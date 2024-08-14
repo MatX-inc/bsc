@@ -413,11 +413,11 @@ genDefSign s look currentPkg (CValueSign (CDef i qt _)) =
   in  case look qi of
         Nothing -> []
         Just _ -> [(CIValueSign qi (qualCQType s qt), [])]
-genDefSign s look currentPkg (Cforeign i qt ms mps) =
+genDefSign s look currentPkg (Cforeign i qt ms mps ni) =
   let qi = qualId currentPkg i
   in  case look qi of
         Nothing -> []
-        Just _ -> [(Cforeign qi (qualCQType s qt) ms mps, [])]
+        Just _ -> [(Cforeign qi (qualCQType s qt) ms mps ni, [])]
 genDefSign s look currentPkg (Cprimitive i qt) =
   let qi = qualId currentPkg i
   in  case look qi of
@@ -723,7 +723,7 @@ getPackagesUsedByExports currentPkg (CSignature _ _ _ defns) =
     getPackageFromDefn (Cclass _ _ (IdKind i _) _ _ _) = getIdPackage i
     getPackageFromDefn (CIclass _ _ (IdKind i _) _ _ _) = getIdPackage i
     getPackageFromDefn (CIValueSign i _) = getIdPackage i
-    getPackageFromDefn (Cforeign i _ _ _) = getIdPackage i
+    getPackageFromDefn (Cforeign i _ _ _ _) = getIdPackage i
     getPackageFromDefn (Cprimitive i _) = getIdPackage i
     getPackageFromDefn (CprimType (IdKind i _)) = getIdPackage i
     getPackageFromDefn (CIinstance _ _) = Nothing  -- Instances don't have a name

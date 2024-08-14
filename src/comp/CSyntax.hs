@@ -162,7 +162,8 @@ data CDefn
         | Cforeign { cforg_name :: Id,
                      cforg_type :: CQType,
                      cforg_foreign_name :: Maybe String,
-                     cforg_ports :: Maybe ([String], [String]) }
+                     cforg_ports :: Maybe ([String], [String]),
+                     cforg_is_noinline :: Bool }
         | Cprimitive Id CQType
         | CprimType IdK
         | CPragma Pragma
@@ -1027,8 +1028,10 @@ instance PPrint CDefn where
             (IdK i)        -> ppConId d i
             (IdKind i k)   -> ppConId d i <+> t "::" <+> pp d k
             (IdPKind i pk) -> ppConId d i <+> t "::" <+> pp d pk
-    pPrint d p (Cforeign i ty oname opnames) =
-        text "foreign" <+> ppVarId d i <+> t "::" <+> pp d ty <> (case oname of Nothing -> text ""; Just s -> text (" = " ++ show s)) <> (case opnames of Nothing -> text ""; Just (is, os) -> t"," <> pparen True (sep (map (text . show) is ++ po os)))
+    pPrint d p (Cforeign i ty oname opnames _) =
+        text "foreign" <+> ppVarId d i <+> t "::" <+> pp d ty <>
+        (case oname of Nothing -> text ""; Just s -> text (" = " ++ show s)) <>
+        (case opnames of Nothing -> text ""; Just (is, os) -> t"," <> pparen True (sep (map (text . show) is ++ po os)))
       where po [o] = [text ",", text (show o)]
             po os = [t"(" <> sepList (map (text . show) os) (t",") <> t ")"]
     pPrint d p (CIinstance i qt) =
@@ -1398,7 +1401,7 @@ instance NFData CDefn where
     rnf (Cinstance qt defls) = rnf2 qt defls
     rnf (CValue i cs) = rnf2 i cs
     rnf (CValueSign def) = rnf def
-    rnf (Cforeign name ty fname ports) = rnf4 name ty fname ports
+    rnf (Cforeign name ty fname ports noinline) = rnf5 name ty fname ports noinline
     rnf (Cprimitive i qt) = rnf2 i qt
     rnf (CprimType ik) = rnf ik
     rnf (CPragma pr) = rnf pr
