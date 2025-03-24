@@ -21,7 +21,7 @@ jobs:
           dnf install -y make
           dnf install -y tcl{,-devel}
           dnf install -y ghc
-          dnf install -y ghc-syb{,-devel} ghc-old-time{,-devel} ghc-split{,-devel} ghc-regex-compat{,-devel} ghc-text{,-devel}
+          dnf install -y ghc-syb{-prof,-devel} ghc-old-time{-prof,-devel} ghc-split{-prof,-devel} ghc-regex-compat{-prof,-devel} ghc-text{-prof,-devel}
           dnf install -y pkg-config
           dnf install -y zlib{,-devel}
           dnf install -y which
@@ -40,7 +40,7 @@ jobs:
         # works on many different versions of Linux that we use.
         run: |
           export PATH=/usr/lib/ccache:$PATH
-          make -j3 GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+          make -j3 BSC_BUILD=PROF GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
           cp /usr/lib64/libffi.so.6 ./inst/lib/SAT/
           tar czf inst.tar.gz inst
       - name: Smoketest
