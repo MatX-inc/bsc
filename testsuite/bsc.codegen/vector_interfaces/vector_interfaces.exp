@@ -6,3 +6,5 @@ compare_verilog mkClockVectorPassThrough.v
 
 compile_verilog_pass SizeZero.bsv
 
+compile_object_pass WrapFieldRepeat.bs {} "-dwrapper_typecheck=tcwrapper.out"
+find_n_strings tcwrapper.out "Prelude.Bits Prelude.Bool 1" 2
