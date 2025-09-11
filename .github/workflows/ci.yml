@@ -50,11 +50,19 @@ jobs:
     strategy:
       matrix:
         os: [ macos-13, macos-14, macos-15 ]
+        xcode_version: [ latest-stable ]
+        include:
+          - os: macos-15
+            xcode_version: '16.0'
+        exclude:
+          - os: macos-15
+            xcode_version: latest-stable
       fail-fast: false
     name: "Build/Test: ${{ matrix.os }}"
     uses: ./.github/workflows/build-and-test-macos.yml
     with:
       os: ${{ matrix.os }}
+      xcode_version: ${{ matrix.xcode_version }}
       ghc_version: 9.6.7
       hls_version: 2.10.0.0
     secrets: inherit
@@ -103,6 +111,7 @@ jobs:
       os: macos-14
       ghc_version: ${{ matrix.ghc.version }}
       hls_version: ${{ matrix.ghc.hls }}
+      xcode_version: latest-stable
     secrets: inherit
 
   # ------------------------------
