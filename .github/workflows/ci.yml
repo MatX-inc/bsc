@@ -69,10 +69,6 @@ jobs:
         ghc:
           - version: 9.4.8
             hls: 2.10.0.0
-          - version: 9.8.4
-            hls: 2.10.0.0
-          - version: 9.10.1
-            hls: 2.10.0.0
           - version: 9.12.2
             hls: 2.10.0.0
       fail-fast: false
@@ -89,10 +85,6 @@ jobs:
       matrix:
         ghc:
           - version: 9.4.8
-            hls: 2.10.0.0
-          - version: 9.8.4
-            hls: 2.10.0.0
-          - version: 9.10.1
             hls: 2.10.0.0
           - version: 9.12.2
             hls: 2.10.0.0
