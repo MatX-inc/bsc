@@ -161,6 +161,7 @@ data IdProp = IdPCanFire
               -- used by the BSV parser to keep track of which array types
               -- were introduced from bracket syntax
               | IdPParserGenerated
+              | IdPCAF                  -- is a CAF introduced (by LiftCAFs)
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
