@@ -849,7 +849,7 @@ data IConInfo a =
           -- only exists before expansion
         | ICSchedPragmas { iConType :: IType, iPragmas :: [CSchedulePragma] }
 
-        | ICMethod { iConType :: IType, iInputNames :: [String], iMethod :: IExpr a }
+        | ICMethod { iConType :: IType, iInputNames :: [String], iOutputNames :: [String], iMethod :: IExpr a }
         | ICClock { iConType :: IType, iClock :: IClock a }
         | ICReset { iConType :: IType, iReset :: IReset a } -- iReset has effective type itBit1
         | ICInout { iConType :: IType, iInout :: IInout a }
@@ -944,8 +944,8 @@ cmpC c1 c2 =
         ICIFace { ifcTyId = ti1, ifcIds = is1 } -> compare (ti1, is1) (ifcTyId c2, ifcIds c2)
         ICRuleAssert { iAsserts = asserts } -> compare asserts (iAsserts c2)
         ICSchedPragmas { iPragmas = pragmas } -> compare pragmas (iPragmas c2)
-        ICMethod { iInputNames = inames1, iMethod = meth1 } ->
-            compare (inames1, meth1) (iInputNames c2, iMethod c2)
+        ICMethod { iInputNames = inames1, iOutputNames = outnames1, iMethod = meth1 } ->
+            compare (inames1, outnames1, meth1) (iInputNames c2, iOutputNames c2, iMethod c2)
         -- the ICon Id is not sufficient for equality comparison for Clk/Rst
         ICClock { iClock = clock1 } -> compare clock1 (iClock c2)
         ICReset { iReset = reset1 } -> compare reset1 (iReset c2)
@@ -1336,7 +1336,7 @@ instance Hyper (IConInfo a) where
     hyper (ICIFace x1 x2 x3) y = hyper3 x1 x2 x3 y
     hyper (ICRuleAssert x1 x2) y = hyper2 x1 x2 y
     hyper (ICSchedPragmas x1 x2) y = hyper2 x1 x2 y
-    hyper (ICMethod x1 x2 x3) y = hyper3 x1 x2 x3 y
+    hyper (ICMethod x1 x2 x3 x4) y = hyper4 x1 x2 x3 x4 y
     hyper (ICClock x1 x2) y = hyper2 x1 x2 y
     hyper (ICReset x1 x2) y = hyper2 x1 x2 y
     hyper (ICInout x1 x2) y = hyper2 x1 x2 y
@@ -1558,7 +1558,7 @@ showTypelessCI (ICValue {iConType = t, iValDef = e}) = "(ICValue)"
 showTypelessCI (ICIFace {iConType = t, ifcTyId = i, ifcIds = ids}) = "(ICIFace _ " ++ (show i) ++ " " ++ (show ids) ++ ")"
 showTypelessCI (ICRuleAssert {iConType = t, iAsserts = rps}) = "(ICRuleAssert _ " ++ (show rps) ++ ")"
 showTypelessCI (ICSchedPragmas {iConType = t, iPragmas = sps}) = "(ICSchedPragmas _ " ++ (show sps) ++ ")"
-showTypelessCI (ICMethod {iConType = t, iInputNames = ins, iMethod = m }) = "(ICMethod " ++ (show ins) ++ " " ++ (ppReadable m) ++ ")"
+showTypelessCI (ICMethod {iConType = t, iInputNames = ins, iOutputNames = outs, iMethod = m }) = "(ICMethod " ++ (show ins) ++ " " ++ (show outs) ++ " " ++ (ppReadable m) ++ ")"
 showTypelessCI (ICClock {iConType = t, iClock = clock}) = "(ICClock)"
 showTypelessCI (ICReset {iConType = t, iReset = reset}) = "(ICReset)"
 showTypelessCI (ICInout {iConType = t, iInout = inout}) = "(ICInout)"
