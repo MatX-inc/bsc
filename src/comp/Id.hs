@@ -161,7 +161,10 @@ data IdProp = IdPCanFire
               -- used by the BSV parser to keep track of which array types
               -- were introduced from bracket syntax
               | IdPParserGenerated
-              | IdPCAF                  -- is a CAF introduced (by LiftCAFs)
+              | IdPCAF                  -- is a CAF introduced by LiftDicts
+              | IdPIncoherent           -- This dictionary binding is an incoherent match
+                                        -- LiftDicts needs to know this to know if it can combine
+                                        -- instances with the same type or not.
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################

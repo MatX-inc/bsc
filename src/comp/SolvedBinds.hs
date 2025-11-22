@@ -3,6 +3,7 @@
 -- no references to recursive bindings from non-recursive bindings and keep non-recursive
 -- bindings in topologically sorted order.
 module SolvedBinds(SolvedBind(..), SolvedBinds, Bind,
+                   markIncoherent,
                    sbsEmpty, fromSB, (<++), emptySBs,
                    getRecursiveDefls, getNonRecursiveDefls) where
 
@@ -37,6 +38,10 @@ instance PPrint SolvedBind where
       text "bind:" <+> pPrint d p bind <> semi <+>
       text "isRecursive:" <+> pPrint d p isRec
     )
+
+markIncoherent :: SolvedBind -> SolvedBind
+markIncoherent sb = sb { bind = mark (bind sb) }
+  where mark (i, t, e) = (addIdProp i IdPIncoherent, t, e)
 
 -- Collection of bindings categorized by recursion
 -- nonRecursiveBinds are maintained in topologically sorted order
