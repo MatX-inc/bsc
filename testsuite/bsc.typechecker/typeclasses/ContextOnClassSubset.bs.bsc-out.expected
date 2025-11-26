@@ -18,6 +18,7 @@ ContextOnClassSubset.ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prel
 	·(Prelude.Bit 8)
 	_bar
 	(Prelude.Prelude.Literal~Prelude.Bit~n= ·16)
+-- IdProp: ContextOnClassSubset::ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prelude.Bit~8[IdPDict]
 next def..........................................................
 
 
