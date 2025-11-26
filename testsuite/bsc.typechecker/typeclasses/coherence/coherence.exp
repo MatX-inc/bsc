@@ -1,0 +1,37 @@
+# Instance-level constraints
+
+# Coherent depending on incoherent - should ERROR
+compile_fail_error Instance_Coherent.bs T0153
+
+# Default with incoherent-instance-matches flag - should WARN then compile/run
+test_c_veri_bs_modules_options Instance_Default_FlagOn {} {-incoherent-instance-matches}
+find_n_warning Instance_Default_FlagOn.bs.bsc-vcomp-out T0154 1
+
+# Default without flag - should ERROR
+compile_fail_error Instance_Default_FlagOff.bs T0153
+
+# Incoherent depending on incoherent - should PASS, compile/run (no warnings)
+test_c_veri Instance_Incoherent
+find_n_warning Instance_Incoherent.bs.bsc-vcomp-out T0154 0
+
+# Superclass constraints
+
+# Coherent with incoherent superclass - doesn't error because from the point
+# of users of the coherent class the behavior is consistent - the match in the
+# top-level dictionary function is used everywhere.
+test_c_veri Super_Coherent
+
+# Default class with incoherent superclass should not warn with the flag on
+# because even if the top-level dictionary function is *using* an incoherent match
+# it is using the same incoherent match everywhere, so behavior is consistent.
+test_c_veri_bs_modules_options Super_Default_FlagOn {} {-incoherent-instance-matches}
+find_n_warning Super_Default_FlagOn.bs.bsc-vcomp-out T0154 0
+
+# Default superclass without flag - should compile because the behavior of the class
+# is coherent even if it depends on an incoherent match.
+test_c_veri Super_Default_FlagOff
+find_n_warning Super_Default_FlagOff.bs.bsc-vcomp-out T0154 0
+
+# Incoherent with incoherent superclass - should also work with no warnings
+test_c_veri Super_Incoherent
+find_n_warning Super_Incoherent.bs.bsc-vcomp-out T0154 0

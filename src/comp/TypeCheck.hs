@@ -20,7 +20,7 @@ import ContextErrors
 import Flags(Flags, enablePoisonPills, allowIncoherentMatches)
 import CSyntax
 import CSyntaxUtil(isCPVar)
-import CType(leftTyCon, getArrows, isDictType)
+import CType(leftTyCon, getArrows, isDictType, isDictFun)
 import PoisonUtils
 import Type
 import Pred(Class(..))
@@ -33,9 +33,9 @@ import CtxRed
 import SymTab
 import Assump
 import CSubst(cSubstN)
-import CFreeVars(getFVC, getFTCC)
+import CFreeVars(getFVC, getFTCC, getPV)
 import Util(separate, apFst, quote, fst3, fromJustOrErr, mapSndM)
--- import Debug.Trace(traceM)
+import Debug.Trace(trace, traceM)
 
 cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage -> IO (CPackage, Bool, S.Set Id)
 cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
@@ -77,7 +77,15 @@ tiDefns errh s flags ds = do
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
-  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors)
+  (ds'', new_warns) <- if have_errors
+                       -- Don't try to check coherence on code known to be incorrect
+                       then return (ds', [])
+                       -- coherence checks are not independent across definitions, need to check all at once
+                       else case runTI flags ai s (markAndCheckDefns ds') of
+                              -- We skip trying to inject poison-pill dictionaries
+                              (Left new_errors, _, _) -> bsError errh (nub new_errors)
+                              (Right ds'', new_warns, _) -> return (ds'', new_warns)
+  return (ds'' ++ error_defs', concat (new_warns:wss), allUsedPkgs, have_errors)
 
 nullAssump :: [Assump]
 nullAssump = []
@@ -302,23 +310,93 @@ getCoherenceInfo m i = fromJustOrErr msg $ M.lookup i m
 isIncohDep :: IncoherenceMap -> Id -> Bool
 isIncohDep m d = isJust $ getCoherenceInfo m d
 
-getDictDeps :: CExpr -> [Id]
-getDictDeps (CVar i) = [i]
-getDictDeps (CTApply e ts) = getDictDeps e
--- _f is a dictionary function, not a dictionary dependency itself
--- any incoherence from _f's match should be recorded in the binding already.
-getDictDeps (CApply _f es) = concatMap getDictDeps es
-getDictDeps (CAnyT _ _ _) = []
-getDictDeps e = internalError $ "getDictDeps invalid dictionary expression: " ++ ppReadable e
+-- returns set of used external identifiers and a set of the types of incoherent instances used by this expression
+analyzeDictExpr :: CExpr -> (S.Set Id, S.Set CType)
+analyzeDictExpr (CVar i)
+  | isDictId i = (S.singleton i, S.empty)
+  | otherwise = (S.empty, S.empty)
+analyzeDictExpr (CTApply e ts) = analyzeDictExpr e
+analyzeDictExpr (CApply f es) = analyzeDictExprs (f:es)
+analyzeDictExpr (CStructT _ fields) = analyzeDictExprs $ map snd fields
+analyzeDictExpr (Cletseq ds e) = (idSet, typeSet)
+  where (defsIdSet, defsTypeSet, localIds) = analyzeDeflsSeq ds
+        (bodyIdSet, bodyTypeSet) = analyzeDictExpr e
+        idSet = defsIdSet `S.union` (bodyIdSet `S.difference` localIds)
+        typeSet = defsTypeSet `S.union` bodyTypeSet
+analyzeDictExpr (Cletrec ds e) = (externalRefs, S.unions (bodyTypeSet : typeSets))
+  where (idSets, typeSets) = unzip $ map analyzeDefl ds
+        (bodyIdSet, bodyTypeSet) = analyzeDictExpr e
+        localIds = S.fromList [ getLName d | d <- ds ]
+        allRefs = S.unions $ bodyIdSet : idSets
+        externalRefs = allRefs `S.difference` localIds
+analyzeDictExpr (CTaskApplyT _ _ es) = analyzeDictExprs es
+analyzeDictExpr (CConT _ _ es) = analyzeDictExprs es
+analyzeDictExpr (CmoduleVerilogT _ m _ _ _ ses _ _ _) = analyzeDictExprs (m : map snd ses)
+analyzeDictExpr (Crules _ rs) = (S.unions idSets, S.unions typeSets)
+  where (idSets, typeSets) = unzip $ map analyzeRule rs
+analyzeDictExpr e = (S.empty, S.empty)
 
-isIncohDict :: IncoherenceMap -> CExpr -> Bool
-isIncohDict m e = any (isIncohDep m) (getDictDeps e)
+analyzeDictExprs :: [CExpr] -> (S.Set Id, S.Set CType)
+analyzeDictExprs es = (S.unions idSets, S.unions typeSets)
+  where (idSets, typeSets) = unzip $ map analyzeDictExpr es
 
-reportNewIncoherence :: IncoherenceMap -> CType -> CExpr -> TI ()
-reportNewIncoherence m t e = do
-  let tsIncoherent = catMaybes $ map (getCoherenceInfo m) (getDictDeps e)
+analyzeRule :: CRule -> (S.Set Id, S.Set CType)
+analyzeRule (CRule _ me qs e) = (S.unions idSets, S.unions typeSets)
+  where (meIdSet, meTypeSet) = maybe (S.empty, S.empty) analyzeDictExpr me
+        (qualsIdSets, qualsTypeSets) = unzip $ map analyzeQual qs
+        (bodyIdSet, bodyTypeSet) = analyzeDictExpr e
+        idSets = meIdSet : bodyIdSet : qualsIdSets
+        typeSets = meTypeSet : bodyTypeSet : qualsTypeSets
+analyzeRule (CRuleNest _ me qs rs) = (S.unions idSets, S.unions typeSets)
+  where (meIdSet, meTypeSet) = maybe (S.empty, S.empty) analyzeDictExpr me
+        (qualsIdSets, qualsTypeSets) = unzip $ map analyzeQual qs
+        (rulesIdSets, rulesTypeSets) = unzip $ map analyzeRule rs
+        idSets = meIdSet : qualsIdSets ++ rulesIdSets
+        typeSets = meTypeSet : qualsTypeSets ++ rulesTypeSets
+
+-- quals do not bind dictionaries, so we just need to analyze the contained expressions
+analyzeQual :: CQual -> (S.Set Id, S.Set CType)
+analyzeQual (CQFilter e) = analyzeDictExpr e
+analyzeQual (CQGen _ _ e) = analyzeDictExpr e
+
+analyzeDef :: CDef -> (S.Set Id, S.Set CType)
+analyzeDef (CDefT i _ _ _) | trace ("analyzeDef: " ++ ppReadable (i, isDictId i, isIncoherentDict i)) False = internalError "unpossible"
+analyzeDef (CDefT i _ cqt cs) = (S.unions idSets, S.unions (incoherentBinding : typeSets))
+  where (idSets, typeSets) = unzip $ map analyzeClause cs
+        (CQType _ t) = cqt
+        incoherentBinding = if isIncoherentDict i then S.singleton t else S.empty
+analyzeDef d@(CDef _ _ _ ) = internalError $ "analyzeDef unexpected CDef: " ++ ppReadable d
+
+analyzeDefl :: CDefl -> (S.Set Id, S.Set CType)
+analyzeDefl (CLValueSign d qs) = (S.unions (defIdSet : idSets), S.unions (defTypeSet : typeSets))
+  where (idSets, typeSets) = unzip $ map analyzeQual qs
+        (defIdSet, defTypeSet) = analyzeDef d
+
+analyzeDeflsSeq :: [CDefl] -> (S.Set Id, S.Set CType, S.Set Id)
+analyzeDeflsSeq = analyzeDeflsSeq' S.empty S.empty S.empty
+  where analyzeDeflsSeq' idSet typeSet localIds []     = (idSet, typeSet, localIds)
+        analyzeDeflsSeq' idSet typeSet localIds (d:ds) = analyzeDeflsSeq' idSet' typeSet' localIds' ds
+          where (deflIdSet, deflTypeSet) = analyzeDefl d
+                idSet' = idSet `S.union` (deflIdSet `S.difference` localIds)
+                typeSet' = typeSet `S.union` deflTypeSet
+                localIds' = S.insert (getLName d) localIds
+
+analyzeClause :: CClause -> (S.Set Id, S.Set CType)
+-- Clauses may bind dictionary parameters, which are not free dependencies
+-- We do not worry about what qs bind, because they are never used to bind dictionaries.
+analyzeClause (CClause ps qs e) = (idSet `S.difference` S.unions (map getPV ps), typeSet)
+  where (idSet, typeSet) = analyzeDictExpr e
+
+isIncohClause :: IncoherenceMap -> CClause -> Bool
+isIncohClause m c = not (S.null $ S.filter (isIncohDep m) idSet) || not (S.null typeSet)
+  where (idSet, typeSet) = analyzeClause c
+
+reportNewIncoherence :: IncoherenceMap -> CType -> CClause -> TI ()
+reportNewIncoherence m t c = do
+  let (clauseIdSet, clauseTypeSet) = analyzeClause c
+      tsIncoherent = S.toList $ clauseTypeSet `S.union` (S.fromList $ catMaybes $ map (getCoherenceInfo m) (S.toList clauseIdSet))
   when (null tsIncoherent) $
-    internalError $ "Newly incoherent with no incoherent dependencies: " ++ ppReadable (t, e, m)
+    internalError $ "Newly incoherent with no incoherent dependencies: " ++ ppReadable (t, c, m)
   case leftTyCon t of
     Just (TyCon i _ (TIstruct SClass _)) -> do
       r <- getSymTab
@@ -334,33 +412,92 @@ reportNewIncoherence m t e = do
         let msg = (getPosition i, EIncoherentDepends (pfpString t) (map pfpString tsIncoherent))
         -- This error is effectively recoverable, so keep looking for more errors
         accumulateError $ EMsgs [msg]
-    _ -> internalError $ "Dict has non-dict type: " ++ ppReadable (t, e)
+    _ -> internalError $ "Dict has non-dict type: " ++ ppReadable (t, c)
 
-getDictBinding :: CDef -> Maybe (Id, CType, CExpr)
-getDictBinding (CDefT i [] (CQType [] t) [CClause [] [] e]) = Just (i, t, e)
-getDictBinding _ = Nothing
+getDictBinding :: CDef -> Maybe (Id, [TyVar], CType, CClause)
+getDictBinding (CDefT i vs (CQType [] t) [c@(CClause _ [] _)])
+  -- | trace (ppReadable (i, isDictId i, t, isDictFun t, vs, e)) False = internalError "unpossible"
+  | isDictId i && isDictFun t = Just (i, vs, t, c)
+getDictBinding d = {- trace ("not matching template: " ++ ppReadable d ++ "\n" ++ show d) -} Nothing
+
+markAndCheckDefns :: [CDefn] -> TI [CDefn]
+markAndCheckDefns defns = do
+  let defs  = [ def | CValueSign def <- defns ]
+{-
+  traceM $ "markAndCheckDefns: " ++ ppReadable defns
+  let defs  = [ def | CValueSign def <- defns ]
+      (dfuns, notdfuns) = partition (isJust . getDictBinding) defs
+
+  traceM $ "defs: " ++ ppReadable defs
+  traceM $ "dfuns: " ++ ppReadable dfuns
+
+  let dfunSet = S.fromList [ getDName dfun | dfun <- dfuns ]
+      allDictDeps = S.unions $ map (fst . analyzeDef) defs
+      importedDictDeps = allDictDeps `S.difference` dfunSet
+
+  traceM $ "allDictDeps: " ++ ppReadable (S.toList allDictDeps)
+  traceM $ "importedDictDeps: " ++ ppReadable (S.toList importedDictDeps)
+
+  symt <- getSymTab
+
+  let makeImportedCoherenceInfo i = do
+        let msg = "imported dictionary not found in symbol table: " ++ ppReadable i
+            VarInfo _ (i' :>: sc) _ = fromJustOrErr msg (findVar symt i)
+        (_ :=> t, _) <- freshInst "markAndCheck" i' sc
+        return (i', toMaybe (isIncoherentDict i') t)
+
+  importedIncoherenceMap <- fmap M.fromList $ mapM makeImportedCoherenceInfo $ S.toList importedDictDeps
+
+  traceM $ "importedIncoherenceMap: " ++ ppReadable importedIncoherenceMap
+
+  (dfuns', topIncoherenceMap) <- markAndCheckRecursiveDefs importedIncoherenceMap dfuns
+  traceM $ "topIncoherenceMap: " ++ ppReadable topIncoherenceMap
+
+  notdfuns' <- mapM (fmap fst . markAndCheckDef topIncoherenceMap) notdfuns
+
+  let defs' = dfuns' ++ notdfuns'
+-}
+
+  let allDictFunDeps = S.unions $ map (fst . analyzeDef) defs
+  let topIncoherenceMap :: M.Map Id (Maybe CType)
+      topIncoherenceMap = M.fromList [(i, Nothing) | i <- S.toList allDictFunDeps ]
+
+  traceM $ "topIncoherenceMap: " ++ ppReadable topIncoherenceMap
+
+  defs' <- mapM (fmap fst . markAndCheckDef topIncoherenceMap) defs
+
+  traceM $ "defs': " ++ ppReadable defs'
+
+  let defMap = M.fromList [ (i, def') | def' <- defs', let i = getDName def' ]
+      updateDefn defn
+        | Right name <- getName defn,
+          Just def' <- M.lookup name defMap = CValueSign def'
+        | otherwise = defn
+
+  return $ map updateDefn defns
 
 markAndCheckDef :: IncoherenceMap -> CDef -> TI (CDef, IncoherenceMap)
+markAndCheckDef _ d | trace("markAndCheckDef: " ++ ppReadable (getDName d)) False = internalError "unpossible"
 markAndCheckDef m d
   -- match dictionary binding
-  | Just (i, t, e) <- getDictBinding d, isDictId i = do
+  | Just (i, vs, t, c) <- getDictBinding d = do
       if isIncoherentDict i then do
         let m' = M.insert i (Just t) m
-        e' <- markAndCheckExpr m e
-        return (CDefT i [] (CQType [] t) [CClause [] [] e'], m')
+        c' <- fmap (head . fst) $ markAndCheckClauses m' (CQType [] t) [c]
+        return (CDefT i vs (CQType [] t) [c'], m')
       else do
-        if isIncohDict m e
+        if isIncohClause m c && M.notMember i m
         then do
           -- incoherent because of dictionary dependencies, not instance match
-          reportNewIncoherence m t e
+          reportNewIncoherence m t c
           let m' = M.insert i (Just t) m
-          e' <- markAndCheckExpr m' e
+          c' <- fmap (head . fst) $ markAndCheckClauses m' (CQType [] t) [c]
           let i' = addIdProp i IdPIncoherent
-          return (CDefT i' [] (CQType [] t) [CClause [] [] e'], m')
+          return (CDefT i' vs (CQType [] t) [c'], m')
         else do
           let m' = M.insert i Nothing m
-          e' <- markAndCheckExpr m' e
-          return (CDefT i [] (CQType [] t) [CClause [] [] e'], m')
+          c' <- fmap (head . fst) $ markAndCheckClauses m' (CQType [] t) [c]
+          return (CDefT i vs (CQType [] t) [c'], m')
 markAndCheckDef m (CDefT i vs cqt cs) = do
   -- Any dictionaries bound by cs are out-of-scope after this definition
   (cs', _) <- markAndCheckClauses m cqt cs
@@ -406,7 +543,41 @@ markAndCheckDefl m (CLValueSign d qs) = do
   qs' <- mapM (markAndCheckQual m) qs
   (d', m') <- markAndCheckDef m d
   return (CLValueSign d' qs', m')
-markAndCheckDefl _ d = internalError $ "TypeCheck.markAndCheckDefl unexpected CDefl " ++ ppReadable d
+markAndCheckDefl _ d = internalError $ "markAndCheckDefl unexpected CDefl (not CLValueSign): " ++ ppReadable d
+
+markAndCheckDictDeflsRec :: IncoherenceMap -> [CDefl] -> TI ([CDefl], IncoherenceMap)
+markAndCheckDictDeflsRec m ds = do
+  let defs = [ d | CLValueSign d [] <- ds ] -- Dict bindings have no qualifiers
+  when (length defs /= length ds) $
+    internalError $ "markAndCheckDeflsRec unexpected CDefls (not CLValuesign _ []): " ++ ppReadable ds
+  (defs', m') <- markAndCheckRecursiveDefs m defs
+  return (map (flip CLValueSign $ []) defs', m')
+
+markAndCheckRecursiveDefs :: IncoherenceMap -> [CDef] -> TI ([CDef], IncoherenceMap)
+markAndCheckRecursiveDefs m defs = do
+  let bindings = catMaybes $ map getDictBinding defs
+      knownIncoherent = M.fromList [ (i, Just t) | (i, _, t, _) <- bindings, isIncoherentDict i ]
+      workingMap = m `M.union` knownIncoherent
+  traceM("def names: " ++ ppReadable [ i | (i, _, _, _) <- bindings ])
+  traceM("knownIncoherent: " ++ ppReadable knownIncoherent)
+  let propagateIncoherence currentMap
+        | M.size nextMap == M.size currentMap = testMap -- the assumed coherence has been confirmed
+        | otherwise = propagateIncoherence nextMap
+        where assumeCoherentMap = M.fromList [(i, Nothing) | (i, _, _, _) <- bindings, M.notMember i currentMap ]
+              testMap = currentMap `M.union` assumeCoherentMap
+              nextMap = currentMap `M.union` M.fromList newEntries
+              newEntries = [ (i, Just t) | (i, _, t, c) <- bindings,
+                                           M.notMember i currentMap,
+                                           isIncohClause testMap c ]
+      finalMap = propagateIncoherence workingMap
+  traceM("finalMap: " ++ ppReadable finalMap)
+  let newIncoherent = [ (t, c) | (i, _, t, c) <- bindings,
+                                 isJust (getCoherenceInfo finalMap i),
+                                 M.notMember i knownIncoherent ]
+  traceM("newIncoherent: " ++ ppReadable newIncoherent)
+  -- mapM_ (uncurry $ reportNewIncoherence finalMap) newIncoherent
+  results <- mapM (markAndCheckDef finalMap) defs
+  return (map fst results, finalMap)
 
 markAndCheckExpr :: IncoherenceMap -> CExpr -> TI CExpr
 markAndCheckExpr m (Cletseq ds e) = do
@@ -416,28 +587,10 @@ markAndCheckExpr m (Cletseq ds e) = do
 markAndCheckExpr m (Cletrec [] e) = markAndCheckExpr m e
 -- Set of recursive dictionary bindings
 markAndCheckExpr m (Cletrec ds@(d:_) e)
-  | CLValueSign defl [] <- d, Just (i, t, _) <- getDictBinding defl, isDictId i = do
-  let bindings = catMaybes $ map getDictBinding [ d | CLValueSign d [] <- ds ]
-  -- traceM $ "Cletrec dicts: " ++ ppReadable (Cletrec ds e)
-  when (length bindings /= length ds) $
-    internalError $ "Non-dictionary bindings in dictionary binding group: " ++ ppReadable ds
-  let knownIncoherent = M.fromList [ (i, Just t) | (i, t, _) <- bindings, isIncoherentDict i ]
-      workingMap = m `M.union` knownIncoherent
-      propagateIncoherence currentMap
-        | M.size nextMap == M.size currentMap = testMap -- the assumed coherence has been confirmed
-        | otherwise = propagateIncoherence nextMap
-        where assumeCoherentMap = M.fromList [(i, Nothing) | (i, _, _) <- bindings, M.notMember i currentMap ]
-              testMap = currentMap `M.union` assumeCoherentMap
-              nextMap = currentMap `M.union` M.fromList newEntries
-              newEntries = [ (i, Just t) | (i, t, e) <- bindings,
-                                           M.notMember i currentMap,
-                                           isIncohDict testMap e ]
-      finalMap = propagateIncoherence workingMap
-  sequence_  [ reportNewIncoherence finalMap t e | (i, t, e) <- bindings,
-                                                   isJust (getCoherenceInfo finalMap i),
-                                                   M.notMember i knownIncoherent ]
-  (ds', _) <- mapAndUnzipM (markAndCheckDefl finalMap) ds
-  e' <- markAndCheckExpr finalMap e
+  | CLValueSign defl [] <- d, Just (i, _, t, _) <- getDictBinding defl,
+    isDictId i, isDictType t = do
+  (ds', m') <- markAndCheckDictDeflsRec m ds
+  e' <- markAndCheckExpr m' e
   return $ Cletrec ds' e'
 -- no dictionary bindings
 markAndCheckExpr m (Cletrec ds e) = do
@@ -455,7 +608,13 @@ markAndCheckExpr m (CTApply e ts) = do
   e' <- markAndCheckExpr m e
   return $ CTApply e' ts
 markAndCheckExpr m e@(CVar i)
-  | isDictId i && isIncohDep m i = return $ CVar $ addIdProp i IdPIncoherent
+  | isDictId i = do
+    let incoherent = isIncohDep m i
+    traceM $ "markAndCheckExpr: " ++ ppReadable (i, incoherent)
+    traceM $ "incoherenceMap: " ++ ppReadable m
+    if incoherent
+    then return $ CVar $ addIdProp i IdPIncoherent
+    else return e
   | otherwise = return e
 markAndCheckExpr m (CTaskApplyT task t es) = do
   es' <- mapM (markAndCheckExpr m) es

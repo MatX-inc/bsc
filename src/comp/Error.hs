@@ -2970,7 +2970,7 @@ getErrorText (WUnusedImport pkg) =
 getErrorText (EIncoherentDepends match depends) =
     (Type 153, empty,
      s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
-            " and this is forbbidden"))
+            " and this is forbidden"))
 getErrorText (WIncoherentDepends match depends) =
     (Type 154, empty,
      s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++

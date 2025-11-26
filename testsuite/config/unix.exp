@@ -2914,14 +2914,15 @@ proc compile_fail_error { source tag {expcount 1} {options ""} {nodeps 0}} {
     }
 }
 
-# This test case ought to fail with a specific error but the error isn't
-# found because of a known bug (though the test case still doesn't compile)
+# This test case ought to fail with a specific error but instead it compiles
+# or it fails with an incorrect error / internalError.
 proc compile_fail_error_bug { source tag {bug ""} {expcount 1} {options ""}} {
     global target_triplet
 
     set output [make_bsc_output_name $source]
 
     if [bsc_compile $source $options] then {
+        setup_xfail $target_triplet $bug
         fail "`$source' shouldn't compile"
 
         # intermediate files should be still valid
@@ -3078,6 +3079,15 @@ proc find_n_error { filename tag expcount } {
 
 proc find_n_warning { filename tag expcount } {
     find_n_emsg $filename "Warning" $tag $expcount
+}
+
+# There should be a certain number of a specific warning in the output,
+# but either that warning does not appear in the output (or the count is wrong). 
+proc find_n_warning_bug { filename tag expcount {bug ""} } {
+    global target_triplet
+
+    setup_xfail $target_triplet $bug
+    find_n_warning $filename $tag $expcount
 }
 
 ## Looks for _expcount_ of an error or warning (specified by
