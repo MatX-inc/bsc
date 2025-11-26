@@ -541,7 +541,7 @@ reducePred eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos)) = do
                      let minst = toMaybe incoherent h
                          -- Mark the binding incoherent for LiftDicts.
                          sb'   = if incoherent then markIncoherent sb else sb
-                     when incoherent $ traceM $ "Incoherent binding: " ++ ppReadable sb'
+                     -- when incoherent $ traceM $ "Incoherent binding: " ++ ppReadable sb'
                      return $ Just (qs, sb', fd_subst, minst)
 
     let is' = genInsts c bound_tyvars dvs pr'

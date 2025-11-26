@@ -35,7 +35,7 @@ import Assump
 import CSubst(cSubstN)
 import CFreeVars(getFVC, getFTCC, getPV)
 import Util(separate, apFst, quote, fst3, fromJustOrErr, mapSndM)
-import Debug.Trace(trace, traceM)
+--import Debug.Trace(trace, traceM)
 
 cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage -> IO (CPackage, Bool, S.Set Id)
 cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
@@ -360,7 +360,7 @@ analyzeQual (CQFilter e) = analyzeDictExpr e
 analyzeQual (CQGen _ _ e) = analyzeDictExpr e
 
 analyzeDef :: CDef -> (S.Set Id, S.Set CType)
-analyzeDef (CDefT i _ _ _) | trace ("analyzeDef: " ++ ppReadable (i, isDictId i, isIncoherentDict i)) False = internalError "unpossible"
+-- analyzeDef (CDefT i _ _ _) | trace ("analyzeDef: " ++ ppReadable (i, isDictId i, isIncoherentDict i)) False = internalError "unpossible"
 analyzeDef (CDefT i _ cqt cs) = (S.unions idSets, S.unions (incoherentBinding : typeSets))
   where (idSets, typeSets) = unzip $ map analyzeClause cs
         (CQType _ t) = cqt
@@ -462,11 +462,11 @@ markAndCheckDefns defns = do
   let topIncoherenceMap :: M.Map Id (Maybe CType)
       topIncoherenceMap = M.fromList [(i, Nothing) | i <- S.toList allDictFunDeps ]
 
-  traceM $ "topIncoherenceMap: " ++ ppReadable topIncoherenceMap
+  -- traceM $ "topIncoherenceMap: " ++ ppReadable topIncoherenceMap
 
   defs' <- mapM (fmap fst . markAndCheckDef topIncoherenceMap) defs
 
-  traceM $ "defs': " ++ ppReadable defs'
+  -- traceM $ "defs': " ++ ppReadable defs'
 
   let defMap = M.fromList [ (i, def') | def' <- defs', let i = getDName def' ]
       updateDefn defn
@@ -477,7 +477,7 @@ markAndCheckDefns defns = do
   return $ map updateDefn defns
 
 markAndCheckDef :: IncoherenceMap -> CDef -> TI (CDef, IncoherenceMap)
-markAndCheckDef _ d | trace("markAndCheckDef: " ++ ppReadable (getDName d)) False = internalError "unpossible"
+-- markAndCheckDef _ d | trace("markAndCheckDef: " ++ ppReadable (getDName d)) False = internalError "unpossible"
 markAndCheckDef m d
   -- match dictionary binding
   | Just (i, vs, t, c) <- getDictBinding d = do
@@ -558,8 +558,8 @@ markAndCheckRecursiveDefs m defs = do
   let bindings = catMaybes $ map getDictBinding defs
       knownIncoherent = M.fromList [ (i, Just t) | (i, _, t, _) <- bindings, isIncoherentDict i ]
       workingMap = m `M.union` knownIncoherent
-  traceM("def names: " ++ ppReadable [ i | (i, _, _, _) <- bindings ])
-  traceM("knownIncoherent: " ++ ppReadable knownIncoherent)
+  -- traceM("def names: " ++ ppReadable [ i | (i, _, _, _) <- bindings ])
+  -- traceM("knownIncoherent: " ++ ppReadable knownIncoherent)
   let propagateIncoherence currentMap
         | M.size nextMap == M.size currentMap = testMap -- the assumed coherence has been confirmed
         | otherwise = propagateIncoherence nextMap
@@ -570,11 +570,11 @@ markAndCheckRecursiveDefs m defs = do
                                            M.notMember i currentMap,
                                            isIncohClause testMap c ]
       finalMap = propagateIncoherence workingMap
-  traceM("finalMap: " ++ ppReadable finalMap)
-  let newIncoherent = [ (t, c) | (i, _, t, c) <- bindings,
+  -- traceM("finalMap: " ++ ppReadable finalMap)
+{-  let newIncoherent = [ (t, c) | (i, _, t, c) <- bindings,
                                  isJust (getCoherenceInfo finalMap i),
-                                 M.notMember i knownIncoherent ]
-  traceM("newIncoherent: " ++ ppReadable newIncoherent)
+                                 M.notMember i knownIncoherent ] -}
+  -- traceM("newIncoherent: " ++ ppReadable newIncoherent)
   -- mapM_ (uncurry $ reportNewIncoherence finalMap) newIncoherent
   results <- mapM (markAndCheckDef finalMap) defs
   return (map fst results, finalMap)
@@ -610,8 +610,8 @@ markAndCheckExpr m (CTApply e ts) = do
 markAndCheckExpr m e@(CVar i)
   | isDictId i = do
     let incoherent = isIncohDep m i
-    traceM $ "markAndCheckExpr: " ++ ppReadable (i, incoherent)
-    traceM $ "incoherenceMap: " ++ ppReadable m
+    -- traceM $ "markAndCheckExpr: " ++ ppReadable (i, incoherent)
+    -- traceM $ "incoherenceMap: " ++ ppReadable m
     if incoherent
     then return $ CVar $ addIdProp i IdPIncoherent
     else return e
