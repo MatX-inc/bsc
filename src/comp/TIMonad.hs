@@ -22,6 +22,7 @@ module TIMonad(
               pushSatStackContext, popSatStackContext
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
+        , accumulateError
         , disambiguateStruct
         ) where
 

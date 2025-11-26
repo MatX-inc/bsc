@@ -791,6 +791,8 @@ data ErrMsg =
         | EClassFundepsExtra String [String]
         | EClassFundepsEmpty String
         | WIncoherentMatch String String
+        | EIncoherentDepends String [String]
+        | WIncoherentDepends String [String]
         | WOrphanInst String
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [Doc])]
@@ -2964,6 +2966,15 @@ getErrorText (EConstrFieldsNotNamed c t) =
 getErrorText (WUnusedImport pkg) =
     (Type 152, empty,
      s2par ("Package " ++ ishow pkg ++ " is imported but not used"))
+
+getErrorText (EIncoherentDepends match depends) =
+    (Type 153, empty,
+     s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
+            " and this is forbbidden"))
+getErrorText (WIncoherentDepends match depends) =
+    (Type 154, empty,
+     s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
+            " so it is actually incoherent."))
 
 -- Generation Errors
 
