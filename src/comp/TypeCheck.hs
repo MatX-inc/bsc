@@ -20,7 +20,7 @@ import ContextErrors
 import Flags(Flags, enablePoisonPills, allowIncoherentMatches)
 import CSyntax
 import CSyntaxUtil(isCPVar)
-import CType(leftTyCon, getArrows, isDictType, isDictFun)
+import CType(leftTyCon, getArrows, getRes, isDictType, isDictFun)
 import PoisonUtils
 import Type
 import Pred(Class(..))
@@ -397,7 +397,7 @@ reportNewIncoherence m t c = do
       tsIncoherent = S.toList $ clauseTypeSet `S.union` (S.fromList $ catMaybes $ map (getCoherenceInfo m) (S.toList clauseIdSet))
   when (null tsIncoherent) $
     internalError $ "Newly incoherent with no incoherent dependencies: " ++ ppReadable (t, c, m)
-  case leftTyCon t of
+  case leftTyCon (getRes t) of
     Just (TyCon i _ (TIstruct SClass _)) -> do
       r <- getSymTab
       let cls_ai = allowIncoherent $ mustFindClass r (CTypeclass i)
