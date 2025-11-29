@@ -464,6 +464,7 @@ traceflags = [
           "legacy-inst-index",
           "trace-kind-inference",
           "trace-lift",
+          "trace-lift-dicts",
           "trace-mergesched",
           "trace-mutatormap",
           "trace-ncsets",
