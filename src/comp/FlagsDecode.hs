@@ -446,7 +446,7 @@ traceflags = [
           "trace-atf-cache-miss",
           "trace-ctxreduce",
           "trace-debug",
-          "trace-drop-dict",
+          "trace-drop-dicts",
           "trace-eq-witnesses",
           "trace-eval-steps",
           "trace-eval-types",
