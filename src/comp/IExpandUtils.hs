@@ -2802,14 +2802,14 @@ cacheDef i t e@(IAps _ _ _) = do
   let m = defCache s
   case (M.lookup i m) of
     Just e' -> do when doTraceCache $
-                    traceM ("cache hit: " ++ ppReadable (i, e'))
+                    traceM ("cache hit: " ++ ppReadable (i, t, e'))
                   return e'
     Nothing -> do e' <- toHeap "cache-def" e (Just i)
                   s <- get
                   let m' = M.insert i e' m
                   put (s { defCache = m' })
                   when doTraceCache $
-                    traceM ("cache miss: " ++ ppReadable (i, e))
+                    traceM ("cache miss: " ++ ppReadable (i, t))
                   return e'
 cacheDef i t e = return e -- no application, not worth caching
 
