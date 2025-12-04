@@ -176,6 +176,7 @@ onlySimple (ICon _ (ICPrim { })) = True
 onlySimple (ICon _ (ICInt { })) = True
 onlySimple (ICon _ (ICReal { })) = True
 onlySimple (ICon _ (ICUndet { })) = True
+onlySimple (ICon _ (ICChar { })) = True
 -- note that foreign function calls are not simple
 onlySimple e = False
 
