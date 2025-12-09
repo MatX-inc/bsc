@@ -28,7 +28,8 @@ trace_lift_dicts :: Bool
 trace_lift_dicts = "-trace-lift-dicts" `elem` progArgs
 
 liftDictsPkg :: SymTab -> CPackage -> CPackage
-liftDictsPkg symt pkg@(CPackage mi exps imps fixs ds includes) = CPackage mi exps imps fixs ds'' includes
+liftDictsPkg symt pkg@(CPackage mi exps imps impsigs fixs ds includes) =
+  CPackage mi exps imps impsigs fixs ds'' includes
   where s = initLState symt pkg
         (ds', s') = runState (liftDicts S.empty M.empty ds) s
         lifted_ds = [ CValueSign (CDefT i [] (CQType [] t) [CClause [] [] e]) |
@@ -67,7 +68,7 @@ data LState = LState {
 type L a = State LState a
 
 initLState :: SymTab -> CPackage -> LState
-initLState symt (CPackage mi exps imps fixs ds includes) = LState {
+initLState symt (CPackage mi exps imps impsigs fixs ds includes) = LState {
   dictNo = 0,
   typeDictMap = M.empty,
   exprDictMap = M.empty,
@@ -86,7 +87,7 @@ getTopNameInfo i = do
   where lookupLifted = fmap (\(t,_) -> ([], t)) . M.lookup i
         lookupLocal  = M.lookup i
         lookupSymTab = fmap handleVarInfo . flip findVar i
-        handleVarInfo (VarInfo _ (_ :>: Forall ks qt) _) = (tyVars, t')
+        handleVarInfo (VarInfo _ (_ :>: Forall ks qt) _ _) = (tyVars, t')
           where tyVars = zipWith tVarKind tmpTyVarIds ks
                 t'     = inst (map TVar tyVars) (qualToType qt)
 
@@ -186,6 +187,10 @@ handleDictExpr p t e@(CTApply f ts)
       fTy <- handleDictFun [] e
       when (expandSyn t /= expandSyn fTy) $ internalError $ "Dictionary type does not match expectation: " ++ ppReadable (fTy, t, e)
       return (e, True)
+handleDictExpr p t e@(CStructT t' [])
+  | expandSyn t /= expandSyn t' = internalError $ "Dictionary type does not match expectation: " ++ ppReadable (t, t', e)
+  | not $ null $ tv t' = return (e, False)
+  | otherwise = return (e, True)
 handleDictExpr p t e = internalError $ "handleDictExpr unexpected expression: " ++ ppReadable (p, t, e) ++ "\n" ++ show e
 
 -- Returns the type of the dictionary function
@@ -217,6 +222,8 @@ handleDictFun ts (CAnyT _ _ _) = internalError $ "handleDictFun polymorphic CAny
 handleDictFun ts0 (CTApply f ts)
   | null ts0 = handleDictFun ts f
   | otherwise = internalError $ "handleDictFunc stacked CTApply: " ++ ppReadable (ts0, f, ts)
+handleDictFun [] (Cletseq [CLValueSign (CDefT i [] (CQType [] t) _) []] (CVar i'))
+  | i == i' = return t
 handleDictFun ts e = internalError $ "handleDictFun unexpected expression: " ++ ppReadable (ts, e) ++ "\n" ++ show e
 
 -- General inlining map (more than dictionaries):
@@ -284,6 +291,7 @@ isSimple :: CExpr -> Bool
 isSimple (CAnyT _ _ _) = True
 isSimple (CLitT _ _) = True
 isSimple (CConT _ _ []) = True
+isSimple (CConT _ _ [CVar i]) = i == idPrimUnit
 isSimple (CStructT _ []) = True
 isSimple (CApply f []) = isSimple f
 isSimple (CTApply f []) = isSimple f
