@@ -18,7 +18,7 @@ Flags {
 	demoteErrors = SomeMsgs [],
 	disableAssertions = False,
 	doICheck = True,
-	dumpAll = False,
+	dumpAll = Nothing,
 	dumps = [],
 	enablePoisonPills = False,
 	entry = Nothing,
