@@ -11,36 +11,39 @@ IPackage DummyInDeflQual
   --idefs 
 DummyInDeflQual.dummyInDeflQual :: Prelude.Bit 12
 DummyInDeflQual.dummyInDeflQual =
-  let _tcdict1072 :: Prelude.Literal (Prelude.Bit 12)
-      _tcdict1072 = Prelude.Prelude.Literal~Prelude.Bit~n= ·12
-      -- IdProp: _tcdict1072[IdP_bad_name,IdPDict]
-  in  let f ::
-	    \/(_tctyvar1063 :: *) .
-	    \/(_tctyvar1064 :: *) . Prelude.Literal _tctyvar1063 -> _tctyvar1064 -> _tctyvar1063
-	  f =
-	    /\ (_tctyvar1063 :: *) .
-	    /\ (_tctyvar1064 :: *) .
-	    \ (_tcdict1050 :: Prelude.Literal _tctyvar1063) .
-	    let _tcdict1042 :: Prelude.Literal (Prelude.Bit 2)
-		_tcdict1042 = Prelude.Prelude.Literal~Prelude.Bit~n= ·2
-		-- IdProp: _tcdict1042[IdP_bad_name,IdPDict]
-	    in  let _tcdict1032 :: Prelude.Eq (Prelude.Bit 2)
-		    _tcdict1032 = Prelude.Prelude.Eq~Prelude.Bit~n= ·2
-		    -- IdProp: _tcdict1032[IdP_bad_name,IdPDict]
-		in  \ (x :: _tctyvar1064) .
-		    PrimIf
-		      ·_tctyvar1063
-		      (PrimOrd
-			 ·Prelude.Bool
-			 ·1
-			 (.(Prelude.==)
-			    ·(Prelude.Bit 2)
-			    _tcdict1032
-			    (PrimBuildUndefined ·(Prelude.Bit 2) _ 1)
-			    (.Prelude.fromInteger ·(Prelude.Bit 2) _tcdict1042 0b11)))
-		      (.Prelude.fromInteger ·_tctyvar1063 _tcdict1050 0)
-		      (PrimBuildUndefined ·_tctyvar1063 (PrimGetEvalPosition ·_tctyvar1064 x) 2)
-      in  f ·(Prelude.Bit 12) ·Prelude.Bool _tcdict1072 (Prelude.True Prelude.PrimUnit)
+  let f ::
+	\/(_tctyvar1063 :: *) .
+	\/(_tctyvar1064 :: *) . Prelude.Literal _tctyvar1063 -> _tctyvar1064 -> _tctyvar1063
+      f =
+	/\ (_tctyvar1063 :: *) .
+	/\ (_tctyvar1064 :: *) .
+	\ (_tcdict1050 :: Prelude.Literal _tctyvar1063) .
+	\ (x :: _tctyvar1064) .
+	PrimIf
+	  ·_tctyvar1063
+	  (PrimOrd
+	     ·Prelude.Bool
+	     ·1
+	     (.(Prelude.==)
+		·(Prelude.Bit 2)
+		DummyInDeflQual._lifted_dict2=
+		(PrimBuildUndefined ·(Prelude.Bit 2) _ 1)
+		(.Prelude.fromInteger ·(Prelude.Bit 2) DummyInDeflQual._lifted_dict1= 0b11)))
+	  (.Prelude.fromInteger ·_tctyvar1063 _tcdict1050 0)
+	  (PrimBuildUndefined ·_tctyvar1063 (PrimGetEvalPosition ·_tctyvar1064 x) 2)
+  in  f ·(Prelude.Bit 12) ·Prelude.Bool DummyInDeflQual._lifted_dict0= (Prelude.True Prelude.PrimUnit)
+next def..........................................................
+DummyInDeflQual._lifted_dict0 :: Prelude.Literal (Prelude.Bit 12)
+DummyInDeflQual._lifted_dict0 = Prelude.Prelude.Literal~Prelude.Bit~n= ·12
+-- IdProp: DummyInDeflQual::_lifted_dict0[IdP_bad_name,IdPDict,IdPCAF]
+next def..........................................................
+DummyInDeflQual._lifted_dict1 :: Prelude.Literal (Prelude.Bit 2)
+DummyInDeflQual._lifted_dict1 = Prelude.Prelude.Literal~Prelude.Bit~n= ·2
+-- IdProp: DummyInDeflQual::_lifted_dict1[IdP_bad_name,IdPDict,IdPCAF]
+next def..........................................................
+DummyInDeflQual._lifted_dict2 :: Prelude.Eq (Prelude.Bit 2)
+DummyInDeflQual._lifted_dict2 = Prelude.Prelude.Eq~Prelude.Bit~n= ·2
+-- IdProp: DummyInDeflQual::_lifted_dict2[IdP_bad_name,IdPDict,IdPCAF]
 next def..........................................................
 
 
