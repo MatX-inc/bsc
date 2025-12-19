@@ -1,4 +1,4 @@
-name: Rocky 8 build
+name: Rocky 9 build
 
 # Trigger the workflow on push or pull request
 on: [ push, pull_request, workflow_dispatch ]
@@ -6,8 +6,8 @@ on: [ push, pull_request, workflow_dispatch ]
 jobs:
   build-ubuntu:
     runs-on: ubuntu-latest
-    container: rockylinux:8.9.20231119
-    name: 'Rocky8'
+    container: rockylinux/rockylinux:9.7
+    name: 'Rocky9'
     steps:
       - name: Install dependencies
         shell: bash
