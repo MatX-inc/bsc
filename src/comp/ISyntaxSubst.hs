@@ -29,7 +29,6 @@ module ISyntaxSubst(
 
 import ISyntax
 import Changed
-import Eval
 import Id
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -169,7 +168,7 @@ tSubstWith tctx allIds t
         Nothing ->
           if ctxContainsVar i tctx
           then -- Alpha-conversion needed: add renaming and continue
-            let i'      = cloneId (S.toList allIds) i
+            let !i'     = cloneId (S.toList allIds) i
                 tctx'   = ctxAdd i (ITVar i') tctx
                 allIds' = S.insert i' allIds
             in Changed $ ITForAll i' k $ changedOr t (sub tctx' allIds' t)
@@ -247,11 +246,11 @@ eSubstWith ectx tctx allIds e
         Nothing ->
           if ctxContainsVar i ectx
           then -- Alpha-conversion needed: add renaming and continue
-            let i'      = cloneId (S.toList allIds) i
+            let !i'     = cloneId (S.toList allIds) i
                 ectx'   = ctxAdd i (IVar i') ectx
                 allIds' = S.insert i' allIds
-                t' = changedOr t (tSubstWith tctx allIds' t)
-                e' = changedOr e (sub ectx' tctx allIds' e)
+                !t'     = changedOr t (tSubstWith tctx allIds' t)
+                !e'     = changedOr e (sub ectx' tctx allIds' e)
             in Changed $ ILam i' t' e'
           else -- No conflict: continue with same contexts
             changed2 (ILam i) t e (tSubstWith tctx allIds t) (sub ectx tctx allIds e)
@@ -267,10 +266,10 @@ eSubstWith ectx tctx allIds e
         Nothing ->
           if ctxContainsVar i tctx
           then -- Alpha-conversion needed: add renaming and continue
-            let i'      = cloneId (S.toList allIds) i
+            let !i'     = cloneId (S.toList allIds) i
                 tctx'   = ctxAdd i (ITVar i') tctx
                 allIds' = S.insert i' allIds
-                e' = changedOr e (sub ectx tctx' allIds' e)
+                !e'     = changedOr e (sub ectx tctx' allIds' e)
             in Changed $ ILAM i' k e'
           else -- No conflict: continue with same contexts
             changed1 (ILAM i k) (sub ectx tctx allIds e)
@@ -286,7 +285,7 @@ eSubstWith ectx tctx allIds e
 {-# INLINE eSubst #-}
 eSubst :: Id -> IExpr a -> IExpr a -> IExpr a
 eSubst i x e
-    | Changed e' <- result = deepseq e' e'
+    | Changed e' <- result = e'
     | otherwise = e
   where fvx = fVars x
         allIds = fvx `S.union` aVars e
@@ -296,7 +295,7 @@ eSubst i x e
 {-# INLINE etSubst #-}
 etSubst :: forall a. Id -> IType -> IExpr a -> IExpr a
 etSubst i t e
-    | Changed e' <- result = deepseq e' e'
+    | Changed e' <- result = e'
     | otherwise = e
   where ftx = fTVars t
         allIds = ftx `S.union` aVars e
@@ -307,7 +306,7 @@ etSubst i t e
 eSubstBatch :: forall a. M.Map Id (IExpr a) -> M.Map Id IType -> IExpr a -> IExpr a
 eSubstBatch exprMap typeMap e
     | exprSize == 0 && typeSize == 0 = e
-    | Changed e' <- result = deepseq e' e'
+    | Changed e' <- result = e'
     | otherwise = e
   where
     exprSize = M.size exprMap
