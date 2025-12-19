@@ -280,7 +280,7 @@ eSubstWith ectx tctx allIds e
     -- Use helper for IConInfo
     sub _    tctx allIds ee@(ICon i ii) =
         changed1 (ICon i) (tSubstIConInfo (tSubstWith tctx allIds) ii)
-    sub _    _    _      ee@(IRefT _ _ _) = Unchanged  -- no free tyvar inside IRef
+    sub _    _    _      ee@(IRefT _ _ _ _) = Unchanged  -- no free tyvar inside IRef
 
 -- Public API: single expression substitution
 {-# INLINE eSubst #-}
