@@ -845,11 +845,11 @@ aIfaceProps _ = emptyWireProps
 -- The result type of an interface method, which may be a tuple for multiple output ports.
 aIfaceResType :: AIFace -> AType
 -- XXX should be ATAction?
-aIfaceResType (AIAction { }) = ATBit 0
-aIfaceResType (AIDef { aif_value = (ADef _ t _ _)}) = t
-aIfaceResType (AIActionValue { aif_value = (ADef _ t _ _)}) = t
+aIfaceResTypes (AIAction { }) = [ATBit 0]
+aIfaceResTypes (AIDef { aif_value = (ADef _ t _ _) }) = [t]
+aIfaceResTypes (AIActionValue { aif_value = (ADef _ t _ _) }) = [t]
 -- should not need type of clock or reset
-aIfaceResType x = internalError ("aIfaceResType: " ++ show x)
+aIfaceResTypes x = internalError ("aIfaceResTypes: " ++ show x)
 
 aIfaceResIds :: AIFace -> [AId]
 aIfaceResIds (AIDef {aif_name=id}) = [id]
@@ -1592,7 +1592,8 @@ instance PPrint AExpr where
     pPrint d p (ATaskValue _ i _ _ n) = pparen (p>0) $ pPrint d 1 i <> text ("#" ++ itos(n))
     pPrint d p (AMethCall _ i m es) =
         pparen (p>0 && not (null es)) $
-        pPrint d 1 i <> sep (text "." <> ppMethId d m : map (pPrint d 1) es)
+        pPrint d 1 i <>
+        sep (text "." <> ppMethId d m : map (pPrint d 1) es)
     pPrint d p (AMethValue _ i m) =
         pparen (p>0) $ pPrint d 1 i <> text "." <> ppMethId d m
     pPrint d p (ATuple _ es) = parens (commaSep (map (pPrint d 0) es))

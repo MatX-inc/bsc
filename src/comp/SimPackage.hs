@@ -373,7 +373,7 @@ getSimPackageInputs spkg =
 -- -----
 
 getPortInfo :: [PProp] -> AIFace
-            -> Maybe (AId, (Maybe VName, [(AType,AId,VName)], Maybe (AType,VName), Bool, [AId]))
+            -> Maybe (AId, (Maybe VName, [(AType,AId,VName)], [(AType,VName)], Bool, [AId]))
 getPortInfo pps aif =
     let name = aif_name aif
         vfi  = aif_fieldinfo aif
@@ -399,7 +399,7 @@ getPortInfo pps aif =
                      otherwise          -> False
         rules = map aRuleName (aIfaceRules aif)
     in case vfi of
-         (Method {}) -> Just (name, (en, ins, ret, isAction, rules))
+         (Method {}) -> Just (name, (en, ins, rets, isAction, rules))
          otherwise   -> Nothing
 
 -- -----

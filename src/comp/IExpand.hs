@@ -322,6 +322,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
               -- and maybe a Def, if the expression is a def reference
               if simple e || isActionType t || isPairType t then
                   -- inline the expression, no def is created for this heap ptr
+                  --trace ("not inlining " ++ show i ++ " " ++ ppReadable t) $
                   (e', Nothing)
               else
                   -- assign the expr to a def, and replace the ptr reference
@@ -5133,7 +5134,7 @@ isCanon (ICon _ (ICModParam { })) = True
 isCanon (ICon _ (ICClock { })) = True
 --isCanon (IAps (ICon _ (ICPrim _ PrimBlock)) _ _) = True                -- XXX is this the best way?
 isCanon (IAps (ICon _ (ICSel { })) _ [_]) = True
-isCanon (IAps (ICon _ (ICOut { })) _ [_]) = True
+--isCanon (IAps (ICon _ (ICOut { })) _ [_]) = True
 -- AV of foreign function application is canon
 --isCanon (IAps (ICon _ (ICForeign { })) _ _) = True
 isCanon (IRefT _ _ _ _) = True

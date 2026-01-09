@@ -18,6 +18,7 @@ import Control.Monad.State(StateT, runStateT, liftIO,
 import qualified Data.Map as M
 import qualified Yices as Y
 import Data.Word(Word32)
+import Data.List (genericIndex)
 
 import ErrorUtil(internalError)
 import Flags
