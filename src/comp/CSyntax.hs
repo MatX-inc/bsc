@@ -25,6 +25,7 @@ module CSyntax(
         CRule(..),
         CDefn(..),
         CDefl(..),
+        CAssocType(..),
         CFunDeps,
         CPred(..),
         CTypeclass(..),
@@ -140,6 +141,28 @@ data CFixity
         | CInfixr Integer Id
         deriving (Eq, Ord, Show)
 
+instance NFData CFixity where
+    rnf (CInfix p i) = rnf2 p i
+    rnf (CInfixl p i) = rnf2 p i
+    rnf (CInfixr p i) = rnf2 p i
+
+-- Associated type family declaration within a class body
+data CAssocType = CAssocType
+    { ca_pos        :: Position
+    , ca_name       :: Id
+    , ca_decl_arity :: Int   -- total args listed in the ATF declaration (class params + extras)
+    , ca_kind       :: Kind
+    } deriving (Eq, Ord, Show)
+
+instance NFData CAssocType where
+    rnf (CAssocType pos name n k) = rnf4 pos name n k
+
+instance PPrint CAssocType where
+    pPrint d _ (CAssocType _ name _ k) =
+        text "type" <+> ppConId d name <>
+        if k == KStar then empty else text " ::" <+> pPrint d 0 k
+
+
 -- Top level definition
 data CDefn
         = Ctype IdK [Id] CType
@@ -154,8 +177,8 @@ data CDefn
                   -- Bool indicates the constrs are visible
                   -- first [Id] are the names of this definition's argument type variables
                   -- last [CTypeclass] are derived classes
-        -- incoherent_matches superclasses name_with_kind variables fundeps default_methods
-        | Cclass (Maybe Bool) [CPred] IdK [Id] CFunDeps CFields
+        -- incoherent_matches superclasses name_with_kind variables fundeps assoc_types default_methods
+        | Cclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocType] CFields
         | Cinstance CQType [CDefl]
         | CValue Id [CClause]
         | CValueSign CDef
@@ -171,9 +194,27 @@ data CDefn
         | CIinstance Id CQType
         -- CItype is imported abstractly
         | CItype IdK [Id] [Position] -- positions of use that caused export
-        | CIclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [Position] -- positions of use that caused export
+        | CIclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocType] [Position] -- positions of use that caused export
         | CIValueSign Id CQType
         deriving (Eq, Ord, Show)
+
+instance NFData CDefn where
+    rnf (Ctype i as ty) = rnf3 i as ty
+    rnf (Cdata vis name tvs osums isums derivs) = rnf6 vis name tvs osums isums derivs
+    rnf (Cstruct vis ss i as fs ds) = rnf6 vis ss i as fs ds
+    rnf (Cclass incoh ps ik is fd ats fs) = rnf7 incoh ps ik is fd ats fs
+    rnf (Cinstance qt defls) = rnf2 qt defls
+    rnf (CValue i cs) = rnf2 i cs
+    rnf (CValueSign def) = rnf def
+    rnf (Cforeign name ty fname ports noinline) = rnf5 name ty fname ports noinline
+    rnf (Cprimitive i qt) = rnf2 i qt
+    rnf (CprimType ik) = rnf ik
+    rnf (CPragma pr) = rnf pr
+    rnf (CIinstance i qt) = rnf2 i qt
+    rnf (CItype i as poss) = rnf3 i as poss
+    rnf (CIclass incoh ps ik is fd ats poss) = rnf7 incoh ps ik is fd ats poss
+    rnf (CIValueSign i ty) = rnf2 i ty
+
 
 -- Since IdPKind is only expected in some disjuncts of CDefn, we could
 -- create a separate IdPK for those cases, but that seems like overkill.
@@ -642,7 +683,15 @@ data CDefl                -- [CQual] part is the when clause used in an interfac
         = CLValueSign CDef [CQual]     -- let x :: T = e2 -- explicit type sig
         | CLValue Id [CClause] [CQual] -- let y = e2      -- no explicit type sig
         | CLMatch CPat CExpr           -- let [z] = e3
+        | CLType Position Id [CType] CType -- type F args = T (assoc type instance)
         deriving (Eq, Ord, Show)
+
+instance NFData CDefl where
+    rnf (CLValueSign def me) = rnf2 def me
+    rnf (CLValue i cs me) = rnf3 i cs me
+    rnf (CLMatch pat e) = rnf2 pat e
+    rnf (CLType pos name args rhs) = rnf4 pos name args rhs
+
 
 -- Definition, local or global
 data CDef
@@ -758,10 +807,10 @@ getName (Cforeign { cforg_name = i }) = Right i
 getName (Ctype i _ _) = Right $ iKName i
 getName (Cdata { cd_name = name }) = Right $ iKName name
 getName (Cstruct _ _ i _ _ _) = Right $ iKName i
-getName (Cclass _ _ i _ _ _) = Right $ iKName i
+getName (Cclass _ _ i _ _ _ _) = Right $ iKName i
 getName (Cinstance qt _) = Left $ getPosition qt
 getName (CItype i _ _) = Right $ iKName i
-getName (CIclass _ _ i _ _ _) = Right $ iKName i
+getName (CIclass _ _ i _ _ _ _) = Right $ iKName i
 getName (CIinstance _ qt) = Left $ getPosition qt
 getName (CIValueSign i _) = Right i
 
@@ -773,6 +822,7 @@ getLName :: CDefl -> Id
 getLName (CLValueSign def _) = getDName def
 getLName (CLValue i _ _) = i
 getLName (CLMatch _ _) = internalError "CSyntax.getLName: CLMatch"
+getLName (CLType _ i _ _) = i
 
 iKName :: IdK -> Id
 iKName (IdK i) = i
@@ -783,9 +833,9 @@ isTDef :: CDefn -> Bool
 isTDef (Ctype _ _ _) = True
 isTDef (Cdata {}) = True
 isTDef (Cstruct _ _ _ _ _ _) = True
-isTDef (Cclass _ _ _ _ _ _) = True
+isTDef (Cclass _ _ _ _ _ _ _) = True
 isTDef (CItype _ _ _) = True
-isTDef (CIclass _ _ _ _ _ _) = True
+isTDef (CIclass _ _ _ _ _ _ _) = True
 isTDef (CprimType _) = True
 isTDef _ = False
 
@@ -915,6 +965,7 @@ instance HasPosition CDefl where
     getPosition (CLValueSign d _) = getPosition d
     getPosition (CLValue i _ _) = getPosition i
     getPosition (CLMatch p e) = getPosition (p, e)
+    getPosition (CLType pos _ _ _) = pos
 
 instance HasPosition CDef where
     getPosition (CDef i _ _) = getPosition i
@@ -1005,9 +1056,9 @@ instance PPrint CDefn where
     pPrint d p (Cstruct vis ss i as fs ds) =
         (t("struct ") <> sep (ppConIdK d i : map (nest 2 . ppVarId d) as) <+> t(if vis then "= {" else "== {")) $+$
         pBlock d 4 False (map (ppField d) fs) <> ppDer d ds
-    pPrint d p (Cclass incoh ps ik is fd ss) =
+    pPrint d p (Cclass incoh ps ik is fd ats ss) =
         (t_cls <+> ppPreds d ps (sep (ppConIdK d ik : map (ppVarId d) is)) <> ppFDs d fd <+> t "where {") $+$
-        pBlock d 4 False (map (ppField d) ss)
+        pBlock d 4 False (map (pPrint d 0) ats ++ map (ppField d) ss)
       where t_cls = case incoh of
                      Just False -> t"class coherent"
                      Just True  -> t"class incoherent"
@@ -1039,7 +1090,7 @@ instance PPrint CDefn where
         t"instance" <+> ppConId d i <+> pPrint d 0 qt
     pPrint d p (CItype i as positions) =
         sep (t"type" <+> ppConIdK d i : map (nest 2 . ppVarId d) as)
-    pPrint d p (CIclass incoh ps ik is fd positions) =
+    pPrint d p (CIclass incoh ps ik is fd ats positions) =
         t_cls <+> ppPreds d ps (sep (ppConIdK d ik : map (nest 2 . ppVarId d) is)) <> ppFDs d fd
       where t_cls = case incoh of
                      Just False -> t"class coherent"
@@ -1317,6 +1368,9 @@ instance PPrint CDefl where
     pPrint d p (CLValue i cs me) = optWhen d me $
         foldr1 ($+$) (map (\ cl -> ppClause d p [ppVarId d i] cl <> t";") cs)
     pPrint d p (CLMatch pat e) = ppClause d p [] (CClause [pat] [] e)
+    pPrint d p (CLType _ name args rhs) =
+        t"type" <+> ppConId d name <+> sep (map (pPrint d maxPrec) args)
+            <+> t"=" <+> pp d rhs
 
 optWhen :: PDetail -> [CQual] -> Doc -> Doc
 optWhen d [] s = s
@@ -1396,23 +1450,6 @@ instance PPrint CInclude where
 instance NFData CPackage where
     rnf (CPackage name exps imps impsigs fixs defns incs) = rnf7 name exps imps impsigs fixs defns incs
 
-instance NFData CDefn where
-    rnf (Ctype i as ty) = rnf3 i as ty
-    rnf (Cdata vis name tvs osums isums derivs) = rnf6 vis name tvs osums isums derivs
-    rnf (Cstruct vis ss i as fs ds) = rnf6 vis ss i as fs ds
-    rnf (Cclass incoh ps ik is fd fs) = rnf6 incoh ps ik is fd fs
-    rnf (Cinstance qt defls) = rnf2 qt defls
-    rnf (CValue i cs) = rnf2 i cs
-    rnf (CValueSign def) = rnf def
-    rnf (Cforeign name ty fname ports noinline) = rnf5 name ty fname ports noinline
-    rnf (Cprimitive i qt) = rnf2 i qt
-    rnf (CprimType ik) = rnf ik
-    rnf (CPragma pr) = rnf pr
-    rnf (CIinstance i qt) = rnf2 i qt
-    rnf (CItype i as poss) = rnf3 i as poss
-    rnf (CIclass incoh ps ik is fd poss) = rnf6 incoh ps ik is fd poss
-    rnf (CIValueSign i ty) = rnf2 i ty
-
 instance NFData CClause where
     rnf (CClause ps qs e) = rnf3 ps qs e
 
@@ -1421,11 +1458,6 @@ instance NFData CLiteral where
 
 instance NFData CCaseArm where
     rnf (CCaseArm pat filt cons) = rnf3 pat filt cons
-
-instance NFData CDefl where
-    rnf (CLValueSign def me) = rnf2 def me
-    rnf (CLValue i cs me) = rnf3 i cs me
-    rnf (CLMatch pat e) = rnf2 pat e
 
 instance NFData CStmt where
     rnf (CSBindT pat inst pprops ty e) = rnf5 pat inst pprops ty e
@@ -1500,11 +1532,6 @@ instance NFData CImportedSignature where
 
 instance NFData CSignature where
     rnf (CSignature i imps fixs defs) = rnf4 i imps fixs defs
-
-instance NFData CFixity where
-    rnf (CInfix p i) = rnf2 p i
-    rnf (CInfixl p i) = rnf2 p i
-    rnf (CInfixr p i) = rnf2 p i
 
 instance NFData CInclude where
     rnf (CInclude s) = rnf s

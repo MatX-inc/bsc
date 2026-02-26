@@ -422,11 +422,11 @@ instance HasPosition VPred where
   getPosition (VPred i p) = getPosition i
 
 
-expandSynVPred :: VPred -> VPred
-expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss)) = VPred i pwp'
+expandSynVPred :: ATFEqMap -> VPred -> VPred
+expandSynVPred eqmap (VPred i (PredWithPositions (IsIn c ts) poss)) = VPred i pwp'
   where pwp' = PredWithPositions p' poss
         p'   = IsIn c ts'
-        ts'  = map expandSyn ts
+        ts'  = map (expandSyn eqmap) ts
 
 -- the CExpr is a dictionary
 data EPred = EPred CExpr Pred
@@ -461,7 +461,7 @@ findCons ct i = do
      Just cs -> do
         s <- getSubst
         let ct' = apSub s ct
-        case leftCon (expandSyn ct') of
+        case leftCon (expandSyn (getATFEqs r) ct') of
          Nothing -> errorAtId (EConstrAmb (pfpString ct')) i
          Just di -> case [ (a, pkg) | ConInfo {ci_id = i', ci_assump = a, ci_pkg = pkg} <- cs, qualEq di i'] of
                    [(a, pkg)] -> do
@@ -546,6 +546,7 @@ findFields :: Type -> Id -> TI (Assump, Id, Int)
 findFields struct_ty0 field_id = do
     --traceM("findFields: " ++ ppReadable (struct_ty, field_id))
     symt <- getSymTab
+    let eqmap = getATFEqs symt
 
     -- Figure out what we know about the struct type
     -- Return values:
@@ -561,7 +562,7 @@ findFields struct_ty0 field_id = do
     --    fs    = struct fields
     --
     let getTInfo t =
-            case (leftTyCon (expandSyn t)) of
+            case (leftTyCon (expandSyn eqmap t)) of
               Nothing -> Nothing
               Just (TyNum n _) -> Just (mkNumId n, True, True, Nothing)
               Just (TyStr s _) -> Just (mkStrId s, True, True, Nothing)
