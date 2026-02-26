@@ -2980,6 +2980,27 @@ getErrorText (WIncoherentDepends match depends) =
      s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
             " so it is actually incoherent."))
 
+getErrorText (EMissingATFEquation cls atf) =
+    (Type 155, empty,
+     s2par ("Instance of class " ++ ishow cls ++
+            " is missing a type family equation for " ++ ishow atf))
+
+getErrorText (EExtraATFEquation cls atf) =
+    (Type 156, empty,
+     s2par ("Instance of class " ++ ishow cls ++
+            " provides a type family equation for " ++ ishow atf ++
+            " which is not an associated type of that class"))
+
+getErrorText (EDuplicateATFEquation cls atf) =
+    (Type 157, empty,
+     s2par ("Instance of class " ++ ishow cls ++
+            " has duplicate type family equations for " ++ ishow atf))
+
+getErrorText (EATFEquationInLet atf) =
+    (Type 158, empty,
+     s2par ("A type family equation for " ++ ishow atf ++
+            " may only appear in a class instance declaration"))
+
 -- Generation Errors
 
 getErrorText (EGenerate num s) =

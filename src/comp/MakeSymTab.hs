@@ -742,11 +742,11 @@ getTI _ mi src_pkg _ iks (Cclass _ ps ik vs _ ats fs) =
                  (map cf_name fs ++
                   map (\ (CPred (CTypeclass i) _) -> i) ps) -- XXX super
         atf_tis = [ (atf_i, TypeInfo (Just atf_i) atf_k vs (TIatf n_total) src_pkg)
-                  | CAssocType _ ca_id ca_n ca_k <- ats
+                  | CAssocType _ ca_id ca_n mca_k <- ats
                   , let n_class  = length vs
                         n_extra  = max 0 (ca_n - n_class)
                         extra_ks = replicate n_extra KStar
-                        atf_k    = foldr Kfun ca_k (ks ++ extra_ks)
+                        atf_k    = foldr Kfun (fromMaybe KStar mca_k) (ks ++ extra_ks)
                         atf_i    = qual mi ca_id
                         n_total  = n_class + n_extra ]
 getTI _ mi src_pkg _ iks (CItype ik vs _) =
