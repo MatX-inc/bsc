@@ -701,6 +701,10 @@ data ErrMsg =
         | ETypeSynRecursive [String]
         | EDuplicateInstance String Position
         | EBadInstanceOverlap String String Position
+        | EMissingATFEquation String String  -- ^ class name, ATF name
+        | EExtraATFEquation String String    -- ^ class name, ATF name
+        | EDuplicateATFEquation String String -- ^ class name, ATF name
+        | EATFEquationInLet String           -- ^ ATF name
 
         | EUndefinedTask String
         | EUnboundCon String (Maybe String)
