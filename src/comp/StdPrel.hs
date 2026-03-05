@@ -46,6 +46,10 @@ tvarh3 = tVarKind v3 KNum
 mkNumInstBody :: CType -> CExpr
 mkNumInstBody t = CStructT t []
 
+tvars1, tvars2 :: TyVar
+tvars1 = tVarKind v1 KStar
+tvars2 = tVarKind v2 KStar
+
 -- instance for p' :=> p
 -- avoid mkInst because it does quantification
 -- that will introduce unnecessary (and sometimes harmful)
@@ -1009,6 +1013,35 @@ genNumEqInsts _ _ _ _ = []
 
 -- -------------------------
 
+clsStarEq :: SymTab -> Class
+clsStarEq symT =
+       Class {
+            name = CTypeclass idStarEq,
+            csig = [tvars1, tvars2],
+            super = [],
+            genInsts = genStarEqInsts symT,
+            tyConOf = TyCon idStarEq (Just kSSS) (TIstruct SClass []),
+            funDeps  = [[False, True], [True, False]],
+            funDeps2 = [[Just False, Just True], [Just True, Just False]],
+            allowIncoherent = Just False,
+            isComm = True
+            }
+
+genStarEqInsts :: SymTab -> [TyVar] -> Maybe [TyVar] -> Pred -> [Inst]
+-- safe base-case if t1 and t2 are syntactically equal (after ATF expansion)
+genStarEqInsts symT _ _ (IsIn c [t1, t2]) =
+    let eqmap = getATFEqs symT
+        t1' = expandSyn eqmap t1
+        t2' = expandSyn eqmap t2
+    in if t1' == t2'
+       then let p = IsIn c [t1', t1']
+                r = anyTExpr (predToType p)
+            in [ mkInst r ([] :=> p) (Just idPrelude) ]
+       else []
+genStarEqInsts _ _ _ _ = []
+
+-- -------------------------
+
 tiArrow, tiBit, tiSizeOf, tiInteger, tiReal :: TISort
 tiArrow   = TIabstract
 tiBit     = TIabstract
@@ -1070,11 +1103,13 @@ preTypes = [
         TypeInfo (Just idMul) (Kfun KNum (Kfun KNum (Kfun KNum KStar))) [v1, v2, v3] (TIstruct SClass []) (Just idPrelude),
         TypeInfo (Just idDiv) (Kfun KNum (Kfun KNum (Kfun KNum KStar))) [v1, v2, v3] (TIstruct SClass []) (Just idPrelude),
         TypeInfo (Just idLog) (Kfun KNum (Kfun KNum KStar)) [v1, v2] (TIstruct SClass []) (Just idPrelude),
-        TypeInfo (Just idNumEq) (Kfun KNum (Kfun KNum KStar)) [v1, v2] (TIstruct SClass []) (Just idPrelude)
+        TypeInfo (Just idNumEq) (Kfun KNum (Kfun KNum KStar)) [v1, v2] (TIstruct SClass []) (Just idPrelude),
+        TypeInfo (Just idStarEq) kSSS [v1, v2] (TIstruct SClass []) (Just idPrelude)
         ]
 
 preClasses :: SymTab -> [Class]
 preClasses symT = [clsNumEq symT,
+                   clsStarEq symT,
                    clsAdd symT,
                    clsMax,
                    clsMin,

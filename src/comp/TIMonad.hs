@@ -15,7 +15,7 @@ module TIMonad(
         errorAtId, findCons, findTyCon, findFields, findCls,
         bitCls,
         literalCls, realLiteralCls, sizedLiteralCls, stringLiteralCls,
-        numEqCls,
+        numEqCls, starEqCls,
         updAssumpPos,
         recordPackageUse,
         incrementSatStack, decrementSatStack, getSatStack, mkTSSatElement, TSSatElement,
@@ -45,7 +45,7 @@ import Scheme
 import Assump
 import SymTab
 import PreIds(idBits, idLiteral, idRealLiteral, idSizedLiteral,
-              idStringLiteral, idNumEq)
+              idStringLiteral, idNumEq, idStarEq)
 import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
@@ -524,6 +524,9 @@ stringLiteralCls = findCls (CTypeclass idStringLiteral)
 
 numEqCls :: TI Class
 numEqCls = findCls (CTypeclass idNumEq)
+
+starEqCls :: TI Class
+starEqCls = findCls (CTypeclass idStarEq)
 
 -- Given a field "field_id" encountered in the program (as a field select,
 -- a field update, a field definition in a struct literal, or a pattern)
