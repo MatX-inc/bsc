@@ -701,15 +701,16 @@ data ErrMsg =
         | ETypeSynRecursive [String]
         | EDuplicateInstance String Position
         | EBadInstanceOverlap String String Position
-        | EMissingATFEquation String String   -- ^ class name, ATF name
-        | EExtraATFEquation String String     -- ^ class name, ATF name
-        | EDuplicateATFEquation String String -- ^ class name, ATF name
-        | EATFEquationInLet String            -- ^ ATF name
-        | EATFPatternMismatch String String        -- ^ class name, ATF name
+        | EMissingATFEquation String String       -- ^ class name, ATF name
+        | EExtraATFEquation String String         -- ^ class name, ATF name
+        | EDuplicateATFEquation String String     -- ^ class name, ATF name
+        | EATFEquationInLet String                -- ^ ATF name
+        | EATFPatternMismatch String String       -- ^ class name, ATF name
         | EATFArityMismatch String String Int Int  -- ^ class name, ATF name, expected, actual
         | EATFDeclParamMismatch String String String String -- ^ class name, ATF name, expected param, actual param
-        | EATFExtraArgNotVar String String String  -- ^ class name, ATF name, non-variable argument
-        | EATFEqUnsupportedKind String String String  -- ^ type1, type2, kind
+        | EATFExtraArgNotVar String String String  -- ^ class name, ATF name, bad arg
+        | EATFResultNotDetermined String String [String]     -- ^ ATF name, result var, params
+        | EATFInInstanceHead String  -- ^ type function name
 
         | EUndefinedTask String
         | EUnboundCon String (Maybe String)
@@ -2973,36 +2974,36 @@ getErrorText (EConstrFieldsNotNamed c t) =
             " does not have named fields."))
 
 getErrorText (WUnusedImport pkg) =
-    (Type 152, empty,
+    (Type 160, empty,
      s2par ("Package " ++ ishow pkg ++ " is imported but not used"))
 
 getErrorText (EIncoherentDepends match depends) =
-    (Type 153, empty,
+    (Type 163, empty,
      s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
             " and this is forbidden"))
 getErrorText (WIncoherentDepends match depends) =
-    (Type 154, empty,
+    (Type 164, empty,
      s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
             " so it is actually incoherent."))
 
 getErrorText (EMissingATFEquation cls atf) =
-    (Type 155, empty,
+    (Type 152, empty,
      s2par ("Instance of class " ++ ishow cls ++
             " is missing a type family equation for " ++ ishow atf))
 
 getErrorText (EExtraATFEquation cls atf) =
-    (Type 156, empty,
+    (Type 153, empty,
      s2par ("Instance of class " ++ ishow cls ++
             " provides a type family equation for " ++ ishow atf ++
             " which is not an associated type of that class"))
 
 getErrorText (EDuplicateATFEquation cls atf) =
-    (Type 157, empty,
+    (Type 154, empty,
      s2par ("Instance of class " ++ ishow cls ++
             " has duplicate type family equations for " ++ ishow atf))
 
 getErrorText (EATFEquationInLet atf) =
-    (Type 158, empty,
+    (Type 155, empty,
      s2par ("A type family equation for " ++ ishow atf ++
             " may only appear in a class instance declaration"))
 
@@ -3019,6 +3020,12 @@ getErrorText (EATFArityMismatch cls atf expected actual) =
             " has " ++ show actual ++ " argument" ++ (if actual == 1 then "" else "s") ++
             " on the left-hand side but the declaration has " ++ show expected))
 
+getErrorText (EATFExtraArgNotVar cls atf arg) =
+    (Type 159, empty,
+     s2par ("Type family equation for " ++ ishow atf ++
+            " in instance of " ++ ishow cls ++
+            " has a non-variable extra argument " ++ ishow arg))
+
 getErrorText (EATFDeclParamMismatch cls atf expected actual) =
     (Type 158, empty,
      s2par ("Type family declaration for " ++ ishow atf ++
@@ -3026,19 +3033,17 @@ getErrorText (EATFDeclParamMismatch cls atf expected actual) =
             " expects parameter " ++ ishow expected ++
             " but found " ++ ishow actual))
 
-getErrorText (EATFExtraArgNotVar cls atf arg) =
-    (Type 159, empty,
-     s2par ("Extra argument " ++ ishow arg ++
-            " in type family equation for " ++ ishow atf ++
-            " in instance of " ++ ishow cls ++
-            " is not a type variable"))
+getErrorText (EATFResultNotDetermined atf result params) =
+    (Type 162, empty,
+     s2par ("Type function " ++ ishow atf ++
+            ": result variable " ++ ishow result ++
+            " is not determined by parameters " ++ intercalate ", " params ++
+            " via any functional dependency"))
 
-getErrorText (EATFEqUnsupportedKind t1 t2 k) =
-    (Type 160, empty,
-     s2par ("Cannot create an equality constraint for types of kind " ++ ishow k ++
-            " (only kinds # and * are currently supported):") $$
-     s2par ("  " ++ t1) $$
-     s2par ("  " ++ t2))
+getErrorText (EATFInInstanceHead atf) =
+    (Type 161, empty,
+     s2par ("Type function " ++ ishow atf ++
+            " cannot be used in an instance head"))
 
 -- Generation Errors
 

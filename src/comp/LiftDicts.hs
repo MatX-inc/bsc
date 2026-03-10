@@ -185,10 +185,10 @@ handleDictExpr p t e@(CTApply f ts)
   | not $ null $ tv ts = return (e, False)
   | otherwise          = do
       fTy <- handleDictFun [] e
-      when (expandSyn M.empty t /= expandSyn M.empty fTy) $ internalError $ "Dictionary type does not match expectation: " ++ ppReadable (fTy, t, e)
+      when (expandSyn t /= expandSyn fTy) $ internalError $ "Dictionary type does not match expectation: " ++ ppReadable (fTy, t, e)
       return (e, True)
 handleDictExpr p t e@(CStructT t' [])
-  | expandSyn M.empty t /= expandSyn M.empty t' = internalError $ "Dictionary type does not match expectation: " ++ ppReadable (t, t', e)
+  | expandSyn t /= expandSyn t' = internalError $ "Dictionary type does not match expectation: " ++ ppReadable (t, t', e)
   | not $ null $ tv t' = return (e, False)
   | otherwise = return (e, True)
 handleDictExpr p t e = internalError $ "handleDictExpr unexpected expression: " ++ ppReadable (p, t, e) ++ "\n" ++ show e
