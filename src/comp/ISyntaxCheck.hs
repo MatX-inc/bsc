@@ -81,13 +81,13 @@ eqTypeATF :: Flags -> SymTab -> Env -> IType -> IType -> Bool
 eqTypeATF flags symt r t t' =
     let (e_ct, ct)   = convType r t
         (E _ _ _ (PredEnv _ m s), ct') = convType e_ct t'
-    in  case fst $ runTI flags False symt $
+    in  case fst3 (runTI flags False symt $
               do eqs <- mapM mkEPred (S.toList s)
                  addBoundTVs (M.elems m)
                  addExplPreds eqs
                  ct_exp  <- normT ct
                  ct_exp' <- normT ct'
-                 return (ct_exp, ct_exp')
+                 return (ct_exp, ct_exp'))
         of Right (a, b) -> a == b
            _            -> False
 
