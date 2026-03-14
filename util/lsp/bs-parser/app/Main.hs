@@ -10,7 +10,7 @@ import qualified Data.ByteString as BS
 import Options.Applicative
 import Prettyprinter
 import Text.Megaparsec (errorBundlePretty)
-import Prettyprinter.Render.Text (putDoc)
+import Prettyprinter.Render.Text ()
 import System.Exit (exitFailure)
 import System.FilePath (takeFileName)
 
@@ -91,7 +91,7 @@ main = do
 runParse :: FilePath -> IO ()
 runParse path = do
   content <- readFileLenient path
-  case parsePackage (T.pack path) content of
+  case parseAuto path content of
     Left err -> do
       putStrLn $ "Parse error in " ++ path ++ ":"
       putStrLn $ errorBundlePretty err
@@ -105,7 +105,7 @@ runParse path = do
 runPretty :: FilePath -> Int -> IO ()
 runPretty path width = do
   content <- readFileLenient path
-  case parsePackage (T.pack path) content of
+  case parseAuto path content of
     Left err -> do
       putStrLn $ "Parse error in " ++ path ++ ":"
       putStrLn $ errorBundlePretty err
@@ -117,7 +117,7 @@ runPretty path width = do
 runCheck :: FilePath -> IO ()
 runCheck path = do
   content <- readFileLenient path
-  case parsePackage (T.pack path) content of
+  case parseAuto path content of
     Left err -> do
       putStrLn $ "Parse error in " ++ path ++ ":"
       putStrLn $ errorBundlePretty err
