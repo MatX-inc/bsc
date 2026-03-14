@@ -199,7 +199,8 @@ prettyConstructor con = case conRecord con of
 
 prettyField :: Field -> Doc ann
 prettyField f =
-  prettyLIdent (fieldName f) <+> "::" <+> prettyQualType (locVal (fieldType f)) <>
+  prettyLIdent (fieldName f) <>
+  maybe mempty (\ty -> " ::" <+> prettyQualType (locVal ty)) (fieldType f) <>
   hsep (map prettyMethodPragma (fieldPragmas f)) <>
   maybe mempty (\e -> " =" <+> prettyLExpr e) (fieldDefault f)
 
@@ -475,10 +476,13 @@ prettyRule r = hsep $ catMaybes
 
 prettyRulePragma :: RulePragma -> Doc ann
 prettyRulePragma = \case
-  RPNoImplicitConditions -> "{-# ASSERT no implicit conditions #-}"
-  RPFireWhenEnabled -> "{-# ASSERT fire when enabled #-}"
+  RPNoImplicitConditions -> "{-# no_implicit_conditions #-}"
+  RPAggressiveImplicitConditions -> "{-# aggressive_implicit_conditions #-}"
+  RPConservativeImplicitConditions -> "{-# conservative_implicit_conditions #-}"
+  RPFireWhenEnabled -> "{-# fire_when_enabled #-}"
   RPCanScheduleFirst -> "{-# can_schedule_first #-}"
   RPClockCrossingRule -> "{-# clock_crossing_rule #-}"
+  RPNoWarn -> "{-# no_warn #-}"
   RPDoc t -> "{-#" <+> pretty t <+> "#-}"
 
 prettyInterfaceField :: InterfaceField -> Doc ann

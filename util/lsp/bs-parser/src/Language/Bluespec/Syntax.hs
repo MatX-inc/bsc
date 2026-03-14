@@ -238,7 +238,7 @@ data Binding = Binding
 data Field = Field
   { fieldSpan    :: !SrcSpan
   , fieldName    :: !(Located Ident)
-  , fieldType    :: !(Located QualType)  -- ^ Field type, possibly with class constraints
+  , fieldType    :: !(Maybe (Located QualType))  -- ^ Field type (Nothing for default-only fields)
   , fieldPragmas :: ![MethodPragma]
   , fieldDefault :: !(Maybe LExpr)
   }
@@ -522,9 +522,12 @@ data Rule = Rule
 -- | A pragma for rules.
 data RulePragma
   = RPNoImplicitConditions
+  | RPAggressiveImplicitConditions
+  | RPConservativeImplicitConditions
   | RPFireWhenEnabled
   | RPCanScheduleFirst
   | RPClockCrossingRule
+  | RPNoWarn
   | RPDoc !Text
   deriving stock (Eq, Show, Generic)
 

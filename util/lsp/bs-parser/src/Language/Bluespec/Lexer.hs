@@ -19,7 +19,7 @@ module Language.Bluespec.Lexer
   ) where
 
 import Control.Monad (void, when)
-import Data.Char (isAlpha, isAlphaNum, isDigit, isHexDigit, isOctDigit, isSpace)
+import Data.Char (isAlpha, isAlphaNum, isDigit, isHexDigit, isOctDigit, isSpace, isSymbol, isPunctuation, isUpper, generalCategory, GeneralCategory(..))
 import Data.List (foldl')
 import Data.List.NonEmpty (toList)
 import Data.Text (Text)
@@ -268,18 +268,27 @@ withSpan file p = do
 -- Identifier Lexers
 --------------------------------------------------------------------------------
 
+-- | Check if character is uppercase or titlecase (can start a constructor ID).
+isUpperOrTitle :: Char -> Bool
+isUpperOrTitle c = let gc = generalCategory c
+                   in gc == UppercaseLetter || gc == TitlecaseLetter
+
 -- | Check if character can start an identifier.
 isIdentStart :: Char -> Bool
 isIdentStart c = isAlpha c || c == '_'
 
 -- | Check if character can continue an identifier.
+-- Includes Unicode letters (for identifiers like a°, a´) and prime.
 isIdentChar :: Char -> Bool
 isIdentChar c = isAlphaNum c || c == '_' || c == '\''
+             || (c > '\x7F' && isAlpha c)  -- Unicode letters (°, ´, etc.)
+             || c == '\x00B0'  -- ° DEGREE SIGN
+             || c == '\x00B4'  -- ´ ACUTE ACCENT / PRIME
 
 -- | Lex a lowercase identifier or keyword.
 varIdOrKeyword :: Lexer TokenKind
 varIdOrKeyword = do
-  c <- satisfy (\x -> isIdentStart x && (x < 'A' || x > 'Z'))
+  c <- satisfy (\x -> isIdentStart x && not (isUpperOrTitle x))
   rest <- takeWhileP Nothing isIdentChar
   let ident = T.cons c rest
   pure $ case keywordMap ident of
@@ -289,18 +298,27 @@ varIdOrKeyword = do
 -- | Lex an uppercase identifier.
 conId :: Lexer TokenKind
 conId = do
-  c <- satisfy (\x -> x >= 'A' && x <= 'Z')
+  c <- satisfy isUpperOrTitle
   rest <- takeWhileP Nothing isIdentChar
   let ident = T.cons c rest
   -- Check for qualified name (use lookAhead to check without consuming)
-  mDot <- optional (try (lookAhead (char '.' *> satisfy isIdentStart)))
+  -- Handles: ConId.varId, ConId.ConId, ConId.+, ConId.:+: etc.
+  mDot <- optional (try (lookAhead (char '.' *> (satisfy isIdentStart <|> satisfy isOpChar))))
   case mDot of
-    Just _ -> do
+    Just c2 | isIdentStart c2 -> do
       void $ char '.'  -- Now consume the dot
       qIdent <- takeWhile1P Nothing isIdentChar
-      pure $ if isUpper (T.head qIdent)
+      pure $ if isUpperOrTitle (T.head qIdent)
         then TokQConId ident qIdent
         else TokQVarId ident qIdent
+    Just _ -> do
+      -- Qualified operator: ConId.+, ConId.:+:, etc.
+      void $ char '.'  -- consume the dot
+      op <- takeWhile1P Nothing isOpChar
+      -- Ops starting with ':' are constructor symbols (ConSym), others are VarSym
+      pure $ if T.head op == ':'
+        then TokQConSym ident op
+        else TokQVarSym ident op
     Nothing -> pure $ TokConId ident
   where
     isUpper c = c >= 'A' && c <= 'Z'
@@ -311,7 +329,10 @@ conId = do
 
 -- | Characters that can appear in operators.
 isOpChar :: Char -> Bool
-isOpChar c = c `elem` ("!#$%&*+./<=>?@\\^|-~:" :: String) || c == '\x2218'  -- ∘
+isOpChar c = c `elem` ("!#$%&*+./<=>?@\\^|-~:" :: String)
+          || c == '\x2218'  -- ∘ COMPOSITION SIGN
+          || c == '\x00BB'  -- » RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK (used in BSC libs)
+          || (c > '\x7F' && (isSymbol c || isPunctuation c))
 
 -- | Reserved operators that are punctuation.
 reservedOps :: [(Text, Punctuation)]
@@ -390,7 +411,7 @@ numericLit = sized <|> unsized
             sign <- option "" (T.singleton <$> oneOf ("+-" :: String))
             exp' <- takeWhile1P Nothing isDigit
             pure (sign <> exp')
-          let floatStr = T.pack (show int) <> "." <> frac <> maybe "" id mExp
+          let floatStr = T.pack (show int) <> "." <> frac <> maybe "" ("e" <>) mExp
           pure $ TokFloat (read $ T.unpack floatStr)
         Nothing -> do
           mExp <- optional $ try $ do
@@ -606,7 +627,7 @@ instance TraversableStream TokenStream where
         newPos = case post of
           (t:_) -> let sp = tokSpan t
                        p = spanBegin sp
-                   in SourcePos (T.unpack $ spanFile sp) (mkPos $ Pos.posLine p) (mkPos $ Pos.posColumn p)
+                   in SourcePos (T.unpack $ spanFile sp) (mkPos $ max 1 $ Pos.posLine p) (mkPos $ max 1 $ Pos.posColumn p)
           [] -> pstateSourcePos pst
     in ( Just (T.unpack $ T.intercalate " " $ map (T.pack . show . tokKind) pre)
        , pst { pstateInput = TokenStream post

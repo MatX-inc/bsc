@@ -246,9 +246,10 @@ literal :: Parser (Located Literal)
 literal = intLit <|> floatLit <|> charLit <|> stringLit
 
 -- | Match a module identifier.
+-- Bluespec allows lowercase package names (e.g. 'package manyVariations where').
 moduleId :: Parser (Located ModuleId)
 moduleId = do
-  c <- conId
+  c <- conId <|> varId
   pure $ Located (locSpan c) (ModuleId $ identText $ locVal c)
 
 --------------------------------------------------------------------------------
@@ -307,7 +308,10 @@ pPackage = do
   startSpan <- getPos
   void $ keyword Lex.KwPackage
   name <- moduleId
-  exports <- optional pExports
+  -- Support both "package Foo (...) where" and "package Foo hiding (...) where"
+  -- 'hiding' is not a keyword so we skip it as a varId if present
+  exports <- optional $ try pExports <|>
+    (varIdNamed "hiding" *> pExports)
   void $ keyword Lex.KwWhere
   void lbrace
   (imports, fixities, defns) <- pPackageBody
@@ -653,22 +657,37 @@ pInterfaceDef = do
   pure $ DefInterface name tvars (map (fmap id) fields) derivs
 
 -- | Parse a field.
+-- Supports: name :: Type [= default]   (standard)
+--           name = default             (default-only, no type annotation)
 pField :: Parser (Located Field)
 pField = withSpan $ do
   name <- varId
-  void $ punct Lex.PunctDColon
-  ty <- withSpan pQualType
-  pragmas <- concat <$> many pMethodPragma
-  def <- optional $ do
-    void $ punct Lex.PunctEqual
-    pExpr
-  pure Field
-    { fieldSpan = noSpan  -- Will be filled by withSpan
-    , fieldName = name
-    , fieldType = ty
-    , fieldPragmas = pragmas
-    , fieldDefault = def
-    }
+  hasDColon <- option False (True <$ try (punct Lex.PunctDColon))
+  if hasDColon
+    then do
+      ty <- withSpan pQualType
+      pragmas <- concat <$> many pMethodPragma
+      def <- optional $ do
+        void $ punct Lex.PunctEqual
+        pExpr
+      pure Field
+        { fieldSpan = noSpan
+        , fieldName = name
+        , fieldType = Just ty
+        , fieldPragmas = pragmas
+        , fieldDefault = def
+        }
+    else do
+      -- No type annotation: must have = default
+      void $ punct Lex.PunctEqual
+      def <- pExpr
+      pure Field
+        { fieldSpan = noSpan
+        , fieldName = name
+        , fieldType = Nothing
+        , fieldPragmas = []
+        , fieldDefault = Just def
+        }
 
 -- | Parse a single method pragma (without delimiters).
 pMethodPragmaItem :: Parser MethodPragma
@@ -717,16 +736,23 @@ pMethodPragmaItem = choice
       pure $ MPArgNames names
   ]
 
--- | Parse an argument name (either a variable identifier or a string literal).
+-- | Parse an argument name (either a variable identifier, constructor ID,
+-- qualified identifier, or string literal).
+-- Bluespec allows arg_names = [FOO.bar] (qualified), [FOOBAR] (ConId), etc.
 pArgName :: Parser Text
 pArgName = choice
-  [ identText . locVal <$> varId
+  [ qualIdToText <$> qualId
   , do
       s <- stringLit
       pure $ case locVal s of
         LitString t -> t
         _ -> ""
   ]
+  where
+    qualIdToText qi = case locVal qi of
+      QualIdent Nothing i    -> identText i
+      QualIdent (Just m) i   -> moduleIdText m <> "." <> identText i
+    moduleIdText (ModuleId t) = t
 
 -- | Parse method pragmas (returns list from one pragma block).
 pMethodPragma :: Parser [MethodPragma]
@@ -981,9 +1007,21 @@ pForeignDef = do
   void $ punct Lex.PunctDColon
   ty <- withSpan pQualType
   -- The external name is optional, with an = before the string
+  -- Optionally followed by a port mapping: ,"portName" or ,("in","out",...)
   mStr <- optional $ do
     void $ punct Lex.PunctEqual
-    locVal <$> stringLit
+    s <- locVal <$> stringLit
+    -- Consume optional port mapping: ,("i","o") or ,"portname"
+    optional $ do
+      void $ punct Lex.PunctComma
+      choice
+        [ void $ do
+            void $ punct Lex.PunctLParen
+            stringLit `sepBy` punct Lex.PunctComma
+            void $ punct Lex.PunctRParen
+        , void stringLit
+        ]
+    pure s
   let foreignStr = case mStr of
         Just (LitString s) -> Just s
         _ -> Nothing
@@ -1282,10 +1320,20 @@ pExpr :: Parser LExpr
 pExpr = do
   e <- pExprOps
   -- Check for type annotation: expr :: type
+  -- In Bluespec, ':: T' can be followed by more operators: (e :: T) + 1
   mTy <- optional $ punct Lex.PunctDColon *> withSpan pQualType
   e' <- case mTy of
     Nothing -> pure e
-    Just ty -> pure $ spanning e ty (ETypeSig e ty)
+    Just ty -> do
+      let annotated = spanning e ty (ETypeSig e ty)
+      -- Continue with any trailing operators after the annotation
+      mOps <- many $ do
+        op <- anyOp
+        e2 <- pLExpr
+        pure (op, e2)
+      case mOps of
+        [] -> pure annotated
+        ops -> pure $ foldl (\a (op, b) -> spanning a b (EInfix a op b)) annotated ops
   -- Check for expression-level where clause: expr where { bindings }
   -- This is sugar for let { bindings } in expr (Cletrec in the reference)
   mWhere <- optional $ try $ do
@@ -1316,7 +1364,10 @@ pLExpr = choice
   , pLetSeq
   , pIf
   , pCase
-  , pDo
+  -- pDo is intentionally NOT here: it's in pAExpr' so that
+  -- action/do blocks can have function arguments applied, e.g.
+  -- "action { f a } clk := iz" parses as "(action {...}) clk := iz"
+  -- matching BSC's behavior where blkexp is an aexp.
   , pModule
   , pRules
   , pInterface
@@ -1395,6 +1446,17 @@ pDo = do
   stmts <- block pStmt
   end <- getPos
   pure $ Located (mergeSpans (spanOf start) end) (EDo (map (Located noSpan) stmts))
+
+-- | Parse a bare block expression: { stmts }
+-- Used in rule bodies like: ==> { q.enq True }
+-- This is shorthand for an anonymous action block.
+pBareBlock :: Parser LExpr
+pBareBlock = try $ do
+  start <- lbrace
+  stmts <- pStmt `sepEndBy` semis
+  end <- rbrace
+  let sp = mergeSpans (spanOf start) (spanOf end)
+  pure $ Located sp (EDo (map (Located noSpan) stmts))
 
 -- | Skip any inline pragmas (e.g., {-# hide #-}).
 -- These can appear before statements and bindings.
@@ -1781,16 +1843,22 @@ pRulePragma = do
   void $ tok Lex.TokPragmaStart
   pragma <- choice
     [ RPNoImplicitConditions <$ varIdNamed "no_implicit_conditions"
+    , RPAggressiveImplicitConditions <$ varIdNamed "aggressive_implicit_conditions"
+    , RPConservativeImplicitConditions <$ varIdNamed "conservative_implicit_conditions"
     , RPFireWhenEnabled <$ varIdNamed "fire_when_enabled"
     , RPCanScheduleFirst <$ varIdNamed "can_schedule_first"
     , RPClockCrossingRule <$ varIdNamed "clock_crossing_rule"
+    , RPNoWarn <$ varIdNamed "no_warn"
     -- ASSERT-style pragmas: {-# ASSERT fire when enabled #-}
     --                       {-# ASSERT no implicit conditions #-}
+    --                       {-# ASSERT AGGRESSIVE_IMPLICIT_CONDITIONS #-}
     , do
         void $ conIdNamed "ASSERT"
         choice
           [ RPFireWhenEnabled <$ (varIdNamed "fire" *> keyword Lex.KwWhen *> varIdNamed "enabled")
           , RPNoImplicitConditions <$ (varIdNamed "no" *> varIdNamed "implicit" *> varIdNamed "conditions")
+          , RPAggressiveImplicitConditions <$ conIdNamed "AGGRESSIVE_IMPLICIT_CONDITIONS"
+          , RPConservativeImplicitConditions <$ conIdNamed "CONSERVATIVE_IMPLICIT_CONDITIONS"
           ]
     ]
   void $ tok Lex.TokPragmaEnd
@@ -1823,22 +1891,42 @@ pInterfaceBody :: Parser [InterfaceField]
 pInterfaceBody = block pInterfaceField <|> pure []
 
 pInterfaceField :: Parser InterfaceField
-pInterfaceField = do
-  start <- getPos
-  name <- varId
-  pats <- many pAtomicPattern
-  void $ punct Lex.PunctEqual
-  e <- pExpr
-  -- The when-guard can be a simple expression or a pattern guard (pat <- expr)
-  mWhen <- optional pGuard
-  end <- getPos
-  pure InterfaceField
-    { ifSpan = mergeSpans start end
-    , ifName = name
-    , ifPats = pats
-    , ifValue = e
-    , ifWhen = mWhen
-    }
+pInterfaceField = typeSigField <|> bindingField
+  where
+    -- Type-only annotation: name :: type
+    -- These appear in interface expression bodies to annotate field types.
+    typeSigField = try $ do
+      start <- getPos
+      name <- varId
+      void $ punct Lex.PunctDColon
+      ty <- withSpan pQualType
+      end <- getPos
+      -- Represent as a type-annotated field with no binding (placeholder value)
+      let nameExpr = Located (locSpan name) (EVar (fmap (QualIdent Nothing) name))
+      pure InterfaceField
+        { ifSpan = mergeSpans start end
+        , ifName = name
+        , ifPats = []
+        , ifValue = spanning nameExpr ty (ETypeSig nameExpr ty)
+        , ifWhen = Nothing
+        }
+    -- Binding: name pats = expr [when guard]
+    bindingField = do
+      start <- getPos
+      name <- varId
+      pats <- many pAtomicPattern
+      void $ punct Lex.PunctEqual
+      e <- pExpr
+      -- The when-guard can be a simple expression or a pattern guard (pat <- expr)
+      mWhen <- optional pGuard
+      end <- getPos
+      pure InterfaceField
+        { ifSpan = mergeSpans start end
+        , ifName = name
+        , ifPats = pats
+        , ifValue = e
+        , ifWhen = mWhen
+        }
 
 -- | Parse function application.
 pFExpr :: Parser LExpr
@@ -1869,10 +1957,21 @@ data Suffix
 
 pSuffix :: Parser Suffix
 pSuffix = choice
-  [ SuffixField <$> (punct Lex.PunctDot *> (varId <|> ((\v -> Located (locSpan v) (VarId (identText (locVal v)))) <$> conId)))
+  [ SuffixField <$> (punct Lex.PunctDot *> pFieldName)
   , SuffixRecordUpd <$> (lbrace *> pFieldBind `sepEndBy` semis <* rbrace)
   , try pBitSelect  -- Bit selection: e[hi:lo]
   ]
+
+-- | Parse a field name after '.': could be varId, conId, or an integer (for
+-- positional field selection, e.g. foo.0 or foo.bar.0.baz).
+pFieldName :: Parser (Located Ident)
+pFieldName = varId
+  <|> ((\v -> Located (locSpan v) (VarId (identText (locVal v)))) <$> conId)
+  <|> MP.token toFieldIdent Set.empty
+  where
+    toFieldIdent t = case Lex.tokKind t of
+      Lex.TokInteger n _ -> Just $ Located (Lex.tokSpan t) (VarId (T.pack (show n)))
+      _ -> Nothing
 
 -- | Parse bit selection suffix: [hi:lo]
 pBitSelect :: Parser Suffix
@@ -1903,6 +2002,7 @@ pAExpr' = choice
   , pLet
   , pLetSeq
   , pLambda
+  , pBareBlock  -- bare { stmts } block (e.g. rule body shorthand)
   ]
 
 -- | Parse a variable.
@@ -2072,10 +2172,18 @@ pAtomicPattern = choice
   , pWildPat
   , pLitPat
   , pConPat
+  , pOpVarPat
   , pTuplePat
   , pListPat
   , pParenPat
   ]
+
+-- | Parse an operator variable pattern: (op) e.g. (<=), (+)
+-- These match a higher-order function argument with the given operator.
+pOpVarPat :: Parser LPattern
+pOpVarPat = try $ do
+  op <- parenOpAsId
+  pure $ Located (locSpan op) (PVar op)
 
 -- | Parse a variable pattern (possibly with as-pattern).
 pVarPat :: Parser LPattern
@@ -2161,10 +2269,21 @@ pParenPat = do
 -- Top-level Parsing Functions
 --------------------------------------------------------------------------------
 
+-- | Strip C preprocessor line markers from input.
+-- CPP produces lines like: # 42 "filename.bs" [flags]
+-- These must be removed before lexing.
+stripCppMarkers :: Text -> Text
+stripCppMarkers = T.unlines . map stripLine . T.lines
+  where
+    stripLine ln = case T.uncons ln of
+      Just ('#', rest) | Just (c, _) <- T.uncons (T.stripStart rest), c >= '0' && c <= '9'
+                       -> T.empty
+      _                -> ln
+
 -- | Parse a complete package.
 parsePackage :: Text -> Text -> Either ParseError Package
 parsePackage file input = do
-  ts <- first (const $ bundleError "Lexer error") $ Lex.tokenize file input
+  ts <- first (const $ bundleError "Lexer error") $ Lex.tokenize file (stripCppMarkers input)
   let ts' = processLayout ts
   parse pPackage (T.unpack file) (Lex.TokenStream ts')
   where

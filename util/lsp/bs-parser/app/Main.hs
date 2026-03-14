@@ -3,7 +3,10 @@ module Main (main) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.Text.IO as TIO
+import qualified Data.ByteString as BS
 import Options.Applicative
 import Prettyprinter
 import Text.Megaparsec (errorBundlePretty)
@@ -68,6 +71,13 @@ opts = info (parseOptions <**> helper)
 -- Main
 --------------------------------------------------------------------------------
 
+-- | Read a file leniently: try UTF-8 first, fall back to Latin-1 decoding.
+-- Bluespec source files are typically UTF-8, but some legacy files use Latin-1.
+readFileLenient :: FilePath -> IO Text
+readFileLenient path = do
+  bytes <- BS.readFile path
+  pure $ TE.decodeUtf8With TEE.lenientDecode bytes
+
 main :: IO ()
 main = do
   options <- execParser opts
@@ -80,7 +90,7 @@ main = do
 
 runParse :: FilePath -> IO ()
 runParse path = do
-  content <- TIO.readFile path
+  content <- readFileLenient path
   case parsePackage (T.pack path) content of
     Left err -> do
       putStrLn $ "Parse error in " ++ path ++ ":"
@@ -94,7 +104,7 @@ runParse path = do
 
 runPretty :: FilePath -> Int -> IO ()
 runPretty path width = do
-  content <- TIO.readFile path
+  content <- readFileLenient path
   case parsePackage (T.pack path) content of
     Left err -> do
       putStrLn $ "Parse error in " ++ path ++ ":"
@@ -106,7 +116,7 @@ runPretty path width = do
 
 runCheck :: FilePath -> IO ()
 runCheck path = do
-  content <- TIO.readFile path
+  content <- readFileLenient path
   case parsePackage (T.pack path) content of
     Left err -> do
       putStrLn $ "Parse error in " ++ path ++ ":"
@@ -117,7 +127,7 @@ runCheck path = do
 
 runLex :: FilePath -> IO ()
 runLex path = do
-  content <- TIO.readFile path
+  content <- readFileLenient path
   case tokenize (T.pack path) content of
     Left err -> do
       putStrLn $ "Lexer error in " ++ path ++ ":"
@@ -129,7 +139,7 @@ runLex path = do
 
 runLayout :: FilePath -> IO ()
 runLayout path = do
-  content <- TIO.readFile path
+  content <- readFileLenient path
   case tokenize (T.pack path) content of
     Left err -> do
       putStrLn $ "Lexer error in " ++ path ++ ":"

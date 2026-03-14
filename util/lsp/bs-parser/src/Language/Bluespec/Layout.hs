@@ -98,15 +98,15 @@ processLayout tokens = go (LayoutState [] False False False Nothing False) token
   where
     go :: LayoutState -> [Token] -> [Token]
     go st ts = case ts of
-      [] -> closeAll (lsContext st)
+      [] -> closeAll (maybe noSpan tokSpan (lsPrevToken st)) (lsContext st)
 
       (t:rest)
         -- Handle EOF specially - close all contexts and emit EOF
         -- But if we're expecting a layout block, emit an empty block first
         | TokEOF <- tokKind t ->
             if lsAfterLayout st
-            then virtualLBrace t : virtualRBrace t : closeAll (lsContext st) ++ [t]
-            else closeAll (lsContext st) ++ [t]
+            then virtualLBrace t : virtualRBrace t : closeAll (tokSpan t) (lsContext st) ++ [t]
+            else closeAll (tokSpan t) (lsContext st) ++ [t]
 
         -- After a layout keyword, expect a brace or start implicit block
         | lsAfterLayout st -> case tokKind t of
@@ -133,6 +133,15 @@ processLayout tokens = go (LayoutState [] False False False Nothing False) token
                     | isExpressionLayoutKeyword (tokKind t) = case rest of
                         (next:_) | isConId (tokKind next) ->
                           newState { lsAfterExprKeyword = True }
+                        (next1:next2:next3:_)
+                          | TokPunct PunctLParen <- tokKind next1
+                          , isConId (tokKind next2)
+                          , TokPunct PunctDColon <- tokKind next3 ->
+                          -- interface/struct (ConId :: Kind) — kind-annotated definition
+                          newState { lsInDefinitionHeader = True }
+                        (next:_) | TokPunct PunctLParen <- tokKind next ->
+                          -- interface/struct ( but NOT kind-annotated: expression tuple
+                          newState
                         _ ->
                           newState { lsAfterLayout = True }
                     | isContextualLayoutKeyword (tokKind t) = case rest of
@@ -200,13 +209,19 @@ processLayout tokens = go (LayoutState [] False False False Nothing False) token
           t : go st { lsInDefinitionHeader = False, lsAfterLayout = True, lsPrevToken = Just t } rest
 
       -- Check for ConId after interface/struct
-      -- Only trigger layout if the NEXT token is on a new line (expression case)
-      -- If next token is on same line, it's likely a definition with type vars - wait for =
+      -- If next token is on same line: definition with type vars, wait for =
+      -- If next token is on new line and is '=': definition header (e.g. struct Foo\n  = ...)
+      -- If next token is on new line and is NOT '=': expression body, trigger layout
       | lsAfterExprKeyword st, isConId (tokKind t) =
           case rest of
             (next:_) | startsNewLine t next ->
-              -- Next token on new line: expression body, trigger layout
-              t : go st { lsAfterExprKeyword = False, lsAfterLayout = True, lsPrevToken = Just t } rest
+              case tokKind next of
+                TokPunct PunctEqual ->
+                  -- "struct Foo\n  =" pattern — this is a definition header
+                  t : go st { lsAfterExprKeyword = False, lsInDefinitionHeader = True, lsPrevToken = Just t } rest
+                _ ->
+                  -- Next token on new line, not '=': expression body, trigger layout
+                  t : go st { lsAfterExprKeyword = False, lsAfterLayout = True, lsPrevToken = Just t } rest
             _ ->
               -- Next token on same line: definition, wait for =
               t : go st { lsAfterExprKeyword = False, lsInDefinitionHeader = True, lsPrevToken = Just t } rest
@@ -231,11 +246,17 @@ processLayout tokens = go (LayoutState [] False False False Nothing False) token
             (next:_) | isConId (tokKind next) ->
               -- interface/struct followed by ConId: layout after the ConId
               t : go st { lsAfterExprKeyword = True, lsInDefinitionHeader = False, lsPrevToken = Just t } rest
+            (next1:next2:next3:_)
+              | TokPunct PunctLParen <- tokKind next1
+              , isConId (tokKind next2)
+              , TokPunct PunctDColon <- tokKind next3 ->
+              -- interface/struct followed by (ConId :: ...) — kind-annotated definition header.
+              -- Set lsInDefinitionHeader so the '=' after the closing ')' and type vars triggers layout.
+              t : go st { lsInDefinitionHeader = True, lsAfterLayout = False, lsAfterExprKeyword = False, lsPrevToken = Just t } rest
             (next:_) | TokPunct PunctLParen <- tokKind next ->
-              -- interface/struct followed by (: this is a tuple interface expression (interface (e1,e2))
-              -- or a kind-annotated definition header (interface (Foo :: Kind) ...).
-              -- In EITHER case, emit as-is without layout intervention — the parser handles both.
-              -- Do NOT set lsInDefinitionHeader (that would corrupt state for subsequent definitions).
+              -- interface/struct followed by ( but NOT a kind annotation:
+              -- tuple interface expression (interface (e1,e2)) or kind-annotated with (type).
+              -- Emit as-is without layout intervention.
               t : go st { lsInDefinitionHeader = False, lsAfterLayout = False, lsAfterExprKeyword = False, lsPrevToken = Just t } rest
             _ ->
               -- interface/struct NOT followed by ConId or (: layout immediately
@@ -290,13 +311,12 @@ processLayout tokens = go (LayoutState [] False False False Nothing False) token
         let vbrace = virtualRBrace t
         in vbrace : t : go st { lsContext = ctx', lsPrevToken = Just t } rest
 
-    -- Close all remaining implicit contexts
-    closeAll :: LayoutContext -> [Token]
-    closeAll [] = []
-    closeAll (0 : _) = []  -- Can't close explicit context without }
-    closeAll (m : ms) =
-      let dummySpan = noSpan
-      in Token dummySpan TokVRBrace : closeAll ms
+    -- Close all remaining implicit contexts, using refSpan for virtual token positions
+    closeAll :: SrcSpan -> LayoutContext -> [Token]
+    closeAll _ [] = []
+    closeAll _ (0 : _) = []  -- Can't close explicit context without }
+    closeAll refSpan (m : ms) =
+      Token refSpan TokVRBrace : closeAll refSpan ms
 
     -- Get current indentation level
     currentIndent :: LayoutContext -> Int

@@ -708,7 +708,7 @@ collectField (Located _ Field {..}) = do
       { symName = identText $ locVal fieldName,
         symKind = SKField,
         symSpan = locSpan fieldName,
-        symType = Just $ formatQualType $ locVal fieldType,
+        symType = fmap (formatQualType . locVal) fieldType,
         symDoc = Nothing,
         symParent = parent
       }
