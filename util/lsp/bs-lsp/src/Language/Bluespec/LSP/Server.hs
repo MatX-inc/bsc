@@ -124,7 +124,7 @@ getWorkspaceRoots params =
   case params ^. Lens.workspaceFolders of
     Just (InL folders) -> mapMaybe getFolderPath folders
     _ -> case params ^. Lens.rootUri of
-      InL uri -> [uriToPath uri]
+      InL docUri -> [uriToPath docUri]
       InR _ -> case params ^. Lens.rootPath of
         Just (InL path) -> [T.unpack path]
         _ -> []

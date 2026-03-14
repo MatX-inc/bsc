@@ -18,9 +18,25 @@ all:
 	cp $$(cd bs-lsp && cabal list-bin bs-lsp) $(PWD)/bs-lsp-bin
 
 .PHONY: install
-install: all
+install: all install-libs
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 bs-lsp-bin $(BINDIR)/bs-lsp
+
+LIBDIR = $(PREFIX)/lib/lsp-libs
+LSP_LIB_BASES = Base1 Base2 Base3-Contexts Base3-Math Base3-Misc
+
+.PHONY: install-libs
+install-libs:
+	$(INSTALL) -m 755 -d $(LIBDIR)
+	@for base in $(LSP_LIB_BASES); do \
+	  src="$(REPO_ROOT)/src/Libraries/$$base"; \
+	  if [ -d "$$src" ]; then \
+	    echo "Installing $$base -> $(LIBDIR)/$$base"; \
+	    cp -r "$$src" "$(LIBDIR)/$$base"; \
+	  else \
+	    echo "Warning: $$src not found, skipping"; \
+	  fi; \
+	done
 
 # Install the VSCode extension.  Requires Node.js / npm.
 # Skips gracefully if npm is not available.

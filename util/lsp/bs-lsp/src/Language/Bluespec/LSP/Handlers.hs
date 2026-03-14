@@ -68,11 +68,11 @@ handlers stateVar =
         result <- handleDefinition stateVar docUri pos
         responder $ Right result
 
-        -- Document symbols - disabled for now due to type issues
-        -- , requestHandler SMethod_TextDocumentDocumentSymbol $ \req responder -> do
-        --     let docUri = req ^. Lens.params . Lens.textDocument . Lens.uri
-        --     result <- handleDocumentSymbols stateVar docUri
-        --     responder $ Right result
+        -- Document symbols
+      , requestHandler SMethod_TextDocumentDocumentSymbol $ \req responder -> do
+          let docUri = req ^. Lens.params . Lens.textDocument . Lens.uri
+          result <- handleDocumentSymbols stateVar docUri
+          responder $ Right result
     ]
 
 -- | Handle document open - parse and publish diagnostics.
@@ -197,13 +197,13 @@ handleDefinition stateVar docUri pos = do
           Just loc -> pure $ InL $ Definition $ InL loc
 
 -- | Handle document symbols request.
-handleDocumentSymbols :: TVar ServerState -> Uri -> LspM () ([DocumentSymbol] |? ([SymbolInformation] |? Null))
+handleDocumentSymbols :: TVar ServerState -> Uri -> LspM () ([SymbolInformation] |? ([DocumentSymbol] |? Null))
 handleDocumentSymbols stateVar docUri = do
   let nuri = toNormalizedUri docUri
   state <- liftIO $ readTVarIO stateVar
   case getDocument nuri state of
     Nothing -> pure $ InR $ InR Null
-    Just doc -> pure $ InL $ getDocumentSymbols (dsSymbols doc)
+    Just doc -> pure $ InR $ InL $ getDocumentSymbols (dsSymbols doc)
 
 -- | Extract filename from URI.
 uriToFilename :: Uri -> Text
