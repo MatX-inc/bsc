@@ -195,8 +195,6 @@ idLog = prelude_id_no fsLog
 idMul = prop_prelude_id_no fsMul [IdPCommutativeTCon]
 idDiv = prelude_id_no fsDiv
 idNumEq = prop_prelude_id_no fsNumEq [IdPCommutativeTCon]
-idStarEq :: Id
-idStarEq = prop_prelude_id_no fsStarEq [IdPCommutativeTCon]
 idAnd = prelude_id_no fsAnd
 idNot = prelude_id_no fsNot
 idPrimSplit = prelude_id_no fsPrimSplit
