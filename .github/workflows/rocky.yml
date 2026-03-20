@@ -1,7 +1,11 @@
 name: Rocky 8 build
 
 # Trigger the workflow on push or pull request
-on: [ push, pull_request, workflow_dispatch ]
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build-ubuntu:
