@@ -423,6 +423,16 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 (_,_,IAps (ICon _ (ICPrim _ PrimBNot)) _ [x]) | eqE cnd x
                                       -> iTrAp2 ctx p [t] [cnd,thn,iTrue]
 
+                -- if c then undefined else e  -->  e
+                -- Safe for bit types because ICUndet only appears in the
+                -- THEN branch for invalid enum constructors (e.g. tag==3
+                -- when 3 is not a valid constructor).  Pack/unpack chains
+                -- like "if (x==k) k _" always put ICUndet in the ELSE
+                -- branch, so this rule does not interfere with that
+                -- optimisation (unlike the symmetric ELSE rule which must
+                -- remain suppressed for bit types).
+                (_, ICon _ (ICUndet {}), _) -> (els, True)
+
                 _ -> (IAps p [t] [cnd, thn, els], False)
 
 -- Boolean optimization
