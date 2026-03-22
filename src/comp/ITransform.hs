@@ -36,6 +36,7 @@ import Prim
 import Pragma(DefProp, defPropsHasNoCSE)
 import ISyntax
 import ISyntaxUtil
+import Undefined(UndefKind(..))
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
 import BExpr
@@ -422,6 +423,14 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                                       -> iTrAp2 ctx p [t] [cnd,iFalse,els]
                 (_,_,IAps (ICon _ (ICPrim _ PrimBNot)) _ [x]) | eqE cnd x
                                       -> iTrAp2 ctx p [t] [cnd,thn,iTrue]
+
+                -- if c then NoMatch else e  -->  e
+                -- A UNoMatch in the then-branch means this arm corresponds
+                -- to an impossible pattern (e.g. an out-of-range enum tag).
+                -- The else branch is always the result, so drop the if.
+                -- Restricted to UNoMatch; UDontCare is a user-written "_"
+                -- whose value is genuinely unknown and must not be dropped.
+                (_, ICon _ (ICUndet { iuKind = UNoMatch }), _) -> (els, True)
 
                 _ -> (IAps p [t] [cnd, thn, els], False)
 
