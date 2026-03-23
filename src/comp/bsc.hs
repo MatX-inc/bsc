@@ -101,7 +101,6 @@ import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
 import IExpand(iExpand)
-import INormTypes(iNormTypes)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
 import IInline(iInline)
@@ -735,6 +734,7 @@ genModule
     -- "run" it
     start flags DFexpanded
     imod0 <- iExpand errh flags symt alldefs fwrapper pps def
+    iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
     stats flags DFexpanded imod0
@@ -747,18 +747,8 @@ genModule
       putStrLn "Rule state locs"
       putStr (ppReadable rule_locs)
 
-    -- normalize types (handle lingering SizeOf)
-    -- Note the we deliberately do not call iMCheck on the
-    -- output of iExpand before iNormTypes because iMCheck
-    -- won't let SizeOf through (except for a tricky edge case)
-    start flags DFnormtypes
-    let imod_norm = iNormTypes flags symt imod0
-    t <- dump errh flags t DFnormtypes dumpnames imod_norm
-    stats flags DFnormtypes imod_norm
-    iMCheck flags symt imod_norm "normtypes"
-
     start flags DFinlineFmt
-    imod_fmt <- iInlineFmt errh imod_norm
+    imod_fmt <- iInlineFmt errh imod0
     iMCheck flags symt imod_fmt "Fmt inline"
     t <- dump errh flags t DFinlineFmt dumpnames imod_fmt
     stats flags DFinlineFmt imod_fmt

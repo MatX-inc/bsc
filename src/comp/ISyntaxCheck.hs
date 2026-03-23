@@ -16,7 +16,8 @@ import PreIds
 import ISyntax
 import ISyntaxSubst(tSubst)
 import ISyntaxUtil
-import SymTab(SymTab, mustFindClass, findSClass)
+import IExpandUtils
+import SymTab(SymTab, mustFindClass, findSClass, getAllTypes, TypeInfo(..))
 
 import Pred
 import CType
@@ -46,8 +47,9 @@ eqType0 flags symt r@(E _ _ eqs _) t t' =
     t == t' ||
     EC.isEqual eqs t t' ||
     eqType1 flags symt r t t' ||
-    -- try satisfying NumEq
-    -- XXX this is wasted work when the kind is not numeric
+    -- try reducing type functions and comparing the results
+    eqTypeATF flags symt r t t' ||
+    -- try satisfying NumEq (only useful for numeric types)
     eqTypeFinal flags symt r t t'
 
 eqType1 :: Flags -> SymTab -> Env -> IType -> IType -> Bool
@@ -74,6 +76,22 @@ eqType1 _ _ _ (ITCon i _ _) (ITCon i' _ _) = i == i'
 eqType1 _ _ _ (ITNum n) (ITNum n') = n == n'
 eqType1 _ _ _ _ _ = False
 
+-- Try to prove two types equal by expanding type functions via normT,
+-- which resolves type functions through class instance lookup.
+eqTypeATF :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+eqTypeATF flags symt r t t' =
+    let (e_ct, ct)   = convType r t
+        (E _ _ _ (PredEnv _ m s), ct') = convType e_ct t'
+    in  case fst3 $ runTI flags False symt $
+              do eqs <- mapM mkEPred (S.toList s)
+                 addBoundTVs (M.elems m)
+                 addExplPreds eqs
+                 ct_exp  <- normT ct
+                 ct_exp' <- normT ct'
+                 return (ct_exp, ct_exp')
+        of Right (a, b) -> a == b
+           _            -> False
+
 -- Decide if two (numeric) types are equal by creating a NumEq proviso
 -- in CSyntax and applying "satisfy".
 eqTypeFinal :: Flags -> SymTab -> Env -> IType -> IType -> Bool
@@ -94,7 +112,7 @@ eqTypeFinal flags symt e t1 t2
           satisfy eqs [vp]
     in  case fst3 (runTI flags False symt satisfyEq) of
           Right ([],_) -> True
-          res -> --trace("eqTypeFinal: not satisfied: " ++ ppReadable res) $
+          res -> --trace("eqTypeFinal: not satisfied: " ++ ppReadable (t1, t2, res)) $
                  False
  where isITAp (ITAp _ _) = True
        isITAp _          = False
@@ -109,27 +127,28 @@ assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadab
 
 type EqTy = Env -> IType -> IType -> Bool
 
-tCheck :: SymTab -> Env -> EqTy -> IExpr a -> IType
-tCheck symt r eqTy ec@(ILam i t e) =
+tCheck :: Flags -> SymTab -> Env -> EqTy -> IExpr a -> IType
+tCheck flags symt r eqTy ec@(ILam i t e) =
     -- assert (kCheckErr r t == IKStar) "ILam" (ec, kCheckErr r t) $
-        itFun t (tCheck symt (addT symt i t r) eqTy e)
-tCheck symt r eqTy ec@(IAps f0 ts [a]) =
-        let f = iAps f0 ts [] in
-        case tCheck symt r eqTy f of
-        ITAp (ITAp arr at') rt | arr == itArrow ->
-            let at = tCheck symt r eqTy a
-            in  -- This trace can lead to infinite loops.
-                --trace("tCheck " ++ ppReadable((f,tCheck symt r eqTy f),(a,at))) $
-                assert (eqTy r at at') "IAp"
-                    (r, ec, a, (at, at') {-, (f,ft),(a,at)-}) (at, at') rt
-        tt -> internalError ("tCheck IAp: " ++ ppReadable(ec, f, tt))
-tCheck symt r eqTy (IAps f ts (e:es)) =
-    tCheck symt r eqTy (IAps (IAps f ts [e]) [] es)
-tCheck symt r _ (IVar i) = findT i r
-tCheck symt r eqTy (ILAM i k e) =
-    ITForAll i k (tCheck symt (addK i k r) eqTy e)
-tCheck symt r eqTy ec@(IAps e [t] []) =
-        case tCheck symt r eqTy e of
+        itFun t (tCheck flags symt (addT symt i t r) eqTy e)
+tCheck flags symt r eqTy ec@(IAps f0 ts [a]) =
+        let f = iAps f0 ts []
+            at = tCheck flags symt r eqTy a
+            (rt, at') =
+                case fullTypeNormalizer flags symt $ tCheck flags symt r eqTy f of
+                    ITAp (ITAp arr at') rt | arr == itArrow -> (rt, at')
+                    tt -> internalError ("tCheck IAp: " ++ ppReadable(ec, f, tt))
+        in  -- This trace can lead to infinite loops.
+            --trace("tCheck " ++ ppReadable((f,tCheck flags symt r eqTy f),(a,at))) $
+            assert (eqTy r at at') "IAp"
+               (r, ec, a, (at, at') {-, (f,ft),(a,at)-}) (at, at') rt
+tCheck flags symt r eqTy (IAps f ts (e:es)) =
+    tCheck flags symt r eqTy (IAps (IAps f ts [e]) [] es)
+tCheck _ _ r _ (IVar i) = findT i r
+tCheck flags symt r eqTy (ILAM i k e) =
+    ITForAll i k (tCheck flags symt (addK i k r) eqTy e)
+tCheck flags symt r eqTy ec@(IAps e [t] []) =
+        case tCheck flags symt r eqTy e of
         --et@(ITForAll i k rt) ->
         ITForAll i k rt ->
             let kt = kCheckErr r t
@@ -137,14 +156,14 @@ tCheck symt r eqTy ec@(IAps e [t] []) =
             in  --trace ("tCheck " ++ ppReadable ((e,et),(t,kt))) $
                 assert (k == kt) "IAP" (ec, (i,k,rt), kt) (k, kt) rt'
         tt -> internalError ("tCheck IAP: " ++ ppReadable (ec, tt))
-tCheck symt r eqTy (IAps f (t:ts) []) =
-    tCheck symt r eqTy (IAps (IAps f [t] []) ts [])
-tCheck symt r _ (ICon c ic) = iConType ic
-tCheck symt r eqTy (IAps f [] []) =
+tCheck flags symt r eqTy (IAps f (t:ts) []) =
+    tCheck flags symt r eqTy (IAps (IAps f [t] []) ts [])
+tCheck _ _ _ _ (ICon c ic) = iConType ic
+tCheck flags symt r eqTy (IAps f [] []) =
     -- trace ("tCheck " ++ show f) $
-    tCheck symt r eqTy f
-tCheck symt r _ (IRefT t _ _ _) = t
---tCheck _ _ _ e = internalError ("no match in tCheck: " ++ ppReadable e)
+    tCheck flags symt r eqTy f
+tCheck _ _ _ _ (IRefT t _ _ _) = t
+--tCheck _ _ _ _ e = internalError ("no match in tCheck: " ++ ppReadable e)
 
 kCheck :: Env -> IType -> Maybe IKind
 kCheck r (ITForAll i k t) = do
@@ -173,7 +192,7 @@ tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
 tCheckIPackage flags symt (IPackage pi _ _ ds) =
     let r  = emptyEnv
         defOK (IDef i t e _) =
-            let t' = tCheck symt r (eqType flags symt) e
+            let t' = tCheck flags symt r (eqType flags symt) e
             in  assert (eqType flags symt r t' t) "defOK1"
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
@@ -186,7 +205,7 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
         let eqTy _ = (==) -- Just direct equality, no other manipulations.
             r = foldr (\ (i, k) r -> addK i k r) emptyEnv iks
             defOK (IDef i t e _) =
-                let t' = tCheck symt r eqTy e
+                let t' = tCheck flags symt r eqTy e
                 in  assert (t == t') "defOK2"
                         (i,e,(t,t')) (t, t') True
             ifcOK (IEFace i _ maybe_e maybe_r _ _) =
@@ -200,8 +219,8 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
 
             rulesOK (IRules sps rs) = all ruleOK rs
             ruleOK (IRule { irule_pred = p , irule_body = a }) =
-                let tp = tCheck symt r eqTy p
-                    ta = tCheck symt r eqTy a
+                let tp = tCheck flags symt r eqTy p
+                    ta = tCheck flags symt r eqTy a
                 in
                     assert (tp == itBit1) "ruleOK p"
                         (p, tp) (p, tp) True &&
@@ -221,7 +240,6 @@ addDict symt t e@(E tm km eqs ps) = E tm km eqs' ps'
   where new_eqs = case t of
                     (ITAp (ITAp (ITCon i _ _) t1) t2)
                          | i == idLog   -> [(ITAp iTLog t1, t2)]
-                         | i == idBits  -> [(ITAp iTSizeOf t1, t2)]
                          | i == idNumEq -> [(t1, t2)]
                     (ITAp (ITAp (ITAp (ITCon i _ _) t1) t2) t3)
                          -- XXX should we also equate T#(t2,t1)
@@ -230,11 +248,46 @@ addDict symt t e@(E tm km eqs ps) = E tm km eqs' ps'
                          | i == idMin -> [(ITAp (ITAp iTMin t1) t2, t3)]
                          | i == idMul -> [(ITAp (ITAp iTMul t1) t2, t3)]
                          | i == idDiv -> [(ITAp (ITAp iTDiv t1) t2, t3)]
-                    otherwise -> []
+                    -- For classes with type functions: add ATF equivalences.
+                    -- E.g., for Container f e with "type Elem f = e":
+                    -- dict type "Container a Maybe" adds (Elem a, Maybe)
+                    otherwise -> atfEqsFromDict symt t
         eqs' = trace_witness ("num eq witnesses: " ++ ppReadable new_eqs) $
                let eqFn (x,y) ec = EC.equate x y ec
                in  foldr eqFn eqs new_eqs
         ps' = addPred symt e t
+
+-- Generate type function equivalences from a class dictionary type.
+-- For a class with "type Elem f = e", when dict type "Container a Maybe"
+-- is added, produce the equivalence (Elem a, Maybe).
+atfEqsFromDict :: SymTab -> IType -> [(IType, IType)]
+atfEqsFromDict symt dictType =
+    let (hd, classArgs) = splitITAp dictType
+        clsId = case hd of
+                  ITCon i _ _ -> Just i
+                  _ -> Nothing
+        -- Convert Kind to IKind
+        kToIK KStar = IKStar
+        kToIK KNum  = IKNum
+        kToIK KStr  = IKStr
+        kToIK (Kfun a b) = IKFun (kToIK a) (kToIK b)
+        kToIK _ = IKStar  -- fallback
+    in case clsId of
+         Nothing -> []
+         Just cid ->
+           [ (atfApp, targetArg)
+           | (atfId, TypeInfo _ atfK _ ti@(TIatf { atf_class_id = acId
+                                                  , atf_param_idxs = pIdxs
+                                                  , atf_target_idx = tIdx }) _)
+               <- getAllTypes symt
+           , acId == cid
+           , tIdx < length classArgs
+           , all (\idx -> idx >= 0 && idx < length classArgs) pIdxs
+           , let paramArgs = [ classArgs !! idx | idx <- pIdxs ]
+                 targetArg = classArgs !! tIdx
+                 atfTyCon = ITCon atfId (kToIK atfK) ti
+                 atfApp = foldl ITAp atfTyCon paramArgs
+           ]
 
 addT :: SymTab -> Id -> IType -> Env -> Env
 addT symt i t (E tm km eqs ps) = addDict symt t $ E (M.insert i t tm) km eqs ps

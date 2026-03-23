@@ -67,10 +67,9 @@ import TypeCheck(topExpr)
 import VModInfo
 import Pragma
 import ISyntax
-import ISyntaxSubst(eSubst, eSubstBatch)
+import ISyntaxSubst(eSubst, eSubstBatchWithNorm)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
-import ISyntaxCheck(iGetKind)
 import IExpandUtils
 import Wires
 import IWireSet
@@ -253,6 +252,8 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
   let (iks, args, varginfo, ifc) = goutput go
   let rules = go_rules go
   let insts = go_state_vars go
+
+  let norm = fullTypeNormalizer flags symt
   let vclockinfo = go_vclockinfo go
   let vresetinfo = go_vresetinfo go
 
@@ -292,7 +293,7 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
               -- get the expression and its name info
               (e, expr_name) = heapOf p
               -- the type for the new IDef being created
-              t = iGetType e
+              t = iGetTypeNorm norm e
               -- the name for the new IDef being created
               i = case expr_name of
                     Just name ->
@@ -956,7 +957,8 @@ iExpandIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) 
             betterInfoByField = map newBetterInfo fs
         -- traceM (ppReadable (zip fs betterInfoByField))
 
-        let fieldTypes = map iGetType es
+        norm <- getTypeNormalizer
+        let fieldTypes = map (iGetTypeNorm norm) es
 
         let fieldBlobs =
                 zip4 (map unQualId fs) betterInfoByField es fieldTypes
@@ -1091,9 +1093,10 @@ iExpandMethod' :: HPred -> HClock -> (Id, BetterInfo.BetterInfo, HExpr) ->
                  G ([(Id, IType)], (HDef, HWireSet, VFieldInfo),
                     (HDef, HWireSet, VFieldInfo))
 iExpandMethod' implicitCond curClk (i, bi, e0) p0 = do
+        norm <- getTypeNormalizer
         -- want the result type, not a type including arguments
         let methType :: IType
-            methType = iGetType e0
+            methType = iGetTypeNorm norm e0
         (P p e', ws1) <- case e0 of
                          -- tuples are allowable for ActionValue methods only
                          IAps f@(ICon _ (ICTuple {})) ts [e1, e2] |
@@ -1154,9 +1157,11 @@ iExpandMethod' implicitCond curClk (i, bi, e0) p0 = do
         let rdyPort :: VPort
             rdyPort    = BetterInfo.mi_ready bi
 
+        norm <- getTypeNormalizer
+        let final_t = iGetTypeNorm norm final_e
         -- split wire sets for more accurate tracking
         return ([],
-                ((IDef i (iGetType final_e) final_e []), final_ws,
+                ((IDef i final_t final_e []), final_ws,
                  Method { vf_name = i,
                           vf_clock = methClock, vf_reset = methReset,
                           vf_mult = 1, vf_inputs = [],
@@ -2876,10 +2881,8 @@ evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
   evalApAccum "ILam-accum" (M.insert i a' exprCtx) typeCtx body as
 
 -- Continue accumulating for ILAM with type argument
-evalApAccum tag exprCtx typeCtx e@(ILAM i k body) (T t : as) = do
-  -- Simplify numeric types involving SizeOf before adding to typeCtx
-  t' <- if isUnSimpNumT t then simpNumT (getIExprPosition e) t else return t
-  evalApAccum "ILAM-accum" exprCtx (M.insert i t' typeCtx) body as
+evalApAccum tag exprCtx typeCtx e@(ILAM i k body) (T t : as) =
+  evalApAccum "ILAM-accum" exprCtx (M.insert i t typeCtx) body as
 
 -- Hit something else: apply accumulated substitutions if any, then continue
 evalApAccum tag exprCtx typeCtx e args = do
@@ -2887,9 +2890,10 @@ evalApAccum tag exprCtx typeCtx e args = do
     traceM ("applying batched subst: " ++
              show (M.size exprCtx) ++ " exprs, " ++
              show (M.size typeCtx) ++ " types")
-  -- eSubstBatch will do no work if exprCtx and typeCtx are empty
+  -- eSubstBatchWithNorm will do no work if exprCtx and typeCtx are empty
   -- (but in evalAppAccum, at least one of them won't be)
-  let e' = eSubstBatch exprCtx typeCtx e
+  norm <- getTypeNormalizer
+  let e' = eSubstBatchWithNorm norm exprCtx typeCtx e
   -- evalAp will handle if substitution revealed more ILam/ILAM
   evalAp tag e' args
 
@@ -2916,18 +2920,6 @@ evalAp str e es = do
       traceM ("evalAp exit  " ++ str' ++ " ]:\n"++ ppReadable (mkAp e es, r))
   return r
 
-isUnSimpNumT :: IType -> Bool
-isUnSimpNumT (ITNum _) = False
-isUnSimpNumT t = iGetKind t == Just IKNum
-
-simpNumT :: Position -> IType -> G IType
-simpNumT pos t = do
-    flags <- getFlags
-    symt <- getSymTab
-    case iConvT flags symt (iToCT t) of
-      t'@(ITNum _) -> return t'
-      _ -> errG (pos, EValueOf (ppString t))
-
 {-# INLINE evalDef #-}
 evalDef :: Id -> IType -> HExpr -> [Arg] -> G PExpr
 evalDef i t e as = do
@@ -2939,12 +2931,6 @@ evalDef i t e as = do
 -- evaluate a function application
 -- [arg] is a stack of application arguments on the left spine of the expression
 evalAp' :: HExpr -> [Arg] -> G PExpr
-
--- simplify numeric types involving SizeOf
-evalAp' e (T t : as) | isUnSimpNumT t = do
-  t' <- simpNumT (getIExprPosition e) t
-  evalAp "simpNumT" e (T t' : as)
-
 evalAp' f@(ICon i (ICDef t e)) as | not doFunExpand = evalDef i t e as
 evalAp' f@(ICon i (ICDef t e)) as = do -- doFunExpand is true
         traceM ("expand " ++ ppReadable (mkAp f as))
@@ -3167,11 +3153,12 @@ conAp' _ (ICIs { conTagInfo = cti }) i as =
               ty = itBit1
           evalStaticOp' True True False e ty (doIs i tys cti)
       _ -> internalError ("conAp': ICIs: " ++ ppReadable (mkAp i as))
-conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as =
+conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
+    norm <- getTypeNormalizer
     case dropT as of
       E e : as' -> do
           let tys = takeT as
-              ty = case itInst outty tys of
+              ty = case norm $ itInst outty tys of
                      (ITAp _ t) -> t
                      _ -> internalError "IExpand.conAp' ICOut: ty"
               resType = dropArrows (length as') ty
@@ -3180,13 +3167,15 @@ conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as =
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doOut o c tys ty cti as')
+          norm <- getTypeNormalizer
+          evalStaticOp' True True False e (norm resType) (doOut o c tys ty cti as')
       _ -> internalError ("conAp': ICOut: " ++ ppReadable (mkAp o as))
-conAp' c (ICSel { iConType = selty, selNo = n }) sel as =
+conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
+    norm <- getTypeNormalizer
     case dropT as of
       E e : as' -> do
           let tys = takeT as
-              ty = case itInst selty tys of
+              ty = case norm $ itInst selty tys of
                      (ITAp _ t) -> t
                      _ -> internalError "IExpand.conAp' ICSel: ty"
               resType = dropArrows (length as') ty
@@ -3203,8 +3192,9 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as =
 -- turn all unit-argument / no-argument constructiors into PrimChr
 -- this is safe because the difference is not observable, and it helps with
 -- improveIf
-conAp' i (ICCon ict cti) _ as | hasNoArg =
-    evalAp "ICCon Enum" icPrimChr (T sizeNum :  T resultType :  E bitExpr : as')
+conAp' i (ICCon ict cti) _ as | hasNoArg = do
+    norm <- getTypeNormalizer
+    evalAp "ICCon Enum" icPrimChr (T sizeNum :  T (norm resultType) :  E bitExpr : as')
   where sizeNum    = mkNumConT (tagSize cti)
         bitExpr    = mkAp icPrimIntegerToBit [T sizeNum, E (iMkLit itInteger (conTag cti))]
         (hasNoArg, resultType, argsToDrop) =
@@ -3573,8 +3563,9 @@ conAp' tfs (ICPrim _ PrimIntBitsToInteger) fe [T (ITNum k), E e] = evalStaticOp 
 
 conAp' ci prim@(ICPrim _ PrimSetSelPosition) f (T _ : E pos_e : E res_e : as) = do
   poss <- evalPositions pos_e
+  norm <- getTypeNormalizer
   let res_e' = mkAp res_e as
-      t' = iGetType res_e'
+      t' = iGetTypeNorm norm res_e'
       icon = (ICon ci prim)
       handler = doSetSelPosition icon t' poss
   -- don't allow evalStaticOp to push through PrimSetSelPosition
@@ -4196,13 +4187,15 @@ doArrayNew :: HExpr -> [Arg] -> G PExpr
 doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, iConType = conType })) [T t, E e1, E val] = do
      -- save val to prevent redundant evaluation
      val' <- toHeapInferName "array-new" val
-     evalStaticOp e1 resultType (handleArrayNew val')
+     norm <- getTypeNormalizer
+     let resultType' = norm resultType
+     evalStaticOp e1 resultType' (handleArrayNew val' resultType')
   where (_, resultType) = itGetArrows (itInst conType [t]) -- grab the result type
-        handleArrayNew val' (ICon ci (ICInt { iVal = ln })) = do
+        handleArrayNew val' resultType' (ICon ci (ICInt { iVal = ln })) = do
           arr <- iMkArray t (ilValue ln) val'
           when doDebug $ traceM ("PrimArrayNew! " ++ show ci)
-          return $ pExpr $ ICon ci (ICLazyArray resultType arr Nothing)
-        handleArrayNew val' e1' =
+          return $ pExpr $ ICon ci (ICLazyArray resultType' arr Nothing)
+        handleArrayNew val' _ e1' =
           nfError "primArrayNew" $ mkAp f [T t, E e1', E val']
 
 doArrayNew f as = internalError ("IExpand.doArrayNew : " ++ ppReadable f ++ ppReadable as)
@@ -4308,7 +4301,8 @@ doArrayUpdate f@(ICon upd_i (ICPrim {iConType = opType}))
                 --traceM("Update: " ++ show arr_e')
                 nfError "primArrayUpdate" $
                     mkAp f [T elem_t, E arr_e', E idx_e', E val_e']
-        let res_t = iGetType arr_e -- result type is (PrimArray t)
+        norm <- getTypeNormalizer
+        let res_t = iGetTypeNorm norm arr_e -- result type is (PrimArray t)
         addPredG idx_p $ evalStaticOp arr_e res_t handleArrayUpdate
     _ -> internalError ("IExpand.doArrayUpdate: index: " ++ ppReadable idx_e')
 
@@ -4425,7 +4419,8 @@ improveIf f t cnd (IAps (ICon i1 c1@(ICCon {conTagInfo = cti1})) ts1 es1)
                                                            -- because that test is otherwise buried in i1 == i2
                                                            = do
   when doTraceIf $ traceM ("improveIf ICCon triggered" ++ show i1 ++ show i2)
-  let realConType = itInst (iConType c1) ts1
+  norm <- getTypeNormalizer
+  let realConType = norm $ itInst (iConType c1) ts1
       (argTypes, _) = itGetArrows realConType
   when (length argTypes /= length es1 || length argTypes /= length es2) $ internalError ("improveIf Con:" ++ ppReadable (argTypes, es1, es2))
   (es', bs) <- mapAndUnzipM (\(t, e1, e2) -> improveIf f t cnd e1 e2) (zip3 argTypes es1 es2)
@@ -4437,7 +4432,8 @@ improveIf f t cnd (IAps (ICon i1 c1@(ICTuple {})) ts1 es1)
                   (IAps (ICon i2 c2@(ICTuple {})) ts2 es2) -- tuple should match since types match
                                                              = do
   when doTraceIf $ traceM ("improveIf ICTuple triggered" ++ show i1 ++ show i2)
-  let realConType = itInst (iConType c1) ts1
+  norm <- getTypeNormalizer
+  let realConType = norm $ itInst (iConType c1) ts1
       (argTypes, _) = itGetArrows realConType
   when (length argTypes /= length es1 || length argTypes /= length es2) $ internalError ("improveIf Con:" ++ ppReadable (argTypes, es1, es2))
   (es', bs) <- mapAndUnzipM (\(t, e1, e2) -> improveIf f t cnd e1 e2) (zip3 argTypes es1 es2)
@@ -4457,7 +4453,8 @@ improveIf f t cnd thn@(IAps concat@(ICon _ (ICPrim _ PrimConcat)) ts1@[ITNum sx,
 improveIf f t cnd thn@(IAps chr@(ICon _ (ICPrim _ PrimChr)) ts1 [chr_thn])
                   els@(IAps     (ICon _ (ICPrim _ PrimChr)) ts2 [chr_els]) = do
   when doTraceIf $ traceM ("improveIf PrimChr triggered " ++ show (cnd,thn,els))
-  let chrArgType = iGetType chr_thn
+  norm <- getTypeNormalizer
+  let chrArgType = iGetTypeNorm norm chr_thn
   (e', _) <- improveIf f chrArgType cnd chr_thn chr_els
   return (IAps chr ts1 [e'], True)
 
@@ -4476,7 +4473,8 @@ improveIf f t cnd thn@(IAps (ICon i1 c1@(ICCon {})) ts1 es1)
   | numCon (conTagInfo c1) == 1
   = do
       when doTraceIf $ traceM ("improveIf ICCon/ICUndet triggered" ++ ppReadable (cnd,thn,els))
-      let realConType = itInst (iConType c1) ts1
+      norm <- getTypeNormalizer
+      let realConType = norm $ itInst (iConType c1) ts1
           (argTypes, _) = itGetArrows realConType
       when (length argTypes /= length es1) $ internalError ("improveIf Con/Undet:" ++ ppReadable (argTypes, es1))
       let mkUndet t = icUndetAt (getIdPosition i2) t u
@@ -4488,7 +4486,8 @@ improveIf f t cnd thn@(ICon i1 (ICUndet { iuKind = u }))
   | numCon (conTagInfo c2) == 1
   = do
       when doTraceIf $ traceM ("improveIf ICCon/ICUndet triggered" ++ ppReadable (cnd,thn,els))
-      let realConType = itInst (iConType c2) ts2
+      norm <- getTypeNormalizer
+      let realConType = norm $ itInst (iConType c2) ts2
           (argTypes, _) = itGetArrows realConType
       when (length argTypes /= length es2) $ internalError ("improveIf Con/Undet:" ++ ppReadable (argTypes, es2))
       let mkUndet t = icUndetAt (getIdPosition i1) t u
@@ -4812,13 +4811,14 @@ doSel sel s tys ty n as ee (p, e) =
 
         -- v | C_av.avAction_  || C_av.avValue_ ->
         -- AV_ selection must be a saturated application, no stray arguments
-        _ | s == idAVValue_ && isCanonAV_ e && null as ->
+        _ | s == idAVValue_ && isCanonAV_ e && null as -> do
+            norm <- getTypeNormalizer
             case e of
               -- drop arguments to value side of ActionValue method (see AMethValue)
               -- and fixup selector type (instantiating and dropping missing types)
               IAps csel@(ICon ic sel2@(ICSel { })) tys2 args@(sv@(ICon _ (ICStateVar { })):_) -> do
-                let resType = dropArrows (length args) (itInst (iConType sel2) tys2)
-                let newSelTy = (iGetType sv) `itFun` resType
+                let resType = dropArrows (length args) (norm $ itInst (iConType sel2) tys2)
+                let newSelTy = (iGetTypeNorm norm sv) `itFun` resType
                 let sel2' = sel2 { iConType = newSelTy }
                 let e'' = (IAps (ICon ic sel2') [] [sv])
                 addPredG p $

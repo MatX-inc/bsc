@@ -701,6 +701,9 @@ data ErrMsg =
         | ETypeSynRecursive [String]
         | EDuplicateInstance String Position
         | EBadInstanceOverlap String String Position
+        | EATFDeclParamMismatch String String String String -- ^ class name, ATF name, expected param, actual param
+        | EATFResultNotDetermined String String [String]     -- ^ ATF name, result var, params
+        | EATFInInstanceHead String  -- ^ type function name
 
         | EUndefinedTask String
         | EUnboundCon String (Maybe String)
@@ -2975,6 +2978,25 @@ getErrorText (WIncoherentDepends match depends) =
     (Type 154, empty,
      s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
             " so it is actually incoherent."))
+
+getErrorText (EATFDeclParamMismatch cls atf expected actual) =
+    (Type 158, empty,
+     s2par ("Type family declaration for " ++ ishow atf ++
+            " in class " ++ ishow cls ++
+            " expects parameter " ++ ishow expected ++
+            " but found " ++ ishow actual))
+
+getErrorText (EATFResultNotDetermined atf result params) =
+    (Type 162, empty,
+     s2par ("Type function " ++ ishow atf ++
+            ": result variable " ++ ishow result ++
+            " is not determined by parameters " ++ intercalate ", " params ++
+            " via any functional dependency"))
+
+getErrorText (EATFInInstanceHead atf) =
+    (Type 161, empty,
+     s2par ("Type function " ++ ishow atf ++
+            " cannot be used in an instance head"))
 
 -- Generation Errors
 
