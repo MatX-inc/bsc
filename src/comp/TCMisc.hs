@@ -559,7 +559,7 @@ reducePred eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos)) = do
 
         f :: Bool -> [Inst] -> TI (Maybe ([VPred], SolvedBind, Subst, Maybe Pred))
         f incoherent [] = return Nothing
-        f incoherent (i@(Inst _ _ (_ :=> h_orig)):is)
+        f incoherent (i@(Inst _ _ (_ :=> h_orig) _):is)
           | not (canMatch pr' h_orig) = f incoherent is
         f incoherent (i:is) = do
                 (m_tv, i'@(Inst _ _ (_ :=> h) _)) <- newInst i (getVPredPositions v')
