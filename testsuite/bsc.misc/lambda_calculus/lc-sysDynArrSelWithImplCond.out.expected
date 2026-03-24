@@ -30,10 +30,10 @@ dim_sysDynArrSelWithImplCond =
 meth_get_sysDynArrSelWithImplCond :: MOD_sysDynArrSelWithImplCond -> Bit #8;
 meth_get_sysDynArrSelWithImplCond =
     (\ (state0 :: MOD_sysDynArrSelWithImplCond) ->
-     let { (def_x_first__h231 :: Bit #8) = meth_first_FIFO2 (inst_fs_0__sysDynArrSelWithImplCond state0)
-	 ; (def_x_first__h307 :: Bit #8) = meth_first_FIFO2 (inst_fs_1__sysDynArrSelWithImplCond state0)
+     let { (def_x_first__h459 :: Bit #8) = meth_first_FIFO2 (inst_fs_3__sysDynArrSelWithImplCond state0)
 	 ; (def_x_first__h383 :: Bit #8) = meth_first_FIFO2 (inst_fs_2__sysDynArrSelWithImplCond state0)
-	 ; (def_x_first__h459 :: Bit #8) = meth_first_FIFO2 (inst_fs_3__sysDynArrSelWithImplCond state0)
+	 ; (def_x_first__h307 :: Bit #8) = meth_first_FIFO2 (inst_fs_1__sysDynArrSelWithImplCond state0)
+	 ; (def_x_first__h231 :: Bit #8) = meth_first_FIFO2 (inst_fs_0__sysDynArrSelWithImplCond state0)
 	 ; (def_b__h524 :: Bit #2) = meth_read_RegN (inst_idx__sysDynArrSelWithImplCond state0)
 	 ; (def_ARR_fs_0_first_fs_1_first_fs_2_first_fs_3_first___d5 :: Array #4 (Bit #8)) =
 	       buildArray4 def_x_first__h231 def_x_first__h307 def_x_first__h383 def_x_first__h459
