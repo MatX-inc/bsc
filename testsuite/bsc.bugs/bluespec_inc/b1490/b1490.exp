@@ -9,7 +9,7 @@ proc rts_flags { heapsize } {
 # -----
 
 compile_verilog_pass Bug1490Bool.bsv {} $rtsflags
-compile_verilog_pass Bug1490MyBool.bsv {} [rts_flags 288]
+compile_verilog_pass Bug1490MyBool.bsv {} [rts_flags 294]
 compile_verilog_pass Bug1490MyUnion.bsv {} [rts_flags 272]
 compile_verilog_pass Bug1490MyEnum.bsv {} $rtsflags
 
@@ -20,6 +20,6 @@ compile_verilog_fail VsortOriginal.bsv {} $rtsflags
 # Confirm that the test failed in the way we expect
 find_n_strings [make_bsc_vcomp_output_name VsortOriginal.bsv] "Heap exhausted" 1
 
-compile_verilog_pass VsortWorkaround.bsv {} [rts_flags 272]
+compile_verilog_pass VsortWorkaround.bsv {} [rts_flags 273]
 
 # -----
