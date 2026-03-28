@@ -308,8 +308,11 @@ tiExpr as td exp@(CStruct mb c ies) = do
 tiExpr as td exp@(CStructUpd e []) = tiExpr as td e
 tiExpr as td exp@(CStructUpd e ies@((i,_):_)) = do
     (ps, e') <- tiExpr as td e
+    -- Normalize to expand associated type functions for struct update
+    s_upd <- getSubst
+    td' <- expandFullType (apSub s_upd td)
     -- XXX should use all fields to disambiguate
-    (_, ti, _) <- findFields td i
+    (_, ti, _) <- findFields td' i
     sy <- getSymTab
     case findType sy ti of
      Just (TypeInfo _ _ _ (TIstruct sst qfs) _) | isUpdateable sst -> do
@@ -2055,7 +2058,11 @@ tiSelect readTag as td e i f = do
                      tiExpr as te e
 
     --do s <- getSubst; trace ("sel1 " ++ ppReadable ((exp, apSub s td), (e, apSub s te), (i, apSub s tf))) $ return ()
-    (i' :>: sc, ti, n)  <- findFields (f te) i
+    -- Normalize the struct type to expand associated type functions
+    -- so that field access works through type family results.
+    s_sel <- getSubst
+    struct_ty <- expandFullType (apSub s_sel (f te))
+    (i' :>: sc, ti, n)  <- findFields struct_ty i
     (qs :=> t, ts)  <- freshInstT "F" i sc tf
     -- do s <- getSubst; trace ("sel2 " ++ ppReadable (exp, apSub s t, apSub s tf)) $ return ()
     case t of
@@ -2087,8 +2094,8 @@ tiField1 as rt (f, e) = do
     -- so replace them with vars and return the preds that determine the vars
     -- XXX disable expanding of type synonyms until failures with TLM
     -- XXX (type synonyms which drop parameters) is resolved
-    -- XXX (tcon_ps, ft) <- expPrimTCons (expandSyn ft0)
-    (tcon_ps, ft) <- expPrimTCons ft0
+    -- XXX (tcon_ps, ft) <- expTFun (expandSyn ft0)
+    (tcon_ps, ft) <- expTFun ft0
     -- Unify the field type and the context expected return type,
     -- possibly returning preds which express type equality
     (t,eq_ps) <- unifyFnTo f e ft rt
@@ -2824,7 +2831,9 @@ tiImpls recursive as ibs = do
 
     s   <- getSubst
 
-    let ps = apSub s (concat pss)
+    let ps0 = apSub s (concat pss)
+    ps <- concatMapM expTConPred ps0
+
     when (not . null $ ps) $ satTraceM ("tiImpls " ++ ppReadable is ++ " ps: " ++ ppReadable ps)
 
     -- try to solve as many constraints as possible,
@@ -3092,7 +3101,6 @@ tiLetseqDef type_env arm@(CLMatch pattern expression) =
     internalError
         ("TCheck.tiLetseqDef: CLMatch should have been desugared:\n" ++
          pfpReadable arm)
-
 -- tiDefls: type-infer a set of letrec definitions
 --   first argument:         assumptions about type environment
 --   second argument (exp):  definitions to typecheck

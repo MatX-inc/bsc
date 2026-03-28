@@ -27,9 +27,9 @@ meth_m_sysMethod_Split =
      let { (def_c__h110 :: Bit #1) = meth_read_RegUN (inst_c__sysMethod_Split state0) }
      in if (bitToBool def_c__h110)
 	then let { (def__read__h40 :: Bit #8) = meth_read_RegUN (inst_rg1__sysMethod_Split state0)
+		 ; (def__read__h62 :: Bit #8) = meth_read_RegUN (inst_rg2__sysMethod_Split state0)
 		 ; (def_y_avValue__h162 :: Bit #8) = primAdd def__read__h40 (1 :: Bit #8)
 		 ; (def_x__h140 :: Bit #8) = primAdd def__read__h40 (3 :: Bit #8)
-		 ; (def__read__h62 :: Bit #8) = meth_read_RegUN (inst_rg2__sysMethod_Split state0)
 		 ; (def_y_avValue__h185 :: Bit #8) = primAdd def__read__h62 (2 :: Bit #8)
 		 ; (act1 :: (Bool, MOD_RegUN #8, ())) =
 		       meth_write_RegUN def_x__h140 (inst_rg1__sysMethod_Split state0)
@@ -42,8 +42,8 @@ meth_m_sysMethod_Split =
 		    (if (bitToBool def_c__h110) then def_y_avValue__h162 else def_y_avValue__h185)
 	else if (not (bitToBool def_c__h110))
 	     then let { (def__read__h40 :: Bit #8) = meth_read_RegUN (inst_rg1__sysMethod_Split state0)
-		      ; (def_y_avValue__h162 :: Bit #8) = primAdd def__read__h40 (1 :: Bit #8)
 		      ; (def__read__h62 :: Bit #8) = meth_read_RegUN (inst_rg2__sysMethod_Split state0)
+		      ; (def_y_avValue__h162 :: Bit #8) = primAdd def__read__h40 (1 :: Bit #8)
 		      ; (def_y_avValue__h185 :: Bit #8) = primAdd def__read__h62 (2 :: Bit #8)
 		      ; (def_x__h163 :: Bit #8) = primAdd def__read__h62 (4 :: Bit #8)
 		      ; (act1 :: (Bool, MOD_RegUN #8, ())) =

@@ -261,7 +261,7 @@ instance PVPrint CDefn where
 
     pvPrint d p (CValueSign def) = pvPrint d p def
 
-    pvPrint d p (Cclass Nothing ps ik is fd ss) =
+    pvPrint d p (Cclass Nothing ps ik is fd _ ss) =
        ((pBlockNT d 0 False
         [t"typeclass" <+> pp d ik <+> pvParameterTypeVars d is,
          pvpFDs d fd,
@@ -1081,7 +1081,6 @@ instance PVPrint CDefl where
     pvPrint d p (CLMatch pat e) =
         t"match"<+> pp d pat <+> t"=" $+$
                   nest 4 (pp d e) <> t";"
-
 optWhen :: PDetail -> [CQual] -> Doc -> Doc
 optWhen d [] s = s
 optWhen d qs s = s $+$ (t"    " <> ppQuals d qs)
@@ -1256,6 +1255,8 @@ instance PVPrint TISort where
     pvPrint d p (TIdata is enum) = pparen (p>0) $ text (if enum then "TIdata (enum)" else "TIdata") <+> pvPrint d 1 is
     pvPrint d p (TIstruct ss is) = pparen (p>0) $ text "TIstruct" <+> pvPrint d 1 ss <+> pvPrint d 1 is
     pvPrint d p (TIabstract) = text "TIabstract"
+    pvPrint d p (TIatf { atf_class_id = cls, atf_param_idxs = pIdxs }) =
+        pparen (p>0) $ text "TIatf" <+> pvPrint d 0 (length pIdxs) <+> pvPrint d 0 cls
 
 instance PVPrint StructSubType where
     pvPrint _ _ ss = text (show ss)
