@@ -484,6 +484,7 @@ traceflags = [
           "trace-state-loc",
           "trace-syn",
           "trace-tcvar",
+          "trace-tc-isreducible",
           "trace-tc-reducepred",
           "trace-tc-satisfy",
           "trace-type",

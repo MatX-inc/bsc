@@ -69,6 +69,11 @@ doTraceReducePred = elem "-trace-tc-reducepred" progArgs
 rpTrace :: String -> a -> a
 rpTrace s x = if doTraceReducePred then traces s x else x
 
+doTraceIsReducible :: Bool
+doTraceIsReducible = elem "-trace-tc-isreducible" progArgs
+irTraceM :: Monad m => String -> m ()
+irTraceM s = when (doTraceIsReducible) $ traceM s
+
 doVarTrace :: Bool
 doVarTrace = elem "-trace-tcvar" progArgs
 
@@ -1625,6 +1630,8 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos)) = do
         v' = VPred i pp'
         f [] = getExplPreds >>= g
         f (i:is) = do isReducible <- byInstIsReducible v' i
+                      irTraceM ("isReduciblePred inst: " ++ ppReadable i ++
+                                " result: " ++ show isReducible)
                       -- if we discover that it could match or definitely
                       -- does not match, then stop; otherwise, try the
                       -- remaining instances
@@ -1634,20 +1641,24 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos)) = do
                           _       -> f is
         g [] = return False
         g (ep:eps) = do isReducible <- byExplPredIsReducible v' ep
+                        irTraceM ("isReduciblePred expl: " ++ ppReadable ep ++
+                                  " result: " ++ show isReducible)
                         case (isReducible) of
                             Fails   -> return False
                             Matches -> return True
                             _       -> g eps
     bvs <- getBoundTVs
+    irTraceM ("isReduciblePred: " ++ ppReadable p')
     let is' = genInsts c bvs Nothing p'
     r <- f is'
+    irTraceM ("isReduciblePred result: " ++ show r)
     return r
 
 
 data MatchResult = NoConclusion
                  | Fails
                  | Matches
-                 deriving (Eq)
+                 deriving (Eq, Show)
 
 
 byInstIsReducible :: VPred -> Inst -> TI MatchResult
