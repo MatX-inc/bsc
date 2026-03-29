@@ -13,7 +13,7 @@ module Pred(
 import Prelude hiding ((<>))
 #endif
 
-import Data.List(union, genericSplitAt, genericLength)
+import Data.List(union, nub, genericSplitAt, genericLength)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -70,7 +70,7 @@ data PredWithPositions = PredWithPositions Pred [Position]
     deriving (Show)
 
 mkPredWithPositions :: [Position] -> Pred -> PredWithPositions
-mkPredWithPositions poss p = PredWithPositions p poss
+mkPredWithPositions poss p = PredWithPositions p $ nub poss
 
 removePredPositions :: PredWithPositions -> Pred
 removePredPositions (PredWithPositions p poss) = p
@@ -80,7 +80,7 @@ getPredPositions (PredWithPositions p poss) = poss
 
 addPredPositions :: PredWithPositions -> [Position] -> PredWithPositions
 addPredPositions (PredWithPositions p poss) poss' =
-    PredWithPositions p (poss ++ poss')
+    PredWithPositions p (poss `union` poss')
 
 instance Eq PredWithPositions where
     (==) (PredWithPositions p1 _) (PredWithPositions p2 _) = (p1 == p2)

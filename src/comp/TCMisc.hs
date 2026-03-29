@@ -260,7 +260,7 @@ joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
           -- but that would require being on the TI monad,
           -- which doesn't seem worth it
           (s, []) <- mgu bound_tyvars (boolCompress bs ts) (boolCompress bs ts')
-          let p'' = VPred i' (PredWithPositions (IsIn c ts') (pos' ++ pos))
+          let p'' = VPred i' (PredWithPositions (IsIn c ts') (pos' `union` pos))
               rs  = p'':[ vp | vp@(VPred j _) <- vps, j /= i && j /= i']
               pr = removePredPositions pp
               b = (i, predToType (apSub s pr), CVar i')

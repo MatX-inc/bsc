@@ -505,7 +505,7 @@ tiExpr as td (CHasType (CAny {}) qt@(CQType [_] nt)) | nt == noType = do
     qual_type <- mkQualType qt
     case qual_type of
       [PredWithPositions p poss] :=> _ -> do
-          -- poss is probably a list of only one position
+          -- poss is probably a set of only one position
           VPred i pwp <- mkVPredFromPred poss p
           let pwp' = addPredPositions pwp poss
           return ([VPred i pwp'], CVar i)
