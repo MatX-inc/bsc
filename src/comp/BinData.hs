@@ -1316,6 +1316,7 @@ instance Bin TISort where
     writeBytes (TIabstract)     = do putI 3
     writeBytes (TIatf { atf_class_id = c, atf_param_idxs = ps, atf_target_idx = t }) =
         do putI 4; toBin c; toBin ps; toBin t
+    writeBytes (TItypeop)       = do putI 5
     readBytes = do
         i <- getI
         case i of
@@ -1325,6 +1326,7 @@ instance Bin TISort where
           3 -> return TIabstract
           4 -> do c <- fromBin; ps <- fromBin; t <- fromBin;
                   return (TIatf { atf_class_id = c, atf_param_idxs = ps, atf_target_idx = t })
+          5 -> return TItypeop
           n -> internalError $ "BinData.Bin(TISort).readBytes: " ++ show n
 
 instance Bin StructSubType where

@@ -36,6 +36,7 @@ import CFreeVars(getFTCDn, getVDefIds, getFTyCons)
 import StdPrel
 import InferKind(inferKinds)
 import Type(fn, tArrow, HasKind(..))
+import TypeOps(numOpNames, strOpNames)
 import Pred
 import Scheme
 import Pragma
@@ -863,10 +864,12 @@ getTI _ mi src_pkg _ iks (CIclass _ ps ik vs _ ats _) =
                         t_idx    = M.findWithDefault (-1) ca_rhs vs_idx_map
                   ]
 getTI _ mi src_pkg _ iks (CprimType ik) =
-    [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract src_pkg)]
+    [(i, TypeInfo (Just i) (getK iks ik) vs ti src_pkg)]
   where i = qual mi (iKName ik)
         -- the CSyntax doesn't provide type var names
         vs = []
+        typeOpIds = numOpNames ++ strOpNames ++ [idId]
+        ti = if iKName ik `elem` typeOpIds then TItypeop else TIabstract
 getTI _ _ _ _ _ _ = []
 
 qual :: Maybe Id -> Id -> Id

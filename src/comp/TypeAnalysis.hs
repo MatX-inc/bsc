@@ -264,8 +264,9 @@ analyzeType' flags symtab unqual_ty primpair_is_interface = doRight analyze (kin
                          TaggedUnion qi k vs isC (map mkTuple conInfos) (w t)
     -- abstract
     analyzeNonNumTCon t qi k vs as isC (TIabstract) =
-        -- XXX if (k == KNum), should we return Numeric?
-        -- XXX such as for TAdd etc?  Should TAdd#(1,2) return 3?
+        Right $ Primary qi k vs isC (w t)
+    -- type-level operation (TAdd, TMul, TStrCat, Id__, etc.)
+    analyzeNonNumTCon t qi k vs as isC (TItypeop) =
         Right $ Primary qi k vs isC (w t)
     -- anonymous struct in Classic tagged union
     analyzeNonNumTCon t qi k vs as isC (TIstruct (SDataCon _ _) fields) =

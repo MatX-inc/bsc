@@ -79,7 +79,7 @@ tSchedPragma, tModule, tVRWireN, tId, t32 :: Type
 tSchedPragma = TCon (TyCon idSchedPragma (Just KStar) TIabstract)
 tModule = TCon (TyCon idModule (Just (Kfun KStar KStar)) TIabstract)
 tVRWireN = TCon (TyCon idVRWireN (Just (Kfun KNum KStar)) (TIstruct SStruct [idWSet, idWGet, idWHas]))
-tId = TCon (TyCon idId (Just (Kfun KStar KStar)) TIabstract)
+tId = TCon (TyCon idId (Just (Kfun KStar KStar)) TItypeop)
 t32 = tOfSize 32 noPosition
 
 t32At :: Position -> Type
@@ -117,14 +117,14 @@ kSSS :: Kind
 kSSS = Kfun KStar (Kfun KStar KStar)
 
 tAdd, tSub, tMul, tDiv, tLog, tExp, tMax, tMin :: Type
-tAdd = TCon (TyCon idTAdd (Just kNNN) TIabstract)
-tSub = TCon (TyCon idTSub (Just kNNN) TIabstract)
-tMul = TCon (TyCon idTMul (Just kNNN) TIabstract)
-tDiv = TCon (TyCon idTDiv (Just kNNN) TIabstract)
-tLog = TCon (TyCon idTLog (Just kNN)  TIabstract)
-tExp = TCon (TyCon idTExp (Just kNN)  TIabstract)
-tMax = TCon (TyCon idTMax (Just kNNN) TIabstract)
-tMin = TCon (TyCon idTMin (Just kNNN) TIabstract)
+tAdd = TCon (TyCon idTAdd (Just kNNN) TItypeop)
+tSub = TCon (TyCon idTSub (Just kNNN) TItypeop)
+tMul = TCon (TyCon idTMul (Just kNNN) TItypeop)
+tDiv = TCon (TyCon idTDiv (Just kNNN) TItypeop)
+tLog = TCon (TyCon idTLog (Just kNN)  TItypeop)
+tExp = TCon (TyCon idTExp (Just kNN)  TItypeop)
+tMax = TCon (TyCon idTMax (Just kNNN) TItypeop)
+tMin = TCon (TyCon idTMin (Just kNNN) TItypeop)
 
 class HasKind t where
     kind :: t -> Kind

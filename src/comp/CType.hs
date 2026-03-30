@@ -12,7 +12,7 @@ module CType(
   isTVar, isTCon, isIfc, isInterface, isDictType, isDictFun, isUpdateable,
   leftCon, leftTyCon, allTyCons, allTConNames, tyConArgs,
   splitTAp, normTAp,
-  isATFAp,
+  isATFAp, isTypeopAp,
   isTypeBit, isTypeString,
   isTypePrimAction, isTypeAction,
   isTypeActionValue, isTypeActionValue_,
@@ -120,6 +120,10 @@ data TISort
           -- primitive abstract type
           -- e.g. Integer, Bit, Module, etc.
         | TIabstract
+          -- primitive type-level operation (numeric, string, identity, etc.)
+          -- e.g. TAdd, TMul, TStrCat, Id__, etc.
+          -- Applications of these are deferred during unification.
+        | TItypeop
           -- Associated type function: resolved by looking up the corresponding
           -- typeclass instance.  Stores the arity (number of LHS params), the
           -- class that defines this type function, and the indices of the ATF
@@ -540,6 +544,13 @@ isATFAp t0 =
         TCon (TyCon _ _ (TIatf { atf_param_idxs = pIdxs })) -> length as == length pIdxs
         _ -> False
 
+isTypeopAp :: Type -> Bool
+isTypeopAp t0 =
+    let (f, as) = splitTAp t0
+    in case f of
+        TCon (TyCon _ _ TItypeop) -> not (null as)
+        _ -> False
+
 getTypeKind :: Type -> Maybe Kind
 getTypeKind (TVar (TyVar _ _ k))  = Just k
 getTypeKind (TCon (TyCon _ mk _)) = mk
@@ -621,6 +632,7 @@ instance PPrint TISort where
     pPrint d p (TIdata is enum) = pparen (p>0) $ text (if enum then "TIdata (enum)" else "TIdata") <+> pPrint d 1 is
     pPrint d p (TIstruct ss is) = pparen (p>0) $ text "TIstruct" <+> pPrint d 1 ss <+> pPrint d 1 is
     pPrint d p (TIabstract) = text "TIabstract"
+    pPrint d p (TItypeop) = text "TItypeop"
     pPrint d p (TIatf { atf_param_idxs = pIdxs, atf_class_id = cls }) =
         pparen (p>0) $ text "TIatf" <+> pPrint d 0 (length pIdxs) <+> pPrint d 0 cls
 
@@ -629,6 +641,7 @@ instance NFData TISort where
     rnf (TIdata is enum) = rnf2 is enum
     rnf (TIstruct ss is) = rnf2 ss is
     rnf (TIabstract) = ()
+    rnf (TItypeop) = ()
     rnf (TIatf { atf_class_id = c, atf_param_idxs = ps, atf_target_idx = t }) =
         rnf3 c ps t
 
