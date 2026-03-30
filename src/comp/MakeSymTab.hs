@@ -78,7 +78,7 @@ mkSymTab errh (CPackage mi _ imps impsigs _ ds _) =
 
         -- instances from the imported packages
         iinstqs = nub [ (i, qt) | CImpSign _ _ (CSignature _ _ _ ds) <- impsigs,
-                                  CIinstance i qt _ <- ds ]
+                                  CIinstance i qt <- ds ]
         qconv qt =
                 case convCQType symT qt of
                 Left msg -> bsErrorUnsafe errh [msg]
