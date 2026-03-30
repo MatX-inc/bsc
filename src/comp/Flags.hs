@@ -220,7 +220,6 @@ data DumpFlag
 
         -- module generation
         | DFexpanded
-        | DFnormtypes
         | DFinlineFmt
         | DFinline
         | DFtransform
