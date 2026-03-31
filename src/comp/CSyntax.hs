@@ -1431,7 +1431,7 @@ instance NFData CDefn where
     rnf (Cprimitive i qt) = rnf2 i qt
     rnf (CprimType ik) = rnf ik
     rnf (CPragma pr) = rnf pr
-    rnf (CIinstance i qt) = rnf3 i qt
+    rnf (CIinstance i qt) = rnf2 i qt
     rnf (CItype i as poss) = rnf3 i as poss
     rnf (CIclass incoh ps ik is fd ats poss) = rnf7 incoh ps ik is fd ats poss
     rnf (CIValueSign i ty) = rnf2 i ty
