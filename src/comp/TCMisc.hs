@@ -629,6 +629,34 @@ dvsSub s dvs =
         traces ("dvsSub " ++ ppReadable (dvs, s)) dvs
 -}
 
+-- KNum and KStr have dedicated constraint solvers; equalities of other kinds
+-- must be handled directly by the caller.
+isSolverKind :: Kind -> Bool
+isSolverKind KNum = True
+isSolverKind KStr = True
+isSolverKind _    = False
+
+-- A bound-variable equality at a kind that has no constraint solver.
+-- KNum/KStr bound-variable equalities still go to their solvers as wanteds;
+-- equalities at other kinds must be handled by the caller:
+--   fundep improvement: apply as a local substitution to dictionaries
+--   unification:        report as a "signature too general" type error
+-- ATF equalities are excluded even if a bound variable appears on one side:
+-- tryATFClassPred in eqToPred handles those by converting them to class predicates.
+isNonSolverBoundVarEq :: [TyVar] -> (Type, Type) -> Bool
+isNonSolverBoundVarEq _   (t1, t2) | isATFAp t1 || isATFAp t2 = False
+isNonSolverBoundVarEq bvs (TVar u, _) = u `elem` bvs && not (isSolverKind (kind u))
+isNonSolverBoundVarEq bvs (_, TVar u) = u `elem` bvs && not (isSolverKind (kind u))
+isNonSolverBoundVarEq _   _           = False
+
+-- Build a one-shot substitution from bound-variable equalities.
+-- Each equality has a bound var on at least one side (guaranteed by mgu).
+mkBoundVarSubst :: [TyVar] -> [(Type, Type)] -> Subst
+mkBoundVarSubst bvs = foldr addEq nullSubst
+  where addEq (TVar u, t) s | u `elem` bvs = (u +-> t) @@ s
+        addEq (t, TVar u) s | u `elem` bvs = (u +-> t) @@ s
+        addEq _           s                = s
+
 byInst :: VPred -> Inst -> TI (Maybe ([VPred], SolvedBind, (Subst, Subst)))
 byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
     -- no longer necessary because reducePred now provides a fresh instance
@@ -643,21 +671,29 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
         -- Record that this instance's package was used
         recordPackageUse pkg
         let s = fd_subst @@ inst_subst
+            -- Bound-variable equalities at non-solver kinds are applied as a
+            -- local substitution to dictionaries rather than accumulated into
+            -- the global TI state.  This is the fundep improvement path: the
+            -- equality is axiomatic (given by the instance), so we apply it
+            -- locally without committing it as a global substitution.
+            (bv_eqs, solver_eqs) = partition (isNonSolverBoundVarEq bound_tyvars) num_eqs
+            local_s = mkBoundVarSubst bound_tyvars bv_eqs
+            s_full  = local_s @@ s
         vs <- mapM (const newDict) ps
         -- if the instance is recursive (has a proviso for itself and expects
         -- a dictionary argument for that), then don't use a new dictionary
         -- for that argument, just pass the instance to itself
-        let isSelfRec = any (== p) (apSub s ps)
-            vs' = zipWith (\ x y -> if (y == p) then i else x) vs (apSub s ps)
-        eq_ps <- mapM (eqToPred (getPredPositions p)) num_eqs
+        let isSelfRec = any (== p) (apSub s_full ps)
+            vs' = zipWith (\ x y -> if (y == p) then i else x) vs (apSub s_full ps)
+        eq_ps <- mapM (eqToPred (getPredPositions p)) solver_eqs
         let eq_pwps = map (mkPredWithPositions []) eq_ps
         eq_vs <- mapM (const newDict) eq_pwps
         -- if p introduces a new predicate, carry on the position info
         let mkvpred x y = VPred x (addPredPositions y (getPredPositions p))
             -- if the instance is recursive one of these will be unused?
-            ps' = zipWith mkvpred (vs ++ eq_vs) (map (apSub s) (ps ++ eq_pwps))
-            t = predToType (apSub s h)
-            e' = apSub s e
+            ps' = zipWith mkvpred (vs ++ eq_vs) (map (apSub s_full) (ps ++ eq_pwps))
+            t = predToType (apSub s_full h)
+            e' = apSub s_full e
         ps'' <- concatMapM (expTConPred . expandSynVPred) ps'
         -- rtrace ("byInst: " ++ ppReadable (ps', e', t)) $ return ()
         let binding = (i, t, CApply e' (map CVar vs'))
@@ -924,9 +960,16 @@ unify x t1 t2 = do
         t2'' <- normT t2'
         -- traceM ("unify 3:\n" ++ ppReadable (t1'', t2''))
         case mgu bound_vars t1'' t2'' of
-          Just (u,eqs)  ->
+          Just (u, eqs) ->
               do extSubst "unify" u
-                 concatMapM (eqToVPred [pos]) $ nub eqs
+                 let eqs' = nub eqs
+                     (bv_eqs, solver_eqs) = partition (isNonSolverBoundVarEq bound_vars) eqs'
+                 -- Bound-variable equalities at non-solver kinds mean the
+                 -- declared type is more general than the inferred type.
+                 -- Report each as a type mismatch so the user sees which
+                 -- bound variable clashed with which inferred type.
+                 mapM_ (\(bt, it) -> reportUnifyError bound_vars x bt it) bv_eqs
+                 concatMapM (eqToVPred [pos]) solver_eqs
           Nothing -> let (t1'', t2'') = niceTypes (t1', t2')
                      in reportUnifyError bound_vars x t1'' t2''
 

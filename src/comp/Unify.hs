@@ -22,82 +22,97 @@ class Unify t where
         -> t -> t -> Maybe (Subst, [(Type, Type)])
 
 instance Unify Type where
-    -- an unreducable ATF application: identical types unify cleanly (reflexivity);
-    -- different types generate a deferred equality constraint.
+    -- Reflexivity: identical types always unify without substitution.
+    mgu _ t1 t2
+        | t1 == t2 = Just (nullSubst, [])
+
+    -- Expand saturated type synonyms before structural matching.
     mgu bound_tyvars t1 t2
-        | isATFAp t1 || isATFAp t2 = atfUnify bound_tyvars t1 t2
-    mgu bound_tyvars t1 t2
-        | kind t1 == KNum =
-      case kind t2 of
-        KNum -> numUnify bound_tyvars t1 t2
-        _ -> internalError("unify kind mismatch: " ++ ppReadable(t1, kind t1, t2, kind t2))
-    mgu bound_tyvars t1@(TAp l r) t2@(TAp l' r') = do
+        | Just t1' <- expandSatSyn t1 = mgu bound_tyvars t1' t2
+        | Just t2' <- expandSatSyn t2 = mgu bound_tyvars t1 t2'
+
+    -- Two distinct type constructors never unify.
+    -- (Equal TCons are already caught by reflexivity above.)
+    mgu _ (TCon _) (TCon _) = Nothing
+
+    -- TVar/TVar: order by generatedness and index to maintain canonical form.
+    -- (u == v is already caught by reflexivity above.)
+    mgu bound_tyvars tu@(TVar u) tv@(TVar v)
+        -- Both bound: defer the equality regardless of kind.  Callers handle
+        -- these two ways:
+        --   fundep improvement: the equality is axiomatic (given by the
+        --     instance), applied locally to dictionaries without being
+        --     accumulated into the global substitution.
+        --   unification: becomes an error — "you declared X here, we deduced
+        --     Y there" — with the bound variable's position as provenance.
+        -- KNum/KStr bound-variable equalities additionally go to the
+        -- constraint solver as wanteds; other kinds are resolved structurally
+        -- or reported as errors by the caller.
+        | u `elem` bound_tyvars
+        , v `elem` bound_tyvars
+            = Just (nullSubst, [(tu, tv)])
+        -- When one var is bound, bind the *unbound* var to point at the bound
+        -- one.  This keeps the bound var out of the substitution domain, which
+        -- is required by orderInstHead (MakeSymTab): okSubst checks that none
+        -- of the "pivot" vars appear in the substitution domain.
+        | u `elem` bound_tyvars = varBindWithEqs v tu
+        | v `elem` bound_tyvars = varBindWithEqs u tv
+        | isGeneratedTVar u
+        , isGeneratedTVar v     =
+            case compare (tv_num u) (tv_num v) of
+              GT -> varBindWithEqs u tv
+              LT -> varBindWithEqs v tu
+              EQ -> internalError "don't substitute a variable for itself"
+        | isGeneratedTVar u     = varBindWithEqs u tv
+        | isGeneratedTVar v     = varBindWithEqs v tu
+        | otherwise             = varBindWithEqs u tv
+
+    -- TVar/type: unbound variables bind freely.  Bound variables defer the
+    -- equality regardless of kind; occurs check still applies.
+    -- See TVar/TVar comment above for how callers handle bound-var equalities.
+    mgu bound_tyvars tu@(TVar u) t
+        | u `notElem` bound_tyvars = varBindWithEqs u t
+        | u `elem` tv t            = Nothing    -- occurs check
+        | otherwise                = Just (nullSubst, [(tu, t)])
+    mgu bound_tyvars t tvu@(TVar u)
+        | u `notElem` bound_tyvars = varBindWithEqs u t
+        | u `elem` tv t            = Nothing    -- occurs check
+        | otherwise                = Just (nullSubst, [(t, tvu)])
+
+    -- Type operator application (ATF or numeric/string op like TAdd/TStrCat):
+    -- deferred as wanteds.  KNum/KStr go to the constraint solver; ATFs are
+    -- converted to class predicates by tryATFClassPred in eqToPred.
+    -- The TVar cases above already handle TVar/typeop uniformly, so here at
+    -- least one side is a non-TVar type operator application.
+    mgu _ t1 t2
+        | isATFAp t1 || isTypeopAp t1 || isATFAp t2 || isTypeopAp t2
+        = Just (nullSubst, [(t1, t2)])
+
+    -- Structural: recurse on both sides.  ATF/typeop applications are already
+    -- handled above, so this only fires for ordinary type constructor applications.
+    mgu bound_tyvars (TAp l r) (TAp l' r') = do
         (s1, eqs1) <- mgu bound_tyvars l l'
         (s2, eqs2) <- mgu bound_tyvars (apSub s1 r) (apSub s1 r')
         Just (s2 @@ s1, fastNub (eqs1 ++ eqs2))
-    -- don't substitute a variable for itself
-    mgu bound_tyvars tu@(TVar u) tv@(TVar v) = varUnify bound_tyvars u v tu tv
-    mgu bound_tyvars (TVar u) t        = varBindWithEqs u t
-    mgu bound_tyvars t (TVar u)        = varBindWithEqs u t
-    mgu bound_tyvars (TCon tc1) (TCon tc2) | tc1==tc2 = Just (nullSubst, [])
-    mgu bound_tyvars _ _ = Nothing
 
-atfUnify :: [TyVar] -> Type -> Type -> Maybe (Subst, [(Type, Type)])
-atfUnify bound_tyvars t1 t2
-    | t1 == t2 = Just (nullSubst, [])
--- prefer an equality constraint to unifying a bound type variable
--- or defining a variable in terms of itself
-atfUnify bound_tyvars (TVar u) t
-    | not (u `elem` (bound_tyvars ++ tv t)) = varBindWithEqs u t
-atfUnify bound_tyvars t (TVar u)
-    | not (u `elem` (bound_tyvars ++ tv t)) = varBindWithEqs u t
-atfUnify bound_tyvars t1 t2 = Just (nullSubst, [(t1,t2)])
+    mgu _ _ _ = Nothing
 
-numUnify :: [TyVar] -> Type -> Type -> Maybe (Subst, [(Type, Type)])
-numUnify bound_tyvars t1 t2
-    | t1 == t2 = Just (nullSubst, [])
-numUnify bound_tyvars (TCon (TyNum n1 _)) (TCon (TyNum n2 _))
-    | n1 /= n2 = Nothing
-numUnify bound_tyvars tu@(TVar u) tv@(TVar v) =
-    case (varUnify bound_tyvars u v tu tv) of
-      Nothing -> Just (nullSubst, [(tu,tv)])
-      res@(Just _) -> res
--- if the type we're unifying against has no type variables
--- (e.g. a number) then just do the substitution
--- should not be necessary because of bound variable handling in ctxreduce
--- numUnify bound_tyvars (TVar u) t | null (tv t) = varBind u t
--- numUnify bound_tyvars t (TVar u) | null (tv t) = varBind u t
--- prefer an equality constraint to unifying a bound type variable
--- or defining a variable in terms of itself
-numUnify bound_tyvars (TVar u) t
-    | not (u `elem` (bound_tyvars ++ tv t)) = varBindWithEqs u t
-numUnify bound_tyvars t (TVar u)
-    | not (u `elem` (bound_tyvars ++ tv t)) = varBindWithEqs u t
-numUnify bound_tyvars t1 t2 = Just (nullSubst, [(t1,t2)])
+-- Expand a saturated type synonym one step.  Returns Nothing if the type is
+-- not a saturated synonym application.
+expandSatSyn :: Type -> Maybe Type
+expandSatSyn t =
+    let (f, as) = splitTAp t
+    in case f of
+        TCon (TyCon _ _ (TItype n body))
+            | fromIntegral (length as) == n
+            -> Just (instTypeSyn as body)
+        _ -> Nothing
 
-varUnify :: [TyVar] -> TyVar -> TyVar -> Type -> Type -> Maybe (Subst, [(Type, Type)])
-varUnify bound_tyvars u v tu tv
-    | u == v = Just (nullSubst, [])
-varUnify bound_tyvars u v tu tv
-    -- don't substitute one bound var for another
-    | u `elem` bound_tyvars, v `elem` bound_tyvars = Nothing
-varUnify bound_tyvars u v tu tv
-    -- don't substitute a bound var with an unbound var
-    | u `elem` bound_tyvars = varBindWithEqs v tu
-varUnify bound_tyvars u v tu tv
-    | v `elem` bound_tyvars = varBindWithEqs u tv
-varUnify bound_tyvars u@(TyVar _ nu _) v@(TyVar _ nv _) tu tv
-    | (isGeneratedTVar u) && (isGeneratedTVar v) =
-        case (compare nu nv) of
-          GT -> varBindWithEqs u tv
-          LT -> varBindWithEqs v tu
-          EQ -> internalError("don't substitute a variable for itself")
--- varUnify fall-throughs for ctxreduce
-    | isGeneratedTVar u = varBindWithEqs u tv
-    | isGeneratedTVar v = varBindWithEqs v tu
-varUnify bound_tyvars u v tu tv = varBindWithEqs u tv
-    {- traces ("varUnify fall-through (no generated): " ++
-            ppReadable (bound_tyvars, u, tv)) $ varBind u tv -}
+-- Substitute synonym parameters (encoded as TGen) with the supplied arguments.
+instTypeSyn :: [Type] -> Type -> Type
+instTypeSyn as (TAp l r)  = TAp (instTypeSyn as l) (instTypeSyn as r)
+instTypeSyn as (TGen _ n) = as !! n
+instTypeSyn _  t          = t
 
 instance (Types t, Unify t) => Unify [t] where
     mgu bound_tyvars (x:xs) (y:ys) = do
@@ -113,7 +128,7 @@ varBindWithEqs u t = fmap no_eqs $ varBind u t
 
 varBind :: TyVar -> Type -> Maybe Subst
 varBind u t | t == TVar u      = Just nullSubst
-            | isUnSatSyn t               = Nothing
+            | isUnSatSyn t     = Nothing
             | u `elem` tv t    = Nothing
             | kind u == kind t = Just (u +-> t)
             | otherwise        = Nothing
