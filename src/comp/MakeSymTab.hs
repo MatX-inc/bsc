@@ -767,7 +767,7 @@ getTI _ mi src_pkg _ iks (Cstruct _ ss ik vs fs _) =
   where i = qual mi (iKName ik)
 getTI errh mi src_pkg _ iks (Cclass _ ps ik vs fds ats fs) =
     checkATFParams `seq`
-    (i, TypeInfo (Just i) k vs ti src_pkg) : mkATFTIs mi i vs ks ats
+    (i, TypeInfo (Just i) k vs ti src_pkg) : mkATFTIs mi src_pkg i vs ks ats
   where i = qual mi (iKName ik)
         k = getK iks ik
         ks = getNK (genericLength vs) k
@@ -817,26 +817,26 @@ getTI errh mi src_pkg _ iks (Cclass _ ps ik vs fds ats fs) =
           in case errs of
                [] -> ()
                _  -> bsErrorUnsafe errh errs
-getTI _ mi _ iks (CItype ik vs _) =
-    [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract)]
+getTI _ mi src_pkg _ iks (CItype ik vs _) =
+    [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract src_pkg)]
   where i = qual mi (iKName ik)
-getTI _ mi _ iks (CIclass _ ps ik vs _ ats _) =
-    (i, TypeInfo (Just i) k vs ti) : mkATFTIs mi i vs ks ats
+getTI _ mi src_pkg _ iks (CIclass _ ps ik vs _ ats _) =
+    (i, TypeInfo (Just i) k vs ti src_pkg) : mkATFTIs mi src_pkg i vs ks ats
   where i = qual mi (iKName ik)
         k = getK iks ik
         ks = getNK (genericLength vs) k
         ti = TIstruct SClass (map (\ (CPred (CTypeclass i) _) -> i) ps)
-getTI _ mi _ iks (CprimType ik) =
-    [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract)]
+getTI _ mi src_pkg _ iks (CprimType ik) =
+    [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract src_pkg)]
   where i = qual mi (iKName ik)
         -- the CSyntax doesn't provide type var names
         vs = []
-getTI _ _ _ iks _ = []
+getTI _ _ _ _ iks _ = []
 
 -- Build TypeInfo entries for associated type functions in a class.
 -- Shared between Cclass and CIclass cases of getTI.
-mkATFTIs :: Maybe Id -> Id -> [Id] -> [Kind] -> [CAssocDepFun] -> [(Id, TypeInfo)]
-mkATFTIs mi classId vs ks ats =
+mkATFTIs :: Maybe Id -> Maybe Id -> Id -> [Id] -> [Kind] -> [CAssocDepFun] -> [(Id, TypeInfo)]
+mkATFTIs mi src_pkg classId vs ks ats =
     [ (atf_i, TypeInfo (Just atf_i) atf_k ca_params
         (TIatf { atf_class_id   = classId
                , atf_param_idxs = p_idxs

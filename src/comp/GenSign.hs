@@ -748,7 +748,7 @@ getPackagesUsedByExports currentPkg (CSignature _ _ _ defns) =
     getPackageFromDefn (Cforeign i _ _ _ _) = getIdPackage i
     getPackageFromDefn (Cprimitive i _) = getIdPackage i
     getPackageFromDefn (CprimType (IdKind i _)) = getIdPackage i
-    getPackageFromDefn (CIinstance _ _ _) = Nothing  -- Instances don't have a name
+    getPackageFromDefn (CIinstance _ _) = Nothing  -- Instances don't have a name
     getPackageFromDefn (CPragma _) = Nothing
     getPackageFromDefn d = internalError $ "GenSign.getPackageFromDefn unexpected defn in signature: " ++ ppReadable d
 -- ---------------
