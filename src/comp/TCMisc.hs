@@ -51,6 +51,9 @@ import Debug.Trace
 
 -------
 
+useLegacyInstIndex :: Bool
+useLegacyInstIndex = elem "-legacy-inst-index" progArgs
+
 doRTrace :: Bool
 doRTrace = elem "-trace-type" progArgs
 rtrace :: String -> a -> a
@@ -424,13 +427,29 @@ joinNeededCtxs' s sbs ps = do
 -- Return values are similar to "sat" since they recursively call each other.
 satMany :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
            TI ([VPred], SolvedBinds, Subst)
+-- Heuristic: sort predicates so those with concrete type arguments are processed
+-- before those with all-variable arguments.  This ensures fundep-producing
+-- predicates (e.g. Bits (UInt 32) n) resolve type variables before
+-- predicates that depend on those variables (e.g. Bits a n), avoiding
+-- expensive scans of all instances for unresolvable predicates.
+satMany dvs es rs_accum sbs s ps =
+    satMany' dvs es rs_accum sbs s (sortBy cmpPredConcreteness ps)
+    where
+        cmpPredConcreteness :: VPred -> VPred -> Ordering
+        cmpPredConcreteness (VPred _ (PredWithPositions (IsIn _ ts1) _))
+                            (VPred _ (PredWithPositions (IsIn _ ts2) _)) =
+            compare (concreteness ts2) (concreteness ts1) -- higher first
+        concreteness ts = length (filter (not . isTVar) ts)
+
+satMany' :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
+    TI ([VPred], SolvedBinds, Subst)
 -- rs_accum is an accumulating parameter of "needed" VPreds
 -- if satisfying fails these are returned (for error messages and ctxReduce)
-satMany dvs es [] sbs s [] = return $ ([], sbs, s)
-satMany dvs es rs_accum sbs s [] = do
+satMany' dvs es [] sbs s [] = return ([], sbs, s)
+satMany' dvs es rs_accum sbs s [] = do
   (final_rs, s', sbs') <- joinNeededCtxs rs_accum
-  return $ (final_rs, sbs' <++ sbs, s' @@ s)
-satMany dvs es rs_accum sbs s (p:ps) = do
+  return (final_rs, sbs' <++ sbs, s' @@ s)
+satMany' dvs es rs_accum sbs s (p:ps) = do
     x <- sat dvs es p
     rtrace ("satMany: sat="++ ppReadable (p,x)) $ return ()
     case x of
@@ -448,31 +467,33 @@ satMany dvs es rs_accum sbs s (p:ps) = do
             -- issue elsewhere (that should not have returned unsubst'd preds)?
             --
             rtrace ("satMany Right: " ++ ppReadable needed) $
-            satMany dvs es ((apSub s' needed) ++ rs_accum) (sbs' <++ sbs) (s' @@ s) ps
+            satMany' dvs es ((apSub s' needed) ++ rs_accum) (sbs' <++ sbs) (s' @@ s) ps
         ([], sbs', s') ->
             -- If p is satisfied, we "drop" it, but add its binding and
             -- substitution.
             if isNullSubst s' then
                 -- Straight-up drop it
                 rtrace ("satMany Left True") $
-                satMany dvs es rs_accum (sbs' <++ sbs) s ps
+                satMany' dvs es rs_accum (sbs' <++ sbs) s ps
             else do
               let (changed_rs, unchanged_rs) = split_rs s' rs_accum
               if null changed_rs then
                  -- no impact on accumulated predicates
                  rtrace ("satMany Left False True") $
-                 satMany dvs es rs_accum (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
+                 satMany' dvs es rs_accum (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
                else
                 -- Drop it, but try from the beginning again to see if any of
                 -- the accumulated rs's can now be
                 -- satisfied in the New State Of The World.  This might lead to
                 -- horrible running time in the worst case.
+                -- Re-sort via satMany since we have a fresh predicate list.
                 rtrace ("satMany Left False False") $ do
                 let rs' = (apSub s' changed_rs) ++ unchanged_rs
                 (rs'', s1, sbs1) <- joinNeededCtxs rs'
                 let s2 = s1 @@ s'
                 satMany (dvsSub s2 dvs) (apSub s2 es) [] (sbs1 <++ sbs' <++ sbs)
                         (s2 @@ s) (rs'' ++ apSub s2 ps)
+
 
 -- try to reduce the supplied VPreds as far as possible
 -- returning the underlying preds required
@@ -486,7 +507,13 @@ reducePredsAggressive dvs es vps0 = do
 reducePredsAggressive' :: DVS -> [EPred] -> SolvedBinds -> Subst -> [VPred] ->
                           TI ([VPred], SolvedBinds, Subst)
 reducePredsAggressive' dvs es sbs1 s1 vps1 = do
-  (vps2, sbs2, s2) <- maskAllowIncoherent $ satMany dvs es [] emptySBs s1 vps1
+  -- Note that we are calling satMany' here, which does not apply the sorting optimization.
+  -- There are some existing bugs where the order in which preds are reduced affects whether
+  -- instance resolution succeeds (see bsc-contrib/Libraries/GenC/GenCMsg/GenCMsg.bs),
+  -- so we conservatively preserve the original order.
+  -- Sorting or not sorting here does not seem to have a measurable effect on the overall
+  -- performance of type checking.
+  (vps2, sbs2, s2) <- maskAllowIncoherent $ satMany' dvs es [] emptySBs s1 vps1
   checkJoinCtxs "reducePredsAggressive 2" vps1 s2 vps2
   let allPredTyCons = concat [ concatMap allTyCons ts | IsIn _ ts <- map toPred vps2 ]
   let badCon (TyCon _ _ (TItype _ _)) = True
@@ -515,8 +542,34 @@ reducePred eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos)) = do
     let pr' = IsIn c ts'
         pp' = PredWithPositions pr' pos
         v' = VPred w pp'
+        -- Quick pre-check: can the instance head possibly match the predicate?
+        -- Compares head type constructors at non-determined fundep positions.
+        -- If both sides have a concrete non-synonym constructor and they
+        -- differ, no match is possible so we skip the expensive newInst call.
+        -- We only check non-fundep positions because fundep-determined
+        -- positions are resolved via mgu after the initial match.
+        -- matchTop uses pickJust over fundeps, so we need ANY fundep to work.
+        canMatch :: Pred -> Pred -> Bool
+        canMatch (IsIn c1 pred_ts) (IsIn _ inst_ts) =
+            any checkFD $ funDeps c1
+          where
+            checkFD bs = and
+                [ case (leftNonSynTyCon pt, leftNonSynTyCon it) of
+                    (Just pc, Just ic) -> pc == ic
+                    _ -> True
+                | (False, pt, it) <- zip3 bs pred_ts inst_ts ]
+            -- Extract head TyCon Id only if it's not a type synonym
+            -- (those could expand to match anything)
+            leftNonSynTyCon t =
+                case leftTyCon t of
+                    Just (TyCon _ _ (TItype {})) -> Nothing  -- synonym
+                    Just (TyCon i _ _)           -> Just i
+                    _                            -> Nothing
+
         f :: Bool -> [Inst] -> TI (Maybe ([VPred], SolvedBind, Subst, Maybe Pred))
         f incoherent [] = return Nothing
+        f incoherent (i@(Inst _ _ (_ :=> h_orig) _):is)
+          | useLegacyInstIndex && not (canMatch pr' h_orig) = f incoherent is
         f incoherent (i:is) = do
                 (m_tv, i'@(Inst _ _ (_ :=> h) _)) <- newInst i (getVPredPositions v')
                 x <- byInst v' i'
