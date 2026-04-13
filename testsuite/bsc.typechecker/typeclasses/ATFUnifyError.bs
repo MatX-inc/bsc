@@ -17,6 +17,10 @@ instance Container (Box a) a where
   wrap = Box
   unwrap (Box x) = x
 
--- Unification creates an unsatisfied context Container a Bool
-conv :: a -> Elem a -> Bool
-conv _ = id
+-- Reading a struct field whose type is Elem f, and assigning to Bool,
+-- requires Container f Bool which is not in scope.
+struct Holder f =
+  val :: Elem f
+
+getBool :: Holder a -> Bool
+getBool h = h.val
