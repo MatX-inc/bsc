@@ -65,6 +65,7 @@ data Flags = Flags {
         keepInlined :: Bool,
         kill :: Maybe (DumpFlag, Maybe String),
         ifLift :: Bool,
+        letGen :: Bool,
         maxTIStackDepth :: Int,
         methodBVI :: Bool,
         methodConf :: Bool,

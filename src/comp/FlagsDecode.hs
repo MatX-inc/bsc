@@ -561,6 +561,7 @@ defaultFlags bluespecdir = Flags {
         keepInlined = False,
         kill = Nothing,
         ifLift = True,
+        letGen = False,
         maxTIStackDepth = 1000,
         methodBVI = False,
         methodConf = False,
@@ -1257,6 +1258,10 @@ externalFlags = [
          (Toggle (\f x -> f {ifLift=x}) (showIfTrue ifLift),
           "lift method calls in \"if\" actions", Visible)),
 
+        ("let-gen",
+         (Toggle (\f x -> f {letGen=x}) (showIfTrue letGen),
+          "generalize untyped let bindings", Hidden)),
+
         ("max-tcheck-stack-depth",
          (Arg "depth"
              (\f s -> case (mread s) of
@@ -1861,6 +1866,7 @@ showFlagsRaw flags =
           ("keepFires", show (keepFires flags)),
           ("keepInlined", show (keepInlined flags)),
           ("kill", show (kill flags)),
+          ("letGen", show (letGen flags)),
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
           ("methodBVI", show (methodBVI flags)),
