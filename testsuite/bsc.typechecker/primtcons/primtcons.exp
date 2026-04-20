@@ -116,5 +116,8 @@ compile_pass CExtendATFExplicit.bsv
 compile_pass ExpSizeOf_VectorIfc.bsv
 compile_verilog_fail_error ExpSizeOf_VectorIfc.bsv T0043
 
+# Test that cExtend works when type synonyms are expanded in instance heads
+compile_pass CExtendSynonym.bsv
+
 # ---------------
 
