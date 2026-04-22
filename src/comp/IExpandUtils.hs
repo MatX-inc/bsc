@@ -3562,6 +3562,8 @@ realPrim _ = False
 stringPrim :: PrimOp -> Bool
 stringPrim PrimStringConcat = True
 stringPrim PrimStringEQ = True
+stringPrim PrimStringLT = True
+stringPrim PrimStringLE = True
 stringPrim PrimStringToInteger = True
 stringPrim PrimStringLength = True
 stringPrim PrimStringSplit = True
