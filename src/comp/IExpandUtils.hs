@@ -21,7 +21,7 @@ module IExpandUtils(
         setBackendSpecific, cacheDef, lookupCExprCache, insertCExprCache,
         addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getCross, getErrHandle, getModuleName,
-        getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer,
+        getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer, mergeATFCache,
         getNewRuleSuffix, updNewRuleSuffix,
         mapPExprPosition,
         chkClockDomain, chkResetDomain, fixupActionWireSet,
@@ -94,7 +94,6 @@ import Id
 import PreIds
 import CSyntax(CExpr)
 import CType(TISort(..), StructSubType(..))
-import IConv(iConvT)
 import VModInfo
 import ISyntax
 import ISyntaxUtil
@@ -585,14 +584,17 @@ data GState = GState {
         badEvaluation :: !Bool,
 
         -- aggressive conditions
-        aggressive_cond :: Bool
+        aggressive_cond :: Bool,
+
+        atfCache :: !IATFCache
         }
 
 initGState :: ErrorHandle -> Flags ->
               SymTab -> M.Map Id HExpr ->
+              IATFCache ->
               Id -> Bool -> [PProp] ->
               GState
-initGState errh flags symt alldefs defId is_noinlined_func pps =
+initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
                           checkMaxStep = redStepsMaxIntervals flags /= 0,
@@ -642,7 +644,8 @@ initGState errh flags symt alldefs defId is_noinlined_func pps =
                       cexprCache = M.empty,
                       savedRules = [],
                       badEvaluation = False,
-                      aggressive_cond = aggImpConds flags
+                      aggressive_cond = aggImpConds flags,
+                      atfCache = atf_cache
  }
     in  gs
 
@@ -663,10 +666,11 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
 
 runG :: ErrorHandle -> Flags ->
         SymTab -> M.Map Id HExpr ->
+        IATFCache ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
-runG errh flags symt alldefs defId is_noinlined_func pps gFn =
-  do let gs = initGState errh flags symt alldefs defId is_noinlined_func pps
+runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
+  do let gs = initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
      do
@@ -2525,40 +2529,35 @@ updHeap tag (p, HeapData ref) e = do
 
 -- Type normalization function used in evaluation.
 -- Fully traverse and reduce all type function applications where possible.
-fullTypeNormalizer :: Flags -> SymTab -> IType -> Changed IType
-fullTypeNormalizer _ _ (ITCon _ _ _) = Unchanged
-fullTypeNormalizer _ _ (ITNum _)     = Unchanged
-fullTypeNormalizer _ _ (ITStr _)     = Unchanged
-fullTypeNormalizer _ _ (ITVar _)     = Unchanged
-fullTypeNormalizer flags symt (ITForAll i k t) = changed1 (ITForAll i k) t'
-  where t' = fullTypeNormalizer flags symt t
-fullTypeNormalizer flags symt t@(ITAp _ _)
-    | (f@(ITCon _ _ (TIatf { atf_param_idxs = pIdxs })), as) <- splitITAp t
+fullTypeNormalizer :: IATFCache -> IType -> Changed IType
+fullTypeNormalizer _ (ITCon _ _ _) = Unchanged
+fullTypeNormalizer _ (ITNum _)     = Unchanged
+fullTypeNormalizer _ (ITStr _)     = Unchanged
+fullTypeNormalizer _ (ITVar _)     = Unchanged
+fullTypeNormalizer cache (ITForAll i k t) = changed1 (ITForAll i k) t'
+  where t' = fullTypeNormalizer cache t
+fullTypeNormalizer cache t@(ITAp _ _)
+    | (ITCon atfId _ (TIatf { atf_param_idxs = pIdxs }), as) <- splitITAp t
     , length as == length pIdxs  -- Only attempt to reduce type functions that are fully applied.
-    , as' <- map (changedOrId $ fullTypeNormalizer flags symt) as
+    , as' <- map (changedOrId $ fullTypeNormalizer cache) as
     , all canNorm as'
-    = Changed $ normTFun $ foldl ITAp f as'
-  where -- iToCT which we use below cannot handle ITVar and ITForAll
+    = Changed $ case M.lookup (atfId, as') cache of
+        Just result -> result
+        Nothing -> internalError $
+             "fullTypeNormalizer - ATF cache miss: " ++ ppReadable (atfId, as')
+  where -- The cache is keyed on concrete types; ITVar and ITForAll can't be looked up
         canNorm (ITVar _)        = False
         canNorm (ITForAll _ _ _) = False
         canNorm (ITAp f a)       = canNorm f && canNorm a
         canNorm _                = True
-        normTFun t =
-          -- calling iConvT does the normalization here.
-          let t' = iConvT flags symt $ iToCT t
-          in case splitITAp t' of
-               ((ITCon _ _ (TIatf {})), _) -> internalError $
-                    "fullTypeNormalizer - unsimplified: " ++ ppReadable (t,t')
-               _ -> t'
-fullTypeNormalizer flags symt (ITAp f a) = changed2 normITAp f a f' a'
-  where f' = fullTypeNormalizer flags symt f
-        a' = fullTypeNormalizer flags symt a
+fullTypeNormalizer cache (ITAp f a) = changed2 normITAp f a f' a'
+  where f' = fullTypeNormalizer cache f
+        a' = fullTypeNormalizer cache a
 
 getTypeNormalizerC :: G (IType -> Changed IType)
 getTypeNormalizerC = do
-  flags <- getFlags
-  symt <- getSymTab
-  return $ fullTypeNormalizer flags symt
+  cache <- getATFCache
+  return $ fullTypeNormalizer cache
 
 getTypeNormalizer :: G (IType -> IType)
 getTypeNormalizer = fmap changedOrId getTypeNormalizerC
@@ -2606,6 +2605,16 @@ getCross = do flags <- getFlags
 getErrHandle :: G ErrorHandle
 getErrHandle = do s <- get
                   return (errHandle (ro s))
+
+{-# INLINE getATFCache #-}
+getATFCache :: G IATFCache
+getATFCache = do s <- get
+                 return (atfCache s)
+
+mergeATFCache :: IATFCache -> G ()
+mergeATFCache new_entries =
+    when (not (M.null new_entries)) $
+      modify (\s -> s { atfCache = mergeIATFCaches new_entries (atfCache s) })
 
 {-# INLINE getWireSetCache #-}
 getWireSetCache :: G (M.Map HeapPointer HWireSet)

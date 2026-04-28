@@ -535,15 +535,18 @@ instance Bin (IPackage a) where
            toBin (ipkg_depends pkg)
            toBin (ipkg_pragmas pkg)
            toBin (ipkg_defs pkg)
+           toBin (ipkg_atf_cache pkg)
     readBytes = do when doTrace $ traceM("read IPackage")
-                   name    <- fromBin
-                   depends <- fromBin
-                   pragmas <- fromBin
-                   defs    <- fromBin
-                   return $ IPackage { ipkg_name    = name
-                                     , ipkg_depends = depends
-                                     , ipkg_pragmas = pragmas
-                                     , ipkg_defs    = defs
+                   name      <- fromBin
+                   depends   <- fromBin
+                   pragmas   <- fromBin
+                   defs      <- fromBin
+                   atfCache  <- fromBin
+                   return $ IPackage { ipkg_name      = name
+                                     , ipkg_depends   = depends
+                                     , ipkg_pragmas   = pragmas
+                                     , ipkg_defs      = defs
+                                     , ipkg_atf_cache = atfCache
                                      }
 
 -- ----------
