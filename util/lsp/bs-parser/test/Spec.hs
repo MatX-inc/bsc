@@ -208,6 +208,24 @@ main = do
           Left err -> expectationFailure $ show err
           Right _ -> pure ()
 
+      it "parses qualified parenthesized symbolic operators" $ do
+        let inputs =
+              [ "Vector.(!!) v i"
+              , "M.(+) x y"
+              , "M.(<=) x y"
+              , "M.(++) xs ys"
+              ]
+        mapM_ (\input -> case parseExpr "<test>" input of
+          Left err -> expectationFailure $ show err
+          Right _ -> pure ()) inputs
+
+      it "pretty-prints qualified parenthesized symbolic operators" $ do
+        case parseExpr "<test>" "Vector.(!!) v i" of
+          Left err -> expectationFailure $ show err
+          Right expr ->
+            renderPretty 80 (prettyExpr (locVal expr))
+              `shouldBe` "Vector.(!!) v i"
+
     describe "BSV parser — unit tests" $ do
       it "parses empty package" $ do
         parseBSV "package Foo;\nendpackage" `shouldSucceed`
