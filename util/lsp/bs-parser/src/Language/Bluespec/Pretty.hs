@@ -624,8 +624,13 @@ prettyQualIdent qid = case qualModule qid of
 -- wrap it in parentheses to make it a valid expression.
 prettyQualIdentAsExpr :: QualIdent -> Doc ann
 prettyQualIdentAsExpr qid
-  | isOperatorIdent (qualIdent qid) = parens (prettyQualIdent qid)
+  | isOperatorIdent ident =
+      case qualModule qid of
+        Nothing -> parens (prettyIdent ident)
+        Just m -> prettyModuleId m <> ".(" <> prettyIdent ident <> ")"
   | otherwise = prettyQualIdent qid
+  where
+    ident = qualIdent qid
 
 -- | Check if an identifier is an operator (starts with an operator character).
 isOperatorIdent :: Ident -> Bool

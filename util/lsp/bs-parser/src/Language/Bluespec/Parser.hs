@@ -2011,7 +2011,8 @@ pBitSelect = do
 -- Includes do/if/case/let/lambda so they can be function arguments.
 pAExpr' :: Parser LExpr
 pAExpr' = choice
-  [ pVar
+  [ try pQualifiedParenOp
+  , pVar
   , pCon
   , pLitExpr
   , pValueOf
@@ -2039,6 +2040,25 @@ pCon :: Parser LExpr
 pCon = do
   c <- qualConId
   pure $ Located (locSpan c) (ECon c)
+
+-- | Parse a qualified parenthesized operator used as a value.
+-- Handles: Module.(op), e.g. Vector.(!!)
+pQualifiedParenOp :: Parser LExpr
+pQualifiedParenOp = do
+  m <- conId
+  void $ punct Lex.PunctDot
+  void $ punct Lex.PunctLParen
+  op <- MP.token test expected
+  end <- punct Lex.PunctRParen
+  let qid = Located (mergeSpans (locSpan m) (spanOf end)) $
+        QualIdent (Just $ ModuleId $ identText $ locVal m) (locVal op)
+  pure $ Located (locSpan qid) (EVar qid)
+  where
+    test t = case Lex.tokKind t of
+      Lex.TokVarSym op -> Just $ Located (Lex.tokSpan t) (VarId op)
+      Lex.TokConSym op -> Just $ Located (Lex.tokSpan t) (ConId op)
+      _ -> Nothing
+    expected = Set.singleton $ Label $ NE.fromList "operator"
 
 -- | Parse a literal.
 pLitExpr :: Parser LExpr
