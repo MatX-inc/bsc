@@ -50,7 +50,7 @@ mkCoherentDictMap ipkgs =
 -- The first argument must be "mkCoherentDictMap" applied to the same
 -- imported packages that are passed as the third argument.
 fixupDefs :: M.Map IType Id -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
-fixupDefs coherent_dict_map (IPackage mi _ ps ds) ipkgs =
+fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
     let
         (ms, _) = unzip ipkgs
 
@@ -58,10 +58,10 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds) ipkgs =
         -- XXX The nub is needed (at least) because we call "fixupDefs"
         -- XXX multiple times on a package and so we may be adding the ipkg
         -- XXX pragmas multiple times.
-        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ <- ms ]
+        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ _ <- ms ]
 
         -- Get all the defs from this package and the imported packages
-        ads = concat (ds : map (\ (IPackage _ _ _ ds) -> ds) ms)
+        ads = concat (ds : map (\ (IPackage _ _ _ ds _) -> ds) ms)
 
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
@@ -69,14 +69,15 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds) ipkgs =
         ads' = iDefsMap (fixUp coherent_dict_map m) ads
 
         -- The new package contents
-        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _), s) <- ipkgs ]
+        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = iDefsMap (fixUp coherent_dict_map m) ds
+        merged_atf_cache = foldl mergeIATFCaches own_atf_cache [ ipkg_atf_cache m | (m, _) <- ipkgs ]
         dropDict i t = tracep (trace_drop_dicts && result) ("dropDict: " ++ ppReadable (i,t)) result
           where result = itIsDictType t && isDictId i && t `M.member` coherent_dict_map && not (isIncoherentDict i)
         ds'' = [ d' | d'@(IDef i t _ _) <- ds', not (dropDict i t) ]
     in
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
-        (IPackage mi ipkg_sigs ps' ds'', ads')
+        (IPackage mi ipkg_sigs ps' ds'' merged_atf_cache, ads')
 
 
 -- ===============
