@@ -31,9 +31,6 @@ header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260616-1"
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-headerBS :: B.ByteString
-headerBS = B.pack header
-
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh fn bi_sig bo_sig ipkg =
@@ -541,15 +538,18 @@ instance Bin (IPackage a) where
            toBin (ipkg_depends pkg)
            toBin (ipkg_pragmas pkg)
            toBin (ipkg_defs pkg)
+           toBin (ipkg_atf_cache pkg)
     readBytes = do when doTrace $ traceM("read IPackage")
-                   name    <- fromBin
-                   depends <- fromBin
-                   pragmas <- fromBin
-                   defs    <- fromBin
-                   return $ IPackage { ipkg_name    = name
-                                     , ipkg_depends = depends
-                                     , ipkg_pragmas = pragmas
-                                     , ipkg_defs    = defs
+                   name      <- fromBin
+                   depends   <- fromBin
+                   pragmas   <- fromBin
+                   defs      <- fromBin
+                   atfCache  <- fromBin
+                   return $ IPackage { ipkg_name      = name
+                                     , ipkg_depends   = depends
+                                     , ipkg_pragmas   = pragmas
+                                     , ipkg_defs      = defs
+                                     , ipkg_atf_cache = atfCache
                                      }
 
 -- ----------
