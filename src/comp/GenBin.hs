@@ -34,9 +34,6 @@ headerBS = B.pack header
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-headerBS :: B.ByteString
-headerBS = B.pack header
-
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh fn bi_sig bo_sig ipkg =
