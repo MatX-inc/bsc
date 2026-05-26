@@ -45,7 +45,23 @@ extern void vcd_add_clock_def(tSimStateHdl simHdl,
 extern void vcd_write_id(tSimStateHdl simHdl, unsigned int num);
 extern void vcd_set_clock(tSimStateHdl simHdl,
 			  unsigned int num, tClock handle);
-extern void vcd_write_scope_start(tSimStateHdl simHdl, const char* name);
+/* Begin a new VCD scope.
+ * If `defname` is non-NULL, an additional
+ *   $comment defname <defname> $end
+ * line is emitted after the $scope line. The comment is part of the
+ * standard VCD ignore set, so existing tools are unaffected; tools
+ * that recognize this convention use it to recover the module-type
+ * name that the standard VCD $scope syntax cannot carry, which is
+ * generally useful for type-aware debugging of waveform output.
+ *
+ * Primitive callers pass only `(simHdl, name)` and rely on the
+ * NULL default: primitive C++ classes can be polymorphic, so a
+ * single static defname there would not correspond to unique BSV
+ * type information.
+ */
+extern void vcd_write_scope_start(tSimStateHdl simHdl,
+				  const char* name,
+				  const char* defname = NULL);
 extern void vcd_write_scope_end(tSimStateHdl simHdl);
 extern void vcd_write_def(tSimStateHdl simHdl,
 			  unsigned int num,

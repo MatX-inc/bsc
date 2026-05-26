@@ -30,6 +30,16 @@ if {$ctest == 1} {
                                       -c "main.top.counter.DATA_F equals 150 @610" \
                                       -c "main.top.counter becomes 150 @610" \
                                       -c "main.top.counter.SETF becomes 0 @610" }
+
+    # Check that Bluesim emits `$comment defname <modtype> $end` after
+    # each $scope for synthesized user modules. Primitives do not emit
+    # a defname, so the grep output contains exactly the user-module
+    # defnames in emission order.
+    compile_object_pass DefnameTest.bsv
+    link_objects_pass sysDefnameTest sysDefnameTest
+    sim_output sysDefnameTest {-V sysDefnameTest.vcd}
+    grep sysDefnameTest.vcd sysDefnameTest.defname.out {\$comment defname}
+    compare_file sysDefnameTest.defname.out sysDefnameTest.defname.expected
 }
 
 test_c_veri_bsv VCDTest1

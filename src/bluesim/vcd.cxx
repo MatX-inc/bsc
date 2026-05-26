@@ -363,9 +363,14 @@ void vcd_set_clock(tSimStateHdl simHdl, unsigned int num, tClock handle)
   (simHdl->vcd).clk_map.insert(std::make_pair(num,handle));
 }
 
-void vcd_write_scope_start(tSimStateHdl simHdl, const char* name)
+void vcd_write_scope_start(tSimStateHdl simHdl,
+			   const char* name,
+			   const char* defname)
 {
   fprintf((simHdl->vcd).vcd_file, "$scope module %s $end\n", name);
+  if (defname != NULL) {
+    fprintf((simHdl->vcd).vcd_file, "$comment defname %s $end\n", defname);
+  }
 }
 
 void vcd_write_scope_end(tSimStateHdl simHdl)

@@ -1967,7 +1967,11 @@ simCCBlockToClassDefinition sb_map sch_map sb =
          vcd_recurse =
            [ decl $ (unsigned . int) $ (mkVar "l") `assign` new_l ] ++
            sub_calls
-         scope_start = [ stmt $ (var "vcd_write_scope_start") `cCall` [var "sim_hdl", var "inst_name"] ]
+         -- Pass the module type name (sb_name) as defname so the generated
+         -- VCD includes a `$comment defname <type> $end` line that consumers
+         -- can use to recover the module type for type-aware debugging.
+         scope_start = [ stmt $ (var "vcd_write_scope_start") `cCall`
+                           [var "sim_hdl", var "inst_name", mkStr (sb_name sb)] ]
          scope_end = [ stmt $ (var "vcd_write_scope_end") `cCall` [var "sim_hdl"] ]
          vcd_dump_defs_body =
            block (scope_start ++
