@@ -1045,11 +1045,6 @@ mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> [AExpr]) ->
            ([ADef], [ADef], [ADef], AExprSubst)
 mkEmuxs tl tlG cnd rdb value_method_ids om o m ino emrs =
     let
-        -- A SplitPorts argument arrives as an ATuple of per-port AExprs;
-        -- unwrap one level so each AExpr corresponds to a hardware port.
-        argPorts (ATuple _ es) = es
-        argPorts e             = [e]
-
         -- Break each MethPortBlob into a list of the expressions for
         -- each argument, and then transpose the entire structure to
         -- make a list of, for each argument, a list of the different

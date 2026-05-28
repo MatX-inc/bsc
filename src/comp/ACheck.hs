@@ -274,8 +274,6 @@ chkAExpr e@(AMethCall t _ _ es) =
         if all chkMethArg es
                 then t
                 else internalError ("chkAExpr: methcall " ++ ppReadable e)
-  where chkMethArg (ATuple _ es) = all (isBit . chkAExpr) es
-        chkMethArg arg           = isBit (chkAExpr arg)
 chkAExpr e@(AFunCall { ae_type = t, ae_args = es }) =
         if all (isForeignArg . chkAExpr) es
                 then t
