@@ -110,7 +110,7 @@ import ASyntax
 import ASyntaxUtil(argInputPorts)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle)
 import VModInfo(vPath, vFields, vArgs,
-                VPathInfo(..), VName(..), VFieldInfo(..),
+                VPathInfo(..), VName(..), VFieldInfo(..), vfMethodArgPorts,
                 VArgInfo(..), VWireInfo(..),
                 getInputClockPorts, getInputResetPorts,
                 isClock, isReset, isPort, isParam, id_to_vName,

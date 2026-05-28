@@ -12,7 +12,7 @@ import ErrorUtil(internalError)
 import Id
 import PreIds(idPrimAction, idInout_, idPrimUnit)
 import VModInfo(vArgs, vFields, VName(..), VeriPortProp(..),
-                VArgInfo(..), VFieldInfo(..), VPort)
+                VArgInfo(..), VFieldInfo(..), vfMethodArgPorts, VPort)
 import Prim
 import ASyntax
 import ASyntaxUtil( AVars(..) )
@@ -398,7 +398,7 @@ noUse :: AId -> AExpr -> Bool
 noUse i (APrim _ _ _ es)     = and (map (noUse i) es)
 noUse i (ANoInlineFunCall _ _ _ es) = and (map (noUse i) es)
 noUse i (AFunCall _ _ _ _ es) = and (map (noUse i) es)
-noUse i (AMethCall _ _ _ es) = and (map (noUse i) es)
+noUse i (AMethCall _ _ _ args) = and (map (noUse i) args)
 noUse i (ASPort _ i')        = i /= i'
 noUse i (ASParam _ i')       = i /= i'
 noUse i (ASDef _ i')         = i /= i'

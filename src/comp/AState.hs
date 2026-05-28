@@ -367,12 +367,12 @@ aState' flags pps schedule_info apkg = do
             in  (c':es)
         addWF rid es = internalError("addWF: " ++ ppReadable (rid, es))
 
-        cvtForeign rid resets (AFCall id f isC es _) =
-            AForeignCall id (cvtName isC f) (addWF rid es) [] resets
-        cvtForeign rid resets a@(ATaskAction id f isC _ es Nothing _ _) =
-            AForeignCall id (cvtName isC f) (addWF rid es) [] resets
-        cvtForeign rid resets  (ATaskAction id f isC _ es (Just aid) ty _) =
-            AForeignCall id (cvtName isC f) (addWF rid es) [aid] resets
+        cvtForeign rid resets (AFCall id f isC (c:es) _) =
+            AForeignCall id (cvtName isC f) (addWF rid (c:es)) [] resets
+        cvtForeign rid resets a@(ATaskAction id f isC _ (c:es) Nothing _ _) =
+            AForeignCall id (cvtName isC f) (addWF rid (c:es)) [] resets
+        cvtForeign rid resets  (ATaskAction id f isC _ (c:es) (Just aid) ty _) =
+            AForeignCall id (cvtName isC f) (addWF rid (c:es)) [aid] resets
         cvtForeign rid resets a@(ACall { }) =
             internalError("AState.cvtForeign - not foreign:" ++ ppReadable a)
 
@@ -935,11 +935,13 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
       -- (For actions, the first argument is the condition, so remove it)
       exp :: UniqueUse -> AExpr
       exp (UUExpr e _) = e
-      exp (UUAction (ACall o m es)) = AMethCall aTAction o m es
-      exp (UUAction (AFCall i f isC es isA)) = AFunCall aTAction i f isC es
+      exp (UUAction (ACall o m args)) =
+          AMethCall aTAction o m args
+      exp (UUAction (AFCall i f isC args isA)) =
+          AFunCall aTAction i f isC args
       -- XXX think this is just used for expression muxing
-      exp (UUAction (ATaskAction i f isC n es tid tty isA)) =
-          AFunCall aTAction i f isC es
+      exp (UUAction (ATaskAction i f isC n args tid tty isA)) =
+          AFunCall aTAction i f isC args
 
       -- ---------------
       -- Make the MethodBlob
@@ -1011,11 +1013,12 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
 --  * an expression substitution to replace old expressions with uses
 --    of the new definitions
 
-mkEmuxss :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
+mkEmuxss :: ([AExpr] -> [AExpr]) -> ([AExpr] -> [AExpr]) ->
+            ([AExpr] -> AExpr) ->
             ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob ->
             ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxss tl cnd rdb value_method_ids om (((o, m), f), emrss) =
-    let genfunct = mkEmuxs tl cnd rdb value_method_ids om o m
+mkEmuxss tl tlG cnd rdb value_method_ids om (((o, m), f), emrss) =
+    let genfunct = mkEmuxs tl tlG cnd rdb value_method_ids om o m
         (sel_dss, val_dss, out_dss, sss) = unzip4 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
     in  (concat sel_dss, concat val_dss, concat out_dss, concat sss)
 
@@ -1024,23 +1027,29 @@ mkEmuxss tl cnd rdb value_method_ids om (((o, m), f), emrss) =
 -- XXX conditional def/use analysis.
 mkEmuxssExpr :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
              -> ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxssExpr = mkEmuxss id (const aTrue)
+mkEmuxssExpr = mkEmuxss id id (const aTrue)
 
 mkEmuxssAction :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
                -> ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxssAction = mkEmuxss tail head
+mkEmuxssAction = mkEmuxss tail tail head
 
 -- ---------------
 
 -- This function produces a set of muxes per port
 -- (that is, per copy of the method on a single state instance)
 
-mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
+mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> [AExpr]) ->
+           ([AExpr] -> AExpr) ->
            ExclusiveRulesDB -> [AId] -> OrderMap ->
            AId -> AId -> Maybe Integer -> MethPortBlob ->
            ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
+mkEmuxs tl tlG cnd rdb value_method_ids om o m ino emrs =
     let
+        -- A SplitPorts argument arrives as an ATuple of per-port AExprs;
+        -- unwrap one level so each AExpr corresponds to a hardware port.
+        argPorts (ATuple _ es) = es
+        argPorts e             = [e]
+
         -- Break each MethPortBlob into a list of the expressions for
         -- each argument, and then transpose the entire structure to
         -- make a list of, for each argument, a list of the different

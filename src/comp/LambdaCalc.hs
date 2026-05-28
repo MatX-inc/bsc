@@ -997,7 +997,7 @@ convStmt _ _ (AStmtDef (ADef i t e _)) = do
   e_expr <- convAExpr e
   return [(defId i, convAType t, e_expr)]
 
-convStmt modId avmap (AStmtAction cset (ACall obj meth as)) = do
+convStmt modId avmap (AStmtAction cset (ACall obj meth (_:srcArgs))) = do
   let c = getCondExpr cset
 
   let mod_type = modType modId []
@@ -1184,7 +1184,7 @@ convAExpr (ASAny t Nothing) = let st = convAType t
 
 convAExpr (APrim _ t p args) = convAPrim p t args
 
-convAExpr (AMethCall _ obj meth as) = do
+convAExpr (AMethCall _ obj meth args) = do
   modId <- gets curModId
   state_expr <- gets curState
   instmap <- gets instMap

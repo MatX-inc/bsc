@@ -4715,7 +4715,7 @@ class WrapMethod m w | m -> w where
   -- Compute the list of output port names for a method, from the result base name.
   outputPortNames :: m -> String -> List String
 
-  -- Compute the list of input port names for a method, from the result base name.
+  -- Compute the list of output port names for a method, from the result base name.
   outputPortNames :: m -> String -> List String
 
   -- Save the port types for a method, given the module name, argument base names and result name.

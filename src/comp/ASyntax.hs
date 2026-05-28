@@ -549,6 +549,11 @@ type AMethodInput = [AInput]
 data AAbstractInput =
         -- simple input using one port
         AAI_Port AInput |
+        -- a single source argument that is split into multiple hardware ports
+        -- (e.g. a struct argument whose fields each become a port).
+        -- The list MUST be non-empty; a zero-port argument is represented as
+        -- AAI_MultiPort [] only when the source argument has zero-width.
+        AAI_MultiPort [AInput] |
         -- clock osc and maybe gate
         AAI_Clock AId (Maybe AId) |
         AAI_Reset AId |
@@ -557,12 +562,14 @@ data AAbstractInput =
 
 instance NFData AAbstractInput where
     rnf (AAI_Port p) = rnf p
+    rnf (AAI_MultiPort ps) = rnf ps
     rnf (AAI_Clock osc mgate) = rnf2 osc mgate
     rnf (AAI_Reset wire) = rnf wire
     rnf (AAI_Inout wire sz) = rnf2 wire sz
 
 absInputToPorts :: AAbstractInput -> [AInput]
 absInputToPorts (AAI_Port p) = [p]
+absInputToPorts (AAI_MultiPort ps) = ps
 absInputToPorts (AAI_Clock osc Nothing) = [(osc, aTBool)]
 absInputToPorts (AAI_Clock osc (Just gate)) = [(osc, aTBool), (gate, aTBool)]
 absInputToPorts (AAI_Reset r) = [(r,aTBool)]
@@ -1515,18 +1522,18 @@ ppActions d as = text "{" <+> sep (map ppA as) <+> text "}"
 -- AFCall/ATaskAction prints i instead of the string name
 -- to print the Bluespec function being called, not the foreign one
 instance PPrint AAction where
-    pPrint d _ (ACall i m (c : es)) | isOne c = pPrint d 0 i <> text "." <> ppMethId d m <+> sep (map (pPrint d 1) es)
-    pPrint d _ (ACall i m (c : es)) = sep [
+    pPrint d _ (ACall i m (c:es)) | isOne c = pPrint d 0 i <> text "." <> ppMethId d m <+> sep (map (pPrint d 1) es)
+    pPrint d _ (ACall i m (c:es)) = sep [
         text "if" <+> pPrint d 0 c <+> text "then",
         nest 2 (pPrint d 0 i <> text "." <> ppMethId d m <+> sep (map (pPrint d 1) es))
         ]
-    pPrint d _ (AFCall i _ _ (c : es) _) | isOne c = pPrint d 0 i <+> sep (map (pPrint d 1) es)
-    pPrint d _ (AFCall i _ _ (c : es) _) = sep [
+    pPrint d _ (AFCall i _ _ (c:es) _) | isOne c = pPrint d 0 i <+> sep (map (pPrint d 1) es)
+    pPrint d _ (AFCall i _ _ (c:es) _) = sep [
         text "if" <+> pPrint d 0 c <+> text "then",
         nest 2 (pPrint d 0 i <+> sep (map (pPrint d 1) es))
         ]
-    pPrint d _ (ATaskAction i _ _ n (c : es) _ _ _) | isOne c = pPrint d 0 i <> text ("#" ++ itos(n)) <+> sep (map (pPrint d 1) es)
-    pPrint d _ (ATaskAction i _ _ n (c : es) _ _ _) = sep [
+    pPrint d _ (ATaskAction i _ _ n (c:es) _ _ _) | isOne c = pPrint d 0 i <> text ("#" ++ itos(n)) <+> sep (map (pPrint d 1) es)
+    pPrint d _ (ATaskAction i _ _ n (c:es) _ _ _) = sep [
         text "if" <+> pPrint d 0 c <+> text "then",
         nest 2 (pPrint d 0 i <> text ("#" ++ itos(n)) <+> sep (map (pPrint d 1) es))
         ]
@@ -1590,9 +1597,10 @@ instance PPrint AExpr where
     pPrint d p (ANoInlineFunCall _ i _ es)  = pparen (p>0) $ pPrint d 1 i <+> sep (map (pPrint d 1) es)
     pPrint d p (AFunCall _ i _ _ es)  = pparen (p>0) $ pPrint d 1 i <+> sep (map (pPrint d 1) es)
     pPrint d p (ATaskValue _ i _ _ n) = pparen (p>0) $ pPrint d 1 i <> text ("#" ++ itos(n))
-    pPrint d p (AMethCall _ i m es) =
-        pparen (p>0 && not (null es)) $
-        pPrint d 1 i <> sep (text "." <> ppMethId d m : map (pPrint d 1) es)
+    pPrint d p (AMethCall _ i m args) =
+        pparen (p>0 && not (null args)) $
+        pPrint d 1 i <>
+        sep (text "." <> ppMethId d m : map (pPrint d 1) args)
     pPrint d p (AMethValue _ i m) =
         pparen (p>0) $ pPrint d 1 i <> text "." <> ppMethId d m
     pPrint d p (ATuple _ es) = parens (commaSep (map (pPrint d 0) es))
@@ -1790,20 +1798,20 @@ ppeActions m d as = text "{" <+> sep (map ppeA as) <+> text "}"
         where ppeA a = pPrintExpand m d defContext a <> text ";"
 
 instance PPrintExpand AAction where
-    pPrintExpand m d _ (ACall i meth (c : es)) | isOne c =
+    pPrintExpand m d _ (ACall i meth (c:es)) | isOne c =
         pPrint d 0 i <> text "." <> ppMethId d meth <+> sep (map (pPrintExpand m d pContext) es)
-    pPrintExpand m d _ (ACall i meth (c : es)) = sep [
+    pPrintExpand m d _ (ACall i meth (c:es)) = sep [
         text "if" <+> pPrintExpand m d bContext c <+> text "then",
         nest 2 (pPrint d 0 i <> text "." <> ppMethId d meth <+> sep (map (pPrintExpand m d pContext) es))
         ]
-    pPrintExpand m d _ (AFCall i _ _ (c : es) _) | isOne c = pPrint d 0 i <+> sep (map (pPrintExpand m d pContext) es)
-    pPrintExpand m d _ (AFCall i _ _ (c : es) _) = sep [
+    pPrintExpand m d _ (AFCall i _ _ (c:es) _) | isOne c = pPrint d 0 i <+> sep (map (pPrintExpand m d pContext) es)
+    pPrintExpand m d _ (AFCall i _ _ (c:es) _) = sep [
         text "if" <+> pPrintExpand m d bContext c <+> text "then",
         nest 2 (pPrint d 0 i <+> sep (map (pPrintExpand m d pContext) es))
 
         ]
-    pPrintExpand m d _ (ATaskAction i _ _ n (c : es) _ _ _) | isOne c = pPrint d 0 i <> text ("#" ++ itos(n)) <+> sep (map (pPrintExpand m d pContext) es)
-    pPrintExpand m d _ (ATaskAction i _ _ n (c : es) _ _ _) = sep [
+    pPrintExpand m d _ (ATaskAction i _ _ n (c:es) _ _ _) | isOne c = pPrint d 0 i <> text ("#" ++ itos(n)) <+> sep (map (pPrintExpand m d pContext) es)
+    pPrintExpand m d _ (ATaskAction i _ _ n (c:es) _ _ _) = sep [
         text "if" <+> pPrintExpand m d defContext c <+> text "then",
         nest 2 (pPrint d 0 i <> text ("#" ++ itos(n)) <+> sep (map (pPrintExpand m d pContext) es))
 
@@ -1885,10 +1893,10 @@ instance PPrintExpand AExpr where
                                                  ( parens $ sep $ punctuate comma (map (pPrintExpand m d defContext) es))
     pPrintExpand m d ec (ATaskValue _ i _ _ n) = pparen (useParen ec) $ pPrint d 1 i <> text ("#" ++ itos(n))
     pPrintExpand m d ec (AMethCall _ i meth []) | qualEq meth idPreludeRead = pPrint d 1 i
-    pPrintExpand m d ec (AMethCall _ i meth es) =
+    pPrintExpand m d ec (AMethCall _ i meth args) =
                pPrint d 1 i <> text "."
                <> ppMethId d meth
-               <> if (null es) then empty else (parens (hsep ( punctuate comma docArgs )) )
+               <> if (null args) then empty else (parens (hsep ( punctuate comma docArgs )) )
                    where
                    docArgs = map (pPrintExpand m d defContext) es
     pPrintExpand m d ec (AMethValue _ i meth) = pPrint d 1 i <> text "." <> ppMethId d meth
@@ -2009,13 +2017,6 @@ portSuffix (Just n) = if (n == 0)
 splitPortNums :: [a] -> [Maybe Integer]
 splitPortNums [_] = [Nothing]
 splitPortNums xs  = zipWith (\ _ n -> Just n) xs [1..]
-
--- The result numbers for a method with the given list of results: Nothing
--- (no _RES_ suffix) for a single result, Just 1, Just 2, ... when split across
--- multiple output ports.
-methResultNums :: [a] -> [Maybe Integer]
-methResultNums [_] = [Nothing]
-methResultNums xs  = zipWith (\ _ n -> Just n) xs [1..]
 
 -- #############################################################################
 -- #
