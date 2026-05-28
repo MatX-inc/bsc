@@ -280,7 +280,6 @@ argInputPorts e = case aType e of
 
 -- Return the AExprs that drive the input ports for a method argument.
 argInputPorts :: AExpr -> [AExpr]
-argInputPorts e | aSize e == 0 = []
 argInputPorts (ATuple _ es) = es
 argInputPorts e = case aType e of
   ATTuple ts -> [ ATupleSel t e idx | (idx, t) <- zip [1..] ts ]
