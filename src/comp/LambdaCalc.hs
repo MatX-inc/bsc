@@ -1187,7 +1187,7 @@ convAExpr (ASAny t Nothing) = let st = convAType t
 
 convAExpr (APrim _ t p args) = convAPrim p t args
 
-convAExpr (AMethCall _ obj meth args) = do
+convAExpr (AMethCall _ obj meth as) = do
   modId <- gets curModId
   state_expr <- gets curState
   instmap <- gets instMap

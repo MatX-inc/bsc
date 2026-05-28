@@ -1295,7 +1295,7 @@ convAExpr (ASAny t Nothing) = return $ anyVar t
 
 convAExpr (APrim _ t p args) = convAPrim p t args
 
-convAExpr (AMethCall _ obj meth args) = do
+convAExpr (AMethCall _ obj meth as) = do
   state_expr <- gets curState
   instmap <- gets instMap
   let (submod, submod_tys, _) = lookupMod instmap obj
