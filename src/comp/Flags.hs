@@ -132,6 +132,7 @@ data Flags = Flags {
         showSchedule :: Bool,
         showStats :: Bool,
         showUpds :: Bool,
+        simCodegenOnly :: Bool,
         simplifyCSyntax :: Bool,
         strictMethodSched :: Bool,
         suppressWarnings :: MsgListFlag,

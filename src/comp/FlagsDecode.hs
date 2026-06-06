@@ -296,6 +296,10 @@ checkLinkFlags flags names =
         if (removeVerilogDollar flags)
         then DError [(cmdPosition, EDollarLink)]
         else
+        -- The -sim-codegen-only flag only applies to the Bluesim backend
+        if (simCodegenOnly flags && (backend flags /= Just Bluesim))
+        then DError [(cmdPosition, ESimCodegenOnlyNoSim)]
+        else
         -- Verilog backend
         if (backend flags == Just Verilog)
         then -- An entry point must be specified
@@ -698,6 +702,7 @@ defaultFlags bluespecdir = Flags {
         showSchedule = False,
         showStats = False,
         showUpds = True,
+        simCodegenOnly = False,
         simplifyCSyntax = False,
         strictMethodSched = True,
         suppressWarnings = SomeMsgs [],
@@ -1654,6 +1659,10 @@ externalFlags = [
              (Just (FRTString (show . redStepsMaxIntervals))),
           "terminate elaboration after this number of unfolding messages", Visible)),
 
+        ("sim-codegen-only",
+         (Toggle (\f x -> f {simCodegenOnly=x}) (showIfTrue simCodegenOnly),
+          "generate Bluesim C++ files but do not compile or link them", Visible)),
+
         ("simplify-csyntax",
          (Toggle (\f x -> f {simplifyCSyntax=x}) (showIfTrue simplifyCSyntax),
           "simplify Concrete Syntax", Hidden)),
@@ -2024,6 +2033,7 @@ showFlagsRaw flags =
           ("showStats", show (showStats flags)),
           ("showUpds", show (showUpds flags)),
           ("showVersion", show (showVersion flags)),
+          ("simCodegenOnly", show (simCodegenOnly flags)),
           ("simplifyCSyntax", show (simplifyCSyntax flags)),
           ("strictMethodSched", show (strictMethodSched flags)),
           ("suppressWarnings", show (suppressWarnings flags)),

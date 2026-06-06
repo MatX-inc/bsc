@@ -1166,6 +1166,7 @@ data ErrMsg =
 
         -- Bluesim-specific errors/warnings
         | EBluesimNoXZ String
+        | ESimCodegenOnlyNoSim
 
         -- Errors for the .ba -> code generation mode (-c)
         | EGenWithEntry String
@@ -4662,6 +4663,11 @@ getErrorText EGenVerilogNotSupported =
 getErrorText EGenWithSystemC =
     (System 99, empty,
      s2par ("The flag -c is not supported with -systemc; use -sim."))
+
+getErrorText ESimCodegenOnlyNoSim =
+    (System 100, empty,
+     s2par ("The flag -sim-codegen-only is only supported when linking " ++
+            "with the Bluesim back end (-sim)."))
 
 -- Runtime errors
 getErrorText (EMutuallyExclusiveRulesFire r1 r2) =

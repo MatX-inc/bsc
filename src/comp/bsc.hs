@@ -1331,9 +1331,9 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
-       -- (in -c mode, all files are always regenerated)
+       -- (in -c or -sim-codegen-only mode, all files are always regenerated)
        start flags DFsimDepend
-       reused <- if (blockCodegen flags)
+       reused <- if (blockCodegen flags || simCodegenOnly flags)
                  then return []
                  else analyzeBluesimDependencies flags sim_system prefix
        time <- dump errh flags time DFsimDepend dumpnames reused
@@ -1507,7 +1507,7 @@ simLink errh flags toplevel afilenames cfilenames = do
     start flags DFbluesimcompile
     let jobs = parallelSimLink flags
     (gen_ofiles, compiled_user_ofiles) <-
-        if (blockCodegen flags)
+        if (blockCodegen flags || simCodegenOnly flags)
         then -- the user's build system compiles the generated files
           return ([], [])
         else if (jobs > 1)
@@ -1531,7 +1531,8 @@ simLink errh flags toplevel afilenames cfilenames = do
     -- if generating a SystemC model or only generating code,
     -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
-    when (not (genSysC flags) && not (blockCodegen flags)) $
+    when (not (genSysC flags) && not (blockCodegen flags)
+          && not (simCodegenOnly flags)) $
       cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
