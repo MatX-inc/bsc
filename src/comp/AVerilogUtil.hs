@@ -558,43 +558,6 @@ vDefMpd vco (ADef i t
                 (wires', conns') = mkInputs (k+1) rest
             in  (wires ++ wires', conns ++ conns')
 
-        selectable (ATuple {})  = True
-        selectable (ASDef {})   = True
-        selectable (ASPort {})  = True
-        selectable (ASParam {}) = True
-        selectable _            = False
-
-        -- Match the flat port list to the tuple structure.  A single port takes
-        -- the whole value (its recorded width may be a placeholder, e.g. 0 for a
-        -- polymorphic foreign function); otherwise split the ports among the
-        -- tuple's elements by width, so a shallow split stops at the top level
-        -- and a deep split reaches the leaves.
-        portFrontier _  []   = []
-        portFrontier _  [p]  = [([], p)]
-        portFrontier (ATTuple ts) pts =
-            concat $ zipWith (\ idx (t', ps) -> [ (idx:path, p)
-                                                | (path, p) <- portFrontier t' ps ])
-                             [1 ..] (splitByWidth ts pts)
-        portFrontier ty pts =
-            internalError ("vDefMpd.portFrontier: " ++ ppReadable (ty, pts))
-
-        -- split the port list so group i spans aSize (ts !! i)
-        splitByWidth []       _   = []
-        splitByWidth (t':ts')  pts =
-            let (grp, rest) = takeWidth (aSize t') pts
-            in  (t', grp) : splitByWidth ts' rest
-          where takeWidth 0 ps      = ([], ps)
-                takeWidth _ []      = ([], [])
-                takeWidth w (p:ps)  = let (g, r) = takeWidth (w - snd p) ps
-                                      in  (p:g, r)
-
-        -- apply a selector path (1-based ATupleSel indices) to a tuple value
-        tupleSelPath val []         = val
-        tupleSelPath val (idx:rest) =
-            case ae_type val of
-              ATTuple ts -> tupleSelPath (ATupleSel (ts `genericIndex` (idx-1)) val idx) rest
-              ty         -> internalError ("vDefMpd.tupleSelPath: " ++ ppReadable ty)
-
 vDefMpd vco defin@(ADef i t (APrim _ _ PrimCase es@(x:defarm:ces_t)) _) _ =
         [ VMDecl $ VVDecl VDReg (vSize t) [VVar vi],
           VMStmt { vi_translate_off = False,
