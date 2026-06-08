@@ -66,7 +66,7 @@ import Eval
 import ErrorUtil(internalError)
 
 import Data.Maybe
-import Data.List(partition, intersperse, intercalate, nub, sortBy, genericDrop)
+import Data.List(partition, intersperse, intercalate, nub, sortBy)
 import Data.List.Split(wordsBy)
 import Numeric(showHex)
 import Control.Monad(when)
