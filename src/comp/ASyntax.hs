@@ -845,7 +845,7 @@ aIfaceProps _ = emptyWireProps
 -- The result type of an interface method, which may be a tuple for multiple output ports.
 aIfaceResType :: AIFace -> AType
 -- XXX should be ATAction?
-aIfaceResTypes (AIAction { }) = [ATBit 0]
+aIfaceResTypes (AIAction { }) = []
 aIfaceResTypes (AIDef { aif_value = (ADef _ t _ _) }) = [t]
 aIfaceResTypes (AIActionValue { aif_value = (ADef _ t _ _) }) = [t]
 -- should not need type of clock or reset
