@@ -1592,8 +1592,7 @@ instance PPrint AExpr where
     pPrint d p (ATaskValue _ i _ _ n) = pparen (p>0) $ pPrint d 1 i <> text ("#" ++ itos(n))
     pPrint d p (AMethCall _ i m es) =
         pparen (p>0 && not (null es)) $
-        pPrint d 1 i <>
-        sep (text "." <> ppMethId d m : map (pPrint d 1) es)
+        pPrint d 1 i <> sep (text "." <> ppMethId d m : map (pPrint d 1) es)
     pPrint d p (AMethValue _ i m) =
         pparen (p>0) $ pPrint d 1 i <> text "." <> ppMethId d m
     pPrint d p (ATuple _ es) = parens (commaSep (map (pPrint d 0) es))
