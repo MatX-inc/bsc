@@ -166,7 +166,7 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
                          let meth_id = mkMethId (avi_vname v)
                                                 (vf_name vfi)
                                                 ino
-                                                methpart,
+                                                methOutPart,
                          -- convert to Verilog signal name
                          let veri_id = xLateIdUsingFStringMap nmap meth_id
                     ]
