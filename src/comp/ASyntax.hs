@@ -2010,6 +2010,13 @@ splitPortNums :: [a] -> [Maybe Integer]
 splitPortNums [_] = [Nothing]
 splitPortNums xs  = zipWith (\ _ n -> Just n) xs [1..]
 
+-- The result numbers for a method with the given list of results: Nothing
+-- (no _RES_ suffix) for a single result, Just 1, Just 2, ... when split across
+-- multiple output ports.
+methResultNums :: [a] -> [Maybe Integer]
+methResultNums [_] = [Nothing]
+methResultNums xs  = zipWith (\ _ n -> Just n) xs [1..]
+
 -- #############################################################################
 -- #
 -- #############################################################################
