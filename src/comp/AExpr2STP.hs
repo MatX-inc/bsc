@@ -19,7 +19,6 @@ import qualified Data.Map as M
 import qualified STP as S
 
 import Data.Maybe(fromMaybe)
-import Data.List (genericIndex)
 
 import ErrorUtil(internalError)
 import Flags
