@@ -549,9 +549,6 @@ type AMethodInput = [AInput]
 data AAbstractInput =
         -- simple input using one port
         AAI_Port AInput |
-        -- a single source argument that is split into multiple hardware ports
-        -- (e.g. a struct argument whose fields each become a port).
-        AAI_MultiPort [AInput] |
         -- clock osc and maybe gate
         AAI_Clock AId (Maybe AId) |
         AAI_Reset AId |
@@ -560,14 +557,12 @@ data AAbstractInput =
 
 instance NFData AAbstractInput where
     rnf (AAI_Port p) = rnf p
-    rnf (AAI_MultiPort ps) = rnf ps
     rnf (AAI_Clock osc mgate) = rnf2 osc mgate
     rnf (AAI_Reset wire) = rnf wire
     rnf (AAI_Inout wire sz) = rnf2 wire sz
 
 absInputToPorts :: AAbstractInput -> [AInput]
 absInputToPorts (AAI_Port p) = [p]
-absInputToPorts (AAI_MultiPort ps) = ps
 absInputToPorts (AAI_Clock osc Nothing) = [(osc, aTBool)]
 absInputToPorts (AAI_Clock osc (Just gate)) = [(osc, aTBool), (gate, aTBool)]
 absInputToPorts (AAI_Reset r) = [(r,aTBool)]
@@ -1390,8 +1385,6 @@ ppV d (i, t) = pPrint d 0 i <+> text "::" <+> pPrint d 0 t <> text ";"
 
 instance PPrint AAbstractInput where
     pPrint d p (AAI_Port v) = ppV d v
-    pPrint d p (AAI_MultiPort vs) =
-        text "multi {" <+> sep (map (ppV d) vs) <+> text "}"
     pPrint d p (AAI_Clock osc Nothing) =
         text "clock {" <+>
         (text "osc =" <+> pPrint d 0 osc) <+>
