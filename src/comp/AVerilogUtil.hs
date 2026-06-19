@@ -730,11 +730,6 @@ vExpr vco (APrim _ _ PrimConcat es@(e:_)) | allSame es = VERepeat (VEConst (gene
 vExpr vco (APrim _ _ PrimConcat es) = VEConcat (map (vExpr vco) es)
 -- Avoid repetition syntax for strings
 vExpr vco (APrim _ _ PrimStringConcat es) = VEConcat (map (vExpr vco) es)
--- A constant bit-extract composes with an inner constant select (e.g. reading
--- a field out of a combined split port that is itself a slice), so route it
--- through vSelectBits to avoid an illegal chained index like x[a:b][c:d].
-vExpr vco (APrim _ _ PrimExtract [e1, ASInt _ _ (IntLit _ _ h), ASInt _ _ (IntLit _ _ l)]) =
-    vSelectBits (vExpr vco e1) h l
 vExpr vco (APrim _ _ PrimExtract [e1, e2, e3]) | e2 == e3 = VESelect1 (vExpr vco e1) (vExprC vco e2)
 vExpr vco (APrim _ _ PrimExtract [e1, e2, e3]) | isConst e2 && isConst e3 = VESelect (vExpr vco e1) (vExprC vco e2) (vExprC vco e3)
 vExpr vco (APrim _ _ PrimIf [e1, e2, e3]) = VEIf (vExpr vco e1) (vExpr vco e2) (vExpr vco e3)
@@ -798,17 +793,6 @@ vExpr _ (ATupleSel _ e _) =
     internalError ("vExpr: ATupleSel over non-literal/non-def base: " ++ ppReadable e)
 
 vExpr vco e = internalError ("vExpr vco " ++ ppReadable e)
-
--- Select bits [hi:lo] of an expression.  If the expression is itself a
--- constant bit-select (e.g. the result of a nested ATupleSel, as happens when
--- a split-port value is a tuple of tuples), compose the two selects into a
--- single one rather than emitting an illegal chained index like x[a:b][c:d].
-vSelectBits :: VExpr -> Integer -> Integer -> VExpr
-vSelectBits (VESelect base _ (VEConst baseLo)) hi lo =
-    vSelectBits base (baseLo + hi) (baseLo + lo)
-vSelectBits (VESelect1 base (VEConst baseLo)) hi lo =
-    vSelectBits base (baseLo + hi) (baseLo + lo)
-vSelectBits e hi lo = veSelect e (VEConst hi) (VEConst lo)
 
 vXor :: VExpr -> VExpr -> VExpr
 vXor (VEWConst id_t s b i1) (VEWConst _ _ _ i2) = VEWConst id_t s b (integerXor i1 i2)
