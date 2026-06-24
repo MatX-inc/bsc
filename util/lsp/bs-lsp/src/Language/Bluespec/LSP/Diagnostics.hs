@@ -130,6 +130,7 @@ formatToken tok = case Lex.tokKind tok of
   Lex.TokQVarSym m s -> "'" <> m <> "." <> s <> "'"
   Lex.TokQConSym m s -> "'" <> m <> "." <> s <> "'"
   Lex.TokInteger n _ -> T.pack (show n)
+  Lex.TokUnbasedUnsized b -> if b then "'1" else "'0"
   Lex.TokFloat f -> T.pack (show f)
   Lex.TokChar c -> "'" <> T.singleton c <> "'"
   Lex.TokString s -> "\"" <> s <> "\""

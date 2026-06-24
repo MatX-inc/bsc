@@ -109,6 +109,15 @@ main = do
         let Right toks = tokenize "<test>" "42 0xFF 8'b10101010"
         length (filter (not . isEof) toks) `shouldBe` 3
 
+      it "lexes unbased unsized literals without stealing character literals" $ do
+        let Right toks = tokenize "<test>" "'0 '1 '0' '1'"
+        map tokKind (filter (not . isEof) toks) `shouldBe`
+          [ TokUnbasedUnsized False
+          , TokUnbasedUnsized True
+          , TokChar '0'
+          , TokChar '1'
+          ]
+
       it "lexes string literals" $ do
         let Right toks = tokenize "<test>" "\"hello\" 'a'"
         length (filter (not . isEof) toks) `shouldBe` 2
@@ -225,6 +234,34 @@ main = do
           Right expr ->
             renderPretty 80 (prettyExpr (locVal expr))
               `shouldBe` "Vector.(!!) v i"
+
+      it "parses Classic unary minus expressions" $ do
+        let inputs =
+              [ "foo = -x"
+              , "foo = -1"
+              , "foo = -(x + y)"
+              , "foo = 5 - (-2)"
+              ]
+        mapM_ (\body -> case parsePackage "<test>" ("package Foo where\n" <> body <> "\n") of
+          Left err -> expectationFailure $ show err
+          Right pkg -> length (pkgDefns pkg) `shouldBe` 1) inputs
+
+      it "parses Classic unbased unsized literals" $ do
+        let inputs =
+              [ "foo = '0"
+              , "foo = '1"
+              , "foo '0 = '1"
+              , "foo = case x of\n  '0 -> False\n  '1 -> True\n"
+              ]
+        mapM_ (\body -> case parsePackage "<test>" ("package Foo where\n" <> body <> "\n") of
+          Left err -> expectationFailure $ show err
+          Right pkg -> length (pkgDefns pkg) `shouldBe` 1) inputs
+
+      it "continues to parse tick-prefixed and character literals" $ do
+        let inputs = ["foo = 'hFF", "foo = 'b1010", "foo = 'o77", "foo = 'd42", "foo = '0'"]
+        mapM_ (\body -> case parsePackage "<test>" ("package Foo where\n" <> body <> "\n") of
+          Left err -> expectationFailure $ show err
+          Right pkg -> length (pkgDefns pkg) `shouldBe` 1) inputs
 
     describe "BSV parser — unit tests" $ do
       it "parses empty package" $ do

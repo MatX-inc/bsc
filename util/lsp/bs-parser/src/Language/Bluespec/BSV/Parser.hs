@@ -234,6 +234,7 @@ namedOp name = void $ tok $ \case
 intLit :: Parser (Located Literal)
 intLit = tok $ \case
   Lex.TokInteger n mfmt -> Just $ LitInt n (fmap (\(w,f) -> (w, cvtFmt f)) mfmt)
+  Lex.TokUnbasedUnsized b -> Just $ LitInt (if b then 1 else 0) Nothing
   _ -> Nothing
   where
     cvtFmt Lex.IntDec' = IntDec
