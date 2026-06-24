@@ -65,6 +65,7 @@ data TokenKind
 
   -- Literals
   | TokInteger !Integer !(Maybe (Int, IntFormat'))  -- ^ Integer literal
+  | TokUnbasedUnsized !Bool                         -- ^ '0 / '1 unbased unsized bit literal
   | TokFloat !Double                                -- ^ Float literal
   | TokChar !Char                                   -- ^ Character literal
   | TokString !Text                                 -- ^ String literal
@@ -446,7 +447,7 @@ operator = do
 
 -- | Lex a numeric literal.
 numericLit :: Lexer TokenKind
-numericLit = sized <|> tickPrefixed <|> unsized
+numericLit = sized <|> tickPrefixed <|> unbasedUnsized <|> unsized
   where
     -- Sized bit literals: 8'hFF, 4'b1010
     sized = try $ do
@@ -464,6 +465,14 @@ numericLit = sized <|> tickPrefixed <|> unsized
         , (char 'o' <|> char 'O') *> (TokInteger <$> octNum <*> pure (Just (0, IntOct')))
         , (char 'd' <|> char 'D') *> (TokInteger <$> L.decimal <*> pure (Just (0, IntDec')))
         ]
+
+    -- Unbased unsized bit literals: '0 (all zeros) and '1 (all ones).
+    -- Do not consume character literals like '0' and '1'.
+    unbasedUnsized = try $ do
+      void $ char '\''
+      bit <- oneOf ("01" :: String)
+      notFollowedBy $ char '\''
+      pure $ TokUnbasedUnsized (bit == '1')
 
     sizedFormat =
           (char 'h' *> ((,IntHex') <$> hexNum))

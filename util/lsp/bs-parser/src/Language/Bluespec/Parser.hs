@@ -246,6 +246,7 @@ intLit = MP.token test expected
   where
     test t = case Lex.tokKind t of
       Lex.TokInteger n mFmt -> Just $ Located (Lex.tokSpan t) (LitInt n (cvtFmt <$> mFmt))
+      Lex.TokUnbasedUnsized b -> Just $ Located (Lex.tokSpan t) (LitInt (if b then 1 else 0) Nothing)
       _ -> Nothing
     cvtFmt (w, Lex.IntDec') = (w, IntDec)
     cvtFmt (w, Lex.IntHex') = (w, IntHex)
@@ -579,6 +580,7 @@ pPragmaContent = do
       Lex.TokConSym s -> s
       Lex.TokString s -> "\"" <> s <> "\""
       Lex.TokInteger n _ -> T.pack (show n)
+      Lex.TokUnbasedUnsized b -> if b then "'1" else "'0"
       Lex.TokKeyword kw -> T.pack (show kw)
       Lex.TokPunct p -> punctToText p
       _ -> ""
@@ -1358,12 +1360,33 @@ pExpr = do
 -- | Parse expression with operators.
 pExprOps :: Parser LExpr
 pExprOps = do
-  e <- pLExpr
+  e <- pUnaryExpr
   ops <- many $ do
     op <- anyOp
-    e2 <- pLExpr
+    e2 <- pUnaryExpr
     pure (op, e2)
   pure $ resolveOps bluespecFixities e ops
+
+-- | Parse Classic/BH prefix unary operators.
+pUnaryExpr :: Parser LExpr
+pUnaryExpr = choice
+  [ pfx "-" ENeg
+  , pLExpr
+  ]
+  where
+    pfx nm f = do
+      op <- varSymNamed nm
+      e <- pUnaryExpr
+      pure $ Located (mergeSpans (locSpan op) (locSpan e)) (f e)
+
+-- | Match a specific variable operator symbol.
+varSymNamed :: Text -> Parser (Located Text)
+varSymNamed name = MP.token test expected
+  where
+    test t = case Lex.tokKind t of
+      Lex.TokVarSym op | op == name -> Just $ Located (Lex.tokSpan t) op
+      _ -> Nothing
+    expected = Set.singleton $ Label $ NE.fromList $ T.unpack name
 
 -- | Parse a left-hand expression (lambda, let, if, case, etc.).
 pLExpr :: Parser LExpr
