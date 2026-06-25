@@ -20,7 +20,7 @@ import qualified Data.Set as S
 
 import Error(internalError)
 import CType(Type(..), TyCon(..), TyVar, leftTyCon)
-import TypeOps(numOpNames, strOpNames)
+import TypeOps(numOpNames, strOpNames, isTypeFunOp)
 import Pred(Pred(..), Class(inputPositions), expandSyn)
 
 -- ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ predQuery btvs (IsIn c ts) =
 -- probe ALL trie branches (Free) to avoid missing instances that have a
 -- concrete-number head (e.g. VectorTreeReduce 1, VectorTreeReduce 2).
 isTFunTyCon :: TyCon -> Bool
-isTFunTyCon (TyCon { tcon_name = i }) = i `elem` numOpNames ++ strOpNames
+isTFunTyCon (TyCon { tcon_name = i }) = isTypeFunOp i
 isTFunTyCon _                          = False
 
 -- | Classify one type argument of the predicate being resolved.

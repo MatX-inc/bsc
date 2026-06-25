@@ -265,7 +265,7 @@ expandSyn t0 = exp [] f as
         exp _ f as = foldl TAp f $ map expandSyn as
 
 isTFun :: Id -> Bool
-isTFun i = i `elem` numOpNames ++ strOpNames
+isTFun i = isTypeFunOp i
 
 apTFun :: Type -> Id -> [Type] -> Type
 apTFun _ i [TCon (TyNum x px), TCon (TyNum y py)] | Just n <- opNumT i [x, y] = TCon (TyNum n p')

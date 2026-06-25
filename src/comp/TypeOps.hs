@@ -1,6 +1,7 @@
-module TypeOps(opNumT, numOpNames, opStrT, strOpNames) where
+module TypeOps(opNumT, numOpNames, opStrT, strOpNames, isTypeFunOp) where
 -- common routines for handling numeric and string types
 
+import qualified Data.Set as S
 import Id
 import PreIds(idTAdd, idTSub, idTMul, idTDiv, idTLog, idTExp, idTMax, idTMin, idTStrCat, idTNumToStr)
 import Util(divC, log2)
@@ -29,3 +30,14 @@ opStrT _ _ = Nothing
 
 strOpNames :: [Id]
 strOpNames = [idTStrCat]
+
+-- Membership test for the (small, fixed) set of numeric/string type-function
+-- operator names.  Precomputed as a Set so the check is O(log n) per call
+-- instead of rebuilding `numOpNames ++ strOpNames` and doing a linear `elem`
+-- with idEq on every call -- this is extremely hot (called per type-constructor
+-- during type expansion/normalization).
+typeFunOpNameSet :: S.Set Id
+typeFunOpNameSet = S.fromList (numOpNames ++ strOpNames)
+
+isTypeFunOp :: Id -> Bool
+isTypeFunOp i = i `S.member` typeFunOpNameSet
