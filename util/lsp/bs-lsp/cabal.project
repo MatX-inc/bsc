@@ -5,3 +5,6 @@ packages: .
 allow-newer:
   lsp:*,
   lsp-types:*
+
+constraints:
+  some < 1.1
