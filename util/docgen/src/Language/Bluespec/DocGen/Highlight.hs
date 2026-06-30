@@ -70,6 +70,7 @@ classify = \case
   TokPragmaContent t -> (Just "cm",  t)
   -- Literals: source text not stored in token; use a generic label
   TokInteger _ _     -> (Just "lit", "0")
+  TokUnbasedUnsized b -> (Just "lit", if b then "'1" else "'0")
   TokFloat _         -> (Just "lit", "0.0")
   TokChar _          -> (Just "lit", "'?'")
 
