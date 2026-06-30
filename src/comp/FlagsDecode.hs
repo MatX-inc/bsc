@@ -279,9 +279,9 @@ checkLinkFlags flags names =
         if (removeVerilogDollar flags)
         then DError [(cmdPosition, EDollarLink)]
         else
-        -- The -sim-codegen-only flag only applies to the Bluesim backend
-        if (simCodegenOnly flags && (backend flags /= Just Bluesim))
-        then DError [(cmdPosition, ESimCodegenOnlyNoSim)]
+        -- The -block-codegen flag only applies to the Bluesim backend
+        if (blockCodegen flags && (backend flags /= Just Bluesim))
+        then DError [(cmdPosition, EBlockCodegenNoSim)]
         else
         -- Verilog backend
         if (backend flags == Just Verilog)
@@ -526,6 +526,7 @@ defaultFlags bluespecdir = Flags {
         backend = Nothing,
         bdir = Nothing,
         biasMethodScheduling = False,
+        blockCodegen = False,
         bluespecDir = bluespecdir,
         cIncPath = [],
         cLibPath = [],
@@ -633,7 +634,6 @@ defaultFlags bluespecdir = Flags {
         showSchedule = False,
         showStats = False,
         showUpds = True,
-        simCodegenOnly = False,
         simplifyCSyntax = False,
         strictMethodSched = True,
         suppressWarnings = SomeMsgs [],
@@ -1116,6 +1116,10 @@ externalFlags = [
          (Toggle (\f x -> f {biasMethodScheduling=x}) (showIfTrue biasMethodScheduling),
           "schedule methods before rules when possible", Hidden)),
 
+        ("block-codegen",
+         (Toggle (\f x -> f {blockCodegen=x}) (showIfTrue blockCodegen),
+          "with -sim, generate a module's Bluesim C++ but do not compile or link it", Visible)),
+
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
           "test assertions with the Assert library", Visible)),
@@ -1586,10 +1590,6 @@ externalFlags = [
              (Just (FRTString (show . redStepsMaxIntervals))),
           "terminate elaboration after this number of unfolding messages", Visible)),
 
-        ("sim-codegen-only",
-         (Toggle (\f x -> f {simCodegenOnly=x}) (showIfTrue simCodegenOnly),
-          "generate Bluesim C++ files but do not compile or link them", Visible)),
-
         ("simplify-csyntax",
          (Toggle (\f x -> f {simplifyCSyntax=x}) (showIfTrue simplifyCSyntax),
           "simplify Concrete Syntax", Hidden)),
@@ -1840,6 +1840,7 @@ showFlagsRaw flags =
           ("backend", show (backend flags)),
           ("bdir", show (bdir flags)),
           ("biasMethodScheduling", show (biasMethodScheduling flags)),
+          ("blockCodegen", show (blockCodegen flags)),
           ("bluespecDir", show (bluespecDir flags)),
           ("cDebug", show (cDebug flags)),
           ("cFlags", show (cFlags flags)),
@@ -1941,7 +1942,6 @@ showFlagsRaw flags =
           ("showStats", show (showStats flags)),
           ("showUpds", show (showUpds flags)),
           ("showVersion", show (showVersion flags)),
-          ("simCodegenOnly", show (simCodegenOnly flags)),
           ("simplifyCSyntax", show (simplifyCSyntax flags)),
           ("strictMethodSched", show (strictMethodSched flags)),
           ("suppressWarnings", show (suppressWarnings flags)),
