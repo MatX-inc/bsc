@@ -296,11 +296,14 @@ fi
 
 # compile Verilog files
 if [ "$VERBOSE" = "yes" ]; then
-  # XXX Verilator doesn't have a verbosity flag?
   VLT_VERBOSE=""
+  MAKE_QUIET=""
   echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
 else
-  VLT_VERBOSE=""
+  # Quiet Verilator's summary report and the build recipe echo so a successful
+  # build produces no output (matching iverilog); errors are still printed.
+  VLT_VERBOSE="--quiet"
+  MAKE_QUIET="-s --no-print-directory"
 fi
 
 verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
@@ -313,7 +316,7 @@ fi
 
 cp -p $BLUESPECDIR/Verilator/sim_main.cpp $OBJDIR/sim_main.cpp
 
-make -C $OBJDIR -j -f ${TOPCLASS}.mk ${TOPCLASS}
+make $MAKE_QUIET -C $OBJDIR -j -f ${TOPCLASS}.mk ${TOPCLASS}
 
 status=$?
 if [ "$status" != "0" ]; then
