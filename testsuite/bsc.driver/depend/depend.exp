@@ -77,7 +77,10 @@ find_n_strings [make_bsc_vcomp_output_name NoInline.bsv] \
 # Test that generated files associated with import-BDPI are included
 # in the set of files which are checked to force recompilation
 
-if { $vtest == 1 } {
+# This exercises regeneration of the compile-time VPI wrapper files; with
+# -use-dpi there is no compile-time wrapper (the DPI wrapper is made at link),
+# so the VPI-wrapper dependency check does not apply.
+if { $vtest == 1 && ![useDPI] } {
 
 # Compile, generating .h and .c
 compile_verilog_pass BDPI.bsv

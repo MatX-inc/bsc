@@ -54,7 +54,7 @@ proc bsc_link_verilog { objects toplevel { options "" } } {
     cd [file join $here $subdir]
     set output [make_bsc_vcomp_output_name $toplevel]
     set vexename [make_vexe_name $toplevel]
-    set link_options "-verilog -vsim $verilog_compiler -e $toplevel -o $vexename $vcomp_flags"
+    set link_options "-verilog -vsim $verilog_compiler -e $toplevel -o $vexename [dpi_flag] $vcomp_flags"
     set cmd "$bsc $link_options $options $objects >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "def_link_verilog" $cmd 2]
@@ -386,6 +386,26 @@ proc get_verilog_compiler_version {} {
 proc isPositiveReset {} {
     set opts $::env(BSC_OPTIONS)
     regexp "BSV_POSITIVE_RESET" $opts
+}
+
+# -------------------------
+
+# True when foreign functions are compiled to DPI-C rather than VPI (the
+# use_dpi flag, derived from the simulator in unix.exp).  DPI and VPI generate
+# different wrappers (DPI at link time, with no VPI-style startup array), so
+# VPI-specific tests key off this.
+proc useDPI {} {
+    global use_dpi
+    return $use_dpi
+}
+
+# The bsc option for compiling/linking Verilog with foreign functions as DPI-C
+# ("-use-dpi"), or "" -- see the use_dpi flag.  Applied only at the Verilog
+# compile/link points (not globally via BSC_OPTIONS), so it never leaks into
+# flag/error-dump output and is never given to iverilog or the C backend.
+proc dpi_flag {} {
+    global use_dpi
+    return [expr {$use_dpi ? "-use-dpi" : ""}]
 }
 
 # -------------------------

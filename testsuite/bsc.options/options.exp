@@ -140,6 +140,11 @@ files_exist { simfiles/mkDummyModule.cxx \
 # the source file given on the command line include a directory
 # (which is what we will test here).
 
+# The wrapper-file placement checks below are VPI-specific: with -use-dpi there
+# is no compile-time wrapper (the DPI wrapper is generated at link time) and no
+# VPI-style startup array, so skip these checks under DPI.
+if { ![useDPI] } {
+
 # ---
 # Test compile without vdir
 
@@ -190,6 +195,8 @@ erase_many {vfiles/vpi_*.o vpi_*.{c,h,o}}
 
 link_verilog_pass {srcfiles/my_time.ba} {sysGCD} {-vsearch vfiles:+}
 files_exist {vfiles/vpi_wrapper_my_time.o vpi_startup_array.o}
+
+}
 
 ###########
 #
