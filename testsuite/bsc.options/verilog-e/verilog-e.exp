@@ -20,7 +20,9 @@ check_verilog_output sysHello.out sysHello.out.expected {}
 link_verilog_pass sysHello.v sysHello "-vsim /bin/echo"
 move sysHello.bsc-vcomp-out sysHello.sim-echo.bsc-vcomp-out
 m4_process "-DBLUESPECDIR=$bsdir" bsc-sim-echo.expected bsc-sim-echo.expected.post-m4
-compare_file sysHello.sim-echo.bsc-vcomp-out bsc-sim-echo.expected.post-m4
+# Under -use-dpi, bsc passes -dpi along to the vsim script; strip it so the
+# echoed command matches the simulator-agnostic golden (no-op otherwise).
+compare_file_filtered sysHello.sim-echo.bsc-vcomp-out bsc-sim-echo.expected.post-m4 {} { -e {s/ -dpi//} }
 
 # check that a bogus sim name causes a clean error
 link_verilog_fail sysHello.v sysHello "-vsim bogus_sim"
@@ -34,6 +36,6 @@ find_n_error sysHello.bsc-vcomp-out S0035 1
 link_verilog_pass sysHello.v sysHello "-D foo -D bar=128 -vsim /bin/echo"
 move sysHello.bsc-vcomp-out sysHello.D-test.bsc-vcomp-out
 m4_process "-DBLUESPECDIR=$bsdir" bsc-D-test.expected bsc-D-test.expected.post-m4
-compare_file sysHello.D-test.bsc-vcomp-out bsc-D-test.expected.post-m4
+compare_file_filtered sysHello.D-test.bsc-vcomp-out bsc-D-test.expected.post-m4 {} { -e {s/ -dpi//} }
 
 }

@@ -9,6 +9,12 @@ proc check_ats { filename_root } {
 	# Ignore PreludeBSV line number changes
 	set ere_options { -e s/VRWire\[0-9\]\+/VRWireNNNN/g }
 
+	# With -use-dpi there is no compile-time VPI wrapper (the DPI wrapper is
+	# made at link), so drop that line for a simulator-agnostic comparison.
+	if { [useDPI] } {
+	    append ere_options { -e {/VPI wrapper files created/d}}
+	}
+
 	compile_verilog_pass $filename {} {-dATS}
 	compare_file_filter_ids $output {} {} $ere_options
     }
