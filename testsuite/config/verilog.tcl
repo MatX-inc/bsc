@@ -347,7 +347,15 @@ proc clean_verilator_output { infile outfile } {
     # after the finish (such as $display in the same block)
     set finish_script {-e {/\$finish/,$d}}
 
-    sed $infile $outfile {} $finish_script
+    # Verilator prints runtime warnings on stdout that iverilog does not, and
+    # that no Verilator flag disables.  Match only the invariant substring: the
+    # exact wording and IEEE citation vary by Verilator version (e.g.
+    # "proceeded"/"preceded", "ending-address"/"final address", IEEE 2017/2023),
+    # so these patterns work across 4.x and 5.x.
+    set dumpvar_script {-e {/\$dumpvar ignored/d}}
+    set readmem_script {-e {/\$readmem file ended/d}}
+
+    sed $infile $outfile {} "$dumpvar_script $readmem_script $finish_script"
 }
 
 # -------------------------
