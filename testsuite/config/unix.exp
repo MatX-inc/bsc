@@ -2781,12 +2781,20 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
                     break
                 }
             }
-            if { ! $_vlt_skip_inout \
-                 && ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)] } {
+            if { ! $_vlt_skip_inout } {
                 foreach _vm $vmods {
-                    if { [file_contains \
-                            [file join [absolute $srcdir] $subdir $_vm] \
-                            "BSC_NEEDS_TIMING"] } {
+                    set _vf [file join [absolute $srcdir] $subdir $_vm]
+                    # A foreign function named srandom() collides with the
+                    # SystemVerilog built-in srandom method, which Verilator
+                    # internal-errors on -- there is no back door for this.
+                    if { [file_contains $_vf "srandom("] } {
+                        set _vlt_xfail 1
+                        break
+                    }
+                    # Clock/reset generators need --timing, off unless the
+                    # BSC_VERILATOR_ENABLE_TIMING back door is set.
+                    if { ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)] \
+                         && [file_contains $_vf "BSC_NEEDS_TIMING"] } {
                         set _vlt_xfail 1
                         break
                     }
