@@ -15,7 +15,6 @@ import SimPrimitiveModules(isPrimitiveModule)
 import Data.Maybe(maybeToList)
 import Data.List(find, intercalate, sortOn)
 import Data.List.Split(split, condense, oneOf)
-import Data.Function(on)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
