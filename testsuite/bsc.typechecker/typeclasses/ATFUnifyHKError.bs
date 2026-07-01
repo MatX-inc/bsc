@@ -12,10 +12,5 @@ class (Container :: * -> (* -> *) -> *) a s | a -> s where
 
 data Foo f = Foo (f Bool)
 
--- Reading a struct field whose type uses a higher-kinded ATF (Elem a),
--- and assigning to Foo Maybe, requires Container a Maybe which is missing.
-struct Holder a =
-  val :: Foo (Elem a)
-
-getMaybe :: Holder a -> Foo Maybe
-getMaybe h = h.val
+conv :: a -> Foo (Elem a) -> Foo Maybe
+conv _ = id
