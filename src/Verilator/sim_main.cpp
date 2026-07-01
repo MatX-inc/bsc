@@ -62,6 +62,31 @@ int main (int argc, char **argv, char **env) {
     }
 #endif
 
+#ifdef BSC_VERILATOR_TIMING
+    // Harness for designs with internally-generated (delay-based) clocks
+    // (BSC_NEEDS_TIMING; built with Verilator --timing).  The clocks come from
+    // ClockGen etc., so we do not toggle CLK -- we advance simulated time to
+    // each scheduled event.  BSC's reset synchronizer (SyncResetA) asserts
+    // reset *asynchronously on a negedge of RST_N* and then holds it across the
+    // first generated-clock edges, so we must produce that negedge (setting the
+    // reset as an initial level, as the cycle harness below does, produces no
+    // edge and the reset never fires under Verilator).
+    VerilatedContext* contextp = TOP->contextp();
+    TOP->CLK = 0;
+    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;   // start de-asserted ...
+    TOP->eval();
+    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;        // ... then assert: negedge -> async reset
+    TOP->eval();
+    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;   // de-assert (SyncResetA holds it)
+    while (! contextp->gotFinish ()) {
+	TOP->eval ();
+#if VM_TRACE
+	if (tfp) tfp->dump(contextp->time());
+#endif
+	if (! TOP->eventsPending ()) break;
+	contextp->time(TOP->nextTimeSlot ());
+    }
+#else
     // initial conditions
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
     TOP->CLK = 0;
@@ -87,6 +112,7 @@ int main (int argc, char **argv, char **env) {
 	TOP->CLK = 1;
 	step(TOP, tfp, 5);
     }
+#endif
 
     TOP->final ();    // Done simulating
 

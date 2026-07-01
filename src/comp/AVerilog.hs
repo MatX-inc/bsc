@@ -30,6 +30,7 @@ import Pragma(PProp(..))
 import ASyntax
 import ASyntaxUtil
 import Verilog
+import VModInfo(vClk, vRst, output_clocks, output_resets)
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
@@ -76,9 +77,30 @@ aVerilog errh flags pps aspack ffmap =
                              inlined_submod_comments,
                              inlined_rule_comments]
         trailer = ["",""]
-        comments = if (null comments_list)
-                   then []
-                   else (intercalate [""] comments_list) ++ trailer
+        comments = timing_marker ++
+                   (if (null comments_list)
+                    then []
+                    else (intercalate [""] comments_list) ++ trailer)
+
+        -- Emit a marker if this module instantiates anything that generates a
+        -- clock or reset (i.e. has an output clock/reset), such as
+        -- mkAbsoluteClock, clock dividers, or gated clocks.  Such designs rely
+        -- on delay-based Verilog (ClockGen.v etc.) that only simulates under
+        -- Verilator's --timing; the verilator build script greps the generated
+        -- Verilog for BSC_NEEDS_TIMING to decide between --timing and
+        -- --no-timing.  (Detection is per-module and local: the link step ORs
+        -- the marker across all linked files, so no transitive analysis is
+        -- needed here.)
+        needs_timing = any instGensClockOrReset (aspkg_state_instances aspack)
+          where instGensClockOrReset avi =
+                    let vmi = avi_vmi avi
+                    in  not (null (output_clocks (vClk vmi))) ||
+                        not (null (output_resets (vRst vmi)))
+        timing_marker =
+            if needs_timing
+            then ["BSC_NEEDS_TIMING: instantiates a generated clock/reset;" ++
+                  " Verilator requires --timing to simulate this design"]
+            else []
 
         -- The modules are:
         --   (1) The main module

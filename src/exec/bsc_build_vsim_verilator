@@ -135,20 +135,24 @@ if [ -n "$BSC_OTHER_ARGUMENTS" ]; then
   exit 1
 fi
 
-# Ignore 'main' from BSC_VERILOG_FILES, and record if seen.
-# And remove the top module, if provided, to avoid passing
-# it multiple times to Verilator.
+# Drop 'main.v' from the file list (Verilator uses sim_main.cpp as its driver
+# instead), recording whether it was seen.  Keep every other file -- including
+# the top module's file, whatever its name -- so Verilator can resolve
+# --top-module from the command-line.  Also note whether a file named
+# <top>.v was among them (see the TOP_VERFILE fallback below).
 #
 BSC_VERILOG_FILES_NO_MAIN=""
 HAS_MAIN=0
+TOP_IN_FILES="no"
 for f in $BSC_VERILOG_FILES
 do
     fbase=`basename $f`
     if [ "$fbase" = "main.v" ] ; then
 	HAS_MAIN=1
     else
-	if [ "$fbase" != "${BSC_TOPLEVEL_MODULE}.v" ] ; then
-	    BSC_VERILOG_FILES_NO_MAIN="$BSC_VERILOG_FILES_NO_MAIN $f"
+	BSC_VERILOG_FILES_NO_MAIN="$BSC_VERILOG_FILES_NO_MAIN $f"
+	if [ "$fbase" = "${BSC_TOPLEVEL_MODULE}.v" ] ; then
+	    TOP_IN_FILES="yes"
 	fi
     fi
 done
@@ -196,10 +200,58 @@ VLT_WARN=""
 
 VLT_CONFIG=$BLUESPECDIR/Verilator/verilator_config.vlt
 
+# Does this design need Verilator's --timing (delay-based simulation)?
+# Two cases:
+#  (1) It generates a clock or reset: BSC marks such Verilog with
+#      BSC_NEEDS_TIMING (see AVerilog); it relies on delay-based library
+#      Verilog (ClockGen.v etc.) that only simulates under --timing.
+#  (2) It is linked without BSC's main.v (HAS_MAIN=0): then the top is a
+#      self-contained module that drives its own clock internally (a
+#      delay-based clock generator), rather than exposing a CLK port for
+#      sim_main.cpp to toggle -- which again requires --timing.
+# Verilator support for both is incomplete, so both are locked by default
+# (BSC_VERILATOR_ENABLE_TIMING is the back door).
+NEEDS_TIMING="no"
+TIMING_REASON=""
+for f in $BSC_VERILOG_FILES ; do
+    if [ -f "$f" ] && grep -q 'BSC_NEEDS_TIMING' "$f" ; then
+	NEEDS_TIMING="yes"
+	TIMING_REASON="it generates a clock or reset"
+	break
+    fi
+done
+if [ "$NEEDS_TIMING" = "no" ] && [ "$HAS_MAIN" = "0" ] ; then
+    NEEDS_TIMING="yes"
+    TIMING_REASON="it is linked without a main module (its top drives its own clock)"
+fi
+
 # Starting with version 5, zero-delay statements (like #0) require
-# a flag to specify how they should be handled (--timing or --no-timing)
+# a flag to specify how they should be handled (--timing or --no-timing).
+# Designs that generate a clock/reset additionally require --timing, which
+# only exists in Verilator 5.0+.
 MAJVER=`verilator --version 2>/dev/null | head -n 1 | grep -o -E "^Verilator [0-9]+\." | grep -o -E "[0-9]+"`
-if [ "$MAJVER" -ge "5" ]; then
+# Extra -CFLAGS for the sim_main.cpp harness; timing-dependent designs use a
+# different (event-driven) reset/run loop (see sim_main.cpp).
+TIMING_CFLAGS=""
+if [ "$NEEDS_TIMING" = "yes" ]; then
+    # This design needs delay-based library Verilog that only simulates under
+    # Verilator's --timing (Verilator 5.0+).  Verilator's support for such
+    # designs is not yet complete (gated clocks, some resets, self-driving
+    # top modules), so by default we do NOT attempt it and fail with a clear
+    # message -- on any Verilator version.  The BSC_VERILATOR_ENABLE_TIMING
+    # back door opts into the --timing path for experimentation / future work.
+    if [ -n "$BSC_VERILATOR_ENABLE_TIMING" ] && [ "$MAJVER" -ge "5" ]; then
+	VLT_TIMING="--timing"
+	TIMING_CFLAGS="-DBSC_VERILATOR_TIMING"
+    else
+	echo "ERROR: This design needs Verilator --timing (Verilator 5.0+) because" >&2
+	echo "       ${TIMING_REASON}.  That support is not yet complete and is" >&2
+	echo "       off by default.  Set BSC_VERILATOR_ENABLE_TIMING=1 to try it." >&2
+	exit 1
+    fi
+elif [ "$MAJVER" -ge "5" ]; then
+    # Starting with version 5, zero-delay statements (like #0) require a flag
+    # to say how they should be handled (--timing or --no-timing).
     VLT_TIMING="--no-timing"
 else
     VLT_TIMING=""
@@ -220,20 +272,25 @@ rm -rf $OBJDIR
 #}
 #trap cleanup EXIT
 
-# Find the top file
-# For instantiated submodules, Verilator can search in a path to find
-# the file; but Verilator doesn't do this for the top module.  We have
-# to specify that file on the command-line.
+# Find the top file (fallback only).
+# Verilator searches the -y path for instantiated *sub*modules, but NOT for
+# the *top* module, so the top's file must appear explicitly on the command
+# line.  Normally it already does: bsc lists the generated <top>.v, and the
+# testsuite lists its testbench file -- all of which are in
+# BSC_VERILOG_FILES_NO_MAIN and passed to Verilator below, which then resolves
+# --top-module from them regardless of the file's name.
+#
+# The one case that needs help is a top supplied *only* via a -y search dir
+# (never listed as a file).  Only then do we locate <top>.v there and add it
+# explicitly.  Otherwise TOP_VERFILE stays empty (avoiding a double-pass).
 TOP_VERFILE=""
-for d in $VERDIRS ; do
-    if [ -f ${d}/${BSC_TOPLEVEL_MODULE}.v ] ; then
-	TOP_VERFILE=${d}/${BSC_TOPLEVEL_MODULE}.v
-	break
-    fi
-done
-if [ -z "$TOP_VERFILE" ]; then
-    echo "ERROR: Verilog file not found for top module '${BSC_TOPLEVEL_MODULE}'"
-    exit 1
+if [ "$TOP_IN_FILES" = "no" ]; then
+    for d in $VERDIRS ; do
+	if [ -f ${d}/${BSC_TOPLEVEL_MODULE}.v ] ; then
+	    TOP_VERFILE=${d}/${BSC_TOPLEVEL_MODULE}.v
+	    break
+	fi
+    done
 fi
 
 
@@ -241,12 +298,12 @@ fi
 if [ "$VERBOSE" = "yes" ]; then
   # XXX Verilator doesn't have a verbosity flag?
   VLT_VERBOSE=""
-  echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
+  echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
 else
   VLT_VERBOSE=""
 fi
 
-verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
+verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
 
 status=$?
 if [ "$status" != "0" ]; then

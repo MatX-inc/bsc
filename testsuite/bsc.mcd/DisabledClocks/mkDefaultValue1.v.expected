@@ -10,6 +10,7 @@
 // No combinational paths from inputs to outputs
 //
 //
+// BSC_NEEDS_TIMING: instantiates a generated clock/reset; Verilator requires --timing to simulate this design
 
 `ifdef BSV_ASSIGNMENT_DELAY
 `else
