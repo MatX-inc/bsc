@@ -7,7 +7,13 @@ if { $vtest == 1 } {
 	{ mkDMAC.v mkSlave.v ahb_bus.v ahb_default.v ahb_ram.v ram_1024x32.v amba_tb.v} \
 	sysAmbaDmac
 
-    sim_verilog sysAmbaDmac 
+    # No-main design: its top drives its own clock, so it needs Verilator
+    # --timing and is expected to fail there (the link above XFAILs, leaving no
+    # executable to run).
+    if { [verilator_no_timing] } {
+	setup_xfail $target_triplet "verilator-no-main"
+    }
+    sim_verilog sysAmbaDmac
 
     compare_file_bug sysAmbaDmac.out "" "Rob_Brown"
 }

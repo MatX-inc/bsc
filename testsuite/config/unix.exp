@@ -2113,6 +2113,14 @@ proc files_exist_bug { filenames { bug "" } } {
     files_exist $filenames
 }
 
+proc file_contains { filename pattern } {
+    if { ![file exists $filename] } { return 0 }
+    set fh [open $filename r]
+    set data [read $fh]
+    close $fh
+    return [expr {[string first $pattern $data] >= 0}]
+}
+
 proc compare_file { filename {expected ""} {stat "compare_file"}} {
     # FIX: make diff ignore alpha renaming?
     global srcdir
@@ -2713,6 +2721,9 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
     global vtest
     global lasterr
     global target_triplet
+    global verilog_compiler
+    global srcdir
+    global subdir
 
     if {[string compare $expected ""] == 0} {
         set expected "$sysmod.out.expected"
@@ -2746,7 +2757,49 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
         }
 
         compile_verilog_pass $top.$extension $sysmod $gen_options
+
+        # Under Verilator, some designs can't be built/simulated:
+        #
+        #   * inout ports -- Verilator supports simple inout but not the
+        #     complex-port / shorted-inout wiring BSC emits for some designs,
+        #     and we cannot cheaply tell per-design which will work.  So we
+        #     *skip* (do not run) the Verilog flow for any design that uses
+        #     inout -- rejecting it cleanly, with no XFAIL/XPASS bookkeeping.
+        #     The inout may be in an auto-generated submodule pulled in via -y,
+        #     so grep every generated .v in the test directory.
+        #
+        #   * BSC_NEEDS_TIMING -- instantiates a generated clock/reset, needing
+        #     --timing (off unless the BSC_VERILATOR_ENABLE_TIMING back door).
+        #     These reliably fail, so XFAIL the link and skip run/compare.
+        set _vlt_skip_inout 0
+        set _vlt_xfail 0
+        if { $verilog_compiler eq "verilator" } {
+            foreach _vf [glob -nocomplain \
+                             [file join [absolute $srcdir] $subdir *.v]] {
+                if { [file_contains $_vf "inout"] } {
+                    set _vlt_skip_inout 1
+                    break
+                }
+            }
+            if { ! $_vlt_skip_inout \
+                 && ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)] } {
+                foreach _vm $vmods {
+                    if { [file_contains \
+                            [file join [absolute $srcdir] $subdir $_vm] \
+                            "BSC_NEEDS_TIMING"] } {
+                        set _vlt_xfail 1
+                        break
+                    }
+                }
+            }
+        }
+
+        if { ! $_vlt_skip_inout } {
+
+        if { $_vlt_xfail } { setup_xfail $target_triplet "verilator-needs-timing" }
         link_verilog_pass [join $vmods] $sysmod $link_options
+
+        if { ! $_vlt_xfail } {
         # if veribug is specified, we know the output will differ,
         # but we don't know if the sim will exit normally or not
         if { $veribug == "" } {
@@ -2786,6 +2839,8 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
 
             # XXX
             #check_verilog_output $sysmod.v-vcd.out $expected $veribug
+        }
+        }
         }
     }
 

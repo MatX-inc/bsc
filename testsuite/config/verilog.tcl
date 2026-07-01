@@ -68,9 +68,19 @@ proc bsc_link_verilog { objects toplevel { options "" } } {
 
 proc link_verilog_no_main_pass { objects toplevel { options "" } } {
     global vtest
+    global verilog_compiler
+    global target_triplet
 
     if {$vtest == 1} {
       incr_stat "link_verilog_no_main_pass"
+
+      # Linking without BSC's main.v means the top module drives its own clock
+      # internally, which requires Verilator --timing (locked by default; see
+      # bsc_build_vsim_verilator).  So under Verilator this link is expected to
+      # fail unless the BSC_VERILATOR_ENABLE_TIMING back door is set.
+      if { [verilator_no_timing] } {
+          setup_xfail $target_triplet "verilator-no-main"
+      }
 
       if [link_verilog_no_main $objects $toplevel $options] then {
           pass "`$objects' link to executable `$toplevel'"
@@ -78,6 +88,34 @@ proc link_verilog_no_main_pass { objects toplevel { options "" } } {
           fail "`$objects' should link to executable `$toplevel'"
       }
     }
+}
+
+# True when the Verilog simulator is Verilator and the --timing back door is
+# NOT enabled -- i.e. designs that require --timing (clock/reset generators,
+# or no-main self-driving tops) are expected to fail.
+proc verilator_no_timing {} {
+    global verilog_compiler
+    return [expr {$verilog_compiler eq "verilator" \
+                  && ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)]}]
+}
+
+# True when we are under Verilator (no back door) AND at least one of the given
+# generated Verilog files carries the BSC_NEEDS_TIMING marker -- i.e. the design
+# will be locked by bsc_build_vsim_verilator.  Tests that drive the Verilog flow
+# by hand (raw link_verilog_pass / sim_verilog / compare_file) use this to XFAIL
+# the link and skip the run/compare steps, the way test_c_veri_worker_int does
+# automatically.  The files are looked up in the test's source directory.
+proc verilator_timing_locked { vfiles } {
+    global srcdir
+    global subdir
+    if { ! [verilator_no_timing] } { return 0 }
+    foreach f $vfiles {
+        if { [file_contains [file join [absolute $srcdir] $subdir $f] \
+                            "BSC_NEEDS_TIMING"] } {
+            return 1
+        }
+    }
+    return 0
 }
 
 # XXX Replace with 'bsc_link_verilog' when BSC supports a flag like '-no-include-main'
