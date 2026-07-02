@@ -15,7 +15,7 @@ import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
-            isPrefixOf, isSuffixOf, unzip5, intercalate, foldl')
+            isPrefixOf, isSuffixOf, unzip5, intercalate, foldl', tails)
 import Data.Time.Clock.POSIX(getPOSIXTime)
 import Data.Maybe(isJust, isNothing)
 import Numeric(showOct)
@@ -143,6 +143,7 @@ import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
 import SystemCWrapper(checkSystemCIfc, wrapSystemC)
 import SimFileUtils(analyzeBluesimDependencies)
+import VFileUtils(partitionStaleVerilogMods)
 import Verilog(VProgram(..), vGetMainModName, getVeriInsts)
 import Depend
 import Version(bscVersionStr, copyright, buildnum)
@@ -1576,6 +1577,11 @@ simLink errh flags toplevel afilenames cfilenames = do
 
 -- Reuse a Bluesim generated object file
 -- returns the name of the object file being reused
+-- report that a generated Verilog file was reused rather than regenerated
+reuseVerilogFile :: Flags -> String -> IO ()
+reuseVerilogFile flags vNameRel =
+    unless (quiet flags) $ putStrLnF ("Verilog file reused: " ++ vNameRel)
+
 reuseBluesimCFile :: Flags -> String -> IO String
 reuseBluesimCFile flags oName = do
     -- show is used for quoting
@@ -2025,11 +2031,12 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
                           [(cmdPosition,
                             EMultipleABinFilesForName link_name file_names)]
 
-            -- XXX Until we allow re-generation of Verilog files,
-            -- XXX the module .ba files are unused
-            when (not (null (mod_abis))) $
-                bsWarning errh
-                    [(cmdPosition, WExtraABinFiles (map fst mod_abis))]
+            -- without the design's .ba hierarchy, the staleness of
+            -- generated Verilog cannot be checked; warn and use the .v
+            -- files as found (module .ba files given explicitly on the
+            -- command line are still regenerated from, below)
+            bsWarning errh
+                [(cmdPosition, WNoABinForVerilogRegen topmod_name)]
 
             let ffuncs = [ abffi_foreign_func abfi
                            | (_, (ABinForeignFunc abfi _)) <- ffunc_abis ]
@@ -2052,17 +2059,32 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     t <- dump errh flags t DFreadelab dumpnames
              (map (pfpString . ff_name) ffuncs ++ map fst mod_abmis)
 
-{-
-    -- generate Verilog for the module abis
-    -- XXX only if the verilog doesn't exist or is older
-    -- XXX print a message about reusing a file?
-    (t, gen_vfilenames) <-
-        if (updCheck flags)
-        then vGenMods t flags mod_abmis
-        else return (t, [])
-    let vfilenames = vfilenames0  ++ gen_vfilenames
--}
-    let vfilenames = vfilenames0
+    -- Regenerate any module .v that is missing or older than its .ba, and
+    -- reuse the rest, so a link is self-sufficient regardless of which
+    -- subset was pre-generated (with -c or an earlier compile).  A module
+    -- whose .v was given explicitly on the command line is the user's to
+    -- provide and is never regenerated.  File arguments can be glob
+    -- patterns (bsc forwards them to the simulator's shell unexpanded, so
+    -- "*.v" has always meant "the user provides every module"); match
+    -- module names against the patterns rather than comparing literally.
+    let vfile_pats = [ baseName (dropSuf (vfnString vfn))
+                     | vfn <- vfilenames0 ]
+        -- glob match with * and ? (the shell metacharacters that can
+        -- appear in a forwarded filename argument)
+        globMatch ('*':ps) s = any (globMatch ps) (tails s)
+        globMatch ('?':ps) (_:cs) = globMatch ps cs
+        globMatch (p:ps) (c:cs) = (p == c) && globMatch ps cs
+        globMatch [] [] = True
+        globMatch _ _ = False
+        abmiModName abmi = getIdString (unQualId (apkg_name (abmi_apkg abmi)))
+        checked_abmis = [ p | p@(_, abmi) <- mod_abmis
+                            , not (any (`globMatch` abmiModName abmi)
+                                       vfile_pats) ]
+    (stale_abmis, reused_vs) <-
+        partitionStaleVerilogMods flags prefix checked_abmis
+    mapM_ (reuseVerilogFile flags . snd) reused_vs
+    (t, gen_vfilenames) <- vGenMods errh flags t stale_abmis
+    let vfilenames = vfilenames0 ++ map fst reused_vs ++ gen_vfilenames
 
     -- generate files for the foreign functions
     start flags DFcompileVPI
