@@ -1225,11 +1225,11 @@ externalFlags = [
 
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
-          "generate a .ba file after elaboration and scheduling", Visible)),
-
+          "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
         ("elab-verilog",
          (Toggle (\f x -> f {genABinVerilog=x}) (showIfTrue genABinVerilog),
           "include generated Verilog in .ba files", Hidden)),
+
 
         ("expand-ATS-limit",
          (Arg "n"
@@ -1749,7 +1749,9 @@ externalFlags = [
          (Alias "quiet", "same as -quiet", Visible)),
 
         ("verilog",
-         let setFn f = setBackend f Verilog
+         let setFn f = case setBackend f Verilog of
+                         Left f' -> Left f' { genABin = True }
+                         Right e -> Right e
              getFn f = backend f == Just Verilog
          in  (NoArg setFn (Just getFn),
               "compile BSV generating Verilog file", Visible)),
