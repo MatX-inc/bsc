@@ -655,6 +655,7 @@ data ErrMsg =
         | EReservedClock String
         | EReservedReset String
         | EBVIDuplicateSchedule Position String [String] [String]
+        | EBVIDuplicateFallback Position
         | EBVISeparated
         | EBVIInvalidResets
         | EBVIMultipleOpts String
@@ -858,6 +859,38 @@ data ErrMsg =
         | EForeignModNotField String String
         | EForeignModMissingField String String String
         | EForeignModSynth String
+        | EForeignModFallbackPoly
+            String -- ^ fallback name
+            String -- ^ mod
+        | EForeignModFallbackNotSynth
+            String -- ^ fallback name
+        | EForeignModFallbackIfc
+            String -- ^ fallback name
+            String -- ^ fallback ifc type
+            String -- ^ import ifc type
+        | EForeignModFallbackArgCount
+            String -- ^ fallback name
+            Int    -- ^ fallback arg count
+            Int    -- ^ import param/port count
+        | EFallbackUnsupportedImport
+            String -- ^ fallback name
+            String -- ^ reason
+        | EFallbackConflictingImports
+            String -- ^ fallback name
+        | EFallbackBoundaryMismatch
+            String   -- ^ fallback name
+            [String] -- ^ differences
+        | EFallbackScheduleMismatch
+            String   -- ^ fallback name
+            [String] -- ^ violated relationships
+        | EFallbackPathMismatch
+            String   -- ^ fallback name
+            [String] -- ^ undeclared paths
+        | EFallbackTooManyArgs
+            String -- ^ fallback name
+        | EFallbackRequired
+            String -- ^ imported module name
+            String -- ^ instance name
 
         | EForeignFuncStringRes
         | EForeignFuncBadArgType
@@ -1599,6 +1632,10 @@ getErrorText (EIllegalAssertDelayRange exp description) =
      s2par ("Illegal assertion delay range " ++ exp ++ ". " ++ description))
 getErrorText (EBVISeparated) =
     (Parse 131, empty, s2par ("BVI statements must all be together at end of BVI block"))
+getErrorText (EBVIDuplicateFallback prev_pos) =
+    (Parse 225, empty,
+     s2par ("Duplicate " ++ quote "fallback" ++ " statement.  " ++
+            "A previous statement was at " ++ prPosition prev_pos ++ "."))
 getErrorText (EBVIInvalidResets) =
     (Parse 132, empty, s2par ("invalid reset specification in BVI block"))
 -- Removed Parse 133 (EForbiddenDummyId) b/c "_" variable name is now valid BSV
@@ -2678,6 +2715,31 @@ getErrorText (EForeignModMissingField f mod mod_pos) =
     (Type 105, empty, s2par ("The interface field " ++ ishow f ++
                              " is missing in the foreign module import " ++
                              quote mod ++ " at " ++ mod_pos))
+getErrorText (EForeignModFallbackPoly fb mod) =
+    (Type 158, empty,
+     s2par ("The fallback module " ++ quote fb ++ " for the foreign " ++
+            "module import " ++ quote mod ++ " must be a monomorphic " ++
+            "module, with no provisos, so that it can be separately " ++
+            "synthesized."))
+getErrorText (EForeignModFallbackNotSynth fb) =
+    (Type 159, empty,
+     s2par ("The fallback module " ++ quote fb ++ " must be a module " ++
+            "marked (* synthesize *), defined in the same package as " ++
+            "the foreign module import that names it."))
+getErrorText (EForeignModFallbackIfc fb fb_ifc imp_ifc) =
+    (Type 160, empty,
+     s2par ("The fallback module " ++ quote fb ++ " provides the " ++
+            "interface " ++ quote fb_ifc ++ ", but the foreign module " ++
+            "import that names it provides the interface " ++
+            quote imp_ifc ++ ".  A fallback module must provide the " ++
+            "same (monomorphic) interface as the import."))
+getErrorText (EForeignModFallbackArgCount fb fb_n imp_n) =
+    (Type 161, empty,
+     s2par ("The fallback module " ++ quote fb ++ " takes " ++
+            itos fb_n ++ " arguments, but the foreign module import " ++
+            "that names it has " ++ itos imp_n ++
+            " parameter and port arguments.  A fallback module must " ++
+            "take the same parameter and port arguments as the import."))
 getErrorText (ETypeSynRecursive names) =
     (Type 106, empty, s2par ("There are circular references among the following type synonyms: " ++
                              unwordsAnd names))
@@ -3991,6 +4053,45 @@ getErrorText (WRuleUndetPred is_meth rule poss) =
               s2par ("Don't-care values were introduced at the following positions:") $$
               nest 4 (vcat (map (text . prPosition) poss))
     )
+
+getErrorText (EFallbackUnsupportedImport fb reason) =
+    (Generate 129, empty,
+     s2par ("The module " ++ quote fb ++ " cannot be the fallback of " ++
+            "this foreign module import, because " ++ reason ++ "."))
+getErrorText (EFallbackConflictingImports fb) =
+    (Generate 130, empty,
+     s2par ("The module " ++ quote fb ++ " is named as the fallback of " ++
+            "more than one foreign module import, and the imports do not " ++
+            "declare identical boundaries."))
+getErrorText (EFallbackBoundaryMismatch fb diffs) =
+    (Generate 131, empty,
+     s2par ("The generated boundary of the fallback module " ++ quote fb ++
+            " does not match the boundary declared by the foreign module " ++
+            "import that names it:") $$
+     nest 4 (vcat (map s2par diffs)))
+getErrorText (EFallbackScheduleMismatch fb diffs) =
+    (Generate 132, empty,
+     s2par ("The schedule of the fallback module " ++ quote fb ++
+            " does not refine the schedule declared by the foreign module " ++
+            "import that names it.  The following declared relationships " ++
+            "do not hold for the fallback:") $$
+     nest 4 (vcat (map s2par diffs)))
+getErrorText (EFallbackPathMismatch fb diffs) =
+    (Generate 133, empty,
+     s2par ("The fallback module " ++ quote fb ++ " has combinational " ++
+            "paths from inputs to outputs that are not declared by the " ++
+            "foreign module import that names it:") $$
+     nest 4 (vcat (map s2par diffs)))
+getErrorText (EFallbackTooManyArgs fb) =
+    (Generate 134, empty,
+     s2par ("The fallback module " ++ quote fb ++ " has more parameter " ++
+            "or port arguments than the foreign module import that " ++
+            "names it."))
+getErrorText (EFallbackRequired mod inst) =
+    (Generate 135, empty,
+     s2par ("The instance " ++ quote inst ++ " of the foreign module " ++
+            quote mod ++ " has no fallback, but the " ++
+            quote "-require-fallback" ++ " flag is on."))
 
 
 ---------------------------------------------------------------------------

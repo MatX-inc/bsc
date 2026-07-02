@@ -221,10 +221,10 @@ pExpr ft (Cmodule pos is) = do
 pExpr ft (Cinterface pos i ds) = do
     ds' <- mapM (pDefl ft) ds
     return (Cinterface pos i ds')
-pExpr ft (CmoduleVerilog n ui ck rs ses ms vi ps) = do
+pExpr ft (CmoduleVerilog n ui ck rs ses ms vi ps fb) = do
     n' <- pExpr ft n
     ses' <- mapSndM (pExpr ft) ses
-    return (CmoduleVerilog n' ui ck rs ses' ms vi ps)
+    return (CmoduleVerilog n' ui ck rs ses' ms vi ps fb)
 pExpr ft e@(CForeignFuncC { }) = return e
 pExpr ft (Cdo r ss) = do
     ss' <- mapM (pStmt ft) ss

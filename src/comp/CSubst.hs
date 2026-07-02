@@ -181,8 +181,8 @@ instance CSubst CExpr where
     cSubst r (Cmodule pos ss) = Cmodule pos (cSubstMStmts r ss)
     cSubst r (Cinterface pos i ds) =
         Cinterface pos (cSubstMConId r i) (cSubst r ds)
-    cSubst r (CmoduleVerilog m ui cs rs ses fs sch ps) =
-        CmoduleVerilog (cSubst r m) ui cs rs (mapSnd (cSubst r) ses) fs sch ps
+    cSubst r (CmoduleVerilog m ui cs rs ses fs sch ps fb) =
+        CmoduleVerilog (cSubst r m) ui cs rs (mapSnd (cSubst r) ses) fs sch ps fb
     cSubst r (CForeignFuncC i t) = CForeignFuncC i (cSubst r t)
     cSubst r (Cdo b ss) = Cdo b (cSubstStmts r ss)
     cSubst r (Caction pos ss) = Caction pos (cSubstStmts r ss)
@@ -207,8 +207,8 @@ instance CSubst CExpr where
         CSelectT (cSubstTConId r ti) i
     cSubst r (CLitT t l) = CLitT (cSubst r t) l
     cSubst r (CAnyT p uk t) = CAnyT p uk (cSubst r t)
-    cSubst r (CmoduleVerilogT t m ui cs rs ses fs sch ps) =
-        CmoduleVerilogT (cSubst r t) (cSubst r m) ui cs rs (mapSnd (cSubst r) ses) fs sch ps
+    cSubst r (CmoduleVerilogT t m ui cs rs ses fs sch ps fb) =
+        CmoduleVerilogT (cSubst r t) (cSubst r m) ui cs rs (mapSnd (cSubst r) ses) fs sch ps fb
     cSubst r (CForeignFuncCT i t) = (CForeignFuncCT i (cSubst r t))
     cSubst r (CTApply e ts) = CTApply (cSubst r e) (cSubst r ts)
     cSubst r e@(Cattributes {}) = e

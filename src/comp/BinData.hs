@@ -1124,11 +1124,11 @@ instance Bin VModInfo where
     writeBytes x = section "VModInfo" $
                    do { toBin (vName x); toBin (vClk x); toBin (vRst x);
                         toBin (vArgs x); toBin (vFields x); toBin (vSched x);
-                        toBin (vPath x); }
+                        toBin (vPath x); toBin (vFallback x); }
     readBytes = do { name <- fromBin; clk <- fromBin; rst <- fromBin;
                      args <- fromBin; meths <- fromBin; sch <- fromBin;
-                     p <- fromBin;
-                     return (mkVModInfo name clk rst args meths sch p); }
+                     p <- fromBin; fb <- fromBin;
+                     return (mkVModInfo name clk rst args meths sch p fb); }
 
 instance Bin VFieldInfo where
     writeBytes (Method a b c d e f g) =

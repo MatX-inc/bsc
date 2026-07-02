@@ -74,6 +74,7 @@ import IExpandUtils
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
+import BoundaryTarget(targetMethodBetterInfo, targetMethodArgNames)
 
 import ITransform(iTransExpr)
 
@@ -240,16 +241,16 @@ iExpandPref = "__h"
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
            SymTab -> M.Map Id HExpr ->
-           Bool -> [PProp] -> HDef ->
+           Bool -> [PProp] -> Maybe VModInfo -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs is_noinlined_func pps mtarget def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs mi is_noinlined_func pps $
+  go <- runG errh flags symt alldefs mi is_noinlined_func pps mtarget $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -692,8 +693,15 @@ iExpandModuleLam i clkRst e = do
     -- process ifc args
     (as4, mod_expr4) <- --iExpandModuleIfcArgs i as3 mod_expr3
                         return (as3, mod_expr3)
+    -- when synthesizing toward a boundary target, the parameter/port
+    -- argument names (and param-ness) come positionally from the target
+    mtarget <- getBoundaryTarget
+    let tgt_arg_q = case mtarget of
+                      Nothing -> Nothing
+                      Just tgt -> Just [ a | a <- vArgs tgt,
+                                             isParam a || isPort a ]
     -- process remaining args
-    (as5, mod_expr5) <- iExpandModulePortArgs i clkRst as4 mod_expr4
+    (as5, mod_expr5) <- iExpandModulePortArgs i clkRst tgt_arg_q as4 mod_expr4
     -- extract the results
     let mod_expr = mod_expr5
     let (absinps, vargs) =
@@ -797,17 +805,34 @@ iExpandModuleInoutArgs i clkRst (a:as) e = do
 iExpandModuleInoutArgs i clkRst [] e = return ([], e)
 
 -- module arguments which are not clock, reset, or ifc arg
-iExpandModulePortArgs :: Id -> (HClock, HReset) -> [ArgState] -> HExpr ->
+-- (the Maybe [VArgInfo] is the boundary target's parameter/port arguments,
+-- consumed positionally to force the argument names and param-ness;
+-- a count mismatch is reported by the boundary check after elaboration)
+iExpandModulePortArgs :: Id -> (HClock, HReset) -> Maybe [VArgInfo] ->
+                         [ArgState] -> HExpr ->
                          G ([ArgState], HExpr)
-iExpandModulePortArgs i clkRst ((Right (li,t)):as) e = do
+iExpandModulePortArgs i clkRst tgtq ((Right (li,t)):as) e = do
     -- turn the argument into an ICModPort (module port), or into an
     -- ICModParam if the user specified that it be a module parameter
     pps <- getPragmas
 
-    let isParam = isParamModArg pps li
-        arg_id  = if isParam
-                  then makeArgParamId pps li
-                  else makeArgPortId pps li
+    let (mtgt_arg, tgtq') =
+            case tgtq of
+              Just (ta:rest) -> (Just ta, Just rest)
+              Just [] -> (Nothing, Just [])
+              Nothing -> (Nothing, Nothing)
+
+    let isParam = case mtgt_arg of
+                    Just ta -> VModInfo.isParam ta
+                    Nothing -> isParamModArg pps li
+        arg_id  = case mtgt_arg of
+                    Just (Param (VName s)) ->
+                        mkId (getPosition li) (mkFString s)
+                    Just (Port ((VName s), _) _ _) ->
+                        mkId (getPosition li) (mkFString s)
+                    _ -> if isParam
+                         then makeArgParamId pps li
+                         else makeArgPortId pps li
         arg_str = getIdBaseString arg_id
         iconinfo = if isParam
                    then ICModParam t
@@ -831,12 +856,12 @@ iExpandModulePortArgs i clkRst ((Right (li,t)):as) e = do
         abs_input = IAI_Port (arg_id, t)
     let a' = Left (abs_input, varginfo)
 
-    (as', e'') <- iExpandModulePortArgs i clkRst as e'
+    (as', e'') <- iExpandModulePortArgs i clkRst tgtq' as e'
     return (a':as', e'')
-iExpandModulePortArgs i clkRst (a:as) e = do
-  (as', e') <- iExpandModulePortArgs i clkRst as e
+iExpandModulePortArgs i clkRst tgtq (a:as) e = do
+  (as', e') <- iExpandModulePortArgs i clkRst tgtq as e
   return (a:as', e')
-iExpandModulePortArgs i clkRst [] e = return ([], e)
+iExpandModulePortArgs i clkRst _ [] e = return ([], e)
 
 {- -- obsoleted support for interface arguments
 iExpandModuleIfcArgs :: (?pps :: [PProp])
@@ -960,8 +985,15 @@ iExpandIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) 
         let newBetterInfo :: Id -> BetterInfo.BetterInfo
             newBetterInfo f = fromMaybe (BetterInfo.noMethodInfo f)
                               (find (BetterInfo.matchMethodName f) betterInfo )
+        -- when synthesizing toward a boundary target (as the fallback of a
+        -- foreign module import), the method port names come from the
+        -- target's boundary, not from interface pragmas
+        mtarget <- getBoundaryTarget
         let betterInfoByField ::  [BetterInfo.BetterInfo]
-            betterInfoByField = map newBetterInfo fs
+            betterInfoByField =
+                case mtarget of
+                  Nothing -> map newBetterInfo fs
+                  Just tgt -> map (targetMethodBetterInfo tgt) fs
         -- traceM (ppReadable (zip fs betterInfoByField))
 
         let fieldTypes = map (iGetTypeNorm norm) es
@@ -1043,9 +1075,16 @@ iExpandField modId implicitCond clkRst (i, bi, e, t) = do
    showTopProgress ("Elaborating method " ++ quote (pfpString i))
    setIfcSchedNameScopeProgress (Just (IEP_Method i False))
    (_, P p e') <- evalUH e
-   let (ins, eb) = case e' of
-        ICon _ (ICMethod _ ins eb) -> (ins, eb)
+   let (ins0, eb) = case e' of
+        ICon _ (ICMethod _ ins0 eb) -> (ins0, eb)
         _ -> internalError ("iExpandField: expected ICMethod: " ++ ppReadable e')
+   -- when synthesizing toward a boundary target, the method argument
+   -- port names come from the target's boundary
+   mtarget <- getBoundaryTarget
+   let ins = case (mtarget >>= \ tgt -> targetMethodArgNames tgt i) of
+               Just tgt_ins | length tgt_ins == length ins0 -> tgt_ins
+               -- an arity mismatch is reported by the boundary check
+               _ -> ins0
    (its, ((IDef i1 t1 e1 _), ws1, fi1), ((IDef wi wt we _), ws2, fi2))
        <- iExpandMethod modId 1 [] (pConj implicitCond p) clkRst (i, bi, ins, eb)
    let wp1 = wsToProps ws1 -- default clock domain forced in by iExpandField

@@ -417,6 +417,7 @@ cregToReg old_avi =
                            new_vFields
                            regSchedInfo
                            (VPathInfo [])
+                           (vFallback old_vmi)
     in
         AVInst { avi_vname = avi_vname old_avi
                , avi_type = regType

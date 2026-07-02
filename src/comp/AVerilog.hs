@@ -1731,6 +1731,8 @@ dropIds is (i, vmi, info) =
         -- function to drop ports from the VMInst
         dropFromVMInst (VMInst m n es ves) =
             VMInst m n es (mapSnd dropInstPort ves)
+        dropFromVMInst (VMIfDef macro ts es) =
+            VMIfDef macro (map dropFromVMInst ts) (map dropFromVMInst es)
         dropFromVMInst m = internalError ("AVerilog dropIds: " ++ ppReadable m)
 
         -- function to drop ports from the InstInfo
@@ -1778,6 +1780,9 @@ instance VUse VMItem where
     vuses (VMAssign l e) = vuses l ++ vuses e
     vuses (VMInst _ _ ps as) = vuses ps ++ vuses as
     vuses (VMGroup _ ll) = concatMap vuses (concat ll)
+    -- both branches of an instantiation ifdef have the same connections,
+    -- so only count one (else the connection-count logic misfires)
+    vuses (VMIfDef _ _ es) = concatMap vuses es
     vuses _ = []
 
 instance VUse VStmt where

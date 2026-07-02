@@ -252,7 +252,7 @@ getFreeE vs e@(CLit _) = []
 getFreeE vs (Crules _ rs) = concatMap (getFreeR vs) rs
 getFreeE vs (CTApply e ts) = getFreeE vs e ++ concatMap (getFreeT vs) ts
 --getFreeE vs (CmoduleVerilog e _ _ _ ses _ _ _) =
-getFreeE vs (CmoduleVerilogT t e es _ _ ses _ _ _) =
+getFreeE vs (CmoduleVerilogT t e es _ _ ses _ _ _ _) =
    getFreeT vs t ++ getFreeE vs e ++ concatMap (getFreeE vs . snd) ses
 --getFreeE vs (CForeignFuncC _ cqt) =
 getFreeE vs (CForeignFuncCT _ t) = getFreeT vs t

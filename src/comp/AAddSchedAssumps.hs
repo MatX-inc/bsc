@@ -229,7 +229,7 @@ getRWireInstFn errh flags r alldefs = do
       let def :: IDef HeapData
           def = IDef id_x (iGetType iexpr) iexpr []
       let flags' = flags { showElabProgress = False }
-      iepkg <- iExpand errh flags' r alldefs False [] def
+      iepkg <- iExpand errh flags' r alldefs False [] Nothing def
       rwire_pkg <- aConv errh [] flags (iSplitIf flags iepkg)
       case (apkg_state_instances rwire_pkg) of
         [rwire_inst] ->

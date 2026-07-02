@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module VModInfo(VModInfo, mkVModInfo,
-                vName, vClk, vRst, vArgs, vFields, vSched, vPath,
+                vName, vClk, vRst, vArgs, vFields, vSched, vPath, vFallback,
                 VName(..), VPort, VSchedInfo, VMethodConflictInfo,
                 VPathInfo(..), VeriPortProp(..),
                 VArgInfo(..), isParam, isPort, isClock, isReset, isInout,
@@ -17,7 +17,7 @@ module VModInfo(VModInfo, mkVModInfo,
                 lookupIfcInoutWire,
                 getOutputClockPortTable, getOutputResetPortTable,
                 getVNameString, id_to_vName, id_to_vPort,
-                vName_to_id, vPort_to_id,
+                vName_to_id, vPort_to_id, getSimModName,
                 getVArgInfoName, getVArgPortClock, getVArgPortReset,
                 getVArgInoutClock, getVArgInoutReset,
                 getIfcIdPosition,
@@ -45,7 +45,7 @@ import IdPrint()
 import Position
 import SchedInfo
 import Util
-import Eval(NFData(..), rnf, rnf2, rnf3, rnf4, rnf7)
+import Eval(NFData(..), rnf, rnf2, rnf3, rnf4, rnf7, rnf8)
 import PPrint
 
 -- VMODINFO AND SUBSIDIARIES:
@@ -566,21 +566,25 @@ data VModInfo = VModInfo {
         vArgs  :: [VArgInfo],
         vFields :: [VFieldInfo],
         vSched :: VSchedInfo,
-        vPath  :: VPathInfo
+        vPath  :: VPathInfo,
+        -- for imported modules, a same-interface pure-BSV module
+        -- (a synthesized module, referenced by qualified Id) that
+        -- backends may substitute for the imported one
+        vFallback :: Maybe Id
         }
         deriving (Show, Ord, Eq, Generic.Data, Generic.Typeable)
 
 mkVModInfo :: VName -> VClockInfo -> VResetInfo ->
               [VArgInfo] -> [VFieldInfo] ->
-              VSchedInfo -> VPathInfo -> VModInfo
+              VSchedInfo -> VPathInfo -> Maybe Id -> VModInfo
 mkVModInfo vName vClk vRst
            vArgs vFields
-           vSched vPath | check = vm
+           vSched vPath vFallback | check = vm
                         | otherwise = internalError ("VModInfo: " ++ ppReadable vm ++
                                                      ppReadable sched_pairs ++
                                                      ppReadable meth_pairs)
 
- where vm = VModInfo vName vClk vRst vArgs vFields vSched vPath
+ where vm = VModInfo vName vClk vRst vArgs vFields vSched vPath vFallback
        -- ----------
        -- check the method conflict info for consistency and completeness
        -- XXX check the rest of the SchedInfo fields?
@@ -632,17 +636,29 @@ pePrint d p v = text $ concat [
 instance PPrint VModInfo where
     pPrint d p v = pparen True
         (sep
-            [text "VModInfo",
+            ([text "VModInfo",
             pPrint d 10 (vName v),
             pPrint d 10 (vClk v),
             pPrint d 10 (vRst v),
             pPrint d 10 (vArgs v),
             pPrint d 10 (vFields v),
             pPrint d 10 (vSched v),
-            pShowVPathInfo d 10 (vPath v)])
+            pShowVPathInfo d 10 (vPath v)] ++
+            case (vFallback v) of
+              Nothing -> []
+              Just f -> [text "fallback" <+> pPrint d 10 f]))
 
 instance NFData VModInfo where
-    rnf x@(VModInfo x1 x2 x3 x4 x5 x6 x7) = rnf7 x1 x2 x3 x4 x5 x6 x7
+    rnf x@(VModInfo x1 x2 x3 x4 x5 x6 x7 x8) = rnf8 x1 x2 x3 x4 x5 x6 x7 x8
+
+-- The name of the module that Bluesim should link an instance to:
+-- a foreign import with a fallback resolves to the fallback's
+-- synthesized module; anything else resolves to its own module name.
+getSimModName :: VModInfo -> String
+getSimModName vmi =
+    case (vFallback vmi) of
+      Just fb -> getIdBaseString fb
+      Nothing -> getVNameString (vName vmi)
 
 
 -- ===============
@@ -671,8 +687,8 @@ instance PPrint VWireInfo where
 -- #############################################################################
 
 getIfcIdPosition :: VModInfo -> Position
-getIfcIdPosition (VModInfo _ clk _ _ [] _ _) = getPosition clk
-getIfcIdPosition (VModInfo mod_name clk reset args fields schedule path)
+getIfcIdPosition (VModInfo _ clk _ _ [] _ _ _) = getPosition clk
+getIfcIdPosition (VModInfo mod_name clk reset args fields schedule path fallback)
                                              = getPosition fields
 
 -- #############################################################################

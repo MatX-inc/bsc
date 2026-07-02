@@ -545,14 +545,14 @@ iConvE errh flags r env pvs (Crules sps rs) =
         rs_final = foldr ieJoinR icNoRules rs''
         sps_final = iConvSchedulePragmas sps
     in  iAps icAddSchedPragmas [] [sps_final, rs_final]
-iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sch ps) =
+iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sch ps fb) =
         let vinf = -- traces( "=== iConvE: " ++ show name ++ " " ++ show e ) $
                    mkVModInfo
                     (VName "???")
                     clks
                     rst
                     (map fst args)
-                    meths sch ps
+                    meths sch ps fb
             es' = map (iConvE errh flags r env pvs . snd) args
             getMethodName (Method { vf_name = i }) = i
             getMethodName (Clock i) = i

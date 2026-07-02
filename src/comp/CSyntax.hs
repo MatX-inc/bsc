@@ -304,6 +304,7 @@ data CExpr
               [VFieldInfo]        -- output interface fields
               VSchedInfo          -- scheduling annotations
               VPathInfo           -- path annotations
+              (Maybe Id)          -- pure-BSV fallback module
         | CForeignFuncC Id CQType -- link name, wrapped type
         | Cdo Bool CStmts        -- Bool indicates recursive binding
         | Caction Position CStmts
@@ -330,6 +331,7 @@ data CExpr
               [VFieldInfo]        -- output interface fields
               VSchedInfo          -- scheduling annotations
               VPathInfo           -- path annotations
+              (Maybe Id)          -- pure-BSV fallback module
         | CForeignFuncCT Id CType -- link name, primitive type
         | CTApply CExpr [CType]
         -- for passing pprops as values
@@ -361,7 +363,7 @@ instance NFData CExpr where
     rnf (CSubUpdate pos e hl rhs) = rnf4 pos e hl rhs
     rnf (Cmodule pos stmts) = rnf2 pos stmts
     rnf (Cinterface pos mid defls) = rnf3 pos mid defls
-    rnf (CmoduleVerilog  m ui c r ses fs sch ps) = rnf8 m ui c r ses fs sch ps
+    rnf (CmoduleVerilog  m ui c r ses fs sch ps fb) = rnf9 m ui c r ses fs sch ps fb
     rnf (CForeignFuncC i wrap_ty) = rnf2 i wrap_ty
     rnf (Cdo b stmts) = rnf2 b stmts
     rnf (Caction pos stmts) = rnf2 pos stmts
@@ -375,7 +377,7 @@ instance NFData CExpr where
     rnf (CSelectT tid fid) = rnf2 tid fid
     rnf (CLitT ct lit) = rnf2 ct lit
     rnf (CAnyT pos uk ct) = rnf3 pos uk ct
-    rnf (CmoduleVerilogT ct m ui c r ses fs sch ps) = rnf9 ct m ui c r ses fs sch ps
+    rnf (CmoduleVerilogT ct m ui c r ses fs sch ps fb) = rnf10 ct m ui c r ses fs sch ps fb
     rnf (CForeignFuncCT i prim_ty) = rnf2 i prim_ty
     rnf (CTApply e ts) = rnf2 e ts
     rnf (Cattributes pps) = rnf pps
@@ -434,10 +436,11 @@ instance Eq CExpr where
         = (cs1 == cs2)
     (==) (Cinterface _ i1 ds1) (Cinterface _ i2 ds2)
         = (i1 == i2) && (ds1 == ds2)
-    (==) (CmoduleVerilog i1 b1 c1 r1 as1 fs1 s1 p1)
-         (CmoduleVerilog i2 b2 c2 r2 as2 fs2 s2 p2)
+    (==) (CmoduleVerilog i1 b1 c1 r1 as1 fs1 s1 p1 fb1)
+         (CmoduleVerilog i2 b2 c2 r2 as2 fs2 s2 p2 fb2)
         = (i1 == i2) && (b1 == b2) && (c1 == c2) && (r1 == r2) &&
-          (as1 == as2) && (fs1 == fs2) && (s1 == s2) && (p1 == p2)
+          (as1 == as2) && (fs1 == fs2) && (s1 == s2) && (p1 == p2) &&
+          (fb1 == fb2)
     (==) (CForeignFuncC i1 t1) (CForeignFuncC i2 t2)
         = (i1 == i2) && (t1 == t2)
     (==) (Cdo b1 cs1) (Cdo b2 cs2)
@@ -464,10 +467,11 @@ instance Eq CExpr where
         = (t1 == t2) && (l1 == l2)
     (==) (CAnyT _ uk1 t1) (CAnyT _ uk2 t2)
         = (uk1 == uk2) && (t1 == t2)  -- XXX ?
-    (==) (CmoduleVerilogT t1 i1 b1 c1 r1 as1 fs1 s1 p1)
-         (CmoduleVerilogT t2 i2 b2 c2 r2 as2 fs2 s2 p2)
+    (==) (CmoduleVerilogT t1 i1 b1 c1 r1 as1 fs1 s1 p1 fb1)
+         (CmoduleVerilogT t2 i2 b2 c2 r2 as2 fs2 s2 p2 fb2)
         = (t1 == t2) && (i1 == i2) && (b1 == b2) && (c1 == c2) && (r1 == r2) &&
-          (as1 == as2) && (fs1 == fs2) && (s1 == s2) && (p1 == p2)
+          (as1 == as2) && (fs1 == fs2) && (s1 == s2) && (p1 == p2) &&
+          (fb1 == fb2)
     (==) (CForeignFuncCT i1 t1) (CForeignFuncCT i2 t2)
         = (i1 == i2) && (t1 == t2)
     (==) (CTApply f1 ts1) (CTApply f2 ts2)
@@ -485,8 +489,9 @@ xClassicModuleVerilog :: CExpr -> [(String, CExpr)] ->
                          [String] -> [String] ->
                          [(String, ([VeriPortProp], CExpr))] ->
                          [VFieldInfo] -> VSchedInfo -> VPathInfo ->
+                         Maybe Id ->
                          CExpr
-xClassicModuleVerilog m params clocks resets ports methodinfo schedinfo pathinfo =
+xClassicModuleVerilog m params clocks resets ports methodinfo schedinfo pathinfo fallback =
     -- get the current clock and reset and connect them to the imported module
     Cmodule (getPosition m)
             (clock_stmt ++
@@ -494,7 +499,7 @@ xClassicModuleVerilog m params clocks resets ports methodinfo schedinfo pathinfo
              [CMStmt (CSExpr Nothing
                      (xCmoduleVerilog m True -- it's a user import
                           (WireInfo clock_info reset_info arg_info)
-                          args methodinfo' schedinfo pathinfo))])
+                          args methodinfo' schedinfo pathinfo fallback))])
   where param_ais   = map (Param . VName . fst) params
         param_args  = map snd params
         port_clock  = case clock_names of
@@ -561,7 +566,7 @@ xWrapperModuleVerilog :: Bool -> [PProp] -> CExpr -> VWireInfo -> [CExpr] ->
                          CExpr
 xWrapperModuleVerilog True pps m wireinfo args fields schedinfo pathinfo =
     -- it's a foreign function, which needs to clock or reset
-    xCmoduleVerilog m False wireinfo args fields schedinfo pathinfo
+    xCmoduleVerilog m False wireinfo args fields schedinfo pathinfo Nothing
 xWrapperModuleVerilog False pps m wireinfo args fields schedinfo pathinfo =
   let (args1,stmts1) =
           if (hasDefaultClk pps)
@@ -577,7 +582,7 @@ xWrapperModuleVerilog False pps m wireinfo args fields schedinfo pathinfo =
       stmts' = stmts1 ++ stmts2 ++
                [CMStmt (CSExpr Nothing
                         (xCmoduleVerilog m False -- it's not a user import
-                             wireinfo args' fields schedinfo pathinfo))]
+                             wireinfo args' fields schedinfo pathinfo Nothing))]
   in Cmodule (getPosition m) stmts'
 
 -- ---------------
@@ -585,8 +590,9 @@ xWrapperModuleVerilog False pps m wireinfo args fields schedinfo pathinfo =
 -- The core of the above functions
 xCmoduleVerilog :: CExpr -> Bool -> VWireInfo -> [CExpr] ->
                    [VFieldInfo] -> VSchedInfo -> VPathInfo ->
+                   Maybe Id ->
                    CExpr
-xCmoduleVerilog m is_user_import wireinfo args fields schedinfo pathinfo =
+xCmoduleVerilog m is_user_import wireinfo args fields schedinfo pathinfo fallback =
  let arginfo = wArgs wireinfo in
     if (length args) == (length arginfo) then
       CmoduleVerilog m
@@ -597,6 +603,7 @@ xCmoduleVerilog m is_user_import wireinfo args fields schedinfo pathinfo =
                      fields -- methods or clocks
                      schedinfo
                      pathinfo -- VPathInfo
+                     fallback
     else
       internalError
           ("CSyntax.xCmoduleVerilog: args and arginfo do not match: " ++
@@ -1012,9 +1019,9 @@ instance HasPosition CExpr where
     getPosition (CCon1 _ c _) = getPosition c
     getPosition (Cmodule pos _) = pos
     getPosition (Cinterface pos i ds) = pos
-    getPosition (CmoduleVerilog e _ _ _ ses fs _ _) =
+    getPosition (CmoduleVerilog e _ _ _ ses fs _ _ _) =
         getPosition (e, map snd ses, fs)
-    getPosition (CmoduleVerilogT _ e _ _ _ ses fs _ _) =
+    getPosition (CmoduleVerilogT _ e _ _ _ ses fs _ _ _) =
         getPosition (e, map snd ses, fs)
     getPosition (CForeignFuncC i _) = getPosition i
     getPosition (CForeignFuncCT i _) = getPosition i
@@ -1295,13 +1302,16 @@ instance PPrint CExpr where
         pparen (p>0) (t"interface {" $+$ pBlock d 2 False (map (pp d) ds))
     pPrint d p (Cinterface pos (Just i) ds) =
         pparen (p>0) (t"interface" <+> pp d i <+> t "{" $+$ pBlock d 2 False (map (pp d) ds))
-    pPrint d p (CmoduleVerilog m ui c r ses fs sch ps) =
+    pPrint d p (CmoduleVerilog m ui c r ses fs sch ps fb) =
         sep [
           t"module verilog" <+> pp d m <+>
           pp d c <> t"" <+> pp d r <+> t"",
           nest 4 (if null ses then t"" else pparen True (sepList (map ppA ses) (t","))),
           nest 4 (t"{" $+$ pBlock d 2 False (map f fs)),
-          nest 4 (pp d sch) ]
+          nest 4 (pp d sch),
+          nest 4 (case fb of
+                    Nothing -> empty
+                    Just i -> t"fallback" <+> ppVarId d i) ]
           where mfi s Nothing = empty
                 mfi s (Just i) = t s <+> ppVarId d i
                 mfp s Nothing = empty
@@ -1340,7 +1350,7 @@ instance PPrint CExpr where
     pPrint d p (CSelectT _ i) = text "." <> ppVarId d i
     pPrint d p (CLitT _ l) = pPrint d p l
     pPrint d p (CAnyT pos uk t) = text "_"
-    pPrint d p (CmoduleVerilogT _ m ui c mr ses fs sch ps) = pPrint d p (CmoduleVerilog m ui c mr ses fs sch ps)
+    pPrint d p (CmoduleVerilogT _ m ui c mr ses fs sch ps fb) = pPrint d p (CmoduleVerilog m ui c mr ses fs sch ps fb)
     pPrint d p (CForeignFuncCT i prim_ty) = t"ForeignFuncC" <+> pp d i
     pPrint d p (CTApply e ts) = pparen (p>(maxPrec-1)) $
         sep (pPrint d (maxPrec-1) e : map (nest 2 . ppApArg) ts)

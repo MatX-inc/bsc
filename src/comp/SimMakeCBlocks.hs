@@ -438,7 +438,8 @@ mkState :: NameMap -> AVInst -> (SBId,AId,[AExpr])
 mkState name_map avinst =
   let inst_name = avi_vname avinst
       mod_info  = avi_vmi avinst
-      sbid      = modNameToSBId name_map (getVNameString (vName mod_info))
+      -- foreign imports with a fallback resolve to the fallback in Bluesim
+      sbid      = modNameToSBId name_map (getSimModName mod_info)
       -- get the instantiation argument exprs
       iarg_pairs = getInstArgs avinst
       -- the only clk/rst, if any, are the defaults.

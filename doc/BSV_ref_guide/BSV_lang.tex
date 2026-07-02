@@ -11094,7 +11094,8 @@ The body consists of a sequence of \nterm{importBVIStmts}:
 \gramalt             { \nterm{scheduleBVIStmt} } \\
 \gramalt             { \nterm{pathBVIStmt} } \\
 \gramalt             { \nterm{interfaceBVIStmt}}\\
-\gramalt             { \nterm{inoutBVIStmt} } 
+\gramalt             { \nterm{inoutBVIStmt} } \\
+\gramalt             { \nterm{fallbackBVIStmt} }
 
 
 The optional \nterm{identifier} immediately following the \term{"BVI"} is the name of the {\V} module to be
@@ -12094,6 +12095,68 @@ shown in figure \ref{pathfig}.
           path (WSET, WHAS) ;
        endmodule: vMkRWire0
 \end{verbatim}
+
+
+
+\subsection{Fallback}
+\index{fallback@\te{fallback}(BVI import statement)}
+
+The \te{fallback} statement names a pure-{\BSV} module that backends may
+substitute for the imported {\V} module.  This is useful when the
+imported module cannot be simulated (for example, encrypted vendor IP
+that only a specific simulator can consume): with a fallback, the design
+still simulates in Bluesim and in any {\V} simulator, without
+per-backend conditionals (such as \te{genC} or \te{genVerilog}) in the
+source.
+
+\gram{fallbackBVIStmt} {\term{fallback} \nterm{identifier} \term{;}}
+
+The named module must be a module marked \te{(* synthesize *)}, defined
+in the same package as the import.  It must provide the same
+(monomorphic) interface as the import and take the import's parameter
+and port arguments; clock and reset arguments are supplied implicitly.
+
+The fallback module is synthesized toward the import's declared
+boundary: its generated ports take the names declared by the import, so
+the two modules are interchangeable.  The compiler checks what cannot
+be forced: the fallback's schedule must refine the import's declared
+schedule (the fallback may conflict less, never more), and the fallback
+must not have combinational input-to-output paths beyond those the
+import declares with \te{path} statements.
+
+In generated {\V}, the instantiation of the import is wrapped in an
+\te{ifdef} on the macro \te{BSV\_SOFT\_IP\_}\emph{module}, where
+\emph{module} is the imported {\V} module's name.  When the macro is
+not defined (the default), the imported module is instantiated, exactly
+as without the fallback; when it is defined (for example with
+\te{-D BSV\_SOFT\_IP\_}\emph{module} at link time), the fallback module
+is instantiated instead, over the same connections.  A file
+\emph{module}\te{.fallbacks} is written next to the generated \te{.v},
+listing the swappable instances.  In Bluesim, an instance of an import
+with a fallback is always resolved to the fallback module.
+
+Since no simulator flag is consulted during elaboration, a design using
+imports with fallbacks elaborates once: the same \te{.ba} serves both
+backends.
+
+Example:
+
+\begin{verbatim}
+    (* synthesize *)
+    module mkSRAMmodel (SRAM_Ifc);
+       // a RegFile-based model with the same interface
+       ...
+    endmodule
+
+    import "BVI" VendorSRAM =
+       module mkVendorSRAM (SRAM_Ifc);
+          ...
+          fallback mkSRAMmodel;
+       endmodule
+\end{verbatim}
+
+The \te{-require-fallback} flag makes it an error to generate code for
+a design that instantiates a foreign module import without a fallback.
 
 
 

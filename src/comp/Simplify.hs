@@ -252,8 +252,8 @@ instance Simp CExpr where
     simp r e@(CLitT _ _) = e
     simp r e@(CAnyT {}) = e
 --  simp r (CmoduleVerilog m ui c rs ses fs sch ps) =
-    simp r (CmoduleVerilogT t m ui c rs ses fs sch ps) =
-        CmoduleVerilogT t (simp r m) ui c rs (mapSnd (simp r) ses) fs sch ps
+    simp r (CmoduleVerilogT t m ui c rs ses fs sch ps fb) =
+        CmoduleVerilogT t (simp r m) ui c rs (mapSnd (simp r) ses) fs sch ps fb
 --  simp r e@(CForeignFuncC { }) =
     simp r e@(CForeignFuncCT { }) = e
     simp r e@(Cattributes _) = e

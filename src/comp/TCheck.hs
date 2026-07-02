@@ -43,7 +43,8 @@ import CType(noTyVarNo, getTyVarId, getArrows, isTConArrow, leftTyCon,
              isTypeBit, isTypeString, isTypeUnit, isTypePrimAction, isTVar, isUpdateable,
              isTypeActionValue, isTypeActionValue_, getActionValueArg,
              splitTAp, tyConArgs, cTVarKind)
-import VModInfo(VSchedInfo, VFieldInfo(..), VArgInfo(..), VPort)
+import VModInfo(VSchedInfo, VFieldInfo(..), VArgInfo(..), VPort,
+                isParam, isPort)
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import SymTab
 import Pragma(PProp(..))
@@ -620,7 +621,7 @@ tiExpr as td exp@(Cmodule modulePos ms) = do
                         _                             -> err(getPosition exp, EMultipleInterfaces)
       t -> err (getPosition exp, ENoTypeSign (pfpString exp))
 
-tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
+tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps fb) = do
     (nps, name') <- tiExpr as tString name
     v <- newTVar "tiExpr CmoduleVerilog" KStar exp
     eq_ps <- unify exp (TAp tModule v) td
@@ -824,6 +825,28 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
 --  let   (pses, tys) = unzip paramResults
 --        (pss, es') = unzip pses
     let (qss, ts, ses') = unzip3 qsses
+
+    -- Resolve and check the fallback module reference, if any.
+    -- The fallback must be a monomorphic module of the same interface,
+    -- taking the import's parameter/port arguments (clock and reset
+    -- arguments are supplied implicitly when it is synthesized).
+    let chkFallback Nothing = return ([], Nothing)
+        chkFallback (Just fb_id) = do
+          (fb_qid :>: fb_sc) <- findAssump fb_id as
+          -- The ifc type here is the GenWrap-flattened one, so the ifc
+          -- match cannot be checked here (GenWrap checks it against the
+          -- user-level types); check the argument types and module-ness
+          -- against a fresh interface variable.
+          fb_v <- newTVar "tiExpr CmoduleVerilog fallback" KStar exp
+          let fb_arg_ts = [ t | (a, t) <- zip (map fst args) ts,
+                                isParam a || isPort a ]
+              fb_td = foldr fn (TAp tModule fb_v) fb_arg_ts
+          (fb_qs :=> fb_t, _) <- freshInstT "F" fb_id fb_sc fb_td
+          fb_ps <- concatMapM (mkVPred (getPosition fb_id)) fb_qs
+          fb_eq_ps <- unify exp fb_t fb_td
+          s_fb <- getSubst
+          return (fb_eq_ps ++ apSub s_fb fb_ps,
+                  Just (setIdPosition (getPosition fb_id) fb_qid))
     let methnames  = [n | (Method { vf_name = n }) <- fields]
     let clocknames = [c | (Clock c) <- fields]
     let resetnames = [r | (Reset r) <- fields]
@@ -852,9 +875,10 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
                                     EForeignModMissingField (pfpString i)
                                         name_str name_pos_str)
                         _ -> do fields' <- mapM (chkVeriIfc self_sb_methods) fields
+                                (fb_ps, fb') <- chkFallback fb
                                 let e' = CmoduleVerilogT ty name' ui clks rsts
-                                                         ses' fields' sch ps
-                                return (eq_ps ++ nps {- ++ concat pss -} ++ concat qss, e')
+                                                         ses' fields' sch ps fb'
+                                return (eq_ps ++ nps {- ++ concat pss -} ++ concat qss ++ fb_ps, e')
      _ -> err (getPosition exp, ENotAnInterface)
 
 tiExpr as td exp@(CForeignFuncC link_id wrap_cqt) = do

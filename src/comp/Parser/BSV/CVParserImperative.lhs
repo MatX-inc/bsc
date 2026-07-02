@@ -1228,6 +1228,8 @@ endfunction
 >            isPath _ = False
 >            isUnsync (ISBVI _ (BVI_unsync _)) = True
 >            isUnsync _ = False
+>            isFallback (ISBVI _ (BVI_fallback _)) = True
+>            isFallback _ = False
 
 >            mkVMethodConflictInfo :: [([Id], MethodConflictOp, [Id])] -> VMethodConflictInfo
 >            mkVMethodConflictInfo scheds =
@@ -1528,8 +1530,17 @@ Extract each type of statement, making sure to preserve the order
 >            (bvi_unsyncs, bvis13) = partition isUnsync bvis12
 >            unsyncs = [ u | (ISBVI _ (BVI_unsync u)) <- bvi_unsyncs ]
 >
->        when (not (null bvis13))
+>            (bvi_fallbacks, bvis14) = partition isFallback bvis13
+>            fallbacks = [ (p, f) | (ISBVI p (BVI_fallback f)) <- bvi_fallbacks ]
+>
+>        when (not (null bvis14))
 >            (internalError "convImperativeStmtsToCStmts:ISBVI(2)")
+>
+>        mfallback <-
+>            case fallbacks of
+>              [] -> return Nothing
+>              [(_, f)] -> return (Just f)
+>              ((p1, _) : (p2, _) : _) -> cvtErr p2 (EBVIDuplicateFallback p1)
 
 >        let fname = case mf of
 >                     (Just e) -> e
@@ -1927,6 +1938,7 @@ Extract each type of statement, making sure to preserve the order
 >                    methods'
 >                    vsi
 >                    (VPathInfo paths)
+>                    mfallback
 >            mod' = cVApply idLiftModule [mod]
 >            ifc = Cinterface pos Nothing ((methodClauses methods)++(ifcClauses ifcs))
 >        -- (*A*) Note: this next expression is recognised by GenWrap and the

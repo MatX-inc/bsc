@@ -35,7 +35,9 @@ import Scheme
 import Assump
 import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId)
 import VModInfo(VSchedInfo, VPathInfo(..), VeriPortProp(..), VArgInfo(..),
-                VFieldInfo(..), VName(..), VWireInfo(..), VPort)
+                VFieldInfo(..), VName(..), VWireInfo(..), VPort,
+                isParam, isPort, mkVModInfo)
+import BoundaryTarget(boundaryTargetPProps)
 -- GenWrap defines its own versions that expand synonyms and use qualEq
 import Type hiding (isPrimAction, isActionValue, getAVType,
                     isReset, isClock, isInout)
@@ -301,8 +303,27 @@ isGenDef pmap i =
 
 genWrapE :: Bool -> M.Map Id [PProp] -> CPackage ->
             GWMonad (CPackage, [WrapInfo])
-genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds includes)  =
+genWrapE generating ppmap0 cpack@(CPackage packageId exps imps impsigs fixs ds includes)  =
     do
+       -- A module which is the fallback of an import-BVI is synthesized
+       -- toward the import's declared boundary; the boundary's clock,
+       -- reset, and method shapes are applied via the existing pragma
+       -- forms, injected here so that they take effect both in wrapper
+       -- generation and in elaboration.
+       let fallback_pps =
+               M.fromListWith (++)
+                 [ (unQualId fb, boundaryTargetPProps target)
+                   | CValueSign (CDef _ _ [CClause _ _ (Cmodule _ body)]) <- ds,
+                     CMStmt (CSBindT _ _ _ _
+                       (CApply _ [CmoduleVerilog _ _ vc vr aes fs vs vp
+                                      (Just fb)])) <- body,
+                     let target = mkVModInfo (VName "") vc vr (map fst aes)
+                                             fs vs vp Nothing ]
+           ppmap = M.mapWithKey
+                       (\ i pps -> M.findWithDefault [] (unQualId i)
+                                       fallback_pps ++ pps)
+                       ppmap0
+
        -- information on all modules which are being generated
        -- (this checks the pragmas on all defs which have pragmas, though,
        -- and errors if any do not meet sanity checks)
@@ -317,8 +338,19 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        let trs0 = concat ifcTypeRecords
        let trs = nub trs0
 
+       -- types of the modules being generated, for validating that a
+       -- fallback reference in an import-BVI names a synthesized module
+       -- of the same interface
+       -- (Nothing when not generating, since the module list is empty then;
+       -- the fallback is validated when the package is compiled for a backend)
+       let fbenv = if generating
+                   then Just $ M.fromList
+                          [ (unQualId defid, newtyp)
+                            | (CDef defid newtyp _, _, _, _) <- moduledefs ]
+                   else Nothing
+
        -- create the type records for Verilog interfaces
-       (defsWithVector, trs') <- foldM fixVerilogIfc ([],[]) ds
+       (defsWithVector, trs') <- foldM (fixVerilogIfc fbenv) ([],[]) ds
        let finalIfcTRecs = nub (trs0 ++ reverse trs')
        --traceM( "IfcTRec: " ++ ppReadable finalIfcTRecs )
 
@@ -391,9 +423,11 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
            tyinf = TypeInfo (Just qdi) k vs ti Nothing
 
        -- removes the [CClause] from the input, and replaces it with singleton list
+       -- (the injected fallback pragmas don't change the key set, so
+       -- consulting the original map is equivalent)
        fixDef :: CDefn -> CDefn
        fixDef (CValueSign (CDef defid t e)) | generating &&
-                                              isGenDef ppmap defid =
+                                              isGenDef ppmap0 defid =
            CValueSign (CDef defid t [CClause [] [] (CVar defid)])
        fixDef d = d
 
@@ -659,22 +693,54 @@ genWrapInfo _ (def,_,_,_) =
 -- the comment labelled (*A*) in CVParserImperative.lhs
 -- This looks for CModuleVerilog definition (import BVI), and creates  the new definition and
 -- IfcTRec for it.
-fixVerilogIfc :: ([CDefn], [IfcTRec]) -> CDefn -> GWMonad ([CDefn], [IfcTRec])
-fixVerilogIfc (ds,ts) x@(CValueSign (CDef n (CQType prs tid) [CClause ps qs (Cmodule pos body)])) =
+fixVerilogIfc :: Maybe (M.Map Id CQType) ->
+                 ([CDefn], [IfcTRec]) -> CDefn -> GWMonad ([CDefn], [IfcTRec])
+fixVerilogIfc fbenv (ds,ts) x@(CValueSign (CDef n (CQType prs tid) [CClause ps qs (Cmodule pos body)])) =
  do
-    (newBody, tyrs, prs') <- foldM (fixCModuleVerilog n) ([],[],prs) body
+    (newBody, tyrs, prs') <- foldM (fixCModuleVerilog fbenv n) ([],[],prs) body
     let d'= (CValueSign (CDef n (CQType prs' tid) [CClause ps qs (Cmodule pos (reverse newBody))]))
     --
     return (d':ds, tyrs++ts)
 
-fixVerilogIfc (ds,ts) d = return ((d:ds),ts)
+fixVerilogIfc _ (ds,ts) d = return ((d:ds),ts)
 
 
 -- a fix for vectors of interfaces
-fixCModuleVerilog :: Id -> ([CMStmt], [IfcTRec], [CPred]) -> CMStmt -> GWMonad ([CMStmt], [IfcTRec], [CPred])
-fixCModuleVerilog n (ss,ts,ps)
+fixCModuleVerilog :: Maybe (M.Map Id CQType) ->
+                     Id -> ([CMStmt], [IfcTRec], [CPred]) -> CMStmt -> GWMonad ([CMStmt], [IfcTRec], [CPred])
+fixCModuleVerilog fbenv n (ss,ts,ps)
        bdy@(CMStmt (CSBindT p@(CPVar mName) mi pprops cq@(CQType qs ty)
-                            def@(CApply _ [CmoduleVerilog _ _ _ _ aes fs _ _]))) = do
+                            def@(CApply _ [CmoduleVerilog _ _ _ _ aes fs _ _ mfb]))) = do
+   -- validate a fallback module reference against the import:
+   -- it must be a synthesized module of this package, providing the same
+   -- interface and taking the import's parameter/port arguments
+   let chkFallbackRef _ Nothing = return ()
+       chkFallbackRef env (Just fb) =
+           case M.lookup (unQualId fb) env of
+             Nothing -> bad (getPosition fb,
+                             EForeignModFallbackNotSynth (pfpString fb))
+             Just (CQType _ fb_t) -> do
+               fb_t' <- expandSynSym fb_t
+               ty' <- expandSynSym ty
+               let (fb_arg_ts, fb_res) = getArrows fb_t'
+                   n_imp_args = length [ a | (a, _) <- aes,
+                                             isParam a || isPort a ]
+               case fb_res of
+                 TAp m fb_ifc | m == tModule ->
+                    if (fb_ifc /= ty')
+                    then bad (getPosition fb,
+                              EForeignModFallbackIfc (pfpString fb)
+                                  (pfpString fb_ifc) (pfpString ty'))
+                    else when (length fb_arg_ts /= n_imp_args) $
+                         bad (getPosition fb,
+                              EForeignModFallbackArgCount (pfpString fb)
+                                  (length fb_arg_ts) n_imp_args)
+                 _ -> bad (getPosition fb,
+                           EForeignModFallbackPoly (pfpString fb)
+                               (pfpString n))
+   case fbenv of
+     Nothing -> return ()
+     Just env -> chkFallbackRef env mfb
    let mStmtSPT = savePortTypeStmt (CVar id_x)
        mStmtSPTO = savePortTypeOfStmt (CVar id_x)
    let saveArgTypes (Port vp _ _, e) = [mStmtSPTO vp e]
@@ -768,7 +834,7 @@ fixCModuleVerilog n (ss,ts,ps)
            -- and saving its name
            ss' = save_stmts ++ ((saveNameStmt mName id_x):s':ss)
        return (ss', tr':ts, ps' ++ ps)
-fixCModuleVerilog n (ss, ts, ps) s = return (s:ss, ts, ps)
+fixCModuleVerilog _ n (ss, ts, ps) s = return (s:ss, ts, ps)
 
 
 procType ::

@@ -108,6 +108,7 @@ data Flags = Flags {
         removeStarvedRules :: Bool,
         removeUnusedMods :: Bool,
         removeVerilogDollar :: Bool,
+        requireFallback :: Bool,
         resetName :: String,
         resource :: ResourceFlag,
         rstGate :: Bool,

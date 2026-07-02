@@ -77,7 +77,9 @@ import CVPrint
 import Id
 import Backend
 import Pragma
-import VModInfo(VPathInfo, VPort)
+import VModInfo(VPathInfo, VPort, VModInfo, vName, vFallback,
+                getVNameString)
+import BoundaryTarget(resolveFallbackTargets, chkBoundaryTarget)
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
@@ -105,6 +107,7 @@ import IInline(iInline)
 import IInlineFmt(iInlineFmt)
 import Params(iParams)
 import ASyntax(APackage(..), ASPackage(..),
+               AVInst(..),
                ppeAPackage,
                getAPackageFieldInfos)
 import ASyntaxUtil(getForeignCallNames)
@@ -143,7 +146,8 @@ import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
 import SystemCWrapper(checkSystemCIfc, wrapSystemC)
 import SimFileUtils(analyzeBluesimDependencies)
-import Verilog(VProgram(..), vGetMainModName, getVeriInsts)
+import Verilog(VProgram(..), vGetMainModName, getVeriInsts,
+               getVeriFallbacks)
 import Depend
 import Version(bscVersionStr, copyright, buildnum)
 import Classic(SyntaxMode(..), setSyntax)
@@ -522,6 +526,12 @@ compilePackage
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
 
+    -- boundary targets for the fallback modules of foreign imports:
+    -- each fallback is synthesized toward the boundary declared by the
+    -- import that names it
+    let (fallback_targets, fallback_errs) = resolveFallbackTargets imods
+    when (not (null fallback_errs)) $ bsError errh fallback_errs
+
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
         orderGens (IPackage pid _ _ ds) gs =
                 --trace (ppReadable (gis, g, os)) $
@@ -570,8 +580,9 @@ compilePackage
                 -- in the Maybe monad
                 ex_filt ex = do (CE.ErrorCall s) <- (CE.fromException ex)::(Maybe CE.ErrorCall)
                                 return s
+                mtarget = M.lookup (unQualId i) fallback_targets
                 def_comp = do
-                  def <- genModule errh wi fwrapper flags dumpnames'
+                  def <- genModule errh mtarget wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
                              internalSymt alldefs (getDef im i')
                   return (def, True)
@@ -655,6 +666,7 @@ compilePackage
 
 genModule ::
     ErrorHandle ->
+    Maybe VModInfo -> -- boundary target, when the module is a fallback
     WrapInfo ->
     Bool ->
     Flags ->
@@ -669,6 +681,7 @@ genModule ::
 -- [IDef HeapData], VSchedInfo, VPathInfo, VWireInfo, [VFieldInfo], [VPort])
 genModule
     errh
+    mtarget
     wi
     fwrapper
     flags0
@@ -680,6 +693,9 @@ genModule
     def  =
 
   do
+    -- (when synthesizing toward a boundary target, the target's clock,
+    -- reset, and method shapes were already applied via pragmas injected
+    -- in GenWrap, so they are part of wi_prags here)
     let pps = wi_prags wi
         def_pos = let (IDef i _ _ _) = def
                   in  getPosition i
@@ -693,7 +709,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs fwrapper pps def
+    imod0 <- iExpand errh flags symt alldefs fwrapper pps mtarget def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
@@ -913,9 +929,32 @@ genModule
     -- the amod doesn't change beyond this point
     let amod_final = amod_no_undet
 
+    -- with -require-fallback, reject foreign imports without a fallback
+    when (requireFallback flags) $ do
+        let missing = [ (getPosition (avi_vname avi),
+                         EFallbackRequired
+                             (getVNameString (vName (avi_vmi avi)))
+                             (getIdString (avi_vname avi)))
+                      | avi <- apkg_state_instances amod_final,
+                        avi_user_import avi,
+                        isNothing (vFallback (avi_vmi avi)) ]
+        when (not (null missing)) $ bsError errh missing
+
     -- save wireinfo
     let wireinfo = apkg_external_wires amod_final
     let fieldinfo = getAPackageFieldInfos amod_final
+
+    -- when synthesizing toward a boundary target, check that the produced
+    -- boundary matches the target (modulo module name), that the schedule
+    -- refines the target's, and that the combinational paths are a subset
+    -- of the target's
+    case mtarget of
+      Nothing -> return ()
+      Just target -> do
+        let emsgs = chkBoundaryTarget (mod_nm wi) target
+                        wireinfo fieldinfo
+                        (asi_v_sched_info schedule_info) vPathInfo
+        when (not (null emsgs)) $ bsError errh emsgs
 
     blurb <- mkGenFileHeader flags
     let methodConflictBlurb :: [String] -- string printed in top of Verilog file
@@ -1235,6 +1274,20 @@ writeVerilog errh flags prefix
        when (showModuleUse flags) $ do
            writeFileCatch errh useName (unlines (getVeriInsts vprog))
            unless (quiet flags) $ putStrLnF ("Use file created: " ++ useNameRel)
+
+       -- if any instantiated foreign imports have fallbacks, write a
+       -- sidecar listing them (instance, module, macro, fallback), so
+       -- that build flows can gate on or select the fallbacks
+       let fallback_lines =
+               [ unwords [ "instance", i, "module", m,
+                           "macro", mac, "fallback", fb ]
+                 | (i, m, mac, fb) <- getVeriFallbacks vprog ]
+           fbFileName = dropSuf (vfnString vName) ++ ".fallbacks"
+           fbFileNameRel = dropSuf vNameRel ++ ".fallbacks"
+       when (not (null fallback_lines)) $ do
+           writeFileCatch errh fbFileName (unlines fallback_lines)
+           unless (quiet flags) $
+               putStrLnF ("Fallback file created: " ++ fbFileNameRel)
 
        return [vName]
 

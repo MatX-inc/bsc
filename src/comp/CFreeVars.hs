@@ -162,8 +162,12 @@ getFVE (Cinterface pos mi ds) =
     in  case mi of
           Nothing -> dfvs
           Just i -> addC i dfvs
-getFVE (CmoduleVerilog e _ _ _ ses _ _ _) = unionManyFVS (getFVE e : map (getFVE . snd) ses)
-getFVE (CmoduleVerilogT _ e _ _ _ ses _ _ _) = unionManyFVS (getFVE e : map (getFVE . snd) ses)
+getFVE (CmoduleVerilog e _ _ _ ses _ _ _ fb) =
+    let fvs = unionManyFVS (getFVE e : map (getFVE . snd) ses)
+    in  maybe fvs (\ i -> addV i fvs) fb
+getFVE (CmoduleVerilogT _ e _ _ _ ses _ _ _ fb) =
+    let fvs = unionManyFVS (getFVE e : map (getFVE . snd) ses)
+    in  maybe fvs (\ i -> addV i fvs) fb
 getFVE (CForeignFuncC { }) = emptyFVS
 getFVE (CForeignFuncCT { }) = emptyFVS
 getFVE (Cdo _ ss) = getFVStmts ss
@@ -283,9 +287,9 @@ getFTCE (Cinterface pos mi ds) =
     in  case mi of
           Nothing -> dcs
           Just i  -> S.insert i dcs
-getFTCE (CmoduleVerilog e _ _ _ ses _ _ _) =
+getFTCE (CmoduleVerilog e _ _ _ ses _ _ _ _) =
     S.unions (getFTCE e : map (getFTCE . snd) ses)
-getFTCE (CmoduleVerilogT t e _ _ _ ses _ _ _) =
+getFTCE (CmoduleVerilogT t e _ _ _ ses _ _ _ _) =
     S.unions ([getFTyCons t, getFTCE e] ++ map (getFTCE . snd) ses)
 getFTCE (CForeignFuncC _ t) = getFQTyCons t
 getFTCE (CForeignFuncCT _ t) = getFTyCons t

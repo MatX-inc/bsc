@@ -54,7 +54,7 @@ module IExpandUtils(
         NameInfo, legalizeNameInfo,
         newIStateLoc, newIStateLocForRule,
         isNoInlinedFunc, isAggressive, setAggressive,
-        getPragmas, setPragmas,
+        getPragmas, setPragmas, getBoundaryTarget,
         cleanupFinalRules,
         heapCellToHExpr,
         canLiftCond,
@@ -554,6 +554,9 @@ data GState = GState {
         noinlined_func :: Bool,
         -- the pragmas for the top-level module
         pragmas :: [PProp],
+        -- when the module is the fallback of a foreign module import,
+        -- the import's VModInfo, which prescribes the boundary
+        boundary_target :: Maybe VModInfo,
 
         -- record when the gate of a clock is used
         used_clk_gates :: !(S.Set HClock),
@@ -590,9 +593,9 @@ data GState = GState {
 
 initGState :: ErrorHandle -> Flags ->
               SymTab -> M.Map Id HExpr ->
-              Id -> Bool -> [PProp] ->
+              Id -> Bool -> [PProp] -> Maybe VModInfo ->
               GState
-initGState errh flags symt alldefs defId is_noinlined_func pps =
+initGState errh flags symt alldefs defId is_noinlined_func pps mtarget =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
                           checkMaxStep = redStepsMaxIntervals flags /= 0,
@@ -631,6 +634,7 @@ initGState errh flags symt alldefs defId is_noinlined_func pps =
                           setIdBaseString defId (init (getIdBaseString defId)),
                       noinlined_func = is_noinlined_func,
                       pragmas = pps,
+                      boundary_target = mtarget,
                       used_clk_gates = S.empty,
                       clk_gates_inhigh = S.empty,
                       in_reset_clk_info = M.empty,
@@ -663,10 +667,10 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
 
 runG :: ErrorHandle -> Flags ->
         SymTab -> M.Map Id HExpr ->
-        Id -> Bool -> [PProp] -> G a ->
+        Id -> Bool -> [PProp] -> Maybe VModInfo -> G a ->
         IO (GOutput a)
-runG errh flags symt alldefs defId is_noinlined_func pps gFn =
-  do let gs = initGState errh flags symt alldefs defId is_noinlined_func pps
+runG errh flags symt alldefs defId is_noinlined_func pps mtarget gFn =
+  do let gs = initGState errh flags symt alldefs defId is_noinlined_func pps mtarget
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
      do
@@ -3687,5 +3691,8 @@ getPragmas = gets pragmas
 
 setPragmas :: [PProp] -> G ()
 setPragmas x = modify (\s -> s {pragmas=x})
+
+getBoundaryTarget :: G (Maybe VModInfo)
+getBoundaryTarget = gets boundary_target
 
 -----------------------------------------------------------------------------

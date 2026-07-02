@@ -25,6 +25,7 @@ module Verilog(
                vargName,
                commonDeclTypes,
                getVeriInsts,
+               getVeriFallbacks,
                vGetMainModName,
                vKeywords,
                vSeq,
@@ -318,6 +319,10 @@ data VMItem
         --          if no spaces needed, use a list of one list.
         | VMGroup { vg_translate_off :: Bool, vg_body :: [[VMItem]]}
         | VMFunction VFunction
+        -- items wrapped in `ifdef <macro> ... `else ... `endif
+        | VMIfDef { vi_ifdef_macro :: String,
+                    vi_ifdef_then :: [VMItem],
+                    vi_ifdef_else :: [VMItem] }
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
 instance Ord VMItem where
@@ -337,15 +342,24 @@ instance Ord VMItem where
 
          compare (VMInst _ _ _ _) (VMDecl _ )       = GT
          compare (VMInst _ _ _ _) (VMInst _ _ _ _)  = EQ
+         compare (VMInst _ _ _ _) (VMIfDef _ _ _)   = EQ
          compare (VMInst _ _ _ _) _                 = LT
+
+         -- VMIfDef is used to wrap instantiations, so order it like one
+         compare (VMIfDef _ _ _) (VMDecl _)         = GT
+         compare (VMIfDef _ _ _) (VMInst _ _ _ _)   = EQ
+         compare (VMIfDef _ _ _) (VMIfDef _ _ _)    = EQ
+         compare (VMIfDef _ _ _) _                  = LT
 
          compare (VMAssign vl _) (VMAssign vr _)    = compare vl vr
          compare (VMAssign _ _) (VMDecl _)          = GT
          compare (VMAssign _ _) (VMInst _ _ _ _)    = GT
+         compare (VMAssign _ _) (VMIfDef _ _ _)     = GT
          compare (VMAssign _ _) _                   = LT
 
          compare (VMStmt {}) (VMDecl _)              = GT
          compare (VMStmt {}) (VMInst _ _ _ _)        = GT
+         compare (VMStmt {}) (VMIfDef _ _ _)         = GT
          compare (VMStmt {}) (VMAssign _ _)          = GT
          compare (VMStmt {}) (VMStmt {})             = EQ
          compare (VMStmt {}) _                       = LT
@@ -389,6 +403,12 @@ instance PPrint VMItem where
                 | otherwise = vsepEmptyLine (map (ppLines d) stmtss)
 
         pPrint d p (VMFunction f) = pPrint d p f
+        pPrint d p (VMIfDef macro ts es) =
+             text ("`ifdef " ++ macro) $+$
+             ppLines d ts $+$
+             text ("`else // " ++ macro) $+$
+             ppLines d es $+$
+             text ("`endif // " ++ macro)
         pPrint d p (VMRegGroup inst_id def_name cs stmt) =
             text "// register" <+>
             pPrint d 0 inst_id $+$
@@ -404,6 +424,7 @@ instance NFData VMItem where
     rnf (VMRegGroup vid s cmt item) = rnf4 vid s cmt item
     rnf (VMGroup toff body) = rnf2 toff body
     rnf (VMFunction vfun) = rnf vfun
+    rnf (VMIfDef macro ts es) = rnf3 macro ts es
 
 pv95params :: PDetail -> (Maybe String, VExpr) -> Doc
 pv95params d (Nothing,x)  =  pPrint d 0 x
@@ -419,6 +440,7 @@ groupVMItems vmis =
     let
         -- identify which VMItems need a space before and after them
         needsSpace (VMInst _ _ _ _)     = True
+        needsSpace (VMIfDef _ _ _)      = True
         needsSpace (VMStmt _ _)         = True
         needsSpace (VMFunction _)       = True
         needsSpace (VMGroup _ _)        = True
@@ -1154,7 +1176,28 @@ getVeriInsts (VProgram ms _ _) = nub (concatMap getInstsFromVModule ms)
       getInstsFromVMItem (VMRegGroup _ _ _ i) = getInstsFromVMItem i
       getInstsFromVMItem (VMGroup _ iss) =
           concatMap (concatMap getInstsFromVMItem) iss
+      getInstsFromVMItem (VMIfDef _ ts es) =
+          concatMap getInstsFromVMItem (ts ++ es)
       getInstsFromVMItem _ = []
+
+-- extract the instances wrapped in a fallback-selection ifdef:
+-- (instance name, imported module name, macro, fallback module name)
+getVeriFallbacks :: VProgram -> [(String, String, String, String)]
+getVeriFallbacks (VProgram ms _ _) = concatMap fromMod ms
+  where
+      fromMod vmod = concatMap fromItem (vm_body vmod)
+      fromItem (VMComment _ i) = fromItem i
+      fromItem (VMRegGroup _ _ _ i) = fromItem i
+      fromItem (VMGroup _ iss) = concatMap (concatMap fromItem) iss
+      fromItem (VMIfDef macro (t:_) (e:_)) =
+          case (unwrap t, unwrap e) of
+            (VMInst { vi_module_name = fbm },
+             VMInst { vi_module_name = m, vi_inst_name = i }) ->
+                [(getVIdString i, getVIdString m, macro, getVIdString fbm)]
+            _ -> []
+      fromItem _ = []
+      unwrap (VMComment _ x) = unwrap x
+      unwrap x = x
 
 -- true if the declarions have the same type
 commonDeclTypes :: VVDecl -> VVDecl -> Bool

@@ -100,7 +100,7 @@ instance Types CExpr where
         CSubUpdate pos (apSub s e_vec) (apSub s e_h, apSub s e_l) (apSub s e_rhs)
     apSub s (Cmodule pos is) = Cmodule pos (apSub s is)
     apSub s (Cinterface pos mi ds) = Cinterface pos mi (apSub s ds)
-    apSub s (CmoduleVerilog m ui c r ses fs sch ps) = CmoduleVerilog (apSub s m) ui c r (mapSnd (apSub s) ses) fs sch ps
+    apSub s (CmoduleVerilog m ui c r ses fs sch ps fb) = CmoduleVerilog (apSub s m) ui c r (mapSnd (apSub s) ses) fs sch ps fb
     apSub s (CForeignFuncC i wty) = CForeignFuncC i (apSub s wty)
     apSub s (Cdo r ss) = Cdo r (apSub s ss)
     apSub s (Caction pos ss) = Caction pos (apSub s ss)
@@ -112,8 +112,8 @@ instance Types CExpr where
     apSub s (CConT t i es) = CConT t i (apSub s es)
     apSub s (CLitT t l) = CLitT (apSub s t) l
     apSub s (CAnyT pos uk t) = CAnyT pos uk (apSub s t)
-    apSub s (CmoduleVerilogT t m ui c r ses fs sch ps) =
-        CmoduleVerilogT (apSub s t) (apSub s m) ui c r (mapSnd (apSub s) ses) fs sch ps
+    apSub s (CmoduleVerilogT t m ui c r ses fs sch ps fb) =
+        CmoduleVerilogT (apSub s t) (apSub s m) ui c r (mapSnd (apSub s) ses) fs sch ps fb
     apSub s (CForeignFuncCT i pty) = CForeignFuncCT i (apSub s pty)
     apSub s (COper os) = internalError ("CSyntaxTypes.Types(CExpr).apSub: COper " ++ ppReadable os)
     apSub s e@(Cattributes pps) = e
@@ -144,7 +144,7 @@ instance Types CExpr where
     tv (CSubUpdate pos e_vec (e_h, e_l) e_rhs) = tv [e_vec, e_h, e_l, e_rhs]
     tv (Cmodule pos is) = tv is
     tv (Cinterface pos mi ds) = tv ds
-    tv (CmoduleVerilog m ui c r ses fs sch ps) = tv (m, map snd ses)
+    tv (CmoduleVerilog m ui c r ses fs sch ps fb) = tv (m, map snd ses)
     tv (CForeignFuncC i wty) = tv wty
     tv (Cdo r ss) = tv ss
     tv (Caction pos ss) = tv ss
@@ -156,7 +156,7 @@ instance Types CExpr where
     tv (CConT t i es) = tv es
     tv (CLitT t l) = tv t
     tv e@(CAnyT _ _ t) = tv t
-    tv (CmoduleVerilogT t m ui c r ses fs sch ps) = tv (t, m, map snd ses)
+    tv (CmoduleVerilogT t m ui c r ses fs sch ps fb) = tv (t, m, map snd ses)
     tv (CForeignFuncCT i pty) = tv pty
     tv (COper os) = internalError ("CSyntaxTypes.Types(CExpr).apSub: COper " ++ ppReadable os)
     tv e@(Cattributes pps) = []

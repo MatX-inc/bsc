@@ -26,7 +26,7 @@ import Position(cmdPosition, noPosition, getPosition)
 import PPrint
 import ASyntax
 import ASyntaxUtil(getForeignCallNames)
-import VModInfo(vName, getVNameString)
+import VModInfo(vName, getVNameString, vFallback, getSimModName)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap)
 import ABin
 import GenABin(readABinFile)
@@ -241,19 +241,31 @@ followABIHierarchy mparent curmod_name = do
 followABMIHierarchy :: APackage -> M ()
 followABMIHierarchy curpkg = do
 
+    -- when linking for Bluesim, a foreign import with a fallback resolves
+    -- to the fallback's synthesized module (which has a .ba) and is
+    -- followed like a native submodule
+    mbackend <- getBackend
+    let resolve_fallbacks = (mbackend == Just Bluesim)
+
     -- ----------
     -- get the instantiated module instances
 
     let
-        getModuleName avi = getVNameString $ vName $ avi_vmi avi
+        getModuleName avi = if resolve_fallbacks
+                            then getSimModName (avi_vmi avi)
+                            else getVNameString $ vName $ avi_vmi avi
         getInstanceName avi = getIdString $ avi_vname avi
         mkPair avi = (getInstanceName avi, getModuleName avi)
 
         curmod_avinsts = apkg_state_instances curpkg
 
-        -- identify the foreign imports
+        -- identify the foreign imports (a foreign import whose instance
+        -- resolves to a fallback is treated as native)
+        isForeignLeaf avi =
+            avi_user_import avi &&
+            not (resolve_fallbacks && isJust (vFallback (avi_vmi avi)))
         (foreign_avis, native_avis) =
-            partition avi_user_import curmod_avinsts
+            partition isForeignLeaf curmod_avinsts
 
         -- info for all submodules
         submod_pairs = map mkPair curmod_avinsts

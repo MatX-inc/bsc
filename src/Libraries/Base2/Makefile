@@ -24,6 +24,14 @@ $(BUILDDIR)/%.bo: %.bs
 $(BUILDDIR)/%.bo: %.bsv
 	${BSC} ${BSCFLAGS} $<
 
+# OVLAssertions defines pure-BSV fallback modules for its OVL imports;
+# elaborate them (generating .ba and .v into BUILDDIR) while compiling
+# the package.  The .ba files are not backend-specific, so they serve
+# both Bluesim and Verilog+`define flows.
+OVL_FALLBACK_GENS = -g bsv_assert_always_model -g bsv_assert_never_model
+$(BUILDDIR)/OVLAssertions.bo: OVLAssertions.bsv
+	${BSC} ${BSCFLAGS} -verilog -elab -vdir $(BUILDDIR) $(OVL_FALLBACK_GENS) $<
+
 .PHONY: clean full_clean
 clean full_clean:
 	@rm -f *.bi *.bo *.ba vpi_wrapper* *.info *~

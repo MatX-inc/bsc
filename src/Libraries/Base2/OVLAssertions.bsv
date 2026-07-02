@@ -740,6 +740,31 @@ module bsv_assert_always#(OVLDefaults#(Bool) defaults) (AssertTest_IFC#(Bool));
 
 endmodule
 
+// Pure-BSV substitute for the `assert_always' OVL checker, used when the
+// OVL Verilog library is not available (always in Bluesim; in Verilog
+// simulation when `BSV_SOFT_IP_assert_always is defined).  It checks from
+// the first cycle after reset and reports failures with $display.
+(* synthesize *)
+module bsv_assert_always_model#(parameter Bit#(SizeOf#(OVLSeverityLevel)) severity_level,
+                                parameter Bit#(SizeOf#(OVLPropertyType)) property_type,
+                                parameter String msg,
+                                parameter Bit#(SizeOf#(OVLCoverageLevel)) coverage_level)
+                               (VAssertTest_IFC#(1));
+   Reg#(Bool) r_active <- mkReg(False);
+   (* fire_when_enabled, no_implicit_conditions *)
+   rule r_activate (!r_active);
+      r_active <= True;
+   endrule
+   method Action test(Bit#(1) test_expr);
+      OVLPropertyType ptype = unpack(property_type);
+      if (r_active && ptype != OVL_IGNORE && test_expr != 1) begin
+         $display("OVL_ERROR : ASSERT_ALWAYS : %s", msg);
+         if (unpack(severity_level) == OVL_FATAL)
+            $finish(1);
+      end
+   endmethod
+endmodule
+
 import "BVI" assert_always =
 module v_assert_always#(OVLDefaults#(Bool) defaults) (VAssertTest_IFC#(1));
 
@@ -754,6 +779,8 @@ module v_assert_always#(OVLDefaults#(Bool) defaults) (VAssertTest_IFC#(1));
    method test(test_expr) enable((* inhigh *)EN);
 
    schedule (test) CF (test);
+
+   fallback bsv_assert_always_model;
 endmodule
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1375,6 +1402,29 @@ module bsv_assert_never#(OVLDefaults#(Bool) defaults) (AssertTest_IFC#(Bool));
 
 endmodule
 
+// Pure-BSV substitute for the `assert_never' OVL checker (see the
+// comment on bsv_assert_always_model above).
+(* synthesize *)
+module bsv_assert_never_model#(parameter Bit#(SizeOf#(OVLSeverityLevel)) severity_level,
+                               parameter Bit#(SizeOf#(OVLPropertyType)) property_type,
+                               parameter String msg,
+                               parameter Bit#(SizeOf#(OVLCoverageLevel)) coverage_level)
+                              (VAssertTest_IFC#(1));
+   Reg#(Bool) r_active <- mkReg(False);
+   (* fire_when_enabled, no_implicit_conditions *)
+   rule r_activate (!r_active);
+      r_active <= True;
+   endrule
+   method Action test(Bit#(1) test_expr);
+      OVLPropertyType ptype = unpack(property_type);
+      if (r_active && ptype != OVL_IGNORE && test_expr != 0) begin
+         $display("OVL_ERROR : ASSERT_NEVER : %s", msg);
+         if (unpack(severity_level) == OVL_FATAL)
+            $finish(1);
+      end
+   endmethod
+endmodule
+
 import "BVI" assert_never =
 module v_assert_never#(OVLDefaults#(Bool) defaults) (VAssertTest_IFC#(1));
 
@@ -1389,6 +1439,8 @@ module v_assert_never#(OVLDefaults#(Bool) defaults) (VAssertTest_IFC#(1));
    method test(test_expr) enable((* inhigh *)EN_test);
 
    schedule (test) CF (test);
+
+   fallback bsv_assert_never_model;
 endmodule
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -618,7 +618,7 @@ instance PVPrint CExpr where
     pvPrint d p (Cinterface pos (Just i) ds) =
         (t"interface" <+> pp d i) $+$
         (pBlock d 2 False (map (ppM d) ds)  empty (t"endinterface:" <+> pp d i))
-    pvPrint d p (CmoduleVerilog m ui c r ses fs sch ps) =
+    pvPrint d p (CmoduleVerilog m ui c r ses fs sch ps fb) =
         sep [
           t"(unexpected) module verilog" <+> pp d m <> t";",
           (if c==(ClockInfo [][][][]) then empty else pPrint d p c),
@@ -626,7 +626,10 @@ instance PVPrint CExpr where
           nest 4 (if null ses then empty else pparen True (sepList (map ppA ses) (t","))),
           nest 4 (t"{" $+$ pBlock d 2 False (map (ppVeriMethod d Nothing) fs) (t";") (t"}")),
           nest 4 (pp d sch),
-          nest 4 (pp d ps) ]
+          nest 4 (pp d ps),
+          nest 4 (case fb of
+                    Nothing -> empty
+                    Just i -> t"fallback" <+> pvpId d i <> t";") ]
           where ppA (s, e) = text "(" <> text (show s) <> text "," <+> pp d e <> text ")"
     pvPrint d p (CForeignFuncC i wrap_ty) =
         t"(unexpected) ForeignFuncC" <+> pp d i
@@ -654,8 +657,8 @@ instance PVPrint CExpr where
     pvPrint d p (CSelectT _ i) = text "." <> pvpId d i
     pvPrint d p (CLitT _ l) = pvPrint d p l
     pvPrint d p (CAnyT pos uk t) = text "?"
-    pvPrint d p (CmoduleVerilogT _ m ui c r ses fs sch ps) =
-        pvPrint d p (CmoduleVerilog m ui c r ses fs sch ps)
+    pvPrint d p (CmoduleVerilogT _ m ui c r ses fs sch ps fb) =
+        pvPrint d p (CmoduleVerilog m ui c r ses fs sch ps fb)
     pvPrint d p (CForeignFuncCT i prim_ty) =
         t"(unexpected) ForeignFuncC" <+> pp d i
     pvPrint d p (CTApply e ts) = pparen (p>(maxPrec-1)) $
@@ -882,7 +885,7 @@ instance PVPrint CDef where
 
     -- XXX this seems out of date with the BSV parser
     pvPrint d p (CDef i (CQType ps ty) [CClause cps []
-        (CmoduleVerilog m ui c r args meths sch pts)]) | all isVar cps =
+        (CmoduleVerilog m ui c r args meths sch pts _)]) | all isVar cps =
       let (ys, x) = getArrows ty
           ity = case x of (TAp (TCon _) y) -> y;
                           z -> z

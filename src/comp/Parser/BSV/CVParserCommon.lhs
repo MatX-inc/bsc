@@ -206,6 +206,7 @@ that they will turn up in this order.
 >  | BVI_schedule ([Id], MethodConflictOp, [Id])
 >  | BVI_path (VName, VName)
 >  | BVI_unsync [Id]  -- for internal use only
+>  | BVI_fallback Id  -- pure-BSV substitute module
 >    deriving (Show)
 
 ==========

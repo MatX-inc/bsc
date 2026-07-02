@@ -33,6 +33,11 @@ build:
 install: build
 	install -d $(INSTALLDIR)
 	install -m644 $(BUILDDIR)/* $(INSTALLDIR)
+	# Verilog for the pure-BSV fallbacks of import-BVI definitions
+	if ls $(BUILDDIR)/*.v > /dev/null 2>&1; then \
+	    install -d $(LIBDIR)/Verilog && \
+	    install -m644 $(BUILDDIR)/*.v $(LIBDIR)/Verilog; \
+	fi
 
 TAGS: $(SRCS)
 	$(TOP)/util/scripts/btags $+

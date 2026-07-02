@@ -14,7 +14,7 @@ module AVerilogUtil (
 
                      -- higher level conversion functions
                      -- XXX these might belong in AVerilog?
-                     vState, InstInfo, wiredInstance,
+                     vState, InstInfo, wiredInstance, mkSoftIpMacro,
                      vForeignBlock, vForeignCall,
 
                      -- separate decls and defs
@@ -31,6 +31,7 @@ module AVerilogUtil (
                      VConvtOpts(..)
                     ) where
 
+import Data.Char(isAlphaNum)
 import Data.List(nub, partition, genericLength, union, intersect, (\\),
                  uncons)
 import Data.Maybe
@@ -44,8 +45,9 @@ import Id
 import PreIds( idInout_, idSVA )
 import Position( Position )
 
-import VModInfo(vArgs, vName, vFields, VName(..), VeriPortProp(..),
-                getIfcIdPosition, VArgInfo(..), VFieldInfo(..))
+import VModInfo(vArgs, vName, vFields, vFallback, VName(..), VeriPortProp(..),
+                getIfcIdPosition, getVNameString,
+                VArgInfo(..), VFieldInfo(..))
 import Prim
 import ASyntax
 import ASyntaxUtil
@@ -800,6 +802,7 @@ type InstInfo = ([(VId, VExpr)],  -- parameter exprs
 -- will be thrown out (see use in AVerilog.hs)
 wiredInstance :: VMItem -> Bool
 wiredInstance inst@(VMInst {}) = (not . null) (vi_inst_ports inst)
+wiredInstance (VMIfDef _ _ (inst:_)) = wiredInstance inst
 wiredInstance item = internalError ("wiredInstance - not instance: " ++ ppReadable item)
 
 -- this also takes a "rewiring" map for those special wires
@@ -983,14 +986,28 @@ vState  flags rewire_map avinst =
 
         ifc_position = (getIfcIdPosition vi)
 
-        vminst = VMInst {
-                         vi_module_name  = vIdV (vName vi),
+        mkInst mod_vid =
+                 VMInst {
+                         vi_module_name  = mod_vid,
                          vi_inst_name    = vInstId v_inst_name,
                          vi_inst_params  = if ( vco_v95 vco )
                                            then Left (mapFst (Just . getVIdString)  paramExprs)
                                            else Right (mapSnd Just paramExprs),
                          vi_inst_ports   = map (updateArgPosition ifc_position . tildeHack) args
                         }
+
+        vminst = mkInst (vIdV (vName vi))
+
+        -- when the instantiated module is a foreign import with a fallback,
+        -- emit an ifdef that swaps only the module name over the one shared
+        -- instantiation (default: the imported module, as today)
+        final_inst =
+            case (vFallback vi) of
+              Nothing -> vminst
+              Just fb ->
+                  let macro = mkSoftIpMacro (getVNameString (vName vi))
+                      fb_inst = mkInst (mkVId (getIdBaseString fb))
+                  in  VMIfDef macro [fb_inst] [vminst]
 
         inst_info =
             (-- param exprs
@@ -1017,8 +1034,15 @@ vState  flags rewire_map avinst =
         if (length (vArgs vi)) /= (length es)
         then internalError "AVerilog.vState: # args differs from expected"
         else (v_inst_name,
-              vminst,
+              final_inst,
               inst_info)
+
+-- the macro that selects the fallback of a foreign import, derived from
+-- the imported Verilog module's name (restricted to macro-safe characters)
+mkSoftIpMacro :: String -> String
+mkSoftIpMacro mod_name =
+    let safe c = if (isAlphaNum c || c == '_') then c else '_'
+    in  "BSV_SOFT_IP_" ++ map safe mod_name
 
 -- ------------------------------
 updateArgPosition :: Position -> (VId,Maybe VExpr) -> (VId,Maybe VExpr)

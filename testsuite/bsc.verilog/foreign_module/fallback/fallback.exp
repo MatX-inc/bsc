@@ -1,0 +1,66 @@
+# --------------------------------------------------
+# Tests for pure-BSV fallbacks on foreign module imports (BVI)
+#
+# An import "BVI" may declare `fallback <module>', naming a synthesized
+# module of the same interface.  The Verilog backend emits an ifdef that
+# swaps only the module name over one shared instantiation (default: the
+# imported module); Bluesim resolves the instance to the fallback's .ba.
+
+# ----------
+# Error cases
+
+# fallback has the wrong interface
+compile_verilog_fail_error FbWrongIfc.bsv T0160
+
+# fallback is not a defined module
+compile_fail_error FbUnbound.bsv T0004
+
+# fallback is not marked (* synthesize *)
+compile_verilog_fail_error FbNotSynth.bsv T0159
+
+# duplicate fallback clause
+compile_fail_error FbDup.bsv P0225
+
+# fallback does not take the import's parameter arguments
+compile_verilog_fail_error FbBadArgs.bsv T0161
+
+# fallback's schedule does not refine the import's declared schedule
+compile_verilog_fail_error FbBadSched.bsv G0132
+
+# fallback has combinational paths the import does not declare
+compile_verilog_fail_error FbBadPath.bsv G0133
+
+# -require-fallback rejects instantiated imports without a fallback
+compile_verilog_fail_error FbRequire.bsv G0135 1 sysFbRequire {-require-fallback}
+
+# ----------
+# The generated Verilog: one shared instantiation under an ifdef
+
+compile_verilog_pass TbCnt.bsv sysTbCnt
+find_n_strings sysTbCnt.v {`ifdef BSV_SOFT_IP_VendorCnt} 1
+find_n_strings sysTbCnt.v {VendorCnt c(} 1
+find_n_strings sysTbCnt.v {mkCntModel c(} 1
+
+# the fallback's module has exactly the import's ports
+find_n_strings mkCntModel.v {EN_incr} 4
+find_n_strings mkCntModel.v {RST_N} 4
+
+# the sidecar file lists the swappable instance
+find_n_strings sysTbCnt.fallbacks {fallback mkCntModel} 1
+
+# ----------
+# Simulation: Bluesim resolves to the fallback; Verilog runs the
+# imported module by default and the fallback when the macro is defined
+
+test_c_only_bsv TbCnt
+
+test_veri_only_bsv_modules TbCnt {VendorCnt.v}
+
+test_veri_only_bsv_modules_options TbCnt {mkCntModel.v} {} {} {} {-D BSV_SOFT_IP_VendorCnt}
+
+# ----------
+# The OVL assertion checkers (library) have fallbacks
+
+test_c_only_bsv TbOvl {} {} 1
+
+test_veri_only_bsv_modules_options TbOvl {} {} {} {} {-D BSV_SOFT_IP_assert_always} {} 1

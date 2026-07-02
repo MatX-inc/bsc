@@ -27,7 +27,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260427-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260702-1"
 
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
@@ -330,9 +330,9 @@ instance Bin CExpr where
     writeBytes (Cmodule pos ss) = do putI 21; toBin pos; toBin ss
     writeBytes (Cinterface pos mi ds) = do putI 22;
                                            toBin pos; toBin mi; toBin ds
-    writeBytes (CmoduleVerilog e b vc vr va vf vs vp) =
+    writeBytes (CmoduleVerilog e b vc vr va vf vs vp fb) =
         do putI 23; toBin e; toBin b; toBin vc; toBin vr; toBin va;
-           toBin vf; toBin vs; toBin vp
+           toBin vf; toBin vs; toBin vp; toBin fb
     writeBytes (CForeignFuncC i qt) = do putI 24; toBin i; toBin qt
     writeBytes (Cdo b ss) = do putI 25; toBin b; toBin ss
     writeBytes (Caction pos ss) = do putI 26; toBin pos; toBin ss
@@ -347,9 +347,9 @@ instance Bin CExpr where
     writeBytes (CSelectT i1 i2) = do putI 35; toBin i1; toBin i2
     writeBytes (CLitT t l) = do putI 36; toBin t; toBin l
     writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk
-    writeBytes (CmoduleVerilogT t e b vc vr va vf vs vp) =
+    writeBytes (CmoduleVerilogT t e b vc vr va vf vs vp fb) =
         do putI 38; toBin t; toBin e; toBin b; toBin vc; toBin vr; toBin va;
-           toBin vf; toBin vs; toBin vp
+           toBin vf; toBin vs; toBin vp; toBin fb
     writeBytes (CForeignFuncCT i t) = do putI 39; toBin i; toBin t
     writeBytes (CTApply e ts) = do putI 40; toBin e; toBin ts
     writeBytes (Cattributes ps) = do putI 41; toBin ps
@@ -394,8 +394,8 @@ instance Bin CExpr where
                       return (Cinterface pos mi ds)
              23 -> do e <- fromBin; b <- fromBin; vc <- fromBin;
                       vr <- fromBin; va <- fromBin; vf <- fromBin;
-                      vs <- fromBin; vp <- fromBin;
-                      return (CmoduleVerilog e b vc vr va vf vs vp)
+                      vs <- fromBin; vp <- fromBin; fb <- fromBin;
+                      return (CmoduleVerilog e b vc vr va vf vs vp fb)
              24 -> do i <- fromBin; qt <- fromBin; return (CForeignFuncC i qt)
              25 -> do b <- fromBin; ss <- fromBin; return (Cdo b ss)
              26 -> do pos <- fromBin; ss <- fromBin; return (Caction pos ss)
@@ -415,8 +415,8 @@ instance Bin CExpr where
                       return (CAnyT pos uk t)
              38 -> do t <- fromBin; e <- fromBin; b <- fromBin; vc <- fromBin;
                       vr <- fromBin; va <- fromBin; vf <- fromBin;
-                      vs <- fromBin; vp <- fromBin;
-                      return (CmoduleVerilogT t e b vc vr va vf vs vp)
+                      vs <- fromBin; vp <- fromBin; fb <- fromBin;
+                      return (CmoduleVerilogT t e b vc vr va vf vs vp fb)
              39 -> do i <- fromBin; t <- fromBin; return (CForeignFuncCT i t)
              40 -> do e <- fromBin; ts <- fromBin; return (CTApply e ts)
              41 -> do ps <- fromBin; return (Cattributes ps)

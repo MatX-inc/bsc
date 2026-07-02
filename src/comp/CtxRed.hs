@@ -240,10 +240,10 @@ instance CtxRed CExpr where
     ctxRed (Cinterface pos mi ds) = do
         ds' <- ctxRed ds
         return (Cinterface pos mi ds')
-    ctxRed (CmoduleVerilog m ui c r ses fs sch ps) = do
+    ctxRed (CmoduleVerilog m ui c r ses fs sch ps fb) = do
         m' <- ctxRed m
         ses' <- ctxRed ses
-        return (CmoduleVerilog m' ui c r ses' fs sch ps)
+        return (CmoduleVerilog m' ui c r ses' fs sch ps fb)
     -- the contexts on the cqt here are not a real type,
     -- but are extra info for better error reporting in tiExpr
     ctxRed e@(CForeignFuncC i cqt) = return e

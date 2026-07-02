@@ -35,7 +35,7 @@ import Pragma
 -- XXX
 import IOUtil(progArgs)
 
-infix 6 >>>> , >>>>> , >>>>>> , {- >>>>>>> , >>>>>>>> , -} >>>>>>>>>
+infix 6 >>>> , >>>>> , >>>>>> , {- >>>>>>> , >>>>>>>> , -} >>>>>>>>> , >>>>>>>>>>
 
 -- XXX
 useLayout :: Bool
@@ -131,9 +131,12 @@ pModule = l L_module `into` \ pos ->
         ||! l L_verilog ..+ aexp +.+ pOParen (sepBy1 (pParen (pString +.+ cm ..+ pExpr)) cm) +.+
                 sepBy1 pString cm +.+ sepBy pString cm +.+
                 pOParen (sepBy1 (pParen (pString +.+ pVeriPortProps +.+ cm ..+ pExpr)) cm) +.+
-                blockOf noTrig pField +.+ pSchedInfo +.+ pPathInfo   >>>>>>>>> xClassicModuleVerilog
+                blockOf noTrig pField +.+ pSchedInfo +.+ pPathInfo +.+
+                pFallback                                            >>>>>>>>>> xClassicModuleVerilog
   where pPathInfo :: CParser VPathInfo
         pPathInfo = succeed (VPathInfo [])
+        pFallback :: CParser (Maybe Id)
+        pFallback = option (literal (mkFString "fallback") ..+ pVarId)
         pField :: CParser VFieldInfo
         pField = pFieldId +.+ pOMult +.+ eq ..+ many pVeriPort
                  +.+ pOPort "output" +.+ pOPort "enable"             >>>>>> mkMethod
@@ -879,12 +882,15 @@ noTrig = mkPosition fsEmpty 0 (-1)
 --            -> (b -> c -> d -> e -> f -> g -> h -> i) -> Parser a i
 (>>>>>>>>>) :: Parser a (b, (c, (d, (e, (f, (g, (h, i)))))))
             -> (b -> c -> d -> e -> f -> g -> h -> i -> j) -> Parser a j
+(>>>>>>>>>>) :: Parser a (b, (c, (d, (e, (f, (g, (h, (i, j))))))))
+            -> (b -> c -> d -> e -> f -> g -> h -> i -> j -> k) -> Parser a k
 p >>>> f = p >>- \ (x,(y,z)) -> f x y z
 p >>>>> f = p >>- \ (x,(y,(z,w))) -> f x y z w
 p >>>>>> f = p >>- \ (x,(y,(z,(w,a)))) -> f x y z w a
 --p >>>>>>> f = p >>- \ (x,(y,(z,(w,(a,b))))) -> f x y z w a b
 --p >>>>>>>> f = p >>- \ (x,(y,(z,(w,(a,(b,c)))))) -> f x y z w a b c
 p >>>>>>>>> f = p >>- \ (x,(y,(z,(w,(a,(b,(c,d))))))) -> f x y z w a b c d
+p >>>>>>>>>> f = p >>- \ (x,(y,(z,(w,(a,(b,(c,(d,e)))))))) -> f x y z w a b c d e
 
 option :: Parser a b -> Parser a (Maybe b)
 option p = p >>- Just ||! succeed Nothing

@@ -2966,6 +2966,11 @@ Parse a pattern and return it
 >             pSemi
 >             return [ISBVI pos (BVI_unsync ms)])
 >         <|>
+>         (do pTheString "fallback"
+>             m <- pQualIdentifier <?> "fallback module name"
+>             pSemi
+>             return [ISBVI pos (BVI_fallback m)])
+>         <|>
 >         pBVINested emptyId
 >         <?> "imperative BVI statement")
 >        assertEmptyAttributes EAttribsBVI atts

@@ -57,6 +57,7 @@ TRYDELFILES = $(wildcard \
 	nWaveLog \
 	vfastLog \
 	*out.raw \
+	*.fallbacks \
 	client_server.cmds \
 	*.dSYM \
 	work_*/ \

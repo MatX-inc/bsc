@@ -8,7 +8,7 @@ import SimPackage
 import SimPrimitiveModules(isPrimitiveModule)
 import ASyntax(AVInst(..))
 import ABinUtil(ABinMap)
-import VModInfo(VModInfo(..), getVNameString)
+import VModInfo(VModInfo(..), getVNameString, getSimModName)
 import Version(bscVersionStr)
 import FileNameUtil
 import ErrorUtil(internalError)
@@ -89,7 +89,7 @@ analyzeBluesimDependencies flags sim_system prefix =
            influences pkg = let pname = getIdBaseString (sp_name pkg)
                                 insts = [ name
                                         | i <- M.elems (sp_state_instances pkg)
-                                        , let name = getVNameString (vName (avi_vmi i))
+                                        , let name = getSimModName (avi_vmi i)
                                         , not (isPrimitiveModule name)
                                         ]
                             in map (\x -> (x,[pname])) insts

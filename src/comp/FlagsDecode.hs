@@ -606,6 +606,7 @@ defaultFlags bluespecdir = Flags {
         removeStarvedRules = False,
         removeUnusedMods = False,
         removeVerilogDollar = False,
+        requireFallback = False,
         resetName = "RST_N",
         resource = RFoff,
         rstGate = False,
@@ -1435,6 +1436,11 @@ externalFlags = [
          (Toggle (\f x -> f { removeVerilogDollar = x }) (showIfTrue removeVerilogDollar),
           "remove dollar signs from Verilog identifiers", Visible)),
 
+        ("require-fallback",
+         (Toggle (\f x -> f { requireFallback = x }) (showIfTrue requireFallback),
+          "error if an instantiated foreign module import has no fallback",
+          Visible)),
+
         ("reset-prefix",
          (Arg "name" (\f s -> -- check for legal verilog name
                        if vIsValidIdent s
@@ -1911,6 +1917,7 @@ showFlagsRaw flags =
           ("removeReg", show (removeReg flags)),
           ("removeStarvedRules", show (removeStarvedRules flags)),
           ("removeUnusedMods", show (removeUnusedMods flags)),
+          ("requireFallback", show (requireFallback flags)),
           ("removeVerilogDollar", show (removeVerilogDollar flags)),
           ("resetName", show (resetName flags)),
           ("resource", show (resource flags)),

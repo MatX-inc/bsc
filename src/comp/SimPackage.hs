@@ -313,7 +313,8 @@ findSubPkg ss parent path =
   in findIt parent (map mk_homeless_id segments)
   where findIt p []     = Just p
         findIt p (x:xs) = let avi      = findAVInst (sp_state_instances p) x
-                              mod_name = vName_to_id (vName (avi_vmi avi))
+                              mod_name = mk_homeless_id
+                                             (getSimModName (avi_vmi avi))
                               sub      = M.lookup mod_name (ssys_packages ss)
                           in case sub of
                                (Just s) -> findIt s xs
