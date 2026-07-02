@@ -1156,7 +1156,6 @@ data ErrMsg =
         -- Errors for the .ba -> code generation mode (-c)
         | EGenWithEntry String
         | EGenWithSrcFile String
-        | EGenVerilogNotSupported
         | EGenWithSystemC
 
         -- Errors/warnings from the SystemC wrapper generator
@@ -4511,13 +4510,8 @@ getErrorText (EGenWithSrcFile fname) =
             "source file (" ++ ishow fname ++ ") cannot be provided.  " ++
             "To compile and generate from source, use -g."))
 
-getErrorText EGenVerilogNotSupported =
-    (System 98, empty,
-     s2par ("The flag -c is only supported with the Bluesim " ++
-            "back end (-sim)."))
-
 getErrorText EGenWithSystemC =
-    (System 99, empty,
+    (System 98, empty,
      s2par ("The flag -c is not supported with -systemc; use -sim."))
 
 -- Runtime errors

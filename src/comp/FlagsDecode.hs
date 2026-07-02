@@ -368,8 +368,8 @@ checkCodeGenFlags flags names =
                   -- Everything is OK for Bluesim code generation
                   DCodeGen flags mods anames
               Just Verilog ->
-                  -- .ba -> .v generation is not supported yet
-                  DError [(cmdPosition, EGenVerilogNotSupported)]
+                  -- Everything is OK for Verilog code generation
+                  DCodeGen flags mods anames
 
 
 -- and, if so, error that flags must go before source files

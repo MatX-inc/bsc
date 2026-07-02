@@ -156,6 +156,13 @@ only two things differ between the runs, and both are neutralized:
 `check_block_codegen_modules` (`testsuite/config/unix.exp`) enforces it: it
 rebuilds every multi-module test's submodules with `-c` and byte-compares.
 
+The Verilog backend has the same mode: `-verilog -c M` regenerates `M.v` from
+`M.ba` (via `vGenMods` in `bsc.hs`), byte-identical to the `.v` that `-g`
+writes for the same elaboration under the same generation flags.  Codegen
+flags are read from the `-c` invocation's command line (elaboration-affecting
+flags are baked into the `.ba`), and foreign-function `.ba` files are found
+via the same `-p`/`-bdir` search path as at link time.
+
 ### Bluetcl
 
 * [Support for reflection in BSC](https://groups.io/g/b-lang-discuss/message/513)
