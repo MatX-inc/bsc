@@ -606,7 +606,6 @@ defaultFlags bluespecdir = Flags {
         fdir = Nothing,
         finalcleanup = 1,
         genABin = False,
-        genABinVerilog = False,
         genName = [],
         genSysC = False,
         -- The ifcPath value will be produced from the raw value,
@@ -1226,10 +1225,6 @@ externalFlags = [
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
           "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
-        ("elab-verilog",
-         (Toggle (\f x -> f {genABinVerilog=x}) (showIfTrue genABinVerilog),
-          "include generated Verilog in .ba files", Hidden)),
-
 
         ("expand-ATS-limit",
          (Arg "n"
@@ -1926,7 +1921,6 @@ showFlagsRaw flags =
           ("fdir", show (fdir flags)),
           ("finalcleanup", show (finalcleanup flags)),
           ("genABin", show (genABin flags)),
-          ("genABinVerilog", show (genABinVerilog flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),
           ("ifLift", show (ifLift flags)),
