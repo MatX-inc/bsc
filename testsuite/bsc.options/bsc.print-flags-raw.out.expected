@@ -86,6 +86,7 @@ Flags {
 	removeReg = True,
 	removeStarvedRules = False,
 	removeUnusedMods = False,
+	requireFallback = False,
 	removeVerilogDollar = False,
 	resetName = "RST_N",
 	resource = RFoff,

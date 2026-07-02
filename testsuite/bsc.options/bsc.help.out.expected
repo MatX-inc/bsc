@@ -49,6 +49,7 @@ Compiler flags:
 -remove-false-rules     remove rules whose condition is provably false
 -remove-starved-rules   remove rules that are never fired by the generated schedule
 -remove-unused-modules  remove unconnected modules from the Verilog
+-require-fallback       error if an instantiated foreign module import has no fallback
 -reset-prefix name      reset name or prefix for generated modules
 -resource-off           fail on insufficient resources
 -resource-simple        reschedule on insufficient resources
