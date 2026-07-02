@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenABin(genABinFile, readABinFile) where
+module GenABin(genABinFile, readABinFile, readABinFileMaybe) where
 
 import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Position
@@ -50,6 +50,15 @@ readABinFile errh nm s =
        then (decode (B.drop hlen s), "")
        --then (decodeWithHash (B.drop hlen s))
        else bsErrorUnsafe errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- Tolerant variant: Nothing if the file tag does not match the current
+-- format (e.g. the file was written by a different version of BSC)
+readABinFileMaybe :: B.ByteString -> Maybe ABin
+readABinFileMaybe s =
+    let hlen = B.length headerBS
+    in if B.take hlen s == headerBS
+       then Just (decode (B.drop hlen s))
+       else Nothing
 
 -- ----------
 -- Bin ABin

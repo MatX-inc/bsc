@@ -56,6 +56,29 @@ compare_file $outfile
 }
 
 # -----
+# Test that an up-to-date .ba elaborated for a different backend does not
+# satisfy the generated-file check: after a Verilog compile of a
+# backend-specific module (with -elab), a Bluesim compile with -u must
+# re-elaborate rather than leave the Verilog-tagged .ba in place to fail
+# the Bluesim link with a backend mismatch (S0042)
+
+if { $ctest == 1 && $vtest == 1 } {
+
+compile_verilog_pass CrossElab.bsv sysCrossElab {-elab}
+find_regexp [make_bsc_vcomp_output_name CrossElab.bsv] \
+    {Elaborated Verilog module file created: sysCrossElab\.ba}
+
+# recompiling for Bluesim must regenerate the .ba, not skip codegen
+compile_object_pass CrossElab.bsv sysCrossElab
+find_regexp [make_bsc_ccomp_output_name CrossElab.bsv] \
+    {Elaborated Bluesim module file created: sysCrossElab\.ba}
+
+# and the Bluesim link succeeds
+link_objects_pass {} sysCrossElab
+
+}
+
+# -----
 # Test that generated files associated with noinline functions are
 # included in the set of files which are checked to force recompilation
 
