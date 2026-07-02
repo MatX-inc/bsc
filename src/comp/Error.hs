@@ -1140,6 +1140,7 @@ data ErrMsg =
 
         -- ABin (.ba) file issues
         | WExtraABinFiles [String]
+        | WNoABinForVerilogRegen String
         | EMissingABinModFile String (Maybe String)
         | EMissingABinForeignFuncFile String String
         | EMultipleABinFilesForName String [String]
@@ -4136,6 +4137,12 @@ getErrorText (WExtraABinFiles filenames) =
     (System 39, empty,
      s2par ("The following elaboration files were not used in the design:") $$
      nest 2 (sepList (map text filenames) comma))
+getErrorText (WNoABinForVerilogRegen topmod) =
+    (System 99, empty,
+     s2par ("No elaboration file (.ba) was found for module " ++
+            ishow topmod ++ " or one of its submodules, so BSC cannot " ++
+            "check whether the generated Verilog is up to date; linking " ++
+            "will use the Verilog files found on the search path."))
 getErrorText (EMissingABinModFile module_name mparent) =
     (System 40, empty,
      case (mparent) of
