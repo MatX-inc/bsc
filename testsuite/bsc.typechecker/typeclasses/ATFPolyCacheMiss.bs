@@ -38,5 +38,5 @@ sysATFPolyCacheMiss = module
     "test": when True ==>
       action
         let result = checkPair r
-        if result then $display "pass" else $display "FAIL"
+        $display "result: %b" (pack result)
         $finish 0
