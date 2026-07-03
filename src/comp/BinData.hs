@@ -730,7 +730,6 @@ instance Bin IdProp where
                                   = do putI 35 ; toBin poss
     writeBytes IdPParserGenerated = putI 36
     writeBytes IdPIncoherent      = putI 37
-    writeBytes IdPCAF             = putI 38
     readBytes = do
         i <- getI
         case i of
@@ -763,7 +762,6 @@ instance Bin IdProp where
           35 -> do poss <- fromBin; return (IdPInlinedPositions poss)
           36 -> return IdPParserGenerated
           37 -> return IdPIncoherent
-          38 -> return IdPCAF
           n  -> internalError $ "BinData.Bin(IdProp).readBytes: " ++ show n
 
 
