@@ -51,7 +51,7 @@ module Id(
         isFromRHSId, setFromRHSId,
         isSignedId, setSignedId,
         setInternal,
-        isDictId,
+        isDictId, isIncoherentDict,
         isInternal,
         isSplitRuleId,
         isRuleId,
@@ -163,6 +163,10 @@ data IdProp = IdPCanFire
               -- were introduced from bracket syntax
               | IdPParserGenerated
               | IdPIncoherent           -- Used to track incoherent instance matches
+              | IdPCAF                  -- is a CAF ("constant applicative form"):
+                                        -- a top-level nullary binding, which is
+                                        -- what lifted dictionaries become
+                                        -- (introduced by LiftDicts)
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
@@ -523,6 +527,9 @@ isHideAllId idx = hasIdProp idx IdP_hide_all
 
 isDictId :: Id -> Bool
 isDictId i = hasIdProp i IdPDict
+
+isIncoherentDict :: Id -> Bool
+isIncoherentDict i = isDictId i && hasIdProp i IdPIncoherent
 
 isRuleId :: Id -> Bool
 isRuleId idx = hasIdProp idx IdPRule
