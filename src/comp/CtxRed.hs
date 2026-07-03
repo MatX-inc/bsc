@@ -26,6 +26,14 @@ import IOUtil(progArgs)
 doTraceCtxReduce :: Bool
 doTraceCtxReduce = "-trace-ctxreduce" `elem` progArgs
 
+-- Perform context reduction on the definitions in a package.
+-- Returns a triple:
+--  * the context-reduced package
+--  * the set of Ids of packages whose symbols were used during reduction
+--    (folded into the unused-import warning check in bsc.hs)
+--  * the cache of ATF (associated type function) resolutions recorded
+--    while solving contexts (merged with the cache from typecheck in
+--    bsc.hs and threaded through iConvPackage into elaboration)
 cCtxReduceIO :: ErrorHandle -> Flags -> SymTab -> CPackage ->
                IO (CPackage, S.Set Id, CATFCache)
 cCtxReduceIO errh flags s (CPackage mi exps imps impsigs fixs ds includes) = do
