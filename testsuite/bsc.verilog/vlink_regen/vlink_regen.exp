@@ -71,6 +71,28 @@ find_regexp_fail vlink5.bsc-out {Verilog file created: mkRSub\.v}
 vlink_run sysVRegenTb vlink5b.bsc-out
 
 # -------------------------
+# The .ba check is all-or-nothing per design: if any module's .ba is
+# missing (here a submodule's, while the top's is present), the link
+# warns and uses the .v files as found -- it never half-regenerates a
+# design it cannot fully see -- and still succeeds
+
+erase mkRSub.ba
+vlink_run sysVRegenTb vlink7.bsc-out
+find_n_strings vlink7.bsc-out {Warning: Command line: (S0099)} 1
+find_regexp_fail vlink7.bsc-out {Verilog file created}
+find_regexp_fail vlink7.bsc-out {Verilog file reused}
+
+# ... and the same from the other direction: the top's .ba missing
+# while the submodule's is present
+
+compile_verilog_pass VRegen.bsv sysVRegenTb
+erase sysVRegenTb.ba
+vlink_run sysVRegenTb vlink8.bsc-out
+find_n_strings vlink8.bsc-out {Warning: Command line: (S0099)} 1
+find_regexp_fail vlink8.bsc-out {Verilog file created}
+find_regexp_fail vlink8.bsc-out {Verilog file reused}
+
+# -------------------------
 # With no .ba hierarchy available, the link warns and uses the .v
 # files as found (the pre-regeneration behavior)
 
