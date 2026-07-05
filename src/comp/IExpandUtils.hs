@@ -2517,8 +2517,7 @@ addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
   when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
                              prPositionConcise (getPosition cell_name) ++ "] " ++
                              ppReadable (result,t,pe))
-
-  return $ deepseq cell_name result
+  return result
 
 {-
 -- add an expression to the heap that is in NF
@@ -2531,7 +2530,7 @@ addHeapNF tag t pe ws = do
 -- flags <- getFlags
 -- mapIExprPosition flags?
   when doTraceHeap $ traceM ("addHeapNF " ++ ppReadable (result,t,pe))
-  return $ deepseq result result
+  return result
 -}
 
 -- "evalPred" needs to create references for shared expressions.
