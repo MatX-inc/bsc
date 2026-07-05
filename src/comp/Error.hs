@@ -1005,6 +1005,7 @@ data ErrMsg =
         | WRuleAlwaysFalse String Bool
         | WRuleNoActions String Bool
         | WRuleUndetPred Bool String [Position]
+        | WSVReservedIdent String
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
         | WRuleNoDefaultClock String
@@ -1027,8 +1028,6 @@ data ErrMsg =
         | ESplitInsideNoSplit String
 
         | WMissingRule String
-
-        | WSVReservedIdent String
 
         | WFCall [(String, Position, [Position])]
 
@@ -3154,12 +3153,6 @@ getErrorText (ESplitInsideNoSplit expr) =
 getErrorText (WMissingRule s) =
     (Generate 17, empty, s2par ("Rule not found: " ++ ishow s))
 
-getErrorText (WSVReservedIdent name) =
-    (Generate 129, empty,
-     s2par ("The identifier " ++ quote name ++ " is a reserved word in " ++
-            "SystemVerilog and will be emitted as an escaped identifier " ++
-            "in the generated Verilog."))
-
 -- Generate 19 is obsolete.  It used to be that Generate 18 was for
 -- reporting WFCall of one method with one position and Generate 19 was
 -- for one method with multiple positions.
@@ -4054,6 +4047,12 @@ getErrorText (WMethodNoDefaultClock method) =
             "provide a clock (for instance, by designating an input clock " ++
             "as the module's default clock with the " ++
             quote "default_clock" ++ " attribute)."))
+
+getErrorText (WSVReservedIdent name) =
+    (Generate 129, empty,
+     s2par ("The identifier " ++ quote name ++ " is a reserved word in " ++
+            "SystemVerilog and will be emitted as an escaped identifier " ++
+            "in the generated Verilog."))
 
 
 ---------------------------------------------------------------------------
