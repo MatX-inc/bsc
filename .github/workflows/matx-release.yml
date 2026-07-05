@@ -1,10 +1,9 @@
 name: matx-release
 
-# Trigger the workflow on push to main, pull request or manual dispatch
+# Trigger the workflow on push to main or manual dispatch
 on:
   push:
     branches: [ main ]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
