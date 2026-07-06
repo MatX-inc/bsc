@@ -41,6 +41,9 @@ interface ILPM0;
 endinterface
 
 (* synthesize *)
+// Aggressive conditions leads to too many users of "sram.read",
+// so we disable it
+(* options="-no-aggressive-conditions" *)
 module mkMesaTxLpm0(ILPM0);
    LPMMemoryStub stub <- mkStub;
    let sram = stub.mem;
