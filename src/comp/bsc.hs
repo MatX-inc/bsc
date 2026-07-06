@@ -91,7 +91,7 @@ import ISyntax(IPackage(..), IModule(..),
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef)
+import FixupDefs(fixupDefs, updDef, mkCoherentDictMap)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimpDicts(iSimpDicts)
 import ISimplify(iSimplify)
@@ -503,6 +503,13 @@ compilePackage
         -- so they can be put into the current IPackage for linking info
         binmods = zip (map (adjEnv env) binmods0) pkgsigs
 
+        -- The coherent-dictionary map used by "fixupDefs" and "updDef"
+        -- depends only on the imported packages ("binmods"), which are
+        -- fixed for the entire compile; so build it once here and thread
+        -- it through, rather than rebuilding it on every call (once per
+        -- compile plus once per synthesized module, via "updDef").
+        coherentDictMap = mkCoherentDictMap binmods
+
     t <- dump errh flags t DFbinary dumpnames binmods
 
     -- For "genModule" we construct a symbol table that includes all defs,
@@ -517,7 +524,7 @@ compilePackage
     t <- dump errh flags t DFsympostbinary dumpnames mint
 
     start flags DFfixup
-    let (imodf, alldefsList) = fixupDefs imod binmods
+    let (imodf, alldefsList) = fixupDefs coherentDictMap imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
@@ -619,7 +626,7 @@ compilePackage
             -- references
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
-            let im' = updDef idef im binmods
+            let im' = updDef coherentDictMap idef im binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
