@@ -42,7 +42,7 @@ import FileIOUtil(openFileCatch, hCloseCatch, hFlushCatch, hGetBufferingCatch,
                   hSetBufferingCatch, hPutStrCatch, hGetLineCatch,
                   hGetCharCatch, hIsEOFCatch, hIsReadableCatch,
                   hIsWritableCatch)
-import qualified SCC
+import GraphWrapper(tSortInt)
 import IntegerUtil(mask)
 import Util
 import PFPrint
