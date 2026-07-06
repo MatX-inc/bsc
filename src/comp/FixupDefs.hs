@@ -1,4 +1,4 @@
-module FixupDefs(fixupDefs, updDef) where
+module FixupDefs(fixupDefs, updDef, mkCoherentDictMap) where
 
 import Data.List(nub)
 import qualified Data.Map as M
@@ -24,14 +24,33 @@ itIsDictType t
     ITCon _ _ (TIstruct SClass _) <- leftmost t = True
 itIsDictType _ = False
 
+-- Map from the type of a coherent dictionary to the (unique) top-level
+-- def of that dictionary in the imported packages.  This map depends only
+-- on the imported packages, which are fixed for the entire compilation of
+-- a package; so it can be built once (in "compilePackage" in bsc.hs) and
+-- passed to every call of "fixupDefs" and "updDef" (which is called once
+-- per synthesized module), rather than rebuilt on each call.
+mkCoherentDictMap :: [(IPackage a, String)] -> M.Map IType Id
+mkCoherentDictMap ipkgs =
+    let
+        -- Get all the defs from the imported packages
+        ams = concatMap (ipkg_defs . fst) ipkgs
+
+        coherent_dicts = [ d | d@(IDef i t _ _) <- ams, itIsDictType t, isDictId i, not $ isIncoherentDict i ]
+    in
+        M.fromList [ (t,i) | IDef i t _ _ <- coherent_dicts ]
+
 -- This does two things:
 -- (1) Insert imported packages into the current package (including their
 --     pragmas and defs, and recording their signatures)
 -- (2) Find references to top-level variables and insert the definitions
 --     (to avoid lookups when evaluating the code).  This creates a cyclic
 --     data structure when defs call each other recursively.
-fixupDefs :: IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
-fixupDefs (IPackage mi _ ps ds) ipkgs =
+--
+-- The first argument must be "mkCoherentDictMap" applied to the same
+-- imported packages that are passed as the third argument.
+fixupDefs :: M.Map IType Id -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs coherent_dict_map (IPackage mi _ ps ds) ipkgs =
     let
         (ms, _) = unzip ipkgs
 
@@ -40,12 +59,6 @@ fixupDefs (IPackage mi _ ps ds) ipkgs =
         -- XXX multiple times on a package and so we may be adding the ipkg
         -- XXX pragmas multiple times.
         ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ <- ms ]
-
-        -- Get all the defs from the imported packages
-        ams = concatMap ipkg_defs ms
-
-        coherent_dicts = [ d | d@(IDef i t _ _) <- ams, itIsDictType t, isDictId i, not $ isIncoherentDict i ]
-        coherent_dict_map = M.fromList [ (t,i) | IDef i t _ _ <- coherent_dicts ]
 
         -- Get all the defs from this package and the imported packages
         ads = concat (ds : map (\ (IPackage _ _ _ ds) -> ds) ms)
@@ -71,8 +84,10 @@ fixupDefs (IPackage mi _ ps ds) ipkgs =
 -- Replace the definition for a top-level variable with a new definition.
 -- (This is used to replace the pre-synthesis definition for a module with
 -- the post-synthesis definition.)
-updDef :: IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
-updDef d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
+-- The first argument must be "mkCoherentDictMap" applied to the same
+-- imported packages that are passed as the fourth argument.
+updDef :: M.Map IType Id -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef coherent_dict_map d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list
         ds' = [ if i == i' then d else d' | d'@(IDef i' _ _ _) <- ds ]
@@ -88,7 +103,7 @@ updDef d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
         -- We use "fixupDefs" to perform both changes.
         -- XXX However, "fixupDefs" is overkill, for just one def.
         -- XXX Note that we throw away alldefs, when we could return it.
-        (ipkg'', _) = fixupDefs ipkg' ips
+        (ipkg'', _) = fixupDefs coherent_dict_map ipkg' ips
     in
         ipkg''
 
