@@ -71,7 +71,6 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- The new package contents
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = iDefsMap (fixUp coherent_dict_map m) ds
-        merged_atf_cache = foldl mergeIATFCaches own_atf_cache [ ipkg_atf_cache m | (m, _) <- ipkgs ]
         dropDict i t = tracep (trace_drop_dicts && result) ("dropDict: " ++ ppReadable (i,t)) result
           where result = itIsDictType t && isDictId i && t `M.member` coherent_dict_map && not (isIncoherentDict i)
         ds'' = [ d' | d'@(IDef i t _ _) <- ds', not (dropDict i t) ]
