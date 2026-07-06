@@ -58,13 +58,19 @@ fixupDefs (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- The new package contents
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = iDefsMap (fixUp coherent_dict_map m) ds
-        merged_atf_cache = foldl mergeIATFCaches own_atf_cache [ ipkg_atf_cache m | (m, _) <- ipkgs ]
         dropDict i t = tracep (trace_drop_dicts && result) ("dropDict: " ++ ppReadable (i,t)) result
           where result = itIsDictType t && isDictId i && t `M.member` coherent_dict_map && not (isIncoherentDict i)
         ds'' = [ d' | d'@(IDef i t _ _) <- ds', not (dropDict i t) ]
+        -- Note that the package keeps only its own ATF cache entries, so
+        -- that .bo files stay proportional to their own package.  The union
+        -- with the imported packages' caches (for use during elaboration)
+        -- is built in bsc.hs and is never stored in an IPackage.  Do not
+        -- merge caches here: "fixupDefs" is re-invoked once per synthesized
+        -- module (via "updDef"), so any merging added here is multiplied by
+        -- the number of modules.
     in
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
-        (IPackage mi ipkg_sigs ps' ds'' merged_atf_cache, ads')
+        (IPackage mi ipkg_sigs ps' ds'' own_atf_cache, ads')
 
 
 -- ===============
