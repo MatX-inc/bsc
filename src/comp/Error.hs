@@ -1154,6 +1154,7 @@ data ErrMsg =
 
         -- Bluesim-specific errors/warnings
         | EBluesimNoXZ String
+        | ESimCodegenOnlyNoSim
 
         -- Errors/warnings from the SystemC wrapper generator
         | ESystemCWrapperComboPaths String
@@ -4506,6 +4507,11 @@ getErrorText (EMissingVPIWrapperFile fname is_dpi) =
      let ifctype = if is_dpi then "DPI" else "VPI"
      in  s2par ("Cannot find the " ++ ifctype ++ " file " ++ ishow fname ++
                 " in the Verilog search path."))
+
+getErrorText ESimCodegenOnlyNoSim =
+    (System 96, empty,
+     s2par ("The flag -sim-codegen-only is only supported when linking " ++
+            "with the Bluesim back end (-sim)."))
 
 -- Runtime errors
 getErrorText (EMutuallyExclusiveRulesFire r1 r2) =
