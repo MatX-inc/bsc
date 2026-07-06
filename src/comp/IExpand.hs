@@ -5275,7 +5275,7 @@ pushBNot' :: Position -> HExpr -> S.Set HeapPointer -> HExpr -> G PExpr
 pushBNot' pos fe visited e = do
     (ee, P pe ew) <- evalUHSqueezed e
     let mkey = case ee of
-                 IRefT _ ptr _ -> Just ptr
+                 IRefT _ ptr _ _ -> Just ptr
                  _ -> Nothing
     -- cycle guard (cf. extractWires' visited set): self-referential
     -- structures (e.g. guard logic) leave the negation unpushed
