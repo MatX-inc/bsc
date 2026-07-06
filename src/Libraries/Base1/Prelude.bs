@@ -4858,14 +4858,13 @@ instance PrimSeqTupleBits () where
 -- Compute the list port names for type 'a' given a base name.
 -- Check that the number of port names matches the number of ports.
 -- This error should only occur if there is an error in a SplitPorts instance.
-checkPortNames :: (SplitPorts a p) => a -> String -> List String
+checkPortNames :: (SplitPorts a p, TupleSize p n) => a -> String -> List String
 checkPortNames proxy base =
   let pn = portNames proxy base
-      n = valueOf (TTupleSize p)
   in
-    if listLength pn /= n
+    if listLength pn /= valueOf n
     then primError (getEvalPosition proxy) $
-      "SplitPorts: " +++ base +++ " has " +++ integerToString n +++
+      "SplitPorts: " +++ base +++ " has " +++ integerToString (valueOf n) +++
       " ports, but " +++ integerToString (listLength pn) +++ " port names were given"
     else pn
 
