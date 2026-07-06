@@ -143,7 +143,6 @@ data Flags = Flags {
         usePrelude :: Bool,
         useProvisoSAT :: Bool,
         stdlibNames :: Bool,
-        v95 :: Bool,
         vFlags :: [String],
         vdir :: Maybe String,
         vPathRaw :: [String],
