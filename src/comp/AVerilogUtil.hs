@@ -37,7 +37,7 @@ import Data.Maybe
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
-import Flags(Flags, readableMux, unSpecTo, v95, systemVerilogOutput, useDPI)
+import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI)
 import PPrint
 import IntLit
 import Id
@@ -72,8 +72,6 @@ import SCC(tsort)
 -- Define a structure which controls Verilog conversions
 data VConvtOpts = VConvtOpts {
                               vco_unspec      :: String,
-                              vco_v95         :: Bool,
-                              vco_v95_tasks   :: [String],
                               vco_readableMux :: Bool,
                               vco_sv_tasks    :: Bool,
                               vco_use_dpi     :: Bool,
@@ -87,8 +85,6 @@ data VConvtOpts = VConvtOpts {
 flagsToVco :: Flags -> VConvtOpts
 flagsToVco flags = VConvtOpts {
                                vco_unspec = unSpecTo flags,
-                               vco_v95    = v95 flags,
-                               vco_v95_tasks = ["$signed", "$unsigned"],
                                vco_readableMux = readableMux flags,
                                vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
@@ -229,7 +225,7 @@ vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =
     retW = case ids of
              (w:_) -> M.lookup w (vco_def_widths vco)
              []    -> Nothing
-    vtaskid = VId (vCommentTaskName vco dpiName) aid Nothing
+    vtaskid = VId dpiName aid Nothing
     (ids',es') = let lv = headOrErr "vForeignCall: missing return value" ids
                  in case isAForeignCallWithRetAsArg vco ffmap f of
                      (Just ty) -> ([], (ASDef ty lv) : es)
@@ -552,18 +548,15 @@ vDefMpd vco (ADef i t
         [ VMInst {
                   vi_module_name = mkVId n,
                   vi_inst_name   = VId inst_name i Nothing,
-                  -- BSV noinline functions are enforced monomorphic
-                  -- (T0111), so they never have parameters and take the
-                  -- named (empty) side.  Classic foreign functions
-                  -- applied at numeric types (e.g. Fork) do pass them:
-                  -- size params (default width of 32 is fine), and
-                  -- necessarily POSITIONAL, in type-argument order,
-                  -- because the foreign declaration names only ports --
-                  -- the hand-written module's parameter names (e.g.
-                  -- Fork.v's iw/ow) are unknown to the compiler.
-                  vi_inst_params = if null is
-                                   then Right []
-                                   else Left (map (\x -> (Nothing,VEConst x)) is),
+                  -- Classic foreign functions applied at numeric types
+                  -- (e.g. Fork) pass the values as instance parameters
+                  -- NAMED by the declaration's type variables, which the
+                  -- hand-written module's parameter names must match
+                  -- (Fork.v's iw/ow).  BSV noinline functions are
+                  -- enforced monomorphic (T0111): no parameters.
+                  -- (These are size params, so default width of 32 is fine.)
+                  vi_inst_params = [ (mkVId nm, Just (VEConst v))
+                                   | (nm, v) <- is ],
                   vi_inst_ports  = (zip
                                     (map (mkVId . fst) ips')
                                     (map (Just . (vExpr vco)) es')
@@ -618,7 +611,7 @@ vDefMpd vco (ADef i_t t_t@(ATBit _) fn@(AFunCall {}) _) ffmap
     [ VMDecl $ VVDecl VDReg (vSize t_t) [VVar (vId i_t)]
     , VMStmt { vi_translate_off = True, vi_body = body }
     ]
-  where name = vCommentTaskName vco foreignNm
+  where name = foreignNm
         foreignNm = if vco_use_dpi vco
                     then dpiMonoCallName vco (ae_funname fn)
                                          (Just (aSize t_t))
@@ -800,7 +793,7 @@ vExpr vco e@(AFunCall t _ n isC es) =
   let foreignName = if vco_use_dpi vco
                     then dpiMonoCallName vco n (Just (aSize t)) (map (aSize . aType) es)
                     else vNameToTask False n
-      name = vCommentTaskName vco (if isC then foreignName else n)
+      name = if isC then foreignName else n
   in VEFctCall (mkVId name) (map (vExpr vco) es)
 vExpr vco (ASInt idt (ATBit w) (IntLit _ b i))  = VEWConst (idToVId idt) w b i
 vExpr vco (ASReal _ _ r)                        = VEReal r
@@ -900,9 +893,7 @@ muxInst vco pri s i es =
                                      ++ "Mux_"
                                      ++ itos (length es `div` 2)),
             vi_inst_name    = i,
-            vi_inst_params  = if ( vco_v95 vco )
-                              then Left [(Just $ getVIdString viWidth ,VEConst s)]
-                              else Right [(viWidth, Just (VEConst s))],
+            vi_inst_params  = [(viWidth, Just (VEConst s))],
             vi_inst_ports   = zip muxInputs (map Just es)
            }
 
@@ -1127,9 +1118,7 @@ vState  flags rewire_map avinst =
         vminst = VMInst {
                          vi_module_name  = vIdV (vName vi),
                          vi_inst_name    = vInstId v_inst_name,
-                         vi_inst_params  = if ( vco_v95 vco )
-                                           then Left (mapFst (Just . getVIdString)  paramExprs)
-                                           else Right (mapSnd Just paramExprs),
+                         vi_inst_params  = mapSnd Just paramExprs,
                          vi_inst_ports   = map (updateArgPosition ifc_position . tildeHack) args
                         }
 
@@ -1237,11 +1226,6 @@ aIds _                    = internalError("Unexpected pattern in AVerilog::aIds"
 
 
 -- ==============================
-
--- replace non v95 task with their name enclosed in a comment
-vCommentTaskName :: VConvtOpts -> String -> String
-vCommentTaskName vco s | vco_v95 vco && elem s (vco_v95_tasks vco) = " /*" ++ s ++ "*/ "
-                       | otherwise = s
 
 -- create a Verilog DPI/VPI task name from a foreign function name
 vNameToTask :: Bool -> String -> String
