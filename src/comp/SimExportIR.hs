@@ -38,14 +38,19 @@ import Data.Word (Word32)
 import qualified Codec.CBOR.Encoding as C
 import qualified Codec.CBOR.Write as CW
 
+import Data.List (foldl', nub)
+import Data.Maybe (mapMaybe)
+
 import ErrorUtil (internalError)
-import Id (Id, getIdBaseString, mkIdCanFire, mkIdWillFire)
+import Id (Id, getIdBaseString, getIdQualString, mkIdCanFire, mkIdWillFire)
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
 import Pragma (RulePragma(..))
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..))
 import VModInfo (vName, getVNameString)
+import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
+import SimDomainInfo (DomainInfo(..))
 import ASyntax
 import SimPackage
 
@@ -142,11 +147,21 @@ encDesign ssys =
         pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
         instmap = M.toList (ssys_instmap ssys)
 
+        -- per-module schedule analysis (segments, exec order, disjointness)
+        msis = M.fromList [ (getIdBaseString (sp_name p), analyzeModule p)
+                          | p <- pkgs ]
+        segmaps = M.map msi_segIdx msis
+        instToMod = ssys_instmap ssys
+
         action :: EncM [(String, C.Encoding)]
         action = do
           topId <- str (getIdBaseString (ssys_top ssys))
-          modsEnc <- mapM (encModule pkgNames) pkgs
+          modsEnc <- mapM (\p -> encModule pkgNames
+                                   (msis M.! getIdBaseString (sp_name p)) p)
+                          pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
+          compsEnc <- mapM (encComposition instToMod segmaps)
+                           (ssys_schedules ssys)
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
           return
@@ -155,7 +170,7 @@ encDesign ssys =
             , ("top", encW32 topId)
             , ("modules", encList modsEnc)
             , ("instance_map", encList instEnc)
-            , ("compositions", encList [])   -- P0 TODO: schedule composition
+            , ("compositions", encList compsEnc)
             , ("foreign_funcs", encList [])  -- P0 TODO: from ssys_ffuncmap
             , ("default_clock", encMaybe encW32 clkId)
             , ("default_reset", encMaybe encW32 rstId)
@@ -168,10 +183,226 @@ encDesign ssys =
     in  encStruct fields'
 
 -- ===============
+-- Module-local schedule analysis (BIR.md section 4)
+--
+-- A module's own schedule order (asi_sched_order) contains its rule nodes
+-- AND its interface-method nodes; the method positions are the only points
+-- where the outside world can interleave (the merge fuses method nodes
+-- into calling parent rules).  Cutting at method positions yields the
+-- per-module-type segments; the design-level composition then references
+-- (instance, segment).
+
+data Seg = Seg { seg_nodes :: [SchedNode], seg_cut :: [String] }
+
+data ModSchedInfo = ModSchedInfo
+    { msi_domains :: [(Int, [Seg])]           -- per clock domain
+    , msi_segIdx  :: M.Map String Int         -- node key -> segment index
+    , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
+    , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
+    }
+
+-- Segment lookup key for a schedule node ("S:rule" / "E:rule"), local
+-- (unqualified) name.
+nodeKey :: SchedNode -> String
+nodeKey (Sched i) = "S:" ++ getIdBaseString i
+nodeKey (Exec i) = "E:" ++ getIdBaseString i
+
+analyzeModule :: SimPackage -> ModSchedInfo
+analyzeModule pkg =
+    let asi = sp_schedule pkg
+        order = asi_sched_order asi
+
+        methodNames = S.fromList
+            [ getIdBaseString (aif_name f) | f <- sp_interface pkg ]
+
+        ruleDom :: M.Map String Int
+        ruleDom = M.fromList
+            [ (getIdBaseString (arule_id r), domOf (arule_wprops r))
+            | r <- sp_rules pkg ]
+        domOf wp = case wpClockDomain wp of
+                     Just (ClockDomain n) -> n
+                     Nothing -> 0
+
+        execPos = M.fromList
+            [ (getIdBaseString i, p)
+            | (Exec i, p) <- zip order [(0 :: Int) ..] ]
+
+        disj0 = exclRulesDBToDisjRulesDB (asi_exclusive_rules_db asi)
+        isRule s = M.member s ruleDom
+        disj = M.fromList
+            [ (rs, S.filter isRule (S.map getIdBaseString ds))
+            | (r, ds) <- M.toList disj0
+            , let rs = getIdBaseString r
+            , isRule rs ]
+
+        doms = nub (M.elems ruleDom)
+
+        -- Split this domain's rule nodes into segments at method positions.
+        segsFor :: Int -> [Seg]
+        segsFor d =
+            let step (segs, nodes, cut) node =
+                    let base = getIdBaseString (getSchedNodeId node)
+                    in  if base `S.member` methodNames
+                        then (segs, nodes, nub (cut ++ [base]))
+                        else if M.lookup base ruleDom == Just d
+                        then if null cut
+                             then (segs, nodes ++ [node], [])
+                             else (segs ++ [Seg nodes cut], [node], [])
+                        else (segs, nodes, cut)
+                (segs, nodes, cut) = foldl' step ([], [], []) order
+            in  if null nodes && null cut && not (null segs)
+                then segs
+                else segs ++ [Seg nodes cut]
+
+        domSegs = [ (d, segsFor d) | d <- doms ]
+
+        -- keyed per node, not per rule: a method cut can fall between a
+        -- rule's Sched and Exec, putting them in different segments
+        segIdx = M.fromList
+            [ (nodeKey n, i)
+            | (_, segs) <- domSegs
+            , (i, seg) <- zip [(0 :: Int) ..] segs
+            , n <- seg_nodes seg ]
+    in
+        ModSchedInfo { msi_domains = domSegs
+                     , msi_segIdx = segIdx
+                     , msi_execPos = execPos
+                     , msi_disj = disj }
+
+-- ===============
+-- Compositions
+
+-- Qualified rule path: "inst.path.RL_rule" (the merge stores the instance
+-- path in the Id qualifier, qualifyChildId).
+qualPath :: Id -> String
+qualPath i = case getIdQualString i of
+               ""  -> getIdBaseString i
+               q   -> q ++ "." ++ getIdBaseString i
+
+encComposition :: M.Map String String -> M.Map String (M.Map String Int)
+               -> SimSchedule -> EncM C.Encoding
+encComposition instToMod segmaps ss = do
+    let order = ss_sched_order ss
+
+        -- resolve a merged node to (instance path, segment index);
+        -- top-module method nodes resolve to Nothing and are skipped
+        resolve node =
+            let i = getSchedNodeId node
+                inst = getIdQualString i
+                key = case node of
+                        Sched _ -> "S:" ++ getIdBaseString i
+                        Exec _ -> "E:" ++ getIdBaseString i
+                modName = case M.lookup inst instToMod of
+                            Just m -> m
+                            Nothing -> internalError
+                              ("SimExportIR: unknown instance " ++ show inst)
+                segmap = M.findWithDefault M.empty modName segmaps
+            in  (,) inst <$> M.lookup key segmap
+
+        -- The flat merged order freely interleaves Sched and Exec nodes of
+        -- different instances, so it cannot be collapsed into segment runs
+        -- directly.  Instead, project the merged constraint graph onto
+        -- (instance, segment) units and topologically sort those; the
+        -- BIR.md section 4 argument (cross-instance constraints only
+        -- attach at method cut points) makes this projection acyclic.
+        units = nub (mapMaybe resolve order)
+        firstPos = M.fromList
+            (reverse [ (u, p)
+                     | (p, Just u) <- zip [(0 :: Int) ..] (map resolve order) ])
+
+        unitEdges = S.fromList
+            [ (pu, nu)
+            | (n, preds) <- ss_sched_graph ss
+            , Just nu <- [resolve n]
+            , p <- preds
+            , Just pu <- [resolve p]
+            , pu /= nu ]
+
+        -- Kahn's algorithm; ties broken by first appearance in the flat
+        -- order so the output tracks bsc's own choice.
+        succsOf u = [ b | (a, b) <- S.toList unitEdges, a == u ]
+        indeg0 = M.fromListWith (+)
+                   ([ (u, 0 :: Int) | u <- units ]
+                    ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
+        pickNext ready = case ready of
+            [] -> Nothing
+            _  -> Just (snd (minimum
+                    [ (M.findWithDefault maxBound u firstPos, u)
+                    | u <- ready ]))
+        kahn indeg done
+            | Just u <- pickNext
+                [ v | (v, d) <- M.toList indeg, d == 0 ] =
+                let indeg' = M.delete u indeg
+                    indeg'' = foldl' (\m v -> M.adjust (subtract 1) v m)
+                                     indeg' (succsOf u)
+                in  kahn indeg'' (u : done)
+            | M.null indeg = reverse done
+            | otherwise = internalError
+                ("SimExportIR: cyclic segment graph; a module boundary is "
+                 ++ "interleaved below method granularity: "
+                 ++ show (M.keys indeg))
+        entries = kahn indeg0 []
+
+        dups = length entries /= S.size (S.fromList entries)
+
+        execPos = M.fromList [ (qualPath i, p)
+                             | (Exec i, p) <- zip order [(0 :: Int) ..] ]
+
+        crossPairs =
+            [ (qualPath r, qualPath d)
+            | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+            , d <- S.toList ds
+            , getIdQualString r /= getIdQualString d
+            , let pr = M.lookup (qualPath r) execPos
+            , let pd = M.lookup (qualPath d) execPos
+            , maybe False id ((<) <$> pr <*> pd) ]
+
+        ticks = [ (getIdQualString prim, getIdBaseString prim,
+                   getIdBaseString port)
+                | di <- M.elems (ss_domain_info_map ss)
+                , (prim, (port, _)) <- di_prims di ]
+
+    if dups
+      then internalError ("SimExportIR: non-contiguous segment interleaving; "
+                          ++ "composition needs graph-based derivation")
+      else do
+        clkId <- str (oscName (ss_clock ss))
+        entriesEnc <- mapM (\(inst, seg) -> do
+                              instE <- strE inst
+                              return $ encStruct
+                                [ ("instance", instE)
+                                , ("segment", encW32 (fromIntegral seg))
+                                ])
+                           entries
+        ticksEnc <- mapM (\(inst, prim, port) -> do
+                            iE <- strE inst
+                            pE <- strE prim
+                            oE <- strE port
+                            return $ encStruct
+                              [ ("instance", iE), ("prim", pE), ("port", oE) ])
+                         ticks
+        earlyEnc <- mapM (strE . qualPath) (ss_early_rules ss)
+        crossEnc <- mapM (\(a, b) -> encPair <$> strE a <*> strE b) crossPairs
+        return $ encStruct
+          [ ("clock", encW32 clkId)
+          , ("posedge", encBool (ss_posedge ss))
+          , ("entries", encList entriesEnc)
+          , ("ticks", encList ticksEnc)
+          , ("early", encList earlyEnc)
+          , ("cross_inhibits", encList crossEnc)
+          ]
+
+oscName :: AClock -> String
+oscName clk = case aclock_osc clk of
+                ASPort _ i -> getIdBaseString i
+                ASDef _ i -> getIdBaseString i
+                e -> ppReadable e
+
+-- ===============
 -- Modules
 
-encModule :: S.Set String -> SimPackage -> EncM C.Encoding
-encModule pkgNames pkg = do
+encModule :: S.Set String -> ModSchedInfo -> SimPackage -> EncM C.Encoding
+encModule pkgNames msi pkg = do
     nameId <- idE (sp_name pkg)
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
@@ -179,8 +410,9 @@ encModule pkgNames pkg = do
     instsEnc <- mapM (encInstance pkgNames (sp_method_order_map pkg))
                      (M.elems (sp_state_instances pkg))
     defsEnc <- mapM encDef (M.elems (sp_local_defs pkg))
-    rulesEnc <- mapM encRule (sp_rules pkg)
+    rulesEnc <- mapM (encRule msi) (sp_rules pkg)
     methodsEnc <- concat <$> mapM encMethod (sp_interface pkg)
+    schedEnc <- encSchedule msi pkg
     return $ encStruct
       [ ("name", nameId)
       , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
@@ -191,17 +423,54 @@ encModule pkgNames pkg = do
       , ("defs", encList defsEnc)
       , ("rules", encList rulesEnc)
       , ("methods", encList methodsEnc)
-      , ("schedule", encSchedule)
+      , ("schedule", schedEnc)
       ]
 
--- P0 TODO: segmented per-(domain,edge) schedules (BIR.md section 4).
-encSchedule :: C.Encoding
-encSchedule =
-    encStruct
-      [ ("domains", encList [])
-      , ("conflicts", encList [])
-      , ("disjoint", encList [])
+encSchedule :: ModSchedInfo -> SimPackage -> EncM C.Encoding
+encSchedule msi pkg = do
+    domsEnc <- mapM encModSched (msi_domains msi)
+    let esposito = case asch_scheduler (asi_schedule (sp_schedule pkg)) of
+                     [ASchedEsposito pairs] -> pairs
+                     scheds -> concat [ ps | ASchedEsposito ps <- scheds ]
+    conflictsEnc <- mapM (\(r, blockers) -> do
+                            rE <- idE r
+                            bsE <- mapM idE blockers
+                            return (encPair rE (encList bsE)))
+                         esposito
+    disjEnc <- mapM (\(r, ds) -> do
+                       rE <- strE r
+                       dsE <- mapM strE (S.toList ds)
+                       return (encPair rE (encList dsE)))
+                    (M.toList (msi_disj msi))
+    return $ encStruct
+      [ ("domains", encList domsEnc)
+      , ("conflicts", encList conflictsEnc)
+      , ("disjoint", encList disjEnc)
       ]
+
+encModSched :: (Int, [Seg]) -> EncM C.Encoding
+encModSched (d, segs) = do
+    segsEnc <- mapM encSeg segs
+    return $ encStruct
+      [ ("domain", encW32 (fromIntegral d))
+      , ("posedge", encBool True)   -- P0 TODO: negedge-triggered domains
+      , ("segments", encList segsEnc)
+      -- P0 TODO: per-module tick order (composition carries ticks for now)
+      , ("ticks", encList [])
+      ]
+
+encSeg :: Seg -> EncM C.Encoding
+encSeg seg = do
+    nodesEnc <- mapM encSchedNode (seg_nodes seg)
+    cutEnc <- mapM strE (seg_cut seg)
+    return $ encStruct
+      [ ("nodes", encList nodesEnc)
+      , ("cut", encList cutEnc)
+      ]
+
+encSchedNode :: SchedNode -> EncM C.Encoding
+encSchedNode (Sched i) = encVariant "Sched" <$> idE i
+encSchedNode (Exec i) = encVariant "Exec" <$> idE i
 
 encClockDomain :: AClockDomain -> EncM C.Encoding
 encClockDomain (ClockDomain n, clocks) = do
@@ -289,8 +558,8 @@ encDef (ADef i t e _props) = do
           ])
       ]
 
-encRule :: ARule -> EncM C.Encoding
-encRule r = do
+encRule :: ModSchedInfo -> ARule -> EncM C.Encoding
+encRule msi r = do
     nameId <- idE (arule_id r)
     -- The predicate is a reference to the CAN_FIRE def after
     -- aAddScheduleDefs; recover the def names.
@@ -304,6 +573,15 @@ encRule r = do
                 Just (ClockDomain n) -> fromIntegral n
                 Nothing -> 0
         crossing = RPclockCrossingRule `elem` arule_pragmas r
+        -- disjoint rules of this module executing earlier in the module's
+        -- own order inhibit this rule (destructive-execution patch;
+        -- cross-module pairs live in the composition)
+        base = getIdBaseString (arule_id r)
+        myPos = M.findWithDefault maxBound base (msi_execPos msi)
+        earlier r' = M.findWithDefault maxBound r' (msi_execPos msi) < myPos
+        inhibits = filter earlier
+                     (S.toList (M.findWithDefault S.empty base (msi_disj msi)))
+    inhibitsEnc <- mapM strE inhibits
     return $ encStruct
       [ ("name", nameId)
       , ("can_fire", cf)
@@ -311,7 +589,7 @@ encRule r = do
       , ("body", encList bodyEnc)
       , ("clock_domain", encW32 dom)
       , ("crossing", encBool crossing)
-      , ("me_inhibits", encList [])   -- P0 TODO: with segmented schedules
+      , ("me_inhibits", encList inhibitsEnc)
       ]
 
 -- Interface methods.  Clock/reset/inout interface entries carry no
