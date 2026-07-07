@@ -53,7 +53,7 @@ import VModInfo (vName, getVNameString)
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
 import ASyntaxUtil (aVars)
 import SimCCBlock (SimCCFnStmt(..))
-import SimMakeCBlocks (cvtActions)
+import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimDomainInfo (DomainInfo(..))
 import ASyntax
 import SimPackage
@@ -609,8 +609,19 @@ encInstance pkgNames mom avi = do
       , ("port_counts", encList portsEnc)
       ]
 
+-- ActionValue results are read through the synthetic temp def that the
+-- corresponding AvAction statement latches -- never by re-invoking the
+-- method (mirrors substAV, SimMakeCBlocks.hs:1481-1482).
+substAV :: AExpr -> AExpr
+substAV (AMethValue ty obj meth) = ASDef ty (mkAVMethTmpId obj meth)
+substAV (APrim i ty op es) = APrim i ty op (map substAV es)
+substAV (AMethCall ty obj meth es) = AMethCall ty obj meth (map substAV es)
+substAV (AFunCall ty i f isC es) = AFunCall ty i f isC (map substAV es)
+substAV e = e
+
 encDef :: ADef -> EncM C.Encoding
-encDef (ADef i t e _props) = do
+encDef (ADef i t e0 _props) = do
+    let e = substAV e0
     nameId <- idE i
     exprEnc <- encExpr e
     let base = getIdBaseString i

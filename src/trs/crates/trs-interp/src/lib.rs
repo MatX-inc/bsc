@@ -497,7 +497,13 @@ impl Interp {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
                 let mname = self.d.strings[method as usize].clone();
-                p.value_method(&mname, argv, self.cycle)
+                let r = p.value_method(&mname, argv, self.cycle);
+                if std::env::var_os("TRS_TRACE").is_some() {
+                    let path = self.insts[callee].path.clone();
+                    eprintln!("[{}] {}.{} -> {}", self.cycle, path, mname,
+                              r.to_hex_string());
+                }
+                return r;
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -520,6 +526,12 @@ impl Interp {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
                 let mname = self.d.strings[method as usize].clone();
+                if std::env::var_os("TRS_TRACE").is_some() {
+                    let args: Vec<String> =
+                        argv.iter().map(|v| v.to_hex_string()).collect();
+                    eprintln!("[{}] <{}>.{}({})", self.cycle, callee, mname,
+                              args.join(","));
+                }
                 p.action_method(&mname, argv, self.cycle);
             }
             InstKind::User { module, .. } => {
@@ -558,7 +570,12 @@ impl Interp {
                     self.exec_stmt(callee, &mut ctx, st);
                 }
                 match result {
-                    Some(r) => self.eval(callee, &mut ctx, &r),
+                    Some(r) => {
+                        if std::env::var_os("TRS_TRACE").is_some() {
+                            eprintln!("    av-result expr: {r:?}");
+                        }
+                        self.eval(callee, &mut ctx, &r)
+                    }
                     None => panic!("actionvalue method without result"),
                 }
             }
@@ -577,13 +594,16 @@ impl Interp {
         match st {
             Stmt::Def(name) => {
                 let v = self.eval(inst, ctx, &Expr::Def(*name));
+                if std::env::var_os("TRS_TRACE").is_some() {
+                    eprintln!("    def {} := {}", self.s(*name), v.to_hex_string());
+                }
                 ctx.locals.insert(*name, v);
             }
             Stmt::Action(a) => self.exec_action(inst, ctx, a),
             Stmt::AvAction { def, action } => match action {
                 Action::MethCall { instance, method, cond, args, .. } => {
-                    let dw = self.def_width(inst, *def);
                     if !self.eval(inst, ctx, cond).as_bool() {
+                        let dw = self.def_width(inst, *def).unwrap_or(1);
                         ctx.locals.insert(*def, Value::undet(dw));
                         return;
                     }
@@ -591,7 +611,13 @@ impl Interp {
                         args.iter().map(|x| self.eval(inst, ctx, x)).collect();
                     let child = self.child_of(inst, *instance);
                     let v = self.call_actionvalue(child, *method, &argv);
-                    ctx.locals.insert(*def, v.zext(dw));
+                    // synthetic AV temps are not in the def table; the
+                    // callee's result already has the declared width
+                    let v = match self.def_width(inst, *def) {
+                        Some(dw) => v.zext(dw),
+                        None => v,
+                    };
+                    ctx.locals.insert(*def, v);
                 }
                 a @ Action::Task { temp, width, .. } => {
                     self.exec_action(inst, ctx, a);
@@ -615,13 +641,13 @@ impl Interp {
         }
     }
 
-    fn def_width(&self, inst: usize, name: StrId) -> u32 {
+    fn def_width(&self, inst: usize, name: StrId) -> Option<u32> {
         let module = self.module_of(inst);
         let mir = self.mods[module].ir;
-        match self.mods[module].defs.get(&name) {
-            Some(di) => self.d.modules[mir].defs[*di].width,
-            None => 64,
-        }
+        self.mods[module]
+            .defs
+            .get(&name)
+            .map(|di| self.d.modules[mir].defs[*di].width)
     }
 
     fn exec_action(&mut self, inst: usize, ctx: &mut Ctx, a: &Action) {
