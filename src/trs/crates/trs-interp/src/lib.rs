@@ -975,7 +975,7 @@ impl Interp {
                 self.finished = Some(code);
             }
             "$stop" => self.finished = Some(0),
-            "$dumpvars" | "$dumpon" | "$dumpoff" => {} // waves: P2
+            "$dumpvars" | "$dumpon" | "$dumpoff" | "$dumpfile" => {} // waves: P2
             other => panic!("trs-interp: unimplemented system task {other:?}"),
         }
     }

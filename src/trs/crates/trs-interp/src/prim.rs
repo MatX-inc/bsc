@@ -61,6 +61,8 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         // registers: args (after clock/reset) are [width, init] or [width]
         "RegN" | "RegA" => Box::new(Reg::new(consts, true, name == "RegA")),
         "RegUN" => Box::new(Reg::new(consts, false, false)),
+        "CrossingRegN" | "CrossingRegA" => Box::new(Reg::new(consts, true, name == "CrossingRegA")),
+        "CrossingRegUN" => Box::new(Reg::new(consts, false, false)),
         // a reverting virtual reg exists for scheduling; Bluesim uses the
         // no-reset MOD_Reg ctor, which loads the init value directly at
         // construction (regType NRst — no reset line, no ticks)
@@ -776,6 +778,9 @@ struct Reg {
     in_reset: bool,
     async_rst: bool,
     suppress: bool,
+    // clock-crossing registers (CrossingReg*): NBA-visible previous value
+    prev: Value,
+    written_at: u64,
 }
 
 impl Reg {
@@ -793,10 +798,12 @@ impl Reg {
         };
         Reg {
             reset_value,
+            prev: Value::undet(width),
             value: Value::undet(width),
             in_reset: false,
             async_rst,
             suppress: false,
+            written_at: u64::MAX,
         }
     }
 
@@ -810,30 +817,41 @@ impl Reg {
             .zext(width);
         Reg {
             reset_value: v.clone(),
+            prev: v.clone(),
             value: v,
             in_reset: false,
             async_rst: false,
             suppress: false,
+            written_at: u64::MAX,
         }
     }
 }
 
 impl Prim for Reg {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
-            "read" | "get" => self.value.clone(),
+            "read" | "get" | "_read" => self.value.clone(),
+            // crossing read: a same-instant write is not yet visible
+            "crossed" => {
+                if self.written_at == now {
+                    self.prev.clone()
+                } else {
+                    self.value.clone()
+                }
+            }
             m => panic!("Reg: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
         match method {
-            "write" | "set" | "put" => {
+            "write" | "set" | "put" | "_write" => {
                 // sync-reset registers never suppress writes — the reset
                 // tick re-forces the reset value at the end of each
                 // in-reset edge; only async regs block once suppressed
                 // (METH_write, bs_prim_mod_reg.h:100)
                 if !(self.async_rst && self.suppress) {
-                    self.value = args[0].clone();
+                    self.prev = std::mem::replace(&mut self.value, args[0].clone());
+                    self.written_at = now;
                 }
             }
             m => panic!("Reg: unknown action method {m:?}"),
