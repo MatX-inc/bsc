@@ -1,4 +1,4 @@
-module SimMakeCBlocks ( simMakeCBlocks ) where
+module SimMakeCBlocks ( simMakeCBlocks, cvtActions ) where
 
 import Flags
 import PPrint

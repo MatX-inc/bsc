@@ -14,7 +14,7 @@ pub mod value;
 use std::collections::HashMap;
 
 use trs_ir as ir;
-use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, StrId};
+use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 use format::Arg;
 use prim::Prim;
@@ -58,6 +58,18 @@ enum InstKind {
         children: HashMap<StrId, usize>,
     },
     Prim(Box<dyn Prim>),
+}
+
+/// Evaluation context: method-argument frame plus body-local defs.
+/// `memo` caches every def computed on demand (used while latching fire
+/// conditions, where no actions can intervene); body execution instead
+/// computes defs at their statement positions, which is what preserves
+/// read-before-mutate semantics.
+#[derive(Default)]
+struct Ctx {
+    frame: HashMap<StrId, Value>,
+    locals: HashMap<StrId, Value>,
+    memo: bool,
 }
 
 impl Interp {
@@ -191,13 +203,17 @@ impl Interp {
         }
     }
 
-    /// Evaluate an expression in an instance context with a method-arg
-    /// frame.  Reads current state; latched defs win over recomputation.
-    fn eval(&mut self, inst: usize, frame: &HashMap<StrId, Value>, e: &Expr) -> Value {
+    /// Evaluate an expression in an instance context.  Body-local defs and
+    /// per-cycle latched defs win over recomputation; in memo contexts,
+    /// on-demand def values are cached.
+    fn eval(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr) -> Value {
         match e {
             Expr::Const { width, limbs } => Value::from_limbs32(*width, limbs),
             Expr::Str(_) => panic!("string used as value (only valid as task arg)"),
             Expr::Def(name) => {
+                if let Some(v) = ctx.locals.get(name) {
+                    return v.clone();
+                }
                 if let Some(v) = self.latched(inst, *name) {
                     return v;
                 }
@@ -208,10 +224,14 @@ impl Interp {
                     .get(name)
                     .unwrap_or_else(|| panic!("unknown def {:?}", self.s(*name)));
                 let d = self.d.modules[mir].defs[di].clone();
-                self.eval(inst, frame, &d.expr)
+                let v = self.eval(inst, ctx, &d.expr);
+                if ctx.memo {
+                    ctx.locals.insert(*name, v.clone());
+                }
+                v
             }
             Expr::Port(name) | Expr::Param(name) => {
-                if let Some(v) = frame.get(name) {
+                if let Some(v) = ctx.frame.get(name) {
                     return v.clone();
                 }
                 // module input ports outside a method frame: clock gates
@@ -220,7 +240,7 @@ impl Interp {
             }
             Expr::MethCall { width, instance, method, args, .. } => {
                 let argv: Vec<Value> =
-                    args.iter().map(|a| self.eval(inst, frame, a)).collect();
+                    args.iter().map(|a| self.eval(inst, ctx, a)).collect();
                 let child = self.child_of(inst, *instance);
                 self.call_value(child, *method, &argv, *width)
             }
@@ -229,37 +249,40 @@ impl Interp {
                 self.call_value(child, *method, &[], *width)
             }
             Expr::TaskValue { width, cookie } => {
-                // value produced by the paired Task action, stored under a
-                // synthetic latched key (cookie space is per design)
-                self.latched(inst, cookie_key(*cookie))
+                // value produced by the paired Task action earlier in this
+                // body, stored under a synthetic key
+                ctx.locals
+                    .get(&cookie_key(*cookie))
+                    .cloned()
+                    .or_else(|| self.latched(inst, cookie_key(*cookie)))
                     .unwrap_or_else(|| Value::undet(*width))
             }
             Expr::ForeignCall { width, func, args } => {
                 let fname = self.s(*func).to_string();
                 let argv: Vec<Arg> = args
                     .iter()
-                    .map(|a| self.eval_arg(inst, frame, a, false))
+                    .map(|a| self.eval_arg(inst, ctx, a, false))
                     .collect();
                 self.foreign_value(&fname, &argv, *width)
             }
             Expr::Gate { .. } => Value::from_u64(1, 1),
             Expr::Clock { .. } | Expr::Reset { .. } => Value::from_u64(1, 1),
-            Expr::Prim { op, width, args } => self.eval_prim(inst, frame, *op, *width, args),
+            Expr::Prim { op, width, args } => self.eval_prim(inst, ctx, *op, *width, args),
             Expr::If { width, cond, then_, else_ } => {
-                if self.eval(inst, frame, cond).as_bool() {
-                    self.eval(inst, frame, then_).zext(*width)
+                if self.eval(inst, ctx, cond).as_bool() {
+                    self.eval(inst, ctx, then_).zext(*width)
                 } else {
-                    self.eval(inst, frame, else_).zext(*width)
+                    self.eval(inst, ctx, else_).zext(*width)
                 }
             }
             Expr::Case { width, scrutinee, arms, default } => {
-                let s = self.eval(inst, frame, scrutinee);
+                let s = self.eval(inst, ctx, scrutinee);
                 for (k, v) in arms {
                     if s.as_u64() == *k && s.width <= 64 {
-                        return self.eval(inst, frame, v).zext(*width);
+                        return self.eval(inst, ctx, v).zext(*width);
                     }
                 }
-                self.eval(inst, frame, default).zext(*width)
+                self.eval(inst, ctx, default).zext(*width)
             }
         }
     }
@@ -267,150 +290,138 @@ impl Interp {
     fn eval_prim(
         &mut self,
         inst: usize,
-        frame: &HashMap<StrId, Value>,
+        ctx: &mut Ctx,
         op: PrimOp,
         w: u32,
         args: &[Expr],
     ) -> Value {
-        let ev = |it: &mut Interp, k: usize| it.eval(inst, frame, &args[k]);
         match op {
             PrimOp::And => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.and(&b, w)
             }
             PrimOp::Or => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.or(&b, w)
             }
             PrimOp::Xor => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.xor(&b, w)
             }
-            PrimOp::Not => ev(self, 0).not(w),
+            PrimOp::Not => self.eval(inst, ctx, &args[0]).not(w),
             PrimOp::Add => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.add(&b, w)
             }
             PrimOp::Sub => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.sub(&b, w)
             }
-            PrimOp::Neg => ev(self, 0).neg(w),
+            PrimOp::Neg => self.eval(inst, ctx, &args[0]).neg(w),
             PrimOp::Mul => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.mul(&b, w)
             }
             PrimOp::Quot => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.quot(&b, w)
             }
             PrimOp::Rem => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 a.rem(&b, w)
             }
             PrimOp::Eq => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 Value::from_u64(1, a.eq(&b) as u64)
             }
             PrimOp::Ult => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 Value::from_u64(1, a.ult(&b) as u64)
             }
             PrimOp::Ule => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 Value::from_u64(1, a.ule(&b) as u64)
             }
             PrimOp::Slt => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 Value::from_u64(1, a.slt(&b) as u64)
             }
             PrimOp::Sle => {
-                let a = ev(self, 0);
-                let b = ev(self, 1);
+                let a = self.eval(inst, ctx, &args[0]);
+                let b = self.eval(inst, ctx, &args[1]);
                 Value::from_u64(1, a.sle(&b) as u64)
             }
             PrimOp::Shl => {
-                let a = ev(self, 0);
-                let sh = ev(self, 1).as_u64();
+                let a = self.eval(inst, ctx, &args[0]);
+                let sh = self.eval(inst, ctx, &args[1]).as_u64();
                 a.shl(sh, w)
             }
             PrimOp::Lshr => {
-                let a = ev(self, 0);
-                let sh = ev(self, 1).as_u64();
+                let a = self.eval(inst, ctx, &args[0]);
+                let sh = self.eval(inst, ctx, &args[1]).as_u64();
                 a.lshr(sh, w)
             }
             PrimOp::Ashr => {
-                let a = ev(self, 0);
-                let sh = ev(self, 1).as_u64();
+                let a = self.eval(inst, ctx, &args[0]);
+                let sh = self.eval(inst, ctx, &args[1]).as_u64();
                 a.ashr(sh, w)
             }
             PrimOp::Extract => {
                 // PrimExtract e hi lo
-                let a = ev(self, 0);
-                let hi = ev(self, 1).as_u64();
-                let lo = ev(self, 2).as_u64();
+                let a = self.eval(inst, ctx, &args[0]);
+                let hi = self.eval(inst, ctx, &args[1]).as_u64();
+                let lo = self.eval(inst, ctx, &args[2]).as_u64();
                 a.extract(hi, lo, w)
             }
             PrimOp::Concat => {
                 // left-to-right, first is most significant
-                let mut acc = ev(self, 0);
+                let mut acc = self.eval(inst, ctx, &args[0]);
                 let mut accw = acc.width;
                 for k in 1..args.len() {
-                    let nxt = self.eval(inst, frame, &args[k]);
+                    let nxt = self.eval(inst, ctx, &args[k]);
                     accw += nxt.width;
                     acc = acc.concat(&nxt, accw);
                 }
                 acc.zext(w)
             }
-            PrimOp::ZeroExt => ev(self, 0).zext(w),
-            PrimOp::SignExt => ev(self, 0).sext(w),
+            PrimOp::ZeroExt => self.eval(inst, ctx, &args[0]).zext(w),
+            PrimOp::SignExt => self.eval(inst, ctx, &args[0]).sext(w),
             PrimOp::Select => {
                 panic!("PrimArrayDynSelect should be expanded by simPackageOpt")
             }
         }
     }
 
-    fn eval_arg(
-        &mut self,
-        inst: usize,
-        frame: &HashMap<StrId, Value>,
-        e: &Expr,
-        signed: bool,
-    ) -> Arg {
+    fn eval_arg(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr, signed: bool) -> Arg {
         match e {
             Expr::Str(s) => Arg::Str(self.s(*s).to_string()),
-            _ => Arg::Val(self.eval(inst, frame, e), signed),
+            _ => Arg::Val(self.eval(inst, ctx, e), signed),
         }
     }
 
     // ===============
     // Method calls
 
-    fn method_frame(
-        &mut self,
-        callee_mod: usize,
-        mi: usize,
-        argv: &[Value],
-    ) -> HashMap<StrId, Value> {
+    fn method_ctx(&mut self, callee_mod: usize, mi: usize, argv: &[Value], memo: bool) -> Ctx {
         let mir = self.mods[callee_mod].ir;
         let m = &self.d.modules[mir].methods[mi];
-        m.args
-            .iter()
-            .zip(argv.iter())
-            .map(|(p, v)| (p.name, v.clone()))
-            .collect()
+        Ctx {
+            frame: m.args.iter().zip(argv.iter()).map(|(p, v)| (p.name, v.clone())).collect(),
+            locals: HashMap::new(),
+            memo,
+        }
     }
 
     fn call_value(&mut self, callee: usize, method: StrId, argv: &[Value], w: u32) -> Value {
@@ -427,9 +438,9 @@ impl Interp {
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
                 let mir = self.mods[module].ir;
                 let result = self.d.modules[mir].methods[mi].result.clone();
-                let frame = self.method_frame(module, mi, argv);
+                let mut ctx = self.method_ctx(module, mi, argv, true);
                 match result {
-                    Some(r) => self.eval(callee, &frame, &r).zext(w),
+                    Some(r) => self.eval(callee, &mut ctx, &r).zext(w),
                     None => panic!("value call to method without result"),
                 }
             }
@@ -449,58 +460,124 @@ impl Interp {
                     .get(&method)
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
                 let mir = self.mods[module].ir;
-                let body: Vec<Action> = self.d.modules[mir].methods[mi].body.clone();
-                let frame = self.method_frame(module, mi, argv);
-                for a in &body {
-                    self.exec_action(callee, &frame, a);
+                let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
+                let mut ctx = self.method_ctx(module, mi, argv, false);
+                for st in &body {
+                    self.exec_stmt(callee, &mut ctx, st);
+                }
+            }
+        }
+    }
+
+    fn call_actionvalue(&mut self, callee: usize, method: StrId, argv: &[Value]) -> Value {
+        match &mut self.insts[callee].kind {
+            InstKind::Prim(p) => {
+                let mname = self.d.strings[method as usize].clone();
+                p.actionvalue_method(&mname, argv, self.cycle)
+            }
+            InstKind::User { module, .. } => {
+                let module = *module;
+                let mi = *self.mods[module]
+                    .methods
+                    .get(&method)
+                    .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
+                let mir = self.mods[module].ir;
+                let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
+                let result = self.d.modules[mir].methods[mi].result.clone();
+                let mut ctx = self.method_ctx(module, mi, argv, false);
+                for st in &body {
+                    self.exec_stmt(callee, &mut ctx, st);
+                }
+                match result {
+                    Some(r) => self.eval(callee, &mut ctx, &r),
+                    None => panic!("actionvalue method without result"),
                 }
             }
         }
     }
 
     // ===============
-    // Actions
+    // Statements and actions
 
-    fn exec_action(&mut self, inst: usize, frame: &HashMap<StrId, Value>, a: &Action) {
+    /// Execute one body statement: defs are computed at their exact
+    /// position (a later action must not affect them).
+    fn exec_stmt(&mut self, inst: usize, ctx: &mut Ctx, st: &Stmt) {
+        if self.finished.is_some() {
+            return;
+        }
+        match st {
+            Stmt::Def(name) => {
+                let v = self.eval(inst, ctx, &Expr::Def(*name));
+                ctx.locals.insert(*name, v);
+            }
+            Stmt::Action(a) => self.exec_action(inst, ctx, a),
+            Stmt::AvAction { def, action } => match action {
+                Action::MethCall { instance, method, cond, args, .. } => {
+                    let dw = self.def_width(inst, *def);
+                    if !self.eval(inst, ctx, cond).as_bool() {
+                        ctx.locals.insert(*def, Value::undet(dw));
+                        return;
+                    }
+                    let argv: Vec<Value> =
+                        args.iter().map(|x| self.eval(inst, ctx, x)).collect();
+                    let child = self.child_of(inst, *instance);
+                    let v = self.call_actionvalue(child, *method, &argv);
+                    ctx.locals.insert(*def, v.zext(dw));
+                }
+                other => panic!("AvAction with non-method action: {other:?}"),
+            },
+        }
+    }
+
+    fn def_width(&self, inst: usize, name: StrId) -> u32 {
+        let module = self.module_of(inst);
+        let mir = self.mods[module].ir;
+        match self.mods[module].defs.get(&name) {
+            Some(di) => self.d.modules[mir].defs[*di].width,
+            None => 64,
+        }
+    }
+
+    fn exec_action(&mut self, inst: usize, ctx: &mut Ctx, a: &Action) {
         if self.finished.is_some() {
             return;
         }
         match a {
             Action::MethCall { instance, method, cond, args, .. } => {
-                if !self.eval(inst, frame, cond).as_bool() {
+                if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
                 let argv: Vec<Value> =
-                    args.iter().map(|x| self.eval(inst, frame, x)).collect();
+                    args.iter().map(|x| self.eval(inst, ctx, x)).collect();
                 let child = self.child_of(inst, *instance);
                 self.call_action(child, *method, &argv);
             }
             Action::Foreign { func, cond, args, signed } => {
-                if !self.eval(inst, frame, cond).as_bool() {
+                if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
                 let fname = self.s(*func).to_string();
                 let argv: Vec<Arg> = args
                     .iter()
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
-                    .map(|(x, sg)| self.eval_arg(inst, frame, x, *sg))
+                    .map(|(x, sg)| self.eval_arg(inst, ctx, x, *sg))
                     .collect();
                 self.foreign_action(&fname, &argv);
             }
             Action::Task { func, cookie, temp, width, cond, args, signed } => {
-                if !self.eval(inst, frame, cond).as_bool() {
+                if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
                 let fname = self.s(*func).to_string();
                 let argv: Vec<Arg> = args
                     .iter()
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
-                    .map(|(x, sg)| self.eval_arg(inst, frame, x, *sg))
+                    .map(|(x, sg)| self.eval_arg(inst, ctx, x, *sg))
                     .collect();
                 let v = self.foreign_value(&fname, &argv, *width);
-                self.set_latched(inst, cookie_key(*cookie), v.clone());
+                ctx.locals.insert(cookie_key(*cookie), v.clone());
                 if let Some(t) = temp {
-                    self.set_latched(inst, *t, v);
+                    ctx.locals.insert(*t, v);
                 }
             }
         }
@@ -551,9 +628,9 @@ impl Interp {
             None => return, // method node in a segment: nothing to latch
         };
         let r = self.d.modules[mir].rules[ri].clone();
-        let empty = HashMap::new();
+        let mut ctx = Ctx { memo: true, ..Default::default() };
 
-        let mut cf = self.eval(inst, &empty, &Expr::Def(r.can_fire));
+        let mut cf = self.eval(inst, &mut ctx, &Expr::Def(r.can_fire));
         // intra-module ME inhibitors (earlier disjoint rules' CFs)
         for other in &r.me_inhibits {
             let other_ri = self.mods[module].rules[other];
@@ -573,7 +650,10 @@ impl Interp {
             }
         }
         self.set_latched(inst, r.can_fire, cf);
-        let wf = self.eval(inst, &empty, &Expr::Def(r.will_fire));
+        // recompute the WILL_FIRE cone against the (possibly inhibited)
+        // latched CAN_FIRE, not the memoized pre-inhibitor values
+        let mut wf_ctx = Ctx { memo: true, ..Default::default() };
+        let wf = self.eval(inst, &mut wf_ctx, &Expr::Def(r.will_fire));
         self.set_latched(inst, r.will_fire, wf);
     }
 
@@ -592,9 +672,9 @@ impl Interp {
         if !fire {
             return;
         }
-        let empty = HashMap::new();
-        for a in &r.body {
-            self.exec_action(inst, &empty, a);
+        let mut ctx = Ctx::default();
+        for st in &r.body {
+            self.exec_stmt(inst, &mut ctx, st);
         }
     }
 

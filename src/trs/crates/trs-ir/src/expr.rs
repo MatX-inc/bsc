@@ -106,11 +106,23 @@ pub enum PrimOp {
     Select,
 }
 
+/// One statement of a rule or method body: bodies are the exact
+/// interleaving of def computations and actions that
+/// `tsortActionsAndDefs` produces — a def's position matters, because a
+/// later action may mutate state the def reads (the def must see the
+/// pre-action value), and computing each def once at its position is
+/// what makes shared expression DAGs linear work.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Stmt {
+    /// Compute the named local def now and latch it for this body.
+    Def(StrId),
+    Action(Action),
+    /// ActionValue call whose result is latched into `def`
+    /// (`SFSAssignAction`).
+    AvAction { def: StrId, action: Action },
+}
+
 /// An action within a rule or method body (the `AAction` analogue).
-///
-/// Order within the body is significant: bodies arrive already
-/// topologically sorted per the method-order (`sSB`) constraints
-/// (`tsortActionsAndDefs` semantics).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Action {
     /// Conditional action-method call: `if (cond) instance.method(args)`.

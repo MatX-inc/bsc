@@ -17,7 +17,7 @@ pub mod verify;
 
 use serde::{Deserialize, Serialize};
 
-pub use expr::{Action, Expr, PrimOp};
+pub use expr::{Action, Expr, PrimOp, Stmt};
 pub use schedule::{Composition, ModuleSchedule, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
@@ -175,7 +175,7 @@ pub struct Rule {
     pub can_fire: StrId,
     /// Reference to the WILL_FIRE def for this rule.
     pub will_fire: StrId,
-    pub body: Vec<Action>,
+    pub body: Vec<Stmt>,
     pub clock_domain: u32,
     /// `clock_crossing_rule` — executed in the after-edge function.
     pub crossing: bool,
@@ -194,7 +194,7 @@ pub struct Method {
     pub kind: MethodKind,
     pub args: Vec<Port>,
     pub ready: Option<Expr>,
-    pub body: Vec<Action>,
+    pub body: Vec<Stmt>,
     pub result: Option<Expr>,
     pub clock_domain: u32,
 }

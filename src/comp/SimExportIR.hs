@@ -48,9 +48,12 @@ import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
 import Pragma (RulePragma(..))
-import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..))
+import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
 import VModInfo (vName, getVNameString)
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
+import ASyntaxUtil (aVars)
+import SimCCBlock (SimCCFnStmt(..))
+import SimMakeCBlocks (cvtActions)
 import SimDomainInfo (DomainInfo(..))
 import ASyntax
 import SimPackage
@@ -411,8 +414,8 @@ encModule pkgNames msi pkg = do
     instsEnc <- mapM (encInstance pkgNames (sp_method_order_map pkg))
                      (M.elems (sp_state_instances pkg))
     defsEnc <- mapM encDef (M.elems (sp_local_defs pkg))
-    rulesEnc <- mapM (encRule msi) (sp_rules pkg)
-    methodsEnc <- concat <$> mapM encMethod (sp_interface pkg)
+    rulesEnc <- mapM (encRule msi pkg) (sp_rules pkg)
+    methodsEnc <- concat <$> mapM (encMethod pkg) (sp_interface pkg)
     schedEnc <- encSchedule msi pkg
     return $ encStruct
       [ ("name", nameId)
@@ -559,8 +562,40 @@ encDef (ADef i t e _props) = do
           ])
       ]
 
-encRule :: ModSchedInfo -> ARule -> EncM C.Encoding
-encRule msi r = do
+-- The exact def/action interleaving that Bluesim executes: reuse the
+-- backend's own linearization (tsortActionsAndDefs via cvtActions) and
+-- encode its statement list.
+bodyStmts :: SimPackage -> Id -> WireProps -> S.Set AId -> [AAction]
+          -> [SimCCFnStmt]
+bodyStmts pkg rid wprops other_defs acts =
+    let reset_ids = [ ae_objid (areset_wire rst)
+                    | n <- wpResets wprops
+                    , Just rst <- [lookup n (sp_reset_list pkg)] ]
+    in  cvtActions (sp_name pkg) rid (sp_local_defs pkg)
+                   (sp_method_order_map pkg) other_defs acts reset_ids
+
+encStmt :: SimCCFnStmt -> EncM C.Encoding
+encStmt (SFSDef _ (_, i) (Just _)) = encVariant "Def" <$> idE i
+encStmt (SFSDef _ _ Nothing) =
+    -- declaration only (e.g. a task temp); the Task action fills it
+    return mempty
+encStmt (SFSAssign _ i _) = encVariant "Def" <$> idE i
+encStmt (SFSAction act) = encVariant "Action" <$> encAction act
+encStmt (SFSAssignAction _ i act _) = do
+    dE <- idE i
+    aE <- encAction act
+    return $ encVariant "AvAction" (encStruct [("def", dE), ("action", aE)])
+encStmt s = internalError ("SimExportIR.encStmt: " ++ ppReadable s)
+
+-- mempty markers from declaration-only stmts must not appear in the list
+encStmts :: [SimCCFnStmt] -> EncM C.Encoding
+encStmts stmts = do
+    let keep (SFSDef _ _ Nothing) = False
+        keep _ = True
+    encList <$> mapM encStmt (filter keep stmts)
+
+encRule :: ModSchedInfo -> SimPackage -> ARule -> EncM C.Encoding
+encRule msi pkg r = do
     nameId <- idE (arule_id r)
     -- The predicate is a reference to the CAN_FIRE def after
     -- aAddScheduleDefs; recover the def names.
@@ -569,7 +604,8 @@ encRule msi r = do
                  _         -> mkIdCanFire (arule_id r)
     cf <- idE cfId
     wf <- idE (mkIdWillFire (arule_id r))
-    bodyEnc <- mapM encAction (arule_actions r)
+    bodyEnc <- encStmts (bodyStmts pkg (arule_id r) (arule_wprops r)
+                                   S.empty (arule_actions r))
     let dom = case wpClockDomain (arule_wprops r) of
                 Just (ClockDomain n) -> fromIntegral n
                 Nothing -> 0
@@ -587,7 +623,7 @@ encRule msi r = do
       [ ("name", nameId)
       , ("can_fire", cf)
       , ("will_fire", wf)
-      , ("body", encList bodyEnc)
+      , ("body", bodyEnc)
       , ("clock_domain", encW32 dom)
       , ("crossing", encBool crossing)
       , ("me_inhibits", encList inhibitsEnc)
@@ -595,29 +631,37 @@ encRule msi r = do
 
 -- Interface methods.  Clock/reset/inout interface entries carry no
 -- executable content (they are in the clock/reset lists); skip them.
-encMethod :: AIFace -> EncM [C.Encoding]
-encMethod (AIDef name inputs props pred_ (ADef _ t e _) _ _) = do
-    m <- encMethodStruct name "Value" (concat inputs) (Just pred_) [] (Just (t, e)) props
+encMethod :: SimPackage -> AIFace -> EncM [C.Encoding]
+encMethod pkg (AIDef name inputs props pred_ (ADef _ t e _) _ _) = do
+    m <- encMethodStruct pkg name "Value" (concat inputs) (Just pred_) [] (Just (t, e))
+                         props
     return [m]
-encMethod (AIAction inputs props pred_ name body _) = do
-    m <- encMethodStruct name "Action" (concat inputs) (Just pred_)
+encMethod pkg (AIAction inputs props pred_ name body _) = do
+    m <- encMethodStruct pkg name "Action" (concat inputs) (Just pred_)
                          (concatMap arule_actions body) Nothing props
     return [m]
-encMethod (AIActionValue inputs props pred_ name body (ADef _ t e _) _) = do
-    m <- encMethodStruct name "ActionValue" (concat inputs) (Just pred_)
+encMethod pkg (AIActionValue inputs props pred_ name body (ADef _ t e _) _) = do
+    m <- encMethodStruct pkg name "ActionValue" (concat inputs) (Just pred_)
                          (concatMap arule_actions body) (Just (t, e)) props
     return [m]
-encMethod (AIClock {}) = return []
-encMethod (AIReset {}) = return []
-encMethod (AIInout {}) = return []
+encMethod _ (AIClock {}) = return []
+encMethod _ (AIReset {}) = return []
+encMethod _ (AIInout {}) = return []
 
-encMethodStruct :: Id -> String -> [AInput] -> Maybe APred -> [AAction]
-                -> Maybe (AType, AExpr) -> WireProps -> EncM C.Encoding
-encMethodStruct name kind inputs mpred body mresult props = do
+encMethodStruct :: SimPackage -> Id -> String -> [AInput] -> Maybe APred
+                -> [AAction] -> Maybe (AType, AExpr) -> WireProps
+                -> EncM C.Encoding
+encMethodStruct pkg name kind inputs mpred body mresult props = do
     nameId <- idE name
     argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
     readyEnc <- traverse encExpr mpred
-    bodyEnc <- mapM encAction body
+    -- defs the result expression needs must be computed with the body
+    -- (an ActionValue's return can depend on the body's effects order)
+    let result_defs = case mresult of
+          Just (_, e) -> S.fromList
+              [ i | i <- aVars e, i `M.member` sp_local_defs pkg ]
+          Nothing -> S.empty
+    bodyEnc <- encStmts (bodyStmts pkg name props result_defs body)
     resultEnc <- traverse (encExpr . snd) mresult
     let dom = case wpClockDomain props of
                 Just (ClockDomain n) -> fromIntegral n
@@ -627,7 +671,7 @@ encMethodStruct name kind inputs mpred body mresult props = do
       , ("kind", encUnitVariant kind)
       , ("args", encList argsEnc)
       , ("ready", encMaybe id readyEnc)
-      , ("body", encList bodyEnc)
+      , ("body", bodyEnc)
       , ("result", encMaybe id resultEnc)
       , ("clock_domain", encW32 dom)
       ]
