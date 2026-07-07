@@ -114,8 +114,12 @@ pub enum PrimOp {
 /// what makes shared expression DAGs linear work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Stmt {
-    /// Compute the named local def now and latch it for this body.
-    Def(StrId),
+    /// Compute `expr` now and latch it under `name` for this body.  The
+    /// expression is the statement's own (post-substitution) form from
+    /// tsortActionsAndDefs -- it may differ from the def table's entry
+    /// (ActionValue references are substituted with their latched temps,
+    /// and inlining can re-embed calls the table still shows).
+    Def { name: StrId, expr: Expr },
     Action(Action),
     /// ActionValue call whose result is latched into `def`
     /// (`SFSAssignAction`).

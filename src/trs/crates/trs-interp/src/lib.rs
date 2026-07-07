@@ -25,6 +25,7 @@ use value::Value;
 
 struct ModIx {
     ir: usize, // index into design.modules
+    ports: HashMap<StrId, (u32, ir::PortKind)>,
     defs: HashMap<StrId, usize>,
     rules: HashMap<StrId, usize>,
     methods: HashMap<StrId, usize>,
@@ -85,12 +86,37 @@ struct Ctx {
 
 impl Interp {
     pub fn new(d: Design) -> Interp {
+        let str_ids: HashMap<&str, StrId> = d
+            .strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i as StrId))
+            .collect();
         let mods: Vec<ModIx> = d
             .modules
             .iter()
             .enumerate()
             .map(|(i, m)| ModIx {
                 ir: i,
+                // module inputs, plus method argument ports and the EN_<meth>
+                // enable ports their WILL_FIRE defs read — an uncalled
+                // method's EN reads as 0 (see Expr::Port in eval)
+                ports: m
+                    .inputs
+                    .iter()
+                    .map(|p| (p.name, (p.width, p.kind)))
+                    .chain(m.methods.iter().flat_map(|me| {
+                        me.args
+                            .iter()
+                            .map(|a| (a.name, (a.width, a.kind)))
+                            .chain(
+                                str_ids
+                                    .get(format!("EN_{}", d.strings[me.name as usize]).as_str())
+                                    .map(|&en| (en, (1, ir::PortKind::MethodEnable))),
+                            )
+                            .collect::<Vec<_>>()
+                    }))
+                    .collect(),
                 defs: m.defs.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
                 rules: m.rules.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
                 methods: m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
@@ -295,9 +321,19 @@ impl Interp {
                         return v.clone();
                     }
                 }
-                // module input ports outside a method frame: clock gates
-                // and reset lines read as asserted-off (1)
-                Value::from_u64(1, 1)
+                // module input ports outside a method frame: clock gates and
+                // reset lines read as asserted-off (1); method enables and
+                // args read as not-driven (0) — an uncalled method's EN must
+                // be 0 or WILL_FIRE inhibitors derived from it (rule vs.
+                // conflicting method, e.g. sysSchedFixTb's rm vs. step) would
+                // suppress the rule every cycle
+                let module = self.module_of(inst);
+                match self.mods[module].ports.get(name) {
+                    Some(&(w, ir::PortKind::MethodArg))
+                    | Some(&(w, ir::PortKind::MethodEnable)) => Value::from_u64(w, 0),
+                    Some(&(w, _)) => Value::from_u64(w, 1),
+                    None => Value::from_u64(1, 1),
+                }
             }
             Expr::MethCall { width, instance, method, args, .. } => {
                 let argv: Vec<Value> =
@@ -592,8 +628,8 @@ impl Interp {
             return;
         }
         match st {
-            Stmt::Def(name) => {
-                let v = self.eval(inst, ctx, &Expr::Def(*name));
+            Stmt::Def { name, expr } => {
+                let v = self.eval(inst, ctx, expr);
                 if std::env::var_os("TRS_TRACE").is_some() {
                     eprintln!("    def {} := {}", self.s(*name), v.to_hex_string());
                 }

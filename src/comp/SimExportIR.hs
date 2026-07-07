@@ -670,11 +670,11 @@ bodyStmts pkg rid wprops mretdef acts =
 type SignedOracle = AId -> Bool
 
 encStmt :: SignedOracle -> SimCCFnStmt -> EncM C.Encoding
-encStmt _ (SFSDef _ (_, i) (Just _)) = encVariant "Def" <$> idE i
+encStmt _ (SFSDef _ (_, i) (Just e)) = encDefStmt i e
 encStmt _ (SFSDef _ _ Nothing) =
     -- declaration only (e.g. a task temp); the Task action fills it
     return mempty
-encStmt _ (SFSAssign _ i _) = encVariant "Def" <$> idE i
+encStmt _ (SFSAssign _ i e) = encDefStmt i e
 encStmt sgn (SFSAction act) = encVariant "Action" <$> encAction sgn act
 encStmt sgn (SFSAssignAction _ i act _) = do
     dE <- idE i
@@ -687,6 +687,17 @@ encStmt sgn (SFSCond c ts es) = do
     return $ encVariant "Cond"
                (encStruct [("cond", cE), ("then_", tE), ("else_", eE)])
 encStmt _ s = internalError ("SimExportIR.encStmt: " ++ ppReadable s)
+
+-- The statement's own expression is authoritative (it carries the
+-- tsort's ActionValue substitutions, which the def table may not after
+-- inlining re-embedded calls); substAV catches AMethValue forms the
+-- tsort leaves for the reader.
+encDefStmt :: AId -> AExpr -> EncM C.Encoding
+encDefStmt i e = do
+    nameE <- idE i
+    exprE <- encExpr (substAV e)
+    return $ encVariant "Def"
+               (encStruct [("name", nameE), ("expr", exprE)])
 
 -- mempty markers from declaration-only stmts must not appear in the list
 encStmts :: SignedOracle -> [SimCCFnStmt] -> EncM C.Encoding
