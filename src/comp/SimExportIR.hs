@@ -54,6 +54,7 @@ import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
 import ASyntaxUtil (aVars)
 import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
+import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg)
 import SimDomainInfo (DomainInfo(..))
 import ASyntax
 import SimPackage
@@ -165,8 +166,8 @@ encDesign ssys =
                                    (msis M.! getIdBaseString (sp_name p)) p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
-          compsEnc <- mapM (encComposition instToMod segmaps)
-                           (ssys_schedules ssys)
+          compsEnc <- concat <$> mapM (encComposition instToMod segmaps)
+                                       (ssys_schedules ssys)
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
           return
@@ -345,7 +346,7 @@ qualPath i = case getIdQualString i of
                q   -> q ++ "." ++ getIdBaseString i
 
 encComposition :: M.Map String String -> M.Map String (M.Map String (Int, Int))
-               -> SimSchedule -> EncM C.Encoding
+               -> SimSchedule -> EncM [C.Encoding]
 encComposition instToMod segmaps ss = do
     let order = ss_sched_order ss
 
@@ -422,10 +423,37 @@ encComposition instToMod segmaps ss = do
             , let pd = M.lookup (qualPath d) execPos
             , maybe False id ((<) <$> pr <*> pd) ]
 
-        ticks = [ (getIdQualString prim, getIdBaseString prim,
-                   getIdBaseString port)
-                | di <- M.elems (ss_domain_info_map ss)
-                , (prim, (port, _)) <- di_prims di ]
+        -- direction-filter the primitive ticks against the primMap tick
+        -- specs (doTickCall): a posedge schedule also produces a
+        -- negedge tick function for Neg/Both ports (SyncBit05/15,
+        -- ClockInverter, GatedClock)
+        tickFor wantPos (prim, (port, _)) =
+            let pname = M.findWithDefault "" (getIdQualString prim
+                                              ++ (if null (getIdQualString prim)
+                                                  then "" else ".")
+                                              ++ getIdBaseString prim)
+                                             instToMod
+                tick_specs = case [ l | (n, _, _, l) <- primMap, n == pname ] of
+                               (l : _) -> l
+                               [] -> []
+                dir_ok = if wantPos then tickIsPos else tickIsNeg
+            in  if any (\td -> tickElem td == getIdBaseString port && dir_ok td)
+                       tick_specs
+                then Just (getIdQualString prim, getIdBaseString prim,
+                           getIdBaseString port)
+                else Nothing
+        all_prims = [ p | di <- M.elems (ss_domain_info_map ss)
+                        , p <- di_prims di ]
+        -- conditional reset ticks (mkResetTickStmt; posedge only), after
+        -- the regular ticks
+        rst_ticks = [ (getIdQualString prim, getIdBaseString prim,
+                       getIdBaseString clkarg)
+                    | di <- M.elems (ss_domain_info_map ss)
+                    , (prim, clkarg) <- di_prim_resets di ]
+        ticks = [ (i, p, o, False) | (i, p, o) <- mapMaybe (tickFor True) all_prims ]
+                ++ [ (i, p, o, True) | (i, p, o) <- rst_ticks ]
+        neg_ticks = [ (i, p, o, False)
+                    | (i, p, o) <- mapMaybe (tickFor False) all_prims ]
 
     if dups
       then internalError ("SimExportIR: non-contiguous segment interleaving; "
@@ -440,23 +468,38 @@ encComposition instToMod segmaps ss = do
                                 , ("segment", encW32 (fromIntegral seg))
                                 ])
                            entries
-        ticksEnc <- mapM (\(inst, prim, port) -> do
-                            iE <- strE inst
-                            pE <- strE prim
-                            oE <- strE port
-                            return $ encStruct
-                              [ ("instance", iE), ("prim", pE), ("port", oE) ])
-                         ticks
+        let encTick (inst, prim, port, rst) = do
+              iE <- strE inst
+              pE <- strE prim
+              oE <- strE port
+              return $ encStruct
+                [ ("instance", iE), ("prim", pE), ("port", oE)
+                , ("reset", encBool rst) ]
+        ticksEnc <- mapM encTick ticks
+        negTicksEnc <- mapM encTick neg_ticks
         earlyEnc <- mapM (strE . qualPath) (ss_early_rules ss)
         crossEnc <- mapM (\(a, b) -> encPair <$> strE a <*> strE b) crossPairs
-        return $ encStruct
-          [ ("clock", encW32 clkId)
-          , ("posedge", encBool (ss_posedge ss))
-          , ("entries", encList entriesEnc)
-          , ("ticks", encList ticksEnc)
-          , ("early", encList earlyEnc)
-          , ("cross_inhibits", encList crossEnc)
-          ]
+        let posComp = encStruct
+              [ ("clock", encW32 clkId)
+              , ("posedge", encBool (ss_posedge ss))
+              , ("entries", encList entriesEnc)
+              , ("ticks", encList ticksEnc)
+              , ("early", encList earlyEnc)
+              , ("cross_inhibits", encList crossEnc)
+              ]
+            -- a posedge schedule also owns the opposite edge's tick
+            -- function (SimMakeCBlocks builds pos and neg tick stmts
+            -- from the same schedule); export the Neg/Both ticks as a
+            -- rule-less negedge composition
+            negComp = encStruct
+              [ ("clock", encW32 clkId)
+              , ("posedge", encBool (not (ss_posedge ss)))
+              , ("entries", encList [])
+              , ("ticks", encList negTicksEnc)
+              , ("early", encList [])
+              , ("cross_inhibits", encList [])
+              ]
+        return $ if null neg_ticks then [posComp] else [posComp, negComp]
 
 oscName :: AClock -> String
 oscName clk = case aclock_osc clk of

@@ -29,6 +29,10 @@ pub trait Prim {
     /// are ignored and state is forced to the reset value.  Prims without
     /// a reset connection never see this.
     fn set_in_reset(&mut self, _asserted: bool) {}
+    /// Conditional reset tick (rst_tick_*): posedge of the prim's clock
+    /// while some reset is asserted; loads the reset state if this prim's
+    /// own reset line is asserted.
+    fn rst_tick(&mut self, _now: u64) {}
     /// For reset-generating prims: drain pending output-reset transitions
     /// as (asserted, immediate) pairs.  Immediate transitions cascade in
     /// place (async reset_fn calls); deferred ones apply at the end of the
@@ -244,7 +248,8 @@ impl Prim for Counter {
             m => panic!("Counter: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
+    fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
             self.val = self.init.clone();
             self.saved_at = u64::MAX;
@@ -767,7 +772,8 @@ impl Prim for Reg {
             m => panic!("Reg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
+    fn rst_tick(&mut self, _now: u64) {
         // rst_tick__clk__1
         if self.in_reset {
             self.value = self.reset_value.clone();
@@ -850,7 +856,8 @@ impl Prim for ConfigReg {
             m => panic!("ConfigReg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
+    fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
             self.value = self.reset_value.clone();
             self.old_value = self.reset_value.clone();
@@ -997,11 +1004,14 @@ impl Prim for CReg {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
+        self.value_reg = self.value.clone();
+    }
+    fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
             self.value = self.reset_value.clone();
+            self.value_reg = self.reset_value.clone();
             self.suppress = true;
         }
-        self.value_reg = self.value.clone();
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
@@ -1133,7 +1143,8 @@ impl Prim for Fifo {
             m => panic!("FIFO: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
+    fn rst_tick(&mut self, _now: u64) {
         if self.in_reset && !self.suppress {
             self.data.clear();
             self.stamp = u64::MAX;

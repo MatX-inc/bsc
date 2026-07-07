@@ -1235,7 +1235,8 @@ impl Interp {
             // (instance idx, module idx, domain, segment idx)
             entries: Vec<(usize, usize, u32, usize)>,
             cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
-            ticks: Vec<(usize, StrId)>,
+            // (prim instance, port, is_reset_tick)
+            ticks: Vec<(usize, StrId, bool)>,
         }
         let rcomps: Vec<RComp> = comps
             .iter()
@@ -1279,7 +1280,7 @@ impl Interp {
                             .inst_by_path
                             .get(&ppath)
                             .unwrap_or_else(|| panic!("unknown tick instance {ppath:?}"));
-                        (ii, tk.port)
+                        (ii, tk.port, tk.reset)
                     })
                     .collect();
 
@@ -1379,11 +1380,16 @@ impl Interp {
                     }
                 }
 
-                // end-of-edge ticks
-                for &(inst, port) in &rc.ticks {
+                // end-of-edge ticks (reset ticks are conditional: the
+                // prim itself checks its reset line)
+                for &(inst, port, is_rst) in &rc.ticks {
                     if let InstKind::Prim(p) = &mut self.insts[inst].kind {
-                        let pname = self.d.strings[port as usize].clone();
-                        p.tick(&pname, t, pos);
+                        if is_rst {
+                            p.rst_tick(t);
+                        } else {
+                            let pname = self.d.strings[port as usize].clone();
+                            p.tick(&pname, t, pos);
+                        }
                     }
                     if self.rstgen_out.contains_key(&inst) {
                         self.poll_rstgen(inst);
@@ -1415,12 +1421,10 @@ impl Interp {
             }
 
             // the cycle limit stops the simulation at the Nth default
-            // posedge — events from other clocks later in the same window
-            // do not run (kernel posedge_limit yields at the edge)
-            if pos
-                && Some(clocks[ci]) == self.d.default_clock
-                && self.cycle >= max_cycles
-            {
+            // posedge, but the kernel finishes the current timeslice
+            // first — same-instant edges of other clocks still run;
+            // events at later times do not
+            if self.cycle >= max_cycles && !same_time {
                 break;
             }
         }

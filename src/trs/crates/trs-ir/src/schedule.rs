@@ -120,10 +120,13 @@ pub struct CompositionEntry {
     pub segment: u32,
 }
 
-/// A tick with a design-relative instance path.
+/// A tick with a design-relative instance path.  `reset` marks the
+/// conditional reset ticks (mkResetTickStmt): while the prim's reset is
+/// asserted, each posedge of its clock loads the reset state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualifiedTick {
     pub instance: StrId,
     pub prim: StrId,
     pub port: StrId,
+    pub reset: bool,
 }
