@@ -27,13 +27,24 @@ pub trait Prim {
     /// are ignored and state is forced to the reset value.  Prims without
     /// a reset connection never see this.
     fn set_in_reset(&mut self, _asserted: bool) {}
+    /// For reset-generating prims: drain pending output-reset transitions
+    /// as (asserted, immediate) pairs.  Immediate transitions cascade in
+    /// place (async reset_fn calls); deferred ones apply at the end of the
+    /// timeslice (reset_at_end_of_timeslice).
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        Vec::new()
+    }
+    /// End of the current simulation instant: reset generators move
+    /// internally deferred transitions forward (MakeReset's rst register
+    /// reaching its internal SyncReset).
+    fn end_of_timeslice(&mut self) {}
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
 /// recovered from the constant instantiation args (clock/reset args are
 /// filtered out by the caller; `consts` holds the remaining constants in
 /// order).
-pub fn make_prim(name: &str, consts: &[Value], strs: &[String]) -> Box<dyn Prim> {
+pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> Box<dyn Prim> {
     match name {
         // registers: args (after clock/reset) are [width, init] or [width]
         "RegN" | "RegA" => Box::new(Reg::new(consts, true, name == "RegA")),
@@ -43,12 +54,12 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String]) -> Box<dyn Prim>
         "RevertReg" => Box::new(Reg::new(consts, true, false)),
         "Probe" | "ProbeWire" => Box::new(Probe),
         // no reset modeling yet: reset outputs read as deasserted
-        "ResetToBool" => Box::new(ResetToBool),
+        "ResetToBool" => Box::new(ResetToBool { in_reset: false }),
         "Counter" => Box::new(Counter::new(consts)),
-        "RegFile" => Box::new(RegFile::new(consts, None)),
-        "RegFileLoad" => Box::new(RegFile::new(consts, strs.first().cloned())),
-        "ConfigRegN" | "ConfigRegA" => Box::new(ConfigReg::new(consts, true)),
-        "ConfigRegUN" => Box::new(ConfigReg::new(consts, false)),
+        "RegFile" => Box::new(RegFile::new(consts, None, path)),
+        "RegFileLoad" => Box::new(RegFile::new(consts, strs.first().cloned(), path)),
+        "ConfigRegN" | "ConfigRegA" => Box::new(ConfigReg::new(consts, true, name == "ConfigRegA")),
+        "ConfigRegUN" => Box::new(ConfigReg::new(consts, false, false)),
         "RWire" => Box::new(RWire::new(consts, false)),
         "RWire0" => Box::new(RWire::new(consts, true)),
         "BypassWire" => Box::new(BypassWire::new(consts, false)),
@@ -72,6 +83,21 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String]) -> Box<dyn Prim>
         "SyncPulse" => Box::new(SyncPulse::new()),
         "SyncHandshake" => Box::new(SyncHandshake { hs: Handshake::new(false, false) }),
         "SyncRegister" => Box::new(SyncReg::new(consts)),
+        // reset generators: args are [cycles] / [cycles, init?] per
+        // bs_prim_mod_resets.h ctors; A-variants assert asynchronously
+        "SyncReset" => Box::new(SyncReset::new(carg(consts, 0) as u32, false)),
+        "SyncResetA" => Box::new(SyncReset::new(carg(consts, 0) as u32, true)),
+        "SyncReset0" => Box::new(SyncReset0::new()),
+        "InitialReset" => Box::new(InitialReset::new(carg(consts, 0) as u32)),
+        // MakeReset args: [cycles, init]; MakeReset0 args: [init]
+        "MakeReset0" => Box::new(MakeReset::new(
+            consts.first().map(|v| v.as_u64()).unwrap_or(1) as u8,
+            None,
+        )),
+        "MakeReset" | "MakeResetA" => Box::new(MakeReset::new(
+            consts.get(1).map(|v| v.as_u64()).unwrap_or(1) as u8,
+            Some(SyncReset::new(carg(consts, 0) as u32, name == "MakeResetA")),
+        )),
         _ => panic!("trs-interp: unimplemented primitive {name:?} (P1 bring-up)"),
     }
 }
@@ -89,13 +115,15 @@ impl Prim for Probe {
     fn tick(&mut self, _port: &str, _now: u64) {}
 }
 
-/// ResetToBool without reset modeling: reads as "not in reset".
-struct ResetToBool;
+/// MOD_ResetToBool: reads 1 while its reset line is asserted.
+struct ResetToBool {
+    in_reset: bool,
+}
 
 impl Prim for ResetToBool {
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
-            "isAsserted" | "_read" | "read" => Value::from_u64(1, 0),
+            "isAsserted" | "_read" | "read" => Value::from_u64(1, self.in_reset as u64),
             m => panic!("ResetToBool: unknown value method {m:?}"),
         }
     }
@@ -103,6 +131,9 @@ impl Prim for ResetToBool {
         panic!("ResetToBool: unknown action method {method:?}")
     }
     fn tick(&mut self, _port: &str, _now: u64) {}
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+    }
 }
 
 // ===============
@@ -113,12 +144,14 @@ impl Prim for ResetToBool {
 struct Counter {
     width: u32,
     val: Value,
+    init: Value,
     saved_val: Value,
     saved_at: u64,
     a: Value,
     a_at: u64,
     b: Value,
     b_at: u64,
+    in_reset: bool,
 }
 
 impl Counter {
@@ -127,13 +160,15 @@ impl Counter {
         let init = consts.get(1).cloned().unwrap_or_else(|| Value::undet(width));
         Counter {
             width,
-            val: init.zext(width),
+            val: Value::undet(width),
+            init: init.zext(width),
             saved_val: Value::zero(width),
             saved_at: u64::MAX,
             a: Value::zero(width),
             a_at: u64::MAX,
             b: Value::zero(width),
             b_at: u64::MAX,
+            in_reset: false,
         }
     }
     fn save(&mut self, now: u64) {
@@ -158,6 +193,9 @@ impl Prim for Counter {
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        if self.in_reset {
+            return;
+        }
         let w = self.width;
         match method {
             "addA" | "incrA" => {
@@ -189,82 +227,392 @@ impl Prim for Counter {
             m => panic!("Counter: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64) {
+        if self.in_reset {
+            self.val = self.init.clone();
+            self.saved_at = u64::MAX;
+            self.a_at = u64::MAX;
+            self.b_at = u64::MAX;
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+    }
 }
 
 // ===============
 
-/// RegFile (bs_prim_mod_regfile.h): sparse storage, read-before-write with
-/// one-entry write forwarding (a same-cycle earlier upd to the same
-/// address reads the pre-write value).
+/// RegFile (bs_prim_mod_regfile.h): sparse storage over [lo, hi],
+/// read-before-write with one-entry write forwarding, out-of-bounds
+/// warnings, and the full mem_file.cxx loader (comments, @addr, x/z
+/// digits, range-tracker gap/duplicate warnings).
 struct RegFile {
     data: std::collections::HashMap<u64, Value>,
+    /// leaf instance name (mem-file warnings)
+    mem_name: String,
+    /// hierarchical name rooted at "top" (out-of-bounds warnings)
+    full_name: String,
+    addr_bits: u32,
     width: u32,
+    lo: u64,
+    hi: u64,
     upd_at: u64,
     upd_addr: u64,
     upd_prev: Value,
 }
 
+/// bs_range_tracker.h: runs of loaded addresses; after loading, report
+/// gaps and duplicates against [start, end].
+struct RangeTracker {
+    runs: Vec<(u64, u64)>,
+}
+
+impl RangeTracker {
+    fn new() -> RangeTracker {
+        RangeTracker { runs: Vec::new() }
+    }
+    fn set_addr(&mut self, addr: u64) {
+        match self.runs.last_mut() {
+            Some(r) if addr == r.1 + 1 => r.1 = addr,
+            Some(r) if r.0 > 0 && addr == r.0 - 1 => r.0 = addr,
+            _ => self.runs.push((addr, addr)),
+        }
+    }
+    fn check_range(&mut self, filename: &str, memname: &str, start: u64, end: u64) {
+        if self.runs.is_empty() {
+            return;
+        }
+        self.runs.sort();
+        let mut next_addr = start;
+        let mut next_overlap_addr = start;
+        let mut full = false;
+        let mut overlap_full = false;
+        for &(lo, hi) in &self.runs {
+            if lo < next_addr || full {
+                // overlap
+                let mut overlap_low = lo;
+                let overlap_high = if hi < next_addr || full { hi } else { next_addr - 1 };
+                if !overlap_full && overlap_high >= next_overlap_addr {
+                    if overlap_low < next_overlap_addr {
+                        overlap_low = next_overlap_addr;
+                    }
+                    if overlap_low == overlap_high {
+                        println!(
+                            "Warning: file '{filename}' for memory '{memname}' has duplicate values for address {overlap_low}."
+                        );
+                    } else {
+                        println!(
+                            "Warning: file '{filename}' for memory '{memname}' has duplicate values for addresses {overlap_low} to {overlap_high}."
+                        );
+                    }
+                    next_overlap_addr = overlap_high + 1;
+                    if overlap_high == end {
+                        overlap_full = true;
+                    }
+                }
+            } else if lo > next_addr {
+                // gap
+                if next_addr == lo - 1 {
+                    println!(
+                        "Warning: file '{filename}' for memory '{memname}' has a gap at address {next_addr}."
+                    );
+                } else {
+                    println!(
+                        "Warning: file '{filename}' for memory '{memname}' has a gap at addresses {next_addr} to {}.",
+                        lo - 1
+                    );
+                }
+            }
+            if hi >= next_addr {
+                next_addr = hi + 1;
+                if hi == end {
+                    full = true;
+                }
+            }
+        }
+        if !full {
+            if next_addr == end {
+                println!(
+                    "Warning: file '{filename}' for memory '{memname}' has a gap at address {next_addr}."
+                );
+            } else {
+                println!(
+                    "Warning: file '{filename}' for memory '{memname}' has a gap at addresses {next_addr} to {end}."
+                );
+            }
+        }
+        self.runs.clear();
+    }
+}
+
+/// mem_file.cxx parse_hex: '_' ignored, x/z count as 0 nibbles; error if
+/// the value extends beyond the last nibble or sets bits above `bits` in
+/// a partial final nibble.
+fn parse_mem_hex(s: &str, bits: u32) -> Option<Value> {
+    // accumulate at full-nibble width so overflow into a partial final
+    // nibble is observable, then truncate
+    let nibbles = ((bits + 3) / 4).max(1);
+    let w = nibbles * 4;
+    let mut v = Value::zero(w);
+    let mut nbits: u32 = 0;
+    for c in s.chars() {
+        let d = match c {
+            '_' => continue,
+            'x' | 'X' | 'z' | 'Z' => 0,
+            c if c.is_ascii_hexdigit() => c.to_digit(16).unwrap(),
+            _ => return None,
+        };
+        v = v.shl(4, w).or(&Value::from_u64(w, d as u64), w);
+        nbits += 4;
+        if nbits / 4 > nibbles
+            || (nbits / 4 == nibbles && bits % 4 != 0 && !v.lshr(bits as u64, w).is_zero())
+        {
+            return None;
+        }
+    }
+    Some(v.extract(bits.max(1) as u64 - 1, 0, bits.max(1)))
+}
+
+/// mem_file.cxx parse_bin: 0/1 plus x/z (as 0); error past `bits` digits.
+fn parse_mem_bin(s: &str, bits: u32) -> Option<Value> {
+    let mut v = Value::zero(bits.max(1));
+    let mut nbits: u32 = 0;
+    for c in s.chars() {
+        let d = match c {
+            '_' => continue,
+            '0' | 'x' | 'X' | 'z' | 'Z' => 0,
+            '1' => 1,
+            _ => return None,
+        };
+        v = v.shl(1, bits.max(1)).or(&Value::from_u64(bits.max(1), d), bits.max(1));
+        nbits += 1;
+        if nbits > bits {
+            return None;
+        }
+    }
+    Some(v)
+}
+
 impl RegFile {
-    fn new(consts: &[Value], file: Option<String>) -> RegFile {
-        // args: [addr_width, data_width, lo, hi] (file name separate)
+    fn new(consts: &[Value], file: Option<String>, path: &str) -> RegFile {
+        // args (after clocks/resets/file): [addr_width, data_width, lo,
+        // hi, binary_format]
+        let addr_bits = carg(consts, 0) as u32;
         let width = carg(consts, 1) as u32;
+        let lo = carg(consts, 2);
+        let hi = carg(consts, 3);
+        let bin = carg(consts, 4) != 0;
+        let leaf = path.rsplit('.').next().unwrap_or(path).to_string();
+        let full_name = if path.is_empty() {
+            "top".to_string()
+        } else {
+            format!("top.{path}")
+        };
         let mut rf = RegFile {
             data: Default::default(),
+            mem_name: leaf,
+            full_name,
+            addr_bits,
             width,
+            lo,
+            hi,
             upd_at: u64::MAX,
             upd_addr: 0,
             upd_prev: Value::undet(width),
         };
         if let Some(f) = file {
-            rf.load_memfile(&f);
+            rf.load_memfile(&f, bin);
         }
         rf
     }
 
-    /// Minimal $readmemh loader: @addr directives, hex words, //, /* */
-    /// and # comments (bs_mem_file.h grammar subset).
-    fn load_memfile(&mut self, path: &str) {
-        let text = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("RegFileLoad: cannot read {path:?}: {e}"));
-        let mut cleaned = String::new();
-        let mut chars = text.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '/' if chars.peek() == Some(&'/') => {
-                    while let Some(&n) = chars.peek() {
-                        if n == '\n' { break; }
-                        chars.next();
-                    }
+    fn in_range(&self, a: u64) -> bool {
+        let (lo, hi) = (self.lo.min(self.hi), self.lo.max(self.hi));
+        a >= lo && a <= hi
+    }
+
+    /// Port of mem_file.cxx read_mem_file + the {Hex,Bin}FormatHandler:
+    /// same state machine, same messages (to stdout), same partial-load
+    /// behavior on errors.
+    fn load_memfile(&mut self, path: &str, bin: bool) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(x) => x,
+            Err(e) => {
+                let mut msg = e.to_string();
+                if let Some(i) = msg.find(" (os error") {
+                    msg.truncate(i);
                 }
-                '/' if chars.peek() == Some(&'*') => {
-                    chars.next();
-                    let mut prev = ' ';
-                    for n in chars.by_ref() {
-                        if prev == '*' && n == '/' { break; }
-                        prev = n;
-                    }
-                }
-                _ => cleaned.push(c),
+                println!("Error: failed to open file '{path}' because {msg}");
+                return;
             }
-        }
-        let mut addr: u64 = 0;
-        for tok in cleaned.split_whitespace() {
-            if let Some(a) = tok.strip_prefix('@') {
-                addr = u64::from_str_radix(a, 16)
-                    .unwrap_or_else(|_| panic!("RegFileLoad: bad address {tok:?}"));
+        };
+        let decreasing = self.lo > self.hi;
+        let mut addr = self.lo;
+        let mut rt = RangeTracker::new();
+        let mut set_entry = |rf: &mut RegFile, rt: &mut RangeTracker, s: &str,
+                             addr: &mut u64|
+         -> bool {
+            if rf.in_range(*addr) {
+                let parsed = if bin {
+                    parse_mem_bin(s, rf.width)
+                } else {
+                    parse_mem_hex(s, rf.width)
+                };
+                match parsed {
+                    Some(v) => {
+                        rf.data.insert(*addr, v);
+                        rt.set_addr(*addr);
+                    }
+                    None => return false,
+                }
+            }
+            if decreasing {
+                *addr = addr.wrapping_sub(1);
             } else {
-                let clean: String = tok.chars().filter(|c| *c != '_').collect();
-                let mut v = Value::zero(self.width);
-                for c in clean.chars() {
-                    let d = c.to_digit(16)
-                        .unwrap_or_else(|| panic!("RegFileLoad: bad datum {tok:?}"));
-                    v = v.shl(4, self.width).or(&Value::from_u64(self.width, d as u64), self.width);
+                *addr += 1;
+            }
+            true
+        };
+
+        #[derive(PartialEq)]
+        enum St {
+            Start,
+            BeginComment,
+            CppComment,
+            CComment,
+            EndCComment,
+            InAddr,
+            InValue,
+        }
+        let mut state = St::Start;
+        let mut line: u32 = 1;
+        let mut start_line: u32 = 1;
+        let mut comment_start_line: u32 = 0;
+        let mut tok = String::new();
+        for c in text.chars() {
+            match state {
+                St::Start => match c {
+                    '/' => state = St::BeginComment,
+                    '@' => {
+                        state = St::InAddr;
+                        tok.clear();
+                        start_line = line;
+                    }
+                    c if c.is_ascii_hexdigit() => {
+                        state = St::InValue;
+                        tok.clear();
+                        tok.push(c);
+                        start_line = line;
+                    }
+                    '\n' => line += 1,
+                    '\r' | ' ' | '\t' => {}
+                    _ => {
+                        println!("Error: syntax error at line {line} of file '{path}'");
+                        println!("       Encountered '{c}' when expecting '/', '@', hex digit, end-of-line or whitespace.");
+                        return;
+                    }
+                },
+                St::BeginComment => match c {
+                    '/' => state = St::CppComment,
+                    '*' => {
+                        state = St::CComment;
+                        comment_start_line = line;
+                    }
+                    _ => {
+                        println!("Error: syntax error at line {line} of file '{path}'");
+                        println!("       Malformed comment start sequence.");
+                        return;
+                    }
+                },
+                St::CppComment => {
+                    if c == '\n' {
+                        line += 1;
+                        state = St::Start;
+                    }
                 }
-                self.data.insert(addr, v);
-                addr += 1;
+                St::CComment => {
+                    if c == '\n' {
+                        line += 1;
+                    } else if c == '*' {
+                        state = St::EndCComment;
+                    }
+                }
+                St::EndCComment => {
+                    state = if c == '/' { St::Start } else { St::CComment };
+                }
+                St::InAddr => {
+                    let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
+                    if done {
+                        let err = match parse_mem_hex(&tok, self.addr_bits) {
+                            None => Some("Malformed address".to_string()),
+                            Some(v) => {
+                                let a = v.as_u64();
+                                if !self.in_range(a) {
+                                    Some("Address is outside of the allowed range".to_string())
+                                } else {
+                                    addr = a;
+                                    None
+                                }
+                            }
+                        };
+                        if let Some(e) = err {
+                            println!("Error: address processing error at line {start_line} of file '{path}'");
+                            println!("       {e}.");
+                            return;
+                        }
+                        if c == '\n' {
+                            line += 1;
+                        }
+                        state = if c == '/' { St::BeginComment } else { St::Start };
+                    } else if c.is_ascii_hexdigit() || matches!(c, '_' | 'x' | 'X' | 'z' | 'Z') {
+                        tok.push(c);
+                    } else {
+                        println!("Error: address processing error at line {start_line} of file '{path}'");
+                        println!("       Encountered '{c}' when expecting '/', hex digit, end-of-line or whitespace.");
+                        return;
+                    }
+                }
+                St::InValue => {
+                    let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
+                    if done {
+                        if !set_entry(self, &mut rt, &tok, &mut addr) {
+                            println!("Error: value processing error at line {start_line} of file '{path}'");
+                            println!("       Malformed value.");
+                            return;
+                        }
+                        if c == '\n' {
+                            line += 1;
+                        }
+                        state = if c == '/' { St::BeginComment } else { St::Start };
+                    } else if c.is_ascii_hexdigit() || matches!(c, '_' | 'x' | 'X' | 'z' | 'Z') {
+                        tok.push(c);
+                    } else {
+                        println!("Error: value processing error at line {start_line} of file '{path}'");
+                        println!("       Encountered '{c}' when expecting '/', digit, end-of-line or whitespace.");
+                        return;
+                    }
+                }
             }
         }
+        match state {
+            St::CComment | St::EndCComment => {
+                println!("Error: syntax error at line {comment_start_line} of file '{path}'");
+                println!("       Unterminated C-style comment.");
+            }
+            St::InValue => {
+                if !set_entry(self, &mut rt, &tok, &mut addr) {
+                    println!("Error: value processing error at line {line} of file '{path}'");
+                    println!("       Malformed value.");
+                }
+            }
+            _ => {}
+        }
+        rt.check_range(path, &self.mem_name, self.lo, self.hi);
+    }
+
+    fn addr_hex(&self, a: u64) -> String {
+        let digits = ((self.addr_bits + 3) / 4).max(1) as usize;
+        format!("{a:0digits$x}")
     }
 }
 
@@ -273,6 +621,14 @@ impl Prim for RegFile {
         match method {
             "sub" => {
                 let a = args[0].as_u64();
+                if !self.in_range(a) {
+                    println!(
+                        "Warning: RegFile '{}' -- Read address is out of bounds: {}",
+                        self.full_name,
+                        self.addr_hex(a)
+                    );
+                    return Value::undet(self.width);
+                }
                 if self.upd_at == now && self.upd_addr == a {
                     return self.upd_prev.clone();
                 }
@@ -288,6 +644,14 @@ impl Prim for RegFile {
         match method {
             "upd" => {
                 let a = args[0].as_u64();
+                if !self.in_range(a) {
+                    println!(
+                        "Warning: RegFile '{}' -- Write address is out of bounds: {}",
+                        self.full_name,
+                        self.addr_hex(a)
+                    );
+                    return;
+                }
                 if self.upd_at != now || self.upd_addr != a {
                     self.upd_prev = self
                         .data
@@ -317,18 +681,23 @@ struct Reg {
     value: Value,
     reset_value: Value,
     in_reset: bool,
+    async_rst: bool,
 }
 
 impl Reg {
-    fn new(consts: &[Value], has_reset: bool, _async_rst: bool) -> Reg {
-        // instantiation args: [width, init] for RegN/RegA, [width] for RegUN
+    fn new(consts: &[Value], has_reset: bool, async_rst: bool) -> Reg {
+        // instantiation args: [width, init] for RegN/RegA, [width] for
+        // RegUN.  The value starts undet even for resettable registers:
+        // the reset value arrives via the reset tick at the first clock
+        // edge with reset asserted (async regs take it at assert time) —
+        // observable when a derived reset never asserts.
         let width = carg(consts, 0) as u32;
-        let value = if has_reset && consts.len() > 1 {
+        let reset_value = if has_reset && consts.len() > 1 {
             consts[1].zext(width)
         } else {
             Value::undet(width)
         };
-        Reg { reset_value: value.clone(), value, in_reset: false }
+        Reg { reset_value, value: Value::undet(width), in_reset: false, async_rst }
     }
 }
 
@@ -349,10 +718,16 @@ impl Prim for Reg {
             m => panic!("Reg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64) {
+        // reset tick: while in reset, each clock edge loads the reset
+        // value (rst_tick__clk__1)
+        if self.in_reset {
+            self.value = self.reset_value.clone();
+        }
+    }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
-        if asserted {
+        if asserted && self.async_rst {
             self.value = self.reset_value.clone();
         }
     }
@@ -368,22 +743,24 @@ struct ConfigReg {
     written_at: u64,
     reset_value: Value,
     in_reset: bool,
+    async_rst: bool,
 }
 
 impl ConfigReg {
-    fn new(consts: &[Value], has_reset: bool) -> ConfigReg {
+    fn new(consts: &[Value], has_reset: bool, async_rst: bool) -> ConfigReg {
         let width = carg(consts, 0) as u32;
-        let value = if has_reset && consts.len() > 1 {
+        let reset_value = if has_reset && consts.len() > 1 {
             consts[1].zext(width)
         } else {
             Value::undet(width)
         };
         ConfigReg {
-            old_value: value.clone(),
-            reset_value: value.clone(),
-            value,
+            old_value: Value::undet(width),
+            reset_value,
+            value: Value::undet(width),
             written_at: u64::MAX,
             in_reset: false,
+            async_rst,
         }
     }
 }
@@ -416,10 +793,16 @@ impl Prim for ConfigReg {
             m => panic!("ConfigReg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64) {
+        if self.in_reset {
+            self.value = self.reset_value.clone();
+            self.old_value = self.reset_value.clone();
+            self.written_at = u64::MAX;
+        }
+    }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
-        if asserted {
+        if asserted && self.async_rst {
             self.value = self.reset_value.clone();
             self.old_value = self.reset_value.clone();
             self.written_at = u64::MAX;
@@ -519,8 +902,8 @@ impl CReg {
             Value::undet(width)
         };
         CReg {
-            value: init.clone(),
-            value_reg: init.clone(),
+            value: Value::undet(width),
+            value_reg: Value::undet(width),
             reset_value: init,
             in_reset: false,
         }
@@ -547,14 +930,13 @@ impl Prim for CReg {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64) {
+        if self.in_reset {
+            self.value = self.reset_value.clone();
+        }
         self.value_reg = self.value.clone();
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
-        if asserted {
-            self.value = self.reset_value.clone();
-            self.value_reg = self.reset_value.clone();
-        }
     }
 }
 
@@ -670,7 +1052,12 @@ impl Prim for Fifo {
             m => panic!("FIFO: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64) {
+        if self.in_reset {
+            self.data.clear();
+            self.stamp = u64::MAX;
+        }
+    }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
         if asserted {
@@ -1041,6 +1428,262 @@ impl Prim for SyncReg {
         if asserted {
             self.data.force(self.reset_value.clone());
             self.d_out = self.reset_value.clone();
+        }
+    }
+}
+
+
+// ===============
+// Reset generators (bs_prim_mod_resets.h).  Output transitions are
+// reported through take_reset_out as (asserted, immediate) pairs; the
+// interpreter routes immediate ones as cascading reset_fn calls and
+// deferred ones through the end-of-timeslice queue.
+
+/// MOD_SyncReset / MOD_SyncResetA: output asserts with the input (async
+/// variant immediately, sync variant at the next clk tick) and deasserts
+/// `hold` clk ticks after the input deasserts.
+struct SyncReset {
+    hold: u32,
+    is_async: bool,
+    count: u32,
+    in_reset: bool,
+    call_reset_fn: bool,
+    pending: Vec<(bool, bool)>,
+}
+
+impl SyncReset {
+    fn new(hold: u32, is_async: bool) -> SyncReset {
+        SyncReset {
+            hold,
+            is_async,
+            count: 0,
+            in_reset: false,
+            call_reset_fn: false,
+            pending: Vec::new(),
+        }
+    }
+    fn input(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.count = self.hold + 1;
+            if self.is_async {
+                self.pending.push((true, true));
+            } else {
+                self.call_reset_fn = true;
+            }
+        }
+    }
+    fn clk(&mut self) {
+        if self.call_reset_fn {
+            if self.in_reset {
+                self.pending.push((true, false));
+            }
+            self.call_reset_fn = false;
+        }
+        if !self.in_reset && self.count > 0 {
+            if self.count == 1 {
+                self.pending.push((false, false));
+            }
+            self.count -= 1;
+        }
+    }
+}
+
+impl Prim for SyncReset {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("SyncReset: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("SyncReset: unknown action method {method:?}")
+    }
+    fn tick(&mut self, port: &str, _now: u64) {
+        match port {
+            "clk" => self.clk(),
+            p => panic!("SyncReset: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.input(asserted);
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// MOD_SyncReset0: combinationally forwards its input reset.
+struct SyncReset0 {
+    pending: Vec<(bool, bool)>,
+}
+
+impl SyncReset0 {
+    fn new() -> SyncReset0 {
+        SyncReset0 { pending: Vec::new() }
+    }
+}
+
+impl Prim for SyncReset0 {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("SyncReset0: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("SyncReset0: unknown action method {method:?}")
+    }
+    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.pending.push((asserted, true));
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// MOD_InitialReset: output starts asserted (reset_init at time 0, set up
+/// by the interpreter) and deasserts after `count` clk ticks.
+struct InitialReset {
+    count: u32,
+    pending: Vec<(bool, bool)>,
+}
+
+impl InitialReset {
+    fn new(count: u32) -> InitialReset {
+        InitialReset { count, pending: Vec::new() }
+    }
+}
+
+impl Prim for InitialReset {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("InitialReset: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("InitialReset: unknown action method {method:?}")
+    }
+    fn tick(&mut self, port: &str, _now: u64) {
+        match port {
+            "clk" => {
+                if self.count > 0 {
+                    if self.count == 1 {
+                        self.pending.push((false, false));
+                    }
+                    self.count -= 1;
+                }
+            }
+            p => panic!("InitialReset: unknown tick port {p:?}"),
+        }
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// MOD_MakeReset / MOD_MakeReset0: a RegA-like `rst` register driven by
+/// the assertReset method, auto-returning to 1 each clk tick.  MakeReset
+/// feeds the register through an internal SyncReset synchronized to
+/// dst_clk; MakeReset0's output is the register itself.
+struct MakeReset {
+    rst_reset_value: u8,
+    rst: u8,
+    old_rst: u8,
+    written: u64,
+    in_reset: bool,
+    sync: Option<SyncReset>,
+    /// rst-register transitions awaiting end of timeslice before they
+    /// reach the internal SyncReset (reset_at_end_of_timeslice on
+    /// static_reset_syncRst$rst)
+    internal_pending: Vec<bool>,
+    pending: Vec<(bool, bool)>,
+}
+
+impl MakeReset {
+    fn new(rst_reset_value: u8, sync: Option<SyncReset>) -> MakeReset {
+        MakeReset {
+            rst_reset_value,
+            rst: 1,
+            old_rst: 1,
+            written: u64::MAX,
+            in_reset: false,
+            sync,
+            internal_pending: Vec::new(),
+            pending: Vec::new(),
+        }
+    }
+    fn route(&mut self, asserted: bool, immediate: bool) {
+        match &mut self.sync {
+            None => self.pending.push((asserted, immediate)),
+            Some(s) => {
+                if immediate {
+                    // reset_RST calls sync.reset_IN_RST directly
+                    s.input(asserted);
+                    self.pending.append(&mut s.pending);
+                } else {
+                    self.internal_pending.push(asserted);
+                }
+            }
+        }
+    }
+}
+
+impl Prim for MakeReset {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "isAsserted" => Value::from_u64(1, (self.rst == 0) as u64),
+            m => panic!("MakeReset: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], now: u64) {
+        match method {
+            "assertReset" => {
+                if !self.in_reset {
+                    self.old_rst = self.rst;
+                    self.rst = 0;
+                    self.written = now;
+                }
+            }
+            m => panic!("MakeReset: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64) {
+        match port {
+            "clk" => {
+                if !self.in_reset {
+                    if self.written != now {
+                        self.old_rst = self.rst;
+                        self.rst = 1;
+                    }
+                    if self.rst != self.old_rst {
+                        let a = self.rst == 0;
+                        self.route(a, false);
+                    }
+                }
+            }
+            "dst_clk" => {
+                if let Some(s) = &mut self.sync {
+                    s.clk();
+                    self.pending.append(&mut s.pending);
+                }
+            }
+            p => panic!("MakeReset: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.old_rst = self.rst;
+            self.rst = self.rst_reset_value;
+            if self.old_rst != self.rst {
+                let a = self.rst == 0;
+                self.route(a, true);
+            }
+        }
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.pending)
+    }
+    fn end_of_timeslice(&mut self) {
+        if let Some(s) = &mut self.sync {
+            for a in std::mem::take(&mut self.internal_pending) {
+                s.input(a);
+            }
+            self.pending.append(&mut s.pending);
         }
     }
 }

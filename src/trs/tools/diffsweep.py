@@ -94,7 +94,7 @@ def one_test(job):
 
     # data files ($readmem, file reads) load relative to the run directory
     for f in os.listdir(testdir):
-        if f.endswith((".dat", ".hex", ".bin", ".txt", ".mem", ".vec")):
+        if f.endswith((".dat", ".hex", ".bin", ".txt", ".mem", ".vec", ".input", ".vectors", ".handbuilt", ".rom", ".data")):
             try:
                 shutil.copy(os.path.join(testdir, f), wk)
             except OSError:
