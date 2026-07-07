@@ -585,6 +585,12 @@ encStmt (SFSAssignAction _ i act _) = do
     dE <- idE i
     aE <- encAction act
     return $ encVariant "AvAction" (encStruct [("def", dE), ("action", aE)])
+encStmt (SFSCond c ts es) = do
+    cE <- encExpr c
+    tE <- encStmts ts
+    eE <- encStmts es
+    return $ encVariant "Cond"
+               (encStruct [("cond", cE), ("then_", tE), ("else_", eE)])
 encStmt s = internalError ("SimExportIR.encStmt: " ++ ppReadable s)
 
 -- mempty markers from declaration-only stmts must not appear in the list

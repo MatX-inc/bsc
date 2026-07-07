@@ -27,11 +27,19 @@ pub trait Prim {
 /// recovered from the constant instantiation args (clock/reset args are
 /// filtered out by the caller; `consts` holds the remaining constants in
 /// order).
-pub fn make_prim(name: &str, consts: &[Value]) -> Box<dyn Prim> {
+pub fn make_prim(name: &str, consts: &[Value], strs: &[String]) -> Box<dyn Prim> {
     match name {
         // registers: args (after clock/reset) are [width, init] or [width]
         "RegN" | "RegA" => Box::new(Reg::new(consts, true, name == "RegA")),
         "RegUN" => Box::new(Reg::new(consts, false, false)),
+        // a reverting virtual reg exists for scheduling; Bluesim models it
+        // as a plain reg (primMap maps RevertReg to the Reg class, no tick)
+        "RevertReg" => Box::new(Reg::new(consts, true, false)),
+        "Probe" | "ProbeWire" => Box::new(Probe),
+        // no reset modeling yet: reset outputs read as deasserted
+        "ResetToBool" => Box::new(ResetToBool),
+        "RegFile" => Box::new(RegFile::new(consts, None)),
+        "RegFileLoad" => Box::new(RegFile::new(consts, strs.first().cloned())),
         "ConfigRegN" | "ConfigRegA" => Box::new(ConfigReg::new(consts, true)),
         "ConfigRegUN" => Box::new(ConfigReg::new(consts, false)),
         "RWire" => Box::new(RWire::new(consts, false)),
@@ -50,6 +58,148 @@ pub fn make_prim(name: &str, consts: &[Value]) -> Box<dyn Prim> {
         "SizedFIFOL" => Box::new(Fifo::new_sized_loopy(consts)),
         _ => panic!("trs-interp: unimplemented primitive {name:?} (P1 bring-up)"),
     }
+}
+
+// ===============
+
+/// Probe: waveform-only sink.
+struct Probe;
+
+impl Prim for Probe {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("Probe: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, _method: &str, _args: &[Value], _now: u64) {}
+    fn tick(&mut self, _port: &str) {}
+}
+
+/// ResetToBool without reset modeling: reads as "not in reset".
+struct ResetToBool;
+
+impl Prim for ResetToBool {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "isAsserted" | "_read" | "read" => Value::from_u64(1, 0),
+            m => panic!("ResetToBool: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("ResetToBool: unknown action method {method:?}")
+    }
+    fn tick(&mut self, _port: &str) {}
+}
+
+// ===============
+
+/// RegFile (bs_prim_mod_regfile.h): sparse storage, read-before-write with
+/// one-entry write forwarding (a same-cycle earlier upd to the same
+/// address reads the pre-write value).
+struct RegFile {
+    data: std::collections::HashMap<u64, Value>,
+    width: u32,
+    upd_at: u64,
+    upd_addr: u64,
+    upd_prev: Value,
+}
+
+impl RegFile {
+    fn new(consts: &[Value], file: Option<String>) -> RegFile {
+        // args: [addr_width, data_width, lo, hi] (file name separate)
+        let width = carg(consts, 1) as u32;
+        let mut rf = RegFile {
+            data: Default::default(),
+            width,
+            upd_at: u64::MAX,
+            upd_addr: 0,
+            upd_prev: Value::undet(width),
+        };
+        if let Some(f) = file {
+            rf.load_memfile(&f);
+        }
+        rf
+    }
+
+    /// Minimal $readmemh loader: @addr directives, hex words, //, /* */
+    /// and # comments (bs_mem_file.h grammar subset).
+    fn load_memfile(&mut self, path: &str) {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("RegFileLoad: cannot read {path:?}: {e}"));
+        let mut cleaned = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '/' if chars.peek() == Some(&'/') => {
+                    while let Some(&n) = chars.peek() {
+                        if n == '\n' { break; }
+                        chars.next();
+                    }
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    let mut prev = ' ';
+                    for n in chars.by_ref() {
+                        if prev == '*' && n == '/' { break; }
+                        prev = n;
+                    }
+                }
+                _ => cleaned.push(c),
+            }
+        }
+        let mut addr: u64 = 0;
+        for tok in cleaned.split_whitespace() {
+            if let Some(a) = tok.strip_prefix('@') {
+                addr = u64::from_str_radix(a, 16)
+                    .unwrap_or_else(|_| panic!("RegFileLoad: bad address {tok:?}"));
+            } else {
+                let clean: String = tok.chars().filter(|c| *c != '_').collect();
+                let mut v = Value::zero(self.width);
+                for c in clean.chars() {
+                    let d = c.to_digit(16)
+                        .unwrap_or_else(|| panic!("RegFileLoad: bad datum {tok:?}"));
+                    v = v.shl(4, self.width).or(&Value::from_u64(self.width, d as u64), self.width);
+                }
+                self.data.insert(addr, v);
+                addr += 1;
+            }
+        }
+    }
+}
+
+impl Prim for RegFile {
+    fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
+        match method {
+            "sub" => {
+                let a = args[0].as_u64();
+                if self.upd_at == now && self.upd_addr == a {
+                    return self.upd_prev.clone();
+                }
+                self.data
+                    .get(&a)
+                    .cloned()
+                    .unwrap_or_else(|| Value::undet(self.width))
+            }
+            m => panic!("RegFile: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "upd" => {
+                let a = args[0].as_u64();
+                if self.upd_at != now || self.upd_addr != a {
+                    self.upd_prev = self
+                        .data
+                        .get(&a)
+                        .cloned()
+                        .unwrap_or_else(|| Value::undet(self.width));
+                    self.upd_at = now;
+                    self.upd_addr = a;
+                }
+                self.data.insert(a, args[1].clone());
+            }
+            m => panic!("RegFile: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, _port: &str) {}
 }
 
 fn carg(consts: &[Value], i: usize) -> u64 {

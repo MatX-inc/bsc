@@ -155,10 +155,17 @@ impl Interp {
                             _ => None,
                         })
                         .collect();
+                    let strs: Vec<String> = args
+                        .iter()
+                        .filter_map(|a| match a {
+                            Expr::Str(sid) => Some(self.s(*sid).to_string()),
+                            _ => None,
+                        })
+                        .collect();
                     let idx = self.insts.len();
                     self.insts.push(Inst {
                         path: cpath.clone(),
-                        kind: InstKind::Prim(prim::make_prim(&pname, &consts)),
+                        kind: InstKind::Prim(prim::make_prim(&pname, &consts, &strs)),
                     });
                     self.inst_by_path.insert(cpath.clone(), idx);
                     idx
@@ -526,6 +533,16 @@ impl Interp {
                 }
                 other => panic!("AvAction with non-method action: {other:?}"),
             },
+            Stmt::Cond { cond, then_, else_ } => {
+                let branch = if self.eval(inst, ctx, cond).as_bool() {
+                    then_
+                } else {
+                    else_
+                };
+                for st in branch.clone() {
+                    self.exec_stmt(inst, ctx, &st);
+                }
+            }
         }
     }
 

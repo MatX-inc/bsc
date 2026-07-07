@@ -120,6 +120,9 @@ pub enum Stmt {
     /// ActionValue call whose result is latched into `def`
     /// (`SFSAssignAction`).
     AvAction { def: StrId, action: Action },
+    /// Conditional statement group (`SFSCond`) — e.g. system tasks gated
+    /// on the reset wire so `$display` stays quiet during reset.
+    Cond { cond: Expr, then_: Vec<Stmt>, else_: Vec<Stmt> },
 }
 
 /// An action within a rule or method body (the `AAction` analogue).
