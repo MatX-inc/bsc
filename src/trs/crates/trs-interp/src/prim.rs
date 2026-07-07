@@ -49,9 +49,10 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         // registers: args (after clock/reset) are [width, init] or [width]
         "RegN" | "RegA" => Box::new(Reg::new(consts, true, name == "RegA")),
         "RegUN" => Box::new(Reg::new(consts, false, false)),
-        // a reverting virtual reg exists for scheduling; Bluesim models it
-        // as a plain reg (primMap maps RevertReg to the Reg class, no tick)
-        "RevertReg" => Box::new(Reg::new(consts, true, false)),
+        // a reverting virtual reg exists for scheduling; Bluesim uses the
+        // no-reset MOD_Reg ctor, which loads the init value directly at
+        // construction (regType NRst — no reset line, no ticks)
+        "RevertReg" => Box::new(Reg::preset(consts)),
         "Probe" | "ProbeWire" => Box::new(Probe),
         // no reset modeling yet: reset outputs read as deasserted
         "ResetToBool" => Box::new(ResetToBool { in_reset: false }),
@@ -64,7 +65,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "RWire0" => Box::new(RWire::new(consts, true)),
         "BypassWire" => Box::new(BypassWire::new(consts, false)),
         "BypassWire0" => Box::new(BypassWire::new(consts, true)),
-        "CRegN5" | "CRegA5" | "CRegUN5" => Box::new(CReg::new(consts, !name.ends_with("UN5"))),
+        "CRegN5" | "CRegA5" | "CRegUN5" => Box::new(CReg::new(consts, !name.ends_with("UN5"), name == "CRegA5")),
         "FIFO1" => Box::new(Fifo::new(consts, 1, false, false)),
         "FIFO2" => Box::new(Fifo::new(consts, 2, false, false)),
         "FIFO10" => Box::new(Fifo::new(consts, 1, false, true)),
@@ -152,6 +153,7 @@ struct Counter {
     b: Value,
     b_at: u64,
     in_reset: bool,
+    suppress: bool,
 }
 
 impl Counter {
@@ -169,6 +171,7 @@ impl Counter {
             b: Value::zero(width),
             b_at: u64::MAX,
             in_reset: false,
+            suppress: false,
         }
     }
     fn save(&mut self, now: u64) {
@@ -193,7 +196,7 @@ impl Prim for Counter {
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
-        if self.in_reset {
+        if self.suppress {
             return;
         }
         let w = self.width;
@@ -233,10 +236,14 @@ impl Prim for Counter {
             self.saved_at = u64::MAX;
             self.a_at = u64::MAX;
             self.b_at = u64::MAX;
+            self.suppress = true;
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
+        if !asserted {
+            self.suppress = false;
+        }
     }
 }
 
@@ -682,6 +689,7 @@ struct Reg {
     reset_value: Value,
     in_reset: bool,
     async_rst: bool,
+    suppress: bool,
 }
 
 impl Reg {
@@ -697,7 +705,30 @@ impl Reg {
         } else {
             Value::undet(width)
         };
-        Reg { reset_value, value: Value::undet(width), in_reset: false, async_rst }
+        Reg {
+            reset_value,
+            value: Value::undet(width),
+            in_reset: false,
+            async_rst,
+            suppress: false,
+        }
+    }
+
+    /// The no-reset ctor variant: value loaded at construction.
+    fn preset(consts: &[Value]) -> Reg {
+        let width = carg(consts, 0) as u32;
+        let v = consts
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Value::undet(width))
+            .zext(width);
+        Reg {
+            reset_value: v.clone(),
+            value: v,
+            in_reset: false,
+            async_rst: false,
+            suppress: false,
+        }
     }
 }
 
@@ -711,7 +742,11 @@ impl Prim for Reg {
     fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
         match method {
             "write" | "set" | "put" => {
-                if !self.in_reset {
+                // sync-reset registers never suppress writes — the reset
+                // tick re-forces the reset value at the end of each
+                // in-reset edge; only async regs block once suppressed
+                // (METH_write, bs_prim_mod_reg.h:100)
+                if !(self.async_rst && self.suppress) {
                     self.value = args[0].clone();
                 }
             }
@@ -719,16 +754,22 @@ impl Prim for Reg {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64) {
-        // reset tick: while in reset, each clock edge loads the reset
-        // value (rst_tick__clk__1)
+        // rst_tick__clk__1
         if self.in_reset {
             self.value = self.reset_value.clone();
+            self.suppress = true;
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
-        if asserted && self.async_rst {
-            self.value = self.reset_value.clone();
+        if asserted {
+            if self.async_rst {
+                // async: reset_RST performs the tick immediately
+                self.value = self.reset_value.clone();
+                self.suppress = true;
+            }
+        } else {
+            self.suppress = false;
         }
     }
 }
@@ -744,6 +785,7 @@ struct ConfigReg {
     reset_value: Value,
     in_reset: bool,
     async_rst: bool,
+    suppress: bool,
 }
 
 impl ConfigReg {
@@ -761,6 +803,7 @@ impl ConfigReg {
             written_at: u64::MAX,
             in_reset: false,
             async_rst,
+            suppress: false,
         }
     }
 }
@@ -781,7 +824,7 @@ impl Prim for ConfigReg {
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
         match method {
             "write" | "set" | "put" => {
-                if self.in_reset {
+                if self.async_rst && self.suppress {
                     return;
                 }
                 if self.written_at != now {
@@ -798,14 +841,20 @@ impl Prim for ConfigReg {
             self.value = self.reset_value.clone();
             self.old_value = self.reset_value.clone();
             self.written_at = u64::MAX;
+            self.suppress = true;
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
-        if asserted && self.async_rst {
-            self.value = self.reset_value.clone();
-            self.old_value = self.reset_value.clone();
-            self.written_at = u64::MAX;
+        if asserted {
+            if self.async_rst {
+                self.value = self.reset_value.clone();
+                self.old_value = self.reset_value.clone();
+                self.written_at = u64::MAX;
+                self.suppress = true;
+            }
+        } else {
+            self.suppress = false;
         }
     }
 }
@@ -891,10 +940,12 @@ struct CReg {
     value_reg: Value,   // value registered at the last edge
     reset_value: Value,
     in_reset: bool,
+    async_rst: bool,
+    suppress: bool,
 }
 
 impl CReg {
-    fn new(consts: &[Value], has_reset: bool) -> CReg {
+    fn new(consts: &[Value], has_reset: bool, async_rst: bool) -> CReg {
         let width = carg(consts, 0) as u32;
         let init = if has_reset && consts.len() > 1 {
             consts[1].zext(width)
@@ -906,6 +957,8 @@ impl CReg {
             value_reg: Value::undet(width),
             reset_value: init,
             in_reset: false,
+            async_rst,
+            suppress: false,
         }
     }
 }
@@ -922,7 +975,7 @@ impl Prim for CReg {
     }
     fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
         if method.starts_with("port") && method.ends_with("__write") {
-            if !self.in_reset {
+            if !(self.async_rst && self.suppress) {
                 self.value = args[0].clone();
             }
         } else {
@@ -932,11 +985,20 @@ impl Prim for CReg {
     fn tick(&mut self, _port: &str, _now: u64) {
         if self.in_reset {
             self.value = self.reset_value.clone();
+            self.suppress = true;
         }
         self.value_reg = self.value.clone();
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
+        if asserted {
+            if self.async_rst {
+                self.value = self.reset_value.clone();
+                self.suppress = true;
+            }
+        } else {
+            self.suppress = false;
+        }
     }
 }
 
@@ -953,6 +1015,7 @@ struct Fifo {
     stamp: u64,
     saved_len: usize,
     in_reset: bool,
+    suppress: bool,
 }
 
 impl Fifo {
@@ -967,6 +1030,7 @@ impl Fifo {
             stamp: u64::MAX,
             saved_len: 0,
             in_reset: false,
+            suppress: false,
         }
     }
 
@@ -983,6 +1047,7 @@ impl Fifo {
             stamp: u64::MAX,
             saved_len: 0,
             in_reset: false,
+            suppress: false,
         }
     }
 
@@ -1027,7 +1092,9 @@ impl Prim for Fifo {
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
-        if self.in_reset {
+        // ops in the assert cycle land (cleared by that edge's rst_tick);
+        // later in-reset cycles are suppressed (bs_prim_mod_fifo.h:93)
+        if self.suppress {
             return;
         }
         self.snapshot(now);
@@ -1053,16 +1120,16 @@ impl Prim for Fifo {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64) {
-        if self.in_reset {
+        if self.in_reset && !self.suppress {
             self.data.clear();
             self.stamp = u64::MAX;
+            self.suppress = true;
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
-        if asserted {
-            self.data.clear();
-            self.stamp = u64::MAX;
+        if !asserted {
+            self.suppress = false;
         }
     }
 }

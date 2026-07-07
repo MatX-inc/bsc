@@ -680,15 +680,17 @@ impl Interp {
     }
 
     fn call_action(&mut self, callee: usize, method: StrId, argv: &[Value]) {
+        if std::env::var_os("TRS_TRACE").is_some() {
+            if let InstKind::Prim(_) = &self.insts[callee].kind {
+                let mname = self.d.strings[method as usize].clone();
+                let args: Vec<String> = argv.iter().map(|v| v.to_hex_string()).collect();
+                eprintln!("[{}] {}.{}({})", self.cycle, self.insts[callee].path,
+                          mname, args.join(","));
+            }
+        }
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
                 let mname = self.d.strings[method as usize].clone();
-                if std::env::var_os("TRS_TRACE").is_some() {
-                    let args: Vec<String> =
-                        argv.iter().map(|v| v.to_hex_string()).collect();
-                    eprintln!("[{}] <{}>.{}({})", self.cycle, callee, mname,
-                              args.join(","));
-                }
                 p.action_method(&mname, argv, self.now);
             }
             InstKind::User { module, .. } => {
@@ -1018,6 +1020,10 @@ impl Interp {
         // latched CAN_FIRE, not the memoized pre-inhibitor values
         let mut wf_ctx = Ctx { memo: true, ..Default::default() };
         let wf = self.eval(inst, &mut wf_ctx, &Expr::Def(r.will_fire));
+        if std::env::var_os("TRS_TRACE_WF").is_some() && wf.as_bool() {
+            eprintln!("[{}] FIRE {}.{}", self.cycle, self.insts[inst].path,
+                      self.s(rule_name));
+        }
         self.set_latched(inst, r.will_fire, wf);
     }
 
