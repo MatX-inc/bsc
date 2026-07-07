@@ -35,6 +35,14 @@ pub enum Expr {
     TaskValue { width: u32, cookie: u32 },
     /// Foreign (BDPI) value function call.
     ForeignCall { width: u32, func: StrId, args: Vec<Expr> },
+    /// String literal (`ASStr`) — `$display` format strings and the like.
+    Str(StrId),
+    /// An abstract clock value (`ASClock`) — appears in instantiation
+    /// arguments; oscillator and gate expressions.
+    Clock { osc: Box<Expr>, gate: Box<Expr> },
+    /// An abstract reset value (`ASReset`) — appears in instantiation
+    /// arguments.
+    Reset { wire: Box<Expr> },
     /// A submodule's output clock gate (`AMGate`).
     Gate { instance: StrId, clock: StrId },
     Prim { op: PrimOp, width: u32, args: Vec<Expr> },
@@ -61,8 +69,9 @@ impl Expr {
             | Expr::If { width, .. }
             | Expr::Case { width, .. } => *width,
             Expr::Gate { .. } => 1,
-            // Def/Port/Param widths come from their declarations.
-            Expr::Def(_) | Expr::Port(_) | Expr::Param(_) => 0,
+            Expr::Clock { .. } | Expr::Reset { .. } => 1,
+            // Def/Port/Param/Str widths come from their declarations.
+            Expr::Def(_) | Expr::Port(_) | Expr::Param(_) | Expr::Str(_) => 0,
         }
     }
 }
