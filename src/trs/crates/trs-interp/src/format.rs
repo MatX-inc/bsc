@@ -8,13 +8,14 @@ use crate::value::Value;
 
 #[derive(Debug, Clone)]
 pub enum Arg {
-    Val(Value),
+    /// value + signed-display flag
+    Val(Value, bool),
     Str(String),
 }
 
 /// Maximal printed width of an N-bit value in the given base — Verilog's
 /// default column width for unsized format specifiers.
-fn max_width(bits: u32, base: u32) -> usize {
+fn max_width(bits: u32, base: u32, signed: bool) -> usize {
     if bits == 0 {
         return 1;
     }
@@ -22,15 +23,21 @@ fn max_width(bits: u32, base: u32) -> usize {
         2 => bits as usize,
         8 => ((bits as usize) + 2) / 3,
         16 => ((bits as usize) + 3) / 4,
+        _ if signed => {
+            // widest is -2^(bits-1): magnitude digits plus the sign
+            let m = Value::from_u64(bits.max(1), 1).shl((bits - 1) as u64, bits);
+            m.to_dec_string().len() + 1
+        }
         _ => Value::zero(bits).not(bits).to_dec_string().len(), // 2^bits-1
     }
 }
 
-fn fmt_val(v: &Value, base: u32, zero_pad: bool, width: Option<usize>) -> String {
+fn fmt_val(v: &Value, base: u32, zero_pad: bool, width: Option<usize>, signed: bool) -> String {
     let s = match base {
         2 => v.to_bin_string(),
         8 => v.to_oct_string(),
         16 => v.to_hex_string(),
+        _ if signed && v.sign() => format!("-{}", v.neg(v.width).to_dec_string()),
         _ => v.to_dec_string(),
     };
     // %h/%b/%o strings are already max-width with leading zeros; trim per
@@ -62,8 +69,11 @@ pub fn format_args(args: &[Arg], default_base: u32, now: u64) -> String {
                 i += 1;
                 format_str(fmt, args, &mut i, &mut out, now);
             }
-            Arg::Val(v) => {
-                out.push_str(&fmt_val(v, default_base, false, Some(max_width(v.width, default_base))));
+            Arg::Val(v, sg) => {
+                out.push_str(&fmt_val(
+                    v, default_base, false,
+                    Some(max_width(v.width, default_base, *sg)), *sg,
+                ));
                 i += 1;
             }
         }
@@ -71,16 +81,16 @@ pub fn format_args(args: &[Arg], default_base: u32, now: u64) -> String {
     out
 }
 
-fn next_val(args: &[Arg], i: &mut usize) -> Value {
+fn next_val(args: &[Arg], i: &mut usize) -> (Value, bool) {
     while *i < args.len() {
         let a = &args[*i];
         *i += 1;
         match a {
-            Arg::Val(v) => return v.clone(),
+            Arg::Val(v, sg) => return (v.clone(), *sg),
             Arg::Str(_) => continue, // strings consumed as %s only
         }
     }
-    Value::zero(1)
+    (Value::zero(1), false)
 }
 
 fn next_arg(args: &[Arg], i: &mut usize) -> Option<Arg> {
@@ -137,48 +147,48 @@ fn format_str(fmt: &str, args: &[Arg], i: &mut usize, out: &mut String, now: u64
         match spec.to_ascii_lowercase() {
             '%' => out.push('%'),
             'd' | 'u' => {
-                let v = next_val(args, i);
+                let (v, sg) = next_val(args, i);
                 let w = if explicit_min {
                     None
                 } else {
-                    width.or(Some(max_width(v.width, 10)))
+                    width.or(Some(max_width(v.width, 10, sg)))
                 };
-                out.push_str(&fmt_val(&v, 10, false, w));
+                out.push_str(&fmt_val(&v, 10, false, w, sg));
             }
             'h' | 'x' => {
-                let v = next_val(args, i);
+                let (v, _) = next_val(args, i);
                 let w = if explicit_min {
                     None
                 } else {
-                    width.or(Some(max_width(v.width, 16)))
+                    width.or(Some(max_width(v.width, 16, false)))
                 };
-                out.push_str(&fmt_val(&v, 16, true, w));
+                out.push_str(&fmt_val(&v, 16, true, w, false));
             }
             'o' => {
-                let v = next_val(args, i);
+                let (v, _) = next_val(args, i);
                 let w = if explicit_min {
                     None
                 } else {
-                    width.or(Some(max_width(v.width, 8)))
+                    width.or(Some(max_width(v.width, 8, false)))
                 };
-                out.push_str(&fmt_val(&v, 8, true, w));
+                out.push_str(&fmt_val(&v, 8, true, w, false));
             }
             'b' => {
-                let v = next_val(args, i);
+                let (v, _) = next_val(args, i);
                 let w = if explicit_min {
                     None
                 } else {
-                    width.or(Some(max_width(v.width, 2)))
+                    width.or(Some(max_width(v.width, 2, false)))
                 };
-                out.push_str(&fmt_val(&v, 2, true, w));
+                out.push_str(&fmt_val(&v, 2, true, w, false));
             }
             'c' => {
-                let v = next_val(args, i);
+                let (v, _) = next_val(args, i);
                 out.push((v.as_u64() & 0xFF) as u8 as char);
             }
             's' => match next_arg(args, i) {
                 Some(Arg::Str(s)) => out.push_str(&s),
-                Some(Arg::Val(v)) => {
+                Some(Arg::Val(v, _)) => {
                     // sized string: bytes, MSB first, skipping leading NULs
                     let n = ((v.width + 7) / 8) as usize;
                     let mut bytes = Vec::new();
@@ -196,7 +206,7 @@ fn format_str(fmt: &str, args: &[Arg], i: &mut usize, out: &mut String, now: u64
                 None => {}
             },
             't' => {
-                let v = next_val(args, i);
+                let (v, _) = next_val(args, i);
                 let w = width.unwrap_or(20);
                 let s = v.to_dec_string();
                 if s.len() < w && !explicit_min {
@@ -215,7 +225,7 @@ mod tests {
     use super::*;
 
     fn v(w: u32, x: u64) -> Arg {
-        Arg::Val(Value::from_u64(w, x))
+        Arg::Val(Value::from_u64(w, x), false)
     }
 
     #[test]

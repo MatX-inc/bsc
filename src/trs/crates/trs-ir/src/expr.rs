@@ -126,6 +126,9 @@ pub enum Action {
         func: StrId,
         cond: Expr,
         args: Vec<Expr>,
+        /// Per-arg signed-display flags (`encodeArgs`'s "-" prefix,
+        /// `ForeignFunctions.hs:256-262`).
+        signed: Vec<bool>,
     },
     /// Foreign ActionValue task; `cookie` links to `Expr::TaskValue`,
     /// `temp` is the def receiving the value (`ATaskAction`).
@@ -136,5 +139,7 @@ pub enum Action {
         width: u32,
         cond: Expr,
         args: Vec<Expr>,
+        /// Per-arg signed-display flags.
+        signed: Vec<bool>,
     },
 }

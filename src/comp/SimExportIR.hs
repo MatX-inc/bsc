@@ -42,7 +42,8 @@ import Data.List (foldl', nub)
 import Data.Maybe (mapMaybe)
 
 import ErrorUtil (internalError)
-import Id (Id, getIdBaseString, getIdQualString, mkIdCanFire, mkIdWillFire)
+import Id (Id, getIdBaseString, getIdQualString, isSignedId,
+           mkIdCanFire, mkIdWillFire)
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
@@ -801,6 +802,7 @@ encAction (AFCall _ fun _ (cond : args) _) = do
       [ ("func", f)
       , ("cond", condEnc)
       , ("args", encList argsEnc)
+      , ("signed", encList (map (encBool . argSigned) args))
       ]
 encAction (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
     f <- strE fun
@@ -814,5 +816,12 @@ encAction (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
       , ("width", encW32 (aTypeWidth mty))
       , ("cond", condEnc)
       , ("args", encList argsEnc)
+      , ("signed", encList (map (encBool . argSigned) args))
       ]
 encAction a = internalError ("SimExportIR.encAction: " ++ ppReadable a)
+
+-- Signed-display flag for a system-task argument: matches encodeArgs's
+-- "-" prefix rule (ForeignFunctions.hs:256-262).
+argSigned :: AExpr -> Bool
+argSigned (ASDef _ aid) = isSignedId aid
+argSigned _ = False

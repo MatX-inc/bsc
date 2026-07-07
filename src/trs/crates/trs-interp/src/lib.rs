@@ -238,7 +238,7 @@ impl Interp {
                 let fname = self.s(*func).to_string();
                 let argv: Vec<Arg> = args
                     .iter()
-                    .map(|a| self.eval_arg(inst, frame, a))
+                    .map(|a| self.eval_arg(inst, frame, a, false))
                     .collect();
                 self.foreign_value(&fname, &argv, *width)
             }
@@ -382,10 +382,16 @@ impl Interp {
         }
     }
 
-    fn eval_arg(&mut self, inst: usize, frame: &HashMap<StrId, Value>, e: &Expr) -> Arg {
+    fn eval_arg(
+        &mut self,
+        inst: usize,
+        frame: &HashMap<StrId, Value>,
+        e: &Expr,
+        signed: bool,
+    ) -> Arg {
         match e {
             Expr::Str(s) => Arg::Str(self.s(*s).to_string()),
-            _ => Arg::Val(self.eval(inst, frame, e)),
+            _ => Arg::Val(self.eval(inst, frame, e), signed),
         }
     }
 
@@ -469,22 +475,28 @@ impl Interp {
                 let child = self.child_of(inst, *instance);
                 self.call_action(child, *method, &argv);
             }
-            Action::Foreign { func, cond, args } => {
+            Action::Foreign { func, cond, args, signed } => {
                 if !self.eval(inst, frame, cond).as_bool() {
                     return;
                 }
                 let fname = self.s(*func).to_string();
-                let argv: Vec<Arg> =
-                    args.iter().map(|x| self.eval_arg(inst, frame, x)).collect();
+                let argv: Vec<Arg> = args
+                    .iter()
+                    .zip(signed.iter().chain(std::iter::repeat(&false)))
+                    .map(|(x, sg)| self.eval_arg(inst, frame, x, *sg))
+                    .collect();
                 self.foreign_action(&fname, &argv);
             }
-            Action::Task { func, cookie, temp, width, cond, args } => {
+            Action::Task { func, cookie, temp, width, cond, args, signed } => {
                 if !self.eval(inst, frame, cond).as_bool() {
                     return;
                 }
                 let fname = self.s(*func).to_string();
-                let argv: Vec<Arg> =
-                    args.iter().map(|x| self.eval_arg(inst, frame, x)).collect();
+                let argv: Vec<Arg> = args
+                    .iter()
+                    .zip(signed.iter().chain(std::iter::repeat(&false)))
+                    .map(|(x, sg)| self.eval_arg(inst, frame, x, *sg))
+                    .collect();
                 let v = self.foreign_value(&fname, &argv, *width);
                 self.set_latched(inst, cookie_key(*cookie), v.clone());
                 if let Some(t) = temp {
@@ -509,7 +521,7 @@ impl Interp {
             "$writeo" => print!("{}", format::format_args(args, 8, self.now)),
             "$finish" => {
                 let code = match args.first() {
-                    Some(Arg::Val(v)) => v.as_u64() as i32,
+                    Some(Arg::Val(v, _)) => v.as_u64() as i32,
                     _ => 0,
                 };
                 self.finished = Some(code);
