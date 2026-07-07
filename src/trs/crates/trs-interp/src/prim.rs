@@ -552,8 +552,11 @@ impl Fifo {
         }
     }
 
+    /// The count the CF status methods report (bs_prim_mod_fifo.h:181-203):
+    /// loopy FIFOs reflect same-cycle mutations (deq < i_notFull < enq);
+    /// all others report the begin-of-cycle count once anything mutated.
     fn cycle_start_len(&self, now: u64) -> usize {
-        if self.stamp == now {
+        if !self.loopy && self.stamp == now {
             self.saved_len
         } else {
             self.data.len()
