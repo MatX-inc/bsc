@@ -70,6 +70,13 @@ module_*.cxx
 # VCD dumps
 *.vcd
 
+# FST dumps (and the conversions/dumps checked by tests)
+*.fst
+*.fst.hier
+*.fst-vcd
+*.fst-hier
+*.fsthier
+
 # ModelSim/Questa output
 transcript
 work_*
