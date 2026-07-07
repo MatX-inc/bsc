@@ -20,8 +20,10 @@ pub trait Prim {
         panic!("primitive has no actionvalue methods");
     }
     /// End-of-edge tick (RWire clear, CReg rotate, synchronizer clock
-    /// ports, ...).  `now` is the simulation time of the ticking edge.
-    fn tick(&mut self, port: &str, now: u64);
+    /// ports, ...).  `now` is the simulation time of the ticking edge;
+    /// `clk_val` is the clock level after the edge (true on posedge) —
+    /// Both-edge ticks (ClockInverter, GatedClock) depend on it.
+    fn tick(&mut self, port: &str, now: u64, clk_val: bool);
     /// Reset line transition (assert = true).  Mirrors the `reset_RST`
     /// handlers in bs_prim_mod_*.h: while asserted, state-mutating methods
     /// are ignored and state is forced to the reset value.  Prims without
@@ -38,6 +40,12 @@ pub trait Prim {
     /// internally deferred transitions forward (MakeReset's rst register
     /// reaching its internal SyncReset).
     fn end_of_timeslice(&mut self) {}
+    /// For clock-generating prims (MakeClock, ClockDiv, ClockInverter):
+    /// drain output edges triggered at the current instant
+    /// (bk_trigger_clock_edge).  true = posedge.
+    fn take_clock_edges(&mut self) -> Vec<bool> {
+        Vec::new()
+    }
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -99,6 +107,12 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
             consts.get(1).map(|v| v.as_u64()).unwrap_or(1) as u8,
             Some(SyncReset::new(carg(consts, 0) as u32, name == "MakeResetA")),
         )),
+        // dynamic clock sources (bs_prim_mod_clockgen.h)
+        "MakeClock" => Box::new(MakeClock::new(consts)),
+        "ClockDiv" => Box::new(ClockDivider::new(consts)),
+        "ClockInverter" | "GatedClockInverter" => Box::new(ClockInverter::new()),
+        // a BypassWire crossing domains; the clk tick is bookkeeping only
+        "CrossingBypassWire" => Box::new(BypassWire::new(consts, false)),
         _ => panic!("trs-interp: unimplemented primitive {name:?} (P1 bring-up)"),
     }
 }
@@ -113,7 +127,7 @@ impl Prim for Probe {
         panic!("Probe: unknown value method {method:?}")
     }
     fn action_method(&mut self, _method: &str, _args: &[Value], _now: u64) {}
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
 }
 
 /// MOD_ResetToBool: reads 1 while its reset line is asserted.
@@ -131,7 +145,7 @@ impl Prim for ResetToBool {
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("ResetToBool: unknown action method {method:?}")
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
     }
@@ -230,7 +244,7 @@ impl Prim for Counter {
             m => panic!("Counter: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
         if self.in_reset {
             self.val = self.init.clone();
             self.saved_at = u64::MAX;
@@ -673,7 +687,7 @@ impl Prim for RegFile {
             m => panic!("RegFile: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
 }
 
 fn carg(consts: &[Value], i: usize) -> u64 {
@@ -753,7 +767,7 @@ impl Prim for Reg {
             m => panic!("Reg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
         // rst_tick__clk__1
         if self.in_reset {
             self.value = self.reset_value.clone();
@@ -836,7 +850,7 @@ impl Prim for ConfigReg {
             m => panic!("ConfigReg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
         if self.in_reset {
             self.value = self.reset_value.clone();
             self.old_value = self.reset_value.clone();
@@ -895,7 +909,7 @@ impl Prim for RWire {
             m => panic!("RWire: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
         self.valid = false;
     }
 }
@@ -928,7 +942,7 @@ impl Prim for BypassWire {
             m => panic!("BypassWire: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
 }
 
 // ===============
@@ -982,7 +996,7 @@ impl Prim for CReg {
             panic!("CReg: unknown action method {method:?}")
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
         if self.in_reset {
             self.value = self.reset_value.clone();
             self.suppress = true;
@@ -1119,7 +1133,7 @@ impl Prim for Fifo {
             m => panic!("FIFO: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str, _now: u64) {
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {
         if self.in_reset && !self.suppress {
             self.data.clear();
             self.stamp = u64::MAX;
@@ -1150,7 +1164,7 @@ impl Prim for ClockGen {
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("ClockGen: unknown action method {method:?}")
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
 }
 
 /// SyncVar: cross-domain variable with Verilog non-blocking-assignment
@@ -1234,7 +1248,7 @@ impl Prim for SyncBit {
             m => panic!("SyncBit: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, port: &str, now: u64) {
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
         match port {
             "clk_dst" => {
                 if self.two_stage {
@@ -1297,7 +1311,7 @@ impl Prim for SyncPulse {
             m => panic!("SyncPulse: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, port: &str, now: u64) {
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
         match port {
             "clk_dst" => {
                 self.d_pulse = self.d2.clone();
@@ -1420,7 +1434,7 @@ impl Prim for SyncHandshake {
             m => panic!("SyncHandshake: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, port: &str, now: u64) {
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
         match port {
             "clk_src" => self.hs.clk_src(now),
             "clk_dst" => self.hs.clk_dst(now),
@@ -1477,7 +1491,7 @@ impl Prim for SyncReg {
             m => panic!("SyncReg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, port: &str, now: u64) {
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
         match port {
             "clk_src" => self.hs.clk_src(now),
             "clk_dst" => {
@@ -1563,7 +1577,7 @@ impl Prim for SyncReset {
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("SyncReset: unknown action method {method:?}")
     }
-    fn tick(&mut self, port: &str, _now: u64) {
+    fn tick(&mut self, port: &str, _now: u64, _clk_val: bool) {
         match port {
             "clk" => self.clk(),
             p => panic!("SyncReset: unknown tick port {p:?}"),
@@ -1595,7 +1609,7 @@ impl Prim for SyncReset0 {
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("SyncReset0: unknown action method {method:?}")
     }
-    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
     fn set_in_reset(&mut self, asserted: bool) {
         self.pending.push((asserted, true));
     }
@@ -1624,7 +1638,7 @@ impl Prim for InitialReset {
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("InitialReset: unknown action method {method:?}")
     }
-    fn tick(&mut self, port: &str, _now: u64) {
+    fn tick(&mut self, port: &str, _now: u64, _clk_val: bool) {
         match port {
             "clk" => {
                 if self.count > 0 {
@@ -1708,7 +1722,7 @@ impl Prim for MakeReset {
             m => panic!("MakeReset: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, port: &str, now: u64) {
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
         match port {
             "clk" => {
                 if !self.in_reset {
@@ -1752,5 +1766,224 @@ impl Prim for MakeReset {
             }
             self.pending.append(&mut s.pending);
         }
+    }
+}
+
+// ===============
+// Dynamic clock sources (bs_prim_mod_clockgen.h): kernel clocks with no
+// predefined waveform; edges are triggered from input-clock ticks.
+
+/// MOD_MakeClock: clock level driven by setClockValue, gated by
+/// setGateCond (latched while the output is low).
+pub struct MakeClock {
+    init_high: bool,
+    init_gate: bool,
+    current_high: bool,
+    old_out_high: bool,
+    gate_out: bool,
+    new_gate: bool,
+    in_reset: bool,
+    edges: Vec<bool>,
+}
+
+impl MakeClock {
+    fn new(consts: &[Value]) -> MakeClock {
+        let init_high = carg(consts, 0) != 0;
+        let init_gate = consts.get(1).map(|v| v.as_u64() != 0).unwrap_or(true);
+        MakeClock {
+            init_high,
+            init_gate,
+            current_high: init_high,
+            old_out_high: init_high,
+            gate_out: init_gate,
+            new_gate: init_gate,
+            in_reset: false,
+            edges: Vec::new(),
+        }
+    }
+}
+
+impl Prim for MakeClock {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "getClockValue" => Value::from_u64(1, self.current_high as u64),
+            "getGateCond" => Value::from_u64(1, self.new_gate as u64),
+            m => panic!("MakeClock: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+        match method {
+            "setClockValue" => {
+                if !self.in_reset {
+                    self.current_high = args[0].as_bool();
+                }
+            }
+            "setGateCond" => {
+                if !self.in_reset {
+                    self.new_gate = args[0].as_bool();
+                }
+            }
+            m => panic!("MakeClock: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, _now: u64, _clk_val: bool) {
+        match port {
+            "clk" => {
+                if self.in_reset {
+                    return;
+                }
+                if !self.old_out_high && self.current_high && self.gate_out {
+                    self.edges.push(true);
+                    self.old_out_high = true;
+                } else if self.old_out_high && !self.current_high {
+                    self.edges.push(false);
+                    self.old_out_high = false;
+                }
+                if !self.current_high {
+                    self.gate_out = self.new_gate;
+                }
+            }
+            p => panic!("MakeClock: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.current_high = self.init_high;
+            self.gate_out = self.init_gate;
+            self.new_gate = self.init_gate;
+        }
+    }
+    fn take_clock_edges(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.edges)
+    }
+}
+
+/// MOD_ClockDivider: counts input posedges through [lower, upper]; the
+/// output is high while cntr >= 2^(width-1).
+pub struct ClockDivider {
+    transition: u64,
+    lower: u64,
+    upper: u64,
+    offset: u64,
+    cntr: u64,
+    gate_out: bool,
+    in_reset: bool,
+    edges: Vec<bool>,
+}
+
+impl ClockDivider {
+    fn new(consts: &[Value]) -> ClockDivider {
+        let width = carg(consts, 0);
+        let lower = carg(consts, 1);
+        let upper = carg(consts, 2);
+        let offset = carg(consts, 3);
+        ClockDivider {
+            transition: 1 << (width - 1),
+            lower,
+            upper,
+            offset,
+            cntr: upper - offset,
+            gate_out: false,
+            in_reset: false,
+            edges: Vec::new(),
+        }
+    }
+}
+
+impl Prim for ClockDivider {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "clockReady" => Value::from_u64(1, (self.cntr == self.transition - 1) as u64),
+            m => panic!("ClockDiv: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("ClockDiv: unknown action method {method:?}")
+    }
+    fn tick(&mut self, port: &str, _now: u64, _clk_val: bool) {
+        match port {
+            "clk" => {
+                if self.in_reset {
+                    return;
+                }
+                if self.cntr < self.transition {
+                    self.gate_out = true;
+                }
+                if self.cntr == self.upper {
+                    self.cntr = self.lower;
+                    if self.gate_out {
+                        self.edges.push(false);
+                        self.gate_out = true;
+                    }
+                } else {
+                    self.cntr += 1;
+                    if self.cntr == self.transition && self.gate_out {
+                        self.edges.push(true);
+                    }
+                }
+            }
+            p => panic!("ClockDiv: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            let prev = self.cntr;
+            self.cntr = self.upper - self.offset;
+            if prev >= self.transition && self.cntr < self.transition {
+                self.edges.push(false);
+            } else if prev < self.transition && self.cntr >= self.transition {
+                self.edges.push(true);
+            }
+            self.gate_out = false;
+        }
+    }
+    fn take_clock_edges(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.edges)
+    }
+}
+
+/// MOD_ClockInverter: output is the complement of (clk & gate), updated
+/// on both input edges.
+pub struct ClockInverter {
+    current_high: bool,
+    gate_out: bool,
+    edges: Vec<bool>,
+}
+
+impl ClockInverter {
+    fn new() -> ClockInverter {
+        ClockInverter { current_high: false, gate_out: true, edges: Vec::new() }
+    }
+}
+
+impl Prim for ClockInverter {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "clockReady" => Value::from_u64(1, 1),
+            m => panic!("ClockInverter: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("ClockInverter: unknown action method {method:?}")
+    }
+    fn tick(&mut self, port: &str, _now: u64, clk_val: bool) {
+        match port {
+            "clk" => {
+                let mut new_high = !clk_val;
+                if !self.gate_out {
+                    new_high = false;
+                }
+                if new_high != self.current_high {
+                    self.edges.push(new_high);
+                }
+                self.current_high = new_high;
+            }
+            p => panic!("ClockInverter: unknown tick port {p:?}"),
+        }
+    }
+    fn take_clock_edges(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.edges)
     }
 }

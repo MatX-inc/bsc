@@ -8,6 +8,9 @@ pub struct Value {
     limbs: Vec<u64>,
 }
 
+/// Marker width for string-valued `Value`s (see `Value::str_ref`).
+pub const STR_MARKER: u32 = u32::MAX;
+
 fn nlimbs(width: u32) -> usize {
     ((width as usize) + 63) / 64
 }
@@ -322,11 +325,31 @@ impl Value {
     }
 
     pub fn zext(&self, w: u32) -> Value {
+        if self.width == STR_MARKER {
+            // string values pass through width adjustments unchanged
+            // (they only ever flow into task arguments)
+            return self.clone();
+        }
         let mut r = self.clone();
         r.width = w;
         r.limbs.resize(nlimbs(w).max(1), 0);
         r.mask();
         r
+    }
+
+    /// A dynamically selected string value: carries an interned string id
+    /// instead of bits.  Only valid as a task argument; the marker width
+    /// keeps it inert through muxes and def stores.
+    pub fn str_ref(id: u32) -> Value {
+        Value { width: STR_MARKER, limbs: vec![id as u64] }
+    }
+
+    pub fn as_str_id(&self) -> Option<u32> {
+        if self.width == STR_MARKER {
+            Some(self.limbs[0] as u32)
+        } else {
+            None
+        }
     }
 
     pub fn sext(&self, w: u32) -> Value {
