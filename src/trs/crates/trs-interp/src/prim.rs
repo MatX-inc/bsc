@@ -118,6 +118,10 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "SyncRegister" => Box::new(SyncReg::new(consts)),
         // reset generators: args are [cycles] / [cycles, init?] per
         // bs_prim_mod_resets.h ctors; A-variants assert asynchronously
+        "RegTwoN" | "RegTwoA" => Box::new(RegTwo::new(consts, true, name == "RegTwoA")),
+        "RegTwoUN" => Box::new(RegTwo::new(consts, false, false)),
+        "ClockMux" | "UngatedClockMux" => Box::new(ClockMux::new()),
+        "ClockSelect" | "UngatedClockSelect" => Box::new(ClockSelect::new(consts)),
         "ResetMux" => Box::new(ResetMux::new()),
         "ResetEither" => Box::new(ResetEither::new()),
         "SyncReset" => Box::new(SyncReset::new(carg(consts, 0) as u32, false)),
@@ -2864,5 +2868,315 @@ impl Prim for GatedClock {
         } else {
             self.suppress = false;
         }
+    }
+}
+
+// ===============
+// MOD_RegTwo (bs_prim_mod_reg.h:648): a register with two write ports
+// (setA wins over a same-instant setB) whose get() reads the
+// begin-of-instant value (NBA visibility).
+
+struct RegTwo {
+    value: Value,
+    old_value: Value,
+    reset_value: Value,
+    written: u64,
+    a_at: u64,
+    async_rst: bool,
+    in_reset: bool,
+    suppress: bool,
+}
+
+impl RegTwo {
+    fn new(consts: &[Value], has_reset: bool, async_rst: bool) -> RegTwo {
+        let width = carg(consts, 0) as u32;
+        let reset_value = if has_reset && consts.len() > 1 {
+            consts[1].zext(width)
+        } else {
+            Value::undet(width)
+        };
+        RegTwo {
+            value: Value::undet(width),
+            old_value: Value::undet(width),
+            reset_value,
+            written: u64::MAX,
+            a_at: u64::MAX,
+            async_rst,
+            in_reset: false,
+            suppress: false,
+        }
+    }
+    fn note_write(&mut self, now: u64) {
+        if self.written != now {
+            self.old_value = self.value.clone();
+            self.written = now;
+        }
+    }
+}
+
+impl Prim for RegTwo {
+    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+        match method {
+            "get" | "read" => {
+                if self.written == now {
+                    self.old_value.clone()
+                } else {
+                    self.value.clone()
+                }
+            }
+            m => panic!("RegTwo: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        if self.async_rst && self.suppress {
+            return;
+        }
+        match method {
+            "setA" => {
+                self.note_write(now);
+                self.a_at = now;
+                self.value = args[0].clone();
+            }
+            "setB" => {
+                self.note_write(now);
+                if self.a_at != now {
+                    self.value = args[0].clone();
+                }
+            }
+            m => panic!("RegTwo: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    fn rst_tick(&mut self, _now: u64) {
+        if self.in_reset {
+            self.value = self.reset_value.clone();
+            self.suppress = true;
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            if self.async_rst {
+                self.value = self.reset_value.clone();
+                self.suppress = true;
+            }
+        } else {
+            self.suppress = false;
+        }
+    }
+}
+
+// ===============
+// MOD_ClockMux / MOD_ClockSelect (bs_prim_mod_clockmux.h): output clock
+// muxes.  ClockMux switches combinationally on select; ClockSelect
+// registers the selector on xclk and generates a synchronized reset held
+// for `stages` output cycles after a switch.
+
+struct ClockMux {
+    sel_a: bool,
+    a_clk: bool,
+    a_gate: bool,
+    b_clk: bool,
+    b_gate: bool,
+    new_clk: bool,
+    gate_out: bool,
+    edges: Vec<bool>,
+}
+
+impl ClockMux {
+    fn new() -> ClockMux {
+        ClockMux {
+            sel_a: false,
+            a_clk: false,
+            a_gate: false,
+            b_clk: false,
+            b_gate: false,
+            new_clk: false,
+            gate_out: true,
+            edges: Vec::new(),
+        }
+    }
+    fn do_clock(&mut self) {
+        let old = self.new_clk;
+        self.new_clk = if self.sel_a { self.a_clk } else { self.b_clk };
+        self.gate_out = if self.sel_a { self.a_gate } else { self.b_gate };
+        if self.new_clk != old {
+            self.edges.push(self.new_clk);
+        }
+    }
+}
+
+impl Prim for ClockMux {
+    fn gate_out(&self) -> bool {
+        self.gate_out
+    }
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("ClockMux: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+        match method {
+            "select" => {
+                self.sel_a = args[0].as_bool();
+                self.do_clock();
+            }
+            m => panic!("ClockMux: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, _now: u64, clk_val: bool, gate: bool) {
+        match port {
+            "aClk" => {
+                self.a_clk = clk_val;
+                self.a_gate = gate;
+                self.do_clock();
+            }
+            "bClk" => {
+                self.b_clk = clk_val;
+                self.b_gate = gate;
+                self.do_clock();
+            }
+            "xclk" => self.do_clock(),
+            p => panic!("ClockMux: unknown tick port {p:?}"),
+        }
+    }
+    fn take_clock_edges(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.edges)
+    }
+}
+
+struct ClockSelect {
+    reset_delay: u64,
+    reset_hold: u64,
+    sel: bool,
+    sel2: bool,
+    written: u64,
+    in_reset: bool,
+    a_clk: bool,
+    a_gate: bool,
+    b_clk: bool,
+    b_gate: bool,
+    new_clk: bool,
+    gate_out: bool,
+    changed: bool,
+    changed_negedge: u64,
+    last_now: u64,
+    edges: Vec<bool>,
+    rst_pending: Vec<(bool, bool)>,
+}
+
+impl ClockSelect {
+    fn new(consts: &[Value]) -> ClockSelect {
+        let stages = carg(consts, 0);
+        ClockSelect {
+            reset_delay: stages,
+            reset_hold: stages + 1,
+            sel: false,
+            sel2: false,
+            written: u64::MAX,
+            in_reset: false,
+            a_clk: false,
+            a_gate: true,
+            b_clk: false,
+            b_gate: true,
+            new_clk: false,
+            gate_out: true,
+            changed: false,
+            changed_negedge: u64::MAX,
+            last_now: 0,
+            edges: Vec::new(),
+            rst_pending: Vec::new(),
+        }
+    }
+    fn do_clock_and_reset(&mut self, now: u64) {
+        let old_clk = self.new_clk;
+        self.new_clk = if self.sel { self.a_clk } else { self.b_clk };
+        self.gate_out = if self.sel { self.a_gate } else { self.b_gate };
+
+        let prev_changed = self.changed;
+        self.changed = (self.sel != self.sel2) || self.in_reset;
+        if !self.changed && prev_changed {
+            self.changed_negedge = now;
+        }
+
+        if self.new_clk != old_clk {
+            self.edges.push(self.new_clk);
+        }
+
+        if (self.new_clk && !old_clk) || (self.changed && !prev_changed) {
+            if self.changed || self.changed_negedge == now {
+                if self.reset_hold > self.reset_delay {
+                    // assert the output reset at end of timeslice
+                    self.rst_pending.push((true, false));
+                }
+                self.reset_hold = 0;
+            } else {
+                if self.reset_hold <= self.reset_delay {
+                    self.reset_hold += 1;
+                }
+                if self.reset_hold > self.reset_delay {
+                    self.rst_pending.push((false, false));
+                }
+            }
+        }
+    }
+}
+
+impl Prim for ClockSelect {
+    fn gate_out(&self) -> bool {
+        self.gate_out
+    }
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("ClockSelect: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "select" => {
+                self.last_now = now;
+                if !self.in_reset {
+                    self.written = now;
+                    self.sel2 = self.sel;
+                    self.sel = args[0].as_bool();
+                    self.do_clock_and_reset(now);
+                }
+            }
+            m => panic!("ClockSelect: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64, clk_val: bool, gate: bool) {
+        self.last_now = now;
+        match port {
+            "aClk" => {
+                self.a_clk = clk_val;
+                self.a_gate = gate;
+                self.do_clock_and_reset(now);
+            }
+            "bClk" => {
+                self.b_clk = clk_val;
+                self.b_gate = gate;
+                self.do_clock_and_reset(now);
+            }
+            "xclk" => {
+                if !self.in_reset && self.written != now {
+                    self.sel2 = self.sel;
+                    self.do_clock_and_reset(now);
+                }
+            }
+            p => panic!("ClockSelect: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if !asserted {
+            self.sel = false;
+            self.sel2 = false;
+        }
+        // reset_RST re-evaluates the clock/reset logic (this is what
+        // asserts the generated reset while the input reset is held)
+        self.do_clock_and_reset(self.last_now);
+    }
+    fn take_clock_edges(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.edges)
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.rst_pending)
     }
 }

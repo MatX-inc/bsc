@@ -60,14 +60,14 @@ fn fmt_val(v: &Value, base: u32, zero_pad: bool, width: Option<usize>, signed: b
 
 /// Format one $display-style call.  `default_base` is 10 for the plain
 /// tasks, 16/8/2 for $displayh/$displayo/$displayb.
-pub fn format_args(args: &[Arg], default_base: u32, now: u64) -> String {
+pub fn format_args(args: &[Arg], default_base: u32, now: u64, loc: &str) -> String {
     let mut out = String::new();
     let mut i = 0;
     while i < args.len() {
         match &args[i] {
             Arg::Str(fmt) => {
                 i += 1;
-                format_str(fmt, args, &mut i, &mut out, now);
+                format_str(fmt, args, &mut i, &mut out, now, loc);
             }
             Arg::Val(v, sg) => {
                 out.push_str(&fmt_val(
@@ -77,6 +77,64 @@ pub fn format_args(args: &[Arg], default_base: u32, now: u64) -> String {
                 i += 1;
             }
         }
+    }
+    out
+}
+
+/// A bit-packed string value back to text: bytes MSB-first, leading NUL
+/// bytes skipped (how Bluesim reads a Bit#(n) used as a format).
+fn unpack_str(v: &Value) -> String {
+    let nbytes = ((v.width as usize) + 7) / 8;
+    let mut s = String::new();
+    for k in (0..nbytes).rev() {
+        let b = v.lshr((k * 8) as u64, v.width).as_u64() as u8;
+        if b == 0 && s.is_empty() {
+            continue;
+        }
+        s.push(b as char);
+    }
+    s
+}
+
+/// $swrite/$sformat semantics: ONLY the first argument is a format (a
+/// string, or a bit-packed string value); remaining string arguments are
+/// literal text, remaining values format in the default base.
+/// `fmt_first`: $sformat's first argument is always the format, even when
+/// it is a bit-packed string value; $swrite formats a leading value as a
+/// plain value instead.
+pub fn format_sformat(
+    args: &[Arg],
+    default_base: u32,
+    now: u64,
+    loc: &str,
+    fmt_first: bool,
+) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    match args.first() {
+        Some(Arg::Str(f)) => {
+            i = 1;
+            let fmt = f.clone();
+            format_str(&fmt, args, &mut i, &mut out, now, loc);
+        }
+        Some(Arg::Val(v, _)) if fmt_first => {
+            i = 1;
+            let fmt = unpack_str(v);
+            format_str(&fmt, args, &mut i, &mut out, now, loc);
+        }
+        _ => {}
+    }
+    while i < args.len() {
+        match &args[i] {
+            Arg::Str(text) => out.push_str(text),
+            Arg::Val(v, sg) => {
+                out.push_str(&fmt_val(
+                    v, default_base, false,
+                    Some(max_width(v.width, default_base, *sg)), *sg,
+                ));
+            }
+        }
+        i += 1;
     }
     out
 }
@@ -95,7 +153,7 @@ fn next_val(args: &[Arg], i: &mut usize) -> (Value, bool) {
 }
 
 /// A string literal as a bit vector: bytes MSB-first (Verilog packing).
-fn str_value(s: &str) -> Value {
+pub fn str_value(s: &str) -> Value {
     let bytes = s.as_bytes();
     let w = (bytes.len() as u32 * 8).max(8);
     let mut v = Value::zero(w);
@@ -115,7 +173,7 @@ fn next_arg(args: &[Arg], i: &mut usize) -> Option<Arg> {
     }
 }
 
-fn format_str(fmt: &str, args: &[Arg], i: &mut usize, out: &mut String, now: u64) {
+fn format_str(fmt: &str, args: &[Arg], i: &mut usize, out: &mut String, now: u64, loc: &str) {
     let mut cs = fmt.chars().peekable();
     while let Some(c) = cs.next() {
         if c == '\\' {
@@ -227,6 +285,7 @@ fn format_str(fmt: &str, args: &[Arg], i: &mut usize, out: &mut String, now: u64
                 out.push_str(&s);
             }
             '0' => { /* %0 alone: nothing */ }
+            'm' => out.push_str(loc),
             other => panic!("trs-interp: unimplemented format %{other} (now={now})"),
         }
     }

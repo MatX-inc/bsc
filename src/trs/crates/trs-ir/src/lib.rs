@@ -251,8 +251,11 @@ impl std::error::Error for DecodeError {}
 
 impl Design {
     pub fn decode(bytes: &[u8]) -> Result<Design, DecodeError> {
-        let design: Design = ciborium::from_reader(bytes)
-            .map_err(|e| DecodeError::Cbor(e.to_string()))?;
+        // deep expression trees (long fold chains) exceed ciborium's
+        // default recursion limit of 128
+        let design: Design =
+            ciborium::de::from_reader_with_recursion_limit(bytes, 65536)
+                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
         if design.version != BIR_VERSION {
             return Err(DecodeError::VersionMismatch {
                 found: design.version,

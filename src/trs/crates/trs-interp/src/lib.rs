@@ -37,6 +37,8 @@ pub struct Interp {
     /// Verilog file descriptors are; 0x8000_0000 reserved for stdout
     /// behavior of the MCD form is not modeled yet)
     files: HashMap<u64, std::fs::File>,
+    /// per-fd pushback stack for $ungetc; $fgetc pops from here first
+    pushback: HashMap<u64, Vec<u8>>,
     next_fd: u64,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
@@ -173,6 +175,7 @@ impl Interp {
             inst_by_path: HashMap::new(),
             insts: Vec::new(),
             files: HashMap::new(),
+            pushback: HashMap::new(),
             next_fd: 0x8000_0001,
             finished: None,
             cycle: 0,
@@ -348,7 +351,8 @@ impl Interp {
                             self.dynclk_init
                                 .insert(format!("{cpath}$CLK_OUT"), init_high);
                         }
-                        "ClockInverter" | "GatedClockInverter" => {
+                        "ClockInverter" | "GatedClockInverter" | "ClockMux"
+                        | "UngatedClockMux" | "ClockSelect" | "UngatedClockSelect" => {
                             self.dynclk_init
                                 .insert(format!("{cpath}$CLK_OUT"), false);
                         }
@@ -381,6 +385,7 @@ impl Interp {
                         "SyncReset" | "SyncResetA" | "SyncReset0" | "InitialReset"
                             | "MakeReset" | "MakeResetA" | "MakeReset0"
                             | "ResetMux" | "ResetEither"
+                            | "ClockSelect" | "UngatedClockSelect"
                     ) {
                         let t1 = format!("{}$OUT_RST", self.s(name));
                         let t2 = format!("{}$RST_OUT", self.s(name));
@@ -542,7 +547,8 @@ impl Interp {
                     .iter()
                     .map(|a| self.eval_arg(inst, ctx, a, false))
                     .collect();
-                self.foreign_value(&fname, &argv, *width)
+                let loc = self.loc_of(inst);
+                self.foreign_value(&fname, &argv, *width, &loc)
             }
             Expr::Gate { instance, .. } => {
                 let child = self.child_of(inst, *instance);
@@ -914,7 +920,8 @@ impl Interp {
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
                     .map(|(x, sg)| self.eval_arg(inst, ctx, x, *sg))
                     .collect();
-                self.foreign_action(&fname, &argv);
+                let loc = self.loc_of(inst);
+                self.foreign_action(&fname, &argv, &loc);
             }
             Action::Task { func, cookie, temp, width, cond, args, signed } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
@@ -926,7 +933,8 @@ impl Interp {
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
                     .map(|(x, sg)| self.eval_arg(inst, ctx, x, *sg))
                     .collect();
-                let v = self.foreign_value(&fname, &argv, *width);
+                let loc = self.loc_of(inst);
+                let v = self.foreign_value(&fname, &argv, *width, &loc);
                 ctx.locals.insert(cookie_key(*cookie), v.clone());
                 if let Some(t) = temp {
                     ctx.locals.insert(*t, v);
@@ -947,7 +955,18 @@ impl Interp {
         }
     }
 
-    fn foreign_action(&mut self, name: &str, args: &[Arg]) {
+    /// %m location string: the hierarchical name of the module executing
+    /// the task (the C++ passes `this` and write_name prints it).
+    fn loc_of(&self, inst: usize) -> String {
+        let p = &self.insts[inst].path;
+        if p.is_empty() {
+            "top".to_string()
+        } else {
+            format!("top.{p}")
+        }
+    }
+
+    fn foreign_action(&mut self, name: &str, args: &[Arg], loc: &str) {
         match name {
             "$fdisplay" | "$fwrite" | "$fdisplayh" | "$fwriteh"
             | "$fdisplayb" | "$fwriteb" | "$fdisplayo" | "$fwriteo" => {
@@ -961,7 +980,7 @@ impl Interp {
                     Some(Arg::Val(v, _)) => v.as_u64(),
                     _ => 0x8000_0000,
                 };
-                let mut text = format::format_args(&args[1..], base, self.now);
+                let mut text = format::format_args(&args[1..], base, self.now, loc);
                 if name.starts_with("$fdisplay") {
                     text.push('\n');
                 }
@@ -982,23 +1001,23 @@ impl Interp {
                     let _ = std::io::stdout().flush();
                 }
             }
-            "$display" => println!("{}", format::format_args(args, 10, self.now)),
-            "$displayh" => println!("{}", format::format_args(args, 16, self.now)),
-            "$displayb" => println!("{}", format::format_args(args, 2, self.now)),
-            "$displayo" => println!("{}", format::format_args(args, 8, self.now)),
-            "$write" => print!("{}", format::format_args(args, 10, self.now)),
-            "$writeh" => print!("{}", format::format_args(args, 16, self.now)),
-            "$writeb" => print!("{}", format::format_args(args, 2, self.now)),
-            "$writeo" => print!("{}", format::format_args(args, 8, self.now)),
+            "$display" => println!("{}", format::format_args(args, 10, self.now, loc)),
+            "$displayh" => println!("{}", format::format_args(args, 16, self.now, loc)),
+            "$displayb" => println!("{}", format::format_args(args, 2, self.now, loc)),
+            "$displayo" => println!("{}", format::format_args(args, 8, self.now, loc)),
+            "$write" => print!("{}", format::format_args(args, 10, self.now, loc)),
+            "$writeh" => print!("{}", format::format_args(args, 16, self.now, loc)),
+            "$writeb" => print!("{}", format::format_args(args, 2, self.now, loc)),
+            "$writeo" => print!("{}", format::format_args(args, 8, self.now, loc)),
             "$error" | "$warning" | "$info" => {
                 // severity prefix, then the message (dollar_display.cxx)
                 let sev = &name[1..];
                 let mut t = sev[..1].to_uppercase();
                 t.push_str(&sev[1..]);
-                println!("{}: {}", t, format::format_args(args, 10, self.now));
+                println!("{}: {}", t, format::format_args(args, 10, self.now, loc));
             }
             "$fatal" => {
-                println!("Fatal: {}", format::format_args(args, 10, self.now));
+                println!("Fatal: {}", format::format_args(args, 10, self.now, loc));
                 self.finished = Some(1);
             }
             "$finish" => {
@@ -1009,12 +1028,13 @@ impl Interp {
                 self.finished = Some(code);
             }
             "$stop" => self.finished = Some(0),
-            "$dumpvars" | "$dumpon" | "$dumpoff" | "$dumpfile" => {} // waves: P2
+            "$dumpvars" | "$dumpon" | "$dumpoff" | "$dumpfile" | "$dumpall"
+            | "$dumplimit" | "$dumpflush" => {} // waves: P2
             other => panic!("trs-interp: unimplemented system task {other:?}"),
         }
     }
 
-    fn foreign_value(&mut self, name: &str, args: &[Arg], w: u32) -> Value {
+    fn foreign_value(&mut self, name: &str, args: &[Arg], w: u32, loc: &str) -> Value {
         match name {
             "$time" | "$stime" => Value::from_u64(w.max(1), self.now),
             "$fopen" => {
@@ -1045,6 +1065,9 @@ impl Interp {
                     Some(Arg::Val(v, _)) => v.as_u64(),
                     _ => return Value::from_u64(w.max(32), u32::MAX as u64),
                 };
+                if let Some(b) = self.pushback.get_mut(&fd).and_then(|s| s.pop()) {
+                    return Value::from_u64(w.max(32), b as u64);
+                }
                 let mut byte = [0u8; 1];
                 if let Some(f) = self.files.get_mut(&fd) {
                     if f.read_exact(&mut byte).is_ok() {
@@ -1053,6 +1076,43 @@ impl Interp {
                 }
                 // EOF / bad fd: -1
                 Value::from_u64(w.max(32), 0xFFFF_FFFF)
+            }
+            "$ungetc" => {
+                // args: (char, fd); pushes back for the next $fgetc and
+                // returns the char (C ungetc semantics)
+                let c = match args.first() {
+                    Some(Arg::Val(v, _)) => v.as_u64() as u8,
+                    _ => 0,
+                };
+                let fd = match args.get(1) {
+                    Some(Arg::Val(v, _)) => v.as_u64(),
+                    _ => 0,
+                };
+                if self.files.contains_key(&fd) || fd == 0x8000_0000 {
+                    self.pushback.entry(fd).or_default().push(c);
+                    Value::from_u64(w.max(32), c as u64)
+                } else {
+                    Value::from_u64(w.max(32), 0xFFFF_FFFF)
+                }
+            }
+            "$swriteAV" | "$sformatAV" | "$swritebAV" | "$swriteoAV" | "$swritehAV" => {
+                // format into a string, then pack the ASCII bytes into the
+                // result width (right-justified, like the C++ BufferTarget
+                // + copy_back)
+                let base = match name {
+                    "$swritebAV" => 2,
+                    "$swriteoAV" => 8,
+                    "$swritehAV" => 16,
+                    _ => 10,
+                };
+                let text =
+                    format::format_sformat(args, base, self.now, loc, name == "$sformatAV");
+                let packed = format::str_value(&text);
+                if packed.width >= w {
+                    packed.extract(w as u64 - 1, 0, w)
+                } else {
+                    packed.zext(w)
+                }
             }
             "$fclose" => {
                 if let Some(Arg::Val(v, _)) = args.first() {
