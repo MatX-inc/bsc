@@ -60,8 +60,8 @@ pub struct Interp {
     /// reset wire ports, so the interpreter only has to answer "is this
     /// reset wire asserted" and drive prim reset lines.
     rst_asserted: Vec<bool>,
-    /// node -> primitive instances whose reset line is this node
-    rst_subs: Vec<Vec<usize>>,
+    /// node -> (prim instance, reset-arg ordinal) subscriptions
+    rst_subs: Vec<Vec<(usize, usize)>>,
     /// reset-generating prim instance -> the node its OUT_RST drives
     rstgen_out: HashMap<usize, usize>,
     /// deferred (end-of-timeslice) reset transitions, mirroring
@@ -360,14 +360,18 @@ impl Interp {
                         kind: InstKind::Prim(prim::make_prim(&pname, &consts, &strs, &cpath)),
                     });
                     // reset-line subscriptions from Reset args wired to a
-                    // live reset (a constant wire = noReset, never asserted)
+                    // live reset (a constant wire = noReset, never
+                    // asserted); the ordinal distinguishes A_RST/B_RST on
+                    // multi-input prims
+                    let mut rst_ord = 0;
                     for a in &args {
                         if let Expr::Reset { wire } = a {
                             if let Expr::Port(p) = wire.as_ref() {
                                 if let Some(&n) = reset_map.get(p) {
-                                    self.rst_subs[n].push(idx);
+                                    self.rst_subs[n].push((idx, rst_ord));
                                 }
                             }
+                            rst_ord += 1;
                         }
                     }
                     // reset generators drive the node named <leaf>$OUT_RST
@@ -376,11 +380,13 @@ impl Interp {
                         pname.as_str(),
                         "SyncReset" | "SyncResetA" | "SyncReset0" | "InitialReset"
                             | "MakeReset" | "MakeResetA" | "MakeReset0"
+                            | "ResetMux" | "ResetEither"
                     ) {
-                        let target = format!("{}$OUT_RST", self.s(name));
+                        let t1 = format!("{}$OUT_RST", self.s(name));
+                        let t2 = format!("{}$RST_OUT", self.s(name));
                         let out = reset_map
                             .iter()
-                            .find(|(k, _)| self.s(**k) == target)
+                            .find(|(k, _)| self.s(**k) == t1 || self.s(**k) == t2)
                             .map(|(_, &n)| n);
                         if let Some(out) = out {
                             self.rstgen_out.insert(idx, out);
@@ -1108,9 +1114,9 @@ impl Interp {
             }
             self.rst_asserted[n] = v;
             let subs = self.rst_subs[n].clone();
-            for idx in subs {
+            for (idx, ord) in subs {
                 if let InstKind::Prim(p) = &mut self.insts[idx].kind {
-                    p.set_in_reset(v);
+                    p.set_reset_input(ord, v);
                     if self.rstgen_out.contains_key(&idx) {
                         for (out_v, immediate) in p.take_reset_out() {
                             let out = self.rstgen_out[&idx];

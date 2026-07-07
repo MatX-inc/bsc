@@ -29,6 +29,13 @@ pub trait Prim {
     /// are ignored and state is forced to the reset value.  Prims without
     /// a reset connection never see this.
     fn set_in_reset(&mut self, _asserted: bool) {}
+    /// Indexed reset-line transition for prims with several reset inputs
+    /// (ResetMux/ResetEither A_RST/B_RST); the index is the ordinal of
+    /// the Reset argument in the instantiation.  Single-input prims fall
+    /// through to set_in_reset.
+    fn set_reset_input(&mut self, _input: usize, asserted: bool) {
+        self.set_in_reset(asserted);
+    }
     /// Conditional reset tick (rst_tick_*): posedge of the prim's clock
     /// while some reset is asserted; loads the reset state if this prim's
     /// own reset line is asserted.
@@ -106,6 +113,8 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "SyncRegister" => Box::new(SyncReg::new(consts)),
         // reset generators: args are [cycles] / [cycles, init?] per
         // bs_prim_mod_resets.h ctors; A-variants assert asynchronously
+        "ResetMux" => Box::new(ResetMux::new()),
+        "ResetEither" => Box::new(ResetEither::new()),
         "SyncReset" => Box::new(SyncReset::new(carg(consts, 0) as u32, false)),
         "SyncResetA" => Box::new(SyncReset::new(carg(consts, 0) as u32, true)),
         "SyncReset0" => Box::new(SyncReset0::new()),
@@ -2627,5 +2636,122 @@ impl Prim for Bram {
             "clkB" => self.clk(true, now),
             p => panic!("BRAM: unknown tick port {p:?}"),
         }
+    }
+}
+
+
+// ===============
+// Reset combinators (bs_prim_mod_resets.h).
+
+/// MOD_ResetMux: two reset inputs, a select register (updated at end of
+/// timeslice when changed), output follows the selected input.
+struct ResetMux {
+    sel_a: bool,
+    new_sel_a: bool,
+    a_asserted: bool,
+    b_asserted: bool,
+    select_changed: bool,
+    pending: Vec<(bool, bool)>,
+}
+
+impl ResetMux {
+    fn new() -> ResetMux {
+        ResetMux {
+            sel_a: false,
+            new_sel_a: false,
+            // rst_in values start 0 (asserted) in the C++
+            a_asserted: true,
+            b_asserted: true,
+            select_changed: false,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl Prim for ResetMux {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("ResetMux: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+        match method {
+            "select" => self.new_sel_a = args[0].as_bool(),
+            m => panic!("ResetMux: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, _now: u64, _clk_val: bool) {
+        match port {
+            "xclk" => {
+                if self.new_sel_a != self.sel_a {
+                    self.select_changed = true;
+                }
+            }
+            p => panic!("ResetMux: unknown tick port {p:?}"),
+        }
+    }
+    fn set_reset_input(&mut self, input: usize, asserted: bool) {
+        if input == 0 {
+            self.a_asserted = asserted;
+            if self.sel_a {
+                self.pending.push((asserted, true));
+            }
+        } else {
+            self.b_asserted = asserted;
+            if !self.sel_a {
+                self.pending.push((asserted, true));
+            }
+        }
+    }
+    fn end_of_timeslice(&mut self) {
+        if self.select_changed {
+            self.select_changed = false;
+            self.sel_a = self.new_sel_a;
+            if self.a_asserted != self.b_asserted {
+                let v = if self.sel_a { self.a_asserted } else { self.b_asserted };
+                self.pending.push((v, false));
+            }
+        }
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// MOD_ResetEither: output asserted while either input is asserted;
+/// transitions propagate only while the other input is deasserted.
+struct ResetEither {
+    a_asserted: bool,
+    b_asserted: bool,
+    pending: Vec<(bool, bool)>,
+}
+
+impl ResetEither {
+    fn new() -> ResetEither {
+        ResetEither { a_asserted: false, b_asserted: false, pending: Vec::new() }
+    }
+}
+
+impl Prim for ResetEither {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("ResetEither: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("ResetEither: unknown action method {method:?}")
+    }
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
+    fn set_reset_input(&mut self, input: usize, asserted: bool) {
+        if input == 0 {
+            if asserted != self.a_asserted && !self.b_asserted {
+                self.pending.push((asserted, true));
+            }
+            self.a_asserted = asserted;
+        } else {
+            if asserted != self.b_asserted && !self.a_asserted {
+                self.pending.push((asserted, true));
+            }
+            self.b_asserted = asserted;
+        }
+    }
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.pending)
     }
 }
