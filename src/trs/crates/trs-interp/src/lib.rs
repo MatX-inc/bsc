@@ -488,6 +488,27 @@ impl Interp {
                         return Value::from_u64(1, (!self.rst_asserted[n]) as u64);
                     }
                 }
+                // flattened gate wires of derived clocks: the exporter
+                // writes "<absolute.path>$CLK_GATE_OUT" for qualified
+                // gate ports (tick gates); module-local Gate reads come
+                // through Expr::Gate instead
+                if let Some(path) = self.s(*name).strip_suffix("$CLK_GATE_OUT") {
+                    let candidates = [path.to_string(), {
+                        let base = &self.insts[inst].path;
+                        if base.is_empty() {
+                            path.to_string()
+                        } else {
+                            format!("{base}.{path}")
+                        }
+                    }];
+                    for p in &candidates {
+                        if let Some(&ci) = self.inst_by_path.get(p) {
+                            if let InstKind::Prim(pr) = &self.insts[ci].kind {
+                                return Value::from_u64(1, pr.gate_out() as u64);
+                            }
+                        }
+                    }
+                }
                 let module = self.module_of(inst);
                 match self.mods[module].ports.get(name) {
                     Some(&(w, ir::PortKind::MethodArg))
@@ -523,7 +544,14 @@ impl Interp {
                     .collect();
                 self.foreign_value(&fname, &argv, *width)
             }
-            Expr::Gate { .. } => Value::from_u64(1, 1),
+            Expr::Gate { instance, .. } => {
+                let child = self.child_of(inst, *instance);
+                match &self.insts[child].kind {
+                    InstKind::Prim(p) => Value::from_u64(1, p.gate_out() as u64),
+                    // a user module's exported gate: not modeled yet
+                    _ => Value::from_u64(1, 1),
+                }
+            }
             Expr::Clock { .. } => Value::from_u64(1, 1),
             Expr::Reset { wire } => self.eval(inst, ctx, wire),
             Expr::Prim { op, width, args } => self.eval_prim(inst, ctx, *op, *width, args),
@@ -1241,8 +1269,9 @@ impl Interp {
             // (instance idx, module idx, domain, segment idx)
             entries: Vec<(usize, usize, u32, usize)>,
             cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
-            // (prim instance, port, is_reset_tick)
-            ticks: Vec<(usize, StrId, bool)>,
+            // (prim instance, port, is_reset_tick, owner instance for
+            // gate evaluation, gate expr)
+            ticks: Vec<(usize, StrId, bool, usize, Option<Expr>)>,
         }
         let rcomps: Vec<RComp> = comps
             .iter()
@@ -1286,7 +1315,8 @@ impl Interp {
                             .inst_by_path
                             .get(&ppath)
                             .unwrap_or_else(|| panic!("unknown tick instance {ppath:?}"));
-                        (ii, tk.port, tk.reset)
+                        let owner = *self.inst_by_path.get(&ipath).unwrap_or(&0);
+                        (ii, tk.port, tk.reset, owner, tk.gate.clone())
                     })
                     .collect();
 
@@ -1388,13 +1418,22 @@ impl Interp {
 
                 // end-of-edge ticks (reset ticks are conditional: the
                 // prim itself checks its reset line)
-                for &(inst, port, is_rst) in &rc.ticks {
+                for (inst, port, is_rst, owner, gexpr) in rc.ticks.clone() {
+                    let gate = match &gexpr {
+                        None => true,
+                        Some(g) => {
+                            let mut c = Ctx::default();
+                            self.eval(owner, &mut c, g).as_bool()
+                        }
+                    };
                     if let InstKind::Prim(p) = &mut self.insts[inst].kind {
                         if is_rst {
-                            p.rst_tick(t);
+                            if gate {
+                                p.rst_tick(t);
+                            }
                         } else {
                             let pname = self.d.strings[port as usize].clone();
-                            p.tick(&pname, t, pos);
+                            p.tick(&pname, t, pos, gate);
                         }
                     }
                     if self.rstgen_out.contains_key(&inst) {

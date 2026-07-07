@@ -427,7 +427,7 @@ encComposition instToMod segmaps ss = do
         -- specs (doTickCall): a posedge schedule also produces a
         -- negedge tick function for Neg/Both ports (SyncBit05/15,
         -- ClockInverter, GatedClock)
-        tickFor wantPos (prim, (port, _)) =
+        tickFor wantPos (prim, (port, clk)) =
             let pname = M.findWithDefault "" (getIdQualString prim
                                               ++ (if null (getIdQualString prim)
                                                   then "" else ".")
@@ -440,20 +440,21 @@ encComposition instToMod segmaps ss = do
             in  if any (\td -> tickElem td == getIdBaseString port && dir_ok td)
                        tick_specs
                 then Just (getIdQualString prim, getIdBaseString prim,
-                           getIdBaseString port)
+                           getIdBaseString port, aclock_gate clk)
                 else Nothing
         all_prims = [ p | di <- M.elems (ss_domain_info_map ss)
                         , p <- di_prims di ]
         -- conditional reset ticks (mkResetTickStmt; posedge only), after
         -- the regular ticks
         rst_ticks = [ (getIdQualString prim, getIdBaseString prim,
-                       getIdBaseString clkarg)
+                       getIdBaseString clkarg, aTrue)
                     | di <- M.elems (ss_domain_info_map ss)
                     , (prim, clkarg) <- di_prim_resets di ]
-        ticks = [ (i, p, o, False) | (i, p, o) <- mapMaybe (tickFor True) all_prims ]
-                ++ [ (i, p, o, True) | (i, p, o) <- rst_ticks ]
-        neg_ticks = [ (i, p, o, False)
-                    | (i, p, o) <- mapMaybe (tickFor False) all_prims ]
+        ticks = [ (i, p, o, False, g)
+                | (i, p, o, g) <- mapMaybe (tickFor True) all_prims ]
+                ++ [ (i, p, o, True, g) | (i, p, o, g) <- rst_ticks ]
+        neg_ticks = [ (i, p, o, False, g)
+                    | (i, p, o, g) <- mapMaybe (tickFor False) all_prims ]
 
     if dups
       then internalError ("SimExportIR: non-contiguous segment interleaving; "
@@ -468,13 +469,24 @@ encComposition instToMod segmaps ss = do
                                 , ("segment", encW32 (fromIntegral seg))
                                 ])
                            entries
-        let encTick (inst, prim, port, rst) = do
+        let encTick (inst, prim, port, rst, gate) = do
               iE <- strE inst
               pE <- strE prim
               oE <- strE port
+              gateE <- case gate of
+                         -- constant-true gates encode as None
+                         ASInt _ _ il | ilValue il == 1 -> return C.encodeNull
+                         -- design-level gate wires carry the instance
+                         -- path in the qualifier; flatten it into the
+                         -- port name so the backend can resolve it
+                         ASPort _ i | not (null (getIdQualString i)) ->
+                           encVariant "Port"
+                             <$> (encW32 <$> str (getIdQualString i ++ "$"
+                                                  ++ getIdBaseString i))
+                         g -> encExpr g
               return $ encStruct
                 [ ("instance", iE), ("prim", pE), ("port", oE)
-                , ("reset", encBool rst) ]
+                , ("reset", encBool rst), ("gate", gateE) ]
         ticksEnc <- mapM encTick ticks
         negTicksEnc <- mapM encTick neg_ticks
         earlyEnc <- mapM (strE . qualPath) (ss_early_rules ss)

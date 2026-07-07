@@ -129,4 +129,7 @@ pub struct QualifiedTick {
     pub prim: StrId,
     pub port: StrId,
     pub reset: bool,
+    /// Gate of the prim's clock: the tick call's gate_value argument.
+    /// None = constant true (ungated).
+    pub gate: Option<crate::expr::Expr>,
 }
