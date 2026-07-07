@@ -87,10 +87,22 @@ fn next_val(args: &[Arg], i: &mut usize) -> (Value, bool) {
         *i += 1;
         match a {
             Arg::Val(v, sg) => return (v.clone(), *sg),
-            Arg::Str(_) => continue, // strings consumed as %s only
+            // a string consumed by a numeric spec formats as its bytes
+            Arg::Str(st) => return (str_value(st), false),
         }
     }
     (Value::zero(1), false)
+}
+
+/// A string literal as a bit vector: bytes MSB-first (Verilog packing).
+fn str_value(s: &str) -> Value {
+    let bytes = s.as_bytes();
+    let w = (bytes.len() as u32 * 8).max(8);
+    let mut v = Value::zero(w);
+    for &b in bytes {
+        v = v.shl(8, w).or(&Value::from_u64(w, b as u64), w);
+    }
+    v
 }
 
 fn next_arg(args: &[Arg], i: &mut usize) -> Option<Arg> {

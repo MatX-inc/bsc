@@ -39,7 +39,8 @@ pub struct Interp {
     insts: Vec<Inst>,
     finished: Option<i32>,
     cycle: u64,
-    /// simulation time of the current posedge (default clock: 5, 15, ...)
+    /// simulation time of the current posedge.  The default clock is
+    /// low 5 / high 5 with initial delay 5, so posedges land at 10, 20, ...
     now: u64,
 }
 
@@ -56,6 +57,11 @@ enum InstKind {
         latched: HashMap<StrId, Value>,
         /// local child name -> instance index
         children: HashMap<StrId, usize>,
+        /// module parameters, bound at instantiation (positional zip of
+        /// the child's inputs with the parent's instantiation args)
+        params: HashMap<StrId, Value>,
+        /// string-valued parameters (only observable as task args)
+        str_params: HashMap<StrId, String>,
     },
     Prim(Box<dyn Prim>),
 }
@@ -96,10 +102,10 @@ impl Interp {
             insts: Vec::new(),
             finished: None,
             cycle: 0,
-            now: 5,
+            now: 10,
         };
         let top_mod = it.mod_by_name[&it.d.top];
-        it.instantiate("".to_string(), top_mod);
+        it.instantiate("".to_string(), top_mod, HashMap::new(), HashMap::new());
         it
     }
 
@@ -107,7 +113,13 @@ impl Interp {
         &self.d.strings[id as usize]
     }
 
-    fn instantiate(&mut self, path: String, module: usize) -> usize {
+    fn instantiate(
+        &mut self,
+        path: String,
+        module: usize,
+        params: HashMap<StrId, Value>,
+        str_params: HashMap<StrId, String>,
+    ) -> usize {
         let slot = self.insts.len();
         self.insts.push(Inst {
             path: path.clone(),
@@ -115,6 +127,8 @@ impl Interp {
                 module,
                 latched: HashMap::new(),
                 children: HashMap::new(),
+                params,
+                str_params,
             },
         });
         self.inst_by_path.insert(path.clone(), slot);
@@ -138,30 +152,58 @@ impl Interp {
                         .mod_by_name
                         .get(&mname)
                         .unwrap_or_else(|| panic!("unknown module {:?}", self.s(mname)));
-                    self.instantiate(cpath.clone(), cmod)
+                    // bind the child's parameters: its inputs align
+                    // positionally with the instantiation args
+                    let cmir = self.mods[cmod].ir;
+                    let inputs: Vec<(StrId, ir::PortKind)> = self.d.modules[cmir]
+                        .inputs
+                        .iter()
+                        .map(|p| (p.name, p.kind))
+                        .collect();
+                    let mut params = HashMap::new();
+                    let mut str_params = HashMap::new();
+                    for (k, ((pname_, kind_), arg)) in
+                        inputs.iter().zip(args.iter()).enumerate()
+                    {
+                        let _ = k;
+                        match kind_ {
+                            ir::PortKind::Clock
+                            | ir::PortKind::ClockGate
+                            | ir::PortKind::Reset => {}
+                            _ => match arg {
+                                Expr::Str(sid) => {
+                                    str_params.insert(*pname_, self.s(*sid).to_string());
+                                }
+                                _ => {
+                                    let mut c = Ctx::default();
+                                    let v = self.eval(slot, &mut c, arg);
+                                    params.insert(*pname_, v);
+                                }
+                            },
+                        }
+                    }
+                    self.instantiate(cpath.clone(), cmod, params, str_params)
                 }
                 ir::InstanceKind::Prim(p) => {
                     let pname = match &p {
                         ir::Primitive::Other { name } => self.s(*name).to_string(),
                         other => panic!("structured primitive kinds not exported yet: {other:?}"),
                     };
-                    // constant instantiation args only (clocks/resets skipped)
-                    let consts: Vec<Value> = args
-                        .iter()
-                        .filter_map(|a| match a {
-                            Expr::Const { width, limbs } => {
-                                Some(Value::from_limbs32(*width, limbs))
+                    // evaluate instantiation args in the parent context
+                    // (they may reference the parent's own parameters);
+                    // clocks/resets are connection info, not values
+                    let mut consts: Vec<Value> = Vec::new();
+                    let mut strs: Vec<String> = Vec::new();
+                    for a in &args {
+                        match a {
+                            Expr::Clock { .. } | Expr::Reset { .. } | Expr::Gate { .. } => {}
+                            Expr::Str(sid) => strs.push(self.s(*sid).to_string()),
+                            _ => {
+                                let mut c = Ctx::default();
+                                consts.push(self.eval(slot, &mut c, a));
                             }
-                            _ => None,
-                        })
-                        .collect();
-                    let strs: Vec<String> = args
-                        .iter()
-                        .filter_map(|a| match a {
-                            Expr::Str(sid) => Some(self.s(*sid).to_string()),
-                            _ => None,
-                        })
-                        .collect();
+                        }
+                    }
                     let idx = self.insts.len();
                     self.insts.push(Inst {
                         path: cpath.clone(),
@@ -240,6 +282,11 @@ impl Interp {
             Expr::Port(name) | Expr::Param(name) => {
                 if let Some(v) = ctx.frame.get(name) {
                     return v.clone();
+                }
+                if let InstKind::User { params, .. } = &self.insts[inst].kind {
+                    if let Some(v) = params.get(name) {
+                        return v.clone();
+                    }
                 }
                 // module input ports outside a method frame: clock gates
                 // and reset lines read as asserted-off (1)
@@ -414,6 +461,14 @@ impl Interp {
     fn eval_arg(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr, signed: bool) -> Arg {
         match e {
             Expr::Str(s) => Arg::Str(self.s(*s).to_string()),
+            Expr::Port(name) | Expr::Param(name) => {
+                if let InstKind::User { str_params, .. } = &self.insts[inst].kind {
+                    if let Some(sv) = str_params.get(name) {
+                        return Arg::Str(sv.clone());
+                    }
+                }
+                Arg::Val(self.eval(inst, ctx, e), signed)
+            }
             _ => Arg::Val(self.eval(inst, ctx, e), signed),
         }
     }
@@ -530,6 +585,13 @@ impl Interp {
                     let child = self.child_of(inst, *instance);
                     let v = self.call_actionvalue(child, *method, &argv);
                     ctx.locals.insert(*def, v.zext(dw));
+                }
+                a @ Action::Task { temp, width, .. } => {
+                    self.exec_action(inst, ctx, a);
+                    let v = temp
+                        .and_then(|t| ctx.locals.get(&t).cloned())
+                        .unwrap_or_else(|| Value::undet((*width).max(1)));
+                    ctx.locals.insert(*def, v);
                 }
                 other => panic!("AvAction with non-method action: {other:?}"),
             },

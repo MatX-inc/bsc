@@ -36,8 +36,9 @@ fn main() -> ExitCode {
             }
         },
         ["run", path, rest @ ..] => {
+            // bluesim's -m N stops before the Nth edge; match it exactly
             let max_cycles = match rest {
-                ["-m", n] => n.parse().unwrap_or(u64::MAX),
+                ["-m", n] => n.parse::<u64>().map(|x| x.saturating_sub(1)).unwrap_or(u64::MAX),
                 _ => u64::MAX,
             };
             match trs_interp::run_file(path, max_cycles) {

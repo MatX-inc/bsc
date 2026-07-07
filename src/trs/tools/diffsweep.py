@@ -36,19 +36,38 @@ TIMEOUT = 25
 
 
 def find_source(testdir, top):
-    cand = os.path.join(testdir, top + ".bsv")
-    if os.path.exists(cand):
-        return cand
-    pat = re.compile(r"module\s+(?:\[[^\]]*\]\s*)?" + re.escape(top) + r"\b")
-    for f in sorted(os.listdir(testdir)):
-        if f.endswith(".bsv"):
-            try:
-                text = open(os.path.join(testdir, f), errors="replace").read()
-            except OSError:
-                continue
-            if pat.search(text):
-                return os.path.join(testdir, f)
-    return None
+    def scan(name):
+        cand = os.path.join(testdir, name + ".bsv")
+        if os.path.exists(cand):
+            return cand
+        pats = [
+            re.compile(r"module\s+(?:\[[^\]]*\]\s*)?" + re.escape(name) + r"\b"),
+            re.compile(r"`define\s+\w+\s+" + re.escape(name) + r"\b"),
+        ]
+        for f in sorted(os.listdir(testdir)):
+            if f.endswith(".bsv"):
+                try:
+                    text = open(os.path.join(testdir, f), errors="replace").read()
+                except OSError:
+                    continue
+                if any(p.search(text) for p in pats):
+                    return os.path.join(testdir, f)
+        # filename convention: sysFoo defined in Foo.bsv
+        if name.startswith("sys"):
+            cand = os.path.join(testdir, name[3:] + ".bsv")
+            if os.path.exists(cand):
+                return cand
+        return None
+
+    # expected files may carry a variant suffix: sysFoo_flagvariant
+    name = top
+    while True:
+        found = scan(name)
+        if found:
+            return found, name
+        if "_" not in name:
+            return None
+        name = name.rsplit("_", 1)[0]
 
 
 def run(cmd, cwd, timeout=TIMEOUT):
@@ -68,9 +87,18 @@ def one_test(job):
     shutil.rmtree(wk, ignore_errors=True)
     os.makedirs(wk, exist_ok=True)
 
-    src = find_source(testdir, top)
-    if src is None:
+    found = find_source(testdir, top)
+    if found is None:
         return (rel, top, "NO_SOURCE", "")
+    src, top = found
+
+    # data files ($readmem, file reads) load relative to the run directory
+    for f in os.listdir(testdir):
+        if f.endswith((".dat", ".hex", ".bin", ".txt", ".mem", ".vec")):
+            try:
+                shutil.copy(os.path.join(testdir, f), wk)
+            except OSError:
+                pass
 
     common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-p", testdir + ":+"]
     r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk)

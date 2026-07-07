@@ -152,7 +152,8 @@ encDesign ssys =
         instmap = M.toList (ssys_instmap ssys)
 
         -- per-module schedule analysis (segments, exec order, disjointness)
-        msis = M.fromList [ (getIdBaseString (sp_name p), analyzeModule p)
+        msis = M.fromList [ (getIdBaseString (sp_name p),
+                             analyzeModule pkgNames p)
                           | p <- pkgs ]
         segmaps = M.map msi_segIdx msis
         instToMod = ssys_instmap ssys
@@ -211,13 +212,66 @@ nodeKey :: SchedNode -> String
 nodeKey (Sched i) = "S:" ++ getIdBaseString i
 nodeKey (Exec i) = "E:" ++ getIdBaseString i
 
-analyzeModule :: SimPackage -> ModSchedInfo
-analyzeModule pkg =
+analyzeModule :: S.Set String -> SimPackage -> ModSchedInfo
+analyzeModule pkgNames pkg =
     let asi = sp_schedule pkg
         order = asi_sched_order asi
 
         methodNames = S.fromList
             [ getIdBaseString (aif_name f) | f <- sp_interface pkg ]
+
+        -- Rules that call into user-submodule instances are fusion points:
+        -- the merge attaches cross-boundary constraints to them, so each
+        -- gets a singleton segment (a child's segments may have to run
+        -- between two such rules).  Primitive calls don't cut: primitives
+        -- are not scheduled modules.
+        userInsts = S.fromList
+            [ getIdBaseString (avi_vname avi)
+            | avi <- M.elems (sp_state_instances pkg)
+            , getVNameString (vName (avi_vmi avi)) `S.member` pkgNames ]
+
+        defmap = sp_local_defs pkg
+
+        -- transitive def closure from a seed set of ids
+        defClosure :: S.Set AId -> S.Set AId
+        defClosure = go S.empty
+          where go seen pending = case S.minView pending of
+                  Nothing -> seen
+                  Just (i, rest)
+                    | i `S.member` seen -> go seen rest
+                    | otherwise ->
+                        case M.lookup i defmap of
+                          Nothing -> go (S.insert i seen) rest
+                          Just (ADef _ _ e _) ->
+                              go (S.insert i seen)
+                                 (rest `S.union` S.fromList (aVars e))
+
+        exprTouches :: AExpr -> Bool
+        exprTouches (AMethCall _ o _ es) =
+            getIdBaseString o `S.member` userInsts || any exprTouches es
+        exprTouches (AMethValue _ o _) = getIdBaseString o `S.member` userInsts
+        exprTouches (APrim _ _ _ es) = any exprTouches es
+        exprTouches (AFunCall _ _ _ _ es) = any exprTouches es
+        exprTouches _ = False
+
+        defsTouch :: S.Set AId -> Bool
+        defsTouch ids = or [ exprTouches e
+                           | i <- S.toList ids
+                           , Just (ADef _ _ e _) <- [M.lookup i defmap] ]
+
+        actTouches :: AAction -> Bool
+        actTouches (ACall o _ es) =
+            getIdBaseString o `S.member` userInsts || any exprTouches es
+        actTouches a = any exprTouches (aact_args a)
+
+        touchingRules = S.fromList
+            [ getIdBaseString (arule_id r)
+            | r <- sp_rules pkg
+            , let seed = S.fromList
+                    (aVars (arule_pred r)
+                     ++ concatMap aVars (concatMap aact_args (arule_actions r)))
+            , any actTouches (arule_actions r)
+              || defsTouch (defClosure seed) ]
 
         ruleDom :: M.Map String Int
         ruleDom = M.fromList
@@ -241,18 +295,25 @@ analyzeModule pkg =
 
         doms = nub (M.elems ruleDom)
 
-        -- Split this domain's rule nodes into segments at method positions.
+        -- Split this domain's rule nodes into segments: cut at interface
+        -- method positions AND isolate child-calling rules as singletons.
         segsFor :: Int -> [Seg]
         segsFor d =
             let step (segs, nodes, cut) node =
                     let base = getIdBaseString (getSchedNodeId node)
                     in  if base `S.member` methodNames
                         then (segs, nodes, nub (cut ++ [base]))
-                        else if M.lookup base ruleDom == Just d
-                        then if null cut
-                             then (segs, nodes ++ [node], [])
-                             else (segs ++ [Seg nodes cut], [node], [])
-                        else (segs, nodes, cut)
+                        else if M.lookup base ruleDom /= Just d
+                        then (segs, nodes, cut)
+                        else if base `S.member` touchingRules
+                        then -- close any open segment, emit a singleton
+                             let closed = if null nodes && null cut
+                                          then segs
+                                          else segs ++ [Seg nodes cut]
+                             in  (closed ++ [Seg [node] []], [], [])
+                        else if null cut
+                        then (segs, nodes ++ [node], [])
+                        else (segs ++ [Seg nodes cut], [node], [])
                 (segs, nodes, cut) = foldl' step ([], [], []) order
             in  if null nodes && null cut && not (null segs)
                 then segs
