@@ -1,6 +1,6 @@
-# Bluesim2: a Rust/LLVM simulation backend for BSC
+# TRS: a Rust/LLVM simulation backend for BSC
 
-Status: design proposal (working name "Bluesim2"; user-facing name stays
+Status: design proposal (working name "TRS"; user-facing name stays
 "Bluesim").  This document is grounded in the current implementation — file
 references point at the code on the `vlink-regen` branch (PR #2), which this
 work builds on.
@@ -148,15 +148,15 @@ Run side:
                 bsc (Haskell, unchanged front/middle)
    .bsv ──► elaboration/scheduling ──► .ba  (APackage + AScheduleInfo)
                                         │
-                                        │  NEW: SimExportIR  (-sim2 codegen)
+                                        │  NEW: SimExportIR  (-trs codegen)
                                         ▼
-                                 .bir  per module            ┌──────────────┐
-                     (portable post-schedule IR, versioned)  │ user C/C++   │
+                                 .bir  (design: module bodies ┌──────────────┐
+                      + segmented schedules + compositions)  │ user C/C++   │
                                         │                    │ BDPI objects │
                                         ▼                    └──────┬───────┘
-        ┌──────────────────────── bsim2 (Rust) ─────────────────────┼──────┐
-        │  ir: load/verify  ─►  plan: link closure, schedule merge, │      │
-        │  inline decisions ─►  codegen: LLVM IR per module (parallel)     │
+        ┌──────────────────────── trs (Rust) ─────────────────────┼──────┐
+        │  ir: load/verify  ─►  plan: link closure, inline choices  │      │
+        │                   ─►  codegen: LLVM IR per module (parallel)     │
         │        │                        │                                │
         │        │             ┌──────────┴──────────┐                     │
         │        │             ▼                     ▼                     │
@@ -177,7 +177,7 @@ Split of responsibilities:
   small Haskell module (`SimExportIR.hs`) serializes the per-module
   post-schedule data to a stable, documented format.  bsc's semantic
   knowledge is not reimplemented.
-- **bsim2 owns** everything downstream: the link closure, schedule merging,
+- **trs owns** everything downstream: the link closure, schedule merging,
   optimization, code generation, runtime, and waveforms.  It is a standalone
   Rust program invoked by `bsc` exactly where `simLink`/`genModuleC` runs
   today (and usable directly by build systems).
@@ -188,36 +188,42 @@ Split of responsibilities:
 defined by `Bin` instances over bsc's internal types (`BinData.hs`,
 `GenABin.hs`).  A Rust reader would be version-locked to bsc's internals and
 break on every datatype change.  Instead, bsc gains an export pass emitting
-**BIR** (Bluesim IR): CBOR (self-describing, fast, serde-native) with an
-explicit schema version, containing only what simulation needs.  Note the
-`.ba` already drops information Bluesim must recompute (e.g. `UseCond`s are
-not round-tripped, `GenABin.hs:404-408`), so `.ba` was never a complete
-interface either; BIR makes the actual contract explicit and testable.
+**BIR** (Bluesim IR): CBOR with an explicit schema version, containing only
+what simulation needs.  Note the `.ba` already drops information Bluesim
+must recompute (e.g. `UseCond`s are not round-tripped,
+`GenABin.hs:404-408`), so `.ba` was never a complete interface either; BIR
+makes the actual contract explicit and testable.  The full format is
+specified in [BIR.md](BIR.md); serialization is `serialise`/`cborg` on the
+Haskell side (the one new dependency, aligned with the cabalization path;
+packaged by Debian/Ubuntu) and `ciborium`/serde on the Rust side.
 
-Contents per module (essentially `SimPackage` minus Haskell-isms —
-see `SimPackage.hs:83-108` and the `APackage` fields it mirrors):
+**The export point is post-`simExpand`/`simPackageOpt`** — bsc already runs
+both at link time before anything C++-specific happens
+(`bsc.hs:1274-1313`), so all schedule *merging* and the per-module IR
+cleanups stay in Haskell, and the Rust side never reimplements them.  What
+bsc exports:
 
-- module name, wrapper flag, generation-options descriptor (for staleness);
-- inputs (clocks with gates, resets, method args/enables), clock domains,
-  reset list, output-clock/gate info;
-- state instances: primitive kind or user-module name, instantiation
-  parameters (constants — Bluesim already requires this,
-  `SimExpand.hs:2158-2195`), per-method port types, multi-port counts,
-  and the instance's `MethodConflictInfo` (for `sSB` ordering);
-- local defs (`ADef`s, including `CAN_FIRE_*`/`WILL_FIRE_*`), rules
-  (predicate ref + action list), interface methods;
-- the schedule: `Sched`/`Exec` node order, the dependency graph, Esposito
-  conflict pairs, disjoint/exclusive rule sets, early (clock-crossing)
-  rules, schedule pragmas;
-- foreign-function signatures used (name, C name, arg/return styles).
+- **Per module (instantiation-independent, cacheable):** inputs, clock
+  domains, resets; state instances (primitive kind or module ref, constant
+  instantiation args — Bluesim already requires this,
+  `SimExpand.hs:2158-2195` — plus the `sSB` method-order pairs); local defs
+  including `CAN_FIRE_*`/`WILL_FIRE_*`; rules and methods with bodies
+  **pre-linearized** by bsc (`tsortActionsAndDefs` ordering, so intra-rule
+  method-order semantics also stay in Haskell); and the module's
+  **segmented schedule** (§5.2) with per-rule intra-module ME inhibitors.
+- **Per link:** the instance map, BDPI signatures, and the
+  **compositions** — per-(clock, edge) interleavings of (instance, segment)
+  references, plus the composition-level facts that don't factor by module
+  type: cross-module disjointness pairs, cross-instance tick order, and
+  clock-crossing rules.
 
-Expressions and actions mirror `AExpr`/`AAction` (`ASyntax.hs:936-1148`):
-prim ops, constants, def/port/param refs, method calls/values, foreign
-calls, task actions with cookies, gate refs.  The format is a data contract,
-not an ABI: it is versioned, and `bsim2 ir dump` pretty-prints it for
-diff-testing against bsc's own `-ddumpsimexpand` output.
+Expressions and actions mirror `AExpr`/`AAction` (`ASyntax.hs:936-1148`)
+after `simPackageOpt`: prim ops, constants, def/port/param refs, method
+calls/values, foreign calls, task actions with cookies, gate refs.  The
+format is a data contract, not an ABI: it is versioned, and `trs ir dump`
+pretty-prints it for diff-testing against bsc's own dump flags.
 
-## 4. Execution semantics in bsim2
+## 4. Execution semantics in trs
 
 Identical to today, restated as the invariants the code generator must
 uphold:
@@ -266,7 +272,7 @@ fields for replicated instances) inside its parent — the whole design is
   or, when a wire's writer and readers are all in one domain segment and the
   liveness is local, the wire is **SSA-converted away** entirely.
 - FIFOs, BRAMs, RegFiles, synchronizers, clock/reset generators remain
-  runtime primitives in Rust (`bsim2-rt`), *monomorphized by codegen*: the
+  runtime primitives in Rust (`trs-rt`), *monomorphized by codegen*: the
   generator emits calls to width-specialized `extern "C"` entry points
   (≤ 8/32/64-bit and wide variants), so no C++-template-style header cost and
   no dynamic dispatch.  Small FIFOs (depth ≤ 2, the overwhelmingly common
@@ -280,20 +286,31 @@ fields for replicated instances) inside its parent — the whole design is
 ### 5.2 Hierarchical code generation
 
 The unit of code generation is the **module** (as in PR #2's `-c` model),
-not the design:
+not the design — and the schedule arrives already factored that way
+(BIR.md §4), so codegen never re-derives hierarchy from a flat order:
 
-- Per module, per clock domain *that the module participates in*, emit a
-  **domain segment**: `seg_<Mod>_<domain>_<edge>(state*)` containing that
-  module's `Sched`/`Exec`/tick statements in schedule order, plus calls into
-  child segments at the points the merged schedule dictates.  The top-level
-  per-domain schedule function is then a short driver calling segments — not
-  a design-wide flat function.
-- This is possible because the merged schedule usually interleaves modules in
-  large runs, not randomly: the merge qualifies child rules by instance path
-  and topologically sorts; contiguous runs from one instance become segment
-  calls, and only genuinely interleaved rules force segment splits.  Worst
-  case degrades to today's flat order (correctness never depends on
-  segmentation).
+- **Segments are computed by bsc and exported per module type.**  A
+  module's rules interact with the outside world only through its
+  interface methods; every cross-boundary constraint attaches to a method
+  node, which the merge fuses into the calling parent's rules
+  (`SimExpand.hs:1040-1076`).  Cutting the module's own schedule order at
+  its method-node positions yields ≤ methods+1 **segments** regardless of
+  rule count.  A tile with 200 internal rules and 6 interface methods is
+  at most 7 segments; a 64-tile grid contributes ≤ 448 top-level schedule
+  entries instead of 12,800.  The tile's internal scheduling never
+  becomes manifest at the top level.
+- Codegen emits `seg_<Mod>_<domain>_<edge>_<k>(state*)` per segment, per
+  module type.  The per-domain edge function is the **composition**: a
+  short driver of (instance, segment) calls that scales with instances ×
+  methods, not instances × rules.  Worst-case coupling degrades to more,
+  smaller segments — never to a semantic change.
+- Two facts don't factor by module type and ride the composition instead:
+  cross-module ME-inhibitor pairs (parent↔child disjointness derived
+  through method use, `combineSchedDRDB`, `SimExpand.hs:1362-1429`) become
+  per-instance inhibit inputs, constant-folded when the instantiation
+  context makes them dead; and cross-instance tick ordering.  Intra-module
+  inhibitors are fixed by the module's own segment order and bake into the
+  shared per-module code.
 - Rule bodies and methods are per-module LLVM functions; method calls across
   module boundaries are direct calls with the callee's state pointer — and
   since the whole design is one LLVM program at link, **cross-module inlining
@@ -303,7 +320,7 @@ not the design:
 - Per-module code is emitted into its own LLVM module keyed by
   `(module, codegen options, BIR hash)` → object cache.  Instantiating the
   same BSV module N times costs one codegen.  The only always-regenerated
-  pieces are the thin top-level drivers (mirroring PR #2: "the top module,
+  pieces are the composition drivers (mirroring PR #2: "the top module,
   the schedule, and the model files are always generated by the link").
 
 ### 5.3 Fire-condition and rule optimization
@@ -348,11 +365,11 @@ This is a first-class requirement, not a byproduct.
   parallelizes (`-parallel-sim-link`), and the biggest TU (the schedule)
   serializes the tail.  Segmented schedules (§5.2) break that tail up.
 - **Content-addressed object cache.**  Key = BIR hash ⊕ codegen options ⊕
-  bsim2 version, mirroring PR #2's `StaleUtils` conventions ("missing product
+  trs version, mirroring PR #2's `StaleUtils` conventions ("missing product
   is never fresh; equal times are fresh") but by content, not mtime, so
   rebuilding an unchanged module is a cache hit even after `touch`.  This
   extends `-c` point codegen naturally: `bsc -sim -c mkFoo` can emit
-  `mkFoo.o` via bsim2, and link reuses it — same mental model, same flags,
+  `mkFoo.o` via trs, and link reuses it — same mental model, same flags,
   as the Verilog side of PR #2.
 - **Two execution modes.**
   - **JIT (default for iterate-run):** ORC/LLJIT, lazy per-segment
@@ -468,9 +485,12 @@ Verilator (`--threads 1` and best-N) on the same RTL.
 
 ## 10. Phasing
 
-- **P0 — BIR export + loader.**  `SimExportIR.hs` behind `-sim2` (reusing
-  `SimExpand`'s checks); Rust `ir` crate loads/verifies/dumps; golden-file
-  diffs against bsc dumps.  Deliverable: every testsuite `.ba` round-trips.
+- **P0 — BIR export + loader.**  `SimExportIR.hs` (reusing `SimExpand` /
+  `simPackageOpt`, which already run at link time) serializes the
+  post-merge system per [BIR.md](BIR.md), using `serialise`/`cborg` — the
+  one new Haskell dependency, adopted on the cabalization path; Rust `ir`
+  crate loads/verifies/dumps; golden-file diffs against bsc dumps.
+  Deliverable: every testsuite `.ba` round-trips.
 - **P1 — Reference interpreter.**  Tree-walking evaluator over BIR with the
   §4 semantics, wired to kernel + rt + `$display`.  Slow but complete; it is
   the differential oracle.  Deliverable: testsuite `bsc.bluesim` cases pass
@@ -496,10 +516,21 @@ Verilator (`--threads 1` and best-N) on the same RTL.
 - **BIR schema churn**: versioned schema, decode-time validation, and the
   exporter lives in bsc's tree so datatype changes break the build, not the
   wire format silently.
-- **LLVM API churn / packaging**: pin via `inkwell` (LLVM 18 validated
-  in-tree); prerequisites are `llvm-18-dev` + `libzstd-dev`; JIT-only mode
-  needs no system linker.  Fallback codegen via textual `.ll` emission is
-  kept behind a feature for debugging.
+- **LLVM API churn / packaging**: pin via `inkwell`/`llvm-sys` (LLVM 18
+  validated in-tree; llvm-sys tracks LLVM 8-22); prerequisites are
+  `llvm-18-dev` + `libzstd-dev`; JIT-only mode needs no system linker.
+  Fallback codegen via textual `.ll` emission is kept behind a feature for
+  debugging.  **JIT specifically**: inkwell's safe `ExecutionEngine` wraps
+  the legacy MCJIT API, which is under an upstream removal plan — the
+  production JIT is ORC LLJIT via `llvm_sys::orc2` behind a thin wrapper
+  of our own (the raw C API is marked experimental; the unsafe surface is
+  confined to one module).
+- **Haskell serialization dependency**: `serialise`/`cborg` are
+  Well-Typed-maintained and Debian/Ubuntu-packaged, but they are bsc's
+  first external serialization dependency; adopted as part of the
+  cabalization effort, with the encoder isolated in `SimExportIR.hs` so a
+  hand-rolled CBOR fallback (~150 lines over `bytestring`) remains
+  possible if packaging friction appears.
 - **Haskell-side maintenance**: `SimExportIR.hs` is small (serialization
   only) and colocated with `SimPackage`; the heavy semantic passes it reuses
   (`SimExpand`, checks) already exist.
@@ -512,19 +543,66 @@ Verilator (`--threads 1` and best-N) on the same RTL.
 ## 12. Repository layout
 
 ```
-src/bluesim2/               Rust workspace (this directory)
+src/trs/               Rust workspace (this directory)
   DESIGN.md                 this document
   crates/
-    bsim2-ir/               BIR schema, loader, verifier, pretty-printer
-    bsim2-kernel/           event queue, priorities, clocks, resets, bk_* core
-    bsim2-rt/               primitives (FIFO, RegFile, BRAM, sync*), system
+    trs-ir/               BIR schema, loader, verifier, pretty-printer
+    trs-kernel/           event queue, priorities, clocks, resets, bk_* core
+    trs-rt/               primitives (FIFO, RegFile, BRAM, sync*), system
                             tasks, plusargs, wide-data helpers
-    bsim2-wave/             change capture, VCD writer, FST writer
-    bsim2-codegen/          LLVM lowering (feature "llvm", needs llvm-18-dev)
-    bsim2/                  CLI: link planner, JIT/AOT driver, native runner
-src/comp/SimExportIR.hs     (P0) BIR exporter, invoked from the -sim2 path
+    trs-wave/             change capture, VCD writer, FST writer
+    trs-codegen/          LLVM lowering (feature "llvm", needs llvm-18-dev)
+    trs/                  CLI: link planner, JIT/AOT driver, native runner
+src/comp/SimExportIR.hs     (P0) BIR exporter, invoked from the -trs path
 ```
 
-`cargo build` in `src/bluesim2` builds everything except `bsim2-codegen`
+`cargo build` in `src/trs` builds everything except `trs-codegen`
 unless `--features llvm` is given, so the workspace compiles on machines
 without LLVM dev packages.
+
+## Appendix A: decision record — LLVM codegen in Rust, not in bsc
+
+Considered: (A) Haskell + LLVM FFI bindings inside bsc; (B) bsc emits
+textual `.ll` and shells out to clang/llc; (C) BIR export + Rust codegen
+(chosen).  Summary of the investigation (mid-2026):
+
+- **(A) has no viable substrate.**  llvm-hs's last release is 9.0.1 (2019,
+  LLVM 9), incompatible with GHC ≥ 9.0; no branch past LLVM 15 (unreleased,
+  last commit 2023); forks top out at LLVM 12.  The one maintained binding,
+  llvm-ffi (LLVM 13-21), has no ORC/LLJIT — only the legacy
+  ExecutionEngine, which upstream is removing.  So (A) means hand-rolled
+  LLVM-C FFI inside bsc and linking libLLVM into a plain make+ghc build
+  across the 10-target CI matrix.
+- **(B) is workable but loses what matters here.**  It forfeits the
+  in-process JIT (lazy per-segment compilation, tiering, `$dumpvars`
+  re-lowering — §6, §8); its flagship precedent, GHC's `-fllvm`, documents
+  a perpetually moving supported-LLVM window, slow compiles, and
+  miscompile-class textual-IR bugs still being fixed in 2025 — nothing
+  type-checks emitted text.
+- **The codegen↔runtime contract decides it.**  Today's backend hardcodes
+  ~92 runtime-facing strings in four Haskell files (250+ distinct
+  agreements: the 84-entry primitive map, `METH_*`, `wop_*`,
+  `rst_tick__clk__1`-style mangles, `vcd_*`, `bk_*`), kept honest *only*
+  because g++ type-checks generated C++ against the real runtime headers
+  every build.  Any LLVM-emitting design loses that check; under (A)/(B)
+  the contract survives as unchecked strings **and** grows a reverse
+  channel (Haskell would need Rust-side struct sizes/alignments for flat
+  state, wave buffers, symbol tables).  Under (C) the whole surface
+  becomes rustc-checked shared types in one workspace, and the planned
+  optimization work — which churns exactly this seam — stays one-language.
+  The cross-language boundary lands instead at the post-scheduling IR, the
+  most stable point in the pipeline.
+- **Precedent**: every modern fast RTL simulator surveyed (arcilator,
+  ksim, ESSENT, GSIM — the latter ~20x single-thread Verilator on
+  Rocket/CoreMark) is a standalone systems-language tool consuming a
+  post-elaboration simulation IR exported by the frontend; CIRCT tried
+  direct HW→LLVM lowering and abandoned it for a mid-level IR (Arc ≈ BIR).
+- **What the Haskell option got right** was folded back into the design:
+  the export moved to post-`simExpand`/`simPackageOpt` so schedule merging
+  and rule linearization stay in Haskell (§3.1), and the schedule is
+  exported hierarchically (§5.2, BIR.md §4) so no scheduling semantics are
+  re-derived in Rust.
+
+Revisit if: the JIT loop is dropped as a requirement *and* sustaining
+maintainers are Haskell-only (then (B) against the existing C++ runtime is
+the fallback); or a maintained Haskell LLJIT binding materializes.

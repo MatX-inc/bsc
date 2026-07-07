@@ -1,4 +1,4 @@
-//! The bsim2 simulation kernel.
+//! The trs simulation kernel.
 //!
 //! A port of the Bluesim kernel's *semantics* (`src/bluesim/kernel.cxx`,
 //! `event_queue.cxx`, `priority.cxx`): a single event queue ordered by

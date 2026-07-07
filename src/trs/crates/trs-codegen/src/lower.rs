@@ -8,10 +8,10 @@ use inkwell::context::Context;
 use inkwell::OptimizationLevel;
 
 /// Smoke-level check that LLVM is usable: build `i64 add(i64,i64)`, JIT it,
-/// call it.  Exercised by `cargo test -p bsim2-codegen --features llvm`.
+/// call it.  Exercised by `cargo test -p trs-codegen --features llvm`.
 pub fn llvm_smoke_test() -> Result<u64, String> {
     let ctx = Context::create();
-    let module = ctx.create_module("bsim2_smoke");
+    let module = ctx.create_module("trs_smoke");
     let builder = ctx.create_builder();
     let i64t = ctx.i64_type();
     let fnt = i64t.fn_type(&[i64t.into(), i64t.into()], false);

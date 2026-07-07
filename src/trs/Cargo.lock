@@ -21,26 +21,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
-name = "bsim2"
+name = "trs"
 version = "0.0.1"
 dependencies = [
- "bsim2-codegen",
- "bsim2-ir",
- "bsim2-kernel",
- "bsim2-rt",
- "bsim2-wave",
+ "trs-codegen",
+ "trs-ir",
+ "trs-kernel",
+ "trs-rt",
+ "trs-wave",
 ]
 
 [[package]]
-name = "bsim2-codegen"
+name = "trs-codegen"
 version = "0.0.1"
 dependencies = [
- "bsim2-ir",
+ "trs-ir",
  "inkwell",
 ]
 
 [[package]]
-name = "bsim2-ir"
+name = "trs-ir"
 version = "0.0.1"
 dependencies = [
  "ciborium",
@@ -48,21 +48,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "bsim2-kernel"
+name = "trs-kernel"
 version = "0.0.1"
 
 [[package]]
-name = "bsim2-rt"
+name = "trs-rt"
 version = "0.0.1"
 dependencies = [
- "bsim2-kernel",
+ "trs-kernel",
 ]
 
 [[package]]
-name = "bsim2-wave"
+name = "trs-wave"
 version = "0.0.1"
 dependencies = [
- "bsim2-kernel",
+ "trs-kernel",
  "fst-writer",
 ]
 

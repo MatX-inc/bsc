@@ -1,5 +1,5 @@
 [package]
-name = "bsim2-rt"
+name = "trs-rt"
 description = "Runtime primitives (FIFO, RegFile, BRAM, synchronizers) and system tasks"
 version.workspace = true
 edition.workspace = true
@@ -7,4 +7,4 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bsim2-kernel = { path = "../bsim2-kernel" }
+trs-kernel = { path = "../trs-kernel" }

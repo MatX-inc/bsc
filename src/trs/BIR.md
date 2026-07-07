@@ -1,0 +1,141 @@
+# BIR — the TRS export format
+
+Status: draft, schema version 1.  This document and the Rust types in
+`crates/trs-ir/src/` jointly define the contract; where prose and code
+disagree, the code is authoritative and this document has a bug.
+
+BIR is the data contract between bsc (Haskell) and the trs backend
+(Rust).  bsc exports it after elaboration, scheduling, `simExpand`, and
+`simPackageOpt` — the point in today's pipeline where all semantic analysis
+is done and C++-shaping is about to begin (`bsc.hs::genModuleC`).
+Everything upstream of BIR stays in bsc; everything downstream (LLVM
+lowering, runtime, waveforms) lives in Rust and never re-derives schedule
+semantics.
+
+## 1. Encoding
+
+- **CBOR** (RFC 8949).  Haskell side: `serialise`/`cborg` (chosen as the
+  new dependency on the cabalization path; Debian/Ubuntu package it as
+  `libghc-serialise-dev`).  Rust side: `ciborium` + `serde`.
+- The Haskell encoder is written to match the `serde` derivation of the
+  Rust types (structs as arrays in declaration order; enums as
+  `{variant: payload}` maps / bare strings for unit variants — ciborium's
+  externally-tagged convention).  The Rust `Design::decode` is the
+  conformance checker: it validates the schema version and reference
+  integrity before any use.
+- One `.bir` file per link (design-level), containing per-module bodies.
+  A per-module export for `-c`-style point codegen reuses the same
+  `Module` encoding standalone; module `content_hash` is the
+  content-addressed cache key.
+- All identifiers are interned: `StrId` indexes `Design::strings`.
+  Conventions: rules are `RL_*` names as in the `.ba`; instance paths are
+  dotted (`"a.b.c"`, `""` = top); qualified rule paths are
+  `"a.b.RL_r"` (matching `qualifyChildId`, `SimExpand.hs:1711`).
+
+## 2. Versioning
+
+`BIR_VERSION` (a single u32) is bumped on **any** change to the encoded
+shape, compatible or not — no in-band schema evolution.  bsc and trs
+releases are expected to move together; a mismatch is a hard, descriptive
+error at decode time.  The schema is expected to churn during P0-P3;
+stability promises begin when the version is declared 1.0 in both trees.
+
+## 3. Content
+
+### Per module (`Module`) — instantiation-independent, cacheable
+
+Mirrors the post-`simPackageOpt` `SimPackage` (`SimPackage.hs:83-108`):
+
+| Field | Source | Notes |
+|---|---|---|
+| `inputs`, `clock_domains`, `resets` | `sp_inputs`, `sp_clock_domains`, `sp_reset_list` | |
+| `instances` | `sp_state_instances` (`AVInst`) | primitive kind or module ref; constant args; `method_order` = the `sSB` pairs (`MethodOrderMap`); port counts |
+| `defs` | `sp_local_defs` | includes `CAN_FIRE_*`/`WILL_FIRE_*` (flagged) |
+| `rules` | `sp_rules` | body **pre-linearized** by bsc (`tsortActionsAndDefs` order), plus `me_inhibits` (intra-module, see §4) |
+| `methods` | `sp_interface` | value/action/actionvalue, ready expr, linearized body |
+| `schedule` | derived (§4) | segmented per (domain, edge) |
+
+Expressions/actions mirror `AExpr`/`AAction` (`ASyntax.hs:936-1148`)
+post-`simPackageOpt`: dynamic selects expanded, cases inserted, `ASAny`
+resolved, concats normalized.  Rule and method bodies are exported in
+final execution order — the intra-rule topological sort (method-order
+constraints, foreign-call ordering) is bsc's job, not the backend's.
+
+### Per link (`Design`)
+
+- `modules`, `instance_map`, `top`, `default_clock`/`default_reset`,
+  `foreign_funcs` (BDPI signatures; the C ABI itself is unchanged from
+  today's conventions).
+- `compositions`: the design schedule, hierarchically (§4).
+
+## 4. The hierarchical schedule
+
+**Problem.** bsc's link-time merge produces a global per-domain order over
+all rules of all instances (`mergeSchedules` → `flattenCombSchedGraph`).
+Exporting that flat order would scale with instance count — a tile grid's
+internal scheduling would all be manifest at top level, defeating
+per-module-type code generation and caching.
+
+**Factoring.** A module's rules interact with the outside world only
+through its interface methods: every cross-boundary schedule constraint
+attaches to a method node, and the merge fuses method nodes into the
+calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
+
+1. **Segments (per module type).**  The module's own schedule order
+   (which contains its rule *and* method nodes) is cut at the method-node
+   positions.  What remains is an ordered list of segments — runs of the
+   module's own `Sched`/`Exec` nodes — with each cut labeled by the
+   methods that execute there (`Segment::cut`).  A module with M
+   method-position groups has ≤ M+1 segments regardless of rule count.
+2. **Composition (per link).**  The design-level order becomes a sequence
+   of `(instance, segment)` references: parent rules execute inside the
+   parent's own segments; a child's segment k+1 is scheduled after the
+   parent activity that calls the methods in cut k.  bsc derives the
+   composition from its merged graph with a topological sort that
+   maximizes per-instance runs.  Size is O(Σ instances × segments), i.e.
+   O(instances × methods) — independent of internal rule counts.
+3. **Degradation is graceful.**  Any interleaving the constraint graph
+   forces (heavily coupled boundaries) shows up as more, smaller
+   composition entries — never as a semantic change.  The flat schedule is
+   the degenerate case where every segment holds one rule.
+
+**What doesn't factor** (composition-level, small):
+
+- **Cross-module ME inhibitors.**  The merge derives parent↔child disjoint
+  pairs through method use (`combineSchedDRDB`, `SimExpand.hs:1362-1429`).
+  Which rule inhibits which depends on the composed order, so these are
+  exported as qualified pairs (`Composition::cross_inhibits`); codegen
+  wires them as per-instance inhibit inputs, constant-folded away when an
+  instantiation context makes them dead.  Intra-module inhibitors are
+  fixed by the module's own segment order and are exported per rule
+  (`Rule::me_inhibits`), keeping the compiled module code shared.
+- **Cross-instance tick order** (producers before consumers,
+  `sortTickCalls`) and **early rules** (`clock_crossing_rule`), both
+  qualified lists.
+
+**Semantic invariants** (unchanged from today's Bluesim; DESIGN.md §4):
+executing segments in composition order with each rule gated by its
+WILL_FIRE, inhibitors applied, ticks after rules, reset ticks guarded —
+is TRS-equivalent by the same argument as the current flat schedule,
+because the composition is itself a topological order of the same merged
+constraint graph.
+
+## 5. What BIR deliberately omits
+
+- Urgency computation, RDY construction, conflict resolution — already
+  folded into the exported `WILL_FIRE`/`RDY` defs by bsc.
+- The schedule dependency *graph* — trs consumes orders, not graphs; the
+  graph stays in bsc (and in `.ba`) for `-show-schedule` tooling.
+- `UseCond`-style conditional-use detail (not round-tripped by `.ba`
+  either, `GenABin.hs:404-408`).
+- Verilog-oriented info: `VPathInfo`, port naming for synthesis, etc.
+
+## 6. Testing the contract
+
+- `trs ir dump <design.bir>` pretty-prints for golden-file diffing
+  against bsc's `-ddumpsimexpand`/`-ddumpsimpackageopt` dumps.
+- Round-trip property tests on the Rust side; decode-time verification
+  (string refs, module refs, segment indices, def references).
+- The P1 reference interpreter executes BIR directly; its
+  bit-identical-stdout differential runs against today's Bluesim are the
+  end-to-end validation that the exported information is *sufficient*.

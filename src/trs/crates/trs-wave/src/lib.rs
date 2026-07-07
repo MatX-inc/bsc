@@ -15,7 +15,7 @@ pub mod vcd_id;
 
 pub use hierarchy::{Hierarchy, Scope, SignalDef, SignalId, VarKind};
 
-use bsim2_kernel::Time;
+use trs_kernel::Time;
 
 /// A captured value change, buffered until its timeslice settles.
 #[derive(Debug, Clone, PartialEq, Eq)]

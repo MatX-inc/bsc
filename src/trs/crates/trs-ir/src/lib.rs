@@ -18,7 +18,7 @@ pub mod verify;
 use serde::{Deserialize, Serialize};
 
 pub use expr::{Action, Expr, PrimOp};
-pub use schedule::{Schedule, SchedNode};
+pub use schedule::{Composition, ModuleSchedule, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
@@ -37,6 +37,9 @@ pub struct Design {
     pub modules: Vec<Module>,
     /// Hierarchical instance path -> module name (`ssys_instmap` analogue).
     pub instance_map: Vec<(StrId, StrId)>,
+    /// Per-(clock, edge) interleavings of instance segments — the design
+    /// schedule, exported hierarchically (see `schedule` module docs).
+    pub compositions: Vec<Composition>,
     /// Foreign (BDPI) function signatures used anywhere in the design.
     pub foreign_funcs: Vec<ForeignFunc>,
     pub default_clock: Option<StrId>,
@@ -58,8 +61,8 @@ pub struct Module {
     pub defs: Vec<Def>,
     pub rules: Vec<Rule>,
     pub methods: Vec<Method>,
-    /// This module's own schedule info (merged across the hierarchy by the
-    /// link planner, as `SimExpand.mergeSchedules` does today).
+    /// This module type's segmented schedule; the design-level interleaving
+    /// lives in `Design::compositions`.
     pub schedule: Schedule,
 }
 
@@ -116,7 +119,7 @@ pub enum InstanceKind {
     Module(StrId),
 }
 
-/// Primitives the backend knows how to lay out or call into bsim2-rt.
+/// Primitives the backend knows how to lay out or call into trs-rt.
 /// The full set today is `SimPrimitiveModules.hs:263-348`; this enum grows
 /// with the phases in DESIGN.md §10.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,7 +140,7 @@ pub enum Primitive {
     ClockDivider { divisor: u32 },
     SyncReg { width: u32, stages: u8 },
     SyncFifo { width: u32, depth: u32 },
-    /// Escape hatch during bring-up: named primitive handled by bsim2-rt.
+    /// Escape hatch during bring-up: named primitive handled by trs-rt.
     Other { name: StrId },
 }
 
@@ -176,6 +179,13 @@ pub struct Rule {
     pub clock_domain: u32,
     /// `clock_crossing_rule` — executed in the after-edge function.
     pub crossing: bool,
+    /// Intra-module ME inhibitors: disjoint rules executing *earlier* in
+    /// this module's segment order whose CAN_FIREs are negated into this
+    /// rule's effective CAN_FIRE — the destructive-execution correctness
+    /// patch (`mkMERuleInhibits`, `SimMakeCBlocks.hs:1636-1658`).  Fixed
+    /// per module type; cross-module pairs are in
+    /// `Composition::cross_inhibits`.
+    pub me_inhibits: Vec<StrId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,7 +239,7 @@ impl std::fmt::Display for DecodeError {
             DecodeError::Cbor(e) => write!(f, "CBOR decode error: {e}"),
             DecodeError::VersionMismatch { found, expected } => write!(
                 f,
-                "BIR version mismatch: file has {found}, this bsim2 expects {expected} \
+                "BIR version mismatch: file has {found}, this trs expects {expected} \
                  (regenerate with a matching bsc)"
             ),
             DecodeError::Invalid(e) => write!(f, "invalid BIR: {e}"),
@@ -286,6 +296,7 @@ mod tests {
                 schedule: Schedule::default(),
             }],
             instance_map: vec![],
+            compositions: vec![],
             foreign_funcs: vec![],
             default_clock: None,
             default_reset: None,

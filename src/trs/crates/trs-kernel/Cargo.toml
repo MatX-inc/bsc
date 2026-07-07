@@ -1,5 +1,5 @@
 [package]
-name = "bsim2-kernel"
+name = "trs-kernel"
 description = "Simulation kernel: event queue, priorities, clocks, resets"
 version.workspace = true
 edition.workspace = true

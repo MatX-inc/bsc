@@ -1,0 +1,21 @@
+[package]
+name = "trs"
+description = "TRS driver: link planner, JIT/AOT builder, native runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "trs"
+path = "src/main.rs"
+
+[dependencies]
+trs-ir = { path = "../trs-ir" }
+trs-kernel = { path = "../trs-kernel" }
+trs-rt = { path = "../trs-rt" }
+trs-wave = { path = "../trs-wave" }
+trs-codegen = { path = "../trs-codegen" }
+
+[features]
+llvm = ["trs-codegen/llvm"]
