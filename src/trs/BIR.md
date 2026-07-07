@@ -87,13 +87,23 @@ calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
    module's own `Sched`/`Exec` nodes — with each cut labeled by the
    methods that execute there (`Segment::cut`).  A module with M
    method-position groups has ≤ M+1 segments regardless of rule count.
+   Note that a rule's `Sched` and `Exec` nodes may land in *different*
+   segments: a method position can legitimately fall between them (e.g. a
+   child rule competing with a parent-called method under
+   `descending_urgency` computes its fire condition before the method
+   runs but executes after), so segment membership is per node, not per
+   rule.
 2. **Composition (per link).**  The design-level order becomes a sequence
    of `(instance, segment)` references: parent rules execute inside the
    parent's own segments; a child's segment k+1 is scheduled after the
    parent activity that calls the methods in cut k.  bsc derives the
-   composition from its merged graph with a topological sort that
-   maximizes per-instance runs.  Size is O(Σ instances × segments), i.e.
-   O(instances × methods) — independent of internal rule counts.
+   composition by projecting the merged constraint graph
+   (`ss_sched_graph`) onto (instance, segment) units and topologically
+   sorting (ties broken by first appearance in bsc's flat order) — the
+   flat merged order itself cannot simply be run-collapsed, because it
+   freely interleaves `Sched`/`Exec` nodes of different instances.  Size
+   is O(Σ instances × segments), i.e. O(instances × methods) —
+   independent of internal rule counts.
 3. **Degradation is graceful.**  Any interleaving the constraint graph
    forces (heavily coupled boundaries) shows up as more, smaller
    composition entries — never as a semantic change.  The flat schedule is

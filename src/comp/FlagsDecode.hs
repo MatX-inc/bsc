@@ -620,6 +620,7 @@ defaultFlags bluespecdir = Flags {
         fdir = Nothing,
         finalcleanup = 1,
         genABin = False,
+        genBir = False,
         genName = [],
         genSysC = False,
         -- The ifcPath value will be produced from the raw value,
@@ -1234,6 +1235,10 @@ externalFlags = [
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
           "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
+
+        ("bir",
+         (Toggle (\f x -> f {genBir=x}) (showIfTrue genBir),
+          "generate a .bir (TRS IR) file when linking with -sim", Hidden)),
 
         ("expand-ATS-limit",
          (Arg "n"
@@ -1953,6 +1958,7 @@ showFlagsRaw flags =
           ("fdir", show (fdir flags)),
           ("finalcleanup", show (finalcleanup flags)),
           ("genABin", show (genABin flags)),
+          ("genBir", show (genBir flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),
           ("ifLift", show (ifLift flags)),

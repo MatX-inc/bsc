@@ -91,8 +91,8 @@ pub struct TickCall {
 /// dotted strings ("a.b.c"); rule paths are "a.b.RL_r".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Composition {
-    /// Index into the design's clock table.
-    pub clock: u32,
+    /// Interned name of this composition's canonical clock oscillator.
+    pub clock: StrId,
     pub posedge: bool,
     /// Ordered (instance, segment) references.  Each instance's segments
     /// appear in order; runs are maximized so the common case is one entry

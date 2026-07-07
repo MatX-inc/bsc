@@ -30,6 +30,7 @@ Flags {
 	fdir = Nothing,
 	finalcleanup = 1,
 	genABin = False,
+	genBir = False,
 	genName = [],
 	genSysC = False,
 	ifLift = True,
