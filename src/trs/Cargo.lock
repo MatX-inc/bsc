@@ -25,6 +25,7 @@ name = "trs"
 version = "0.0.1"
 dependencies = [
  "trs-codegen",
+ "trs-interp",
  "trs-ir",
  "trs-kernel",
  "trs-rt",
@@ -37,6 +38,13 @@ version = "0.0.1"
 dependencies = [
  "trs-ir",
  "inkwell",
+]
+
+[[package]]
+name = "trs-interp"
+version = "0.0.1"
+dependencies = [
+ "trs-ir",
 ]
 
 [[package]]

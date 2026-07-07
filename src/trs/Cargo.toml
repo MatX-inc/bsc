@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/trs-ir",
+    "crates/trs-interp",
     "crates/trs-kernel",
     "crates/trs-rt",
     "crates/trs-wave",
@@ -11,6 +12,7 @@ members = [
 # trs-codegen needs llvm-18-dev; everything else builds without it.
 default-members = [
     "crates/trs-ir",
+    "crates/trs-interp",
     "crates/trs-kernel",
     "crates/trs-rt",
     "crates/trs-wave",

@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 trs-ir = { path = "../trs-ir" }
+trs-interp = { path = "../trs-interp" }
 trs-kernel = { path = "../trs-kernel" }
 trs-rt = { path = "../trs-rt" }
 trs-wave = { path = "../trs-wave" }

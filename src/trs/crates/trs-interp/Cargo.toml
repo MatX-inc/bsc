@@ -1,0 +1,10 @@
+[package]
+name = "trs-interp"
+description = "Reference interpreter over BIR: the differential oracle (DESIGN.md P1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trs-ir = { path = "../trs-ir" }
