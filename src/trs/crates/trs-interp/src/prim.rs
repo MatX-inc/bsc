@@ -38,6 +38,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String]) -> Box<dyn Prim>
         "Probe" | "ProbeWire" => Box::new(Probe),
         // no reset modeling yet: reset outputs read as deasserted
         "ResetToBool" => Box::new(ResetToBool),
+        "Counter" => Box::new(Counter::new(consts)),
         "RegFile" => Box::new(RegFile::new(consts, None)),
         "RegFileLoad" => Box::new(RegFile::new(consts, strs.first().cloned())),
         "ConfigRegN" | "ConfigRegA" => Box::new(ConfigReg::new(consts, true)),
@@ -85,6 +86,93 @@ impl Prim for ResetToBool {
     }
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("ResetToBool: unknown action method {method:?}")
+    }
+    fn tick(&mut self, _port: &str) {}
+}
+
+// ===============
+
+/// Counter (bs_prim_mod_counter.h): value() reads the begin-of-cycle
+/// value once any write has happened this cycle; addA/addB accumulate;
+/// setC overrides then re-applies same-cycle adds; setF force-overrides.
+struct Counter {
+    width: u32,
+    val: Value,
+    saved_val: Value,
+    saved_at: u64,
+    a: Value,
+    a_at: u64,
+    b: Value,
+    b_at: u64,
+}
+
+impl Counter {
+    fn new(consts: &[Value]) -> Counter {
+        let width = carg(consts, 0) as u32;
+        let init = consts.get(1).cloned().unwrap_or_else(|| Value::undet(width));
+        Counter {
+            width,
+            val: init.zext(width),
+            saved_val: Value::zero(width),
+            saved_at: u64::MAX,
+            a: Value::zero(width),
+            a_at: u64::MAX,
+            b: Value::zero(width),
+            b_at: u64::MAX,
+        }
+    }
+    fn save(&mut self, now: u64) {
+        if self.saved_at != now {
+            self.saved_at = now;
+            self.saved_val = self.val.clone();
+        }
+    }
+}
+
+impl Prim for Counter {
+    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+        match method {
+            "value" | "_read" => {
+                if self.saved_at == now {
+                    self.saved_val.clone()
+                } else {
+                    self.val.clone()
+                }
+            }
+            m => panic!("Counter: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        let w = self.width;
+        match method {
+            "addA" | "incrA" => {
+                self.save(now);
+                self.a_at = now;
+                self.a = args[0].clone();
+                self.val = self.val.add(&args[0], w);
+            }
+            "addB" | "incrB" => {
+                self.save(now);
+                self.b_at = now;
+                self.b = args[0].clone();
+                self.val = self.val.add(&args[0], w);
+            }
+            "setC" | "update" => {
+                self.save(now);
+                self.val = args[0].clone();
+                if self.a_at == now {
+                    self.val = self.val.add(&self.a.clone(), w);
+                }
+                if self.b_at == now {
+                    self.val = self.val.add(&self.b.clone(), w);
+                }
+            }
+            "setF" | "_write" => {
+                self.save(now);
+                self.val = args[0].clone();
+            }
+            m => panic!("Counter: unknown action method {m:?}"),
+        }
     }
     fn tick(&mut self, _port: &str) {}
 }

@@ -32,6 +32,11 @@ struct ModIx {
 
 pub struct Interp {
     d: Design,
+    /// open files from $fopen, keyed by descriptor (bit 31 set, as
+    /// Verilog file descriptors are; 0x8000_0000 reserved for stdout
+    /// behavior of the MCD form is not modeled yet)
+    files: HashMap<u64, std::fs::File>,
+    next_fd: u64,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
@@ -100,6 +105,8 @@ impl Interp {
             mod_by_name,
             inst_by_path: HashMap::new(),
             insts: Vec::new(),
+            files: HashMap::new(),
+            next_fd: 0x8000_0001,
             finished: None,
             cycle: 0,
             now: 10,
@@ -665,8 +672,50 @@ impl Interp {
     // ===============
     // System tasks
 
+    fn write_fd(&mut self, fd: u64, text: &str) {
+        use std::io::Write;
+        if fd == 0x8000_0000 {
+            print!("{text}");
+        } else if let Some(f) = self.files.get_mut(&fd) {
+            let _ = f.write_all(text.as_bytes());
+        }
+    }
+
     fn foreign_action(&mut self, name: &str, args: &[Arg]) {
         match name {
+            "$fdisplay" | "$fwrite" | "$fdisplayh" | "$fwriteh"
+            | "$fdisplayb" | "$fwriteb" | "$fdisplayo" | "$fwriteo" => {
+                let base = match name.chars().last() {
+                    Some('h') => 16,
+                    Some('b') => 2,
+                    Some('o') => 8,
+                    _ => 10,
+                };
+                let fd = match args.first() {
+                    Some(Arg::Val(v, _)) => v.as_u64(),
+                    _ => 0x8000_0000,
+                };
+                let mut text = format::format_args(&args[1..], base, self.now);
+                if name.starts_with("$fdisplay") {
+                    text.push('\n');
+                }
+                self.write_fd(fd, &text);
+            }
+            "$fclose" => {
+                if let Some(Arg::Val(v, _)) = args.first() {
+                    self.files.remove(&v.as_u64());
+                }
+            }
+            "$fflush" => {
+                use std::io::Write;
+                if let Some(Arg::Val(v, _)) = args.first() {
+                    if let Some(f) = self.files.get_mut(&v.as_u64()) {
+                        let _ = f.flush();
+                    }
+                } else {
+                    let _ = std::io::stdout().flush();
+                }
+            }
             "$display" => println!("{}", format::format_args(args, 10, self.now)),
             "$displayh" => println!("{}", format::format_args(args, 16, self.now)),
             "$displayb" => println!("{}", format::format_args(args, 2, self.now)),
@@ -675,6 +724,17 @@ impl Interp {
             "$writeh" => print!("{}", format::format_args(args, 16, self.now)),
             "$writeb" => print!("{}", format::format_args(args, 2, self.now)),
             "$writeo" => print!("{}", format::format_args(args, 8, self.now)),
+            "$error" | "$warning" | "$info" => {
+                // severity prefix, then the message (dollar_display.cxx)
+                let sev = &name[1..];
+                let mut t = sev[..1].to_uppercase();
+                t.push_str(&sev[1..]);
+                println!("{}: {}", t, format::format_args(args, 10, self.now));
+            }
+            "$fatal" => {
+                println!("Fatal: {}", format::format_args(args, 10, self.now));
+                self.finished = Some(1);
+            }
             "$finish" => {
                 let code = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64() as i32,
@@ -691,7 +751,49 @@ impl Interp {
     fn foreign_value(&mut self, name: &str, args: &[Arg], w: u32) -> Value {
         match name {
             "$time" | "$stime" => Value::from_u64(w.max(1), self.now),
+            "$fopen" => {
+                let path = match args.first() {
+                    Some(Arg::Str(s)) => s.clone(),
+                    _ => return Value::zero(w.max(1)),
+                };
+                let write_mode = !matches!(args.get(1), Some(Arg::Str(m)) if m.starts_with('r'));
+                let f = if write_mode {
+                    std::fs::File::create(&path)
+                } else {
+                    std::fs::File::open(&path)
+                };
+                match f {
+                    Ok(f) => {
+                        let fd = self.next_fd;
+                        self.next_fd += 1;
+                        self.files.insert(fd, f);
+                        Value::from_u64(w.max(32), fd)
+                    }
+                    Err(_) => Value::zero(w.max(1)),
+                }
+            }
             "$test$plusargs" => Value::from_u64(1, 0), // no plusargs yet
+            "$fgetc" => {
+                use std::io::Read;
+                let fd = match args.first() {
+                    Some(Arg::Val(v, _)) => v.as_u64(),
+                    _ => return Value::from_u64(w.max(32), u32::MAX as u64),
+                };
+                let mut byte = [0u8; 1];
+                if let Some(f) = self.files.get_mut(&fd) {
+                    if f.read_exact(&mut byte).is_ok() {
+                        return Value::from_u64(w.max(32), byte[0] as u64);
+                    }
+                }
+                // EOF / bad fd: -1
+                Value::from_u64(w.max(32), 0xFFFF_FFFF)
+            }
+            "$fclose" => {
+                if let Some(Arg::Val(v, _)) = args.first() {
+                    self.files.remove(&v.as_u64());
+                }
+                Value::zero(w.max(1))
+            }
             other => panic!("trs-interp: unimplemented value task {other:?} ({args:?})"),
         }
     }

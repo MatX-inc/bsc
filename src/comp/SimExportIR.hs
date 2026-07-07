@@ -635,31 +635,43 @@ bodyStmts pkg rid wprops other_defs acts =
     in  cvtActions (sp_name pkg) rid (sp_local_defs pkg)
                    (sp_method_order_map pkg) other_defs acts reset_ids
 
-encStmt :: SimCCFnStmt -> EncM C.Encoding
-encStmt (SFSDef _ (_, i) (Just _)) = encVariant "Def" <$> idE i
-encStmt (SFSDef _ _ Nothing) =
+type SignedOracle = AId -> Bool
+
+encStmt :: SignedOracle -> SimCCFnStmt -> EncM C.Encoding
+encStmt _ (SFSDef _ (_, i) (Just _)) = encVariant "Def" <$> idE i
+encStmt _ (SFSDef _ _ Nothing) =
     -- declaration only (e.g. a task temp); the Task action fills it
     return mempty
-encStmt (SFSAssign _ i _) = encVariant "Def" <$> idE i
-encStmt (SFSAction act) = encVariant "Action" <$> encAction act
-encStmt (SFSAssignAction _ i act _) = do
+encStmt _ (SFSAssign _ i _) = encVariant "Def" <$> idE i
+encStmt sgn (SFSAction act) = encVariant "Action" <$> encAction sgn act
+encStmt sgn (SFSAssignAction _ i act _) = do
     dE <- idE i
-    aE <- encAction act
+    aE <- encAction sgn act
     return $ encVariant "AvAction" (encStruct [("def", dE), ("action", aE)])
-encStmt (SFSCond c ts es) = do
+encStmt sgn (SFSCond c ts es) = do
     cE <- encExpr c
-    tE <- encStmts ts
-    eE <- encStmts es
+    tE <- encStmts sgn ts
+    eE <- encStmts sgn es
     return $ encVariant "Cond"
                (encStruct [("cond", cE), ("then_", tE), ("else_", eE)])
-encStmt s = internalError ("SimExportIR.encStmt: " ++ ppReadable s)
+encStmt _ s = internalError ("SimExportIR.encStmt: " ++ ppReadable s)
 
 -- mempty markers from declaration-only stmts must not appear in the list
-encStmts :: [SimCCFnStmt] -> EncM C.Encoding
-encStmts stmts = do
+encStmts :: SignedOracle -> [SimCCFnStmt] -> EncM C.Encoding
+encStmts sgn stmts = do
     let keep (SFSDef _ _ Nothing) = False
         keep _ = True
-    encList <$> mapM encStmt (filter keep stmts)
+    encList <$> mapM (encStmt sgn) (filter keep stmts)
+
+-- Signed display for a system-task argument: encodeArgs's "-" prefix
+-- checks the referenced Id's sign property; the property may live on the
+-- reference or on the def's own id (removeSignCasts rewrites both ways).
+mkSignedOracle :: SimPackage -> SignedOracle
+mkSignedOracle pkg i =
+    isSignedId i
+    || case M.lookup i (sp_local_defs pkg) of
+         Just (ADef di _ _ _) -> isSignedId di
+         Nothing -> False
 
 encRule :: ModSchedInfo -> SimPackage -> ARule -> EncM C.Encoding
 encRule msi pkg r = do
@@ -671,7 +683,8 @@ encRule msi pkg r = do
                  _         -> mkIdCanFire (arule_id r)
     cf <- idE cfId
     wf <- idE (mkIdWillFire (arule_id r))
-    bodyEnc <- encStmts (bodyStmts pkg (arule_id r) (arule_wprops r)
+    bodyEnc <- encStmts (mkSignedOracle pkg)
+                        (bodyStmts pkg (arule_id r) (arule_wprops r)
                                    S.empty (arule_actions r))
     let dom = case wpClockDomain (arule_wprops r) of
                 Just (ClockDomain n) -> fromIntegral n
@@ -728,7 +741,8 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
           Just (_, e) -> S.fromList
               [ i | i <- aVars e, i `M.member` sp_local_defs pkg ]
           Nothing -> S.empty
-    bodyEnc <- encStmts (bodyStmts pkg name props result_defs body)
+    bodyEnc <- encStmts (mkSignedOracle pkg)
+                        (bodyStmts pkg name props result_defs body)
     resultEnc <- traverse (encExpr . snd) mresult
     let dom = case wpClockDomain props of
                 Just (ClockDomain n) -> fromIntegral n
@@ -820,6 +834,12 @@ encExpr (ASReset _ rst) = do
     return $ encVariant "Reset" $ encStruct
       [ ("wire", wireEnc)
       ]
+encExpr (APrim _ _ PrimResetUnassertedVal []) =
+    -- the value of an unasserted reset wire (active-low convention: 1)
+    return $ encVariant "Const" $ encStruct
+      [ ("width", encW32 1)
+      , ("limbs", encList [encW32 1])
+      ]
 encExpr (APrim _ t PrimIf [c, x, y]) = do
     cEnc <- encExpr c
     xEnc <- encExpr x
@@ -892,8 +912,8 @@ primOpName op = internalError ("SimExportIR.primOpName: " ++ show op)
 -- ===============
 -- Actions
 
-encAction :: AAction -> EncM C.Encoding
-encAction (ACall obj meth (cond : args)) = do
+encAction :: SignedOracle -> AAction -> EncM C.Encoding
+encAction _ (ACall obj meth (cond : args)) = do
     o <- idE obj
     m <- idE meth
     condEnc <- encExpr cond
@@ -905,7 +925,7 @@ encAction (ACall obj meth (cond : args)) = do
       , ("cond", condEnc)
       , ("args", encList argsEnc)
       ]
-encAction (AFCall _ fun _ (cond : args) _) = do
+encAction sgn (AFCall _ fun _ (cond : args) _) = do
     f <- strE fun
     condEnc <- encExpr cond
     argsEnc <- mapM encExpr args
@@ -913,9 +933,9 @@ encAction (AFCall _ fun _ (cond : args) _) = do
       [ ("func", f)
       , ("cond", condEnc)
       , ("args", encList argsEnc)
-      , ("signed", encList (map (encBool . argSigned) args))
+      , ("signed", encList (map (encBool . argSigned sgn) args))
       ]
-encAction (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
+encAction sgn (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
     f <- strE fun
     tempEnc <- traverse idE mtemp
     condEnc <- encExpr cond
@@ -927,12 +947,13 @@ encAction (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
       , ("width", encW32 (aTypeWidth mty))
       , ("cond", condEnc)
       , ("args", encList argsEnc)
-      , ("signed", encList (map (encBool . argSigned) args))
+      , ("signed", encList (map (encBool . argSigned sgn) args))
       ]
-encAction a = internalError ("SimExportIR.encAction: " ++ ppReadable a)
+encAction _ a = internalError ("SimExportIR.encAction: " ++ ppReadable a)
 
 -- Signed-display flag for a system-task argument: matches encodeArgs's
--- "-" prefix rule (ForeignFunctions.hs:256-262).
-argSigned :: AExpr -> Bool
-argSigned (ASDef _ aid) = isSignedId aid
-argSigned _ = False
+-- "-" prefix rule (ForeignFunctions.hs:256-262), extended with the def
+-- table (the sign property may be on the def rather than the reference).
+argSigned :: SignedOracle -> AExpr -> Bool
+argSigned sgn (ASDef _ aid) = sgn aid
+argSigned _ _ = False
