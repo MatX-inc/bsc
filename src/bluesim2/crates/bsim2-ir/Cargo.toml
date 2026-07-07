@@ -1,0 +1,11 @@
+[package]
+name = "bsim2-ir"
+description = "BIR: the portable post-scheduling IR exported by bsc for simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+ciborium = { workspace = true }

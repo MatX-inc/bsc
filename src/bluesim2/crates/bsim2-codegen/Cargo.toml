@@ -1,0 +1,16 @@
+[package]
+name = "bsim2-codegen"
+description = "LLVM lowering of BIR: state layout, rule/segment functions, JIT and AOT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bsim2-ir = { path = "../bsim2-ir" }
+# LLVM 18 via inkwell; requires system llvm-18-dev and libzstd-dev.
+inkwell = { version = "0.9", features = ["llvm18-1"], optional = true }
+
+[features]
+default = []
+llvm = ["dep:inkwell"]

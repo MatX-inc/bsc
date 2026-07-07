@@ -1,0 +1,15 @@
+[package]
+name = "bsim2-wave"
+description = "Waveform capture and VCD/FST writers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bsim2-kernel = { path = "../bsim2-kernel" }
+fst-writer = { workspace = true, optional = true }
+
+[features]
+default = ["fst"]
+fst = ["dep:fst-writer"]

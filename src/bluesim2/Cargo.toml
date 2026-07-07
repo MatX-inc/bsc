@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bsim2-ir",
+    "crates/bsim2-kernel",
+    "crates/bsim2-rt",
+    "crates/bsim2-wave",
+    "crates/bsim2-codegen",
+    "crates/bsim2",
+]
+# bsim2-codegen needs llvm-18-dev; everything else builds without it.
+default-members = [
+    "crates/bsim2-ir",
+    "crates/bsim2-kernel",
+    "crates/bsim2-rt",
+    "crates/bsim2-wave",
+    "crates/bsim2",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "BSD-3-Clause"
+repository = "https://github.com/B-Lang-org/bsc"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+ciborium = "0.2"
+fst-writer = "0.3"
+
+[profile.release]
+debug = true
