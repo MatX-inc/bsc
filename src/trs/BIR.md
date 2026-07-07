@@ -101,16 +101,17 @@ calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
    runs but executes after), so segment membership is per node, not per
    rule.
 2. **Composition (per link).**  The design-level order becomes a sequence
-   of `(instance, segment)` references: parent rules execute inside the
-   parent's own segments; a child's segment k+1 is scheduled after the
-   parent activity that calls the methods in cut k.  bsc derives the
-   composition by projecting the merged constraint graph
+   of `(instance, domain, segment)` references: parent rules execute
+   inside the parent's own segments; a child's segment k+1 is scheduled
+   after the parent activity that calls the methods in cut k.  bsc
+   derives the composition by projecting the merged constraint graph
    (`ss_sched_graph`) onto (instance, segment) units and topologically
    sorting (ties broken by first appearance in bsc's flat order) — the
    flat merged order itself cannot simply be run-collapsed, because it
-   freely interleaves `Sched`/`Exec` nodes of different instances.  Size
-   is O(Σ instances × segments), i.e. O(instances × methods) —
-   independent of internal rule counts.
+   freely interleaves `Sched`/`Exec` nodes of different instances.  The
+   domain id disambiguates the per-domain segment numbering for modules
+   spanning several clock domains.  Size is O(Σ instances × segments),
+   i.e. O(instances × methods) — independent of internal rule counts.
 3. **Degradation is graceful.**  Any interleaving the constraint graph
    forces (heavily coupled boundaries) shows up as more, smaller
    composition entries — never as a semantic change.  The flat schedule is
@@ -128,7 +129,30 @@ calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
   (`Rule::me_inhibits`), keeping the compiled module code shared.
 - **Cross-instance tick order** (producers before consumers,
   `sortTickCalls`) and **early rules** (`clock_crossing_rule`), both
-  qualified lists.
+  qualified lists.  Ticks are direction-filtered against the primMap
+  tick specs; a posedge schedule also owns the opposite edge's tick
+  function, exported as a rule-less negedge composition (Neg/Both tick
+  ports: ClockInverter, GatedClock, SyncBit05/15).  Each tick carries
+  its clock's gate expression (None = ungated) — the `gate_value`
+  argument of the C++ tick calls.  Conditional **reset ticks**
+  (`mkResetTickStmt`, from `di_prim_resets`) are flagged `reset: true`:
+  while a prim's reset is asserted, each posedge of its clock loads the
+  reset state.
+
+**Clocks and resets at run time.**  Composition clocks name oscillators:
+the default clock (LOW, first edge t=0, high 5 / low 5), a ClockGen
+output (`<inst>$CLK_OUT`, waveform from instantiation args), or a
+dynamic clock (MakeClock/ClockDiv/ClockInverter) whose edges the driving
+prim triggers at tick time (`bk_trigger_clock_edge`).  Clock gating is
+already folded into gated rules' CAN_FIREs by bsc; `Expr::Gate` reads a
+prim's gate output, and flattened gate wires encode as
+`<path>$CLK_GATE_OUT` ports.  Reset semantics follow the kernel: the top
+reset asserts at t=0 and deasserts at t=2 after that instant's logic;
+derived resets (`<inst>$OUT_RST` / `$RST_OUT` wires) are driven by the
+reset-generator prims with async assertion cascading immediately and
+other transitions applying at end of timeslice.  Rule bodies carry their
+own reset guards as exported Cond statements over reset wires — the
+backend only answers "is this wire asserted".
 
 **Semantic invariants** (unchanged from today's Bluesim; DESIGN.md §4):
 executing segments in composition order with each rule gated by its
