@@ -82,11 +82,18 @@ attaches to a method node, and the merge fuses method nodes into the
 calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
 
 1. **Segments (per module type).**  The module's own schedule order
-   (which contains its rule *and* method nodes) is cut at the method-node
-   positions.  What remains is an ordered list of segments — runs of the
-   module's own `Sched`/`Exec` nodes — with each cut labeled by the
-   methods that execute there (`Segment::cut`).  A module with M
-   method-position groups has ≤ M+1 segments regardless of rule count.
+   (which contains its rule *and* method nodes) is cut at two kinds of
+   positions: its interface-method nodes (each cut labeled with the
+   methods that execute there, `Segment::cut`), and — because a rule
+   that calls a *user-submodule* method is itself a fusion point the
+   merge attaches cross-boundary constraints to — every child-calling
+   rule node becomes a singleton segment (a child's segments may have
+   to run between two such rules; found via sysBug898, where an FSM
+   pulses a child and reads the propagated result in the same cycle).
+   Primitive method calls do not cut: primitives are not scheduled
+   modules.  Segment count is bounded by interface methods plus
+   child-calling rules, still independent of internal rule count and
+   still per module type.
    Note that a rule's `Sched` and `Exec` nodes may land in *different*
    segments: a method position can legitimately fall between them (e.g. a
    child rule competing with a parent-called method under
