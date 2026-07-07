@@ -111,6 +111,48 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
             consts.get(1).map(|v| v.as_u64()).unwrap_or(1) as u8,
             Some(SyncReset::new(carg(consts, 0) as u32, name == "MakeResetA")),
         )),
+        // raw args: [width, depth, indexWidth] ([depth, indexWidth] for
+        // the zero-width variants, [width] for depth-1); the clear
+        // interface exists only on the Level variants
+        "SyncFIFO" => Box::new(SyncFifo::new(carg(consts, 0) as u32, carg(consts, 1), false)),
+        "SyncFIFO0" => Box::new(SyncFifo::new(0, carg(consts, 0), false)),
+        "SyncFIFO1" => Box::new(SyncFifo::new(carg(consts, 0) as u32, 1, false)),
+        "SyncFIFO10" => Box::new(SyncFifo::new(0, 1, false)),
+        "SyncFIFOLevel" => Box::new(SyncFifo::new(carg(consts, 0) as u32, carg(consts, 1), true)),
+        "SyncFIFOLevel0" => Box::new(SyncFifo::new(0, carg(consts, 0), true)),
+        // BRAMs: [pipelined, addr_width, data_width, memsize]; BE adds
+        // [chunk_size, we_width] before memsize; Load variants carry the
+        // file in strs plus a binary flag as the last const
+        "BRAM1" | "BRAM2" => Box::new(Bram::new(
+            carg(consts, 0) != 0,
+            carg(consts, 1) as u32,
+            carg(consts, 2) as u32,
+            carg(consts, 2) as u32,
+            1,
+            carg(consts, 3),
+            path,
+            None,
+        )),
+        "BRAM1BE" | "BRAM2BE" => Box::new(Bram::new(
+            carg(consts, 0) != 0,
+            carg(consts, 1) as u32,
+            carg(consts, 2) as u32,
+            carg(consts, 3) as u32,
+            carg(consts, 4) as u32,
+            carg(consts, 5),
+            path,
+            None,
+        )),
+        "BRAM1Load" | "BRAM2Load" => Box::new(Bram::new(
+            carg(consts, 0) != 0,
+            carg(consts, 1) as u32,
+            carg(consts, 2) as u32,
+            carg(consts, 2) as u32,
+            1,
+            carg(consts, 3),
+            path,
+            strs.first().map(|f| (f.clone(), carg(consts, 4) != 0)),
+        )),
         // dynamic clock sources (bs_prim_mod_clockgen.h)
         "MakeClock" => Box::new(MakeClock::new(consts)),
         "ClockDiv" => Box::new(ClockDivider::new(consts)),
@@ -457,10 +499,34 @@ impl RegFile {
         a >= lo && a <= hi
     }
 
-    /// Port of mem_file.cxx read_mem_file + the {Hex,Bin}FormatHandler:
-    /// same state machine, same messages (to stdout), same partial-load
-    /// behavior on errors.
+    /// Port of mem_file.cxx read_mem_file + the {Hex,Bin}FormatHandler.
     fn load_memfile(&mut self, path: &str, bin: bool) {
+        let (addr_bits, width, lo, hi) = (self.addr_bits, self.width, self.lo, self.hi);
+        let mem_name = self.mem_name.clone();
+        load_mem_file(path, bin, addr_bits, width, lo, hi, &mem_name, &mut |a, v| {
+            self.data.insert(a, v);
+        });
+    }
+
+    fn addr_hex(&self, a: u64) -> String {
+        let digits = ((self.addr_bits + 3) / 4).max(1) as usize;
+        format!("{a:0digits$x}")
+    }
+}
+
+/// mem_file.cxx read_mem_file + format handlers: same state machine, same
+/// messages (to stdout), same partial-load behavior on errors.  `sink`
+/// receives in-range parsed (address, value) pairs.
+fn load_mem_file(
+    path: &str,
+    bin: bool,
+    addr_bits: u32,
+    width: u32,
+    lo: u64,
+    hi: u64,
+    mem_name: &str,
+    sink: &mut dyn FnMut(u64, Value),
+) {
         let text = match std::fs::read_to_string(path) {
             Ok(x) => x,
             Err(e) => {
@@ -472,21 +538,22 @@ impl RegFile {
                 return;
             }
         };
-        let decreasing = self.lo > self.hi;
-        let mut addr = self.lo;
+        let in_range = |a: u64| -> bool { a >= lo.min(hi) && a <= lo.max(hi) };
+    let decreasing = lo > hi;
+        let mut addr = lo;
         let mut rt = RangeTracker::new();
-        let mut set_entry = |rf: &mut RegFile, rt: &mut RangeTracker, s: &str,
-                             addr: &mut u64|
+        let mut set_entry = |rt: &mut RangeTracker, s: &str, addr: &mut u64,
+                             sink: &mut dyn FnMut(u64, Value)|
          -> bool {
-            if rf.in_range(*addr) {
+            if in_range(*addr) {
                 let parsed = if bin {
-                    parse_mem_bin(s, rf.width)
+                    parse_mem_bin(s, width)
                 } else {
-                    parse_mem_hex(s, rf.width)
+                    parse_mem_hex(s, width)
                 };
                 match parsed {
                     Some(v) => {
-                        rf.data.insert(*addr, v);
+                        sink(*addr, v);
                         rt.set_addr(*addr);
                     }
                     None => return false,
@@ -569,11 +636,11 @@ impl RegFile {
                 St::InAddr => {
                     let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
                     if done {
-                        let err = match parse_mem_hex(&tok, self.addr_bits) {
+                        let err = match parse_mem_hex(&tok, addr_bits) {
                             None => Some("Malformed address".to_string()),
                             Some(v) => {
                                 let a = v.as_u64();
-                                if !self.in_range(a) {
+                                if !in_range(a) {
                                     Some("Address is outside of the allowed range".to_string())
                                 } else {
                                     addr = a;
@@ -601,7 +668,7 @@ impl RegFile {
                 St::InValue => {
                     let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
                     if done {
-                        if !set_entry(self, &mut rt, &tok, &mut addr) {
+                        if !set_entry(&mut rt, &tok, &mut addr, sink) {
                             println!("Error: value processing error at line {start_line} of file '{path}'");
                             println!("       Malformed value.");
                             return;
@@ -626,20 +693,14 @@ impl RegFile {
                 println!("       Unterminated C-style comment.");
             }
             St::InValue => {
-                if !set_entry(self, &mut rt, &tok, &mut addr) {
+                if !set_entry(&mut rt, &tok, &mut addr, sink) {
                     println!("Error: value processing error at line {line} of file '{path}'");
                     println!("       Malformed value.");
                 }
             }
             _ => {}
         }
-        rt.check_range(path, &self.mem_name, self.lo, self.hi);
-    }
-
-    fn addr_hex(&self, a: u64) -> String {
-        let digits = ((self.addr_bits + 3) / 4).max(1) as usize;
-        format!("{a:0digits$x}")
-    }
+        rt.check_range(path, mem_name, lo, hi);
 }
 
 impl Prim for RegFile {
@@ -1996,5 +2057,514 @@ impl Prim for ClockInverter {
     }
     fn take_clock_edges(&mut self) -> Vec<bool> {
         std::mem::take(&mut self.edges)
+    }
+}
+
+// ===============
+// MOD_SyncFIFO (bs_prim_mod_synchronizers.h:845): a depth-2^k FIFO whose
+// source and destination sides run on different clocks; head/tail indices
+// cross domains through SyncVar-like registers, counting modulo 2*depth.
+
+/// A cross-domain index register with non-blocking-assignment visibility
+/// (SyncVar<I> over plain integers).
+struct SyncIdx {
+    prev: u64,
+    cur: u64,
+    written_at: u64,
+}
+
+impl SyncIdx {
+    fn new() -> SyncIdx {
+        SyncIdx { prev: 0, cur: 0, written_at: u64::MAX }
+    }
+    fn read(&self, now: u64) -> u64 {
+        if self.written_at == now {
+            self.prev
+        } else {
+            self.cur
+        }
+    }
+    fn probe(&self) -> u64 {
+        self.cur
+    }
+    fn write(&mut self, x: u64, now: u64) {
+        self.prev = self.cur;
+        self.cur = x;
+        self.written_at = now;
+    }
+    fn force(&mut self, x: u64) {
+        self.prev = x;
+        self.cur = x;
+        self.written_at = u64::MAX;
+    }
+}
+
+struct SyncFifo {
+    width: u32,
+    depth: u64,
+    has_clear: bool,
+    idx_bits: u32,
+    mask: u64,
+    data: Vec<Value>,
+    d_dout: Value,
+    src_hi: SyncIdx,
+    dst_lo: SyncIdx,
+    src_lo: u64,
+    dst_hi: u64,
+    src_hi_plus_1: u64,
+    dst_lo_plus_1: u64,
+    d_sync_reg1: u64,
+    s_sync_reg1: u64,
+    s_count: u64,
+    d_count: u64,
+    not_empty: bool,
+    not_full: bool,
+    in_reset: bool,
+    s_reset: bool,
+    d_reset: bool,
+    did_enq: bool,
+    did_deq: bool,
+    did_sclear: bool,
+    did_dclear: bool,
+    s_clr: Handshake,
+    d_clr: Handshake,
+}
+
+impl SyncFifo {
+    fn new(width: u32, depth: u64, has_clear: bool) -> SyncFifo {
+        let depth = depth.max(1);
+        let idx_bits = 64 - depth.leading_zeros(); // index_size(depth)
+        SyncFifo {
+            width,
+            depth,
+            has_clear,
+            idx_bits,
+            mask: (1u64 << idx_bits) - 1,
+            data: (0..depth).map(|_| Value::undet(width.max(1))).collect(),
+            d_dout: Value::undet(width.max(1)),
+            src_hi: SyncIdx::new(),
+            dst_lo: SyncIdx::new(),
+            src_lo: 0,
+            dst_hi: 0,
+            src_hi_plus_1: 1,
+            dst_lo_plus_1: 1,
+            d_sync_reg1: 0,
+            s_sync_reg1: 0,
+            s_count: 0,
+            d_count: 0,
+            not_empty: false,
+            not_full: true,
+            in_reset: false,
+            s_reset: false,
+            d_reset: false,
+            did_enq: false,
+            did_deq: false,
+            did_sclear: false,
+            did_dclear: false,
+            s_clr: Handshake::new(false, false),
+            d_clr: Handshake::new(false, false),
+        }
+    }
+
+    fn meth_not_empty(&self) -> bool {
+        !self.d_reset
+            && if self.depth != 1 {
+                self.not_empty
+            } else {
+                self.dst_hi != self.dst_lo.probe()
+            }
+    }
+    fn meth_not_full(&self) -> bool {
+        !self.s_reset && self.not_full
+    }
+
+    fn clk_src(&mut self, now: u64) {
+        self.s_reset = self.in_reset;
+        if self.s_reset
+            || (self.has_clear
+                && (self.did_sclear || !self.s_clr.rdy_send() || self.d_clr.pulse(now)))
+        {
+            self.src_hi.force(0);
+            self.src_hi_plus_1 = 1;
+            self.not_full = false;
+            self.s_count = 0;
+        } else if self.did_enq {
+            self.not_full = (self.src_hi_plus_1 ^ self.depth) != self.src_lo;
+            self.s_count = if self.src_hi_plus_1 > self.src_lo {
+                self.src_hi_plus_1.wrapping_sub(self.src_lo) & self.mask
+            } else {
+                (self.src_hi_plus_1 + 2 * self.depth - self.src_lo) & self.mask
+            };
+            self.src_hi.write(self.src_hi_plus_1, now);
+            self.src_hi_plus_1 = (self.src_hi_plus_1 + 1) % (2 * self.depth);
+        } else {
+            let h = self.src_hi.read(now);
+            self.not_full = (h ^ self.depth) != self.src_lo;
+            self.s_count = if h > self.src_lo {
+                h.wrapping_sub(self.src_lo) & self.mask
+            } else {
+                (h + 2 * self.depth - self.src_lo) & self.mask
+            };
+        }
+        self.did_sclear = false;
+        self.did_enq = false;
+
+        // synchronize index from destination side
+        self.src_lo = self.s_sync_reg1;
+        self.s_sync_reg1 = self.dst_lo.read(now);
+
+        if self.depth == 1 {
+            self.not_full = self.src_hi.probe() == self.src_lo;
+            self.s_count = if self.not_full { 0 } else { 1 };
+        }
+
+        self.s_clr.clk_src(now);
+        self.d_clr.clk_dst(now);
+    }
+
+    fn clk_dst(&mut self, now: u64) {
+        self.d_reset = self.in_reset;
+        if self.d_reset
+            || (self.has_clear
+                && (self.did_dclear || !self.d_clr.rdy_send() || self.s_clr.pulse(now)))
+        {
+            self.dst_lo.force(0);
+            self.dst_lo_plus_1 = 1;
+            self.not_empty = false;
+            self.d_count = 0;
+        } else if self.did_deq {
+            self.not_empty = self.dst_hi != self.dst_lo.read(now);
+            self.d_count = if self.dst_hi > self.dst_lo_plus_1 {
+                self.dst_hi.wrapping_sub(self.dst_lo.read(now)) & self.mask
+            } else {
+                (self.dst_hi + 2 * self.depth - self.dst_lo.read(now)) & self.mask
+            };
+            if self.not_empty {
+                if self.depth != 1 {
+                    self.d_dout =
+                        self.data[(self.dst_lo.read(now) % self.depth) as usize].clone();
+                }
+                self.dst_lo.write(self.dst_lo_plus_1, now);
+                self.dst_lo_plus_1 = (self.dst_lo_plus_1 + 1) % (2 * self.depth);
+            }
+        } else {
+            self.d_count = if self.dst_hi > self.dst_lo.read(now) {
+                self.dst_hi.wrapping_sub(self.dst_lo.read(now)) & self.mask
+            } else {
+                (self.dst_hi + 2 * self.depth - self.dst_lo.read(now)) & self.mask
+            };
+            if self.depth != 1 && !self.not_empty && self.dst_hi != self.dst_lo.read(now) {
+                self.d_dout =
+                    self.data[(self.dst_lo.read(now) % self.depth) as usize].clone();
+                self.dst_lo.write(self.dst_lo_plus_1, now);
+                self.dst_lo_plus_1 = (self.dst_lo_plus_1 + 1) % (2 * self.depth);
+                self.not_empty = true;
+            }
+        }
+        self.did_dclear = false;
+        self.did_deq = false;
+
+        // synchronize index from source side
+        self.dst_hi = self.d_sync_reg1;
+        self.d_sync_reg1 = self.src_hi.read(now);
+
+        if self.depth == 1 {
+            self.not_empty = self.dst_lo.probe() == self.dst_hi;
+            self.d_count = if self.not_empty { 1 } else { 0 };
+        }
+
+        self.s_clr.clk_dst(now);
+        self.d_clr.clk_src(now);
+    }
+}
+
+impl Prim for SyncFifo {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "notEmpty" | "dNotEmpty" | "RDY_first" | "RDY_deq" => {
+                Value::from_u64(1, self.meth_not_empty() as u64)
+            }
+            "first" => self.d_dout.clone(),
+            "notFull" | "sNotFull" | "RDY_enq" => {
+                Value::from_u64(1, self.meth_not_full() as u64)
+            }
+            "sCount" => Value::from_u64(self.idx_bits.max(1), self.s_count),
+            "dCount" => Value::from_u64(self.idx_bits.max(1), self.d_count),
+            "RDY_sClear" => Value::from_u64(1, self.s_clr.rdy_send() as u64),
+            "RDY_dClear" => Value::from_u64(1, self.d_clr.rdy_send() as u64),
+            m => panic!("SyncFIFO: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "enq" => {
+                if self.width > 0 {
+                    let x = args[0].clone();
+                    if self.depth == 1 {
+                        self.d_dout = x.clone();
+                    }
+                    let idx = (self.src_hi.read(now) % self.depth) as usize;
+                    self.data[idx] = x;
+                }
+                self.did_enq = true;
+            }
+            "deq" => self.did_deq = true,
+            "sClear" => {
+                self.s_clr.send();
+                self.did_sclear = true;
+            }
+            "dClear" => {
+                self.d_clr.send();
+                self.did_dclear = true;
+            }
+            m => panic!("SyncFIFO: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
+        match port {
+            "clk_src" => self.clk_src(now),
+            "clk_dst" => self.clk_dst(now),
+            p => panic!("SyncFIFO: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        self.s_clr.reset(asserted);
+        self.d_clr.reset(asserted);
+        if asserted {
+            self.src_lo = 0;
+            self.dst_hi = 0;
+            self.src_hi.force(0);
+            self.dst_lo.force(0);
+            self.src_hi_plus_1 = 1;
+            self.dst_lo_plus_1 = 1;
+            self.d_sync_reg1 = 0;
+            self.s_sync_reg1 = 0;
+            self.s_count = 0;
+            self.d_count = 0;
+            self.s_reset = true;
+            self.d_reset = true;
+            self.did_enq = false;
+            self.did_deq = false;
+            self.did_sclear = false;
+            self.did_dclear = false;
+        }
+    }
+}
+
+// ===============
+// MOD_BRAM (bs_prim_mod_bram.h): request-latched block RAM.  put records
+// the request; the port's clock tick performs the memory access and loads
+// the output register (write-first).  `pipelined` adds one more output
+// stage.  Byte enables write `chunk_size`-bit lanes selected by the
+// write-enable bits.
+
+struct BramPort {
+    upd_at: u64,
+    upd_addr: u64,
+    upd_wens: u64,
+    upd_val: Value,
+    written_at: u64,
+    upd_prev: Value,
+    out: Value,
+    out2: Value,
+}
+
+impl BramPort {
+    fn new(width: u32) -> BramPort {
+        BramPort {
+            upd_at: u64::MAX,
+            upd_addr: 0,
+            upd_wens: 0,
+            upd_val: Value::undet(width),
+            written_at: u64::MAX,
+            upd_prev: Value::undet(width),
+            out: Value::undet(width),
+            out2: Value::undet(width),
+        }
+    }
+}
+
+struct Bram {
+    pipelined: bool,
+    addr_bits: u32,
+    width: u32,
+    hi_addr: u64,
+    chunk_size: u32,
+    num_wens: u32,
+    full_name: String,
+    data: std::collections::HashMap<u64, Value>,
+    a: BramPort,
+    b: BramPort,
+}
+
+impl Bram {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        pipelined: bool,
+        addr_bits: u32,
+        width: u32,
+        chunk_size: u32,
+        num_wens: u32,
+        mem_size: u64,
+        path: &str,
+        file: Option<(String, bool)>,
+    ) -> Bram {
+        let leaf = path.rsplit('.').next().unwrap_or(path).to_string();
+        let full_name = if path.is_empty() {
+            "top".to_string()
+        } else {
+            format!("top.{path}")
+        };
+        let mut b = Bram {
+            pipelined,
+            addr_bits,
+            width,
+            hi_addr: mem_size.saturating_sub(1),
+            chunk_size,
+            num_wens,
+            full_name,
+            data: Default::default(),
+            a: BramPort::new(width),
+            b: BramPort::new(width),
+        };
+        if let Some((f, bin)) = file {
+            let (ab, w, hi) = (b.addr_bits, b.width, b.hi_addr);
+            let data = &mut b.data;
+            load_mem_file(&f, bin, ab, w, 0, hi, &leaf, &mut |a, v| {
+                data.insert(a, v);
+            });
+        }
+        b
+    }
+
+    fn addr_hex(&self, a: u64) -> String {
+        let digits = ((self.addr_bits + 3) / 4).max(1) as usize;
+        format!("{a:0digits$x}")
+    }
+
+    fn put(&mut self, port_b: bool, wens: u64, addr: u64, val: Value, now: u64, pname: &str) {
+        if addr > self.hi_addr {
+            println!(
+                "Warning: BRAM '{}' -- {} address on port {} is out of bounds: {}",
+                self.full_name,
+                if wens != 0 { "Write" } else { "Read" },
+                pname,
+                self.addr_hex(addr)
+            );
+        }
+        let p = if port_b { &mut self.b } else { &mut self.a };
+        p.upd_at = now;
+        p.upd_addr = addr;
+        p.upd_wens = wens;
+        p.upd_val = val;
+    }
+
+    fn clk(&mut self, port_b: bool, now: u64) {
+        let (pa, pb) = (&mut self.a, &mut self.b);
+        let (me, other) = if port_b { (pb, pa) } else { (pa, pb) };
+        me.out2 = me.out.clone();
+        if me.upd_at != now {
+            return;
+        }
+        let is_write = me.upd_wens != 0;
+        if me.upd_addr > self.hi_addr {
+            me.out = Value::undet(self.width);
+        } else if is_write {
+            let cur = self
+                .data
+                .get(&me.upd_addr)
+                .cloned()
+                .unwrap_or_else(|| Value::undet(self.width));
+            // previous value: if the other port wrote the same address at
+            // this instant, use its pre-write value
+            me.written_at = now;
+            me.upd_prev = if other.written_at == now && other.upd_addr == me.upd_addr {
+                other.upd_prev.clone()
+            } else {
+                cur.clone()
+            };
+            let merged = {
+                let mut r = cur;
+                for n in 0..self.num_wens {
+                    if me.upd_wens >> n & 1 != 0 {
+                        let lo = (n * self.chunk_size) as u64;
+                        let hi = lo + self.chunk_size as u64 - 1;
+                        let chunk = me.upd_val.extract(hi, lo, self.chunk_size);
+                        let width = self.width;
+                        let mut nv = chunk;
+                        if lo > 0 {
+                            nv = nv.concat(&r.extract(lo - 1, 0, lo as u32), (hi + 1) as u32);
+                        }
+                        if hi + 1 < width as u64 {
+                            let high_bits = (width as u64 - 1 - hi) as u32;
+                            nv = r
+                                .extract(width as u64 - 1, hi + 1, high_bits)
+                                .concat(&nv, width);
+                        }
+                        r = nv.zext(width);
+                    }
+                }
+                r
+            };
+            self.data.insert(me.upd_addr, merged.clone());
+            me.out = merged;
+        } else {
+            // read: if the other port wrote the same address at this
+            // instant, read the pre-write value
+            let v = if other.written_at == now && other.upd_addr == me.upd_addr {
+                other.upd_prev.clone()
+            } else {
+                self.data
+                    .get(&me.upd_addr)
+                    .cloned()
+                    .unwrap_or_else(|| Value::undet(self.width))
+            };
+            me.out = v;
+        }
+    }
+}
+
+impl Prim for Bram {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "read" | "a_read" => {
+                if self.pipelined {
+                    self.a.out2.clone()
+                } else {
+                    self.a.out.clone()
+                }
+            }
+            "b_read" => {
+                if self.pipelined {
+                    self.b.out2.clone()
+                } else {
+                    self.b.out.clone()
+                }
+            }
+            m => panic!("BRAM: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "put" | "a_put" => {
+                let wens = args[0].as_u64();
+                let addr = args[1].as_u64();
+                self.put(false, wens, addr, args[2].clone(), now, "A");
+            }
+            "b_put" => {
+                let wens = args[0].as_u64();
+                let addr = args[1].as_u64();
+                self.put(true, wens, addr, args[2].clone(), now, "B");
+            }
+            m => panic!("BRAM: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool) {
+        match port {
+            "clk" | "clkA" => self.clk(false, now),
+            "clkB" => self.clk(true, now),
+            p => panic!("BRAM: unknown tick port {p:?}"),
+        }
     }
 }
