@@ -78,15 +78,21 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "BypassWire" => Box::new(BypassWire::new(consts, false)),
         "BypassWire0" => Box::new(BypassWire::new(consts, true)),
         "CRegN5" | "CRegA5" | "CRegUN5" => Box::new(CReg::new(consts, !name.ends_with("UN5"), name == "CRegA5")),
-        "FIFO1" => Box::new(Fifo::new(consts, 1, false, false)),
-        "FIFO2" => Box::new(Fifo::new(consts, 2, false, false)),
-        "FIFO10" => Box::new(Fifo::new(consts, 1, false, true)),
-        "FIFO20" => Box::new(Fifo::new(consts, 2, false, true)),
-        "FIFOL1" => Box::new(Fifo::new(consts, 1, true, false)),
-        "FIFOL10" => Box::new(Fifo::new(consts, 1, true, true)),
-        "SizedFIFO" => Box::new(Fifo::new_sized(consts, false)),
-        "SizedFIFO0" => Box::new(Fifo::new_sized(consts, true)),
-        "SizedFIFOL" => Box::new(Fifo::new_sized_loopy(consts)),
+        // raw args: FIFO1/2/L1/L2 = [width, guarded]; the 0-variants drop
+        // width; SizedFIFO(L) = [width, depth, cnt_width, guarded],
+        // SizedFIFO0 = [depth, cnt_width, guarded]
+        "FIFO1" => Box::new(Fifo::new(carg(consts, 0) as u32, 1, carg(consts, 1) != 0, FifoType::Simple, false, path)),
+        "FIFO2" => Box::new(Fifo::new(carg(consts, 0) as u32, 2, carg(consts, 1) != 0, FifoType::Simple, false, path)),
+        "FIFO10" => Box::new(Fifo::new(0, 1, carg(consts, 0) != 0, FifoType::Simple, true, path)),
+        "FIFO20" => Box::new(Fifo::new(0, 2, carg(consts, 0) != 0, FifoType::Simple, true, path)),
+        "FIFOL1" => Box::new(Fifo::new(carg(consts, 0) as u32, 1, carg(consts, 1) != 0, FifoType::Loopy, false, path)),
+        "FIFOL2" => Box::new(Fifo::new(carg(consts, 0) as u32, 2, carg(consts, 1) != 0, FifoType::Loopy, false, path)),
+        "FIFOL10" => Box::new(Fifo::new(0, 1, carg(consts, 0) != 0, FifoType::Loopy, true, path)),
+        "FIFOL20" => Box::new(Fifo::new(0, 2, carg(consts, 0) != 0, FifoType::Loopy, true, path)),
+        "SizedFIFO" => Box::new(Fifo::new(carg(consts, 0) as u32, carg(consts, 1), carg(consts, 3) != 0, FifoType::Simple, false, path)),
+        "SizedFIFO0" => Box::new(Fifo::new(0, carg(consts, 0), carg(consts, 2) != 0, FifoType::Simple, true, path)),
+        "SizedFIFOL" => Box::new(Fifo::new(carg(consts, 0) as u32, carg(consts, 1), carg(consts, 3) != 0, FifoType::Loopy, false, path)),
+        "SizedFIFOL0" => Box::new(Fifo::new(0, carg(consts, 0), carg(consts, 2) != 0, FifoType::Loopy, true, path)),
         "ClockGen" => Box::new(ClockGen),
         // SyncBit = 2-flop; SyncBit15 = 2-flop ticked on both dst edges;
         // SyncBit05/SyncBit1 = 1-flop (negedge/posedge dst tick) -- edge
@@ -1089,74 +1095,67 @@ impl Prim for CReg {
 
 // ===============
 
-/// FIFO (bs_prim_mod_fifo.h): in-place mutation with a begin-of-cycle
-/// snapshot for the conflict-free status methods.
+/// FIFO (bs_prim_mod_fifo.h): ring buffer with element count; guarded
+/// FIFOs warn (and drop the op) on enq-to-full / deq-from-empty, judged
+/// against the begin-of-cycle count when the opposite op already ran
+/// this instant.  Loopy FIFOs allow deq-then-enq; bypass FIFOs allow
+/// enq-then-deq.
+#[derive(PartialEq, Clone, Copy)]
+enum FifoType {
+    Simple,
+    Loopy,
+    Bypass,
+}
+
 struct Fifo {
-    data: std::collections::VecDeque<Value>,
-    depth: usize,
-    loopy: bool,
+    data: Vec<Value>,
+    fst: usize,
+    elems: usize,
+    saved_elems: usize,
+    size: usize,
+    ftype: FifoType,
+    guard: bool,
     zero_width: bool,
     width: u32,
-    stamp: u64,
-    saved_len: usize,
+    enq_at: u64,
+    deq_at: u64,
+    clear_at: u64,
+    full_name: String,
     in_reset: bool,
     suppress: bool,
 }
 
 impl Fifo {
-    fn new(consts: &[Value], depth: usize, loopy: bool, zero_width: bool) -> Fifo {
-        let width = if zero_width { 0 } else { carg(consts, 0) as u32 };
-        Fifo {
-            data: Default::default(),
-            depth,
-            loopy,
-            zero_width,
-            width,
-            stamp: u64::MAX,
-            saved_len: 0,
-            in_reset: false,
-            suppress: false,
-        }
-    }
-
-    fn new_sized(consts: &[Value], zero_width: bool) -> Fifo {
-        // SizedFIFO args: [width, depth, cntr_width] (p1/p2/p3)
-        let width = if zero_width { 0 } else { carg(consts, 0) as u32 };
-        let depth = if zero_width { carg(consts, 0) } else { carg(consts, 1) } as usize;
-        Fifo {
-            data: Default::default(),
-            depth: depth.max(1),
-            loopy: false,
-            zero_width,
-            width,
-            stamp: u64::MAX,
-            saved_len: 0,
-            in_reset: false,
-            suppress: false,
-        }
-    }
-
-    fn new_sized_loopy(consts: &[Value]) -> Fifo {
-        let mut f = Fifo::new_sized(consts, false);
-        f.loopy = true;
-        f
-    }
-
-    fn snapshot(&mut self, now: u64) {
-        if self.stamp != now {
-            self.stamp = now;
-            self.saved_len = self.data.len();
-        }
-    }
-
-    /// The count the CF status methods report (bs_prim_mod_fifo.h:181-203):
-    /// loopy FIFOs reflect same-cycle mutations (deq < i_notFull < enq);
-    /// all others report the begin-of-cycle count once anything mutated.
-    fn cycle_start_len(&self, now: u64) -> usize {
-        if !self.loopy && self.stamp == now {
-            self.saved_len
+    fn new(
+        width: u32,
+        depth: u64,
+        guard: bool,
+        ftype: FifoType,
+        zero_width: bool,
+        path: &str,
+    ) -> Fifo {
+        let size = depth.max(1) as usize;
+        let full_name = if path.is_empty() {
+            "top".to_string()
         } else {
-            self.data.len()
+            format!("top.{path}")
+        };
+        Fifo {
+            data: (0..size).map(|_| Value::undet(width.max(1))).collect(),
+            fst: 0,
+            elems: 0,
+            saved_elems: 0,
+            size,
+            ftype,
+            guard,
+            zero_width,
+            width,
+            enq_at: u64::MAX,
+            deq_at: u64::MAX,
+            clear_at: u64::MAX,
+            full_name,
+            in_reset: false,
+            suppress: false,
         }
     }
 }
@@ -1164,51 +1163,95 @@ impl Fifo {
 impl Prim for Fifo {
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
-            "first" => self
-                .data
-                .front()
-                .cloned()
-                .unwrap_or_else(|| Value::undet(self.width.max(1))),
-            "notFull" => Value::from_u64(1, (self.data.len() < self.depth) as u64),
-            "notEmpty" => Value::from_u64(1, (!self.data.is_empty()) as u64),
-            "i_notFull" => Value::from_u64(1, (self.cycle_start_len(now) < self.depth) as u64),
-            "i_notEmpty" => Value::from_u64(1, (self.cycle_start_len(now) > 0) as u64),
+            "first" => self.data[self.fst].clone(),
+            "notFull" => Value::from_u64(1, (self.elems < self.size) as u64),
+            "notEmpty" => Value::from_u64(1, (self.elems != 0) as u64),
+            "i_notFull" => {
+                let v = if self.ftype != FifoType::Loopy
+                    && (self.enq_at == now || self.deq_at == now || self.clear_at == now)
+                {
+                    self.saved_elems < self.size
+                } else {
+                    self.elems < self.size
+                };
+                Value::from_u64(1, v as u64)
+            }
+            "i_notEmpty" => {
+                let v = if self.ftype != FifoType::Loopy
+                    && (self.enq_at == now || self.deq_at == now || self.clear_at == now)
+                {
+                    self.saved_elems != 0
+                } else {
+                    self.elems != 0
+                };
+                Value::from_u64(1, v as u64)
+            }
             m => panic!("FIFO: unknown value method {m:?}"),
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
-        // ops in the assert cycle land (cleared by that edge's rst_tick);
-        // later in-reset cycles are suppressed (bs_prim_mod_fifo.h:93)
         if self.suppress {
             return;
         }
-        self.snapshot(now);
         match method {
             "enq" => {
-                if self.data.len() >= self.depth {
-                    panic!("FIFO overflow (schedule bug: guarded enq on full fifo)");
+                self.enq_at = now;
+                if self.deq_at != now {
+                    self.saved_elems = self.elems;
                 }
-                let v = if self.zero_width {
-                    Value::zero(1)
-                } else {
-                    args[0].clone()
-                };
-                self.data.push_back(v);
+                if self.elems == self.size
+                    || (self.ftype != FifoType::Loopy
+                        && self.guard
+                        && self.deq_at == now
+                        && self.saved_elems == self.size)
+                {
+                    println!("Warning: {} -- Enqueuing to a full fifo", self.full_name);
+                } else if self.elems < self.size {
+                    let v = if self.zero_width {
+                        Value::zero(1)
+                    } else {
+                        args[0].clone()
+                    };
+                    self.data[(self.fst + self.elems) % self.size] = v;
+                    self.elems += 1;
+                }
             }
             "deq" => {
-                if self.data.pop_front().is_none() {
-                    panic!("FIFO underflow (schedule bug: guarded deq on empty fifo)");
+                self.deq_at = now;
+                if self.enq_at != now {
+                    self.saved_elems = self.elems;
+                }
+                if self.elems == 0
+                    || (self.ftype != FifoType::Bypass
+                        && self.guard
+                        && self.enq_at == now
+                        && self.saved_elems == 0)
+                {
+                    println!("Warning: {} -- Dequeuing from empty fifo", self.full_name);
+                } else if self.elems != 0 {
+                    self.fst = (self.fst + 1) % self.size;
+                    self.elems -= 1;
                 }
             }
-            "clear" => self.data.clear(),
+            "clear" => {
+                self.clear_at = now;
+                if self.enq_at != now && self.deq_at != now {
+                    self.saved_elems = self.elems;
+                }
+                self.elems = 0;
+            }
             m => panic!("FIFO: unknown action method {m:?}"),
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool) {}
     fn rst_tick(&mut self, _now: u64) {
         if self.in_reset && !self.suppress {
-            self.data.clear();
-            self.stamp = u64::MAX;
+            self.elems = 0;
+            self.saved_elems = 0;
+            self.fst = 0;
+            self.enq_at = u64::MAX;
+            self.deq_at = u64::MAX;
+            self.clear_at = u64::MAX;
             self.suppress = true;
         }
     }
