@@ -45,9 +45,29 @@ pub struct Interp {
     insts: Vec<Inst>,
     finished: Option<i32>,
     cycle: u64,
-    /// simulation time of the current posedge.  The default clock is
-    /// low 5 / high 5 with initial delay 5, so posedges land at 10, 20, ...
+    /// current simulation time (the time of the executing clock edge)
     now: u64,
+    /// reset asserted at t=0, deasserted at t=2 *after* that instant's
+    /// logic — so edges at t <= 2 execute in reset (kernel.cxx
+    /// setup_reset_events)
+    in_reset: bool,
+    /// "<path>$CLK_OUT" -> waveform, captured from ClockGen instantiation
+    /// args (bs_prim_mod_clockgen.h set_clk_0 -> bk_alter_clock)
+    clockgen_waves: HashMap<String, Wave>,
+    /// primitive instances with a live reset connection (a Reset arg whose
+    /// wire is not a constant); these receive set_in_reset broadcasts
+    reset_prims: Vec<usize>,
+}
+
+/// A periodic clock waveform.  The default clock is LOW with first edge
+/// at t=0, high 5 / low 5 (the generated model's bk_alter_clock call), so
+/// posedges land at 0 (in reset), 10, 20, ...
+#[derive(Clone, Copy)]
+struct Wave {
+    init_high: bool,
+    delay: u64,
+    hi: u64,
+    lo: u64,
 }
 
 struct Inst {
@@ -135,7 +155,10 @@ impl Interp {
             next_fd: 0x8000_0001,
             finished: None,
             cycle: 0,
-            now: 10,
+            now: 0,
+            in_reset: false,
+            clockgen_waves: HashMap::new(),
+            reset_prims: Vec::new(),
         };
         let top_mod = it.mod_by_name[&it.d.top];
         it.instantiate("".to_string(), top_mod, HashMap::new(), HashMap::new());
@@ -237,11 +260,31 @@ impl Interp {
                             }
                         }
                     }
+                    if pname == "ClockGen" {
+                        // args: v1Width, v2Width, initDelay, initValue,
+                        // otherValue; high phase = initValue ? v2 : v1
+                        let v1 = consts[0].as_u64();
+                        let v2 = consts[1].as_u64();
+                        let delay = consts[2].as_u64();
+                        let init_high = consts[3].as_u64() != 0;
+                        let (hi, lo) = if init_high { (v2, v1) } else { (v1, v2) };
+                        self.clockgen_waves.insert(
+                            format!("{cpath}$CLK_OUT"),
+                            Wave { init_high, delay, hi, lo },
+                        );
+                    }
+                    let has_reset = args.iter().any(|a| {
+                        matches!(a, Expr::Reset { wire }
+                                 if !matches!(wire.as_ref(), Expr::Const { .. }))
+                    });
                     let idx = self.insts.len();
                     self.insts.push(Inst {
                         path: cpath.clone(),
                         kind: InstKind::Prim(prim::make_prim(&pname, &consts, &strs)),
                     });
+                    if has_reset {
+                        self.reset_prims.push(idx);
+                    }
                     self.inst_by_path.insert(cpath.clone(), idx);
                     idx
                 }
@@ -331,6 +374,10 @@ impl Interp {
                 match self.mods[module].ports.get(name) {
                     Some(&(w, ir::PortKind::MethodArg))
                     | Some(&(w, ir::PortKind::MethodEnable)) => Value::from_u64(w, 0),
+                    Some(&(w, ir::PortKind::Reset)) => {
+                        // active-low RST_N
+                        Value::from_u64(w, (!self.in_reset) as u64)
+                    }
                     Some(&(w, _)) => Value::from_u64(w, 1),
                     None => Value::from_u64(1, 1),
                 }
@@ -363,7 +410,8 @@ impl Interp {
                 self.foreign_value(&fname, &argv, *width)
             }
             Expr::Gate { .. } => Value::from_u64(1, 1),
-            Expr::Clock { .. } | Expr::Reset { .. } => Value::from_u64(1, 1),
+            Expr::Clock { .. } => Value::from_u64(1, 1),
+            Expr::Reset { wire } => self.eval(inst, ctx, wire),
             Expr::Prim { op, width, args } => self.eval_prim(inst, ctx, *op, *width, args),
             Expr::If { width, cond, then_, else_ } => {
                 if self.eval(inst, ctx, cond).as_bool() {
@@ -533,7 +581,7 @@ impl Interp {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
                 let mname = self.d.strings[method as usize].clone();
-                let r = p.value_method(&mname, argv, self.cycle);
+                let r = p.value_method(&mname, argv, self.now);
                 if std::env::var_os("TRS_TRACE").is_some() {
                     let path = self.insts[callee].path.clone();
                     eprintln!("[{}] {}.{} -> {}", self.cycle, path, mname,
@@ -568,7 +616,7 @@ impl Interp {
                     eprintln!("[{}] <{}>.{}({})", self.cycle, callee, mname,
                               args.join(","));
                 }
-                p.action_method(&mname, argv, self.cycle);
+                p.action_method(&mname, argv, self.now);
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -590,7 +638,7 @@ impl Interp {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
                 let mname = self.d.strings[method as usize].clone();
-                p.actionvalue_method(&mname, argv, self.cycle)
+                p.actionvalue_method(&mname, argv, self.now)
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -701,7 +749,7 @@ impl Interp {
                 self.call_action(child, *method, &argv);
             }
             Action::Foreign { func, cond, args, signed } => {
-                if !self.eval(inst, ctx, cond).as_bool() {
+                if self.in_reset || !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
                 let fname = self.s(*func).to_string();
@@ -713,7 +761,7 @@ impl Interp {
                 self.foreign_action(&fname, &argv);
             }
             Action::Task { func, cookie, temp, width, cond, args, signed } => {
-                if !self.eval(inst, ctx, cond).as_bool() {
+                if self.in_reset || !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
                 let fname = self.s(*func).to_string();
@@ -921,99 +969,199 @@ impl Interp {
         }
     }
 
+    /// Broadcast a reset-line transition to every reset-connected
+    /// primitive (mirrors reset_model -> reset_RST_N fan-out).
+    fn broadcast_reset(&mut self, asserted: bool) {
+        for i in 0..self.reset_prims.len() {
+            let idx = self.reset_prims[i];
+            if let InstKind::Prim(p) = &mut self.insts[idx].kind {
+                p.set_in_reset(asserted);
+            }
+        }
+    }
+
+    /// Resolve a composition clock to its waveform: the default clock is
+    /// the fixed 5/5 wave; "<path>$CLK_OUT" names a ClockGen instance.
+    /// Dynamic clocks (MakeClock, GatedClock, ClockDiv) are not modeled
+    /// yet and fail loudly.
+    fn resolve_wave(&self, clock: StrId) -> Wave {
+        if Some(clock) == self.d.default_clock {
+            return Wave { init_high: false, delay: 0, hi: 5, lo: 5 };
+        }
+        let name = self.s(clock);
+        if let Some(w) = self.clockgen_waves.get(name) {
+            return *w;
+        }
+        panic!("trs-interp: unimplemented clock source {name:?} (P1 bring-up)");
+    }
+
     /// Run until $finish or the cycle limit.  Returns the exit code.
+    ///
+    /// Multi-clock event loop: each composition fires on one (clock, edge);
+    /// clock waveforms come from resolve_wave.  Same-time edges execute in
+    /// clock definition order (the kernel breaks ties by clock handle
+    /// index).  max_cycles counts default-clock posedges, including the
+    /// in-reset edge at t=0.
     pub fn run(&mut self, max_cycles: u64) -> i32 {
-        // pre-resolve composition structure
         let comps = self.d.compositions.clone();
-        if comps.len() != 1 {
-            panic!(
-                "trs-interp: exactly one clock domain supported in P1 (got {})",
-                comps.len()
-            );
-        }
-        let comp = &comps[0];
 
-        // (instance idx, module idx, segment idx)
-        let entries: Vec<(usize, usize, usize)> = comp
-            .entries
-            .iter()
-            .map(|e| {
-                let path = self.s(e.instance).to_string();
-                let ii = *self
-                    .inst_by_path
-                    .get(&path)
-                    .unwrap_or_else(|| panic!("unknown instance path {path:?}"));
-                (ii, self.module_of(ii), e.segment as usize)
-            })
-            .collect();
-
-        // cross-inhibit lookup: (later inst, later rule) -> earlier CFs
-        let mut cross: HashMap<(usize, StrId), Vec<(usize, StrId)>> = HashMap::new();
-        for (earlier, later) in &comp.cross_inhibits {
-            let (e_inst, e_rule) = self.split_qual(*earlier);
-            let (l_inst, l_rule) = self.split_qual(*later);
-            let e_mod = self.module_of(e_inst);
-            let e_mir = self.mods[e_mod].ir;
-            let e_ri = self.mods[e_mod].rules[&e_rule];
-            let e_cf = self.d.modules[e_mir].rules[e_ri].can_fire;
-            cross.entry((l_inst, l_rule)).or_default().push((e_inst, e_cf));
-        }
-
-        let ticks: Vec<(usize, StrId)> = comp
-            .ticks
-            .iter()
-            .map(|t| {
-                let ipath = self.s(t.instance).to_string();
-                let ppath = if ipath.is_empty() {
-                    self.s(t.prim).to_string()
-                } else {
-                    format!("{}.{}", ipath, self.s(t.prim))
-                };
-                let ii = *self
-                    .inst_by_path
-                    .get(&ppath)
-                    .unwrap_or_else(|| panic!("unknown tick instance {ppath:?}"));
-                (ii, t.port)
-            })
-            .collect();
-
-        while self.finished.is_none() && self.cycle < max_cycles {
-            // new cycle: clear latched state
-            for i in 0..self.insts.len() {
-                if let InstKind::User { latched, .. } = &mut self.insts[i].kind {
-                    latched.clear();
-                }
+        // distinct clocks in first-appearance order
+        let mut clocks: Vec<StrId> = Vec::new();
+        for c in &comps {
+            if !clocks.contains(&c.clock) {
+                clocks.push(c.clock);
             }
+        }
+        let waves: Vec<Wave> = clocks.iter().map(|&c| self.resolve_wave(c)).collect();
 
-            for &(inst, module, seg) in &entries {
-                let mir = self.mods[module].ir;
-                let sched = &self.d.modules[mir].schedule;
-                let ms = &sched.domains[0];
-                let nodes: Vec<SchedNode> = ms.segments[seg].nodes.clone();
-                for node in nodes {
-                    if self.finished.is_some() {
-                        break;
+        // pre-resolve each composition: (clock idx, entries, inhibitors,
+        // ticks)
+        struct RComp {
+            clk: usize,
+            posedge: bool,
+            // (instance idx, module idx, domain, segment idx)
+            entries: Vec<(usize, usize, u32, usize)>,
+            cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
+            ticks: Vec<(usize, StrId)>,
+        }
+        let rcomps: Vec<RComp> = comps
+            .iter()
+            .map(|comp| {
+                let entries = comp
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        let path = self.s(e.instance).to_string();
+                        let ii = *self
+                            .inst_by_path
+                            .get(&path)
+                            .unwrap_or_else(|| panic!("unknown instance path {path:?}"));
+                        (ii, self.module_of(ii), e.domain, e.segment as usize)
+                    })
+                    .collect();
+
+                // cross-inhibit lookup: (later inst, later rule) -> earlier CFs
+                let mut cross: HashMap<(usize, StrId), Vec<(usize, StrId)>> = HashMap::new();
+                for (earlier, later) in &comp.cross_inhibits {
+                    let (e_inst, e_rule) = self.split_qual(*earlier);
+                    let (l_inst, l_rule) = self.split_qual(*later);
+                    let e_mod = self.module_of(e_inst);
+                    let e_mir = self.mods[e_mod].ir;
+                    let e_ri = self.mods[e_mod].rules[&e_rule];
+                    let e_cf = self.d.modules[e_mir].rules[e_ri].can_fire;
+                    cross.entry((l_inst, l_rule)).or_default().push((e_inst, e_cf));
+                }
+
+                let ticks = comp
+                    .ticks
+                    .iter()
+                    .map(|tk| {
+                        let ipath = self.s(tk.instance).to_string();
+                        let ppath = if ipath.is_empty() {
+                            self.s(tk.prim).to_string()
+                        } else {
+                            format!("{}.{}", ipath, self.s(tk.prim))
+                        };
+                        let ii = *self
+                            .inst_by_path
+                            .get(&ppath)
+                            .unwrap_or_else(|| panic!("unknown tick instance {ppath:?}"));
+                        (ii, tk.port)
+                    })
+                    .collect();
+
+                RComp {
+                    clk: clocks.iter().position(|&c| c == comp.clock).unwrap(),
+                    posedge: comp.posedge,
+                    entries,
+                    cross,
+                    ticks,
+                }
+            })
+            .collect();
+
+        // event heap over (time, clock idx, is_posedge)
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let mut heap: BinaryHeap<Reverse<(u64, usize, bool)>> = BinaryHeap::new();
+        for (ci, w) in waves.iter().enumerate() {
+            let need_pos = rcomps.iter().any(|r| r.clk == ci && r.posedge);
+            let need_neg = rcomps.iter().any(|r| r.clk == ci && !r.posedge);
+            let first_pos = if w.init_high { w.delay + w.lo } else { w.delay };
+            let first_neg = if w.init_high { w.delay } else { w.delay + w.hi };
+            if need_pos {
+                heap.push(Reverse((first_pos, ci, true)));
+            }
+            if need_neg {
+                heap.push(Reverse((first_neg, ci, false)));
+            }
+        }
+
+        self.in_reset = true;
+        self.broadcast_reset(true);
+
+        while self.finished.is_none() {
+            let Some(Reverse((t, ci, pos))) = heap.pop() else { break };
+            if self.in_reset && t > 2 {
+                self.in_reset = false;
+                self.broadcast_reset(false);
+            }
+            if pos && Some(clocks[ci]) == self.d.default_clock {
+                if self.cycle >= max_cycles {
+                    break;
+                }
+                self.cycle += 1;
+            }
+            self.now = t;
+
+            for rc in rcomps.iter().filter(|r| r.clk == ci && r.posedge == pos) {
+                // fresh latch space for this edge
+                for i in 0..self.insts.len() {
+                    if let InstKind::User { latched, .. } = &mut self.insts[i].kind {
+                        latched.clear();
                     }
-                    match node {
-                        SchedNode::Sched(r) => {
-                            let ci = cross.get(&(inst, r)).cloned().unwrap_or_default();
-                            self.latch_rule(inst, r, &ci);
+                }
+
+                for &(inst, module, domain, seg) in &rc.entries {
+                    let mir = self.mods[module].ir;
+                    let sched = &self.d.modules[mir].schedule;
+                    let ms = sched
+                        .domains
+                        .iter()
+                        .find(|ms| ms.domain == domain && ms.posedge == rc.posedge)
+                        .or_else(|| sched.domains.iter().find(|ms| ms.domain == domain))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "no schedule for domain {domain} in {:?}",
+                                self.s(self.d.modules[mir].name)
+                            )
+                        });
+                    let nodes: Vec<SchedNode> = ms.segments[seg].nodes.clone();
+                    for node in nodes {
+                        if self.finished.is_some() {
+                            break;
                         }
-                        SchedNode::Exec(r) => self.exec_rule(inst, r),
+                        match node {
+                            SchedNode::Sched(r) => {
+                                let ci2 = rc.cross.get(&(inst, r)).cloned().unwrap_or_default();
+                                self.latch_rule(inst, r, &ci2);
+                            }
+                            SchedNode::Exec(r) => self.exec_rule(inst, r),
+                        }
+                    }
+                }
+
+                // end-of-edge ticks
+                for &(inst, port) in &rc.ticks {
+                    if let InstKind::Prim(p) = &mut self.insts[inst].kind {
+                        let pname = self.d.strings[port as usize].clone();
+                        p.tick(&pname, t);
                     }
                 }
             }
 
-            // end-of-edge ticks
-            for &(inst, port) in &ticks {
-                if let InstKind::Prim(p) = &mut self.insts[inst].kind {
-                    let pname = self.d.strings[port as usize].clone();
-                    p.tick(&pname);
-                }
-            }
-
-            self.cycle += 1;
-            self.now += 10;
+            let w = &waves[ci];
+            heap.push(Reverse((t + w.hi + w.lo, ci, pos)));
         }
         self.finished.unwrap_or(0)
     }

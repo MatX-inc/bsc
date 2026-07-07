@@ -19,8 +19,14 @@ pub trait Prim {
         let _ = (method, args, now);
         panic!("primitive has no actionvalue methods");
     }
-    /// End-of-edge tick (RWire clear, CReg rotate, ...).
-    fn tick(&mut self, port: &str);
+    /// End-of-edge tick (RWire clear, CReg rotate, synchronizer clock
+    /// ports, ...).  `now` is the simulation time of the ticking edge.
+    fn tick(&mut self, port: &str, now: u64);
+    /// Reset line transition (assert = true).  Mirrors the `reset_RST`
+    /// handlers in bs_prim_mod_*.h: while asserted, state-mutating methods
+    /// are ignored and state is forced to the reset value.  Prims without
+    /// a reset connection never see this.
+    fn set_in_reset(&mut self, _asserted: bool) {}
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -57,6 +63,15 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String]) -> Box<dyn Prim>
         "SizedFIFO" => Box::new(Fifo::new_sized(consts, false)),
         "SizedFIFO0" => Box::new(Fifo::new_sized(consts, true)),
         "SizedFIFOL" => Box::new(Fifo::new_sized_loopy(consts)),
+        "ClockGen" => Box::new(ClockGen),
+        // SyncBit = 2-flop; SyncBit15 = 2-flop ticked on both dst edges;
+        // SyncBit05/SyncBit1 = 1-flop (negedge/posedge dst tick) -- edge
+        // choice is carried by which compositions list the tick
+        "SyncBit" | "SyncBit15" => Box::new(SyncBit::new(consts, true)),
+        "SyncBit05" | "SyncBit1" => Box::new(SyncBit::new(consts, false)),
+        "SyncPulse" => Box::new(SyncPulse::new()),
+        "SyncHandshake" => Box::new(SyncHandshake { hs: Handshake::new(false, false) }),
+        "SyncRegister" => Box::new(SyncReg::new(consts)),
         _ => panic!("trs-interp: unimplemented primitive {name:?} (P1 bring-up)"),
     }
 }
@@ -71,7 +86,7 @@ impl Prim for Probe {
         panic!("Probe: unknown value method {method:?}")
     }
     fn action_method(&mut self, _method: &str, _args: &[Value], _now: u64) {}
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
 }
 
 /// ResetToBool without reset modeling: reads as "not in reset".
@@ -87,7 +102,7 @@ impl Prim for ResetToBool {
     fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
         panic!("ResetToBool: unknown action method {method:?}")
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
 }
 
 // ===============
@@ -174,7 +189,7 @@ impl Prim for Counter {
             m => panic!("Counter: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
 }
 
 // ===============
@@ -287,7 +302,7 @@ impl Prim for RegFile {
             m => panic!("RegFile: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
 }
 
 fn carg(consts: &[Value], i: usize) -> u64 {
@@ -300,6 +315,8 @@ fn carg(consts: &[Value], i: usize) -> u64 {
 /// immediate.  Registered semantics come from the static schedule order.
 struct Reg {
     value: Value,
+    reset_value: Value,
+    in_reset: bool,
 }
 
 impl Reg {
@@ -311,7 +328,7 @@ impl Reg {
         } else {
             Value::undet(width)
         };
-        Reg { value }
+        Reg { reset_value: value.clone(), value, in_reset: false }
     }
 }
 
@@ -324,11 +341,21 @@ impl Prim for Reg {
     }
     fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
         match method {
-            "write" | "set" | "put" => self.value = args[0].clone(),
+            "write" | "set" | "put" => {
+                if !self.in_reset {
+                    self.value = args[0].clone();
+                }
+            }
             m => panic!("Reg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.value = self.reset_value.clone();
+        }
+    }
 }
 
 // ===============
@@ -339,6 +366,8 @@ struct ConfigReg {
     value: Value,
     old_value: Value,
     written_at: u64,
+    reset_value: Value,
+    in_reset: bool,
 }
 
 impl ConfigReg {
@@ -349,7 +378,13 @@ impl ConfigReg {
         } else {
             Value::undet(width)
         };
-        ConfigReg { old_value: value.clone(), value, written_at: u64::MAX }
+        ConfigReg {
+            old_value: value.clone(),
+            reset_value: value.clone(),
+            value,
+            written_at: u64::MAX,
+            in_reset: false,
+        }
     }
 }
 
@@ -369,6 +404,9 @@ impl Prim for ConfigReg {
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
         match method {
             "write" | "set" | "put" => {
+                if self.in_reset {
+                    return;
+                }
                 if self.written_at != now {
                     self.old_value = self.value.clone();
                     self.written_at = now;
@@ -378,7 +416,15 @@ impl Prim for ConfigReg {
             m => panic!("ConfigReg: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.value = self.reset_value.clone();
+            self.old_value = self.reset_value.clone();
+            self.written_at = u64::MAX;
+        }
+    }
 }
 
 // ===============
@@ -417,7 +463,7 @@ impl Prim for RWire {
             m => panic!("RWire: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {
+    fn tick(&mut self, _port: &str, _now: u64) {
         self.valid = false;
     }
 }
@@ -450,7 +496,7 @@ impl Prim for BypassWire {
             m => panic!("BypassWire: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
 }
 
 // ===============
@@ -460,6 +506,8 @@ impl Prim for BypassWire {
 struct CReg {
     value: Value,       // live value, mutated by port writes
     value_reg: Value,   // value registered at the last edge
+    reset_value: Value,
+    in_reset: bool,
 }
 
 impl CReg {
@@ -470,7 +518,12 @@ impl CReg {
         } else {
             Value::undet(width)
         };
-        CReg { value: init.clone(), value_reg: init }
+        CReg {
+            value: init.clone(),
+            value_reg: init.clone(),
+            reset_value: init,
+            in_reset: false,
+        }
     }
 }
 
@@ -486,13 +539,22 @@ impl Prim for CReg {
     }
     fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
         if method.starts_with("port") && method.ends_with("__write") {
-            self.value = args[0].clone();
+            if !self.in_reset {
+                self.value = args[0].clone();
+            }
         } else {
             panic!("CReg: unknown action method {method:?}")
         }
     }
-    fn tick(&mut self, _port: &str) {
+    fn tick(&mut self, _port: &str, _now: u64) {
         self.value_reg = self.value.clone();
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.value = self.reset_value.clone();
+            self.value_reg = self.reset_value.clone();
+        }
     }
 }
 
@@ -508,6 +570,7 @@ struct Fifo {
     width: u32,
     stamp: u64,
     saved_len: usize,
+    in_reset: bool,
 }
 
 impl Fifo {
@@ -521,6 +584,7 @@ impl Fifo {
             width,
             stamp: u64::MAX,
             saved_len: 0,
+            in_reset: false,
         }
     }
 
@@ -536,6 +600,7 @@ impl Fifo {
             width,
             stamp: u64::MAX,
             saved_len: 0,
+            in_reset: false,
         }
     }
 
@@ -580,6 +645,9 @@ impl Prim for Fifo {
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        if self.in_reset {
+            return;
+        }
         self.snapshot(now);
         match method {
             "enq" => {
@@ -602,5 +670,377 @@ impl Prim for Fifo {
             m => panic!("FIFO: unknown action method {m:?}"),
         }
     }
-    fn tick(&mut self, _port: &str) {}
+    fn tick(&mut self, _port: &str, _now: u64) {}
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.data.clear();
+            self.stamp = u64::MAX;
+        }
+    }
+}
+
+// ===============
+// Clock-domain crossing primitives (bs_prim_mod_synchronizers.h) and
+// clock generators (bs_prim_mod_clockgen.h).
+
+/// ClockGen: pure waveform source.  The waveform itself is consumed by the
+/// interpreter's event loop (from the instantiation args); the primitive
+/// instance has no methods and no state.
+struct ClockGen;
+
+impl Prim for ClockGen {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("ClockGen: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        panic!("ClockGen: unknown action method {method:?}")
+    }
+    fn tick(&mut self, _port: &str, _now: u64) {}
+}
+
+/// SyncVar: cross-domain variable with Verilog non-blocking-assignment
+/// visibility — a read at the same simulation time as the write sees the
+/// previous value (two clock edges coinciding in time behave as if the
+/// reader sampled before the writer's edge).
+struct SyncVar {
+    prev: Value,
+    cur: Value,
+    written_at: u64,
+}
+
+impl SyncVar {
+    fn new(v: Value) -> SyncVar {
+        SyncVar { prev: v.clone(), cur: v, written_at: u64::MAX }
+    }
+    fn read(&self, now: u64) -> Value {
+        if self.written_at == now {
+            self.prev.clone()
+        } else {
+            self.cur.clone()
+        }
+    }
+    fn write(&mut self, x: Value, now: u64) {
+        self.prev = std::mem::replace(&mut self.cur, x);
+        self.written_at = now;
+    }
+    fn force(&mut self, x: Value) {
+        self.prev = x.clone();
+        self.cur = x;
+        self.written_at = u64::MAX;
+    }
+}
+
+/// SyncBit family (MOD_Sync2 / MOD_Sync15 / MOD_Sync1): 1-bit two-flop (or
+/// one-flop) synchronizer.  `send` writes the source-side flop; each
+/// destination-clock tick shifts toward `read`.
+struct SyncBit {
+    two_stage: bool,
+    d1: Value,
+    d2: Value,
+    s: SyncVar,
+    reset_value: Value,
+    in_reset: bool,
+}
+
+impl SyncBit {
+    fn new(consts: &[Value], two_stage: bool) -> SyncBit {
+        let rv = consts.first().cloned().unwrap_or_else(|| Value::zero(1)).zext(1);
+        SyncBit {
+            two_stage,
+            d1: Value::undet(1),
+            d2: Value::undet(1),
+            s: SyncVar::new(Value::undet(1)),
+            reset_value: rv,
+            in_reset: false,
+        }
+    }
+}
+
+impl Prim for SyncBit {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "read" | "_read" => {
+                if self.two_stage {
+                    self.d2.clone()
+                } else {
+                    self.d1.clone()
+                }
+            }
+            m => panic!("SyncBit: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "send" | "write" | "_write" => {
+                if !self.in_reset {
+                    self.s.write(args[0].zext(1), now);
+                }
+            }
+            m => panic!("SyncBit: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64) {
+        match port {
+            "clk_dst" => {
+                if self.two_stage {
+                    self.d2 = self.d1.clone();
+                }
+                self.d1 = self.s.read(now);
+            }
+            "clk_src" => {}
+            p => panic!("SyncBit: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.d1 = self.reset_value.clone();
+            self.d2 = self.reset_value.clone();
+            self.s.force(self.reset_value.clone());
+        }
+    }
+}
+
+/// MOD_SyncPulse: send toggles the source flop; the destination sees a
+/// one-cycle pulse when the toggle propagates through the two-flop chain.
+struct SyncPulse {
+    d_pulse: Value,
+    d2: Value,
+    d1: Value,
+    s: SyncVar,
+    in_reset: bool,
+}
+
+impl SyncPulse {
+    fn new() -> SyncPulse {
+        SyncPulse {
+            d_pulse: Value::undet(1),
+            d2: Value::undet(1),
+            d1: Value::undet(1),
+            s: SyncVar::new(Value::undet(1)),
+            in_reset: false,
+        }
+    }
+}
+
+impl Prim for SyncPulse {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "pulse" | "read" | "_read" => self.d2.xor(&self.d_pulse, 1),
+            m => panic!("SyncPulse: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], now: u64) {
+        match method {
+            "send" => {
+                if !self.in_reset {
+                    let cur = self.s.read(now);
+                    let flipped = Value::from_u64(1, (cur.as_u64() == 0) as u64);
+                    self.s.write(flipped, now);
+                }
+            }
+            m => panic!("SyncPulse: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64) {
+        match port {
+            "clk_dst" => {
+                self.d_pulse = self.d2.clone();
+                self.d2 = self.d1.clone();
+                self.d1 = self.s.read(now);
+            }
+            "clk_src" => {}
+            p => panic!("SyncPulse: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.d_pulse = Value::zero(1);
+            self.d2 = Value::zero(1);
+            self.d1 = Value::zero(1);
+            self.s.force(Value::zero(1));
+        }
+    }
+}
+
+/// MOD_SyncHandshake: pulse synchronizer with a return path so the next
+/// send is blocked until the previous pulse reached the destination.
+struct Handshake {
+    d_sync2: SyncVar,
+    d_last: SyncVar,
+    s_toggle: SyncVar,
+    s1: u64,
+    s2: u64,
+    d1: u64,
+    s_rdy: bool,
+    en: bool,
+    param_init: bool,
+    param_delayreturn: bool,
+    in_reset: bool,
+}
+
+impl Handshake {
+    fn new(init: bool, delayreturn: bool) -> Handshake {
+        Handshake {
+            d_sync2: SyncVar::new(Value::undet(1)),
+            d_last: SyncVar::new(Value::undet(1)),
+            s_toggle: SyncVar::new(Value::undet(1)),
+            s1: 1,
+            s2: 1,
+            d1: Value::undet(1).as_u64(),
+            s_rdy: false,
+            en: false,
+            param_init: init,
+            param_delayreturn: delayreturn,
+            in_reset: false,
+        }
+    }
+    fn pulse(&self, now: u64) -> bool {
+        self.d_sync2.read(now).as_u64() != self.d_last.read(now).as_u64()
+    }
+    fn rdy_send(&self) -> bool {
+        !self.in_reset && self.s_rdy
+    }
+    fn send(&mut self) {
+        self.en = true;
+    }
+    fn clk_src(&mut self, now: u64) {
+        if !self.in_reset {
+            self.s2 = self.s1;
+            self.s1 = if self.param_delayreturn {
+                self.d_last.read(now).as_u64()
+            } else {
+                self.d_sync2.read(now).as_u64()
+            };
+        }
+        if self.en {
+            let cur = self.s_toggle.read(now).as_u64();
+            self.s_toggle
+                .write(Value::from_u64(1, (cur == 0) as u64), now);
+            self.s_rdy = false;
+        } else {
+            self.s_rdy = self.s2 == self.s_toggle.read(now).as_u64();
+        }
+        self.en = false;
+    }
+    fn clk_dst(&mut self, now: u64) {
+        let v2 = self.d_sync2.read(now);
+        self.d_last.write(v2, now);
+        self.d_sync2.write(Value::from_u64(1, self.d1), now);
+        self.d1 = self.s_toggle.read(now).as_u64();
+    }
+    fn reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            let init = Value::from_u64(1, self.param_init as u64);
+            let not_init = Value::from_u64(1, !self.param_init as u64);
+            self.d_sync2.force(init.clone());
+            self.s_toggle.force(init.clone());
+            self.d1 = init.as_u64();
+            self.d_last.force(init);
+            self.s1 = not_init.as_u64();
+            self.s2 = not_init.as_u64();
+            self.s_rdy = false;
+            self.en = false;
+        }
+    }
+}
+
+struct SyncHandshake {
+    hs: Handshake,
+}
+
+impl Prim for SyncHandshake {
+    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+        match method {
+            "pulse" | "read" | "_read" => Value::from_u64(1, self.hs.pulse(now) as u64),
+            "RDY_send" => Value::from_u64(1, self.hs.rdy_send() as u64),
+            m => panic!("SyncHandshake: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+        match method {
+            "send" => self.hs.send(),
+            m => panic!("SyncHandshake: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64) {
+        match port {
+            "clk_src" => self.hs.clk_src(now),
+            "clk_dst" => self.hs.clk_dst(now),
+            p => panic!("SyncHandshake: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.hs.reset(asserted);
+    }
+}
+
+/// MOD_SyncReg: a data register whose write is carried across domains by
+/// an internal handshake (init=false, delayreturn=true).
+struct SyncReg {
+    data: SyncVar,
+    d_out: Value,
+    reset_value: Value,
+    hs: Handshake,
+    in_reset: bool,
+}
+
+impl SyncReg {
+    fn new(consts: &[Value]) -> SyncReg {
+        let width = carg(consts, 0) as u32;
+        let rv = consts
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Value::undet(width))
+            .zext(width);
+        SyncReg {
+            data: SyncVar::new(Value::undet(width)),
+            d_out: Value::undet(width),
+            reset_value: rv,
+            hs: Handshake::new(false, true),
+            in_reset: false,
+        }
+    }
+}
+
+impl Prim for SyncReg {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "read" | "_read" => self.d_out.clone(),
+            "RDY_write" => Value::from_u64(1, self.hs.rdy_send() as u64),
+            m => panic!("SyncReg: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "write" | "_write" => {
+                self.data.write(args[0].clone(), now);
+                self.hs.send();
+            }
+            m => panic!("SyncReg: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64) {
+        match port {
+            "clk_src" => self.hs.clk_src(now),
+            "clk_dst" => {
+                if self.hs.pulse(now) {
+                    self.d_out = self.data.read(now);
+                }
+                self.hs.clk_dst(now);
+            }
+            p => panic!("SyncReg: unknown tick port {p:?}"),
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        self.hs.reset(asserted);
+        if asserted {
+            self.data.force(self.reset_value.clone());
+            self.d_out = self.reset_value.clone();
+        }
+    }
 }

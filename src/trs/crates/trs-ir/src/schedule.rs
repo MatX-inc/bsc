@@ -112,8 +112,11 @@ pub struct Composition {
 pub struct CompositionEntry {
     /// Interned instance path ("" = the top module itself).
     pub instance: StrId,
-    /// Index into that instance's module's `ModuleSchedule::segments`
-    /// for this (clock, edge).
+    /// Clock-domain id within that instance's module — selects which
+    /// `ModuleSchedule` in `Schedule::domains` the segment index refers
+    /// to (segment numbering is per domain).
+    pub domain: u32,
+    /// Index into that domain's `ModuleSchedule::segments`.
     pub segment: u32,
 }
 

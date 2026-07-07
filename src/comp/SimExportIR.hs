@@ -201,7 +201,7 @@ data Seg = Seg { seg_nodes :: [SchedNode], seg_cut :: [String] }
 
 data ModSchedInfo = ModSchedInfo
     { msi_domains :: [(Int, [Seg])]           -- per clock domain
-    , msi_segIdx  :: M.Map String Int         -- node key -> segment index
+    , msi_segIdx  :: M.Map String (Int, Int)  -- node key -> (domain, segment)
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
     , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
     }
@@ -324,8 +324,8 @@ analyzeModule pkgNames pkg =
         -- keyed per node, not per rule: a method cut can fall between a
         -- rule's Sched and Exec, putting them in different segments
         segIdx = M.fromList
-            [ (nodeKey n, i)
-            | (_, segs) <- domSegs
+            [ (nodeKey n, (d, i))
+            | (d, segs) <- domSegs
             , (i, seg) <- zip [(0 :: Int) ..] segs
             , n <- seg_nodes seg ]
     in
@@ -344,7 +344,7 @@ qualPath i = case getIdQualString i of
                ""  -> getIdBaseString i
                q   -> q ++ "." ++ getIdBaseString i
 
-encComposition :: M.Map String String -> M.Map String (M.Map String Int)
+encComposition :: M.Map String String -> M.Map String (M.Map String (Int, Int))
                -> SimSchedule -> EncM C.Encoding
 encComposition instToMod segmaps ss = do
     let order = ss_sched_order ss
@@ -432,10 +432,11 @@ encComposition instToMod segmaps ss = do
                           ++ "composition needs graph-based derivation")
       else do
         clkId <- str (oscName (ss_clock ss))
-        entriesEnc <- mapM (\(inst, seg) -> do
+        entriesEnc <- mapM (\(inst, (dom, seg)) -> do
                               instE <- strE inst
                               return $ encStruct
                                 [ ("instance", instE)
+                                , ("domain", encW32 (fromIntegral dom))
                                 , ("segment", encW32 (fromIntegral seg))
                                 ])
                            entries
