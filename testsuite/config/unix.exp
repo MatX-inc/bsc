@@ -1221,6 +1221,16 @@ proc bsc2bsv {source} {
 
 # -u -sim compile
 # returns true iff compilation succeeded
+# The Bluesim backend flag used by compile_object/link_objects/gen_modules:
+# "-sim" (default) or "-trs" (the trs backend) via env SIM_BACKEND_FLAG.
+proc sim_backend_flag {} {
+    global env
+    if { [info exists env(SIM_BACKEND_FLAG)] } {
+        return $env(SIM_BACKEND_FLAG)
+    }
+    return "-sim"
+}
+
 proc bsc_compile_to_object { source { module ""} { options "" } } {
     global bsc
     global srcdir
@@ -1233,7 +1243,7 @@ proc bsc_compile_to_object { source { module ""} { options "" } } {
     cd [file join $here $subdir]
     set output [make_bsc_ccomp_output_name $source]
 
-    set c_comp_options "-no-show-timestamps -no-show-version -u -sim"
+    set c_comp_options "-no-show-timestamps -no-show-version -u [sim_backend_flag]"
     if { [string length $module] > 0 } {
         append c_comp_options " -g $module"
     }
@@ -1273,7 +1283,7 @@ proc bsc_link_objects { objects toplevel { options "" } } {
     }
     set objects $mods
 
-    set link_options "-no-show-timestamps -no-show-version -sim -e $toplevel -o $exefile"
+    set link_options "-no-show-timestamps -no-show-version [sim_backend_flag] -e $toplevel -o $exefile"
     set cmd "$bsc $link_options $options $objects >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_link_objects" $cmd 2]
@@ -1295,7 +1305,7 @@ proc bsc_gen_modules { modules { options "" } } {
     set ok 1
     foreach mod $modules {
         set output [make_bsc_ccomp_output_name $mod]
-        set gen_options "-no-show-timestamps -no-show-version -sim -c $mod"
+        set gen_options "-no-show-timestamps -no-show-version [sim_backend_flag] -c $mod"
         set cmd "$bsc $gen_options $options >& $output"
         verbose "Executing: $cmd" 4
         set status [exec_with_log "bsc_gen_modules" $cmd 2]

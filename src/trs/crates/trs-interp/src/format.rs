@@ -118,6 +118,10 @@ pub fn format_args(
 
 /// A bit-packed string value back to text: bytes MSB-first, leading NUL
 /// bytes skipped (how Bluesim reads a Bit#(n) used as a format).
+pub fn unpack_str_pub(v: &Value) -> String {
+    unpack_str(v)
+}
+
 fn unpack_str(v: &Value) -> String {
     let nbytes = ((v.width as usize) + 7) / 8;
     let mut s = String::new();

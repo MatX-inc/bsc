@@ -36,12 +36,28 @@ fn main() -> ExitCode {
             }
         },
         ["run", path, rest @ ..] => {
-            // bluesim's -m N stops before the Nth edge; match it exactly
-            let max_cycles = match rest {
-                ["-m", n] => n.parse::<u64>().unwrap_or(u64::MAX),
-                _ => u64::MAX,
-            };
-            match trs_interp::run_file(path, max_cycles) {
+            // mirror the bluesim.tcl driver's argument handling: -m N is
+            // the cycle limit, +foo registers a plusarg (sans '+'),
+            // anything else is an error
+            let mut max_cycles = u64::MAX;
+            let mut plusargs: Vec<String> = Vec::new();
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "-m" => {
+                        max_cycles = it
+                            .next()
+                            .and_then(|n| n.parse::<u64>().ok())
+                            .unwrap_or(u64::MAX);
+                    }
+                    p if p.starts_with('+') => plusargs.push(p[1..].to_string()),
+                    other => {
+                        eprintln!("Error: invalid option '{other}'");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            match trs_interp::run_file(path, max_cycles, &plusargs) {
                 Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
                 Err(e) => {
                     eprintln!("trs: {e}");

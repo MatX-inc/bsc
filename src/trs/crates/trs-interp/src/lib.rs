@@ -49,6 +49,8 @@ pub struct Interp {
     dyn_strs: Vec<String>,
     /// dlopened user BDPI code (from the companion .bdpi.so)
     bdpi: Option<bdpi::Bdpi>,
+    /// command-line +args (without the '+'), for $test$plusargs
+    plusargs: Vec<String>,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
@@ -221,6 +223,7 @@ impl Interp {
             pushback: HashMap::new(),
             dyn_strs: Vec::new(),
             bdpi: None,
+            plusargs: Vec::new(),
             finished: None,
             fataled: false,
             cycle: 0,
@@ -1441,7 +1444,16 @@ impl Interp {
                     Err(_) => Value::zero(w.max(1)),
                 }
             }
-            "$test$plusargs" => Value::from_u64(1, 0), // no plusargs yet
+            // prefix match against the registered +args (bk_match_argument)
+            "$test$plusargs" => {
+                let name = match args.first() {
+                    Some(Arg::Str(s)) => s.clone(),
+                    Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
+                    _ => String::new(),
+                };
+                let hit = self.plusargs.iter().any(|a| a.starts_with(&name));
+                Value::from_u64(w.max(1), hit as u64)
+            }
             "$fgetc" => {
                 use std::io::Read;
                 let fd = match args.first() {
@@ -2154,10 +2166,11 @@ fn cookie_key(cookie: u32) -> StrId {
     0x8000_0000 | cookie
 }
 
-pub fn run_file(path: &str, max_cycles: u64) -> Result<i32, String> {
+pub fn run_file(path: &str, max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let design = Design::decode(&bytes).map_err(|e| e.to_string())?;
     let mut interp = Interp::new(design);
+    interp.plusargs = plusargs.to_vec();
     // user BDPI code lives in a companion shared object next to the .bir
     let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
     if std::path::Path::new(&so).exists() {
