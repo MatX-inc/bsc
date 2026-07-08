@@ -135,12 +135,15 @@ fn unpack_str(v: &Value) -> String {
     s
 }
 
-/// $swrite/$sformat semantics: ONLY the first argument is a format (a
-/// string, or a bit-packed string value); remaining string arguments are
-/// literal text, remaining values format in the default base.
+/// $swrite/$sformat semantics: identical to $display's format engine
+/// (dollar_swriteAV calls the same `format(..., restricted=false)` after
+/// peeling the destination) — EVERY string argument is a format string
+/// consuming later arguments; values print in the default base.  This
+/// matters for $format values flattened into the argument list: their
+/// embedded format strings consume their own arguments.
 /// `fmt_first`: $sformat's first argument is always the format, even when
-/// it is a bit-packed string value; $swrite formats a leading value as a
-/// plain value instead.
+/// it is a bit-packed string VALUE (the engine's convert_to_string
+/// branch); $swrite formats a leading value as a plain value instead.
 pub fn format_sformat(
     args: &[Arg],
     default_base: u32,
@@ -149,42 +152,17 @@ pub fn format_sformat(
     fmt_first: bool,
     errs: &mut Vec<String>,
 ) -> String {
-    let mut out = String::new();
-    let mut i = 0;
-    match args.first() {
-        Some(Arg::Str(f)) => {
-            i = 1;
-            let fmt = f.clone();
-            format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
-        }
-        Some(Arg::Val(v, _)) if fmt_first => {
-            i = 1;
+    if fmt_first {
+        if let Some(Arg::Val(v, _)) = args.first() {
+            let mut out = String::new();
+            let mut i = 1;
             let fmt = unpack_str(v);
             format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
+            out.push_str(&format_args(&args[i..], default_base, now, loc, errs));
+            return out;
         }
-        _ => {}
     }
-    while i < args.len() {
-        match &args[i] {
-            Arg::Str(text) => out.push_str(text),
-            Arg::Val(v, sg) => {
-                out.push_str(&fmt_val(
-                    v, default_base, false,
-                    Some(max_width(v.width, default_base, *sg)), *sg,
-                ));
-            }
-            Arg::Real(r) => {
-                errs.push("unexpected real number argument\n".to_string());
-                let v = Value::from_u64(64, (*r as i64) as u64);
-                out.push_str(&fmt_val(
-                    &v, default_base, false,
-                    Some(max_width(64, default_base, true)), true,
-                ));
-            }
-        }
-        i += 1;
-    }
-    out
+    format_args(args, default_base, now, loc, errs)
 }
 
 fn next_val(args: &[Arg], i: &mut usize, errs: &mut Vec<String>) -> (Value, bool) {
