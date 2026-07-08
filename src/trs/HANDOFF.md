@@ -54,33 +54,16 @@ format), `docs/VCD-CONTRACT.md` (byte-level VCD semantics), and
   CompletionBuffer, NullCrossing, SShow, primtcons, prims/name,
   NoClock, log2_loop.golden, misc ccomp compares).
 
-## THE ONE REMAINING REAL BUG (finish this first)
+## No known real bugs remain
 
-`bsc.mcd/Gating`: 6 designs (GatedClock_TwoModTwoSyn, SubMethod,
-SubRule, MethodTb, RuleTb, MethodTb2) share an identical residual
-diff — a ONE-EDGE-LATE gate window (`18,30c18,30`, rg2 = b0 vs af over
-t=180..300, re-converging after).  Repro: copy bsc.mcd/Gating/*.bsv to
-scratch, build each with `bsc -u -trs -g sys<T> <T>.bsv` (+ `-g
-mkGatedClock_TwoModTwoSyn_Sub` for TwoModTwoSyn), diff against
-sysGatedClock_OneMod.out.expected.  Evidence so far (SubMethod, via
-keep-fires VCD diff of ref -sim vs -trs): g1.new_gate matches
-everywhere; the divergence is `s.sg.ssg.new_gate` — reference holds it
-0 for the whole g1-off window (165..295), trs shows one extra toggle
-pair at 165/175 and resumes late (315 vs 295).  Key C++ semantics not
-yet replicated: MOD_GatedClock's latch output is
-`PORT_CLK_GATE_OUT = clk_in_gate & reg` — the INPUT clock's gate
-participates, so when the outer gate (g1) is off, the inner gate (ssg,
-whose clk_in is the g1-gated clock) must go 0 regardless of its own
-cond register, and rules gated by ssg must stop.  Check (a) what gate
-expr the ssg prim's clk_in tick receives in the BIR composition (it
-must be g1's gate, not constant true) on BOTH edges, (b) whether the
-rule toggling ssg's cond (top rule r1, itself g1-gated through TWO
-boundaries) fires one edge too long — i.e. whether the Expr::Gate
-conjunct is evaluated at Sched (latch) time vs the C++'s port read.
-The vcdcmp.py comparator (name-keyed VCD diff) from this session is a
-10-minute rewrite if needed: parse $scope/$var, replay changes keyed
-by hierarchical name, report first divergence excluding `____d\d+$`
-defs and CLK* aliases.
+The last one — a one-edge-late gate window in gated-clock chains
+(all six residual bsc.mcd/Gating diffs) — was a tick-ordering gap:
+SimMakeCBlocks.sortTickCalls orders tick groups so gate producers
+tick before the clocks their gates feed; the exporter now applies the
+same tsort (f859fd96).  All 8 Gating designs byte-match.  A fresh
+full-suite run should show only: 44 bsc.bluesim/interactive (Tcl
+surface, task #20), the watchdogged slow tests (sudoku, MPEG4), and
+nothing else — worth running once to confirm before deep perf work.
 
 ## Also open (not blocking the perf shift)
 
