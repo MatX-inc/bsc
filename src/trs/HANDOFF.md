@@ -92,6 +92,26 @@ trs-codegen --features llvm` builds and its JIT smoke test passes.
 Fresh microbench baseline (5M-cycle counter): reference 0.27 s vs
 interp 50.2 s = ~190x.
 
+START HERE — resumable-stepper refactor (exact spec, anchors as of
+commit 46d2e61d): trs-interp/src/lib.rs `run()` spans ~2782-3370.
+One-time setup: comps/clocks/sources/driver_clock/rcomps (2783-3038);
+loop state: heap/fired_this_slice/final_now (3039-3091).
+(1) Move the local `struct RComp` to module scope; add
+`struct Stepper { clocks, sources, driver_clock, rcomps, heap,
+fired_this_slice, final_now }` held as `Option<Stepper>` on Interp.
+(2) `fn prime(&mut self)` = lines 2783-3090 (setup + initial heap
+seeding), idempotent.  (3) `fn advance(&mut self, max_cycles) -> i32`
+= the event loop over the field; `pub fn run()` = prime + advance,
+byte-identical (sweep must stay 554/0).  While there: pre-resolve
+segment node slices into rcomps — the per-entry-per-edge
+`ms.segments[seg].nodes.clone()` is the per-node-segment tax; measure
+vs the 190x microbench.  Then the -c driver's `sim step N` gets true
+multi-step for free, and the JIT harness (run-to-cycle, compare,
+continue) sits on advance().  JIT env:
+`LLVM_SYS_181_PREFIX=/usr/lib/llvm-18` (llvm-18-dev, libzstd-dev,
+libpolly-18-dev all installed; codegen smoke test passes).
+
+
 
 Correctness ledger is clean modulo the one Gating bug.  Start with the
 resumable-stepper refactor (event heap + resolved comps as Interp
