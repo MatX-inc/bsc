@@ -39,6 +39,9 @@ pub trait Prim {
     /// own ids (the parent's per-prim slot deliberately stays unused).
     /// `clk_vcd_id` is the prim's kernel clock id for CLK aliases;
     /// `clk` its clock index for vcd_set_clock.
+    /// Told once per tick port which kernel clock drives it (for prims
+    /// with several clock domains, e.g. SyncHandshake's sCLK/dCLK).
+    fn vcd_port_clock(&mut self, _port: &str, _clk: usize, _clk_vcd_id: u32) {}
     fn vcd_defs(
         &mut self,
         _w: &mut crate::vcd::Vcd,
@@ -141,7 +144,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "SyncBit" | "SyncBit15" => Box::new(SyncBit::new(consts, true)),
         "SyncBit05" | "SyncBit1" => Box::new(SyncBit::new(consts, false)),
         "SyncPulse" => Box::new(SyncPulse::new()),
-        "SyncHandshake" => Box::new(SyncHandshake { hs: Handshake::new(false, false) }),
+        "SyncHandshake" => Box::new(SyncHandshake { hs: Handshake::new(false, false), src_clk: 0 }),
         "SyncRegister" => Box::new(SyncReg::new(consts)),
         // reset generators: args are [cycles] / [cycles, init?] per
         // bs_prim_mod_resets.h ctors; A-variants assert asynchronously
@@ -2355,6 +2358,28 @@ struct Handshake {
     param_init: bool,
     param_delayreturn: bool,
     in_reset: bool,
+    /// latched at clk_src: a send happened in the ending cycle (sEN)
+    did_send: bool,
+    /// latched at clk_dst: destination pulse visible (dPulse)
+    pulsing: bool,
+    vcd_base: u32,
+    src_clk_id: u32,
+    dst_clk_id: u32,
+    vcd_back: Option<HsVcdBack>,
+}
+
+#[derive(Clone, Default)]
+struct HsVcdBack {
+    d1: u64,
+    d2: u64,
+    dlast: u64,
+    stog: u64,
+    s1: u64,
+    s2: u64,
+    srdy: bool,
+    sen: bool,
+    in_reset: bool,
+    pulsing: bool,
 }
 
 impl Handshake {
@@ -2371,6 +2396,12 @@ impl Handshake {
             param_init: init,
             param_delayreturn: delayreturn,
             in_reset: false,
+            did_send: false,
+            pulsing: false,
+            vcd_base: 0,
+            src_clk_id: 0,
+            dst_clk_id: 0,
+            vcd_back: None,
         }
     }
     fn pulse(&self, now: u64) -> bool {
@@ -2399,6 +2430,7 @@ impl Handshake {
         } else {
             self.s_rdy = self.s2 == self.s_toggle.read(now).as_u64();
         }
+        self.did_send = self.en;
         self.en = false;
     }
     fn clk_dst(&mut self, now: u64) {
@@ -2406,7 +2438,102 @@ impl Handshake {
         self.d_last.write(v2, now);
         self.d_sync2.write(Value::from_u64(1, self.d1), now);
         self.d1 = self.s_toggle.read(now).as_u64();
+        self.pulsing = self.d_last.cur.as_u64() != self.d_sync2.cur.as_u64();
     }
+    /// dump_VCD_defs for the 12-id handshake scope
+    /// (bs_prim_mod_synchronizers.h:586-607)
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _src_clk: usize) {
+        // NOTE: generated code never calls set_clk_0/1 on the handshake
+        // prims, so vcd_set_clock(sEN, BAD_HANDLE) is a no-op (no
+        // backdating) and the sCLK/dCLK aliases use kernel clock 0's id
+        let mut n = w.reserve_ids(12);
+        self.vcd_base = n;
+        w.scope_start(name);
+        for v in ["dSyncReg1", "dSyncReg2", "dLastState", "sToggleReg", "sSyncReg1",
+                  "sSyncReg2", "sRDY"] {
+            w.write_def(n, v, 1);
+            n += 1;
+        }
+        w.write_def(n, "sEN", 1);
+        n += 1;
+        w.write_def(self.src_clk_id, "sCLK", 1);
+        w.write_def(self.dst_clk_id, "dCLK", 1);
+        w.write_def(n, "sRST", 1);
+        n += 1;
+        w.write_def(n, "dPulse", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(&mut self, w: &mut crate::vcd::Vcd, dt: crate::vcd::DumpType, now: u64) {
+        use crate::vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let b1 = |x: u64| Value::from_u64(1, x & 1);
+        let n = self.vcd_base;
+        let cur = HsVcdBack {
+            d1: self.d1,
+            d2: self.d_sync2.cur.as_u64(),
+            dlast: self.d_last.cur.as_u64(),
+            stog: self.s_toggle.cur.as_u64(),
+            s1: self.s1,
+            s2: self.s2,
+            srdy: self.s_rdy,
+            sen: self.did_send,
+            in_reset: self.in_reset,
+            pulsing: self.pulsing,
+        };
+        match dt {
+            D::Xs => {
+                for i in 0..10 {
+                    w.write_x(n + i, 1, now);
+                }
+            }
+            D::Changes => {
+                let b = self.vcd_back.clone().unwrap_or_default();
+                let pairs: [(u64, u64); 6] = [
+                    (cur.d1, b.d1),
+                    (cur.d2, b.d2),
+                    (cur.dlast, b.dlast),
+                    (cur.stog, b.stog),
+                    (cur.s1, b.s1),
+                    (cur.s2, b.s2),
+                ];
+                for (i, (c, bb)) in pairs.iter().enumerate() {
+                    if c != bb {
+                        w.write_val(n + i as u32, &b1(*c), now);
+                    }
+                }
+                if cur.srdy != b.srdy {
+                    w.write_val(n + 6, &bit(cur.srdy), now);
+                }
+                if cur.sen != b.sen {
+                    w.write_val(n + 7, &bit(cur.sen), now);
+                }
+                if cur.in_reset != b.in_reset {
+                    w.write_val(n + 8, &bit(!cur.in_reset), now);
+                }
+                if cur.pulsing != b.pulsing {
+                    w.write_val(n + 9, &bit(cur.pulsing), now);
+                }
+            }
+            _ => {
+                for (i, v) in [cur.d1, cur.d2, cur.dlast, cur.stog, cur.s1, cur.s2]
+                    .iter()
+                    .enumerate()
+                {
+                    w.write_val(n + i as u32, &b1(*v), now);
+                }
+                w.write_val(n + 6, &bit(cur.srdy), now);
+                w.write_val(n + 7, &bit(cur.sen), now);
+                w.write_val(n + 8, &bit(!cur.in_reset), now);
+                w.write_val(n + 9, &bit(cur.pulsing), now);
+            }
+        }
+        // C++ never writes backing.in_reset (ctor false forever) — sRST
+        // changes are emitted only while the reset is asserted
+        let mut back = cur;
+        back.in_reset = self.vcd_back.as_ref().map(|b| b.in_reset).unwrap_or(false);
+        self.vcd_back = Some(back);
+    }
+
     fn reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
         if asserted {
@@ -2420,15 +2547,38 @@ impl Handshake {
             self.s2 = not_init.as_u64();
             self.s_rdy = false;
             self.en = false;
+            self.pulsing = false;
+            self.did_send = false;
         }
     }
 }
 
 struct SyncHandshake {
     hs: Handshake,
+    src_clk: usize,
 }
 
 impl Prim for SyncHandshake {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        let src = self.src_clk;
+        self.hs.vcd_defs(w, name, src);
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        self.hs.vcd_dump(w, dt, now);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "pulse" | "read" | "_read" => Value::from_u64(1, self.hs.pulse(now) as u64),
@@ -2463,6 +2613,9 @@ struct SyncReg {
     reset_value: Value,
     hs: Handshake,
     in_reset: bool,
+    src_clk: usize,
+    vcd_base: u32,
+    vcd_back: Option<(Value, Value)>,
 }
 
 impl SyncReg {
@@ -2479,11 +2632,69 @@ impl SyncReg {
             reset_value: rv,
             hs: Handshake::new(false, true),
             in_reset: false,
+            src_clk: 0,
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for SyncReg {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_synchronizers.h:784-793: dD_OUT/sDataSyncIn plus
+        // the nested "sync" handshake scope
+        let bits = self.d_out.width;
+        let n = w.reserve_ids(2);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(n, "dD_OUT", bits);
+        w.write_def(n + 1, "sDataSyncIn", bits);
+        let src = self.src_clk;
+        self.hs.vcd_defs(w, "sync", src);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let n = self.vcd_base;
+        let din = self.data.read(now);
+        match dt {
+            D::Xs => {
+                w.write_x(n, self.d_out.width, now);
+                w.write_x(n + 1, self.d_out.width, now);
+            }
+            D::Changes => {
+                let (bo, bi) = self.vcd_back.clone().unwrap_or((
+                    Value::undet(self.d_out.width),
+                    Value::undet(self.d_out.width),
+                ));
+                if self.d_out != bo {
+                    w.write_val(n, &self.d_out, now);
+                }
+                if din != bi {
+                    w.write_val(n + 1, &din, now);
+                }
+            }
+            _ => {
+                w.write_val(n, &self.d_out, now);
+                w.write_val(n + 1, &din, now);
+            }
+        }
+        self.vcd_back = Some((self.d_out.clone(), din));
+        self.hs.vcd_dump(w, dt, now);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "read" | "_read" => self.d_out.clone(),

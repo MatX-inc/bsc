@@ -2748,9 +2748,16 @@ impl Interp {
                 self.vcd_inst_clock[inst] = rc.clk;
                 self.vcd_inst_domclock.insert((inst, domain), rc.clk);
             }
-            for (inst, _, _, owner, _) in &rc.ticks {
+            for (inst, port, is_rst, owner, _) in &rc.ticks {
                 self.vcd_inst_clock[*inst] = rc.clk;
                 self.vcd_inst_clock[*owner] = rc.clk;
+                if !*is_rst {
+                    let pname = self.d.strings[*port as usize].clone();
+                    let cid = self.vcd_clocks[rc.clk].vcd_id;
+                    if let InstKind::Prim(p) = &mut self.insts[*inst].kind {
+                        p.vcd_port_clock(&pname, rc.clk, cid);
+                    }
+                }
             }
         }
         // clock-source prims alias the clock they DRIVE (CLK_OUT)
