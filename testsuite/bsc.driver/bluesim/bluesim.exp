@@ -1,3 +1,9 @@
+# Compares Bluesim C++ build/rebuild message logs.
+if { ![cxx_codegen_tests] } {
+    verbose "Skipping C++-codegen inspection tests under [sim_backend_flag]" 1
+    return
+}
+
 if {$ctest != 0} {
 
 # first, remove the build directories and remake them

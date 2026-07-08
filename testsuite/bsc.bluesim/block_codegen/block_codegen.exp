@@ -1,3 +1,9 @@
+# The -c codegen mode writes and compares generated C++ files.
+if { ![cxx_codegen_tests] } {
+    verbose "Skipping C++-codegen inspection tests under [sim_backend_flag]" 1
+    return
+}
+
 #
 # Tests for the -c codegen mode
 #

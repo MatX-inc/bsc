@@ -1,3 +1,9 @@
+# Inspects generated mkTop.cxx for the fixed expression forms.
+if { ![cxx_codegen_tests] } {
+    verbose "Skipping C++-codegen inspection tests under [sim_backend_flag]" 1
+    return
+}
+
 
 # This has been refiled as GitHub Issue #330
 
