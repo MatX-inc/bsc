@@ -1,140 +1,144 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`fad21d8d`).  Read `DESIGN.md` (goals/architecture), `BIR.md` (export
-format), `docs/VCD-CONTRACT.md` (byte-level VCD semantics), and
-`docs/PERF-BASELINE.md` (measured numbers) alongside this.
+`8bc49016` — ALWAYS `git push personal`, never bare `git push origin`:
+origin is the B-lang-org repo and one bare push this session created a
+stray public branch there; see "Ask Ravi" below).  Read `DESIGN.md`
+(goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
+(byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
+numbers) alongside this.
 
 ## Current state
 
-- **Full testsuite** (`env CONFIG_SHELL=/bin/sh SIM_BACKEND_FLAG=-trs
-  TRS=<repo>/src/trs/target/release/trs make VTEST=0
-  SYSTEMCTEST=0 check` from testsuite/): last complete run was
-  6971 PASS / 128 FAIL / 23 XFAIL, and every FAIL was triaged.  Since
-  that run, fixes landed for all real bugs but ONE (below); the other
-  FAILs were: 47 Tcl-surface tests (44 bsc.bluesim/interactive + 3
-  scattered `-c` tests — now partially covered by the driver's -c/-f
-  subset), ~25 spurious test-script bugs (unguarded VTEST=0 compares —
-  all guarded now), and 6 slow-interpreter watchdog artifacts (sudoku
-  generator, MPEG4: legitimate ~7-minute interpreter runs killed at 6
-  min; the P2 JIT is the real fix).  A fresh full run should be near
-  zero unexpected failures modulo those categories.
-- **Differential sweep** (`python3 tools/diffsweep.py`, ~40 min):
-  554 PASS / 0 DIFF / 0 panics.  VCD battery (`tests/vcd/run.sh`): 9/9.
-- The install now packages trs: `make install-src` builds the release
-  runtime via `src/trs/Makefile` into `inst/bin/trs`.
+- **Resumable stepper landed** (981ad24a): `run()` = `prime()` (one-time
+  setup, idempotent) + `advance(max_cycles)` (event loop, resumable —
+  the cycle-limit edge is pushed back on the heap) + `finish()` (final
+  VCD flush, kept out of advance so bounded stepping can't corrupt VCD).
+  `RComp`/`Stepper`/`REntry` at module scope; state is
+  `Option<Stepper>` on Interp.  The -c driver's `sim step N` is true
+  multi-step (cbee70c1), byte-identical vs the reference driver incl.
+  VCD-across-steps and post-$finish errors ("cannot step"/"cannot run
+  anymore", exit 1).  The JIT harness (run-to-cycle, compare, continue)
+  sits directly on `advance()`.
+- **Eager schedule-position defs** (8bc49016): each REntry carries the
+  CF/WF cone defs (getExprIds-True closure, first-Sched-node-attached)
+  and the edge pass evaluates them into the latch before the entry's
+  nodes — mirroring the C++ schedule_posedge def-statement lists.  This
+  fixed the last known real bug (sysMips missing 10 RegFile warnings)
+  and made the interp ~16% FASTER (shared cone defs compute once per
+  edge, not per rule).  CF/WF defs (rule or method, via DefProps) are
+  traversed but never latched — method WILL_FIREs follow the call-time
+  EN protocol (pre-latching them made sub-module rules fire during
+  their parent's method call: mkVCDTest1_Sub regression, fixed).
+- Segment pre-resolution: entries hold resolved node slices + tick port
+  names; the per-edge domain search / nodes.clone() tax is gone.
+- RegFile/BRAM bounds warnings render addresses like dump_val
+  (0x-prefix, width-padded; 3509045e).
+- **Verification**: diffsweep 556 PASS / 0 DIFF (up from 554: the
+  $sformat fix was never in the old release binary — see gotchas — and
+  sysStringFormat2 + one more now pass).  VCD battery 9/9.  Final full
+  suite with all fixes: 9533 PASS / 53 FAIL / 68 XFAIL / 0 XPASS, where
+  the 53 = 44 bsc.bluesim/interactive (Tcl surface, task #20) + 6
+  sudoku/MPEG4 (killed mid-run; those tests are long-test-gated now and
+  won't run at all — see below) + 3 bsc.bsv_examples/wallace
+  (testCombServer: DejaGnu's per-test timeout under -j128 load; 24/0
+  when the dir runs solo).  So the real residue is interactive-only.
+- **Slow tests are long-test-gated** (44c2a1e9): sudoku's
+  mkGenerateTest3 moved behind the bsc.long_tests enable mechanism
+  (sudoku.exp.golden, linked by `make -C bsc.long_tests sudoku`), and
+  the stale enabler links for MPEG4/conflict_free_large/log2_loop were
+  removed — an earlier `enablelongtests` had left them on, which is why
+  every trs suite run paid two 15-minute kills.  fullparallel's
+  enablelongtests still enables everything, sudoku included.
+- The "6-minute watchdog" in earlier handoffs was actually DejaGnu's
+  own per-test timeout: slow interpreter sims (~30s solo) exceed it
+  under -j128 contention.  wallace/testCombServer is the borderline
+  case and can flake in full parallel runs until the JIT lands; it
+  passes solo.
+- Testsuite guards batch 3 (61b0b3d6): vlink_regen, gen_mode, options,
+  splitports, derived_bits, inout, tasks, bh_pragmas, higherrank,
+  instances + BRAM's bug-1731 xfail scoped to cxx_codegen_tests (under
+  -trs the WidthTest link must and does succeed).  All 11 dirs verified
+  0 FAIL under both -sim (VTEST=1) and -trs (VTEST=0) from clean dirs.
+- diffsweep.py has `--trs <binary>` (54f7e089) — sweep a scratch
+  build without touching target/release.  The override travels via env
+  because Python 3.14 pool workers re-import the module.
 
-## Fixed this session (each verified byte-exact vs reference)
-
-- RegAligned primitive; phantom prim-domain clocks resolve to Never
-  (SpecialSyncReg/SpecialSyncFIFO).
-- GatedClock: cross-domain setGateCond while the input clock is low
-  propagates through the transparent latch immediately, via a new
-  `Prim::clock_level` pre-rules hook (mcd_Rand).
-- Native library BDPI rand32/srand via glibc random/srandom
-  (bsc.lib/Divide, SquareRoot); library names excluded from .bdpi.so
-  eager resolution.
-- Driver `-c`/`-f` scripting subset: one `sim run`/`sim step N` plus
-  `sim time` / `sim clock` (getClockInfo tuple) / `puts [...]`
-  (2x2-switch, sysEmptyModule, bsc.if b*).
-- **Per-node schedule segments**: compositions now reproduce bsc's flat
-  merged order exactly (getput sysTestUGFIFOF CF-order divergence; also
-  kills the SRAMFile cyclic-segment class).  touchingRules/meRules
-  analysis deleted.
-- always_enabled check_rdy: BIR Method carries the pragma; the interp
-  gates the body on the sibling RDY_<m> method (rdy_en_pragmas x3,
-  sysTestBypassWire).
-- $swrite/$sformat use the full format engine (every string arg is a
-  format; sysFormat4/5).
-- Divide-by-zero raises SIGFPE like native division (bsc.misc/divmod).
-- GatedClockDiv = ClockDivider with a gated input clock (ClockDividers).
-- ifc_clock_gates: exported per interface clock; Expr::Gate on a user
-  child chases the child's gate expr recursively (Bug-1677 family).
-- Testsuite: many VTEST=0 guards (arrays, b381, b1490, Cntrs,
-  CompletionBuffer, NullCrossing, SShow, primtcons, prims/name,
-  NoClock, log2_loop.golden, misc ccomp compares).
-
-## No known real bugs remain
-
-The last one — a one-edge-late gate window in gated-clock chains
-(all six residual bsc.mcd/Gating diffs) — was a tick-ordering gap:
-SimMakeCBlocks.sortTickCalls orders tick groups so gate producers
-tick before the clocks their gates feed; the exporter now applies the
-same tsort (f859fd96).  All 8 Gating designs byte-match.  A fresh
-full-suite run should show only: 44 bsc.bluesim/interactive (Tcl
-surface, task #20), the watchdogged slow tests (sudoku, MPEG4), and
-nothing else — worth running once to confirm before deep perf work.
-
-## Also open (not blocking the perf shift)
+## Open items
 
 - Tcl surface: 44 bsc.bluesim/interactive tests need the bk_* compat
-  .so (DESIGN.md §7; task #20 approved by Ravi).  Plan: resumable
-  stepper refactor (shared with JIT) -> trs-capi cdylib exporting the
-  46 bk_* + new_MODEL_<top> symbols BluesimLoader.hs dlsyms -> driver
-  thread for async run -> symbol table incrementally.  trsLink should
-  emit a tiny per-design shim .so (it already builds .bdpi.so) linking
-  the shipped runtime; spike dlsym-through-dependency early.
-- VCD clock-alias parity: trs maps a module's input-clock alias vars
-  (dut.CLK vs dut.CLK_c1) to one kernel-clock id where reference keeps
-  them distinct; latent (battery green), matters for byte-parity goals.
-- SyncFIFO + RegAligned VCD hooks still TODO (silent-default class).
-- Watchdogged slow tests (sudoku mkGenerateTest3, MPEG4): expected
-  until the JIT lands.
-- Stray tracked artifacts to clean up (ask Ravi): testsuite
-  a.out.bir files (gcd, fifo, rwire, mcd/Misc), root dump.txt and
-  sysGatedClock_OneMod.bir — run artifacts accidentally in git.
+  .so (DESIGN.md §7; task #20 approved by Ravi).  The stepper refactor
+  it needed is DONE.  Plan: trs-capi cdylib exporting the 46 bk_* +
+  new_MODEL_<top> symbols BluesimLoader.hs dlsyms -> driver thread for
+  async run -> symbol table incrementally.  trsLink should emit a tiny
+  per-design shim .so linking the shipped runtime; spike
+  dlsym-through-dependency early.
+- Latent VCD parity classes (battery green, matter for byte-parity
+  goals): (a) clock-alias vars (dut.CLK vs dut.CLK_c1 map to one kernel
+  clock id where reference keeps them distinct); (b) never-computed
+  defs at the initial dump — C++ dumps the zeroed member, trs dumps
+  the write_undet pattern (sysMips VCD has 48 such lines vs reference);
+  (c) SyncFIFO + RegAligned VCD hooks still TODO (silent-default class).
+- wallace/testCombServer can flake under full -j128 suite load
+  (DejaGnu per-test timeout on a ~30s-solo interpreter run); goes away
+  with the JIT.
+
+## Ask Ravi
+
+- A bare `git push origin` accidentally created branch `claude/trs`
+  on https://github.com/B-lang-org/bsc (same commits as the personal
+  fork).  Deleting a remote branch needs his say-so:
+  `git push origin --delete claude/trs`.
+- Stray tracked run artifacts (grown this session — suite runs
+  regenerate them): testsuite a.out.bir (gcd, fifo, rwire, mcd/Misc,
+  verilog/astate, verilog/tasks), verilog/noinline module_*.bir ×4 +
+  a.out.bir.  `.gitignore` covers *.bir; `git rm --cached` them in a
+  cleanup commit?
 
 ## Next phase: performance (task #19)
 
 LLVM toolchain is READY: llvm-18-dev + libzstd-dev + libpolly-18-dev
 installed; `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18 cargo build -p
 trs-codegen --features llvm` builds and its JIT smoke test passes.
-Fresh microbench baseline (5M-cycle counter): reference 0.27 s vs
-interp 50.2 s = ~190x.
+START: LLVM lowering per DESIGN.md behind the `llvm` feature, rule
+bodies and CF/WF cones as native code, prims as calls into trs-rt;
+the interpreter is the differential oracle (sweep + battery as the
+net); the harness = `prime()` / `advance(to_cycle)` / compare /
+continue on both engines.  Note the eager per-entry def lists in
+REntry are exactly the def-statement lists the JIT should compile per
+schedule position.  Baseline (quiet machine): 5M-cycle counter
+reference 0.27s vs interp ~35s post-refactor (~130x); sudoku-class
+cones >1600x — the JIT is the fix.
 
-START HERE — resumable-stepper refactor (exact spec, anchors as of
-commit 46d2e61d): trs-interp/src/lib.rs `run()` spans ~2782-3370.
-One-time setup: comps/clocks/sources/driver_clock/rcomps (2783-3038);
-loop state: heap/fired_this_slice/final_now (3039-3091).
-(1) Move the local `struct RComp` to module scope; add
-`struct Stepper { clocks, sources, driver_clock, rcomps, heap,
-fired_this_slice, final_now }` held as `Option<Stepper>` on Interp.
-(2) `fn prime(&mut self)` = lines 2783-3090 (setup + initial heap
-seeding), idempotent.  (3) `fn advance(&mut self, max_cycles) -> i32`
-= the event loop over the field; `pub fn run()` = prime + advance,
-byte-identical (sweep must stay 554/0).  While there: pre-resolve
-segment node slices into rcomps — the per-entry-per-edge
-`ms.segments[seg].nodes.clone()` is the per-node-segment tax; measure
-vs the 190x microbench.  Then the -c driver's `sim step N` gets true
-multi-step for free, and the JIT harness (run-to-cycle, compare,
-continue) sits on advance().  JIT env:
-`LLVM_SYS_181_PREFIX=/usr/lib/llvm-18` (llvm-18-dev, libzstd-dev,
-libpolly-18-dev all installed; codegen smoke test passes).
+## Cardinal rules / gotchas
 
-
-
-Correctness ledger is clean modulo the one Gating bug.  Start with the
-resumable-stepper refactor (event heap + resolved comps as Interp
-fields; the trs-kernel crate's Yield/Quit scaffolding anticipates
-it), then LLVM lowering per DESIGN.md behind the `llvm` feature
-(needs llvm-18-dev), interpreter as differential oracle, sweep +
-battery as the net.  Baseline: ~335x slower than compiled Bluesim on
-tight loops, >1600x on sudoku; link already 11-20x faster than -sim.
-Per-node segments made compositions per-rule-node — the entries loop
-clones each 1-node segment per edge; fold that into the stepper
-refactor (pre-resolve entries to node slices once).
-
-## Cardinal rules / gotchas (unchanged)
-
-- Never rebuild `inst/bin/bsc` or `target/release/trs` while a
-  sweep, battery, or testsuite run is using them.  Develop against
-  `CARGO_TARGET_DIR=<scratch>/cargo-alt cargo build` (debug).
-- Watchdog-kill wedged `trs run` processes during suite runs — but
-  known-slow tests (sudoku, MPEG4) legitimately exceed 6 minutes.
-- Reference executables are scripts needing `bluetcl` on PATH
-  (`PATH=<repo>/inst/bin:$PATH`); beware the OTHER bsc checkout on
-  PATH (~/bluespec/bsc) — always prepend this repo's inst/bin.
-- BIR files are re-exported by the *installed* bsc; stale .bir/.ba
-  need regeneration after exporter changes.
-- Commit policy: small commits, push to `personal claude/trs`
+- Never rebuild `inst/bin/bsc` or `target/release/trs` while a sweep,
+  battery, or testsuite run is using them.  Develop against
+  `CARGO_TARGET_DIR=<scratch>/cargo-alt cargo build`; sweep scratch
+  builds with `diffsweep.py --trs`.
+- **Stale-binary trap (bit us this session)**: target/release/trs was
+  built at 04:25 but the $sformat fix landed at 04:36 — the whole
+  first suite run and sweep #1 tested a stale binary (one phantom DIFF,
+  one phantom suite FAIL).  After committing interp changes, rebuild
+  target/release BEFORE judging any run.  Check `ls -la` mtime vs
+  `git log` when results look off.
+- **Watchdogs must match argv[0] exactly** (`awk '$3 == "<abs path>"'`):
+  a substring match on the command line kills the suite launcher itself
+  (its env assignment contains the binary path).  Known-slow tests
+  legitimately exceed 15 min under load.
+- Suite runs: `env CONFIG_SHELL=/bin/sh SIM_BACKEND_FLAG=-trs
+  TRS=<repo>/src/trs/target/release/trs VTEST=0 SYSTEMCTEST=0
+  PATH=<repo>/inst/bin:$PATH make -j128 INIT=bsc checkparallel` from
+  testsuite/ (parallel equivalent of the old serial `check`; ~16 min +
+  slow-test tail).  Aggregate per-dir testrun.sum for progress; the
+  per-dir counts only settle once make clean has swept old sums.
+  Verifying single dirs: `make -C <dir> clean` first or stale .bo/.ba
+  suppress warnings the .exp expects (phantom FAILs).
+- Reference executables are scripts needing `bluetcl` on PATH; beware
+  the OTHER bsc checkout (~/bluespec/bsc) — always prepend this repo's
+  inst/bin, and remember exported PATH does NOT persist across shell
+  invocations.
+- BIR files are re-exported by the *installed* bsc; stale .bir/.ba need
+  regeneration after exporter changes.
+- Commit policy: small commits, push to `personal` (nanavati/bsc)
   freely (Ravi's standing OK); trailers per session convention.
