@@ -12,6 +12,21 @@ pub struct Value {
 pub const STR_MARKER: u32 = u32::MAX;
 pub const REAL_MARKER: u32 = u32::MAX - 1;
 
+/// Reference Bluesim performs native integer division, so a zero divisor
+/// kills the process with SIGFPE (bsc.misc/divmod expects exactly that);
+/// reproduce the trap rather than inventing a result value.
+fn raise_sigfpe() -> ! {
+    extern "C" {
+        fn raise(sig: std::ffi::c_int) -> std::ffi::c_int;
+    }
+    unsafe {
+        raise(8 /* SIGFPE */);
+    }
+    // SIGFPE terminates by default; if the caller blocked it, mirror the
+    // C++'s undefined-behavior death as best we can
+    std::process::abort();
+}
+
 fn nlimbs(width: u32) -> usize {
     ((width as usize) + 63) / 64
 }
@@ -151,7 +166,10 @@ impl Value {
         // narrow fast path; wide division is rare in practice
         if self.limbs.len() == 1 && o.limbs.len() == 1 {
             let d = o.limbs[0];
-            return Value::from_u64(w, if d == 0 { u64::MAX } else { self.limbs[0] / d });
+            if d == 0 {
+                raise_sigfpe();
+            }
+            return Value::from_u64(w, self.limbs[0] / d);
         }
         self.divmod_wide(o, w).0
     }
@@ -159,7 +177,10 @@ impl Value {
     pub fn rem(&self, o: &Value, w: u32) -> Value {
         if self.limbs.len() == 1 && o.limbs.len() == 1 {
             let d = o.limbs[0];
-            return Value::from_u64(w, if d == 0 { self.limbs[0] } else { self.limbs[0] % d });
+            if d == 0 {
+                raise_sigfpe();
+            }
+            return Value::from_u64(w, self.limbs[0] % d);
         }
         self.divmod_wide(o, w).1
     }
@@ -169,7 +190,7 @@ impl Value {
         let mut q = Value::zero(w);
         let mut r = Value::zero(self.width.max(o.width) + 1);
         if o.is_zero() {
-            return (Value { width: w, limbs: vec![u64::MAX; nlimbs(w).max(1)] }, self.clone());
+            raise_sigfpe();
         }
         for i in (0..self.width).rev() {
             r = r.shl_bits(1);
