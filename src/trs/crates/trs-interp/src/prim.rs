@@ -178,6 +178,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         // file in strs plus a binary flag as the last const
         "BRAM1" | "BRAM2" => Box::new(Bram::new(
             carg(consts, 0) != 0,
+            name.starts_with("BRAM2"),
             carg(consts, 1) as u32,
             carg(consts, 2) as u32,
             carg(consts, 2) as u32,
@@ -188,6 +189,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         )),
         "BRAM1BE" | "BRAM2BE" => Box::new(Bram::new(
             carg(consts, 0) != 0,
+            name.starts_with("BRAM2"),
             carg(consts, 1) as u32,
             carg(consts, 2) as u32,
             carg(consts, 3) as u32,
@@ -198,6 +200,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         )),
         "BRAM1Load" | "BRAM2Load" => Box::new(Bram::new(
             carg(consts, 0) != 0,
+            name.starts_with("BRAM2"),
             carg(consts, 1) as u32,
             carg(consts, 2) as u32,
             carg(consts, 2) as u32,
@@ -208,6 +211,7 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         )),
         "BRAM1BELoad" | "BRAM2BELoad" => Box::new(Bram::new(
             carg(consts, 0) != 0,
+            name.starts_with("BRAM2"),
             carg(consts, 1) as u32,
             carg(consts, 2) as u32,
             carg(consts, 3) as u32,
@@ -2010,6 +2014,19 @@ impl Prim for Fifo {
 struct ClockGen;
 
 impl Prim for ClockGen {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_clockgen.h:40-46: single CLK_OUT var aliasing the
+        // kernel-owned clock id; no ids reserved, no value dumping
+        w.scope_start(name);
+        w.write_def(clk_vcd_id, "CLK_OUT", 1);
+        w.scope_end();
+    }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         panic!("ClockGen: unknown value method {method:?}")
     }
@@ -2386,6 +2403,8 @@ struct SyncReset {
     in_reset: bool,
     call_reset_fn: bool,
     pending: Vec<(bool, bool)>,
+    vcd_base: u32,
+    vcd_back: Option<(bool, u32)>,
 }
 
 impl SyncReset {
@@ -2397,6 +2416,8 @@ impl SyncReset {
             in_reset: false,
             call_reset_fn: false,
             pending: Vec::new(),
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
     fn input(&mut self, asserted: bool) {
@@ -2427,6 +2448,58 @@ impl SyncReset {
 }
 
 impl Prim for SyncReset {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_resets.h SyncReset: CLK alias + IN_RST/OUT_RST.
+        // The generated C++ never calls set_clk_0 on SyncReset, so its
+        // CLK alias uses bk_clock_vcd_num(BAD_CLOCK_HANDLE) = the first
+        // kernel clock's id — mirror that quirk (ids start at 0).
+        let _ = clk_vcd_id;
+        let n = w.reserve_ids(2);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(0, "CLK", 1);
+        w.write_def(n, "IN_RST", 1);
+        w.write_def(n + 1, "OUT_RST", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let rst_out = self.in_reset || self.count > 1;
+        match dt {
+            D::Xs => {
+                w.write_x(self.vcd_base, 1, now);
+                w.write_x(self.vcd_base + 1, 1, now);
+            }
+            D::Changes => {
+                let (b_in, b_count) = self.vcd_back.unwrap_or((false, 0));
+                if self.in_reset != b_in {
+                    w.write_val(self.vcd_base, &bit(!self.in_reset), now);
+                }
+                let b_out = b_in || b_count > 1;
+                if rst_out != b_out {
+                    w.write_val(self.vcd_base + 1, &bit(!rst_out), now);
+                }
+            }
+            _ => {
+                w.write_val(self.vcd_base, &bit(!self.in_reset), now);
+                w.write_val(self.vcd_base + 1, &bit(!rst_out), now);
+            }
+        }
+        self.vcd_back = Some((self.in_reset, self.count));
+    }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         panic!("SyncReset: unknown value method {method:?}")
     }
@@ -2489,6 +2562,19 @@ impl InitialReset {
 }
 
 impl Prim for InitialReset {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_resets.h: InitialReset writes an empty scope yet
+        // reserves 3 ids that are never used
+        let _ = w.reserve_ids(3);
+        w.scope_start(name);
+        w.scope_end();
+    }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         panic!("InitialReset: unknown value method {method:?}")
     }
@@ -2530,6 +2616,8 @@ struct MakeReset {
     /// static_reset_syncRst$rst)
     internal_pending: Vec<bool>,
     pending: Vec<(bool, bool)>,
+    vcd_id: u32,
+    vcd_back: Option<Value>,
 }
 
 impl MakeReset {
@@ -2543,6 +2631,8 @@ impl MakeReset {
             sync,
             internal_pending: Vec::new(),
             pending: Vec::new(),
+            vcd_id: 0,
+            vcd_back: None,
         }
     }
     fn route(&mut self, asserted: bool, immediate: bool) {
@@ -2562,6 +2652,31 @@ impl MakeReset {
 }
 
 impl Prim for MakeReset {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_resets.h:340-347: one scope with a single 1-bit
+        // "rst" var (the internal rstSync synchronizer dumps nothing)
+        self.vcd_id = w.reserve_ids(1);
+        w.scope_start(name);
+        w.write_def(self.vcd_id, "rst", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        let v = Value::from_u64(1, self.rst as u64);
+        vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "isAsserted" => Value::from_u64(1, (self.rst == 0) as u64),
@@ -3187,6 +3302,7 @@ impl BramPort {
 
 struct Bram {
     pipelined: bool,
+    dual: bool,
     addr_bits: u32,
     width: u32,
     hi_addr: u64,
@@ -3196,12 +3312,24 @@ struct Bram {
     data: std::collections::HashMap<u64, Value>,
     a: BramPort,
     b: BramPort,
+    vcd_base: u32,
+    vcd_back: Option<(BramVcdBack, BramVcdBack)>,
+}
+
+#[derive(Clone)]
+struct BramVcdBack {
+    en: bool,
+    wens: u64,
+    addr: u64,
+    di: Value,
+    dout: Value,
 }
 
 impl Bram {
     #[allow(clippy::too_many_arguments)]
     fn new(
         pipelined: bool,
+        dual: bool,
         addr_bits: u32,
         width: u32,
         chunk_size: u32,
@@ -3218,6 +3346,7 @@ impl Bram {
         };
         let mut b = Bram {
             pipelined,
+            dual,
             addr_bits,
             width,
             hi_addr: mem_size.saturating_sub(1),
@@ -3227,6 +3356,8 @@ impl Bram {
             data: Default::default(),
             a: BramPort::new(width),
             b: BramPort::new(width),
+            vcd_base: 0,
+            vcd_back: None,
         };
         if let Some((f, bin)) = file {
             let (ab, w, hi) = (b.addr_bits, b.width, b.hi_addr);
@@ -3326,6 +3457,155 @@ impl Bram {
 }
 
 impl Prim for Bram {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_bram.h:756-797: ports only, never memory contents
+        let mut n = w.reserve_ids(if self.dual { 10 } else { 5 });
+        self.vcd_base = n;
+        w.scope_start(name);
+        let ports: &[(&str, &str, &str, &str, &str, &str)] = if self.dual {
+            &[
+                ("CLKA", "ENA", "WEA", "ADDRA", "DIA", "DOA"),
+                ("CLKB", "ENB", "WEB", "ADDRB", "DIB", "DOB"),
+            ]
+        } else {
+            &[("CLK", "EN", "WE", "ADDR", "DI", "DO")]
+        };
+        for (pclk, pen, pwe, paddr, pdi, pdo) in ports {
+            w.write_def(clk_vcd_id, pclk, 1);
+            w.set_clock(n, clk);
+            w.write_def(n, pen, 1);
+            n += 1;
+            w.set_clock(n, clk);
+            w.write_def(n, pwe, self.num_wens);
+            n += 1;
+            w.set_clock(n, clk);
+            w.write_def(n, paddr, self.addr_bits);
+            n += 1;
+            w.set_clock(n, clk);
+            w.write_def(n, pdi, self.width);
+            n += 1;
+            w.write_def(n, pdo, self.width);
+            n += 1;
+        }
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let fresh = |width: u32| BramVcdBack {
+            en: false,
+            wens: 0,
+            addr: 0,
+            di: Value::undet(width.max(1)),
+            dout: Value::undet(width.max(1)),
+        };
+        let (mut back_a, mut back_b) = self
+            .vcd_back
+            .take()
+            .unwrap_or_else(|| (fresh(self.width), fresh(self.width)));
+        let mut num = self.vcd_base;
+        let nports = if self.dual { 2 } else { 1 };
+        for pi in 0..nports {
+            let (p, back) = if pi == 0 {
+                (&self.a, &mut back_a)
+            } else {
+                (&self.b, &mut back_b)
+            };
+            let en = p.upd_at == now;
+            let dout = if self.pipelined { p.out2.clone() } else { p.out.clone() };
+            match dt {
+                D::Xs => {
+                    w.write_x(num, 1, now);
+                    num += 1;
+                    w.write_x(num, self.num_wens, now);
+                    num += 1;
+                    w.write_x(num, self.addr_bits, now);
+                    num += 1;
+                    w.write_x(num, self.width, now);
+                    num += 1;
+                    w.write_x(num, self.width, now);
+                    num += 1;
+                }
+                D::Changes => {
+                    // both ports gate on the (single modeled) clock edge
+                    if clk_edge_now {
+                        let did_write = en && p.upd_wens != 0;
+                        let back_did_write = back.en && back.wens != 0;
+                        if en != back.en {
+                            w.write_val(num, &bit(en), now);
+                            back.en = en;
+                        }
+                        num += 1;
+                        if did_write != back_did_write || p.upd_wens != back.wens {
+                            // WE displays 0 while EN is low in CHANGES mode
+                            let wv = if en { p.upd_wens } else { 0 };
+                            w.write_val(
+                                num,
+                                &Value::from_u64(self.num_wens.max(1), wv),
+                                now,
+                            );
+                        }
+                        num += 1;
+                        if p.upd_addr != back.addr {
+                            w.write_val(
+                                num,
+                                &Value::from_u64(self.addr_bits.max(1), p.upd_addr),
+                                now,
+                            );
+                        }
+                        num += 1;
+                        if p.upd_val != back.di {
+                            w.write_val(num, &p.upd_val, now);
+                        }
+                        num += 1;
+                        if dout != back.dout {
+                            w.write_val(num, &dout, now);
+                        }
+                        num += 1;
+                    } else {
+                        num += 5;
+                    }
+                }
+                _ => {
+                    w.write_val(num, &bit(en), now);
+                    num += 1;
+                    w.write_val(num, &Value::from_u64(self.num_wens.max(1), p.upd_wens), now);
+                    num += 1;
+                    w.write_val(
+                        num,
+                        &Value::from_u64(self.addr_bits.max(1), p.upd_addr),
+                        now,
+                    );
+                    num += 1;
+                    w.write_val(num, &p.upd_val, now);
+                    num += 1;
+                    w.write_val(num, &dout, now);
+                    num += 1;
+                    back.en = en;
+                }
+            }
+            if dt != D::Xs {
+                back.wens = p.upd_wens;
+                back.addr = p.upd_addr;
+                back.di = p.upd_val.clone();
+                back.dout = dout;
+            }
+        }
+        self.vcd_back = Some((back_a, back_b));
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "read" | "a_read" => {

@@ -106,6 +106,8 @@ pub struct Interp {
     vcd_meth_results: HashMap<(usize, StrId), Value>,
     /// per-instance kernel clock index (from the composition that runs it)
     vcd_inst_clock: Vec<usize>,
+    /// (instance, module clock domain) -> kernel clock index
+    vcd_inst_domclock: HashMap<(usize, u32), usize>,
     /// kernel clock VCD state, in composition clock order
     vcd_clocks: Vec<VcdClock>,
     /// per-instance scope id block + change backing, built at header time
@@ -151,6 +153,8 @@ struct ModVar {
     src: VcdSrc,
     width: u32,
     clocked: bool,
+    /// module clock domain whose composition clock backdates this var
+    domain: Option<u32>,
 }
 
 /// Member/port var lists for one module type, in $var emission order.
@@ -319,6 +323,7 @@ impl Interp {
             vcd_meth_calls: HashMap::new(),
             vcd_meth_results: HashMap::new(),
             vcd_inst_clock: Vec::new(),
+            vcd_inst_domclock: HashMap::new(),
             vcd_clocks: Vec::new(),
             vcd_layouts: HashMap::new(),
             vcd_mod_vars: HashMap::new(),
@@ -1830,8 +1835,8 @@ impl Interp {
         // (domain, edge) schedule
         let rules_by_name: HashMap<StrId, usize> =
             m.rules.iter().enumerate().map(|(i, r)| (r.name, i)).collect();
-        for (k, ms) in m.schedule.domains.iter().enumerate() {
-            let fk = (0u8, k as u32, 0u32);
+        for ms in m.schedule.domains.iter() {
+            let fk = (0u8, ms.domain, ms.posedge as u32);
             let mut seen = std::collections::HashSet::new();
             for seg in &ms.segments {
                 for node in &seg.nodes {
@@ -1898,6 +1903,7 @@ impl Interp {
                     src: VcdSrc::Reset(*n),
                     width: 1,
                     clocked: false,
+                    domain: None,
                 });
             }
         }
@@ -1930,7 +1936,17 @@ impl Interp {
                             .map(|me| VcdSrc::PortEn(me.name))
                     })
                     .unwrap_or(VcdSrc::Def(d.name));
-                members.push(ModVar { name: dname, src, width: d.width, clocked: true });
+                let domain = usage
+                    .get(&d.name)
+                    .and_then(|fs| fs.iter().find(|fk| fk.0 == 0).map(|fk| fk.1))
+                    .or_else(|| m.rules.first().map(|r| r.clock_domain));
+                members.push(ModVar {
+                    name: dname,
+                    src,
+                    width: d.width,
+                    clocked: true,
+                    domain,
+                });
             }
         }
         members.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1949,6 +1965,7 @@ impl Interp {
                             src: VcdSrc::PortEn(me.name),
                             width: 1,
                             clocked: true,
+                            domain: Some(me.clock_domain),
                         });
                     }
                 }
@@ -1961,7 +1978,8 @@ impl Interp {
                         src: VcdSrc::PortArg(me.name, ai),
                         width: a.width,
                         clocked: true,
-                    });
+                        domain: Some(me.clock_domain),
+                        });
                 }
             }
             if let Some(res) = &me.result {
@@ -1973,7 +1991,8 @@ impl Interp {
                         src: VcdSrc::PortRes(me.name),
                         width: w.max(1),
                         clocked: true,
-                    });
+                        domain: Some(me.clock_domain),
+                        });
                 }
             }
         }
@@ -2036,7 +2055,7 @@ impl Interp {
                 }
             }
         }
-        // input clock port aliases, reusing the kernel clock's id
+        // input clock port aliases, reusing the bound kernel clock's id
         let my_clk = self.vcd_inst_clock.get(inst).copied().unwrap_or(0);
         let in_clks: Vec<StrId> = self.d.modules[mir]
             .inputs
@@ -2045,15 +2064,21 @@ impl Interp {
             .map(|p| p.name)
             .collect();
         for pn in in_clks {
-            let cid = self.vcd_clocks[my_clk].vcd_id;
+            let ci = self.vcd_clock_index(inst, pn).unwrap_or(my_clk);
+            let cid = self.vcd_clocks[ci].vcd_id;
             w.write_def(cid, self.s(pn), 1);
         }
 
-        // members then ports (ids base..)
+        // members then ports (ids base..); each var backdates to the
+        // kernel clock of its own domain's composition
         let mut n = base;
         for v in mv.members.iter().chain(mv.ports.iter()) {
             if v.clocked {
-                w.set_clock(n, my_clk);
+                let ci = v
+                    .domain
+                    .and_then(|d| self.vcd_inst_domclock.get(&(inst, d)).copied())
+                    .unwrap_or(my_clk);
+                w.set_clock(n, ci);
             }
             w.write_def(n, &v.name, v.width);
             n += 1;
@@ -2078,6 +2103,64 @@ impl Interp {
             inst,
             VcdLayout { base, back: vec![None; mv.members.len() + mv.ports.len()] },
         );
+    }
+
+    /// Which kernel clock a local clock wire aliases: chase instantiation
+    /// bindings (like resolve_clock_at) and match clock names.
+    fn vcd_clock_index(&self, inst: usize, port: StrId) -> Option<usize> {
+        let wire = self.s(port).to_string();
+        self.vcd_clock_index_wire(inst, &wire, 0)
+    }
+    fn vcd_clock_index_wire(&self, inst: usize, wire: &str, depth: u32) -> Option<usize> {
+        if depth > 16 {
+            return None;
+        }
+        // absolute prim-driven names ("a.b$CLK_OUT") appear verbatim
+        let abs = {
+            let base = &self.insts[inst].path;
+            if base.is_empty() {
+                wire.to_string()
+            } else {
+                format!("{base}.{wire}")
+            }
+        };
+        if let Some(k) = self.vcd_clocks.iter().position(|c| c.name == abs) {
+            return Some(k);
+        }
+        // child-qualified wire: resolve inside the child
+        if let Some(kk) = wire.rfind('$') {
+            let (qual, base) = (&wire[..kk], &wire[kk + 1..]);
+            let cpath = if self.insts[inst].path.is_empty() {
+                qual.to_string()
+            } else {
+                format!("{}.{}", self.insts[inst].path, qual)
+            };
+            if let Some(&ci) = self.inst_by_path.get(&cpath) {
+                return self.vcd_clock_index_wire(ci, base, depth + 1);
+            }
+        }
+        // top-level ports match kernel clock names directly
+        if self.insts[inst].path.is_empty() {
+            return self.vcd_clocks.iter().position(|c| c.name == wire);
+        }
+        // input clock port: chase the parent's binding expression
+        if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
+            let pid = self.d.strings.iter().position(|x| x == wire);
+            if let Some(pid) = pid {
+                if let Some((owner, e)) = clk_binds.get(&(pid as StrId)) {
+                    let (owner, e) = (*owner, e.clone());
+                    let osc = match &e {
+                        Expr::Clock { osc, .. } => osc.as_ref().clone(),
+                        other => other.clone(),
+                    };
+                    if let Expr::Port(n) = osc {
+                        let name = self.s(n).to_string();
+                        return self.vcd_clock_index_wire(owner, &name, depth + 1);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Current value of one module-scope var.
@@ -2519,8 +2602,15 @@ impl Interp {
     pub fn run(&mut self, max_cycles: u64) -> i32 {
         let comps = self.d.compositions.clone();
 
-        // distinct clocks in first-appearance order
+        // distinct clocks in first-appearance order, with the default
+        // clock first: the kernel defines it before derived clocks, and
+        // VCD clock ids follow definition order (CLK = id 0 = '!')
         let mut clocks: Vec<StrId> = Vec::new();
+        if let Some(dc) = self.d.default_clock {
+            if comps.iter().any(|c| c.clock == dc) {
+                clocks.push(dc);
+            }
+        }
         for c in &comps {
             if !clocks.contains(&c.clock) {
                 clocks.push(c.clock);
@@ -2652,13 +2742,24 @@ impl Interp {
         // per-instance clock, for prim CLK aliases / vcd_set_clock /
         // posedge gating
         self.vcd_inst_clock = vec![0; self.insts.len()];
+        self.vcd_inst_domclock.clear();
         for rc in &rcomps {
-            for &(inst, _, _, _) in &rc.entries {
+            for &(inst, _, domain, _) in &rc.entries {
                 self.vcd_inst_clock[inst] = rc.clk;
+                self.vcd_inst_domclock.insert((inst, domain), rc.clk);
             }
             for (inst, _, _, owner, _) in &rc.ticks {
                 self.vcd_inst_clock[*inst] = rc.clk;
                 self.vcd_inst_clock[*owner] = rc.clk;
+            }
+        }
+        // clock-source prims alias the clock they DRIVE (CLK_OUT)
+        for (ci, &c) in clocks.iter().enumerate() {
+            let cname = self.s(c).to_string();
+            if let Some(cpath) = cname.strip_suffix("$CLK_OUT") {
+                if let Some(&pi) = self.inst_by_path.get(cpath) {
+                    self.vcd_inst_clock[pi] = ci;
+                }
             }
         }
         // -V file from the command line
