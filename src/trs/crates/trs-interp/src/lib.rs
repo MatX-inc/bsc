@@ -23,6 +23,19 @@ use format::Arg;
 use prim::Prim;
 use value::Value;
 
+/// BDPI imports satisfied by the Bluesim library itself (libbsprim.a's
+/// rand32.cxx), not by user C files.
+fn is_lib_bdpi(c_name: &str) -> bool {
+    matches!(c_name, "rand32" | "srand")
+}
+
+extern "C" {
+    #[link_name = "random"]
+    fn libc_random() -> std::ffi::c_long;
+    #[link_name = "srandom"]
+    fn libc_srandom(seed: std::ffi::c_uint);
+}
+
 // ===============
 // Indexed design
 
@@ -128,6 +141,26 @@ struct VcdClock {
     pos_count: u64,
     pos_at: u64,
     neg_at: u64,
+    /// value before the first edge (bk_clock_initial_value)
+    init_val: bool,
+    /// time of the first edge (bk_clock_first_edge)
+    first_edge: Option<u64>,
+    /// waveform durations (bk_clock_duration; 0 for derived clocks)
+    low_dur: u64,
+    high_dur: u64,
+}
+
+/// One kernel clock's state for the driver's `sim clock` (the
+/// getClockInfo tuple bluetcl prints).
+pub struct ClockInfo {
+    pub name: String,
+    pub initial_val: bool,
+    pub first_edge: u64,
+    pub low_dur: u64,
+    pub high_dur: u64,
+    pub cycles: u64,
+    pub cur_val: bool,
+    pub last_edge: u64,
 }
 
 /// Where a module-scope VCD variable's value comes from.
@@ -1160,6 +1193,17 @@ impl Interp {
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let mut ctx = self.method_ctx(module, mi, argv, false);
+                // an always_enabled method is invoked with its RDY
+                // dropped from the caller's condition; the body itself
+                // checks RDY at runtime (cvtIFace check_rdy) — EN and
+                // args land above regardless
+                if self.d.modules[mir].methods[mi].always_enabled {
+                    if let Some(rdy) = self.d.modules[mir].methods[mi].ready.clone() {
+                        if !self.eval(callee, &mut ctx, &rdy).as_bool() {
+                            return;
+                        }
+                    }
+                }
                 for st in &body {
                     self.exec_stmt(callee, &mut ctx, st);
                 }
@@ -1207,8 +1251,18 @@ impl Interp {
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let result = self.d.modules[mir].methods[mi].result.clone();
                 let mut ctx = self.method_ctx(module, mi, argv, false);
-                for st in &body {
-                    self.exec_stmt(callee, &mut ctx, st);
+                // check_rdy for always_enabled: skip the body when RDY
+                // is off; the result is still evaluated (the C++ returns
+                // the stale port value — "all bets are off")
+                let skip_body = self.d.modules[mir].methods[mi].always_enabled
+                    && match self.d.modules[mir].methods[mi].ready.clone() {
+                        Some(rdy) => !self.eval(callee, &mut ctx, &rdy).as_bool(),
+                        None => false,
+                    };
+                if !skip_body {
+                    for st in &body {
+                        self.exec_stmt(callee, &mut ctx, st);
+                    }
                 }
                 match result {
                     Some(r) => {
@@ -1411,12 +1465,15 @@ impl Interp {
     }
 
     /// dlopen the companion BDPI shared object and resolve the design's
-    /// imported functions.
+    /// imported functions.  Library-provided imports (is_lib_bdpi) are
+    /// not expected in the user .so and are excluded from the eager
+    /// resolution.
     pub fn load_bdpi(&mut self, path: &str) -> Result<(), String> {
         let funcs: Vec<(String, String)> = self
             .d
             .foreign_funcs
             .iter()
+            .filter(|f| !is_lib_bdpi(self.s(f.c_name)))
             .map(|f| (self.s(f.name).to_string(), self.s(f.c_name).to_string()))
             .collect();
         self.bdpi = Some(bdpi::Bdpi::load(std::path::Path::new(path), &funcs)?);
@@ -1432,6 +1489,27 @@ impl Interp {
             .iter()
             .find(|f| self.s(f.name) == name)?
             .clone();
+        // library BDPI: reference Bluesim links libbsprim.a (with
+        // rand32.cxx) into every executable, so these imports resolve
+        // without any user C files; provide them natively with the same
+        // glibc calls for bit-identical streams
+        match self.s(ff.c_name) {
+            "rand32" => {
+                // rand32.cxx: return (unsigned int)random();
+                let v = unsafe { libc_random() } as u64 & 0xffff_ffff;
+                return Some(Value::from_u64(w.max(1), v));
+            }
+            "srand" => {
+                // glibc srand is an alias of srandom, seeding random()
+                let seed = match args.first() {
+                    Some(Arg::Val(v, _)) => v.as_u64() as u32,
+                    _ => 0,
+                };
+                unsafe { libc_srandom(seed) };
+                return Some(Value::from_u64(w.max(1), 0));
+            }
+            _ => {}
+        }
         let b = self.bdpi.as_ref().unwrap_or_else(|| {
             panic!(
                 "BDPI function {name:?} called but no .bdpi.so was found \
@@ -2642,6 +2720,29 @@ impl Interp {
         panic!("trs-interp: unimplemented clock source {wire:?} (P1 bring-up)");
     }
 
+    /// Current simulation time (bk_now), for the driver's `sim time`.
+    pub fn now(&self) -> u64 {
+        self.now
+    }
+
+    /// Kernel clock snapshots (getClockInfo), for `sim clock`.  Empty
+    /// before the first run() call.
+    pub fn clock_info(&self) -> Vec<ClockInfo> {
+        self.vcd_clocks
+            .iter()
+            .map(|c| ClockInfo {
+                name: c.name.clone(),
+                initial_val: c.init_val,
+                first_edge: c.first_edge.unwrap_or(0),
+                low_dur: c.low_dur,
+                high_dur: c.high_dur,
+                cycles: c.pos_count,
+                cur_val: c.cur,
+                last_edge: c.pos_at.max(c.neg_at),
+            })
+            .collect()
+    }
+
     /// Run until $finish or the cycle limit.  Returns the exit code.
     ///
     /// Multi-clock event loop: each composition fires on one (clock, edge);
@@ -2814,6 +2915,20 @@ impl Interp {
                         ClockSource::Triggered { .. } => true,
                         ClockSource::Never => false,
                     },
+                    init_val: match &sources[ci] {
+                        ClockSource::Wave(w) => w.init_high,
+                        ClockSource::Triggered { init_high, .. } => *init_high,
+                        ClockSource::Never => false,
+                    },
+                    first_edge: None,
+                    low_dur: match &sources[ci] {
+                        ClockSource::Wave(w) => w.lo,
+                        _ => 0,
+                    },
+                    high_dur: match &sources[ci] {
+                        ClockSource::Wave(w) => w.hi,
+                        _ => 0,
+                    },
                     pos_count: 0,
                     pos_at: 0,
                     neg_at: 0,
@@ -2973,6 +3088,9 @@ impl Interp {
                 } else {
                     self.vcd.clk_combinational[ci] = c.neg_at;
                     c.neg_at = t;
+                }
+                if c.first_edge.is_none() {
+                    c.first_edge = Some(t);
                 }
                 c.cur = pos;
             }
@@ -3200,12 +3318,13 @@ fn cookie_key(cookie: u32) -> StrId {
     0x8000_0000 | cookie
 }
 
-pub fn run_file(
+/// Load a .bir (and its companion .bdpi.so, if any) into an Interp ready
+/// to run — the driver's -c/-f scripting needs the handle between steps.
+pub fn load_file(
     path: &str,
-    max_cycles: u64,
     plusargs: &[String],
     vcd_file: Option<&str>,
-) -> Result<i32, String> {
+) -> Result<Interp, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let design = Design::decode(&bytes).map_err(|e| e.to_string())?;
     let mut interp = Interp::new(design);
@@ -3219,5 +3338,15 @@ pub fn run_file(
         let so = if so.contains('/') { so } else { format!("./{so}") };
         interp.load_bdpi(&so)?;
     }
+    Ok(interp)
+}
+
+pub fn run_file(
+    path: &str,
+    max_cycles: u64,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+) -> Result<i32, String> {
+    let mut interp = load_file(path, plusargs, vcd_file)?;
     Ok(interp.run(max_cycles))
 }

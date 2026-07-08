@@ -42,6 +42,7 @@ fn main() -> ExitCode {
             let mut max_cycles = u64::MAX;
             let mut plusargs: Vec<String> = Vec::new();
             let mut vcd_file: Option<String> = None;
+            let mut script_cmds = String::new();
             // bluesim.tcl's usage text, printed for -h and after the
             // deprecated-flag notices; the driver exits 0 in both cases
             let script = path
@@ -93,6 +94,34 @@ fn main() -> ExitCode {
                     "--creation_time" => {
                         let _ = it.next();
                     }
+                    // -c/-f collect script commands (bluesim.tcl:94-124);
+                    // a later deprecated flag still wins (exit 0 above)
+                    "-c" => match it.next() {
+                        Some(cmds) => {
+                            script_cmds.push_str(cmds);
+                            script_cmds.push('\n');
+                        }
+                        None => {
+                            println!("Error: -c requires a command argument");
+                            return usage_exit();
+                        }
+                    },
+                    "-f" => match it.next() {
+                        Some(f) => match std::fs::read_to_string(f) {
+                            Ok(s) => {
+                                script_cmds.push_str(&s);
+                                script_cmds.push('\n');
+                            }
+                            Err(e) => {
+                                eprintln!("trs: {f}: {e}");
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => {
+                            println!("Error: -f requires a script filename argument");
+                            return usage_exit();
+                        }
+                    },
                     "-m" => {
                         max_cycles = it
                             .next()
@@ -118,6 +147,9 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            if !script_cmds.is_empty() {
+                return run_script(path, max_cycles, &plusargs, vcd_file.as_deref(), &script_cmds);
+            }
             match trs_interp::run_file(path, max_cycles, &plusargs, vcd_file.as_deref()) {
                 Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
                 Err(e) => {
@@ -128,4 +160,100 @@ fn main() -> ExitCode {
         }
         _ => usage(),
     }
+}
+
+/// The scripting subset of bluesim.tcl's `sim` command that the testsuite
+/// uses outside bsc.bluesim/interactive: a single `sim run`/`sim step N`
+/// plus `sim time`/`sim clock` queries and `puts [...]` printing.  The
+/// full interactive surface arrives with the bk_* compat .so (task #20);
+/// anything beyond this subset errors out loudly.
+fn run_script(
+    path: &str,
+    max_cycles: u64,
+    plusargs: &[String],
+    vcd: Option<&str>,
+    script: &str,
+) -> ExitCode {
+    let mut interp = match trs_interp::load_file(path, plusargs, vcd) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("trs: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut ran = false;
+    let mut fatal = false;
+    for raw in script.split(['\n', ';']) {
+        let cmd = raw.trim();
+        if cmd.is_empty() {
+            continue;
+        }
+        // `puts [sim x]`: evaluate the bracketed command and print it
+        let (do_print, inner) = match cmd.strip_prefix("puts ") {
+            Some(rest) => {
+                let r = rest.trim();
+                let r = r
+                    .strip_prefix('[')
+                    .and_then(|r| r.strip_suffix(']'))
+                    .unwrap_or(r);
+                (true, r.trim().to_string())
+            }
+            None => (false, cmd.to_string()),
+        };
+        let words: Vec<&str> = inner.split_whitespace().collect();
+        let out = match words.as_slice() {
+            ["sim", "run"] | ["sim", "step"] | ["sim", "step", _] => {
+                if ran {
+                    eprintln!(
+                        "trs: -c/-f supports a single run/step per session \
+                         (the interactive surface is not yet implemented)"
+                    );
+                    return ExitCode::from(2);
+                }
+                ran = true;
+                let n = match words.as_slice() {
+                    ["sim", "step", n] => n.parse::<u64>().unwrap_or(1),
+                    ["sim", "step"] => 1,
+                    _ => max_cycles,
+                };
+                let rc = interp.run(n.min(max_cycles));
+                fatal = rc != 0;
+                String::new()
+            }
+            ["sim", "time"] => format!("{}", interp.now()),
+            ["sim", "clock"] => interp
+                .clock_info()
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    format!(
+                        "{{{} {} {} {} {} {} {} {} {} {}}}",
+                        i,
+                        (i == 0) as u32,
+                        c.name,
+                        c.initial_val as u32,
+                        c.first_edge,
+                        c.low_dur,
+                        c.high_dur,
+                        c.cycles,
+                        c.cur_val as u32,
+                        c.last_edge,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            ["sim", "config", "interactive"] => String::new(),
+            _ => {
+                eprintln!(
+                    "trs: unsupported -c/-f command {cmd:?} \
+                     (the interactive surface is not yet implemented)"
+                );
+                return ExitCode::from(2);
+            }
+        };
+        if do_print {
+            println!("{out}");
+        }
+    }
+    ExitCode::from(if fatal { 1 } else { 0 })
 }
