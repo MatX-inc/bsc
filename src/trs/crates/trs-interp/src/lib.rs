@@ -610,7 +610,7 @@ impl Interp {
                             self.dynclk_init
                                 .insert(format!("{cpath}$CLK_OUT"), init_high);
                         }
-                        "ClockDiv" => {
+                        "ClockDiv" | "GatedClockDiv" => {
                             let width = consts[0].as_u64();
                             let upper = consts[2].as_u64();
                             let offset = consts[3].as_u64();

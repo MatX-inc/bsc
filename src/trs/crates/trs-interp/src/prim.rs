@@ -243,7 +243,9 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         )),
         // dynamic clock sources (bs_prim_mod_clockgen.h)
         "MakeClock" => Box::new(MakeClock::new(consts)),
-        "ClockDiv" => Box::new(ClockDivider::new(consts)),
+        // the gated variant differs only in taking a gated input clock;
+        // the gate arrives as the clk tick's gate argument either way
+        "ClockDiv" | "GatedClockDiv" => Box::new(ClockDivider::new(consts)),
         "ClockInverter" | "GatedClockInverter" => Box::new(ClockInverter::new()),
         "GatedClock" => Box::new(GatedClock::new(consts)),
         // a BypassWire crossing domains; the clk tick is bookkeeping only
