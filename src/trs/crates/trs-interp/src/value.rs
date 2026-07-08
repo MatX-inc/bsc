@@ -133,6 +133,15 @@ impl Value {
                 r.limbs[i + j] = cur as u64;
                 carry = cur >> 64;
             }
+            // propagate the tail carry past the end of o's limbs (the
+            // result can be wider than both operands' storage)
+            let mut k = i + o.limbs.len();
+            while carry != 0 && k < n {
+                let cur = r.limbs[k] as u128 + carry;
+                r.limbs[k] = cur as u64;
+                carry = cur >> 64;
+                k += 1;
+            }
         }
         r.mask();
         r

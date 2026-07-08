@@ -924,7 +924,9 @@ bodyStmts pkg rid wprops mretdef acts =
         closure seen (i : rest)
           | i `S.member` seen = closure seen rest
           | otherwise = case M.lookup i defmap of
-              Nothing -> closure (S.insert i seen) rest
+              -- method-argument ports and state ids are not defs; they
+              -- must not reach cvtActions' findDef
+              Nothing -> closure seen rest
               Just (ADef _ _ e _) ->
                   closure (S.insert i seen) (aVars e ++ rest)
         other_defs = case mretdef of
