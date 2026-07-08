@@ -91,8 +91,15 @@ calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
    to run between two such rules; found via sysBug898, where an FSM
    pulses a child and reads the propagated result in the same cycle).
    Primitive method calls do not cut: primitives are not scheduled
-   modules.  Segment count is bounded by interface methods plus
-   child-calling rules, still independent of internal rule count and
+   modules.  Rules in any ME (disjoint) relation also get per-node
+   singleton segments: the merged graph carries *no* ordering edge
+   between ME rules, yet bsc's flat order still fixes which state
+   snapshot each guard observes, so their `Sched`/`Exec` nodes must be
+   independently placeable (found via sysRFile2, where an atomically
+   replayed `[Sched,Exec]` bundle hoisted an ME rule's execution above
+   another rule's guard evaluation, changing the guard's value).
+   Segment count is bounded by interface methods plus child-calling
+   plus ME-involved rules, still independent of internal rule count and
    still per module type.
    Note that a rule's `Sched` and `Exec` nodes may land in *different*
    segments: a method position can legitimately fall between them (e.g. a
@@ -108,7 +115,11 @@ calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
    (`ss_sched_graph`) onto (instance, segment) units and topologically
    sorting (ties broken by first appearance in bsc's flat order) — the
    flat merged order itself cannot simply be run-collapsed, because it
-   freely interleaves `Sched`/`Exec` nodes of different instances.  The
+   freely interleaves `Sched`/`Exec` nodes of different instances.
+   For every ME pair the graph is silent on, a unit edge
+   `unit(Sched r) → unit(Exec d)` is added whenever bsc's flat order
+   places them that way, restoring the guards-see-pre-exec-state
+   invariant that the flat schedule provides for free.  The
    domain id disambiguates the per-domain segment numbering for modules
    spanning several clock domains.  Size is O(Σ instances × segments),
    i.e. O(instances × methods) — independent of internal rule counts.
@@ -135,18 +146,27 @@ calling parent's rule nodes (`SimExpand.hs:1040-1076`).  Therefore:
   ports: ClockInverter, GatedClock, SyncBit05/15).  Each tick carries
   its clock's gate expression (None = ungated) — the `gate_value`
   argument of the C++ tick calls.  Conditional **reset ticks**
-  (`mkResetTickStmt`, from `di_prim_resets`) are flagged `reset: true`:
-  while a prim's reset is asserted, each posedge of its clock loads the
-  reset state.
+  (`mkResetTickStmt`, from `di_prim_resets`) are flagged `reset: true`
+  and also carry their prim's clock gate (`addGateInfo`: a gated
+  register's sync reset is skipped while the gate is low; top-level
+  input gates export as constant true): while a prim's reset is
+  asserted, each gated posedge of its clock loads the reset state.
 
 **Clocks and resets at run time.**  Composition clocks name oscillators:
 the default clock (LOW, first edge t=0, high 5 / low 5), a ClockGen
 output (`<inst>$CLK_OUT`, waveform from instantiation args), or a
 dynamic clock (MakeClock/ClockDiv/ClockInverter) whose edges the driving
-prim triggers at tick time (`bk_trigger_clock_edge`).  Clock gating is
-already folded into gated rules' CAN_FIREs by bsc; `Expr::Gate` reads a
-prim's gate output, and flattened gate wires encode as
-`<path>$CLK_GATE_OUT` ports.  Reset semantics follow the kernel: the top
+prim triggers at tick time (`bk_trigger_clock_edge`).  ClockGen clocks
+have `has_initial_value`: an extra one-shot edge fires at t=0 toward
+the initial value, before regular t=0 edges (kernel PG_INITIAL
+priority).  Clock gating is folded into gated rules' CAN_FIREs by bsc
+*within a module*; `Expr::Gate` reads a prim's gate output, flattened
+gate wires encode as `<path>$CLK_GATE_OUT` ports, and a module's gated
+input clocks export a `ClockGate` port following the `Clock` port
+(both bound from one `Clock{osc,gate}` instantiation arg), which the
+backend resolves through the parent at gate-read time
+(`mkGateSubstMap` semantics; a top-level input gate reads constant
+true).  Reset semantics follow the kernel: the top
 reset asserts at t=0 and deasserts at t=2 after that instant's logic;
 derived resets (`<inst>$OUT_RST` / `$RST_OUT` wires) are driven by the
 reset-generator prims with async assertion cascading immediately and

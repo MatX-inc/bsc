@@ -159,6 +159,11 @@ encDesign ssys =
         segmaps = M.map msi_segIdx msis
         instToMod = ssys_instmap ssys
 
+        -- gates of top-level input clocks are always on in simulation
+        -- (mkScheduleStmts top_gates)
+        top_pkg = findPkg (ssys_packages ssys) (ssys_top ssys)
+        topGates = [ gate | (AAI_Clock _ (Just gate)) <- sp_inputs top_pkg ]
+
         action :: EncM [(String, C.Encoding)]
         action = do
           topId <- str (getIdBaseString (ssys_top ssys))
@@ -166,7 +171,7 @@ encDesign ssys =
                                    (msis M.! getIdBaseString (sp_name p)) p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
-          compsEnc <- concat <$> mapM (encComposition instToMod segmaps)
+          compsEnc <- concat <$> mapM (encComposition instToMod segmaps topGates)
                                        (ssys_schedules ssys)
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
@@ -202,7 +207,8 @@ data Seg = Seg { seg_nodes :: [SchedNode], seg_cut :: [String] }
 
 data ModSchedInfo = ModSchedInfo
     { msi_domains :: [(Int, [Seg])]           -- per clock domain
-    , msi_segIdx  :: M.Map String (Int, Int)  -- node key -> (domain, segment)
+      -- node key -> ((domain, segment), position within segment)
+    , msi_segIdx  :: M.Map String ((Int, Int), Int)
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
     , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
     }
@@ -296,8 +302,18 @@ analyzeModule pkgNames pkg =
 
         doms = nub (M.elems ruleDom)
 
+        -- Rules in any ME (disjoint) relation also get per-node singleton
+        -- segments: bsc's merged graph carries no ordering edge between ME
+        -- rules, yet its flat order keeps every Sched ahead of the ME
+        -- partner's Exec — reproducing that needs the Sched and Exec
+        -- independently placeable (encComposition adds the unit edges).
+        meRules = S.unions (M.elems disj)
+                  `S.union` S.fromList [ r | (r, ds) <- M.toList disj
+                                           , not (S.null ds) ]
+
         -- Split this domain's rule nodes into segments: cut at interface
-        -- method positions AND isolate child-calling rules as singletons.
+        -- method positions AND isolate child-calling / ME rules as
+        -- singletons.
         segsFor :: Int -> [Seg]
         segsFor d =
             let step (segs, nodes, cut) node =
@@ -307,6 +323,7 @@ analyzeModule pkgNames pkg =
                         else if M.lookup base ruleDom /= Just d
                         then (segs, nodes, cut)
                         else if base `S.member` touchingRules
+                             || base `S.member` meRules
                         then -- close any open segment, emit a singleton
                              let closed = if null nodes && null cut
                                           then segs
@@ -325,10 +342,10 @@ analyzeModule pkgNames pkg =
         -- keyed per node, not per rule: a method cut can fall between a
         -- rule's Sched and Exec, putting them in different segments
         segIdx = M.fromList
-            [ (nodeKey n, (d, i))
+            [ (nodeKey n, ((d, i), j))
             | (d, segs) <- domSegs
             , (i, seg) <- zip [(0 :: Int) ..] segs
-            , n <- seg_nodes seg ]
+            , (j, n) <- zip [(0 :: Int) ..] (seg_nodes seg) ]
     in
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
@@ -345,14 +362,16 @@ qualPath i = case getIdQualString i of
                ""  -> getIdBaseString i
                q   -> q ++ "." ++ getIdBaseString i
 
-encComposition :: M.Map String String -> M.Map String (M.Map String (Int, Int))
-               -> SimSchedule -> EncM [C.Encoding]
-encComposition instToMod segmaps ss = do
+encComposition :: M.Map String String
+               -> M.Map String (M.Map String ((Int, Int), Int))
+               -> [AId] -> SimSchedule -> EncM [C.Encoding]
+encComposition instToMod segmaps topGates ss = do
     let order = ss_sched_order ss
 
-        -- resolve a merged node to (instance path, segment index);
-        -- top-module method nodes resolve to Nothing and are skipped
-        resolve node =
+        -- resolve a merged node to (instance path, segment index) plus
+        -- the node's position inside the segment; top-module method nodes
+        -- resolve to Nothing and are skipped
+        resolveFull node =
             let i = getSchedNodeId node
                 inst = getIdQualString i
                 key = case node of
@@ -363,7 +382,8 @@ encComposition instToMod segmaps ss = do
                             Nothing -> internalError
                               ("SimExportIR: unknown instance " ++ show inst)
                 segmap = M.findWithDefault M.empty modName segmaps
-            in  (,) inst <$> M.lookup key segmap
+            in  (\(ds, j) -> ((inst, ds), j)) <$> M.lookup key segmap
+        resolve node = fst <$> resolveFull node
 
         -- The flat merged order freely interleaves Sched and Exec nodes of
         -- different instances, so it cannot be collapsed into segment runs
@@ -376,13 +396,47 @@ encComposition instToMod segmaps ss = do
             (reverse [ (u, p)
                      | (p, Just u) <- zip [(0 :: Int) ..] (map resolve order) ])
 
-        unitEdges = S.fromList
+        graphEdges = S.fromList
             [ (pu, nu)
             | (n, preds) <- ss_sched_graph ss
             , Just nu <- [resolve n]
             , p <- preds
             , Just pu <- [resolve p]
             , pu /= nu ]
+
+        -- ME (disjoint) rule pairs have no graph edge, but bsc's flat
+        -- order still fixes which state snapshot each guard observes: if
+        -- Sched r precedes Exec d there, r's guard must not see d's
+        -- writes.  Restore that as a unit edge (analyzeModule gives ME
+        -- rules singleton per-node segments so the endpoints are
+        -- independently placeable).  A same-unit pair is only legal if
+        -- the segment's internal order already agrees.
+        schedPosQ = M.fromList [ (qualPath i, p)
+                               | (Sched i, p) <- zip order [(0 :: Int) ..] ]
+        mePairs = nub ([ (r, d)
+                       | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                       , d <- S.toList ds ]
+                       ++ [ (d, r)
+                          | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                          , d <- S.toList ds ])
+        meEdges = S.fromList
+            [ (su, eu)
+            | (r, d) <- mePairs
+            , Just ps <- [M.lookup (qualPath r) schedPosQ]
+            , Just pe <- [M.lookup (qualPath d) execPos]
+            , ps < pe
+            , Just (su, sj) <- [resolveFull (Sched r)]
+            , Just (eu, ej) <- [resolveFull (Exec d)]
+            , if su == eu
+              then if sj < ej
+                   then False  -- ordered inside the segment already
+                   else internalError
+                     ("SimExportIR: ME pair straddles a segment against "
+                      ++ "its flat order: " ++ qualPath r ++ " / "
+                      ++ qualPath d)
+              else True ]
+
+        unitEdges = graphEdges `S.union` meEdges
 
         -- Kahn's algorithm; ties broken by first appearance in the flat
         -- order so the output tracks bsc's own choice.
@@ -405,7 +459,8 @@ encComposition instToMod segmaps ss = do
             | M.null indeg = reverse done
             | otherwise = internalError
                 ("SimExportIR: cyclic segment graph; a module boundary is "
-                 ++ "interleaved below method granularity: "
+                 ++ "interleaved below method granularity (or ME ordering "
+                 ++ "constraints interlock two multi-node segments): "
                  ++ show (M.keys indeg))
         entries = kahn indeg0 []
 
@@ -445,9 +500,21 @@ encComposition instToMod segmaps ss = do
         all_prims = [ p | di <- M.elems (ss_domain_info_map ss)
                         , p <- di_prims di ]
         -- conditional reset ticks (mkResetTickStmt; posedge only), after
-        -- the regular ticks
+        -- the regular ticks; each carries the prim's clock gate
+        -- (addGateInfo), with top-level input gates as constant true
+        inst_clk_map = M.fromList [ ((i, c), ac)
+                                  | di <- M.elems (ss_domain_info_map ss)
+                                  , (i, (c, ac)) <- di_prims di ]
+        rstGate prim clkarg =
+            case M.lookup (prim, clkarg) inst_clk_map of
+              Just ac -> case aclock_gate ac of
+                           (ASPort _ portId) | portId `elem` topGates -> aTrue
+                           g -> g
+              Nothing -> internalError
+                ("SimExportIR: no primitive info for " ++ ppReadable prim
+                 ++ " with clock " ++ ppReadable clkarg)
         rst_ticks = [ (getIdQualString prim, getIdBaseString prim,
-                       getIdBaseString clkarg, aTrue)
+                       getIdBaseString clkarg, rstGate prim clkarg)
                     | di <- M.elems (ss_domain_info_map ss)
                     , (prim, clkarg) <- di_prim_resets di ]
         ticks = [ (i, p, o, False, g)
@@ -527,7 +594,7 @@ encModule pkgNames msi pkg = do
     nameId <- idE (sp_name pkg)
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
-    insEnc <- mapM encInput (sp_inputs pkg)
+    insEnc <- concat <$> mapM encInput (sp_inputs pkg)
     instsEnc <- mapM (encInstance pkgNames (sp_method_order_map pkg))
                      (M.elems (sp_state_instances pkg))
     -- interface ActionValue return defs join the def table so the
@@ -615,14 +682,20 @@ encReset (rid, rst) = do
       , ("wire", wireEnc)
       ]
 
-encInput :: AAbstractInput -> EncM C.Encoding
-encInput (AAI_Port (i, t)) = encPort (i, t) "MethodArg"
-encInput (AAI_Clock osc _mgate) = do
+encInput :: AAbstractInput -> EncM [C.Encoding]
+encInput (AAI_Port (i, t)) = (: []) <$> encPort (i, t) "MethodArg"
+encInput (AAI_Clock osc mgate) = do
     n <- idE osc
-    return $ encPortRaw n 1 "Clock"
+    -- a gated input clock also has a gate wire (e.g. CLK_GATE_gclk),
+    -- referenced by rule guards; it follows its Clock port so the
+    -- backend can bind both from one Clock{osc,gate} instantiation arg
+    gateEnc <- traverse (\g -> do gn <- idE g
+                                  return (encPortRaw gn 1 "ClockGate"))
+                        mgate
+    return (encPortRaw n 1 "Clock" : maybe [] (: []) gateEnc)
 encInput (AAI_Reset r) = do
     n <- idE r
-    return $ encPortRaw n 1 "Reset"
+    return [encPortRaw n 1 "Reset"]
 encInput (AAI_Inout {}) =
     internalError "SimExportIR.encInput: Inout not supported by Bluesim"
 

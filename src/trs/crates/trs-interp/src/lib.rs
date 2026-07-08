@@ -69,6 +69,9 @@ pub struct Interp {
     /// deferred (end-of-timeslice) reset transitions, mirroring
     /// reset_at_end_of_timeslice in bs_prim_mod_resets.h
     rst_pending: Vec<(usize, bool)>,
+    /// reset nodes asserted from time 0 (InitialReset outputs), broadcast
+    /// at run() start once instantiation is complete
+    initial_asserts: Vec<usize>,
 }
 
 /// A periodic clock waveform.  The default clock is LOW with first edge
@@ -80,6 +83,10 @@ struct Wave {
     delay: u64,
     hi: u64,
     lo: u64,
+    /// bk_alter_clock has_initial_value: an extra one-shot edge at t=0 in
+    /// the direction of the initial value, at PG_INITIAL priority (before
+    /// regular t=0 edges).  True for ClockGen, false for the default CLK.
+    has_init: bool,
 }
 
 /// How a clock's edges are produced: a periodic waveform, or triggered at
@@ -111,6 +118,10 @@ enum InstKind {
         /// local reset wire name -> reset node (module reset inputs bound
         /// at instantiation; derived resets created by child reset prims)
         resets: HashMap<StrId, usize>,
+        /// local clock-gate port name (e.g. CLK_GATE_gclk) -> the gate
+        /// expression it was instantiated with, evaluated in the parent
+        /// instance (mkGateSubstMap semantics)
+        gates: HashMap<StrId, (usize, Expr)>,
     },
     Prim(Box<dyn Prim>),
 }
@@ -186,6 +197,7 @@ impl Interp {
             rst_subs: vec![Vec::new()],
             rstgen_out: HashMap::new(),
             rst_pending: Vec::new(),
+            initial_asserts: Vec::new(),
         };
         let top_mod = it.mod_by_name[&it.d.top];
         // the top module's reset inputs are all the kernel-driven reset
@@ -195,7 +207,14 @@ impl Interp {
             .filter(|p| p.kind == ir::PortKind::Reset)
             .map(|p| (p.name, 0))
             .collect();
-        it.instantiate("".to_string(), top_mod, HashMap::new(), HashMap::new(), top_binds);
+        it.instantiate(
+            "".to_string(),
+            top_mod,
+            HashMap::new(),
+            HashMap::new(),
+            top_binds,
+            HashMap::new(),
+        );
         it
     }
 
@@ -210,6 +229,7 @@ impl Interp {
         params: HashMap<StrId, Value>,
         str_params: HashMap<StrId, String>,
         reset_binds: HashMap<StrId, usize>,
+        gate_binds: HashMap<StrId, (usize, Expr)>,
     ) -> usize {
         let slot = self.insts.len();
         let mir = self.mods[module].ir;
@@ -239,6 +259,7 @@ impl Interp {
                 params,
                 str_params,
                 resets,
+                gates: gate_binds,
             },
         });
         self.inst_by_path.insert(path.clone(), slot);
@@ -272,34 +293,63 @@ impl Interp {
                     let mut params = HashMap::new();
                     let mut str_params = HashMap::new();
                     let mut child_binds = HashMap::new();
-                    for (k, ((pname_, kind_), arg)) in
-                        inputs.iter().zip(args.iter()).enumerate()
-                    {
-                        let _ = k;
+                    let mut gate_binds = HashMap::new();
+                    // inputs align positionally with the instantiation
+                    // args, except that a gated input clock occupies TWO
+                    // input ports (Clock then ClockGate) bound from one
+                    // Clock{osc,gate} arg
+                    let mut pi = 0usize;
+                    for arg in args.iter() {
+                        if pi >= inputs.len() {
+                            break;
+                        }
+                        let (pname_, kind_) = inputs[pi];
+                        pi += 1;
                         match kind_ {
-                            ir::PortKind::Clock | ir::PortKind::ClockGate => {}
+                            ir::PortKind::Clock => {
+                                if pi < inputs.len()
+                                    && inputs[pi].1 == ir::PortKind::ClockGate
+                                {
+                                    let gname = inputs[pi].0;
+                                    pi += 1;
+                                    if let Expr::Clock { gate, .. } = arg {
+                                        gate_binds.insert(
+                                            gname,
+                                            (slot, gate.as_ref().clone()),
+                                        );
+                                    }
+                                }
+                            }
+                            ir::PortKind::ClockGate => {}
                             ir::PortKind::Reset => {
                                 if let Expr::Reset { wire } = arg {
                                     if let Expr::Port(p) = wire.as_ref() {
                                         if let Some(&n) = reset_map.get(p) {
-                                            child_binds.insert(*pname_, n);
+                                            child_binds.insert(pname_, n);
                                         }
                                     }
                                 }
                             }
                             _ => match arg {
                                 Expr::Str(sid) => {
-                                    str_params.insert(*pname_, self.s(*sid).to_string());
+                                    str_params.insert(pname_, self.s(*sid).to_string());
                                 }
                                 _ => {
                                     let mut c = Ctx::default();
                                     let v = self.eval(slot, &mut c, arg);
-                                    params.insert(*pname_, v);
+                                    params.insert(pname_, v);
                                 }
                             },
                         }
                     }
-                    self.instantiate(cpath.clone(), cmod, params, str_params, child_binds)
+                    self.instantiate(
+                        cpath.clone(),
+                        cmod,
+                        params,
+                        str_params,
+                        child_binds,
+                        gate_binds,
+                    )
                 }
                 ir::InstanceKind::Prim(p) => {
                     let pname = match &p {
@@ -331,7 +381,7 @@ impl Interp {
                         let (hi, lo) = if init_high { (v2, v1) } else { (v1, v2) };
                         self.clockgen_waves.insert(
                             format!("{cpath}$CLK_OUT"),
-                            Wave { init_high, delay, hi, lo },
+                            Wave { init_high, delay, hi, lo, has_init: true },
                         );
                     }
                     // dynamic clocks: record the initial output level; the
@@ -396,9 +446,11 @@ impl Interp {
                         if let Some(out) = out {
                             self.rstgen_out.insert(idx, out);
                             // InitialReset asserts its output from time 0
-                            // (reset_init in set_reset_fn_gen_rst)
+                            // (reset_init in set_reset_fn_gen_rst); the
+                            // assert is broadcast at run() start once every
+                            // subscriber exists
                             if pname == "InitialReset" {
-                                self.rst_asserted[out] = true;
+                                self.initial_asserts.push(out);
                             }
                         }
                     }
@@ -493,6 +545,16 @@ impl Interp {
                         return Value::from_u64(1, (!self.rst_asserted[n]) as u64);
                     }
                 }
+                // input clock-gate ports bound at instantiation resolve in
+                // the parent instance (top-level input gates fall through
+                // and read as constant 1, mirroring top_gates -> aTrue)
+                if let InstKind::User { gates, .. } = &self.insts[inst].kind {
+                    if let Some((owner, g)) = gates.get(name) {
+                        let (owner, g) = (*owner, g.clone());
+                        let mut c = Ctx::default();
+                        return self.eval(owner, &mut c, &g);
+                    }
+                }
                 // flattened gate wires of derived clocks: the exporter
                 // writes "<absolute.path>$CLK_GATE_OUT" for qualified
                 // gate ports (tick gates); module-local Gate reads come
@@ -516,8 +578,13 @@ impl Interp {
                 }
                 let module = self.module_of(inst);
                 match self.mods[module].ports.get(name) {
-                    Some(&(w, ir::PortKind::MethodArg))
-                    | Some(&(w, ir::PortKind::MethodEnable)) => Value::from_u64(w, 0),
+                    // EN_* is latched 1 for the rest of the pass when the
+                    // method executes (urgency inhibitors read it); an
+                    // uncalled method's EN reads 0
+                    Some(&(w, ir::PortKind::MethodEnable)) => self
+                        .latched(inst, *name)
+                        .unwrap_or_else(|| Value::from_u64(w, 0)),
+                    Some(&(w, ir::PortKind::MethodArg)) => Value::from_u64(w, 0),
                     Some(&(w, _)) => Value::from_u64(w, 1),
                     None => Value::from_u64(1, 1),
                 }
@@ -589,26 +656,39 @@ impl Interp {
         args: &[Expr],
     ) -> Value {
         match op {
+            // And/Or/Xor/Add/Mul are associative and may appear n-ary in ASyntax.
             PrimOp::And => {
-                let a = self.eval(inst, ctx, &args[0]);
-                let b = self.eval(inst, ctx, &args[1]);
-                a.and(&b, w)
+                let mut acc = self.eval(inst, ctx, &args[0]);
+                for a in &args[1..] {
+                    let b = self.eval(inst, ctx, a);
+                    acc = acc.and(&b, w);
+                }
+                acc
             }
             PrimOp::Or => {
-                let a = self.eval(inst, ctx, &args[0]);
-                let b = self.eval(inst, ctx, &args[1]);
-                a.or(&b, w)
+                let mut acc = self.eval(inst, ctx, &args[0]);
+                for a in &args[1..] {
+                    let b = self.eval(inst, ctx, a);
+                    acc = acc.or(&b, w);
+                }
+                acc
             }
             PrimOp::Xor => {
-                let a = self.eval(inst, ctx, &args[0]);
-                let b = self.eval(inst, ctx, &args[1]);
-                a.xor(&b, w)
+                let mut acc = self.eval(inst, ctx, &args[0]);
+                for a in &args[1..] {
+                    let b = self.eval(inst, ctx, a);
+                    acc = acc.xor(&b, w);
+                }
+                acc
             }
             PrimOp::Not => self.eval(inst, ctx, &args[0]).not(w),
             PrimOp::Add => {
-                let a = self.eval(inst, ctx, &args[0]);
-                let b = self.eval(inst, ctx, &args[1]);
-                a.add(&b, w)
+                let mut acc = self.eval(inst, ctx, &args[0]);
+                for a in &args[1..] {
+                    let b = self.eval(inst, ctx, a);
+                    acc = acc.add(&b, w);
+                }
+                acc
             }
             PrimOp::Sub => {
                 let a = self.eval(inst, ctx, &args[0]);
@@ -617,9 +697,12 @@ impl Interp {
             }
             PrimOp::Neg => self.eval(inst, ctx, &args[0]).neg(w),
             PrimOp::Mul => {
-                let a = self.eval(inst, ctx, &args[0]);
-                let b = self.eval(inst, ctx, &args[1]);
-                a.mul(&b, w)
+                let mut acc = self.eval(inst, ctx, &args[0]);
+                for a in &args[1..] {
+                    let b = self.eval(inst, ctx, a);
+                    acc = acc.mul(&b, w);
+                }
+                acc
             }
             PrimOp::Quot => {
                 let a = self.eval(inst, ctx, &args[0]);
@@ -786,12 +869,26 @@ impl Interp {
                     .methods
                     .get(&method)
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
+                self.latch_method_en(callee, method);
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let mut ctx = self.method_ctx(module, mi, argv, false);
                 for st in &body {
                     self.exec_stmt(callee, &mut ctx, st);
                 }
+            }
+        }
+    }
+
+    /// Record that an action/actionvalue method fired this pass: the C++
+    /// schedule zeroes every EN_* at the top of the pass and sets it when
+    /// the method executes, and WILL_FIRE urgency inhibitors of
+    /// conflicting rules read it later in the same pass.
+    fn latch_method_en(&mut self, callee: usize, method: StrId) {
+        let en = format!("EN_{}", self.s(method));
+        if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
+            if let InstKind::User { latched, .. } = &mut self.insts[callee].kind {
+                latched.insert(en_id as StrId, Value::from_u64(1, 1));
             }
         }
     }
@@ -808,6 +905,7 @@ impl Interp {
                     .methods
                     .get(&method)
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
+                self.latch_method_en(callee, method);
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let result = self.d.modules[mir].methods[mi].result.clone();
@@ -1274,7 +1372,13 @@ impl Interp {
     /// edges).  GatedClock/ClockMux are not modeled yet and fail loudly.
     fn resolve_source(&self, clock: StrId) -> ClockSource {
         if Some(clock) == self.d.default_clock {
-            return ClockSource::Wave(Wave { init_high: false, delay: 0, hi: 5, lo: 5 });
+            return ClockSource::Wave(Wave {
+                init_high: false,
+                delay: 0,
+                hi: 5,
+                lo: 5,
+                has_init: false,
+            });
         }
         let name = self.s(clock);
         if let Some(w) = self.clockgen_waves.get(name) {
@@ -1390,10 +1494,13 @@ impl Interp {
             })
             .collect();
 
-        // event heap over (time, clock idx, is_posedge)
+        // event heap over (time, priority, clock idx, is_posedge);
+        // priority 0 = one-shot initial edges (PG_INITIAL), 1 = regular
+        // waveform/triggered edges (PG_LOGIC) — initial edges run first
+        // within a timeslice and never period-reschedule
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
-        let mut heap: BinaryHeap<Reverse<(u64, usize, bool)>> = BinaryHeap::new();
+        let mut heap: BinaryHeap<Reverse<(u64, u8, usize, bool)>> = BinaryHeap::new();
         for (ci, src) in sources.iter().enumerate() {
             let need_pos = rcomps.iter().any(|r| r.clk == ci && r.posedge);
             let need_neg = rcomps.iter().any(|r| r.clk == ci && !r.posedge);
@@ -1402,10 +1509,16 @@ impl Interp {
                     let first_pos = if w.init_high { w.delay + w.lo } else { w.delay };
                     let first_neg = if w.init_high { w.delay } else { w.delay + w.hi };
                     if need_pos {
-                        heap.push(Reverse((first_pos, ci, true)));
+                        heap.push(Reverse((first_pos, 1, ci, true)));
                     }
                     if need_neg {
-                        heap.push(Reverse((first_neg, ci, false)));
+                        heap.push(Reverse((first_neg, 1, ci, false)));
+                    }
+                    // has_initial_value: an extra t=0 edge toward the
+                    // initial value, before regular t=0 edges
+                    let dir = w.init_high;
+                    if w.has_init && ((dir && need_pos) || (!dir && need_neg)) {
+                        heap.push(Reverse((0, 0, ci, dir)));
                     }
                 }
                 ClockSource::Triggered { init_high, .. } => {
@@ -1414,18 +1527,23 @@ impl Interp {
                     // the driving prim
                     let dir = *init_high;
                     if (dir && need_pos) || (!dir && need_neg) {
-                        heap.push(Reverse((0, ci, dir)));
+                        heap.push(Reverse((0, 0, ci, dir)));
                     }
                 }
             }
         }
 
-        // kernel reset protocol: top reset asserted before time 0
+        // kernel reset protocol: top reset asserted before time 0;
+        // InitialReset outputs assert from time 0 as well (reset_init)
         self.apply_reset(0, true);
+        let inits = std::mem::take(&mut self.initial_asserts);
+        for n in inits {
+            self.apply_reset(n, true);
+        }
         self.flush_reset_pending();
 
         while self.finished.is_none() {
-            let Some(Reverse((t, ci, pos))) = heap.pop() else { break };
+            let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
             // top reset deasserts at t=2 after that instant's logic
             if t > 2 && self.rst_asserted[0] {
                 self.apply_reset(0, false);
@@ -1508,19 +1626,23 @@ impl Interp {
                             Vec::new()
                         };
                         for pos_edge in edges {
-                            heap.push(Reverse((t, out_ci, pos_edge)));
+                            heap.push(Reverse((t, 1, out_ci, pos_edge)));
                         }
                     }
                 }
             }
 
-            if let ClockSource::Wave(w) = &sources[ci] {
-                heap.push(Reverse((t + w.hi + w.lo, ci, pos)));
+            // regular waveform edges self-reschedule one period out;
+            // initial edges are one-shot (kernel: PG_INITIAL doesn't repeat)
+            if prio != 0 {
+                if let ClockSource::Wave(w) = &sources[ci] {
+                    heap.push(Reverse((t + w.hi + w.lo, 1, ci, pos)));
+                }
             }
 
             // end of timeslice: apply deferred reset transitions before
             // moving to the next simulation time
-            let same_time = matches!(heap.peek(), Some(Reverse((nt, _, _))) if *nt == t);
+            let same_time = matches!(heap.peek(), Some(Reverse((nt, _, _, _))) if *nt == t);
             if !same_time {
                 self.flush_reset_pending();
             }

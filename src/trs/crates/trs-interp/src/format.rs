@@ -23,12 +23,25 @@ fn max_width(bits: u32, base: u32, signed: bool) -> usize {
         2 => bits as usize,
         8 => ((bits as usize) + 2) / 3,
         16 => ((bits as usize) + 3) / 4,
-        _ if signed => {
-            // widest is -2^(bits-1): magnitude digits plus the sign
-            let m = Value::from_u64(bits.max(1), 1).shl((bits - 1) as u64, bits);
-            m.to_dec_string().len() + 1
+        _ => {
+            // dollar_display.cxx maxWidth: sign digit + digit count, where
+            // the digit count for <=64 bits is a closed-form for
+            // digits(2^bits-1) even when signed, but for wide data the
+            // signed count switches to digits(2^(bits-1)) (the magnitude)
+            let sign_digit = if signed { 1 } else { 0 };
+            let digits = if bits > 64 {
+                let m = if signed {
+                    Value::from_u64(bits, 1).shl((bits - 1) as u64, bits)
+                } else {
+                    Value::zero(bits).not(bits) // 2^bits-1
+                };
+                m.to_dec_string().len()
+            } else {
+                let factor: i64 = if bits > 12 { 2 - ((bits as i64 - 3) / 10) } else { 2 };
+                ((bits as i64 + factor) / 3) as usize
+            };
+            sign_digit + digits
         }
-        _ => Value::zero(bits).not(bits).to_dec_string().len(), // 2^bits-1
     }
 }
 
