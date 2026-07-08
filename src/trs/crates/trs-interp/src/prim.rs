@@ -97,6 +97,18 @@ pub trait Prim {
     fn take_clock_edges(&mut self) -> Vec<bool> {
         Vec::new()
     }
+
+    /// JIT state arena (DESIGN.md §5.1): a prim whose entire state is a
+    /// single ≤64-bit word (plain registers) reports its width here so
+    /// compiled code can load/store it directly.  None = not backable.
+    fn arena_width(&self) -> Option<u32> {
+        None
+    }
+    /// Route this prim's state through `slot` (a stable pointer into the
+    /// Interp-owned arena; single-threaded).  The current value is
+    /// written to the slot, which becomes the single source of truth for
+    /// both the interpreter paths and compiled code.
+    fn arena_attach(&mut self, _slot: *mut u64) {}
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -106,10 +118,12 @@ pub trait Prim {
 pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> Box<dyn Prim> {
     match name {
         // registers: args (after clock/reset) are [width, init] or [width]
-        "RegN" | "RegA" => Box::new(Reg::new(consts, true, name == "RegA")),
-        "RegUN" => Box::new(Reg::new(consts, false, false)),
-        "CrossingRegN" | "CrossingRegA" => Box::new(Reg::new(consts, true, name == "CrossingRegA")),
-        "CrossingRegUN" => Box::new(Reg::new(consts, false, false)),
+        "RegN" | "RegA" => Box::new(Reg::new(consts, true, name == "RegA", false)),
+        "RegUN" => Box::new(Reg::new(consts, false, false, false)),
+        "CrossingRegN" | "CrossingRegA" => {
+            Box::new(Reg::new(consts, true, name == "CrossingRegA", true))
+        }
+        "CrossingRegUN" => Box::new(Reg::new(consts, false, false, true)),
         // an aligned-edge crossing reg: written from the source domain,
         // updated on the realClock tick
         "RegAligned" => Box::new(RegAligned::new(consts)),
@@ -1285,19 +1299,41 @@ fn carg(consts: &[Value], i: usize) -> u64 {
 /// immediate.  Registered semantics come from the static schedule order.
 struct Reg {
     value: Value,
+    width: u32,
     reset_value: Value,
     in_reset: bool,
     async_rst: bool,
     suppress: bool,
+    /// CrossingReg* variant: needs prev/written_at NBA tracking and is
+    /// never arena-backed.
+    crossing: bool,
     // clock-crossing registers (CrossingReg*): NBA-visible previous value
     prev: Value,
     written_at: u64,
+    /// JIT arena slot: when attached, `value` is dead and this pointer
+    /// is the single source of truth (see Prim::arena_attach).
+    slot: Option<*mut u64>,
     vcd_id: u32,
     vcd_back: Option<Value>,
 }
 
 impl Reg {
-    fn new(consts: &[Value], has_reset: bool, async_rst: bool) -> Reg {
+    fn load(&self) -> Value {
+        match self.slot {
+            Some(p) => Value::from_u64(self.width, unsafe { *p }),
+            None => self.value.clone(),
+        }
+    }
+    fn store(&mut self, v: Value) {
+        match self.slot {
+            Some(p) => unsafe { *p = v.as_u64() },
+            None => self.value = v,
+        }
+    }
+}
+
+impl Reg {
+    fn new(consts: &[Value], has_reset: bool, async_rst: bool, crossing: bool) -> Reg {
         // instantiation args: [width, init] for RegN/RegA, [width] for
         // RegUN.  The value starts undet even for resettable registers:
         // the reset value arrives via the reset tick at the first clock
@@ -1311,12 +1347,15 @@ impl Reg {
         };
         Reg {
             reset_value,
+            width,
             prev: Value::undet(width),
             value: Value::undet(width),
             in_reset: false,
             async_rst,
             suppress: false,
+            crossing,
             written_at: u64::MAX,
+            slot: None,
             vcd_id: 0,
             vcd_back: None,
         }
@@ -1332,12 +1371,15 @@ impl Reg {
             .zext(width);
         Reg {
             reset_value: v.clone(),
+            width,
             prev: v.clone(),
             value: v,
             in_reset: false,
             async_rst: false,
             suppress: false,
+            crossing: false,
             written_at: u64::MAX,
+            slot: None,
             vcd_id: 0,
             vcd_back: None,
         }
@@ -1361,14 +1403,15 @@ impl Prim for Reg {
         now: u64,
         _clk_edge_now: bool,
     ) {
-        let v = self.value.clone();
+        let v = self.load();
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
 
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
-            "read" | "get" | "_read" => self.value.clone(),
+            "read" | "get" | "_read" => self.load(),
             // crossing read: a same-instant write is not yet visible
+            // (crossing regs are never arena-backed)
             "crossed" => {
                 if self.written_at == now {
                     self.prev.clone()
@@ -1387,8 +1430,14 @@ impl Prim for Reg {
                 // in-reset edge; only async regs block once suppressed
                 // (METH_write, bs_prim_mod_reg.h:100)
                 if !(self.async_rst && self.suppress) {
-                    self.prev = std::mem::replace(&mut self.value, args[0].clone());
-                    self.written_at = now;
+                    match self.slot {
+                        Some(p) => unsafe { *p = args[0].as_u64() },
+                        None => {
+                            self.prev =
+                                std::mem::replace(&mut self.value, args[0].clone());
+                            self.written_at = now;
+                        }
+                    }
                 }
             }
             m => panic!("Reg: unknown action method {m:?}"),
@@ -1398,7 +1447,8 @@ impl Prim for Reg {
     fn rst_tick(&mut self, _now: u64) {
         // rst_tick__clk__1
         if self.in_reset {
-            self.value = self.reset_value.clone();
+            let rv = self.reset_value.clone();
+            self.store(rv);
             self.suppress = true;
         }
     }
@@ -1407,12 +1457,24 @@ impl Prim for Reg {
         if asserted {
             if self.async_rst {
                 // async: reset_RST performs the tick immediately
-                self.value = self.reset_value.clone();
+                let rv = self.reset_value.clone();
+                self.store(rv);
                 self.suppress = true;
             }
         } else {
             self.suppress = false;
         }
+    }
+
+    fn arena_width(&self) -> Option<u32> {
+        // async-reset regs suppress writes while in reset (a check a raw
+        // compiled store cannot honor), crossing regs need NBA tracking:
+        // neither is arena-backable
+        (!self.crossing && !self.async_rst && self.width <= 64).then_some(self.width)
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        unsafe { *slot = self.value.as_u64() };
+        self.slot = Some(slot);
     }
 }
 
