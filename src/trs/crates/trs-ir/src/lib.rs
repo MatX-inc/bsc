@@ -302,6 +302,7 @@ mod tests {
                 clock_domains: vec![],
                 resets: vec![],
                 inputs: vec![],
+                ifc_clocks: vec![],
                 instances: vec![],
                 defs: vec![],
                 rules: vec![],

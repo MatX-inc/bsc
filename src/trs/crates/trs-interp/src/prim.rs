@@ -34,6 +34,31 @@ pub trait Prim {
     /// are ignored and state is forced to the reset value.  Prims without
     /// a reset connection never see this.
     fn set_in_reset(&mut self, _asserted: bool) {}
+
+    /// VCD: declare this prim's $vars in the current scope, reserving its
+    /// own ids (the parent's per-prim slot deliberately stays unused).
+    /// `clk_vcd_id` is the prim's kernel clock id for CLK aliases;
+    /// `clk` its clock index for vcd_set_clock.
+    fn vcd_defs(
+        &mut self,
+        _w: &mut crate::vcd::Vcd,
+        _name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+    }
+
+    /// VCD: dump values per the dump type.  `clk_edge_now` = the prim's
+    /// clock posedged at `now` (gates method-signal resampling in
+    /// CHANGES mode).
+    fn vcd_dump(
+        &mut self,
+        _w: &mut crate::vcd::Vcd,
+        _dt: crate::vcd::DumpType,
+        _now: u64,
+        _clk_edge_now: bool,
+    ) {
+    }
     /// Indexed reset-line transition for prims with several reset inputs
     /// (ResetMux/ResetEither A_RST/B_RST); the index is the ordinal of
     /// the Reset argument in the instantiation.  Single-input prims fall
@@ -810,6 +835,8 @@ struct Reg {
     // clock-crossing registers (CrossingReg*): NBA-visible previous value
     prev: Value,
     written_at: u64,
+    vcd_id: u32,
+    vcd_back: Option<Value>,
 }
 
 impl Reg {
@@ -833,6 +860,8 @@ impl Reg {
             async_rst,
             suppress: false,
             written_at: u64::MAX,
+            vcd_id: 0,
+            vcd_back: None,
         }
     }
 
@@ -852,11 +881,33 @@ impl Reg {
             async_rst: false,
             suppress: false,
             written_at: u64::MAX,
+            vcd_id: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for Reg {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        self.vcd_id = vcd_flat_defs(w, name, self.value.width);
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        let v = self.value.clone();
+        vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "read" | "get" | "_read" => self.value.clone(),
@@ -920,6 +971,8 @@ struct ConfigReg {
     in_reset: bool,
     async_rst: bool,
     suppress: bool,
+    vcd_id: u32,
+    vcd_back: Option<Value>,
 }
 
 impl ConfigReg {
@@ -938,11 +991,33 @@ impl ConfigReg {
             in_reset: false,
             async_rst,
             suppress: false,
+            vcd_id: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for ConfigReg {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        self.vcd_id = vcd_flat_defs(w, name, self.value.width);
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        let v = self.value.clone();
+        vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "read" | "get" => {
@@ -1002,16 +1077,74 @@ struct RWire {
     width: u32,
     value: Value,
     valid: bool,
+    /// latched at the clock tick: fired during the just-ended cycle
+    written: bool,
+    vcd_id: u32,
+    vcd_back: Option<(bool, Value)>,
 }
 
 impl RWire {
     fn new(consts: &[Value], zero_width: bool) -> RWire {
         let width = if zero_width { 0 } else { carg(consts, 0) as u32 };
-        RWire { width, value: Value::zero(width.max(1)), valid: false }
+        RWire {
+            width,
+            value: Value::zero(width.max(1)),
+            valid: false,
+            written: false,
+            vcd_id: 0,
+            vcd_back: None,
+        }
     }
 }
 
 impl Prim for RWire {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_wire.h:87-97: one id, no scope; changes back-dated
+        // to the clock edge; zero-width wires declare width 1
+        self.vcd_id = w.reserve_ids(1);
+        w.set_clock(self.vcd_id, clk);
+        w.write_def(self.vcd_id, name, self.width.max(1));
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        if dt == D::Xs {
+            w.write_x(self.vcd_id, self.width.max(1), now);
+            return;
+        }
+        let written = self.written;
+        let dump = match (&self.vcd_back, dt) {
+            (Some((bw, bv)), D::Changes) => {
+                written != *bw || (written && *bw && self.value != *bv)
+            }
+            _ => true,
+        };
+        if dump {
+            if self.width > 0 {
+                if written {
+                    w.write_val(self.vcd_id, &self.value, now);
+                } else {
+                    w.write_x(self.vcd_id, self.width, now);
+                }
+            } else {
+                // zero-width (PulseWire): dump the 1-bit fired flag
+                w.write_val(self.vcd_id, &Value::from_u64(1, written as u64), now);
+            }
+        }
+        self.vcd_back = Some((written, self.value.clone()));
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "whas" => Value::from_u64(1, self.valid as u64),
@@ -1032,6 +1165,8 @@ impl Prim for RWire {
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
         if !gate { return; }
+        // latch for VCD: did the wire fire during the cycle that just ended
+        self.written = self.valid;
         self.valid = false;
     }
 }
@@ -1172,6 +1307,23 @@ struct Fifo {
     full_name: String,
     in_reset: bool,
     suppress: bool,
+    /// last attempted enqueue value (assigned before guard checks)
+    dummyval: Value,
+    vcd_base: u32,
+    vcd_back: Option<FifoVcdBack>,
+}
+
+#[derive(Clone, PartialEq)]
+struct FifoVcdBack {
+    rst: bool,
+    full_n: bool,
+    empty_n: bool,
+    enq: bool,
+    d_in: Value,
+    deq: bool,
+    clr: bool,
+    elems: usize,
+    slots: Vec<Value>,
 }
 
 impl Fifo {
@@ -1205,11 +1357,203 @@ impl Fifo {
             full_name,
             in_reset: false,
             suppress: false,
+            dummyval: Value::undet(width.max(1)),
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for Fifo {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_fifo.h:263-293
+        let bits = self.width;
+        let extra = if bits > 0 { 1 } else { 0 };
+        let mut n = w.reserve_ids(self.size as u32 + 6 + extra);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(clk_vcd_id, "CLK", 1);
+        w.write_def(n, "RST", 1);
+        n += 1;
+        w.write_def(n, "FULL_N", 1);
+        n += 1;
+        w.write_def(n, "EMPTY_N", 1);
+        n += 1;
+        w.set_clock(n, clk);
+        w.write_def(n, "ENQ", 1);
+        n += 1;
+        if bits > 0 {
+            w.set_clock(n, clk);
+            w.write_def(n, "D_IN", bits);
+            n += 1;
+        }
+        w.set_clock(n, clk);
+        w.write_def(n, "DEQ", 1);
+        n += 1;
+        w.set_clock(n, clk);
+        w.write_def(n, "CLR", 1);
+        n += 1;
+        if bits > 0 {
+            // alias of arr_0
+            w.write_def(n, "D_OUT", bits);
+        }
+        for i in 0..self.size {
+            w.write_def(n + i as u32, &format!("arr_{i}"), bits);
+        }
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bits = self.width;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let mut num = self.vcd_base;
+        let rst = !self.in_reset;
+        let full_n = self.elems < self.size;
+        let empty_n = self.elems != 0;
+        // fresh-backing state matches the C++ ctor-built shadow instance
+        let mut back = self.vcd_back.take().unwrap_or_else(|| FifoVcdBack {
+            rst: true,
+            full_n: true,
+            empty_n: false,
+            enq: false,
+            d_in: Value::undet(bits.max(1)),
+            deq: false,
+            clr: false,
+            elems: 0,
+            slots: (0..self.size).map(|_| Value::undet(bits.max(1))).collect(),
+        });
+        match dt {
+            D::Xs => {
+                for _ in 0..4 {
+                    w.write_x(num, 1, now);
+                    num += 1;
+                }
+                if bits > 0 {
+                    w.write_x(num, bits, now);
+                    num += 1;
+                }
+                w.write_x(num, 1, now);
+                num += 1;
+                w.write_x(num, 1, now);
+                num += 1;
+                for _ in 0..self.size {
+                    w.write_x(num, bits, now);
+                    num += 1;
+                }
+            }
+            D::Changes => {
+                if rst != back.rst {
+                    w.write_val(num, &bit(rst), now);
+                }
+                num += 1;
+                if full_n != back.full_n {
+                    w.write_val(num, &bit(full_n), now);
+                }
+                num += 1;
+                if empty_n != back.empty_n {
+                    w.write_val(num, &bit(empty_n), now);
+                }
+                num += 1;
+                // ENQ/DEQ/CLR only re-evaluated at a posedge of our clock;
+                // their backing flags update only when written
+                if clk_edge_now {
+                    let did = self.enq_at == now;
+                    if did != back.enq {
+                        w.write_val(num, &bit(did), now);
+                        back.enq = did;
+                    }
+                }
+                num += 1;
+                if bits > 0 {
+                    if self.dummyval != back.d_in {
+                        w.write_val(num, &self.dummyval, now);
+                    }
+                    num += 1;
+                }
+                if clk_edge_now {
+                    let did = self.deq_at == now;
+                    if did != back.deq {
+                        w.write_val(num, &bit(did), now);
+                        back.deq = did;
+                    }
+                }
+                num += 1;
+                if clk_edge_now {
+                    let did = self.clear_at == now;
+                    if did != back.clr {
+                        w.write_val(num, &bit(did), now);
+                        back.clr = did;
+                    }
+                }
+                num += 1;
+                for i in 0..self.size {
+                    let idx = (self.fst + i) % self.size;
+                    if i < self.elems
+                        && (i >= back.elems || self.data[idx] != back.slots[i])
+                    {
+                        w.write_val(num, &self.data[idx], now);
+                    } else if i >= self.elems && i < back.elems {
+                        w.write_x(num, bits, now);
+                    }
+                    num += 1;
+                }
+            }
+            _ => {
+                let enq = self.enq_at == now;
+                let deq = self.deq_at == now;
+                let clr = self.clear_at == now;
+                w.write_val(num, &bit(rst), now);
+                num += 1;
+                w.write_val(num, &bit(full_n), now);
+                num += 1;
+                w.write_val(num, &bit(empty_n), now);
+                num += 1;
+                w.write_val(num, &bit(enq), now);
+                num += 1;
+                if bits > 0 {
+                    w.write_val(num, &self.dummyval, now);
+                    num += 1;
+                }
+                w.write_val(num, &bit(deq), now);
+                num += 1;
+                w.write_val(num, &bit(clr), now);
+                num += 1;
+                for i in 0..self.size {
+                    if i < self.elems {
+                        w.write_val(num, &self.data[(self.fst + i) % self.size], now);
+                    } else {
+                        w.write_x(num, bits, now);
+                    }
+                    num += 1;
+                }
+                back.enq = enq;
+                back.deq = deq;
+                back.clr = clr;
+            }
+        }
+        back.rst = rst;
+        back.full_n = full_n;
+        back.empty_n = empty_n;
+        back.d_in = self.dummyval.clone();
+        back.elems = self.elems;
+        for i in 0..self.size {
+            back.slots[i] = self.data[(self.fst + i) % self.size].clone();
+        }
+        self.vcd_back = Some(back);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "first" => self.data[self.fst].clone(),
@@ -1239,6 +1583,10 @@ impl Prim for Fifo {
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        if method == "enq" && !self.zero_width {
+            // saved for VCD display before suppress/guard checks
+            self.dummyval = args[0].clone();
+        }
         if self.suppress {
             return;
         }
@@ -1293,14 +1641,15 @@ impl Prim for Fifo {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
-    fn rst_tick(&mut self, _now: u64) {
+    fn rst_tick(&mut self, now: u64) {
+        // rst_tick_clk calls METH_clear (bs_prim_mod_fifo.h:227-233), so
+        // clear_at is stamped — the VCD shows CLR=1 on the reset edge
         if self.in_reset && !self.suppress {
+            self.clear_at = now;
+            if self.enq_at != now && self.deq_at != now {
+                self.saved_elems = self.elems;
+            }
             self.elems = 0;
-            self.saved_elems = 0;
-            self.fst = 0;
-            self.enq_at = u64::MAX;
-            self.deq_at = u64::MAX;
-            self.clear_at = u64::MAX;
             self.suppress = true;
         }
     }
@@ -2683,6 +3032,38 @@ impl Prim for Bram {
 }
 
 
+
+// ===============
+// VCD helpers shared by flat single-var prims (MOD_Reg-style):
+// one id, one $var named by the instance, XS -> x, CHANGES -> diffed.
+
+fn vcd_flat_defs(w: &mut crate::vcd::Vcd, name: &str, width: u32) -> u32 {
+    let id = w.reserve_ids(1);
+    w.write_def(id, name, width);
+    id
+}
+
+fn vcd_flat_dump(
+    w: &mut crate::vcd::Vcd,
+    dt: crate::vcd::DumpType,
+    now: u64,
+    id: u32,
+    value: &Value,
+    back: &mut Option<Value>,
+) {
+    use crate::vcd::DumpType as D;
+    match dt {
+        D::Xs => w.write_x(id, value.width, now),
+        D::Changes => {
+            if back.as_ref() != Some(value) {
+                w.write_val(id, value, now);
+            }
+        }
+        _ => w.write_val(id, value, now),
+    }
+    *back = Some(value.clone());
+}
+
 // ===============
 // Reset combinators (bs_prim_mod_resets.h).
 
@@ -2895,6 +3276,8 @@ struct RegTwo {
     async_rst: bool,
     in_reset: bool,
     suppress: bool,
+    vcd_id: u32,
+    vcd_back: Option<Value>,
 }
 
 impl RegTwo {
@@ -2914,6 +3297,8 @@ impl RegTwo {
             async_rst,
             in_reset: false,
             suppress: false,
+            vcd_id: 0,
+            vcd_back: None,
         }
     }
     fn note_write(&mut self, now: u64) {
@@ -2925,6 +3310,26 @@ impl RegTwo {
 }
 
 impl Prim for RegTwo {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        self.vcd_id = vcd_flat_defs(w, name, self.value.width);
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        let v = self.value.clone();
+        vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "get" | "read" => {

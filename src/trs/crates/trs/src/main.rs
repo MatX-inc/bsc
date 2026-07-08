@@ -41,7 +41,8 @@ fn main() -> ExitCode {
             // anything else is an error
             let mut max_cycles = u64::MAX;
             let mut plusargs: Vec<String> = Vec::new();
-            let mut it = rest.iter();
+            let mut vcd_file: Option<String> = None;
+            let mut it = rest.iter().peekable();
             while let Some(a) = it.next() {
                 match *a {
                     "-m" => {
@@ -50,6 +51,18 @@ fn main() -> ExitCode {
                             .and_then(|n| n.parse::<u64>().ok())
                             .unwrap_or(u64::MAX);
                     }
+                    // -V [file]: dump waveforms (default dump.vcd)
+                    "-V" => {
+                        let takes_arg = it
+                            .peek()
+                            .map(|n| !n.starts_with('-') && !n.starts_with('+'))
+                            .unwrap_or(false);
+                        vcd_file = Some(if takes_arg {
+                            it.next().unwrap().to_string()
+                        } else {
+                            "dump.vcd".to_string()
+                        });
+                    }
                     p if p.starts_with('+') => plusargs.push(p[1..].to_string()),
                     other => {
                         eprintln!("Error: invalid option '{other}'");
@@ -57,7 +70,7 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            match trs_interp::run_file(path, max_cycles, &plusargs) {
+            match trs_interp::run_file(path, max_cycles, &plusargs, vcd_file.as_deref()) {
                 Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
                 Err(e) => {
                     eprintln!("trs: {e}");

@@ -10,6 +10,7 @@
 pub mod format;
 pub mod prim;
 pub mod value;
+pub mod vcd;
 
 use std::collections::HashMap;
 
@@ -86,6 +87,79 @@ pub struct Interp {
     /// reset nodes asserted from time 0 (InitialReset outputs), broadcast
     /// at run() start once instantiation is complete
     initial_asserts: Vec<usize>,
+    /// VCD writer (vcd.rs, docs/VCD-CONTRACT.md)
+    vcd: vcd::Vcd,
+    /// record last-computed def values / method calls for VCD dumps (set
+    /// when -V is given or the design contains a $dump* task)
+    vcd_trace: bool,
+    /// VCD file requested on the command line (-V), consumed at run()
+    vcd_file_pending: Option<String>,
+    /// last computed value of each def, per instance — the C++ member
+    /// fields persist between edges, so dumps show the value from the
+    /// last time the def was computed (write_undet pattern before that)
+    vcd_def_vals: HashMap<(usize, StrId), Value>,
+    /// last (edge time, args) of each user-module method call, for the
+    /// EN_<m>/<m>_<arg> port values
+    vcd_meth_calls: HashMap<(usize, StrId), (u64, Vec<Value>)>,
+    /// per-instance kernel clock index (from the composition that runs it)
+    vcd_inst_clock: Vec<usize>,
+    /// kernel clock VCD state, in composition clock order
+    vcd_clocks: Vec<VcdClock>,
+    /// per-instance scope id block + change backing, built at header time
+    vcd_layouts: HashMap<usize, VcdLayout>,
+    /// cached member/port selection per module type
+    vcd_mod_vars: HashMap<usize, std::rc::Rc<ModVars>>,
+}
+
+/// Kernel-side clock state mirrored for VCD (tClockInfo essentials).
+struct VcdClock {
+    name: String,
+    vcd_id: u32,
+    /// current level (bk_clock_val)
+    cur: bool,
+    /// bk_alter_clock has_initial_value
+    has_init: bool,
+    /// posedge count (bk_clock_cycle_count)
+    pos_count: u64,
+    pos_at: u64,
+    neg_at: u64,
+}
+
+/// Where a module-scope VCD variable's value comes from.
+#[derive(Clone)]
+enum VcdSrc {
+    /// reset wire (sb_resetDefs): dumps !asserted
+    Reset(StrId),
+    /// member def: last computed value (write_undet pattern initially)
+    Def(StrId),
+    /// EN_<m>: 1 when the method executed at the clock's last posedge
+    PortEn(StrId),
+    /// method argument port: value from the last call
+    PortArg(StrId, usize),
+    /// value/RDY method result port: evaluated on demand
+    PortRes(StrId),
+}
+
+/// One module-scope $var: display name, value source, width, and whether
+/// its changes back-date to the module's clock (vcd_set_clock).
+#[derive(Clone)]
+struct ModVar {
+    name: String,
+    src: VcdSrc,
+    width: u32,
+    clocked: bool,
+}
+
+/// Member/port var lists for one module type, in $var emission order.
+struct ModVars {
+    members: Vec<ModVar>,
+    ports: Vec<ModVar>,
+}
+
+/// Per-instance id block (base id of members++ports) and change backing.
+struct VcdLayout {
+    base: u32,
+    back: Vec<Option<Value>>,
 }
 
 /// One Verilog file-table slot (VLFiles keeps FILE*; the std streams are
@@ -235,7 +309,19 @@ impl Interp {
             rstgen_out: HashMap::new(),
             rst_pending: Vec::new(),
             initial_asserts: Vec::new(),
+            vcd: vcd::Vcd::new(),
+            vcd_trace: false,
+            vcd_file_pending: None,
+            vcd_def_vals: HashMap::new(),
+            vcd_meth_calls: HashMap::new(),
+            vcd_inst_clock: Vec::new(),
+            vcd_clocks: Vec::new(),
+            vcd_layouts: HashMap::new(),
+            vcd_mod_vars: HashMap::new(),
         };
+        // def/method-call recording must run from t=0 if the design can
+        // ever start dumping ($dump* task present); -V sets it too
+        it.vcd_trace = it.d.strings.iter().any(|s| s.starts_with("$dump"));
         let top_mod = it.mod_by_name[&it.d.top];
         // the top module's reset inputs are all the kernel-driven reset
         let top_binds: HashMap<StrId, usize> = it.d.modules[it.mods[top_mod].ir]
@@ -608,6 +694,9 @@ impl Interp {
                     .unwrap_or_else(|| panic!("unknown def {:?}", self.s(*name)));
                 let d = self.d.modules[mir].defs[di].clone();
                 let v = self.eval(inst, ctx, &d.expr);
+                if self.vcd_trace {
+                    self.vcd_def_vals.insert((inst, *name), v.clone());
+                }
                 if ctx.memo {
                     ctx.locals.insert(*name, v.clone());
                 }
@@ -980,6 +1069,10 @@ impl Interp {
                     .get(&method)
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
                 self.latch_method_en(callee, method);
+                if self.vcd_trace {
+                    self.vcd_meth_calls
+                        .insert((callee, method), (self.now, argv.to_vec()));
+                }
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let mut ctx = self.method_ctx(module, mi, argv, false);
@@ -995,6 +1088,12 @@ impl Interp {
     /// the method executes, and WILL_FIRE urgency inhibitors of
     /// conflicting rules read it later in the same pass.
     fn latch_method_en(&mut self, callee: usize, method: StrId) {
+        if self.vcd_trace {
+            self.vcd_meth_calls
+                .entry((callee, method))
+                .and_modify(|e| e.0 = self.now)
+                .or_insert((self.now, Vec::new()));
+        }
         let en = format!("EN_{}", self.s(method));
         if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
             if let InstKind::User { latched, .. } = &mut self.insts[callee].kind {
@@ -1016,6 +1115,10 @@ impl Interp {
                     .get(&method)
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
                 self.latch_method_en(callee, method);
+                if self.vcd_trace {
+                    self.vcd_meth_calls
+                        .insert((callee, method), (self.now, argv.to_vec()));
+                }
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let result = self.d.modules[mir].methods[mi].result.clone();
@@ -1051,6 +1154,9 @@ impl Interp {
                 if std::env::var_os("TRS_TRACE").is_some() {
                     eprintln!("    def {} := {}", self.s(*name), v.to_hex_string());
                 }
+                if self.vcd_trace {
+                    self.vcd_def_vals.insert((inst, *name), v.clone());
+                }
                 ctx.locals.insert(*name, v);
             }
             Stmt::Action(a) => self.exec_action(inst, ctx, a),
@@ -1071,6 +1177,9 @@ impl Interp {
                         Some(dw) => v.zext(dw),
                         None => v,
                     };
+                    if self.vcd_trace {
+                        self.vcd_def_vals.insert((inst, *def), v.clone());
+                    }
                     ctx.locals.insert(*def, v);
                 }
                 a @ Action::Task { temp, width, .. } => {
@@ -1078,6 +1187,9 @@ impl Interp {
                     let v = temp
                         .and_then(|t| ctx.locals.get(&t).cloned())
                         .unwrap_or_else(|| Value::undet((*width).max(1)));
+                    if self.vcd_trace {
+                        self.vcd_def_vals.insert((inst, *def), v.clone());
+                    }
                     ctx.locals.insert(*def, v);
                 }
                 other => panic!("AvAction with non-method action: {other:?}"),
@@ -1391,8 +1503,35 @@ impl Interp {
                 self.finished = Some(code);
             }
             "$stop" => self.finished = Some(0),
-            "$dumpvars" | "$dumpon" | "$dumpoff" | "$dumpfile" | "$dumpall"
-            | "$dumplimit" | "$dumpflush" => {} // waves: P2
+            // waves: dollar_dumpvars.cxx semantics
+            "$dumpfile" => {
+                let name = match args.first() {
+                    Some(Arg::Str(s)) => s.clone(),
+                    Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
+                    _ => "dump.vcd".to_string(),
+                };
+                let _ = self.vcd.set_file(&name);
+            }
+            "$dumpvars" => {
+                if let Some(Arg::Val(v, _)) = args.first() {
+                    self.vcd.set_depth(v.as_u64() as u32);
+                }
+                self.vcd.set_state(true);
+            }
+            "$dumpon" => self.vcd.set_state(true),
+            "$dumpoff" => {
+                if self.vcd.enabled {
+                    self.vcd.set_state(false);
+                    self.vcd.dump_xs();
+                }
+            }
+            "$dumpall" => self.vcd.request_checkpoint(),
+            "$dumplimit" => {
+                if let Some(Arg::Val(v, _)) = args.first() {
+                    self.vcd.set_limit(v.as_u64());
+                }
+            }
+            "$dumpflush" => self.vcd.flush(),
             other => {
                 if self.bdpi_call(other, args, 1).is_none() {
                     panic!("trs-interp: unimplemented system task {other:?}");
@@ -1546,6 +1685,558 @@ impl Interp {
 
     // ===============
     // Cycle execution
+
+    // ===============
+    // VCD dumping (docs/VCD-CONTRACT.md).
+    //
+    // The module-scope variable set replicates the C++ backend's
+    // SimCOpt.moveDefsOntoStack: a def or method port survives as a
+    // class member (and hence a VCD var) only if it is referenced by two
+    // or more generated functions — the per-(domain,edge) schedule
+    // function (CAN_FIRE/WILL_FIRE cones), each rule body function, and
+    // each method function — or if it is >64 bits wide or an ATaskValue
+    // def (never moved).  Unreferenced defs are deleted entirely.
+
+    /// Compute the member/port var lists for one module type.
+    fn vcd_mod_vars(&mut self, module: usize) -> std::rc::Rc<ModVars> {
+        if let Some(mv) = self.vcd_mod_vars.get(&module) {
+            return mv.clone();
+        }
+        let mir = self.mods[module].ir;
+        let m = self.d.modules[mir].clone();
+        // def table by name for cone recursion
+        let defs_by_name: HashMap<StrId, usize> =
+            m.defs.iter().enumerate().map(|(i, d)| (d.name, i)).collect();
+
+        // usage[name] = set of function keys referencing the def/port
+        type FnKey = (u8, u32, u32);
+        let mut usage: HashMap<StrId, std::collections::HashSet<FnKey>> = HashMap::new();
+
+        fn mark_expr(
+            e: &Expr,
+            fk: (u8, u32, u32),
+            m: &ir::Module,
+            defs_by_name: &HashMap<StrId, usize>,
+            usage: &mut HashMap<StrId, std::collections::HashSet<(u8, u32, u32)>>,
+            seen: &mut std::collections::HashSet<StrId>,
+        ) {
+            match e {
+                Expr::Def(n) => {
+                    usage.entry(*n).or_default().insert(fk);
+                    if seen.insert(*n) {
+                        if let Some(&di) = defs_by_name.get(n) {
+                            let inner = m.defs[di].expr.clone();
+                            mark_expr(&inner, fk, m, defs_by_name, usage, seen);
+                        }
+                    }
+                }
+                Expr::Port(n) | Expr::Param(n) => {
+                    usage.entry(*n).or_default().insert(fk);
+                }
+                Expr::MethCall { args, .. } | Expr::ForeignCall { args, .. } => {
+                    for a in args {
+                        mark_expr(a, fk, m, defs_by_name, usage, seen);
+                    }
+                }
+                Expr::Prim { args, .. } => {
+                    for a in args {
+                        mark_expr(a, fk, m, defs_by_name, usage, seen);
+                    }
+                }
+                Expr::Clock { osc, gate } => {
+                    mark_expr(osc, fk, m, defs_by_name, usage, seen);
+                    mark_expr(gate, fk, m, defs_by_name, usage, seen);
+                }
+                Expr::Reset { wire } => mark_expr(wire, fk, m, defs_by_name, usage, seen),
+                Expr::If { cond, then_, else_, .. } => {
+                    mark_expr(cond, fk, m, defs_by_name, usage, seen);
+                    mark_expr(then_, fk, m, defs_by_name, usage, seen);
+                    mark_expr(else_, fk, m, defs_by_name, usage, seen);
+                }
+                Expr::Case { scrutinee, arms, default, .. } => {
+                    mark_expr(scrutinee, fk, m, defs_by_name, usage, seen);
+                    for (_, a) in arms {
+                        mark_expr(a, fk, m, defs_by_name, usage, seen);
+                    }
+                    mark_expr(default, fk, m, defs_by_name, usage, seen);
+                }
+                Expr::Const { .. }
+                | Expr::Str(_)
+                | Expr::Real(_)
+                | Expr::TaskValue { .. }
+                | Expr::MethValue { .. }
+                | Expr::Gate { .. } => {}
+            }
+        }
+        fn mark_action(
+            a: &Action,
+            fk: (u8, u32, u32),
+            m: &ir::Module,
+            dbn: &HashMap<StrId, usize>,
+            usage: &mut HashMap<StrId, std::collections::HashSet<(u8, u32, u32)>>,
+            seen: &mut std::collections::HashSet<StrId>,
+        ) {
+            match a {
+                Action::MethCall { cond, args, .. }
+                | Action::Foreign { cond, args, .. }
+                | Action::Task { cond, args, .. } => {
+                    mark_expr(cond, fk, m, dbn, usage, seen);
+                    for x in args {
+                        mark_expr(x, fk, m, dbn, usage, seen);
+                    }
+                }
+            }
+        }
+        fn mark_stmts(
+            sts: &[Stmt],
+            fk: (u8, u32, u32),
+            m: &ir::Module,
+            dbn: &HashMap<StrId, usize>,
+            usage: &mut HashMap<StrId, std::collections::HashSet<(u8, u32, u32)>>,
+            seen: &mut std::collections::HashSet<StrId>,
+        ) {
+            for st in sts {
+                match st {
+                    Stmt::Def { name, expr } => {
+                        usage.entry(*name).or_default().insert(fk);
+                        mark_expr(expr, fk, m, dbn, usage, seen);
+                    }
+                    Stmt::Action(a) => mark_action(a, fk, m, dbn, usage, seen),
+                    Stmt::AvAction { def, action } => {
+                        usage.entry(*def).or_default().insert(fk);
+                        mark_action(action, fk, m, dbn, usage, seen);
+                    }
+                    Stmt::Cond { cond, then_, else_ } => {
+                        mark_expr(cond, fk, m, dbn, usage, seen);
+                        mark_stmts(then_, fk, m, dbn, usage, seen);
+                        mark_stmts(else_, fk, m, dbn, usage, seen);
+                    }
+                }
+            }
+        }
+
+        // schedule functions: the CF/WF cones of every rule in each
+        // (domain, edge) schedule
+        let rules_by_name: HashMap<StrId, usize> =
+            m.rules.iter().enumerate().map(|(i, r)| (r.name, i)).collect();
+        for (k, ms) in m.schedule.domains.iter().enumerate() {
+            let fk = (0u8, k as u32, 0u32);
+            let mut seen = std::collections::HashSet::new();
+            for seg in &ms.segments {
+                for node in &seg.nodes {
+                    let rn = match node {
+                        ir::SchedNode::Sched(r) | ir::SchedNode::Exec(r) => *r,
+                    };
+                    if let Some(&ri) = rules_by_name.get(&rn) {
+                        let cf = m.rules[ri].can_fire;
+                        let wf = m.rules[ri].will_fire;
+                        mark_expr(&Expr::Def(cf), fk, &m, &defs_by_name, &mut usage, &mut seen);
+                        mark_expr(&Expr::Def(wf), fk, &m, &defs_by_name, &mut usage, &mut seen);
+                    }
+                }
+            }
+        }
+        // rule body functions
+        for r in &m.rules {
+            let fk = (1u8, r.name, 0u32);
+            let mut seen = std::collections::HashSet::new();
+            mark_stmts(&r.body, fk, &m, &defs_by_name, &mut usage, &mut seen);
+        }
+        // method functions (RDY_<m> methods are separate entries, so the
+        // C++ METH_RDY_<m> function falls out naturally)
+        for me in &m.methods {
+            let fk = (2u8, me.name, 0u32);
+            let mut seen = std::collections::HashSet::new();
+            // NOTE: me.ready is NOT marked — the readiness cone lives in
+            // the separate RDY_<m> method entry (its own C++ function)
+            mark_stmts(&me.body, fk, &m, &defs_by_name, &mut usage, &mut seen);
+            if let Some(res) = &me.result {
+                mark_expr(res, fk, &m, &defs_by_name, &mut usage, &mut seen);
+            }
+            // the method function writes its own EN/arg/result ports
+            let en = format!("EN_{}", self.s(me.name));
+            if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
+                usage.entry(en_id as StrId).or_default().insert(fk);
+            }
+            for a in &me.args {
+                usage.entry(a.name).or_default().insert(fk);
+            }
+            if me.result.is_some() {
+                usage.entry(me.name).or_default().insert(fk);
+            }
+            // an action method's function writes its WILL_FIRE def
+            // (cvtIFace wf_stmts); whether the schedule also reads it
+            // (rule inhibitors) falls out of the rule-cone marking above
+            if me.kind != ir::MethodKind::Value {
+                let wf = format!("WILL_FIRE_{}", self.s(me.name));
+                if let Some(id) = self.d.strings.iter().position(|x| x == &wf) {
+                    let id = id as StrId;
+                    if defs_by_name.contains_key(&id) {
+                        usage.entry(id).or_default().insert(fk);
+                    }
+                }
+            }
+        }
+
+        // member selection
+        let mut members: Vec<ModVar> = Vec::new();
+        for rst in &m.resets {
+            if let Expr::Port(n) = &rst.wire {
+                members.push(ModVar {
+                    name: self.s(*n).to_string(),
+                    src: VcdSrc::Reset(*n),
+                    width: 1,
+                    clocked: false,
+                });
+            }
+        }
+        for d in &m.defs {
+            let is_string = d.width == 0
+                || matches!(d.expr, Expr::Str(_))
+                || matches!(&d.expr, Expr::Prim { op: ir::PrimOp::StringConcat, .. });
+            if is_string {
+                continue;
+            }
+            let n_fns = usage.get(&d.name).map(|s| s.len()).unwrap_or(0);
+            let is_task = matches!(d.expr, Expr::TaskValue { .. });
+            let keep = n_fns >= 2 || (n_fns >= 1 && (d.width > 64 || is_task));
+            if keep {
+                let dname = self.s(d.name).to_string();
+                // an action method's WILL_FIRE follows the call, like EN
+                // (the schedule zeroes it each edge, the call sets it)
+                let src = dname
+                    .strip_prefix("WILL_FIRE_")
+                    .and_then(|rest| {
+                        m.methods
+                            .iter()
+                            .find(|me| {
+                                me.kind != ir::MethodKind::Value && self.s(me.name) == rest
+                            })
+                            .map(|me| VcdSrc::PortEn(me.name))
+                    })
+                    .unwrap_or(VcdSrc::Def(d.name));
+                members.push(ModVar { name: dname, src, width: d.width, clocked: true });
+            }
+        }
+        members.sort_by(|a, b| a.name.cmp(&b.name));
+
+        // port selection
+        let mut ports: Vec<ModVar> = Vec::new();
+        for me in &m.methods {
+            let is_action = me.kind != ir::MethodKind::Value;
+            if is_action {
+                let en = format!("EN_{}", self.s(me.name));
+                if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
+                    let n_fns = usage.get(&(en_id as StrId)).map(|s| s.len()).unwrap_or(0);
+                    if n_fns >= 2 {
+                        ports.push(ModVar {
+                            name: en,
+                            src: VcdSrc::PortEn(me.name),
+                            width: 1,
+                            clocked: true,
+                        });
+                    }
+                }
+            }
+            for (ai, a) in me.args.iter().enumerate() {
+                let n_fns = usage.get(&a.name).map(|s| s.len()).unwrap_or(0);
+                if n_fns >= 2 || a.width > 64 {
+                    ports.push(ModVar {
+                        name: self.s(a.name).to_string(),
+                        src: VcdSrc::PortArg(me.name, ai),
+                        width: a.width,
+                        clocked: true,
+                    });
+                }
+            }
+            if let Some(res) = &me.result {
+                let n_fns = usage.get(&me.name).map(|s| s.len()).unwrap_or(0);
+                let w = res.width();
+                if n_fns >= 2 || w > 64 {
+                    ports.push(ModVar {
+                        name: self.s(me.name).to_string(),
+                        src: VcdSrc::PortRes(me.name),
+                        width: w.max(1),
+                        clocked: true,
+                    });
+                }
+            }
+        }
+        ports.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mv = std::rc::Rc::new(ModVars { members, ports });
+        self.vcd_mod_vars.insert(module, mv.clone());
+        mv
+    }
+
+    /// Ordered (name, child inst, is_prim) list for one instance, from
+    /// the module's instance table (already cmpIdByName-sorted by the
+    /// exporter).
+    fn vcd_children(&self, inst: usize) -> Vec<(String, usize, bool)> {
+        let module = self.module_of(inst);
+        let mir = self.mods[module].ir;
+        let mut out = Vec::new();
+        if let InstKind::User { children, .. } = &self.insts[inst].kind {
+            for i in &self.d.modules[mir].instances {
+                if let Some(&ci) = children.get(&i.name) {
+                    let is_prim = matches!(self.insts[ci].kind, InstKind::Prim(_));
+                    out.push((self.s(i.name).to_string(), ci, is_prim));
+                }
+            }
+        }
+        out
+    }
+
+    /// dump_VCD_defs for one user module instance (SimCCBlock.hs
+    /// simCCBlockToClassDefinition): scope, id block, clock defs and
+    /// aliases, members, ports, primitives, submodules.
+    fn vcd_scope_walk(&mut self, w: &mut vcd::Vcd, inst: usize, name: &str, levels: u32) {
+        let module = self.module_of(inst);
+        let mir = self.mods[module].ir;
+        let mv = self.vcd_mod_vars(module);
+        let kids = self.vcd_children(inst);
+        let prims: Vec<_> = kids.iter().filter(|k| k.2).cloned().collect();
+        let subs: Vec<_> = kids.iter().filter(|k| !k.2).cloned().collect();
+
+        w.scope_start(name);
+        let base = w.reserve_ids((mv.members.len() + mv.ports.len() + prims.len()) as u32);
+
+        // clock-def loop (vcd_add_clock_def + match_hierarchy): an
+        // undotted clock name is emitted only in the root scope; a dotted
+        // one where the prefix matches this instance's path
+        let path = self.insts[inst].path.clone();
+        for c in 0..self.vcd_clocks.len() {
+            let cname = self.vcd_clocks[c].name.clone();
+            let cid = self.vcd_clocks[c].vcd_id;
+            match cname.rfind('.') {
+                None => {
+                    if path.is_empty() {
+                        w.write_def(cid, &cname, 1);
+                    }
+                }
+                Some(k) => {
+                    if path == cname[..k] {
+                        w.write_def(cid, &cname[k + 1..], 1);
+                    }
+                }
+            }
+        }
+        // input clock port aliases, reusing the kernel clock's id
+        let my_clk = self.vcd_inst_clock.get(inst).copied().unwrap_or(0);
+        let in_clks: Vec<StrId> = self.d.modules[mir]
+            .inputs
+            .iter()
+            .filter(|p| p.kind == ir::PortKind::Clock)
+            .map(|p| p.name)
+            .collect();
+        for pn in in_clks {
+            let cid = self.vcd_clocks[my_clk].vcd_id;
+            w.write_def(cid, self.s(pn), 1);
+        }
+
+        // members then ports (ids base..)
+        let mut n = base;
+        for v in mv.members.iter().chain(mv.ports.iter()) {
+            if v.clocked {
+                w.set_clock(n, my_clk);
+            }
+            w.write_def(n, &v.name, v.width);
+            n += 1;
+        }
+        // primitives (self-reserving; the block slot stays unused)
+        for (pname, pinst, _) in &prims {
+            let pclk = self.vcd_inst_clock.get(*pinst).copied().unwrap_or(my_clk);
+            let pcid = self.vcd_clocks[pclk].vcd_id;
+            if let InstKind::Prim(p) = &mut self.insts[*pinst].kind {
+                p.vcd_defs(w, pname, pclk, pcid);
+            }
+        }
+        // submodules, depth-limited
+        if levels != 1 {
+            let l = if levels == 0 { 0 } else { levels - 1 };
+            for (sname, sinst, _) in &subs {
+                self.vcd_scope_walk(w, *sinst, sname, l);
+            }
+        }
+        w.scope_end();
+        self.vcd_layouts.insert(
+            inst,
+            VcdLayout { base, back: vec![None; mv.members.len() + mv.ports.len()] },
+        );
+    }
+
+    /// Current value of one module-scope var.
+    fn vcd_var_value(&mut self, inst: usize, v: &ModVar) -> Value {
+        match &v.src {
+            VcdSrc::Reset(n) => {
+                let node = if let InstKind::User { resets, .. } = &self.insts[inst].kind {
+                    resets.get(n).copied()
+                } else {
+                    None
+                };
+                let asserted = node.map(|nn| self.rst_asserted[nn]).unwrap_or(false);
+                Value::from_u64(1, (!asserted) as u64)
+            }
+            VcdSrc::Def(n) => self
+                .vcd_def_vals
+                .get(&(inst, *n))
+                .cloned()
+                .unwrap_or_else(|| Value::undet(v.width.max(1))),
+            VcdSrc::PortEn(mth) => {
+                let clk = self.vcd_inst_clock.get(inst).copied().unwrap_or(0);
+                let at = self.vcd_clocks[clk].pos_at;
+                let en = self
+                    .vcd_meth_calls
+                    .get(&(inst, *mth))
+                    .map(|(t, _)| *t == at)
+                    .unwrap_or(false);
+                Value::from_u64(1, en as u64)
+            }
+            VcdSrc::PortArg(mth, ai) => self
+                .vcd_meth_calls
+                .get(&(inst, *mth))
+                .and_then(|(_, args)| args.get(*ai).cloned())
+                .map(|x| x.zext(v.width.max(1)))
+                .unwrap_or_else(|| Value::undet(v.width.max(1))),
+            VcdSrc::PortRes(mth) => {
+                let module = self.module_of(inst);
+                let mir = self.mods[module].ir;
+                let mi = match self.mods[module].methods.get(mth) {
+                    Some(&mi) => mi,
+                    None => return Value::undet(v.width.max(1)),
+                };
+                let me = &self.d.modules[mir].methods[mi];
+                if !me.args.is_empty() {
+                    return Value::undet(v.width.max(1));
+                }
+                match me.result.clone() {
+                    Some(r) => {
+                        let mut ctx = Ctx::default();
+                        self.eval(inst, &mut ctx, &r).zext(v.width.max(1))
+                    }
+                    None => Value::undet(v.width.max(1)),
+                }
+            }
+        }
+    }
+
+    /// dump_VCD for one user module instance: members+ports (vcd_defs),
+    /// primitives, submodules — same order and ids as the defs walk.
+    fn vcd_dump_walk(
+        &mut self,
+        w: &mut vcd::Vcd,
+        inst: usize,
+        dt: vcd::DumpType,
+        now: u64,
+        levels: u32,
+    ) {
+        use vcd::DumpType as D;
+        let module = self.module_of(inst);
+        let mv = self.vcd_mod_vars(module);
+        let kids = self.vcd_children(inst);
+        let Some(mut layout) = self.vcd_layouts.remove(&inst) else { return };
+        let mut n = layout.base;
+        for (k, v) in mv.members.iter().chain(mv.ports.iter()).enumerate() {
+            match dt {
+                D::Xs => w.write_x(n, v.width, now),
+                D::Changes => {
+                    let cur = self.vcd_var_value(inst, v);
+                    if layout.back[k].as_ref() != Some(&cur) {
+                        w.write_val(n, &cur, now);
+                        layout.back[k] = Some(cur);
+                    }
+                }
+                _ => {
+                    let cur = self.vcd_var_value(inst, v);
+                    w.write_val(n, &cur, now);
+                    layout.back[k] = Some(cur);
+                }
+            }
+            n += 1;
+        }
+        self.vcd_layouts.insert(inst, layout);
+        for (_, pinst, is_prim) in &kids {
+            if !*is_prim {
+                continue;
+            }
+            let pclk = self.vcd_inst_clock.get(*pinst).copied().unwrap_or(0);
+            let edge_now = {
+                let c = &self.vcd_clocks[pclk];
+                c.cur && c.pos_at == now
+            };
+            if let InstKind::Prim(p) = &mut self.insts[*pinst].kind {
+                p.vcd_dump(w, dt, now, edge_now);
+            }
+        }
+        if levels != 1 {
+            let l = if levels == 0 { 0 } else { levels - 1 };
+            for (_, sinst, is_prim) in &kids {
+                if !*is_prim {
+                    self.vcd_dump_walk(w, *sinst, dt, now, l);
+                }
+            }
+        }
+    }
+
+    /// kernel.cxx vcd_event: once per timeslice at PG_AFTER_LOGIC, after
+    /// all same-time edges (and reset flushing), before the PG_FINAL
+    /// early-rule pass.
+    fn vcd_event(&mut self, now: u64) {
+        let mut w = std::mem::replace(&mut self.vcd, vcd::Vcd::new());
+        let top = *self.inst_by_path.get("").unwrap_or(&0);
+        if w.write_header() {
+            self.vcd_layouts.clear();
+            w.scope_start("main");
+            let levels = w.depth;
+            self.vcd_scope_walk(&mut w, top, "top", levels);
+            w.scope_end();
+            w.enddefinitions();
+        }
+        w.advance(now, false);
+        let dt = w.dump_type();
+        use vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        match dt {
+            D::None => {}
+            D::Xs => {
+                w.task(now, "$dumpoff");
+                for c in &self.vcd_clocks {
+                    w.write_x(c.vcd_id, 1, now);
+                }
+                let levels = w.depth;
+                self.vcd_dump_walk(&mut w, top, dt, now, levels);
+            }
+            D::Initial => {
+                w.task(now, "$dumpvars");
+                for c in &self.vcd_clocks {
+                    if c.has_init || c.pos_count != 0 {
+                        w.write_val(c.vcd_id, &bit(c.cur), now);
+                    }
+                }
+                let levels = w.depth;
+                self.vcd_dump_walk(&mut w, top, dt, now, levels);
+            }
+            D::Changes => {
+                for c in &self.vcd_clocks {
+                    if c.pos_at == now || c.neg_at == now {
+                        w.write_val(c.vcd_id, &bit(c.cur), now);
+                    }
+                }
+                let levels = w.depth;
+                self.vcd_dump_walk(&mut w, top, dt, now, levels);
+            }
+            D::Checkpoint | D::Restart => {
+                w.task(now, if dt == D::Checkpoint { "$dumpall" } else { "$dumpon" });
+                for c in &self.vcd_clocks {
+                    w.write_val(c.vcd_id, &bit(c.cur), now);
+                }
+                let levels = w.depth;
+                self.vcd_dump_walk(&mut w, top, dt, now, levels);
+            }
+        }
+        w.check_file_size(now);
+        self.vcd = w;
+    }
 
     fn latch_rule(&mut self, inst: usize, rule_name: StrId, cross_inh: &[(usize, StrId)]) {
         let module = self.module_of(inst);
@@ -1904,6 +2595,56 @@ impl Interp {
             })
             .collect();
 
+        // VCD clock state: reserve the kernel clock ids first (clock ids
+        // are permanent across headers — vcd_keep_ids)
+        if self.vcd_clocks.is_empty() {
+            self.vcd_clocks = clocks
+                .iter()
+                .enumerate()
+                .map(|(ci, &c)| VcdClock {
+                    name: self.s(c).to_string(),
+                    vcd_id: 0,
+                    cur: match &sources[ci] {
+                        ClockSource::Wave(w) => w.init_high,
+                        ClockSource::Triggered { init_high, .. } => *init_high,
+                        ClockSource::Never => false,
+                    },
+                    has_init: match &sources[ci] {
+                        ClockSource::Wave(w) => w.has_init,
+                        ClockSource::Triggered { .. } => true,
+                        ClockSource::Never => false,
+                    },
+                    pos_count: 0,
+                    pos_at: 0,
+                    neg_at: 0,
+                })
+                .collect();
+            for c in &mut self.vcd_clocks {
+                c.vcd_id = self.vcd.reserve_ids(1);
+            }
+            self.vcd.keep_ids();
+            self.vcd.clk_combinational = vec![0; clocks.len()];
+        }
+        // per-instance clock, for prim CLK aliases / vcd_set_clock /
+        // posedge gating
+        self.vcd_inst_clock = vec![0; self.insts.len()];
+        for rc in &rcomps {
+            for &(inst, _, _, _) in &rc.entries {
+                self.vcd_inst_clock[inst] = rc.clk;
+            }
+            for (inst, _, _, owner, _) in &rc.ticks {
+                self.vcd_inst_clock[*inst] = rc.clk;
+                self.vcd_inst_clock[*owner] = rc.clk;
+            }
+        }
+        // -V file from the command line
+        if let Some(f) = self.vcd_file_pending.take() {
+            if self.vcd.set_file(&f).is_ok() {
+                self.vcd.set_state(true);
+            }
+            self.vcd_trace = true;
+        }
+
         // event heap over (time, priority, clock idx, is_posedge);
         // priority 0 = one-shot initial edges (PG_INITIAL), 1 = regular
         // waveform/triggered edges (PG_LOGIC) — initial edges run first
@@ -1912,8 +2653,11 @@ impl Interp {
         use std::collections::BinaryHeap;
         let mut heap: BinaryHeap<Reverse<(u64, u8, usize, bool)>> = BinaryHeap::new();
         for (ci, src) in sources.iter().enumerate() {
-            let need_pos = rcomps.iter().any(|r| r.clk == ci && r.posedge);
-            let need_neg = rcomps.iter().any(|r| r.clk == ci && !r.posedge);
+            // all edges of every waveform clock are heaped (the kernel
+            // schedules every clock's edges; VCD dumps clock waveforms
+            // and reset deassertion timing depends on the first negedge)
+            let need_pos = true;
+            let need_neg = true;
             match src {
                 ClockSource::Wave(w) => {
                     let first_pos = if w.init_high { w.delay + w.lo } else { w.delay };
@@ -1956,6 +2700,10 @@ impl Interp {
         // (clock,edge) compositions that fired in the current timeslice,
         // for the after-edge (PG_FINAL) pass
         let mut fired_this_slice: Vec<usize> = Vec::new();
+        // the time the simulation is considered to have stopped at, for
+        // the final VCD flush (buffered changes at exactly this time are
+        // dropped, matching vcd_reset at bk_shutdown)
+        let mut final_now: u64 = 0;
 
         while self.finished.is_none() {
             let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
@@ -1966,11 +2714,27 @@ impl Interp {
             }
             if pos && Some(clocks[ci]) == self.d.default_clock {
                 if self.cycle >= max_cycles {
+                    final_now = t;
                     break;
                 }
                 self.cycle += 1;
             }
             self.now = t;
+            final_now = t;
+            // clock edge bookkeeping (run_edge_schedule_event):
+            // combinational_at = previous same-direction edge time
+            {
+                let c = &mut self.vcd_clocks[ci];
+                if pos {
+                    self.vcd.clk_combinational[ci] = c.pos_at;
+                    c.pos_at = t;
+                    c.pos_count += 1;
+                } else {
+                    self.vcd.clk_combinational[ci] = c.neg_at;
+                    c.neg_at = t;
+                }
+                c.cur = pos;
+            }
 
             for (rci, rc) in rcomps
                 .iter()
@@ -2074,6 +2838,11 @@ impl Interp {
             let same_time = matches!(heap.peek(), Some(Reverse((nt, _, _, _))) if *nt == t);
             if !same_time {
                 self.flush_reset_pending();
+                // per-timeslice VCD event (PG_AFTER_LOGIC, before the
+                // PG_FINAL early-rule pass)
+                if self.vcd.is_active() {
+                    self.vcd_event(t);
+                }
                 for rci in std::mem::take(&mut fired_this_slice) {
                     let rc = &rcomps[rci];
                     if rc.early.is_empty() {
@@ -2125,6 +2894,14 @@ impl Interp {
                 break;
             }
         }
+        // finish the interrupted timeslice's VCD dump ($finish while
+        // same-time edges were still pending), then flush buffered
+        // changes strictly before the stop time (vcd_reset)
+        if self.vcd.is_active() && !fired_this_slice.is_empty() {
+            self.vcd_event(self.now);
+        }
+        self.vcd.set_final_min_pending(final_now);
+        self.vcd.flush_all_pending();
         // bluesim.tcl: exit 1 iff $fatal was called; $finish status codes
         // do not surface as process exit codes
         if self.fataled { 1 } else { 0 }
@@ -2166,11 +2943,17 @@ fn cookie_key(cookie: u32) -> StrId {
     0x8000_0000 | cookie
 }
 
-pub fn run_file(path: &str, max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
+pub fn run_file(
+    path: &str,
+    max_cycles: u64,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+) -> Result<i32, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let design = Design::decode(&bytes).map_err(|e| e.to_string())?;
     let mut interp = Interp::new(design);
     interp.plusargs = plusargs.to_vec();
+    interp.vcd_file_pending = vcd_file.map(str::to_string);
     // user BDPI code lives in a companion shared object next to the .bir
     let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
     if std::path::Path::new(&so).exists() {
