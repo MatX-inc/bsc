@@ -12,7 +12,8 @@ pub mod prim;
 pub mod value;
 pub mod vcd;
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
@@ -127,6 +128,9 @@ pub struct Interp {
     vcd_layouts: HashMap<usize, VcdLayout>,
     /// cached member/port selection per module type
     vcd_mod_vars: HashMap<usize, std::rc::Rc<ModVars>>,
+    /// resumable event-loop state, built once by prime(); run() =
+    /// prime + advance + finish
+    stepper: Option<Stepper>,
 }
 
 /// Kernel-side clock state mirrored for VCD (tClockInfo essentials).
@@ -236,6 +240,51 @@ enum ClockSource {
     Wave(Wave),
     Triggered { init_high: bool, driver: usize },
     Never,
+}
+
+/// One composition pre-resolved against the instance tree: the kernel
+/// clock index and edge it fires on, plus entries, cross-inhibits and
+/// ticks in directly executable form.
+struct RComp {
+    clk: usize,
+    posedge: bool,
+    // (instance idx, module clock domain, schedule segment nodes) —
+    // nodes are resolved once at prime() so the per-edge pass never
+    // searches domain schedules or clones node lists
+    entries: Vec<(usize, u32, Vec<SchedNode>)>,
+    cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
+    // (prim instance, resolved port name, is_reset_tick, owner instance
+    // for gate evaluation, gate expr)
+    ticks: Vec<(usize, String, bool, usize, Option<Expr>)>,
+    // clock-crossing "early" rules: excluded from the edge pass,
+    // run in the after-edge pass at end of timeslice (the C++
+    // schedule_after_posedge_* at PG_FINAL)
+    early: HashSet<(usize, StrId)>,
+}
+
+/// Resumable event-loop state.  Everything run() used to build locally
+/// lives on the Interp so a driver (`sim step N`) or the JIT harness
+/// (run-to-cycle, compare, continue) can advance in bounded steps.
+struct Stepper {
+    /// distinct clocks in first-appearance order, default clock first
+    clocks: Vec<StrId>,
+    sources: Vec<ClockSource>,
+    /// clock-driver prim instance -> clock index, for routing triggered
+    /// edges after ticks
+    driver_clock: HashMap<usize, usize>,
+    rcomps: Vec<RComp>,
+    /// event heap over (time, priority, clock idx, is_posedge);
+    /// priority 0 = one-shot initial edges (PG_INITIAL), 1 = regular
+    /// waveform/triggered edges (PG_LOGIC) — initial edges run first
+    /// within a timeslice and never period-reschedule
+    heap: BinaryHeap<Reverse<(u64, u8, usize, bool)>>,
+    /// (clock,edge) compositions that fired in the current timeslice,
+    /// for the after-edge (PG_FINAL) pass
+    fired_this_slice: Vec<usize>,
+    /// the time the simulation is considered to have stopped at, for
+    /// the final VCD flush (buffered changes at exactly this time are
+    /// dropped, matching vcd_reset at bk_shutdown)
+    final_now: u64,
 }
 
 struct Inst {
@@ -360,6 +409,7 @@ impl Interp {
             vcd_clocks: Vec::new(),
             vcd_layouts: HashMap::new(),
             vcd_mod_vars: HashMap::new(),
+            stepper: None,
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
@@ -2773,13 +2823,29 @@ impl Interp {
     }
 
     /// Run until $finish or the cycle limit.  Returns the exit code.
-    ///
-    /// Multi-clock event loop: each composition fires on one (clock, edge);
-    /// clock waveforms come from resolve_wave.  Same-time edges execute in
-    /// clock definition order (the kernel breaks ties by clock handle
-    /// index).  max_cycles counts default-clock posedges, including the
-    /// in-reset edge at t=0.
     pub fn run(&mut self, max_cycles: u64) -> i32 {
+        self.advance(max_cycles);
+        self.finish()
+    }
+
+    /// Default-clock posedges processed so far (the `sim step` cursor).
+    pub fn cycles(&self) -> u64 {
+        self.cycle
+    }
+
+    /// True once $finish has been called (stepping past it is an error
+    /// in the reference driver).
+    pub fn is_finished(&self) -> bool {
+        self.finished.is_some()
+    }
+
+    /// One-time event-loop setup: resolve clocks and compositions, wire
+    /// VCD clock state, seed the event heap, and run the kernel reset
+    /// protocol.  Idempotent — later calls are no-ops.
+    pub fn prime(&mut self) {
+        if self.stepper.is_some() {
+            return;
+        }
         let comps = self.d.compositions.clone();
 
         // distinct clocks in first-appearance order, with the default
@@ -2846,21 +2912,7 @@ impl Interp {
             .collect();
 
         // pre-resolve each composition: (clock idx, entries, inhibitors,
-        // ticks)
-        struct RComp {
-            clk: usize,
-            posedge: bool,
-            // (instance idx, module idx, domain, segment idx)
-            entries: Vec<(usize, usize, u32, usize)>,
-            cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
-            // (prim instance, port, is_reset_tick, owner instance for
-            // gate evaluation, gate expr)
-            ticks: Vec<(usize, StrId, bool, usize, Option<Expr>)>,
-            // clock-crossing "early" rules: excluded from the edge pass,
-            // run in the after-edge pass at end of timeslice (the C++
-            // schedule_after_posedge_* at PG_FINAL)
-            early: std::collections::HashSet<(usize, StrId)>,
-        }
+        // ticks) — see RComp at module scope
         let rcomps: Vec<RComp> = comps
             .iter()
             .map(|comp| {
@@ -2873,7 +2925,23 @@ impl Interp {
                             .inst_by_path
                             .get(&path)
                             .unwrap_or_else(|| panic!("unknown instance path {path:?}"));
-                        (ii, self.module_of(ii), e.domain, e.segment as usize)
+                        let mir = self.mods[self.module_of(ii)].ir;
+                        let sched = &self.d.modules[mir].schedule;
+                        let ms = sched
+                            .domains
+                            .iter()
+                            .find(|ms| ms.domain == e.domain && ms.posedge == comp.posedge)
+                            .or_else(|| {
+                                sched.domains.iter().find(|ms| ms.domain == e.domain)
+                            })
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "no schedule for domain {} in {:?}",
+                                    e.domain,
+                                    self.s(self.d.modules[mir].name)
+                                )
+                            });
+                        (ii, e.domain, ms.segments[e.segment as usize].nodes.clone())
                     })
                     .collect();
 
@@ -2904,7 +2972,8 @@ impl Interp {
                             .get(&ppath)
                             .unwrap_or_else(|| panic!("unknown tick instance {ppath:?}"));
                         let owner = *self.inst_by_path.get(&ipath).unwrap_or(&0);
-                        (ii, tk.port, tk.reset, owner, tk.gate.clone())
+                        let pname = self.d.strings[tk.port as usize].clone();
+                        (ii, pname, tk.reset, owner, tk.gate.clone())
                     })
                     .collect();
 
@@ -2974,18 +3043,17 @@ impl Interp {
         self.vcd_inst_clock = vec![0; self.insts.len()];
         self.vcd_inst_domclock.clear();
         for rc in &rcomps {
-            for &(inst, _, domain, _) in &rc.entries {
+            for &(inst, domain, _) in &rc.entries {
                 self.vcd_inst_clock[inst] = rc.clk;
                 self.vcd_inst_domclock.insert((inst, domain), rc.clk);
             }
-            for (inst, port, is_rst, owner, _) in &rc.ticks {
+            for (inst, pname, is_rst, owner, _) in &rc.ticks {
                 self.vcd_inst_clock[*inst] = rc.clk;
                 self.vcd_inst_clock[*owner] = rc.clk;
                 if !*is_rst {
-                    let pname = self.d.strings[*port as usize].clone();
                     let cid = self.vcd_clocks[rc.clk].vcd_id;
                     if let InstKind::Prim(p) = &mut self.insts[*inst].kind {
-                        p.vcd_port_clock(&pname, rc.clk, cid);
+                        p.vcd_port_clock(pname, rc.clk, cid);
                     }
                 }
             }
@@ -2995,11 +3063,11 @@ impl Interp {
                 let tickinfo: Vec<String> = rc
                     .ticks
                     .iter()
-                    .map(|(inst, port, rst, _, _)| {
+                    .map(|(inst, pname, rst, _, _)| {
                         format!(
                             "{}:{}{}",
                             self.insts[*inst].path,
-                            self.d.strings[*port as usize],
+                            pname,
                             if *rst { "(rst)" } else { "" }
                         )
                     })
@@ -3030,12 +3098,7 @@ impl Interp {
             self.vcd_trace = true;
         }
 
-        // event heap over (time, priority, clock idx, is_posedge);
-        // priority 0 = one-shot initial edges (PG_INITIAL), 1 = regular
-        // waveform/triggered edges (PG_LOGIC) — initial edges run first
-        // within a timeslice and never period-reschedule
-        use std::cmp::Reverse;
-        use std::collections::BinaryHeap;
+        // seed the event heap (see Stepper::heap for the ordering)
         let mut heap: BinaryHeap<Reverse<(u64, u8, usize, bool)>> = BinaryHeap::new();
         for (ci, src) in sources.iter().enumerate() {
             // all edges of every waveform clock are heaped (the kernel
@@ -3082,13 +3145,37 @@ impl Interp {
         }
         self.flush_reset_pending();
 
-        // (clock,edge) compositions that fired in the current timeslice,
-        // for the after-edge (PG_FINAL) pass
-        let mut fired_this_slice: Vec<usize> = Vec::new();
-        // the time the simulation is considered to have stopped at, for
-        // the final VCD flush (buffered changes at exactly this time are
-        // dropped, matching vcd_reset at bk_shutdown)
-        let mut final_now: u64 = 0;
+        self.stepper = Some(Stepper {
+            clocks,
+            sources,
+            driver_clock,
+            rcomps,
+            heap,
+            fired_this_slice: Vec::new(),
+            final_now: 0,
+        });
+    }
+
+    /// Drive the event loop until $finish, the cycle limit, or event
+    /// exhaustion.  Resumable: a later call with a higher limit picks up
+    /// exactly where this one stopped.
+    ///
+    /// Multi-clock event loop: each composition fires on one (clock, edge);
+    /// clock waveforms come from resolve_wave.  Same-time edges execute in
+    /// clock definition order (the kernel breaks ties by clock handle
+    /// index).  max_cycles counts default-clock posedges, including the
+    /// in-reset edge at t=0.  Returns the exit code so far (1 iff $fatal).
+    pub fn advance(&mut self, max_cycles: u64) -> i32 {
+        self.prime();
+        let Stepper {
+            clocks,
+            sources,
+            driver_clock,
+            rcomps,
+            mut heap,
+            mut fired_this_slice,
+            mut final_now,
+        } = self.stepper.take().unwrap();
 
         while self.finished.is_none() {
             let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
@@ -3100,6 +3187,9 @@ impl Interp {
             if pos && Some(clocks[ci]) == self.d.default_clock {
                 if self.cycle >= max_cycles {
                     final_now = t;
+                    // put the unprocessed edge back for a later advance()
+                    // with a higher cycle limit
+                    heap.push(Reverse((t, prio, ci, pos)));
                     break;
                 }
                 self.cycle += 1;
@@ -3140,32 +3230,18 @@ impl Interp {
                 // live clock-level updates before rules run (the kernel
                 // flips a clock's value before executing its schedule;
                 // GatedClock's transparent-low latch queries it)
-                for &(inst, port, is_rst, _, _) in &rc.ticks {
-                    if is_rst {
+                for (inst, pname, is_rst, _, _) in &rc.ticks {
+                    if *is_rst {
                         continue;
                     }
-                    let pname = self.d.strings[port as usize].clone();
-                    if let InstKind::Prim(p) = &mut self.insts[inst].kind {
-                        p.clock_level(&pname, pos);
+                    if let InstKind::Prim(p) = &mut self.insts[*inst].kind {
+                        p.clock_level(pname, pos);
                     }
                 }
 
-                for &(inst, module, domain, seg) in &rc.entries {
-                    let mir = self.mods[module].ir;
-                    let sched = &self.d.modules[mir].schedule;
-                    let ms = sched
-                        .domains
-                        .iter()
-                        .find(|ms| ms.domain == domain && ms.posedge == rc.posedge)
-                        .or_else(|| sched.domains.iter().find(|ms| ms.domain == domain))
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "no schedule for domain {domain} in {:?}",
-                                self.s(self.d.modules[mir].name)
-                            )
-                        });
-                    let nodes: Vec<SchedNode> = ms.segments[seg].nodes.clone();
-                    for node in nodes {
+                for (inst, _, nodes) in &rc.entries {
+                    let inst = *inst;
+                    for &node in nodes {
                         if self.finished.is_some() {
                             break;
                         }
@@ -3188,22 +3264,22 @@ impl Interp {
 
                 // end-of-edge ticks (reset ticks are conditional: the
                 // prim itself checks its reset line)
-                for (inst, port, is_rst, owner, gexpr) in rc.ticks.clone() {
-                    let gate = match &gexpr {
+                for (inst, pname, is_rst, owner, gexpr) in &rc.ticks {
+                    let inst = *inst;
+                    let gate = match gexpr {
                         None => true,
                         Some(g) => {
                             let mut c = Ctx::default();
-                            self.eval(owner, &mut c, g).as_bool()
+                            self.eval(*owner, &mut c, g).as_bool()
                         }
                     };
                     if let InstKind::Prim(p) = &mut self.insts[inst].kind {
-                        if is_rst {
+                        if *is_rst {
                             if gate {
                                 p.rst_tick(t);
                             }
                         } else {
-                            let pname = self.d.strings[port as usize].clone();
-                            p.tick(&pname, t, pos, gate);
+                            p.tick(pname, t, pos, gate);
                         }
                     }
                     if self.rstgen_out.contains_key(&inst) {
@@ -3252,19 +3328,9 @@ impl Interp {
                     if rc.early.is_empty() {
                         continue;
                     }
-                    for &(inst, module, domain, seg) in &rc.entries {
-                        let mir = self.mods[module].ir;
-                        let sched = &self.d.modules[mir].schedule;
-                        let ms = sched
-                            .domains
-                            .iter()
-                            .find(|ms| ms.domain == domain && ms.posedge == rc.posedge)
-                            .or_else(|| {
-                                sched.domains.iter().find(|ms| ms.domain == domain)
-                            })
-                            .unwrap();
-                        let nodes: Vec<SchedNode> = ms.segments[seg].nodes.clone();
-                        for node in nodes {
+                    for (inst, _, nodes) in &rc.entries {
+                        let inst = *inst;
+                        for &node in nodes {
                             if self.finished.is_some() {
                                 break;
                             }
@@ -3298,16 +3364,35 @@ impl Interp {
                 break;
             }
         }
-        // finish the interrupted timeslice's VCD dump ($finish while
-        // same-time edges were still pending), then flush buffered
-        // changes strictly before the stop time (vcd_reset)
-        if self.vcd.is_active() && !fired_this_slice.is_empty() {
+        self.stepper = Some(Stepper {
+            clocks,
+            sources,
+            driver_clock,
+            rcomps,
+            heap,
+            fired_this_slice,
+            final_now,
+        });
+        if self.fataled { 1 } else { 0 }
+    }
+
+    /// End-of-simulation epilogue (bk_shutdown's VCD side): finish an
+    /// interrupted timeslice's VCD dump ($finish while same-time edges
+    /// were still pending), then flush buffered changes strictly before
+    /// the stop time (vcd_reset).  Separate from advance() so bounded
+    /// stepping never emits the final flush early.  Returns the process
+    /// exit code — bluesim.tcl exits 1 iff $fatal was called; $finish
+    /// status codes do not surface as process exit codes.
+    pub fn finish(&mut self) -> i32 {
+        let (fired, final_now) = match &self.stepper {
+            Some(st) => (!st.fired_this_slice.is_empty(), st.final_now),
+            None => (false, 0),
+        };
+        if self.vcd.is_active() && fired {
             self.vcd_event(self.now);
         }
         self.vcd.set_final_min_pending(final_now);
         self.vcd.flush_all_pending();
-        // bluesim.tcl: exit 1 iff $fatal was called; $finish status codes
-        // do not surface as process exit codes
         if self.fataled { 1 } else { 0 }
     }
 
