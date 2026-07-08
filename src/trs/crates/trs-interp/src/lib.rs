@@ -2258,40 +2258,19 @@ impl Interp {
                     .unwrap_or(false);
                 Value::from_u64(1, en as u64)
             }
+            // all method ports are zero-initialized in the C++ ctor
+            // (mkPortInit) and only updated when the method is called
             VcdSrc::PortArg(mth, ai) => self
                 .vcd_meth_calls
                 .get(&(inst, *mth))
                 .and_then(|(_, args)| args.get(*ai).cloned())
                 .map(|x| x.zext(v.width.max(1)))
-                .unwrap_or_else(|| Value::undet(v.width.max(1))),
-            VcdSrc::PortRes(mth) => {
-                if let Some(r) = self.vcd_meth_results.get(&(inst, *mth)) {
-                    return r.clone().zext(v.width.max(1));
-                }
-                let module = self.module_of(inst);
-                let mir = self.mods[module].ir;
-                let mi = match self.mods[module].methods.get(mth) {
-                    Some(&mi) => mi,
-                    None => return Value::undet(v.width.max(1)),
-                };
-                let me = &self.d.modules[mir].methods[mi];
-                if !me.args.is_empty() {
-                    return Value::undet(v.width.max(1));
-                }
-                match me.result.clone() {
-                    Some(r) => {
-                        // dump-time evaluation must not disturb the
-                        // recorded def values (C++ reads the port member)
-                        let saved = self.vcd_trace;
-                        self.vcd_trace = false;
-                        let mut ctx = Ctx::default();
-                        let out = self.eval(inst, &mut ctx, &r).zext(v.width.max(1));
-                        self.vcd_trace = saved;
-                        out
-                    }
-                    None => Value::undet(v.width.max(1)),
-                }
-            }
+                .unwrap_or_else(|| Value::zero(v.width.max(1))),
+            VcdSrc::PortRes(mth) => self
+                .vcd_meth_results
+                .get(&(inst, *mth))
+                .map(|r| r.clone().zext(v.width.max(1)))
+                .unwrap_or_else(|| Value::zero(v.width.max(1))),
         }
     }
 
