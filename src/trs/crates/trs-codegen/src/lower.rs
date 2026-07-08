@@ -29,7 +29,6 @@ use std::collections::HashMap;
 use trs_ir::{Action, Design, Expr, PrimOp, Stmt, StrId};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
 use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
@@ -123,6 +122,11 @@ pub struct RuleSpec {
     /// defs this rule's Sched entry evaluates at its schedule position
     /// (REntry::eager); each must have an `eager_slot`
     pub eager: Vec<StrId>,
+    /// eager defs of the SAME instance owned by entries that run
+    /// strictly earlier in this rule's composition: the sched fn may
+    /// load their slots instead of re-expanding the cone (the owner has
+    /// already stored them this edge)
+    pub shared: Vec<StrId>,
     /// unique function-name label (instance path + rule name)
     pub label: String,
     /// baked into callback tokens: token = base + local foreign-stmt
@@ -160,14 +164,6 @@ pub struct CompiledRule {
     pub prim_calls: Vec<PrimCallSpec>,
 }
 
-/// Owns the LLVM context/module/engine the compiled functions live in.
-pub struct JitEngine {
-    // leaked so the ExecutionEngine (and the returned fn pointers) are
-    // 'static; one per loaded design, lives for the process
-    _ctx: &'static Context,
-    _ee: ExecutionEngine<'static>,
-}
-
 /// Why a rule cannot be compiled; the caller falls back to the
 /// interpreter (this is expected and silent — coverage grows over time).
 #[derive(Debug)]
@@ -189,13 +185,31 @@ fn words_for(w: u32) -> u32 {
 
 /// Compile a batch of rules for one (module type, instance) pair.
 /// All-or-nothing per call: any ineligible rule fails the whole batch.
+/// LLVM global state (target registry, MCJIT linkage) must initialize
+/// exactly once before engines are created on worker threads — the
+/// per-call init inside create_jit_execution_engine races otherwise.
+pub fn llvm_init_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        inkwell::targets::Target::initialize_native(
+            &inkwell::targets::InitializationConfig::default(),
+        )
+        .expect("LLVM native target init");
+        // force MCJIT linkage and any lazy registry state on one thread
+        let ctx = Context::create();
+        let m = ctx.create_module("trs_init");
+        let _ = m.create_jit_execution_engine(OptimizationLevel::None);
+    });
+}
+
 pub fn compile_rules(
     env: &PlanEnv,
     specs: &[RuleSpec],
     foreign_cb: ForeignCb,
     sigfpe_cb: SigfpeCb,
     prim_cb: PrimCb,
-) -> Result<(JitEngine, Vec<CompiledRule>), Ineligible> {
+) -> Result<Vec<CompiledRule>, Ineligible> {
+    llvm_init_once();
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
     let module = ctx.create_module("trs_rules");
     let i64t = ctx.i64_type();
@@ -211,6 +225,7 @@ pub fn compile_rules(
         .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
     let prim_fn = module.add_function("trs_jit_prim", prim_ty, None);
 
+    let t_lower = std::time::Instant::now();
     let mut protos = Vec::new();
     for spec in specs {
         let mut lc = Lower {
@@ -233,14 +248,40 @@ pub fn compile_rules(
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
+    let lower_elapsed = t_lower.elapsed();
+    if std::env::var_os("TRS_JIT_TIME").is_some() {
+        let mut insns = 0usize;
+        let mut fun = module.get_first_function();
+        let mut nfun = 0usize;
+        while let Some(f) = fun {
+            nfun += 1;
+            let mut bb = f.get_first_basic_block();
+            while let Some(b) = bb {
+                insns += b.get_instructions().count();
+                bb = b.get_next_basic_block();
+            }
+            fun = f.get_next_function();
+        }
+        eprintln!(
+            "trs jit: {} fns, {} instructions, lower {:?}",
+            nfun, insns, lower_elapsed
+        );
+    }
+    // JIT default is -O0 (DESIGN.md §6: iterate-run starts fast; -O0
+    // halves LLVM time and costs ~4% sim speed on compute-bound loops)
+    let opt = match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok("1") => OptimizationLevel::Less,
+        Ok("2") => OptimizationLevel::Default,
+        Ok("3") => OptimizationLevel::Aggressive,
+        _ => OptimizationLevel::None,
+    };
     let ee = module
-        .create_jit_execution_engine(OptimizationLevel::Less)
+        .create_jit_execution_engine(opt)
         .map_err(|e| Ineligible(format!("LLVM JIT engine: {e}")))?;
     ee.add_global_mapping(&cb_fn, foreign_cb as usize);
     ee.add_global_mapping(&fpe_fn, sigfpe_cb as usize);
     ee.add_global_mapping(&prim_fn, prim_cb as usize);
-    // SAFETY: 'static via the leaked context; the module moved into the EE
-    let ee: ExecutionEngine<'static> = unsafe { std::mem::transmute(ee) };
+
 
     let mut out = Vec::new();
     for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
@@ -257,7 +298,11 @@ pub fn compile_rules(
             prim_calls,
         });
     }
-    Ok((JitEngine { _ctx: ctx, _ee: ee }, out))
+    // the engine (and the leaked context) live for the process: the
+    // returned raw fn pointers stay valid, and pointers are Send —
+    // batches compile on worker threads (contexts are thread-bound)
+    std::mem::forget(ee);
+    Ok(out)
 }
 
 struct Lower<'a, 'ctx> {
@@ -810,11 +855,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 return Ok(self.to_w(word, 64, 1, false));
             }
         }
-        // exec bodies reuse schedule-time eager values; the sched fn
-        // computes them itself (they're its own cone) and stores them
-        if f.is_exec {
+        // schedule-position (eager) defs live in arena slots, but ONLY
+        // the rule's own frame may touch them: inlined callee frames
+        // must recompute (their instances' owning entries may not have
+        // run yet, and C++ method bodies recompute at call time).
+        // Within the own frame: exec bodies reload (bsc's def tsort
+        // guarantees the owner's schedule position precedes any body
+        // alias), and sched fns reload defs owned by strictly earlier
+        // entries (spec.shared) — the cone-dedup that keeps shared
+        // solver cones from expanding into every rule's IR.
+        if f.inst == self.spec.inst {
             if let Some(&(base, w)) = ie.eager_slot.get(&n) {
-                return Ok(self.load_val(f, base, w));
+                let own_eager = self.spec.eager.contains(&n);
+                if f.is_exec || (!own_eager && self.spec.shared.contains(&n)) {
+                    return Ok(self.load_val(f, base, w));
+                }
             }
         }
         if f.expanding.contains(&n) {
@@ -829,8 +884,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let v = self.expr(f, &dex)?;
         f.expanding.pop();
         f.ssa.insert(n, v);
-        // schedule-position defs are visible to exec bodies via the arena
-        if !f.is_exec {
+        // schedule-position defs are visible to exec bodies via the
+        // arena — stored only by the OWNING rule's sched fn (an inlined
+        // frame writing call-time values would corrupt them)
+        if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
             if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
                 self.store_val(f, base, w, v);
             }

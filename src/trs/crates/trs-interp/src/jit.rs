@@ -13,7 +13,7 @@
 
 use super::*;
 use trs_codegen::lower::{
-    compile_rules, CompiledRule, InstEnv, JitEngine, PlanEnv, RuleSpec,
+    compile_rules, CompiledRule, InstEnv, PlanEnv, RuleSpec,
 };
 use prim::ArenaKind;
 
@@ -79,7 +79,6 @@ pub(crate) struct JitPlans {
     /// EN slots to zero before dispatching a composition (the C++
     /// schedule zeroes every enable at the top of the pass)
     pub(crate) en_slots: Vec<u32>,
-    _engines: Vec<JitEngine>,
 }
 
 impl JitPlans {
@@ -221,6 +220,7 @@ impl Interp {
             cf_slot: u32,
             wf_slot: u32,
             eager: Vec<StrId>,
+            shared: Vec<StrId>,
         }
         let mut rules: Vec<RuleInfo> = Vec::new();
         let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
@@ -231,6 +231,10 @@ impl Interp {
                 }
                 return None;
             }
+            // eager defs owned by entries already walked in THIS comp,
+            // per instance: later rules of the same instance may load
+            // their slots instead of re-expanding the cone
+            let mut owned_so_far: HashMap<usize, Vec<StrId>> = HashMap::new();
             for en in &rc.entries {
                 for &node in &en.nodes {
                     let SchedNode::Sched(r) = node else { continue };
@@ -277,6 +281,12 @@ impl Interp {
                     for (e, base, ew) in eager_adds {
                         ie.eager_slot.insert(e, (base, ew));
                     }
+                    let shared =
+                        owned_so_far.get(&en.inst).cloned().unwrap_or_default();
+                    owned_so_far
+                        .entry(en.inst)
+                        .or_default()
+                        .extend(en.eager.iter().copied());
                     rule_ord.insert((en.inst, r), rules.len());
                     rules.push(RuleInfo {
                         inst: en.inst,
@@ -285,6 +295,7 @@ impl Interp {
                         cf_slot,
                         wf_slot,
                         eager: en.eager.clone(),
+                        shared,
                     });
                 }
             }
@@ -350,21 +361,54 @@ impl Interp {
                 cf_slot: ri.cf_slot,
                 wf_slot: ri.wf_slot,
                 eager: ri.eager.clone(),
+                shared: ri.shared.clone(),
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
                 token_base: (ri.ordinal as u64) << 16,
             });
         }
-        let (engine, compiled) =
-            match compile_rules(&env, &specs, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb) {
-            Ok(x) => x,
-            Err(e) => {
-                if trace {
-                    eprintln!("trs jit: off ({e})");
+        // compile in parallel: rule batches are self-contained (their
+        // own LLVM context/engine, leaked for the process); only raw fn
+        // pointers cross threads
+        trs_codegen::lower::llvm_init_once();
+        let t0 = std::time::Instant::now();
+        let nthreads = std::env::var("TRS_JIT_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8)
+            })
+            .clamp(1, 64)
+            .min(specs.len().max(1));
+        let chunk = specs.len().div_ceil(nthreads).max(1);
+        let results: Vec<Result<Vec<CompiledRule>, _>> = std::thread::scope(|sc| {
+            let env = &env;
+            specs
+                .chunks(chunk)
+                .map(|c| {
+                    sc.spawn(move || {
+                        compile_rules(env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().expect("jit compile thread"))
+                .collect()
+        });
+        let mut compiled: Vec<CompiledRule> = Vec::with_capacity(specs.len());
+        for r in results {
+            match r {
+                Ok(mut v) => compiled.append(&mut v),
+                Err(e) => {
+                    if trace {
+                        eprintln!("trs jit: off ({e})");
+                    }
+                    return None;
                 }
-                return None;
             }
-        };
-        let engines = vec![engine];
+        }
+        if std::env::var_os("TRS_JIT_TIME").is_some() {
+            eprintln!("trs jit: compile {:?}", t0.elapsed());
+        }
 
         // token table + dispatch lists
         self.jit_prim_tokens = compiled
@@ -447,6 +491,6 @@ impl Interp {
                 comp_nodes.len()
             );
         }
-        Some(JitPlans { _arena: arena, arena_ptr, comp_nodes, en_slots, _engines: engines })
+        Some(JitPlans { _arena: arena, arena_ptr, comp_nodes, en_slots })
     }
 }
