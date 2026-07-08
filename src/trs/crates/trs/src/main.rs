@@ -163,10 +163,11 @@ fn main() -> ExitCode {
 }
 
 /// The scripting subset of bluesim.tcl's `sim` command that the testsuite
-/// uses outside bsc.bluesim/interactive: a single `sim run`/`sim step N`
-/// plus `sim time`/`sim clock` queries and `puts [...]` printing.  The
-/// full interactive surface arrives with the bk_* compat .so (task #20);
-/// anything beyond this subset errors out loudly.
+/// uses outside bsc.bluesim/interactive: `sim run`/`sim step N` (multi-step
+/// resumable, on Interp::advance) plus `sim time`/`sim clock` queries and
+/// `puts [...]` printing.  The full interactive surface arrives with the
+/// bk_* compat .so (task #20); anything beyond this subset errors out
+/// loudly.
 fn run_script(
     path: &str,
     max_cycles: u64,
@@ -181,8 +182,6 @@ fn run_script(
             return ExitCode::FAILURE;
         }
     };
-    let mut ran = false;
-    let mut fatal = false;
     for raw in script.split(['\n', ';']) {
         let cmd = raw.trim();
         if cmd.is_empty() {
@@ -203,21 +202,24 @@ fn run_script(
         let words: Vec<&str> = inner.split_whitespace().collect();
         let out = match words.as_slice() {
             ["sim", "run"] | ["sim", "step"] | ["sim", "step", _] => {
-                if ran {
-                    eprintln!(
-                        "trs: -c/-f supports a single run/step per session \
-                         (the interactive surface is not yet implemented)"
-                    );
-                    return ExitCode::from(2);
+                // the reference kernel refuses to continue after $finish
+                if interp.is_finished() {
+                    let what =
+                        if words[1] == "run" { "run anymore" } else { "step" };
+                    eprintln!("Error: $finish has been called -- cannot {what}");
+                    interp.finish();
+                    return ExitCode::FAILURE;
                 }
-                ran = true;
-                let n = match words.as_slice() {
-                    ["sim", "step", n] => n.parse::<u64>().unwrap_or(1),
-                    ["sim", "step"] => 1,
+                // step N advances N default-clock posedges from the
+                // current cycle cursor; run goes to the -m limit
+                let target = match words.as_slice() {
+                    ["sim", "step", n] => {
+                        interp.cycles().saturating_add(n.parse::<u64>().unwrap_or(1))
+                    }
+                    ["sim", "step"] => interp.cycles() + 1,
                     _ => max_cycles,
                 };
-                let rc = interp.run(n.min(max_cycles));
-                fatal = rc != 0;
+                interp.advance(target.min(max_cycles));
                 String::new()
             }
             ["sim", "time"] => format!("{}", interp.now()),
@@ -255,5 +257,6 @@ fn run_script(
             println!("{out}");
         }
     }
-    ExitCode::from(if fatal { 1 } else { 0 })
+    // end-of-session epilogue: final VCD flush + $fatal exit code
+    ExitCode::from(if interp.finish() != 0 { 1 } else { 0 })
 }
