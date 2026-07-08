@@ -24,7 +24,7 @@ compile_object_fail_error Testbench_same_with_phase_diff.bsv G0058 1  mkTestbenc
 # compile reuses it and succeeds; the Bluesim-unsupported errors then
 # fire at the next step, when the .ba is used for linking (the link walks
 # the whole design, so it reports the design's imported-BVI first, G0084)
-if { $ctest == 1 } {
+if { $ctest == 1 && $vtest == 1 } {
 compile_verilog_pass Testbench_fast_to_slow.bsv mkTestbench_fast_to_slow
 compile_object_pass Testbench_fast_to_slow.bsv mkTestbench_fast_to_slow
 link_objects_fail_error {} mkTestbench_fast_to_slow G0084 1
