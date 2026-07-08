@@ -1318,15 +1318,28 @@ struct Reg {
 }
 
 impl Reg {
+    fn words(&self) -> usize {
+        ((self.width as usize) + 63) / 64
+    }
     fn load(&self) -> Value {
         match self.slot {
-            Some(p) => Value::from_u64(self.width, unsafe { *p }),
+            Some(p) => {
+                let limbs =
+                    unsafe { std::slice::from_raw_parts(p, self.words()) }.to_vec();
+                Value::from_limbs64(self.width, limbs)
+            }
             None => self.value.clone(),
         }
     }
     fn store(&mut self, v: Value) {
         match self.slot {
-            Some(p) => unsafe { *p = v.as_u64() },
+            Some(p) => {
+                let dst =
+                    unsafe { std::slice::from_raw_parts_mut(p, self.words()) };
+                for (i, d) in dst.iter_mut().enumerate() {
+                    *d = v.limbs64().get(i).copied().unwrap_or(0);
+                }
+            }
             None => self.value = v,
         }
     }
@@ -1431,7 +1444,10 @@ impl Prim for Reg {
                 // (METH_write, bs_prim_mod_reg.h:100)
                 if !(self.async_rst && self.suppress) {
                     match self.slot {
-                        Some(p) => unsafe { *p = args[0].as_u64() },
+                        Some(_) => {
+                            let v = args[0].clone();
+                            self.store(v);
+                        }
                         None => {
                             self.prev =
                                 std::mem::replace(&mut self.value, args[0].clone());
@@ -1469,11 +1485,15 @@ impl Prim for Reg {
     fn arena_width(&self) -> Option<u32> {
         // async-reset regs suppress writes while in reset (a check a raw
         // compiled store cannot honor), crossing regs need NBA tracking:
-        // neither is arena-backable
-        (!self.crossing && !self.async_rst && self.width <= 64).then_some(self.width)
+        // neither is arena-backable.  Wide regs take ceil(width/64) slots.
+        (!self.crossing && !self.async_rst).then_some(self.width)
     }
     fn arena_attach(&mut self, slot: *mut u64) {
-        unsafe { *slot = self.value.as_u64() };
+        let words = self.words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot, words) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = self.value.limbs64().get(i).copied().unwrap_or(0);
+        }
         self.slot = Some(slot);
     }
 }

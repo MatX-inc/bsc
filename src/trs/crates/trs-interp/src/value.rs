@@ -50,6 +50,20 @@ impl Value {
         v
     }
 
+    /// Little-endian 64-bit limbs (JIT arena interchange).
+    pub fn limbs64(&self) -> &[u64] {
+        &self.limbs
+    }
+
+    /// Build from little-endian 64-bit limbs, padding/truncating to the
+    /// width's limb count and masking (JIT arena interchange).
+    pub fn from_limbs64(width: u32, mut limbs: Vec<u64>) -> Value {
+        limbs.resize(nlimbs(width).max(1), 0);
+        let mut v = Value { width, limbs };
+        v.mask();
+        v
+    }
+
     /// From little-endian 32-bit limbs (the BIR constant encoding).
     pub fn from_limbs32(width: u32, l32: &[u32]) -> Value {
         let mut v = Value::zero(width);

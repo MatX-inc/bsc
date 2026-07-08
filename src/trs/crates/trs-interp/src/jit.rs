@@ -16,6 +16,16 @@ use trs_codegen::lower::{
     compile_rules, CompiledRule, JitEngine, PlanEnv, RuleSpec,
 };
 
+fn words_for(w: u32) -> u32 {
+    w.div_ceil(64)
+}
+
+/// Zero-divisor trap for compiled Quot/Rem: raise SIGFPE like the
+/// interpreter (Value::quot) and native division.
+pub(crate) unsafe extern "C" fn jit_sigfpe_cb() {
+    libc::raise(libc::SIGFPE);
+}
+
 /// One dispatch step of a compiled composition, in entries order.
 pub(crate) enum JitNode {
     Sched(unsafe extern "C" fn(*mut u64)),
@@ -108,9 +118,9 @@ impl Interp {
         }
 
         let mut nslots: u32 = 0;
-        let mut alloc = |n: &mut u32| {
+        let mut alloc = |n: &mut u32, words: u32| {
             let s = *n;
-            *n += 1;
+            *n += words;
             s
         };
 
@@ -127,7 +137,7 @@ impl Interp {
             for (name, ci) in kids {
                 let InstKind::Prim(p) = &self.insts[ci].kind else { continue };
                 if let Some(w) = p.arena_width() {
-                    let s = alloc(&mut nslots);
+                    let s = alloc(&mut nslots, words_for(w));
                     reg_slot_by_inst.entry(i).or_default().insert(name, (s, w));
                     attach.push((ci, s));
                 }
@@ -136,7 +146,7 @@ impl Interp {
 
         // reset-node slots holding the port LEVEL (1 = deasserted)
         let reset_node_slot: Vec<u32> =
-            (0..self.rst_asserted.len()).map(|_| alloc(&mut nslots)).collect();
+            (0..self.rst_asserted.len()).map(|_| alloc(&mut nslots, 1)).collect();
 
         // CF/WF slots for every scheduled rule, plus rule specs skeleton
         struct RuleInfo {
@@ -150,7 +160,7 @@ impl Interp {
         let mut rules: Vec<RuleInfo> = Vec::new();
         let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
         let mut cfwf_by_inst: HashMap<usize, HashMap<StrId, u32>> = HashMap::new();
-        let mut eager_by_inst: HashMap<usize, HashMap<StrId, u32>> = HashMap::new();
+        let mut eager_by_inst: HashMap<usize, HashMap<StrId, (u32, u32)>> = HashMap::new();
         for rc in rcomps {
             if !rc.early.is_empty() {
                 if trace {
@@ -173,14 +183,27 @@ impl Interp {
                         return None;
                     };
                     let rr = &self.d.modules[mir].rules[ri];
-                    let cf_slot = alloc(&mut nslots);
-                    let wf_slot = alloc(&mut nslots);
+                    let cf_slot = alloc(&mut nslots, 1);
+                    let wf_slot = alloc(&mut nslots, 1);
                     let by = cfwf_by_inst.entry(en.inst).or_default();
                     by.insert(rr.can_fire, cf_slot);
                     by.insert(rr.will_fire, wf_slot);
                     let eb = eager_by_inst.entry(en.inst).or_default();
                     for &e in &en.eager {
-                        eb.entry(e).or_insert_with(|| alloc(&mut nslots));
+                        if eb.contains_key(&e) {
+                            continue;
+                        }
+                        let Some(ed) =
+                            self.d.modules[mir].defs.iter().find(|d| d.name == e)
+                        else {
+                            if trace {
+                                eprintln!("trs jit: off (eager def unknown)");
+                            }
+                            return None;
+                        };
+                        let ew = ed.width.max(1);
+                        let base = alloc(&mut nslots, words_for(ew));
+                        eb.insert(e, (base, ew));
                     }
                     rule_ord.insert((en.inst, r), rules.len());
                     rules.push(RuleInfo {
@@ -286,7 +309,7 @@ impl Interp {
                     token_base: (ri.ordinal as u64) << 16,
                 });
             }
-            match compile_rules(&env, &specs, jit_foreign_cb) {
+            match compile_rules(&env, &specs, jit_foreign_cb, jit_sigfpe_cb) {
                 Ok((engine, mut fns)) => {
                     engines.push(engine);
                     for (&k, cr) in idxs.iter().zip(fns.drain(..)) {

@@ -2,8 +2,9 @@
 //!
 //! Hybrid P2 slice (DESIGN.md §10): per-rule native functions running
 //! inside the interpreter's event loop, over a shared u64 state arena
-//! (plain ≤64-bit registers, reset-port levels, per-rule CF/WF, and
-//! schedule-position "eager" defs).  Each eligible rule compiles to
+//! (plain sync registers of any width, reset-port levels, per-rule
+//! CF/WF, and schedule-position "eager" defs; wide state takes
+//! ceil(width/64) consecutive slots).  Each eligible rule compiles to
 //!
 //!   sched_<label>(arena: *mut u64)
 //!     — evaluates the CAN_FIRE/WILL_FIRE cone (expanding defs as SSA),
@@ -15,10 +16,13 @@
 //!       back into the interpreter (`ForeignCb`), and a nonzero return
 //!       (=$finish) unwinds immediately.  Returns nonzero iff stopped.
 //!
-//! Values are modeled as i64 with bits above the BSV width kept zero
-//! (sign-extended on demand for signed ops); width > 64 anywhere makes
-//! the rule ineligible and it stays interpreted.  Ineligibility is an
-//! Err from the trial lowering — the caller falls back per composition.
+//! Values are native LLVM iN integers of their exact BSV width — LLVM
+//! legalizes arbitrary widths — so no masking and no 64-bit cap.
+//! Shift semantics mirror Value::shl/lshr/ashr (overflow to zero /
+//! sign-fill; LLVM's shift-amount poison is guarded); Quot/Rem raise
+//! SIGFPE on a zero divisor like the interpreter and native division.
+//! Ineligibility is an Err from the trial lowering — the caller falls
+//! back to the interpreter per design.
 
 use std::collections::HashMap;
 
@@ -27,6 +31,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
+use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
@@ -36,14 +41,17 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 /// stop the simulation ($finish was called).
 pub type ForeignCb = unsafe extern "C" fn(env: *mut core::ffi::c_void, token: u64) -> i32;
 
+/// Called on a zero divisor: must raise SIGFPE (never returns normally).
+pub type SigfpeCb = unsafe extern "C" fn();
+
 /// Everything the lowering needs to resolve names in one module type,
 /// for one instance: arena slots assigned by the interpreter.
 pub struct PlanEnv<'a> {
     pub d: &'a Design,
     /// module index in `d.modules`
     pub mir: usize,
-    /// local register instance name -> (arena slot, width); only plain
-    /// sync/no-reset regs of width ≤ 64 appear here
+    /// local register instance name -> (arena base slot, width); plain
+    /// sync/no-reset regs only, ceil(width/64) consecutive slots
     pub reg_slot: HashMap<StrId, (u32, u32)>,
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
@@ -51,10 +59,10 @@ pub struct PlanEnv<'a> {
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
-    /// schedule-position def name -> arena slot (this instance): stored
-    /// by the sched fn that owns the def, reloaded by exec bodies (the
-    /// C++ `DEF_x = DEF_x;` reuse semantics)
-    pub eager_slot: HashMap<StrId, u32>,
+    /// schedule-position def name -> (arena base slot, width): stored by
+    /// the sched fn that owns the def, reloaded by exec bodies (the C++
+    /// `DEF_x = DEF_x;` reuse semantics)
+    pub eager_slot: HashMap<StrId, (u32, u32)>,
 }
 
 /// One rule to compile.
@@ -109,21 +117,27 @@ fn nope<T>(why: impl Into<String>) -> Result<T, Ineligible> {
     Err(Ineligible(why.into()))
 }
 
+fn words_for(w: u32) -> u32 {
+    w.div_ceil(64)
+}
+
 /// Compile a batch of rules for one (module type, instance) pair.
 /// All-or-nothing per call: any ineligible rule fails the whole batch.
 pub fn compile_rules(
     env: &PlanEnv,
     specs: &[RuleSpec],
     foreign_cb: ForeignCb,
+    sigfpe_cb: SigfpeCb,
 ) -> Result<(JitEngine, Vec<CompiledRule>), Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
     let module = ctx.create_module("trs_rules");
-    // the interpreter callback for $display-family statements
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
     let cb_ty = i32t.fn_type(&[ptrt.into(), i64t.into()], false);
     let cb_fn = module.add_function("trs_jit_foreign", cb_ty, None);
+    let fpe_ty = ctx.void_type().fn_type(&[], false);
+    let fpe_fn = module.add_function("trs_jit_sigfpe", fpe_ty, None);
 
     let mut protos = Vec::new();
     for spec in specs {
@@ -133,6 +147,7 @@ pub fn compile_rules(
             module: &module,
             builder: ctx.create_builder(),
             cb_fn,
+            fpe_fn,
             spec,
             foreign_stmts: Vec::new(),
         };
@@ -148,6 +163,7 @@ pub fn compile_rules(
         .create_jit_execution_engine(OptimizationLevel::Less)
         .map_err(|e| Ineligible(format!("LLVM JIT engine: {e}")))?;
     ee.add_global_mapping(&cb_fn, foreign_cb as usize);
+    ee.add_global_mapping(&fpe_fn, sigfpe_cb as usize);
     // SAFETY: 'static via the leaked context; the module moved into the EE
     let ee: ExecutionEngine<'static> = unsafe { std::mem::transmute(ee) };
 
@@ -174,6 +190,7 @@ struct Lower<'a, 'ctx> {
     module: &'a Module<'ctx>,
     builder: Builder<'ctx>,
     cb_fn: FunctionValue<'ctx>,
+    fpe_fn: FunctionValue<'ctx>,
     spec: &'a RuleSpec,
     foreign_stmts: Vec<Vec<u32>>,
 }
@@ -193,16 +210,15 @@ struct Frame<'ctx> {
 }
 
 impl<'a, 'ctx> Lower<'a, 'ctx> {
-    fn mask(&self, w: u32) -> u64 {
-        if w >= 64 {
-            u64::MAX
-        } else {
-            (1u64 << w) - 1
-        }
-    }
-
     fn rule(&self) -> &trs_ir::Rule {
         &self.env.d.modules[self.env.mir].rules[self.spec.rule_idx]
+    }
+
+    fn ity(&self, w: u32) -> IntType<'ctx> {
+        // callers guarantee w >= 1 (zero widths are Ineligible earlier)
+        self.ctx
+            .custom_width_int_type(std::num::NonZeroU32::new(w.max(1)).unwrap())
+            .unwrap_or_else(|e| panic!("trs jit: int type i{w}: {e}"))
     }
 
     fn def_width(&self, name: StrId) -> Result<u32, Ineligible> {
@@ -211,8 +227,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let m = &self.env.d.modules[self.env.mir];
         match m.defs.iter().find(|d| d.name == name) {
-            Some(d) if d.width >= 1 && d.width <= 64 => Ok(d.width),
-            Some(d) => nope(format!("def width {} > 64", d.width)),
+            Some(d) if d.width >= 1 => Ok(d.width),
+            Some(_) => nope("zero-width def"),
             None => nope("unknown def"),
         }
     }
@@ -226,14 +242,37 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             | Expr::Prim { width, .. }
             | Expr::If { width, .. }
             | Expr::Case { width, .. } => {
-                if *width >= 1 && *width <= 64 {
+                if *width >= 1 {
                     Ok(*width)
                 } else {
-                    nope(format!("width {width} out of range"))
+                    nope("zero-width expression")
                 }
             }
             _ => nope("expression kind not compilable"),
         }
+    }
+
+    /// Resize `v` (of width `from`) to width `to`.
+    fn to_w(&self, v: IntValue<'ctx>, from: u32, to: u32, signed: bool) -> IntValue<'ctx> {
+        use std::cmp::Ordering::*;
+        match from.cmp(&to) {
+            Equal => v,
+            Greater => self.builder.build_int_truncate(v, self.ity(to), "tr").unwrap(),
+            Less => {
+                if signed {
+                    self.builder.build_int_s_extend(v, self.ity(to), "sx").unwrap()
+                } else {
+                    self.builder.build_int_z_extend(v, self.ity(to), "zx").unwrap()
+                }
+            }
+        }
+    }
+
+    /// i1 truthiness of a width-w value.
+    fn nonzero(&self, v: IntValue<'ctx>, w: u32) -> IntValue<'ctx> {
+        self.builder
+            .build_int_compare(IntPredicate::NE, v, self.ity(w).const_zero(), "nz")
+            .unwrap()
     }
 
     fn slot_ptr(&self, f: &Frame<'ctx>, slot: u32) -> PointerValue<'ctx> {
@@ -245,7 +284,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
-    fn load_slot(&self, f: &Frame<'ctx>, slot: u32) -> IntValue<'ctx> {
+    /// Load one raw arena word.
+    fn load_word(&self, f: &Frame<'ctx>, slot: u32) -> IntValue<'ctx> {
         let p = self.slot_ptr(f, slot);
         self.builder
             .build_load(self.ctx.i64_type(), p, "ld")
@@ -253,50 +293,76 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .into_int_value()
     }
 
-    fn store_slot(&self, f: &Frame<'ctx>, slot: u32, v: IntValue<'ctx>) {
+    fn store_word(&self, f: &Frame<'ctx>, slot: u32, v: IntValue<'ctx>) {
         let p = self.slot_ptr(f, slot);
         self.builder.build_store(p, v).unwrap();
     }
 
-    fn c64(&self, x: u64) -> IntValue<'ctx> {
-        self.ctx.i64_type().const_int(x, false)
-    }
-
-    /// Sign-extend a width-w zero-masked i64 value to full i64.
-    fn sext(&self, v: IntValue<'ctx>, w: u32) -> IntValue<'ctx> {
-        if w >= 64 {
-            return v;
+    /// Load a width-w value from ceil(w/64) consecutive slots.
+    fn load_val(&self, f: &Frame<'ctx>, base: u32, w: u32) -> IntValue<'ctx> {
+        if w <= 64 {
+            let word = self.load_word(f, base);
+            return self.to_w(word, 64, w, false);
         }
-        let sh = self.c64(64 - w as u64);
-        let l = self.builder.build_left_shift(v, sh, "sxl").unwrap();
-        self.builder.build_right_shift(l, sh, true, "sxr").unwrap()
-    }
-
-    fn masked(&self, v: IntValue<'ctx>, w: u32) -> IntValue<'ctx> {
-        if w >= 64 {
-            return v;
+        let t = self.ity(w);
+        let mut acc = t.const_zero();
+        for k in 0..words_for(w) {
+            let word = self.load_word(f, base + k);
+            let wide = self.builder.build_int_z_extend(word, t, "wz").unwrap();
+            let sh = t.const_int((64 * k) as u64, false);
+            let pos = self.builder.build_left_shift(wide, sh, "wsh").unwrap();
+            acc = self.builder.build_or(acc, pos, "wor").unwrap();
         }
-        self.builder.build_and(v, self.c64(self.mask(w)), "mk").unwrap()
+        acc
     }
 
-    /// Lower an expression to a zero-masked i64 value of its BSV width.
+    /// Store a width-w value into ceil(w/64) consecutive slots.
+    fn store_val(&self, f: &Frame<'ctx>, base: u32, w: u32, v: IntValue<'ctx>) {
+        if w <= 64 {
+            let word = self.to_w(v, w, 64, false);
+            self.store_word(f, base, word);
+            return;
+        }
+        let t = self.ity(w);
+        for k in 0..words_for(w) {
+            let sh = t.const_int((64 * k) as u64, false);
+            let piece = self.builder.build_right_shift(v, sh, false, "psh").unwrap();
+            let word =
+                self.builder.build_int_truncate(piece, self.ctx.i64_type(), "ptr").unwrap();
+            self.store_word(f, base + k, word);
+        }
+    }
+
+    /// Constant of width w from the BIR's LE 32-bit limbs.
+    fn cval(&self, w: u32, limbs32: &[u32]) -> IntValue<'ctx> {
+        let mut words = vec![0u64; words_for(w) as usize];
+        for (i, &l) in limbs32.iter().enumerate() {
+            if i / 2 < words.len() {
+                words[i / 2] |= (l as u64) << (32 * (i % 2));
+            }
+        }
+        self.ity(w).const_int_arbitrary_precision(&words)
+    }
+
+    /// Lower an expression to an iN value of its BSV width.
     fn expr(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<IntValue<'ctx>, Ineligible> {
         match e {
             Expr::Const { width, limbs } => {
-                if *width > 64 {
-                    return nope("wide constant");
+                if *width == 0 {
+                    return nope("zero-width constant");
                 }
-                let lo = *limbs.first().unwrap_or(&0) as u64;
-                let hi = *limbs.get(1).unwrap_or(&0) as u64;
-                Ok(self.c64((hi << 32 | lo) & self.mask(*width)))
+                Ok(self.cval(*width, limbs))
             }
             Expr::Def(n) => self.def(f, *n),
             Expr::Port(p) => match self.env.reset_slot.get(p) {
-                Some(&slot) => Ok(self.load_slot(f, slot)),
+                Some(&slot) => {
+                    let word = self.load_word(f, slot);
+                    Ok(self.to_w(word, 64, 1, false))
+                }
                 None => nope("non-reset port read"),
             },
             Expr::MethCall { width, instance, method, args, .. } => {
-                let (slot, rw) = match self.env.reg_slot.get(instance) {
+                let (base, rw) = match self.env.reg_slot.get(instance) {
                     Some(&s) => s,
                     None => return nope("method call on non-arena instance"),
                 };
@@ -307,33 +373,40 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if rw != *width {
                     return nope("register read width mismatch");
                 }
-                Ok(self.load_slot(f, slot))
+                Ok(self.load_val(f, base, rw))
             }
             Expr::If { width, cond, then_, else_ } => {
                 // value exprs are pure here (only reg loads): select is safe
+                let wc = self.expr_width(cond)?;
                 let c = self.expr(f, cond)?;
-                let cz = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, c, self.c64(0), "c")
-                    .unwrap();
-                let t = self.expr(f, then_)?;
-                let x = self.expr(f, else_)?;
-                let r = self.builder.build_select(cz, t, x, "if").unwrap().into_int_value();
-                Ok(self.masked(r, *width))
+                let cz = self.nonzero(c, wc);
+                let wt = self.expr_width(then_)?;
+                let wx = self.expr_width(else_)?;
+                let t0 = self.expr(f, then_)?;
+                let x0 = self.expr(f, else_)?;
+                let t = self.to_w(t0, wt, *width, false);
+                let x = self.to_w(x0, wx, *width, false);
+                Ok(self.builder.build_select(cz, t, x, "if").unwrap().into_int_value())
             }
             Expr::Case { width, scrutinee, arms, default } => {
+                let ws = self.expr_width(scrutinee)?;
                 let s = self.expr(f, scrutinee)?;
-                let mut acc = self.expr(f, default)?;
+                let wd = self.expr_width(default)?;
+                let d0 = self.expr(f, default)?;
+                let mut acc = self.to_w(d0, wd, *width, false);
                 for (k, arm) in arms.iter().rev() {
+                    let kc = self.ity(ws).const_int_arbitrary_precision(&[*k]);
                     let hit = self
                         .builder
-                        .build_int_compare(IntPredicate::EQ, s, self.c64(*k), "k")
+                        .build_int_compare(IntPredicate::EQ, s, kc, "k")
                         .unwrap();
-                    let av = self.expr(f, arm)?;
+                    let wa = self.expr_width(arm)?;
+                    let a0 = self.expr(f, arm)?;
+                    let av = self.to_w(a0, wa, *width, false);
                     acc =
                         self.builder.build_select(hit, av, acc, "cs").unwrap().into_int_value();
                 }
-                Ok(self.masked(acc, *width))
+                Ok(acc)
             }
             Expr::Prim { op, width, args } => self.prim(f, *op, *width, args),
             _ => nope("expression kind not compilable"),
@@ -356,14 +429,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         };
         if !own {
             if let Some(&slot) = self.env.cfwf_slot.get(&n) {
-                return Ok(self.load_slot(f, slot));
+                let word = self.load_word(f, slot);
+                return Ok(self.to_w(word, 64, 1, false));
             }
         }
         // exec bodies reuse schedule-time eager values; the sched fn
         // computes them itself (they're its own cone) and stores them
         if f.envp.is_some() {
-            if let Some(&slot) = self.env.eager_slot.get(&n) {
-                return Ok(self.load_slot(f, slot));
+            if let Some(&(base, w)) = self.env.eager_slot.get(&n) {
+                return Ok(self.load_val(f, base, w));
             }
         }
         if f.expanding.contains(&n) {
@@ -380,8 +454,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         f.ssa.insert(n, v);
         // schedule-position defs are visible to exec bodies via the arena
         if f.envp.is_none() {
-            if let Some(&slot) = self.env.eager_slot.get(&n) {
-                self.store_slot(f, slot, v);
+            if let Some(&(base, w)) = self.env.eager_slot.get(&n) {
+                self.store_val(f, base, w, v);
             }
         }
         Ok(v)
@@ -398,9 +472,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             PrimOp::And | PrimOp::Or | PrimOp::Xor | PrimOp::Add | PrimOp::Sub | PrimOp::Mul => {
                 let mut it = args.iter();
                 let first = it.next().ok_or_else(|| Ineligible("no args".into()))?;
-                let mut acc = self.expr(f, first)?;
+                let w0 = self.expr_width(first)?;
+                let a0 = self.expr(f, first)?;
+                let mut acc = self.to_w(a0, w0, width, false);
                 for a in it {
-                    let v = self.expr(f, a)?;
+                    let wa = self.expr_width(a)?;
+                    let v0 = self.expr(f, a)?;
+                    let v = self.to_w(v0, wa, width, false);
                     acc = match op {
                         PrimOp::And => self.builder.build_and(acc, v, "and").unwrap(),
                         PrimOp::Or => self.builder.build_or(acc, v, "or").unwrap(),
@@ -411,87 +489,95 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         _ => unreachable!(),
                     };
                 }
-                Ok(self.masked(acc, width))
+                Ok(acc)
             }
             PrimOp::Not => {
-                let v = self.expr(f, &args[0])?;
-                let r = self.builder.build_xor(v, self.c64(self.mask(width)), "not").unwrap();
-                Ok(self.masked(r, width))
+                let w0 = self.expr_width(&args[0])?;
+                let v0 = self.expr(f, &args[0])?;
+                let v = self.to_w(v0, w0, width, false);
+                Ok(self.builder.build_not(v, "not").unwrap())
             }
             PrimOp::Neg => {
-                let v = self.expr(f, &args[0])?;
-                let r = self.builder.build_int_sub(self.c64(0), v, "neg").unwrap();
-                Ok(self.masked(r, width))
+                let w0 = self.expr_width(&args[0])?;
+                let v0 = self.expr(f, &args[0])?;
+                let v = self.to_w(v0, w0, width, false);
+                Ok(self.builder.build_int_neg(v, "neg").unwrap())
             }
-            PrimOp::Eq => {
-                let x = self.expr(f, &args[0])?;
-                let y = self.expr(f, &args[1])?;
-                let c = self.builder.build_int_compare(IntPredicate::EQ, x, y, "eq").unwrap();
-                Ok(self.builder.build_int_z_extend(c, self.ctx.i64_type(), "z").unwrap())
-            }
-            PrimOp::Ult | PrimOp::Ule => {
-                let x = self.expr(f, &args[0])?;
-                let y = self.expr(f, &args[1])?;
-                let p = if op == PrimOp::Ult { IntPredicate::ULT } else { IntPredicate::ULE };
-                let c = self.builder.build_int_compare(p, x, y, "uc").unwrap();
-                Ok(self.builder.build_int_z_extend(c, self.ctx.i64_type(), "z").unwrap())
+            PrimOp::Eq | PrimOp::Ult | PrimOp::Ule => {
+                let wx = self.expr_width(&args[0])?;
+                let wy = self.expr_width(&args[1])?;
+                let wm = wx.max(wy);
+                let x0 = self.expr(f, &args[0])?;
+                let y0 = self.expr(f, &args[1])?;
+                let x = self.to_w(x0, wx, wm, false);
+                let y = self.to_w(y0, wy, wm, false);
+                let p = match op {
+                    PrimOp::Eq => IntPredicate::EQ,
+                    PrimOp::Ult => IntPredicate::ULT,
+                    _ => IntPredicate::ULE,
+                };
+                Ok(self.builder.build_int_compare(p, x, y, "uc").unwrap())
             }
             PrimOp::Slt | PrimOp::Sle => {
                 let wx = self.expr_width(&args[0])?;
                 let wy = self.expr_width(&args[1])?;
+                let wm = wx.max(wy);
                 let x0 = self.expr(f, &args[0])?;
                 let y0 = self.expr(f, &args[1])?;
-                let x = self.sext(x0, wx);
-                let y = self.sext(y0, wy);
+                let x = self.to_w(x0, wx, wm, true);
+                let y = self.to_w(y0, wy, wm, true);
                 let p = if op == PrimOp::Slt { IntPredicate::SLT } else { IntPredicate::SLE };
-                let c = self.builder.build_int_compare(p, x, y, "sc").unwrap();
-                Ok(self.builder.build_int_z_extend(c, self.ctx.i64_type(), "z").unwrap())
+                Ok(self.builder.build_int_compare(p, x, y, "sc").unwrap())
             }
-            PrimOp::Shl => {
-                // Value::shl: shift >= result width -> 0
-                let x = self.expr(f, &args[0])?;
-                let s = self.expr(f, &args[1])?;
-                let big = self
-                    .builder
-                    .build_int_compare(IntPredicate::UGE, s, self.c64(width as u64), "sb")
-                    .unwrap();
-                let sh =
-                    self.builder.build_select(big, self.c64(0), s, "sa").unwrap().into_int_value();
-                let r = self.builder.build_left_shift(x, sh, "shl").unwrap();
-                let r = self.masked(r, width);
-                Ok(self.builder.build_select(big, self.c64(0), r, "shr").unwrap().into_int_value())
-            }
-            PrimOp::Lshr => {
-                // Value::lshr: bits beyond the source width read as 0
+            PrimOp::Shl | PrimOp::Lshr | PrimOp::Ashr => {
                 let ws = self.expr_width(&args[0])?;
+                if ws != width {
+                    return nope("shift result width differs from source");
+                }
                 let x = self.expr(f, &args[0])?;
-                let s = self.expr(f, &args[1])?;
+                let wa = self.expr_width(&args[1])?;
+                let s0 = self.expr(f, &args[1])?;
+                // compare/clamp the amount in 64 bits, then bring to iW
+                let s64 = self.to_w(s0, wa, 64, false);
+                let wc = self.ctx.i64_type().const_int(width as u64, false);
                 let big = self
                     .builder
-                    .build_int_compare(IntPredicate::UGE, s, self.c64(ws as u64), "lb")
+                    .build_int_compare(IntPredicate::UGE, s64, wc, "sb")
                     .unwrap();
-                let sh =
-                    self.builder.build_select(big, self.c64(0), s, "la").unwrap().into_int_value();
-                let r = self.builder.build_right_shift(x, sh, false, "lshr").unwrap();
-                let r =
-                    self.builder.build_select(big, self.c64(0), r, "lr").unwrap().into_int_value();
-                Ok(self.masked(r, width))
-            }
-            PrimOp::Ashr => {
-                // sign-fill from the source's sign bit; the clamp keeps
-                // LLVM shift amounts < 64 (see Value::ashr)
-                let ws = self.expr_width(&args[0])?;
-                let x0 = self.expr(f, &args[0])?;
-                let s = self.expr(f, &args[1])?;
-                let x = self.sext(x0, ws);
-                let big = self
-                    .builder
-                    .build_int_compare(IntPredicate::UGT, s, self.c64(63), "ab")
-                    .unwrap();
-                let sh =
-                    self.builder.build_select(big, self.c64(63), s, "aa").unwrap().into_int_value();
-                let r = self.builder.build_right_shift(x, sh, true, "ashr").unwrap();
-                Ok(self.masked(r, width))
+                match op {
+                    PrimOp::Shl | PrimOp::Lshr => {
+                        let zero64 = self.ctx.i64_type().const_zero();
+                        let samt64 = self
+                            .builder
+                            .build_select(big, zero64, s64, "sa")
+                            .unwrap()
+                            .into_int_value();
+                        let samt = self.to_w(samt64, 64, width, false);
+                        let r = if op == PrimOp::Shl {
+                            self.builder.build_left_shift(x, samt, "shl").unwrap()
+                        } else {
+                            self.builder.build_right_shift(x, samt, false, "lshr").unwrap()
+                        };
+                        let zero = self.ity(width).const_zero();
+                        Ok(self
+                            .builder
+                            .build_select(big, zero, r, "shz")
+                            .unwrap()
+                            .into_int_value())
+                    }
+                    _ => {
+                        // ashr: clamp to width-1 — sign-fill for any
+                        // amount >= width, matching Value::ashr
+                        let maxs = self.ctx.i64_type().const_int((width - 1) as u64, false);
+                        let samt64 = self
+                            .builder
+                            .build_select(big, maxs, s64, "aa")
+                            .unwrap()
+                            .into_int_value();
+                        let samt = self.to_w(samt64, 64, width, false);
+                        Ok(self.builder.build_right_shift(x, samt, true, "ashr").unwrap())
+                    }
+                }
             }
             PrimOp::Extract => {
                 // args: [val, hi, lo] with constant hi/lo
@@ -505,23 +591,32 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if hi < lo || hi - lo + 1 != width as u64 {
                     return nope("extract bounds/width mismatch");
                 }
+                let ws = self.expr_width(&args[0])?;
+                if lo >= ws as u64 {
+                    // entirely beyond the source: reads as zero
+                    return Ok(self.ity(width).const_zero());
+                }
                 let x = self.expr(f, &args[0])?;
-                let r = self.builder.build_right_shift(x, self.c64(lo), false, "ex").unwrap();
-                Ok(self.masked(r, width))
+                let sh = self.ity(ws).const_int(lo, false);
+                let r = self.builder.build_right_shift(x, sh, false, "ex").unwrap();
+                Ok(self.to_w(r, ws, width, false))
             }
             PrimOp::Concat => {
                 // left-to-right, first arg highest
-                let mut acc = self.c64(0);
+                let t = self.ity(width);
+                let mut acc = t.const_zero();
                 let mut total = 0u32;
                 for a in args {
-                    let w = self.expr_width(a)?;
-                    let v = self.expr(f, a)?;
-                    total += w;
-                    if total > 64 {
-                        return nope("wide concat");
+                    let wa = self.expr_width(a)?;
+                    let v0 = self.expr(f, a)?;
+                    let v = self.to_w(v0, wa, width, false);
+                    total += wa;
+                    if total > width {
+                        return nope("concat width overflow");
                     }
-                    let sh = self.builder.build_left_shift(acc, self.c64(w as u64), "cc").unwrap();
-                    acc = self.builder.build_or(sh, v, "co").unwrap();
+                    let sh = t.const_int(wa as u64, false);
+                    let shifted = self.builder.build_left_shift(acc, sh, "cc").unwrap();
+                    acc = self.builder.build_or(shifted, v, "co").unwrap();
                 }
                 if total != width {
                     return nope("concat width mismatch");
@@ -529,14 +624,43 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 Ok(acc)
             }
             PrimOp::ZeroExt => {
+                let ws = self.expr_width(&args[0])?;
                 let v = self.expr(f, &args[0])?;
-                Ok(v) // already zero-masked
+                Ok(self.to_w(v, ws, width, false))
             }
             PrimOp::SignExt => {
                 let ws = self.expr_width(&args[0])?;
                 let v = self.expr(f, &args[0])?;
-                let r = self.sext(v, ws);
-                Ok(self.masked(r, width))
+                Ok(self.to_w(v, ws, width, true))
+            }
+            PrimOp::Quot | PrimOp::Rem => {
+                // unsigned; zero divisor raises SIGFPE like the
+                // interpreter (Value::quot) and native division
+                let wx = self.expr_width(&args[0])?;
+                let wy = self.expr_width(&args[1])?;
+                let x0 = self.expr(f, &args[0])?;
+                let y0 = self.expr(f, &args[1])?;
+                let wm = wx.max(wy).max(width);
+                let x = self.to_w(x0, wx, wm, false);
+                let y = self.to_w(y0, wy, wm, false);
+                let z = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, y, self.ity(wm).const_zero(), "dz")
+                    .unwrap();
+                let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let trap_bb = self.ctx.append_basic_block(func, "divz");
+                let ok_bb = self.ctx.append_basic_block(func, "divok");
+                self.builder.build_conditional_branch(z, trap_bb, ok_bb).unwrap();
+                self.builder.position_at_end(trap_bb);
+                self.builder.build_call(self.fpe_fn, &[], "fpe").unwrap();
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(ok_bb);
+                let r = if op == PrimOp::Quot {
+                    self.builder.build_int_unsigned_div(x, y, "quot").unwrap()
+                } else {
+                    self.builder.build_int_unsigned_rem(x, y, "rem").unwrap()
+                };
+                Ok(self.to_w(r, wm, width, false))
             }
             _ => nope(format!("prim op {op:?} not compilable")),
         }
@@ -558,21 +682,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             wrote_reg: false,
         };
 
-        let mut cf = self.def(&mut f, r.can_fire)?;
+        let mut cf = self.def(&mut f, r.can_fire)?; // i1
         for &slot in &self.spec.inhibit_slots {
-            let other = self.load_slot(&f, slot);
-            let nz = self
-                .builder
-                .build_int_compare(IntPredicate::NE, other, self.c64(0), "inz")
-                .unwrap();
-            let zero = self.c64(0);
+            let other = self.load_word(&f, slot);
+            let nz = self.nonzero(other, 64);
+            let zero = self.ctx.bool_type().const_zero();
             cf = self.builder.build_select(nz, zero, cf, "inh").unwrap().into_int_value();
         }
-        self.store_slot(&f, self.spec.cf_slot, cf);
+        let cf64 = self.to_w(cf, 1, 64, false);
+        self.store_word(&f, self.spec.cf_slot, cf64);
         // the WF cone reads the (inhibited) latched CF, not the raw cone
         f.ssa.insert(r.can_fire, cf);
         let wf = self.def(&mut f, r.will_fire)?;
-        self.store_slot(&f, self.spec.wf_slot, wf);
+        let wf64 = self.to_w(wf, 1, 64, false);
+        self.store_word(&f, self.spec.wf_slot, wf64);
         // eager defs the cones did not reach still need their slots
         // stored (later rules' cones or bodies may reload them)
         for &e in &self.spec.eager {
@@ -605,11 +728,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             expanding: Vec::new(),
             wrote_reg: false,
         };
-        let wf = self.load_slot(&f, self.spec.wf_slot);
-        let fire = self
-            .builder
-            .build_int_compare(IntPredicate::NE, wf, self.c64(0), "fire")
-            .unwrap();
+        let wf = self.load_word(&f, self.spec.wf_slot);
+        let fire = self.nonzero(wf, 64);
         self.builder.build_conditional_branch(fire, body_bb, done_bb).unwrap();
 
         self.builder.position_at_end(body_bb);
@@ -644,11 +764,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 Stmt::Action(a) => self.action(f, func, a, path, stop_bb)?,
                 Stmt::AvAction { .. } => return nope("actionvalue in body"),
                 Stmt::Cond { cond, then_, else_ } => {
+                    let wc = self.expr_width(cond)?;
                     let c = self.expr(f, cond)?;
-                    let cz = self
-                        .builder
-                        .build_int_compare(IntPredicate::NE, c, self.c64(0), "cc")
-                        .unwrap();
+                    let cz = self.nonzero(c, wc);
                     let then_bb = self.ctx.append_basic_block(func, "then");
                     let else_bb = self.ctx.append_basic_block(func, "else");
                     let join_bb = self.ctx.append_basic_block(func, "join");
@@ -699,7 +817,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     ) -> Result<(), Ineligible> {
         match a {
             Action::MethCall { instance, method, cond, args, .. } => {
-                let (slot, rw) = match self.env.reg_slot.get(instance) {
+                let (base, rw) = match self.env.reg_slot.get(instance) {
                     Some(&s) => s,
                     None => return nope("action on non-arena instance"),
                 };
@@ -709,18 +827,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 {
                     return nope("non-write action method");
                 }
+                let wc = self.expr_width(cond)?;
                 let c = self.expr(f, cond)?;
+                let wv = self.expr_width(&args[0])?;
                 let v0 = self.expr(f, &args[0])?;
-                let v = self.masked(v0, rw);
-                let cz = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, c, self.c64(0), "wc")
-                    .unwrap();
+                let v = self.to_w(v0, wv, rw, false);
+                let cz = self.nonzero(c, wc);
                 let wr_bb = self.ctx.append_basic_block(func, "wr");
                 let sk_bb = self.ctx.append_basic_block(func, "sk");
                 self.builder.build_conditional_branch(cz, wr_bb, sk_bb).unwrap();
                 self.builder.position_at_end(wr_bb);
-                self.store_slot(f, slot, v);
+                self.store_val(f, base, rw, v);
                 f.wrote_reg = true;
                 self.builder.build_unconditional_branch(sk_bb).unwrap();
                 self.builder.position_at_end(sk_bb);
@@ -732,11 +849,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 for a in args {
                     self.arg_safe(f, a)?;
                 }
+                let wc = self.expr_width(cond)?;
                 let c = self.expr(f, cond)?;
-                let cz = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, c, self.c64(0), "fc")
-                    .unwrap();
+                let cz = self.nonzero(c, wc);
                 let go_bb = self.ctx.append_basic_block(func, "fgo");
                 let sk_bb = self.ctx.append_basic_block(func, "fsk");
                 self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
@@ -747,7 +862,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .builder
                     .build_call(
                         self.cb_fn,
-                        &[f.envp.unwrap().into(), self.c64(token).into()],
+                        &[
+                            f.envp.unwrap().into(),
+                            self.ctx.i64_type().const_int(token, false).into(),
+                        ],
                         "cb",
                     )
                     .unwrap();
@@ -775,8 +893,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// A foreign-statement argument is safe iff the interpreter can
     /// recompute it at callback time: constants, strings, reset ports,
     /// arena register reads, and table defs built from those.  Body
-    /// locals and schedule-position (eager) defs are not visible to the
-    /// callback's fresh context.
+    /// locals qualify only until the first compiled register store;
+    /// schedule-position (eager) defs never do (their values aren't
+    /// reconstructible from a fresh context).
     fn arg_safe(&self, f: &Frame<'ctx>, e: &Expr) -> Result<(), Ineligible> {
         match e {
             Expr::Const { .. } | Expr::Str(_) => Ok(()),
@@ -797,9 +916,6 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 Ok(())
             }
             Expr::Def(n) => {
-                // schedule-position values aren't reconstructible from a
-                // fresh context; body locals are — via the def table —
-                // until a compiled store has changed the state under them
                 if self.env.eager_slot.contains_key(n) {
                     return nope("foreign arg reads eager def");
                 }
