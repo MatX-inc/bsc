@@ -64,6 +64,10 @@ pub struct Module {
     /// the internal osc wire being re-exported (a constant = noClock,
     /// which never ticks).
     pub ifc_clocks: Vec<(StrId, Expr)>,
+    /// Interface output resets: external port name -> the internal reset
+    /// wire being re-exported (parents refer to it as "<inst>$<port>").
+    #[serde(default)]
+    pub ifc_resets: Vec<(StrId, StrId)>,
     /// Submodule / primitive instances.
     pub instances: Vec<Instance>,
     /// Combinational defs, including CAN_FIRE_* / WILL_FIRE_*.
@@ -308,6 +312,7 @@ mod tests {
                 resets: vec![],
                 inputs: vec![],
                 ifc_clocks: vec![],
+                ifc_resets: vec![],
                 instances: vec![],
                 defs: vec![],
                 rules: vec![],

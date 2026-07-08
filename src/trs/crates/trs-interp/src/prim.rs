@@ -118,6 +118,11 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         // MOD_DualPortRam (bs_prim_mod_synchronizers.h): CF read/write
         // with begin-of-cycle read on simultaneous same-address access
         "DualPortRam" => Box::new(DualPortRam::new(consts)),
+        // register + latch aligning data into a shifted clock domain
+        "LatchCrossingReg" | "LatchCrossingRegU" => Box::new(LatchCrossingReg::new(
+            carg(consts, 0) as u32,
+            consts.get(1).cloned(),
+        )),
         "ConfigRegN" | "ConfigRegA" => Box::new(ConfigReg::new(consts, true, name == "ConfigRegA")),
         "ConfigRegUN" => Box::new(ConfigReg::new(consts, false, false)),
         "RWire" => Box::new(RWire::new(consts, false)),
@@ -1044,6 +1049,146 @@ impl Prim for RegFile {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+}
+
+/// MOD_LatchCrossingReg (bs_prim_mod_synchronizers.h): a register written
+/// and read in the source domain whose output is latched (transparent
+/// while the destination clock is high) for a shifted destination domain.
+struct LatchCrossingReg {
+    d_latch: Value,
+    s_flop: Value,
+    prev_value: Value,
+    reset_value: Value,
+    written_at: u64,
+    in_reset: bool,
+    prev_transparent: bool,
+    transparent: bool,
+    vcd_base: u32,
+    vcd_back: Option<(Value, Value)>,
+}
+
+impl LatchCrossingReg {
+    fn new(width: u32, rv: Option<Value>) -> LatchCrossingReg {
+        let w = width.max(1);
+        LatchCrossingReg {
+            d_latch: Value::undet(w),
+            s_flop: Value::undet(w),
+            prev_value: Value::undet(w),
+            reset_value: rv.map(|v| v.zext(w)).unwrap_or_else(|| Value::undet(w)),
+            written_at: u64::MAX,
+            in_reset: false,
+            prev_transparent: false,
+            transparent: false,
+            vcd_base: 0,
+            vcd_back: None,
+        }
+    }
+}
+
+impl Prim for LatchCrossingReg {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        let n = w.reserve_ids(2);
+        self.vcd_base = n;
+        w.write_def(n, &format!("{name}$L_OUT"), self.s_flop.width);
+        w.write_def(n + 1, &format!("{name}$Q_OUT"), self.s_flop.width);
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let n = self.vcd_base;
+        match dt {
+            D::Xs => {
+                w.write_x(n, self.s_flop.width, now);
+                w.write_x(n + 1, self.s_flop.width, now);
+            }
+            D::Changes => {
+                let (bl, bf) = self.vcd_back.clone().unwrap_or((
+                    Value::undet(self.s_flop.width),
+                    Value::undet(self.s_flop.width),
+                ));
+                if self.d_latch != bl {
+                    w.write_val(n, &self.d_latch, now);
+                }
+                if self.s_flop != bf {
+                    w.write_val(n + 1, &self.s_flop, now);
+                }
+            }
+            _ => {
+                w.write_val(n, &self.d_latch, now);
+                w.write_val(n + 1, &self.s_flop, now);
+            }
+        }
+        self.vcd_back = Some((self.d_latch.clone(), self.s_flop.clone()));
+    }
+
+    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+        match method {
+            "read" | "_read" => self.s_flop.clone(),
+            "crossed" => {
+                if self.transparent {
+                    if self.written_at == now {
+                        self.prev_value.clone()
+                    } else {
+                        self.s_flop.clone()
+                    }
+                } else {
+                    self.d_latch.clone()
+                }
+            }
+            m => panic!("LatchCrossingReg: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "write" | "_write" => {
+                if !self.in_reset {
+                    self.prev_value = self.s_flop.clone();
+                    self.s_flop = args[0].clone();
+                    self.written_at = now;
+                    if self.transparent {
+                        self.d_latch = args[0].clone();
+                    }
+                }
+            }
+            m => panic!("LatchCrossingReg: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, _port: &str, now: u64, clk_val: bool, gate: bool) {
+        // dstClk: the latch is transparent while the destination clock
+        // is high (and gated on)
+        self.prev_transparent = self.transparent;
+        self.transparent = gate && clk_val;
+        if self.transparent {
+            self.d_latch = self.s_flop.clone();
+        } else if self.prev_transparent {
+            self.d_latch = if self.written_at == now {
+                self.prev_value.clone()
+            } else {
+                self.s_flop.clone()
+            };
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            self.d_latch = self.reset_value.clone();
+            self.s_flop = self.reset_value.clone();
+            self.prev_value = self.reset_value.clone();
+            self.prev_transparent = false;
+            self.transparent = false;
+        }
+    }
 }
 
 /// MOD_DualPortRam: unclocked dual-port memory used by the MCD AsyncRAM

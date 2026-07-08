@@ -49,7 +49,7 @@ import PPrint (ppReadable)
 import Prim (PrimOp(..))
 import Pragma (RulePragma(..))
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
-import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..))
+import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..), VResetInfo(..))
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
 import ASyntaxUtil (aVars)
 import SimCCBlock (SimCCFnStmt(..))
@@ -719,6 +719,23 @@ encModule pkgNames msi pkg = do
                        _ -> return constZero
            return (encPair (encW32 pn) oscEnc)
       | f@(AIClock {}) <- sp_interface pkg ]
+    -- interface output resets: external port name -> the internal reset
+    -- wire being re-exported (parents refer to it as "<inst>$<port>")
+    let orsts = output_resets (wRst (sp_external_wires pkg))
+        orstPortName n = case lookup n orsts of
+                           Just (Just vn, _) -> getVNameString vn
+                           _ -> getIdBaseString n
+        rstWireName i = if null (getIdQualString i)
+                        then getIdString i
+                        else getIdQualString i ++ "$" ++ getIdBaseString i
+    ifcRstsEnc <- sequence
+      [ do pn <- str (orstPortName (aif_name f))
+           wn <- case areset_wire (aif_reset f) of
+                   ASPort _ i -> str (rstWireName i)
+                   ASDef _ i  -> str (rstWireName i)
+                   _          -> str ""
+           return (encPair (encW32 pn) (encW32 wn))
+      | f@(AIReset {}) <- sp_interface pkg ]
     return $ encStruct
       [ ("name", nameId)
       , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
@@ -726,6 +743,7 @@ encModule pkgNames msi pkg = do
       , ("resets", encList rstsEnc)
       , ("inputs", encList insEnc)
       , ("ifc_clocks", encList ifcClksEnc)
+      , ("ifc_resets", encList ifcRstsEnc)
       , ("instances", encList instsEnc)
       , ("defs", encList defsEnc)
       , ("rules", encList rulesEnc)

@@ -646,6 +646,74 @@ impl Interp {
                 children.insert(name, cidx);
             }
         }
+
+        // interface output resets: a reset-list wire "child$port" names a
+        // node created inside the (module) child; merge our placeholder
+        // node onto the child's real node so assertions reach every
+        // subscriber and reset-wire reads see the right state
+        let qual_wires: Vec<StrId> = self.d.modules[mir]
+            .resets
+            .iter()
+            .filter_map(|r| match &r.wire {
+                Expr::Port(n) if self.s(*n).contains('$') => Some(*n),
+                _ => None,
+            })
+            .collect();
+        for w in qual_wires {
+            let name = self.s(w).to_string();
+            let Some(k) = name.rfind('$') else { continue };
+            let (cname, pname_) = (&name[..k], &name[k + 1..]);
+            let cpath = if path.is_empty() {
+                cname.to_string()
+            } else {
+                format!("{path}.{cname}")
+            };
+            let Some(&ci) = self.inst_by_path.get(&cpath) else { continue };
+            let InstKind::User { module: cm, resets: crs, .. } = &self.insts[ci].kind
+            else {
+                continue; // prim reset generators are handled via rstgen_out
+            };
+            let cmir = self.mods[*cm].ir;
+            let Some(&(_, wire)) = self.d.modules[cmir]
+                .ifc_resets
+                .iter()
+                .find(|(p, _)| self.s(*p) == pname_)
+            else {
+                continue;
+            };
+            let Some(&new_node) = crs.get(&wire) else { continue };
+            let old_node = match &self.insts[slot].kind {
+                InstKind::User { resets, .. } => resets.get(&w).copied(),
+                _ => None,
+            };
+            let Some(old_node) = old_node else { continue };
+            if old_node == new_node {
+                continue;
+            }
+            // migrate subscribers and rewrite every map that names the
+            // placeholder (instantiation-time only)
+            let moved = std::mem::take(&mut self.rst_subs[old_node]);
+            self.rst_subs[new_node].extend(moved);
+            for inst in &mut self.insts {
+                if let InstKind::User { resets, .. } = &mut inst.kind {
+                    for v in resets.values_mut() {
+                        if *v == old_node {
+                            *v = new_node;
+                        }
+                    }
+                }
+            }
+            for v in self.rstgen_out.values_mut() {
+                if *v == old_node {
+                    *v = new_node;
+                }
+            }
+            for v in &mut self.initial_asserts {
+                if *v == old_node {
+                    *v = new_node;
+                }
+            }
+        }
         slot
     }
 
@@ -2419,6 +2487,9 @@ impl Interp {
                 continue;
             }
             self.rst_asserted[n] = v;
+            if std::env::var_os("TRS_TRACE_CLK").is_some() {
+                eprintln!("[t={}] reset node {n} -> asserted={v}", self.now);
+            }
             let subs = self.rst_subs[n].clone();
             for (idx, ord) in subs {
                 if let InstKind::Prim(p) = &mut self.insts[idx].kind {
@@ -2618,6 +2689,21 @@ impl Interp {
         }
         let sources: Vec<ClockSource> =
             clocks.iter().map(|&c| self.resolve_source(c)).collect();
+        if std::env::var_os("TRS_TRACE_CLK").is_some() {
+            for (ci, &c) in clocks.iter().enumerate() {
+                let k = match &sources[ci] {
+                    ClockSource::Wave(w) => format!(
+                        "wave init_high={} delay={} hi={} lo={}",
+                        w.init_high, w.delay, w.hi, w.lo
+                    ),
+                    ClockSource::Triggered { driver, .. } => {
+                        format!("triggered by inst {driver}")
+                    }
+                    ClockSource::Never => "never".to_string(),
+                };
+                eprintln!("clock[{ci}] {:?}: {k}", self.s(c));
+            }
+        }
         // clock-driver prim instance -> clock index, for routing triggered
         // edges after ticks
         let driver_clock: HashMap<usize, usize> = sources
@@ -2758,6 +2844,29 @@ impl Interp {
                         p.vcd_port_clock(&pname, rc.clk, cid);
                     }
                 }
+            }
+        }
+        if std::env::var_os("TRS_TRACE_CLK").is_some() {
+            for (i, rc) in rcomps.iter().enumerate() {
+                let tickinfo: Vec<String> = rc
+                    .ticks
+                    .iter()
+                    .map(|(inst, port, rst, _, _)| {
+                        format!(
+                            "{}:{}{}",
+                            self.insts[*inst].path,
+                            self.d.strings[*port as usize],
+                            if *rst { "(rst)" } else { "" }
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "comp[{i}] clk={} pos={} entries={} ticks={:?}",
+                    rc.clk,
+                    rc.posedge,
+                    rc.entries.len(),
+                    tickinfo
+                );
             }
         }
         // clock-source prims alias the clock they DRIVE (CLK_OUT)
@@ -2949,6 +3058,9 @@ impl Interp {
                             Vec::new()
                         };
                         for pos_edge in edges {
+                            if std::env::var_os("TRS_TRACE_CLK").is_some() {
+                                eprintln!("[t={t}] trigger clk={out_ci} pos={pos_edge}");
+                            }
                             heap.push(Reverse((t, 1, out_ci, pos_edge)));
                         }
                     }
