@@ -129,14 +129,24 @@ it.  Extended sweep with TRS_JIT=1: 965 PASS / 0 DIFF; the 2
 TIMEOUTs (sudoku, conflict_free_large) are COMPILE TIME vs the 5s
 long-test leash, which is the next target.
 
+COMPILE TIME 5x FASTER (71a07aa4): parallel rule-batch compilation
+(per-thread contexts, Once-guarded target init — the per-call init
+races), -O0 default (TRS_JIT_OPT raises), owner-ordered eager-slot
+cone sharing (sched fns load slots stored by earlier entries; inlined
+callee frames must RECOMPUTE — the first cut let them load/store
+callee slots whose owners hadn't run, corrupting sudoku).  Sudoku:
+compile 17.7s -> 3.55s, full run ~3.9s byte-identical.  Sweep: 966
+PASS / 0 DIFF; conflict_free_large TIMEOUT->PASS; sudoku fits the 5s
+leash solo but not under 8-way sweep contention.
+
 NEXT (in rough order of value):
-- JIT compile time (~13s for sudoku's 221 rules): (1) per-MODULE-TYPE
-  code sharing — pass a per-instance slot-offset table instead of
-  baking slot constants, so N instances of a module compile once
-  (DESIGN.md §5.2); (2) emit shared cone defs once per module instead
-  of re-expanding per rule; (3) lazy/tiered compilation per DESIGN.md
-  §6 (compile at first fire, -O0 first) — also flips the two sweep
-  TIMEOUT markers to PASS.
+- Lazy/tiered compilation per DESIGN.md §6 (compile rules at first
+  fire) — kills the remaining compile-time floor (two sudoku rules
+  carry ~130k-insn cones; splitting cones into helper fns is the
+  companion fix) and flips the last sweep TIMEOUT marker.
+- Per-MODULE-TYPE code sharing (slot-offset tables instead of baked
+  constants) — one codegen for N instances (DESIGN.md §5.2); matters
+  for replicated-instance designs, not sudoku.
 - Prim arena fast paths for FIFO2/ConfigReg (hot trampoline calls) and
   the latch/tick machinery bypass — sudoku sim is ~6x off reference;
   these close most of it.
