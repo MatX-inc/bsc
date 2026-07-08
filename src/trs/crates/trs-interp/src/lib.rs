@@ -51,6 +51,9 @@ pub struct Interp {
     inst_by_path: HashMap<String, usize>,
     insts: Vec<Inst>,
     finished: Option<i32>,
+    /// $fatal was called: the bluesim.tcl driver exits 1 in that case
+    /// and 0 otherwise ($finish codes are not process exit codes)
+    fataled: bool,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
     now: u64,
@@ -214,6 +217,7 @@ impl Interp {
             pushback: HashMap::new(),
             dyn_strs: Vec::new(),
             finished: None,
+            fataled: false,
             cycle: 0,
             now: 0,
             clockgen_waves: HashMap::new(),
@@ -1328,15 +1332,17 @@ impl Interp {
                 emit_output_errors(&errs);
             }
             "$fatal" => {
-                // first argument is the exit status (dollar_fatal)
-                let (status, rest) = match args.split_first() {
-                    Some((Arg::Val(v, _), rest)) => (v.as_u64() as i32, rest),
-                    _ => (0, args),
+                // first argument is the status passed to bk_fatal_now; the
+                // driver ignores it and exits 1 whenever $fatal fired
+                let rest = match args.split_first() {
+                    Some((Arg::Val(_, _), rest)) => rest,
+                    _ => args,
                 };
                 let mut errs = Vec::new();
                 println!("{}", format::format_args(rest, 10, self.now, loc, &mut errs));
                 emit_output_errors(&errs);
-                self.finished = Some(status);
+                self.fataled = true;
+                self.finished = Some(1);
             }
             "$finish" => {
                 let code = match args.first() {
@@ -2062,7 +2068,9 @@ impl Interp {
                 break;
             }
         }
-        self.finished.unwrap_or(0)
+        // bluesim.tcl: exit 1 iff $fatal was called; $finish status codes
+        // do not surface as process exit codes
+        if self.fataled { 1 } else { 0 }
     }
 
     /// "a.b.RL_r" -> (instance index of "a.b", rule StrId of "RL_r")

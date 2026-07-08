@@ -8,6 +8,7 @@ executable and `trs run` on the exported BIR, and diff stdout.
 Every failure is classified so the output is a work list, not a score:
   COMPILE_FAIL   bsc could not compile the design (env/flags/etc)
   LINK_FAIL      bsc link failed for reasons other than export
+  NOT_SUPPORTED  reference Bluesim cannot run the design either (BVI)
   EXPORT_FAIL    SimExportIR internalError (unhandled IR construct)
   REF_FAIL       reference Bluesim run failed/timed out
   DECODE_FAIL    trs could not decode the .bir
@@ -104,7 +105,8 @@ def one_test(job):
             except OSError:
                 pass
 
-    common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-p", testdir + ":+"]
+    common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk,
+              "-p", wk + ":" + testdir + ":+"]
     r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
@@ -113,7 +115,13 @@ def one_test(job):
     r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common, cwd=wk)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
-        cls = "EXPORT_FAIL" if "SimExportIR" in msg else "LINK_FAIL"
+        if "SimExportIR" in msg:
+            cls = "EXPORT_FAIL"
+        elif "(G0084)" in msg or ("Bluesim" in msg and "import" in msg):
+            # reference Bluesim cannot run this design either (BVI import)
+            cls = "NOT_SUPPORTED"
+        else:
+            cls = "LINK_FAIL"
         return (rel, top, cls, first_error(msg))
 
     bir = os.path.join(wk, top + ".bir")
@@ -121,9 +129,10 @@ def one_test(job):
         return (rel, top, "EXPORT_FAIL", "no .bir produced")
 
     ref = run(["./sim.exe", "-m", MAX_CYCLES], cwd=wk)
-    if ref is None or ref.returncode not in (0,):
-        why = "timeout" if ref is None else f"exit {ref.returncode}"
-        return (rel, top, "REF_FAIL", why)
+    if ref is None:
+        return (rel, top, "REF_FAIL", "timeout")
+    if ref.returncode < 0:
+        return (rel, top, "REF_FAIL", f"signal {-ref.returncode}")
 
     inp = run([TRS, "run", bir, "-m", MAX_CYCLES], cwd=wk)
     if inp is None:
@@ -134,6 +143,9 @@ def one_test(job):
         return (rel, top, "DECODE_FAIL", first_error(inp.stderr))
 
     if ref.stdout == inp.stdout:
+        if ref.returncode != inp.returncode:
+            return (rel, top, "DIFF",
+                    f"exit codes differ: ref={ref.returncode} int={inp.returncode}")
         return (rel, top, "PASS", "")
     return (rel, top, "DIFF", diff_summary(ref.stdout, inp.stdout))
 
