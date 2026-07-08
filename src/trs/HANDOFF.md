@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`f5d99d44` — ALWAYS `git push personal`, never bare `git push origin`:
+`ecba6505` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -139,19 +139,47 @@ compile 17.7s -> 3.55s, full run ~3.9s byte-identical.  Sweep: 966
 PASS / 0 DIFF; conflict_free_large TIMEOUT->PASS; sudoku fits the 5s
 leash solo but not under 8-way sweep contention.
 
+SCHED-EAGER / BODY-LAZY (Ravi's split, current): scheduling functions
+compile eagerly and blocking (they run on EVERY edge, and cone sharing
+makes them tiny — 4% of sudoku's IR, 108ms), while rule BODIES stream
+in on background workers filling per-rule OnceLock cells; an Exec node
+whose cell is still cold reads its WF straight from the arena slot the
+native sched just wrote and interprets the body (exec_rule_forced).
+Key pieces: trial_lower() decides eligibility synchronously by
+lowering into a throwaway context (no engine work); token = ordinal<<17
+| TOKEN_KIND_EXEC | local so callbacks resolve call-site specs through
+the shared LazyJit; the interpreter's Def evaluation falls through to
+arena slots (jit_eager_slots) so interpreted bodies see the fire
+signals/eager defs the scheds computed — do NOT bridge slot values
+into the latch instead: slots evolve during the firing as later scheds
+run, and the resulting staleness is compile-race-dependent (same
+binary alternated pass/fail); interpreted method calls write EN slots
+through (jit_en_slots); the driver _exit()s after flushing so atexit
+doesn't stall on in-flight LLVM workers.  TRS_JIT_SYNC=1 restores
+blocking body compiles for measurement.  Sudoku: -m 1 startup 0.48s
+(trial-lower dominated), -m 4000 1.80s, full run 5.8s byte-identical
+across repeated runs; LongCnt 0.51s.  Battery 9/9.  Sweep: 967 PASS
+/ 0 DIFF / 0 TIMEOUT — sudoku's long-test-leash marker flipped to
+PASS (the -m 4000 probe runs in 1.8s), so the whole extended corpus
+is green under TRS_JIT=1.
+
 NEXT (in rough order of value):
-- Lazy/tiered compilation per DESIGN.md §6 (compile rules at first
-  fire) — kills the remaining compile-time floor (two sudoku rules
-  carry ~130k-insn cones; splitting cones into helper fns is the
-  companion fix) and flips the last sweep TIMEOUT marker.
+- Cone/body splitting into helper fns — two sudoku rule bodies carry
+  ~130k-insn cones and set the body-compile floor (~3.5s wall in the
+  background); splitting also unlocks raising TRS_JIT_OPT.
+- Heuristic escape hatch for sched compile if a cone-heavy design
+  makes the blocking phase noticeable (trial_lower already measures
+  sched IR size per design for free; aggregate TRS_JIT_TIME across
+  the sweep corpus to pick the threshold).  Not needed for any current
+  corpus design.
 - Per-MODULE-TYPE code sharing (slot-offset tables instead of baked
   constants) — one codegen for N instances (DESIGN.md §5.2); matters
   for replicated-instance designs, not sudoku.
 - Prim arena fast paths for FIFO2/ConfigReg (hot trampoline calls) and
   the latch/tick machinery bypass — sudoku sim is ~6x off reference;
   these close most of it.
-- Per-composition fallback granularity (needs latch bridging for
-  cross-composition inhibitor reads).
+- Per-composition fallback granularity (the arena fall-through in
+  eval Def now provides the cross-composition read path naturally).
 - Ship it: enable the jit feature in the Makefile release build once
   llvm-18-dev is a build prerequisite Ravi accepts.
 
