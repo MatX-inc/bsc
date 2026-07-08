@@ -128,8 +128,9 @@ enum InstKind {
         /// module parameters, bound at instantiation (positional zip of
         /// the child's inputs with the parent's instantiation args)
         params: HashMap<StrId, Value>,
-        /// string-valued parameters (only observable as task args)
-        str_params: HashMap<StrId, String>,
+        /// string-valued parameters: port name -> design string id
+        /// (kept as ids so dynamic muxes carry them as marker values)
+        str_params: HashMap<StrId, StrId>,
         /// local reset wire name -> reset node (module reset inputs bound
         /// at instantiation; derived resets created by child reset prims)
         resets: HashMap<StrId, usize>,
@@ -243,12 +244,22 @@ impl Interp {
         &self.d.strings[id as usize]
     }
 
+    /// The string id bound to a string-valued parameter of an instance,
+    /// if any (used to forward string parameters down the hierarchy).
+    fn str_param_of(&self, inst: usize, name: StrId) -> Option<StrId> {
+        if let InstKind::User { str_params, .. } = &self.insts[inst].kind {
+            str_params.get(&name).copied()
+        } else {
+            None
+        }
+    }
+
     fn instantiate(
         &mut self,
         path: String,
         module: usize,
         params: HashMap<StrId, Value>,
-        str_params: HashMap<StrId, String>,
+        str_params: HashMap<StrId, StrId>,
         reset_binds: HashMap<StrId, usize>,
         gate_binds: HashMap<StrId, (usize, Expr)>,
         clk_binds: HashMap<StrId, (usize, Expr)>,
@@ -362,7 +373,15 @@ impl Interp {
                             }
                             _ => match arg {
                                 Expr::Str(sid) => {
-                                    str_params.insert(pname_, self.s(*sid).to_string());
+                                    str_params.insert(pname_, *sid);
+                                }
+                                // a string parameter forwarded through an
+                                // intermediate module level
+                                Expr::Param(p) | Expr::Port(p)
+                                    if self.str_param_of(slot, *p).is_some() =>
+                                {
+                                    let sid = self.str_param_of(slot, *p).unwrap();
+                                    str_params.insert(pname_, sid);
                                 }
                                 _ => {
                                     let mut c = Ctx::default();
@@ -396,6 +415,12 @@ impl Interp {
                         match a {
                             Expr::Clock { .. } | Expr::Reset { .. } | Expr::Gate { .. } => {}
                             Expr::Str(sid) => strs.push(self.s(*sid).to_string()),
+                            Expr::Param(p) | Expr::Port(p)
+                                if self.str_param_of(slot, *p).is_some() =>
+                            {
+                                let sid = self.str_param_of(slot, *p).unwrap();
+                                strs.push(self.s(sid).to_string());
+                            }
                             _ => {
                                 let mut c = Ctx::default();
                                 consts.push(self.eval(slot, &mut c, a));
@@ -559,9 +584,14 @@ impl Interp {
                 if let Some(v) = ctx.frame.get(name) {
                     return v.clone();
                 }
-                if let InstKind::User { params, .. } = &self.insts[inst].kind {
+                if let InstKind::User { params, str_params, .. } = &self.insts[inst].kind {
                     if let Some(v) = params.get(name) {
                         return v.clone();
+                    }
+                    // string parameters flow as marker values so dynamic
+                    // muxes over them still resolve at task boundaries
+                    if let Some(&sid) = str_params.get(name) {
+                        return Value::str_ref(sid);
                     }
                 }
                 // module input ports outside a method frame: clock gates and
@@ -816,8 +846,8 @@ impl Interp {
             Expr::Str(s) => Arg::Str(self.s(*s).to_string()),
             Expr::Port(name) | Expr::Param(name) => {
                 if let InstKind::User { str_params, .. } = &self.insts[inst].kind {
-                    if let Some(sv) = str_params.get(name) {
-                        return Arg::Str(sv.clone());
+                    if let Some(&sid) = str_params.get(name) {
+                        return Arg::Str(self.s(sid).to_string());
                     }
                 }
                 let v = self.eval(inst, ctx, e);

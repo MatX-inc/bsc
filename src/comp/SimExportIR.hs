@@ -156,7 +156,6 @@ encDesign ssys =
         msis = M.fromList [ (getIdBaseString (sp_name p),
                              analyzeModule pkgNames p)
                           | p <- pkgs ]
-        segmaps = M.map msi_segIdx msis
         instToMod = ssys_instmap ssys
 
         -- gates of top-level input clocks are always on in simulation
@@ -171,7 +170,7 @@ encDesign ssys =
                                    (msis M.! getIdBaseString (sp_name p)) p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
-          compsEnc <- concat <$> mapM (encComposition instToMod segmaps topGates)
+          compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
                                        (ssys_schedules ssys)
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
@@ -363,10 +362,11 @@ qualPath i = case getIdQualString i of
                q   -> q ++ "." ++ getIdBaseString i
 
 encComposition :: M.Map String String
-               -> M.Map String (M.Map String ((Int, Int), Int))
+               -> M.Map String ModSchedInfo
                -> [AId] -> SimSchedule -> EncM [C.Encoding]
-encComposition instToMod segmaps topGates ss = do
-    let order = ss_sched_order ss
+encComposition instToMod msis topGates ss = do
+    let segmaps = M.map msi_segIdx msis
+        order = ss_sched_order ss
 
         -- resolve a merged node to (instance path, segment index) plus
         -- the node's position inside the segment; top-module method nodes
@@ -469,14 +469,37 @@ encComposition instToMod segmaps topGates ss = do
         execPos = M.fromList [ (qualPath i, p)
                              | (Exec i, p) <- zip order [(0 :: Int) ..] ]
 
-        crossPairs =
-            [ (qualPath r, qualPath d)
-            | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-            , d <- S.toList ds
-            , getIdQualString r /= getIdQualString d
-            , let pr = M.lookup (qualPath r) execPos
-            , let pd = M.lookup (qualPath d) execPos
-            , maybe False id ((<) <$> pr <*> pd) ]
+        -- ME inhibitors, mkMERuleInhibits semantics against the node
+        -- order the backend actually executes (the composed entries
+        -- expanded to their segment nodes): rule r is inhibited by
+        -- disjoint rule d iff Exec(d) runs before Sched(r).  All pairs
+        -- (same- or cross-instance) export at composition level; the
+        -- per-rule me_inhibits list is empty now that the composed order
+        -- is instance-specific.
+        segNodes inst (dom, seg) =
+            let modName = M.findWithDefault "" inst instToMod
+                segs = case M.lookup modName msis of
+                         Just msi -> case lookup dom (msi_domains msi) of
+                                       Just s -> s
+                                       Nothing -> []
+                         Nothing -> []
+            in  if seg < length segs then seg_nodes (segs !! seg) else []
+        qp i b = if null i then b else i ++ "." ++ b
+        composedNodes =
+            [ (i, node) | (i, ds) <- entries, node <- segNodes i ds ]
+        disjQ = M.fromListWith S.union
+                  ([ (qualPath r, S.map qualPath ds)
+                   | (r, ds) <- M.toList (ss_disjoint_rules_db ss) ]
+                   ++ [ (qualPath d, S.singleton (qualPath r))
+                      | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                      , d <- S.toList ds ])
+        stepME (seen, acc) (i, Exec n) =
+            (S.insert (qp i (getIdBaseString n)) seen, acc)
+        stepME (seen, acc) (i, Sched n) =
+            let q = qp i (getIdBaseString n)
+                inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
+            in  (seen, acc ++ [ (d, q) | d <- S.toList inh ])
+        crossPairs = snd (foldl' stepME (S.empty, []) composedNodes)
 
         -- direction-filter the primitive ticks against the primMap tick
         -- specs (doTickCall): a posedge schedule also produces a
@@ -894,15 +917,11 @@ encRule msi pkg r = do
                 Just (ClockDomain n) -> fromIntegral n
                 Nothing -> 0
         crossing = RPclockCrossingRule `elem` arule_pragmas r
-        -- disjoint rules of this module executing earlier in the module's
-        -- own order inhibit this rule (destructive-execution patch;
-        -- cross-module pairs live in the composition)
-        base = getIdBaseString (arule_id r)
-        myPos = M.findWithDefault maxBound base (msi_execPos msi)
-        earlier r' = M.findWithDefault maxBound r' (msi_execPos msi) < myPos
-        inhibits = filter earlier
-                     (S.toList (M.findWithDefault S.empty base (msi_disj msi)))
-    inhibitsEnc <- mapM strE inhibits
+    -- ME inhibitors are all composition-level (cross_inhibits): the
+    -- executed order is instance-specific, so a module-shared list
+    -- cannot express them (and the pragma-asserted pairs must not
+    -- inhibit at all when every Sched runs before its partners' Execs)
+    let inhibitsEnc = [] :: [C.Encoding]
     return $ encStruct
       [ ("name", nameId)
       , ("can_fire", cf)
