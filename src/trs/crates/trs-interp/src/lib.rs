@@ -1192,23 +1192,37 @@ impl Interp {
                 }
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
-                let mut ctx = self.method_ctx(module, mi, argv, false);
                 // an always_enabled method is invoked with its RDY
                 // dropped from the caller's condition; the body itself
                 // checks RDY at runtime (cvtIFace check_rdy) — EN and
                 // args land above regardless
-                if self.d.modules[mir].methods[mi].always_enabled {
-                    if let Some(rdy) = self.d.modules[mir].methods[mi].ready.clone() {
-                        if !self.eval(callee, &mut ctx, &rdy).as_bool() {
-                            return;
-                        }
-                    }
+                if self.d.modules[mir].methods[mi].always_enabled
+                    && !self.always_en_rdy(callee, module, method)
+                {
+                    return;
                 }
+                let mut ctx = self.method_ctx(module, mi, argv, false);
                 for st in &body {
                     self.exec_stmt(callee, &mut ctx, st);
                 }
             }
         }
+    }
+
+    /// check_rdy for an always_enabled method: the C++ wraps the body in
+    /// `if (RDY_<m> port)` (cvtIFace), so evaluate the sibling RDY_<m>
+    /// method — the always_enabled method's own `ready` expr can
+    /// reference defs bsc dropped along with the caller-side condition.
+    /// No RDY method exported = constant ready.
+    fn always_en_rdy(&mut self, callee: usize, module: usize, method: StrId) -> bool {
+        let rdy_name = format!("RDY_{}", self.s(method));
+        let Some(id) = self.d.strings.iter().position(|x| x == &rdy_name) else {
+            return true;
+        };
+        if !self.mods[module].methods.contains_key(&(id as StrId)) {
+            return true;
+        }
+        self.call_value(callee, id as StrId, &[], 1).as_u64() & 1 == 1
     }
 
     /// Record that an action/actionvalue method fired this pass: the C++
@@ -1250,15 +1264,12 @@ impl Interp {
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
                 let result = self.d.modules[mir].methods[mi].result.clone();
-                let mut ctx = self.method_ctx(module, mi, argv, false);
                 // check_rdy for always_enabled: skip the body when RDY
                 // is off; the result is still evaluated (the C++ returns
                 // the stale port value — "all bets are off")
                 let skip_body = self.d.modules[mir].methods[mi].always_enabled
-                    && match self.d.modules[mir].methods[mi].ready.clone() {
-                        Some(rdy) => !self.eval(callee, &mut ctx, &rdy).as_bool(),
-                        None => false,
-                    };
+                    && !self.always_en_rdy(callee, module, method);
+                let mut ctx = self.method_ctx(module, mi, argv, false);
                 if !skip_body {
                     for st in &body {
                         self.exec_stmt(callee, &mut ctx, st);

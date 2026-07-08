@@ -47,7 +47,7 @@ import Id (Id, getIdBaseString, getIdQualString, isSignedId,
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
-import Pragma (RulePragma(..))
+import Pragma (RulePragma(..), isAlwaysEn)
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
 import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..), VResetInfo(..))
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
@@ -231,59 +231,6 @@ analyzeModule pkgNames pkg =
         methodNames = S.fromList
             [ getIdBaseString (aif_name f) | f <- sp_interface pkg ]
 
-        -- Rules that call into user-submodule instances are fusion points:
-        -- the merge attaches cross-boundary constraints to them, so each
-        -- gets a singleton segment (a child's segments may have to run
-        -- between two such rules).  Primitive calls don't cut: primitives
-        -- are not scheduled modules.
-        userInsts = S.fromList
-            [ getIdBaseString (avi_vname avi)
-            | avi <- M.elems (sp_state_instances pkg)
-            , getVNameString (vName (avi_vmi avi)) `S.member` pkgNames ]
-
-        defmap = sp_local_defs pkg
-
-        -- transitive def closure from a seed set of ids
-        defClosure :: S.Set AId -> S.Set AId
-        defClosure = go S.empty
-          where go seen pending = case S.minView pending of
-                  Nothing -> seen
-                  Just (i, rest)
-                    | i `S.member` seen -> go seen rest
-                    | otherwise ->
-                        case M.lookup i defmap of
-                          Nothing -> go (S.insert i seen) rest
-                          Just (ADef _ _ e _) ->
-                              go (S.insert i seen)
-                                 (rest `S.union` S.fromList (aVars e))
-
-        exprTouches :: AExpr -> Bool
-        exprTouches (AMethCall _ o _ es) =
-            getIdBaseString o `S.member` userInsts || any exprTouches es
-        exprTouches (AMethValue _ o _) = getIdBaseString o `S.member` userInsts
-        exprTouches (APrim _ _ _ es) = any exprTouches es
-        exprTouches (AFunCall _ _ _ _ es) = any exprTouches es
-        exprTouches _ = False
-
-        defsTouch :: S.Set AId -> Bool
-        defsTouch ids = or [ exprTouches e
-                           | i <- S.toList ids
-                           , Just (ADef _ _ e _) <- [M.lookup i defmap] ]
-
-        actTouches :: AAction -> Bool
-        actTouches (ACall o _ es) =
-            getIdBaseString o `S.member` userInsts || any exprTouches es
-        actTouches a = any exprTouches (aact_args a)
-
-        touchingRules = S.fromList
-            [ getIdBaseString (arule_id r)
-            | r <- sp_rules pkg
-            , let seed = S.fromList
-                    (aVars (arule_pred r)
-                     ++ concatMap aVars (concatMap aact_args (arule_actions r)))
-            , any actTouches (arule_actions r)
-              || defsTouch (defClosure seed) ]
-
         ruleDom :: M.Map String Int
         ruleDom = M.fromList
             [ (getIdBaseString (arule_id r), domOf (arule_wprops r))
@@ -325,41 +272,36 @@ analyzeModule pkgNames pkg =
                                                Just "$stop"])
                   (arule_actions r) ]
 
-        -- Rules in any ME (disjoint) relation also get per-node singleton
-        -- segments: bsc's merged graph carries no ordering edge between ME
-        -- rules, yet its flat order keeps every Sched ahead of the ME
-        -- partner's Exec — reproducing that needs the Sched and Exec
-        -- independently placeable (encComposition adds the unit edges).
-        meRules = S.unions (M.elems disj)
-                  `S.union` S.fromList [ r | (r, ds) <- M.toList disj
-                                           , not (S.null ds) ]
-                  `S.union` finishRules
-
         -- Split this domain's rule nodes into segments: cut at interface
-        -- method positions AND isolate child-calling / ME rules as
-        -- singletons.
+        -- method positions, ONE SEGMENT PER RULE NODE.  Per-node segments
+        -- make the composed order reproduce bsc's flat merged order
+        -- exactly (encComposition's Kahn sort breaks ties by first
+        -- appearance in that order): CF rules carry no ordering edge, yet
+        -- their Exec order is observable through unguarded primitives
+        -- (mkUGFIFOF warn/drop, bsc.lib/getput) and task output, and a
+        -- multi-node segment cannot interleave another instance's Exec
+        -- between its own nodes.  This also keeps every ME/finish
+        -- endpoint independently placeable — including design-level ME
+        -- pairs derived through child methods (combineSchedDRDB), which
+        -- interlocked multi-node segments into a cycle
+        -- (bsc.interra/libraries/SRAMFile) — so the projected unit graph
+        -- is trivially acyclic.
         segsFor :: Int -> [Seg]
         segsFor d =
-            let step (segs, nodes, cut) node =
+            let step (segs, cut) node =
                     let base = getIdBaseString (getSchedNodeId node)
                     in  if base `S.member` methodNames
-                        then (segs, nodes, nub (cut ++ [base]))
+                        then (segs, nub (cut ++ [base]))
                         else if M.lookup base ruleDom /= Just d
-                        then (segs, nodes, cut)
-                        else if base `S.member` touchingRules
-                             || base `S.member` meRules
-                        then -- close any open segment, emit a singleton
-                             let closed = if null nodes && null cut
+                        then (segs, cut)
+                        else let closed = if null cut
                                           then segs
-                                          else segs ++ [Seg nodes cut]
-                             in  (closed ++ [Seg [node] []], [], [])
-                        else if null cut
-                        then (segs, nodes ++ [node], [])
-                        else (segs ++ [Seg nodes cut], [node], [])
-                (segs, nodes, cut) = foldl' step ([], [], []) order
-            in  if null nodes && null cut && not (null segs)
+                                          else segs ++ [Seg [] cut]
+                             in  (closed ++ [Seg [node] []], [])
+                (segs, cut) = foldl' step ([], []) order
+            in  if null cut && not (null segs)
                 then segs
-                else segs ++ [Seg nodes cut]
+                else segs ++ [Seg [] cut]
 
         domSegs = [ (d, segsFor d) | d <- doms ]
 
@@ -1075,6 +1017,7 @@ encMethodStructAV pkg name inputs mpred body retdef props = do
       , ("body", bodyEnc)
       , ("result", resultEnc)
       , ("clock_domain", encW32 dom)
+      , ("always_enabled", encBool (isAlwaysEn (sp_pps pkg) name))
       ]
 
 encMethodStruct :: SimPackage -> Id -> String -> [AInput] -> Maybe APred
@@ -1090,6 +1033,8 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
     let dom = case wpClockDomain props of
                 Just (ClockDomain n) -> fromIntegral n
                 Nothing -> 0
+        -- the runtime RDY check only matters for methods with actions
+        ae = kind /= "Value" && isAlwaysEn (sp_pps pkg) name
     return $ encStruct
       [ ("name", nameId)
       , ("kind", encUnitVariant kind)
@@ -1098,6 +1043,7 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
       , ("body", bodyEnc)
       , ("result", encMaybe id resultEnc)
       , ("clock_domain", encW32 dom)
+      , ("always_enabled", encBool ae)
       ]
 
 -- ===============

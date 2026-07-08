@@ -210,6 +210,11 @@ pub struct Method {
     pub body: Vec<Stmt>,
     pub result: Option<Expr>,
     pub clock_domain: u32,
+    /// (* always_enabled *): bsc drops the caller-side RDY condition, so
+    /// the method body must check its own RDY at runtime (the C++
+    /// backend's cvtIFace check_rdy wrapper).
+    #[serde(default)]
+    pub always_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
