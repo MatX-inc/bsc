@@ -98,17 +98,28 @@ pub trait Prim {
         Vec::new()
     }
 
-    /// JIT state arena (DESIGN.md §5.1): a prim whose entire state is a
-    /// single ≤64-bit word (plain registers) reports its width here so
-    /// compiled code can load/store it directly.  None = not backable.
-    fn arena_width(&self) -> Option<u32> {
+    /// JIT state arena (DESIGN.md §5.1): a prim whose state fits the
+    /// arena layout reports its kind so compiled code can load/store it
+    /// directly.  None = not backable.
+    fn arena_kind(&self) -> Option<ArenaKind> {
         None
     }
     /// Route this prim's state through `slot` (a stable pointer into the
-    /// Interp-owned arena; single-threaded).  The current value is
-    /// written to the slot, which becomes the single source of truth for
-    /// both the interpreter paths and compiled code.
+    /// Interp-owned arena; single-threaded).  The current state is
+    /// written to the slot(s), which become the single source of truth
+    /// for both the interpreter paths and compiled code.
     fn arena_attach(&mut self, _slot: *mut u64) {}
+}
+
+/// Arena layouts a prim can expose (see Prim::arena_kind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArenaKind {
+    /// Plain register: value in ceil(width/64) words at the base slot.
+    Reg { width: u32 },
+    /// RWire/PulseWire: valid flag word at the base slot, value in
+    /// ceil(max(width,1)/64) words after it.  The end-of-edge tick
+    /// clears the valid word (interpreted, like all ticks).
+    Wire { width: u32 },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -1482,11 +1493,12 @@ impl Prim for Reg {
         }
     }
 
-    fn arena_width(&self) -> Option<u32> {
+    fn arena_kind(&self) -> Option<ArenaKind> {
         // async-reset regs suppress writes while in reset (a check a raw
         // compiled store cannot honor), crossing regs need NBA tracking:
         // neither is arena-backable.  Wide regs take ceil(width/64) slots.
-        (!self.crossing && !self.async_rst).then_some(self.width)
+        (!self.crossing && !self.async_rst)
+            .then_some(ArenaKind::Reg { width: self.width })
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         let words = self.words();
@@ -1718,8 +1730,53 @@ struct RWire {
     valid: bool,
     /// latched at the clock tick: fired during the just-ended cycle
     written: bool,
+    /// JIT arena backing: valid word at slot, value words after it
+    slot: Option<*mut u64>,
     vcd_id: u32,
     vcd_back: Option<(bool, Value)>,
+}
+
+impl RWire {
+    fn value_words(&self) -> usize {
+        ((self.width.max(1) as usize) + 63) / 64
+    }
+    fn get_valid(&self) -> bool {
+        match self.slot {
+            Some(p) => unsafe { *p != 0 },
+            None => self.valid,
+        }
+    }
+    fn set_valid(&mut self, v: bool) {
+        match self.slot {
+            Some(p) => unsafe { *p = v as u64 },
+            None => self.valid = v,
+        }
+    }
+    fn get_value(&self) -> Value {
+        match self.slot {
+            Some(p) => {
+                let limbs = unsafe {
+                    std::slice::from_raw_parts(p.add(1), self.value_words())
+                }
+                .to_vec();
+                Value::from_limbs64(self.width.max(1), limbs)
+            }
+            None => self.value.clone(),
+        }
+    }
+    fn set_value(&mut self, v: &Value) {
+        match self.slot {
+            Some(p) => {
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(p.add(1), self.value_words())
+                };
+                for (i, d) in dst.iter_mut().enumerate() {
+                    *d = v.limbs64().get(i).copied().unwrap_or(0);
+                }
+            }
+            None => self.value = v.clone(),
+        }
+    }
 }
 
 impl RWire {
@@ -1730,6 +1787,7 @@ impl RWire {
             value: Value::zero(width.max(1)),
             valid: false,
             written: false,
+            slot: None,
             vcd_id: 0,
             vcd_back: None,
         }
@@ -1786,8 +1844,8 @@ impl Prim for RWire {
 
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
-            "whas" => Value::from_u64(1, self.valid as u64),
-            "wget" => self.value.clone(),
+            "whas" => Value::from_u64(1, self.get_valid() as u64),
+            "wget" => self.get_value(),
             m => panic!("RWire: unknown value method {m:?}"),
         }
     }
@@ -1795,9 +1853,10 @@ impl Prim for RWire {
         match method {
             "wset" | "send" => {
                 if self.width > 0 {
-                    self.value = args[0].clone();
+                    let v = args[0].clone();
+                    self.set_value(&v);
                 }
-                self.valid = true;
+                self.set_valid(true);
             }
             m => panic!("RWire: unknown action method {m:?}"),
         }
@@ -1805,8 +1864,21 @@ impl Prim for RWire {
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
         if !gate { return; }
         // latch for VCD: did the wire fire during the cycle that just ended
-        self.written = self.valid;
-        self.valid = false;
+        self.written = self.get_valid();
+        self.set_valid(false);
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        Some(ArenaKind::Wire { width: self.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        unsafe { *slot = self.valid as u64 };
+        let words = self.value_words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(1), words) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = self.value.limbs64().get(i).copied().unwrap_or(0);
+        }
+        self.slot = Some(slot);
     }
 }
 

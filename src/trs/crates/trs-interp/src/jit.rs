@@ -13,8 +13,9 @@
 
 use super::*;
 use trs_codegen::lower::{
-    compile_rules, CompiledRule, JitEngine, PlanEnv, RuleSpec,
+    compile_rules, CompiledRule, InstEnv, JitEngine, PlanEnv, RuleSpec,
 };
+use prim::ArenaKind;
 
 fn words_for(w: u32) -> u32 {
     w.div_ceil(64)
@@ -26,9 +27,44 @@ pub(crate) unsafe extern "C" fn jit_sigfpe_cb() {
     libc::raise(libc::SIGFPE);
 }
 
+/// Prim-method trampoline: unmarshal per the call-site table, invoke
+/// the boxed prim through the interpreter, marshal the result back.
+pub(crate) unsafe extern "C" fn jit_prim_cb(
+    env: *mut core::ffi::c_void,
+    token: u64,
+    args: *const u64,
+    out: *mut u64,
+) {
+    let interp = &mut *(env as *mut Interp);
+    let ordinal = (token >> 16) as usize;
+    let local = (token & 0xffff) as usize;
+    let (inst, method, ref arg_widths, ret_width, is_action) =
+        interp.jit_prim_tokens[ordinal][local];
+    let arg_widths = arg_widths.clone();
+    let mut argv = Vec::with_capacity(arg_widths.len());
+    let mut off = 0usize;
+    for &w in &arg_widths {
+        let words = ((w as usize) + 63) / 64;
+        let limbs =
+            std::slice::from_raw_parts(args.add(off), words.max(1)).to_vec();
+        argv.push(Value::from_limbs64(w.max(1), limbs));
+        off += words;
+    }
+    if is_action {
+        interp.call_action(inst, method, &argv);
+    } else {
+        let v = interp.call_value(inst, method, &argv, ret_width);
+        let words = ((ret_width.max(1) as usize) + 63) / 64;
+        let dst = std::slice::from_raw_parts_mut(out, words);
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+}
+
 /// One dispatch step of a compiled composition, in entries order.
 pub(crate) enum JitNode {
-    Sched(unsafe extern "C" fn(*mut u64)),
+    Sched(unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)),
     Exec(unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32),
 }
 
@@ -40,6 +76,9 @@ pub(crate) struct JitPlans {
     arena_ptr: *mut u64,
     /// per-composition dispatch lists (parallel to Stepper::rcomps)
     pub(crate) comp_nodes: Vec<Option<Vec<JitNode>>>,
+    /// EN slots to zero before dispatching a composition (the C++
+    /// schedule zeroes every enable at the top of the pass)
+    pub(crate) en_slots: Vec<u32>,
     _engines: Vec<JitEngine>,
 }
 
@@ -49,60 +88,51 @@ impl JitPlans {
     }
 }
 
-/// The callback compiled code uses for $display-family statements.
-/// `env` is the owning Interp; the token encodes (rule ordinal << 16 |
-/// local statement index) resolved through Interp::jit_tokens.
+/// The callback compiled code uses for foreign statements: rebuild
+/// the Arg list from the call-site spec (numeric args arrive as word
+/// runs, strings ride the table), dispatch through the interpreter's
+/// foreign machinery, and marshal a task's result back.  Returns
+/// nonzero when $finish was called.
 pub(crate) unsafe extern "C" fn jit_foreign_cb(
     env: *mut core::ffi::c_void,
     token: u64,
+    args: *const u64,
+    out: *mut u64,
 ) -> i32 {
     let interp = &mut *(env as *mut Interp);
     let ordinal = (token >> 16) as usize;
     let local = (token & 0xffff) as usize;
-    let (inst, rule_idx, ref paths) = interp.jit_tokens[ordinal];
-    let path = paths[local].clone();
-    interp.jit_run_foreign(inst, rule_idx, &path);
+    let (inst, func, ret_width, ref spec) = interp.jit_tokens[ordinal][local];
+    let spec = spec.clone();
+    let mut argv = Vec::with_capacity(spec.len());
+    let mut off = 0usize;
+    for &(is_str, id_or_width, signed) in &spec {
+        if is_str {
+            argv.push(Arg::Str(interp.s(id_or_width as StrId).to_string()));
+        } else {
+            let w = id_or_width;
+            let words = ((w.max(1) as usize) + 63) / 64;
+            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+            argv.push(Arg::Val(Value::from_limbs64(w.max(1), limbs), signed));
+            off += words;
+        }
+    }
+    let fname = interp.s(func).to_string();
+    let loc = interp.loc_of(inst);
+    if ret_width == 0 {
+        interp.foreign_action(&fname, &argv, &loc);
+    } else {
+        let v = interp.foreign_value(&fname, &argv, ret_width, &loc);
+        let words = ((ret_width.max(1) as usize) + 63) / 64;
+        let dst = std::slice::from_raw_parts_mut(out, words);
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
     interp.finished.is_some() as i32
 }
 
 impl Interp {
-    /// Execute one body statement located by its index path (Cond arms
-    /// are path elements: stmt index, then 0/1 for then/else, ...).
-    fn jit_run_foreign(&mut self, inst: usize, rule_idx: usize, path: &[u32]) {
-        let module = self.module_of(inst);
-        let mir = self.mods[module].ir;
-        let mut stmts = self.d.modules[mir].rules[rule_idx].body.clone();
-        let mut it = path.iter();
-        loop {
-            let Some(&i) = it.next() else { return };
-            let st = stmts[i as usize].clone();
-            match (it.next(), st) {
-                (None, st) => {
-                    // the compiled branch already evaluated the action's
-                    // condition (against pre-store state); re-evaluating
-                    // it here would see mid-body mutations — force true
-                    let st = match st {
-                        Stmt::Action(Action::Foreign { func, args, signed, .. }) => {
-                            Stmt::Action(Action::Foreign {
-                                func,
-                                cond: Expr::Const { width: 1, limbs: vec![1] },
-                                args,
-                                signed,
-                            })
-                        }
-                        other => other,
-                    };
-                    let mut ctx = Ctx::default();
-                    self.exec_stmt(inst, &mut ctx, &st);
-                    return;
-                }
-                (Some(0), Stmt::Cond { then_, .. }) => stmts = then_,
-                (Some(1), Stmt::Cond { else_, .. }) => stmts = else_,
-                _ => panic!("trs jit: bad foreign statement path"),
-            }
-        }
-    }
-
     /// Build the JIT plan for the resolved compositions, or None to run
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
@@ -124,31 +154,66 @@ impl Interp {
             s
         };
 
-        // plain-register slots, per owning user instance
-        let mut reg_slot_by_inst: HashMap<usize, HashMap<StrId, (u32, u32)>> =
-            HashMap::new();
-        let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, slot)
-        for i in 0..self.insts.len() {
-            let InstKind::User { children, .. } = &self.insts[i].kind else {
-                continue;
-            };
-            let kids: Vec<(StrId, usize)> =
-                children.iter().map(|(k, v)| (*k, *v)).collect();
-            for (name, ci) in kids {
-                let InstKind::Prim(p) = &self.insts[ci].kind else { continue };
-                if let Some(w) = p.arena_width() {
-                    let s = alloc(&mut nslots, words_for(w));
-                    reg_slot_by_inst.entry(i).or_default().insert(name, (s, w));
-                    attach.push((ci, s));
-                }
-            }
-        }
-
-        // reset-node slots holding the port LEVEL (1 = deasserted)
+        // per-instance environments: children, prim slots, resets, ENs
+        let mut inst_envs: HashMap<usize, InstEnv> = HashMap::new();
+        let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
         let reset_node_slot: Vec<u32> =
             (0..self.rst_asserted.len()).map(|_| alloc(&mut nslots, 1)).collect();
+        for i in 0..self.insts.len() {
+            let InstKind::User { module, children, resets, .. } = &self.insts[i].kind
+            else {
+                continue;
+            };
+            let module = *module;
+            let mir = self.mods[module].ir;
+            let children: HashMap<StrId, usize> =
+                children.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut reg_slot = HashMap::new();
+            let mut wire_slot = HashMap::new();
+            for (&name, &ci) in &children {
+                let InstKind::Prim(p) = &self.insts[ci].kind else { continue };
+                match p.arena_kind() {
+                    Some(ArenaKind::Reg { width }) => {
+                        let base = alloc(&mut nslots, width.div_ceil(64).max(1));
+                        reg_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::Wire { width }) => {
+                        let base = alloc(&mut nslots, 1 + width.max(1).div_ceil(64));
+                        wire_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    None => {}
+                }
+            }
+            let reset_slot: HashMap<StrId, u32> = resets
+                .iter()
+                .map(|(port, node)| (*port, reset_node_slot[*node]))
+                .collect();
+            // every EN_* port gets a slot (zeroed per dispatch, stored
+            // by compiled call sites; method WF cones read them)
+            let mut en_slot = HashMap::new();
+            for (&pname, &(_w, kind)) in &self.mods[module].ports {
+                if kind == ir::PortKind::MethodEnable {
+                    en_slot.insert(pname, alloc(&mut nslots, 1));
+                }
+            }
+            inst_envs.insert(
+                i,
+                InstEnv {
+                    mir,
+                    children,
+                    reg_slot,
+                    wire_slot,
+                    reset_slot,
+                    en_slot,
+                    cfwf_slot: HashMap::new(),
+                    eager_slot: HashMap::new(),
+                },
+            );
+        }
 
-        // CF/WF slots for every scheduled rule, plus rule specs skeleton
+        // CF/WF and eager-def slots for every scheduled rule
         struct RuleInfo {
             inst: usize,
             rule_idx: usize,
@@ -159,8 +224,6 @@ impl Interp {
         }
         let mut rules: Vec<RuleInfo> = Vec::new();
         let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
-        let mut cfwf_by_inst: HashMap<usize, HashMap<StrId, u32>> = HashMap::new();
-        let mut eager_by_inst: HashMap<usize, HashMap<StrId, (u32, u32)>> = HashMap::new();
         for rc in rcomps {
             if !rc.early.is_empty() {
                 if trace {
@@ -185,25 +248,34 @@ impl Interp {
                     let rr = &self.d.modules[mir].rules[ri];
                     let cf_slot = alloc(&mut nslots, 1);
                     let wf_slot = alloc(&mut nslots, 1);
-                    let by = cfwf_by_inst.entry(en.inst).or_default();
-                    by.insert(rr.can_fire, cf_slot);
-                    by.insert(rr.will_fire, wf_slot);
-                    let eb = eager_by_inst.entry(en.inst).or_default();
-                    for &e in &en.eager {
-                        if eb.contains_key(&e) {
-                            continue;
-                        }
-                        let Some(ed) =
-                            self.d.modules[mir].defs.iter().find(|d| d.name == e)
-                        else {
-                            if trace {
-                                eprintln!("trs jit: off (eager def unknown)");
+                    let (can_fire, will_fire) = (rr.can_fire, rr.will_fire);
+                    let mut eager_adds: Vec<(StrId, u32, u32)> = Vec::new();
+                    {
+                        let ie = inst_envs.get(&en.inst)?;
+                        for &e in &en.eager {
+                            if ie.eager_slot.contains_key(&e)
+                                || eager_adds.iter().any(|(n, _, _)| *n == e)
+                            {
+                                continue;
                             }
-                            return None;
-                        };
-                        let ew = ed.width.max(1);
-                        let base = alloc(&mut nslots, words_for(ew));
-                        eb.insert(e, (base, ew));
+                            let Some(ed) =
+                                self.d.modules[mir].defs.iter().find(|d| d.name == e)
+                            else {
+                                if trace {
+                                    eprintln!("trs jit: off (eager def unknown)");
+                                }
+                                return None;
+                            };
+                            let ew = ed.width.max(1);
+                            let base = alloc(&mut nslots, ew.div_ceil(64));
+                            eager_adds.push((e, base, ew));
+                        }
+                    }
+                    let ie = inst_envs.get_mut(&en.inst)?;
+                    ie.cfwf_slot.insert(can_fire, cf_slot);
+                    ie.cfwf_slot.insert(will_fire, wf_slot);
+                    for (e, base, ew) in eager_adds {
+                        ie.eager_slot.insert(e, (base, ew));
                     }
                     rule_ord.insert((en.inst, r), rules.len());
                     rules.push(RuleInfo {
@@ -218,8 +290,7 @@ impl Interp {
             }
         }
 
-        // any Exec node must belong to a scheduled rule above; method
-        // Exec nodes or multi-comp oddities fall back
+        // any Exec node must belong to a scheduled rule above
         for rc in rcomps {
             for en in &rc.entries {
                 for &node in &en.nodes {
@@ -234,103 +305,100 @@ impl Interp {
             }
         }
 
-        // compile per instance, batching that instance's rules
-        let mut by_inst: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (k, ri) in rules.iter().enumerate() {
-            by_inst.entry(ri.inst).or_default().push(k);
-        }
-        let mut compiled: Vec<Option<CompiledRule>> = Vec::new();
-        compiled.resize_with(rules.len(), || None);
-        let mut engines = Vec::new();
-        let mut inst_list: Vec<usize> = by_inst.keys().copied().collect();
-        inst_list.sort_unstable();
-        for inst in inst_list {
-            let module = self.module_of(inst);
-            let mir = self.mods[module].ir;
-            // reset ports of this instance -> node slots
-            let mut reset_slot = HashMap::new();
-            if let InstKind::User { resets, .. } = &self.insts[inst].kind {
-                for (port, node) in resets {
-                    reset_slot.insert(*port, reset_node_slot[*node]);
-                }
-            }
-            let env = PlanEnv {
-                d: &self.d,
-                mir,
-                reg_slot: reg_slot_by_inst.get(&inst).cloned().unwrap_or_default(),
-                reset_slot,
-                cfwf_slot: cfwf_by_inst.get(&inst).cloned().unwrap_or_default(),
-                eager_slot: eager_by_inst.get(&inst).cloned().unwrap_or_default(),
-            };
-            let idxs = &by_inst[&inst];
-            let mut specs = Vec::new();
-            for &k in idxs {
-                let ri = &rules[k];
-                let rr = &self.d.modules[mir].rules[ri.rule_idx];
-                // inhibitors: earlier same-module MEs + cross-module
-                let mut inhibit_slots = Vec::new();
-                for other in &rr.me_inhibits {
-                    let other_ri = self.mods[module].rules[other];
-                    let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
-                    match cfwf_by_inst.get(&inst).and_then(|m| m.get(&other_cf)) {
-                        Some(&s) => inhibit_slots.push(s),
-                        None => {
-                            if trace {
-                                eprintln!("trs jit: off (unslotted ME inhibitor)");
-                            }
-                            return None;
+        // one design-wide compile batch
+        let env = PlanEnv { d: &self.d, insts: inst_envs };
+        let mut specs = Vec::new();
+        for ri in &rules {
+            let mir = env.insts[&ri.inst].mir;
+            let rr = &self.d.modules[mir].rules[ri.rule_idx];
+            let module = self.module_of(ri.inst);
+            let mut inhibit_slots = Vec::new();
+            for other in &rr.me_inhibits {
+                let other_ri = self.mods[module].rules[other];
+                let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
+                match env.insts[&ri.inst].cfwf_slot.get(&other_cf) {
+                    Some(&s) => inhibit_slots.push(s),
+                    None => {
+                        if trace {
+                            eprintln!("trs jit: off (unslotted ME inhibitor)");
                         }
+                        return None;
                     }
                 }
-                for rc in rcomps {
-                    if let Some(cs) = rc.cross.get(&(inst, rr.name)) {
-                        for (oi, ocf) in cs {
-                            match cfwf_by_inst.get(oi).and_then(|m| m.get(ocf)) {
-                                Some(&s) => inhibit_slots.push(s),
-                                None => {
-                                    if trace {
-                                        eprintln!(
-                                            "trs jit: off (unslotted cross inhibitor)"
-                                        );
-                                    }
-                                    return None;
+            }
+            for rc in rcomps {
+                if let Some(cs) = rc.cross.get(&(ri.inst, rr.name)) {
+                    for (oi, ocf) in cs {
+                        match env.insts.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
+                            Some(&s) => inhibit_slots.push(s),
+                            None => {
+                                if trace {
+                                    eprintln!(
+                                        "trs jit: off (unslotted cross inhibitor)"
+                                    );
                                 }
+                                return None;
                             }
                         }
                     }
                 }
-                specs.push(RuleSpec {
-                    rule_idx: ri.rule_idx,
-                    inhibit_slots,
-                    cf_slot: ri.cf_slot,
-                    wf_slot: ri.wf_slot,
-                    eager: ri.eager.clone(),
-                    label: format!("i{}_{}", inst, ri.ordinal),
-                    token_base: (ri.ordinal as u64) << 16,
-                });
             }
-            match compile_rules(&env, &specs, jit_foreign_cb, jit_sigfpe_cb) {
-                Ok((engine, mut fns)) => {
-                    engines.push(engine);
-                    for (&k, cr) in idxs.iter().zip(fns.drain(..)) {
-                        compiled[k] = Some(cr);
-                    }
-                }
-                Err(e) => {
-                    if trace {
-                        eprintln!("trs jit: off ({e})");
-                    }
-                    return None;
-                }
-            }
+            specs.push(RuleSpec {
+                inst: ri.inst,
+                rule_idx: ri.rule_idx,
+                inhibit_slots,
+                cf_slot: ri.cf_slot,
+                wf_slot: ri.wf_slot,
+                eager: ri.eager.clone(),
+                label: format!("i{}_{}", ri.inst, ri.ordinal),
+                token_base: (ri.ordinal as u64) << 16,
+            });
         }
+        let (engine, compiled) =
+            match compile_rules(&env, &specs, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb) {
+            Ok(x) => x,
+            Err(e) => {
+                if trace {
+                    eprintln!("trs jit: off ({e})");
+                }
+                return None;
+            }
+        };
+        let engines = vec![engine];
 
         // token table + dispatch lists
-        self.jit_tokens = rules
+        self.jit_prim_tokens = compiled
             .iter()
-            .map(|ri| {
-                let cr = compiled[ri.ordinal].as_ref().unwrap();
-                (ri.inst, ri.rule_idx, cr.foreign_stmts.clone())
+            .map(|cr| {
+                cr.prim_calls
+                    .iter()
+                    .map(|pc| {
+                        (pc.inst, pc.method, pc.arg_widths.clone(), pc.ret_width, pc.is_action)
+                    })
+                    .collect()
+            })
+            .collect();
+        self.jit_tokens = compiled
+            .iter()
+            .map(|cr| {
+                cr.foreign_stmts
+                    .iter()
+                    .map(|fs| {
+                        let args: Vec<(bool, u32, bool)> = fs
+                            .args
+                            .iter()
+                            .map(|a| match a {
+                                trs_codegen::lower::FArgSpec::Str(sid) => {
+                                    (true, *sid, false)
+                                }
+                                trs_codegen::lower::FArgSpec::Num { width, signed } => {
+                                    (false, *width, *signed)
+                                }
+                            })
+                            .collect();
+                        (fs.inst, fs.func, fs.ret_width, args)
+                    })
+                    .collect()
             })
             .collect();
         let comp_nodes: Vec<Option<Vec<JitNode>>> = rcomps
@@ -344,7 +412,7 @@ impl Interp {
                             SchedNode::Exec(r) => (r, false),
                         };
                         let ord = rule_ord[&(en.inst, r)];
-                        let cr = compiled[ord].as_ref().unwrap();
+                        let cr = &compiled[ord];
                         nodes.push(if is_sched {
                             JitNode::Sched(cr.sched)
                         } else {
@@ -355,6 +423,8 @@ impl Interp {
                 Some(nodes)
             })
             .collect();
+        let en_slots: Vec<u32> =
+            env.insts.values().flat_map(|e| e.en_slot.values().copied()).collect();
 
         // allocate + wire the arena
         let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
@@ -377,6 +447,6 @@ impl Interp {
                 comp_nodes.len()
             );
         }
-        Some(JitPlans { _arena: arena, arena_ptr, comp_nodes, _engines: engines })
+        Some(JitPlans { _arena: arena, arena_ptr, comp_nodes, en_slots, _engines: engines })
     }
 }

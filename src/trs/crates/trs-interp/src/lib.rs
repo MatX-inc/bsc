@@ -140,9 +140,13 @@ pub struct Interp {
     /// resumable event-loop state, built once by prime(); run() =
     /// prime + advance + finish
     stepper: Option<Stepper>,
-    /// JIT foreign-statement tokens: rule ordinal -> (instance, rule
-    /// index, statement paths); resolved by the compiled-code callback
-    jit_tokens: Vec<(usize, usize, Vec<Vec<u32>>)>,
+    /// JIT foreign call-site tokens: rule ordinal -> per-site
+    /// (instance, func, ret width, args as (is_str, strid-or-width,
+    /// signed)); resolved by the compiled-code callback
+    jit_tokens: Vec<Vec<(usize, StrId, u32, Vec<(bool, u32, bool)>)>>,
+    /// rule ordinal -> prim call sites: (prim instance, method, arg
+    /// widths, result width, is_action) for the trampoline
+    jit_prim_tokens: Vec<Vec<(usize, StrId, Vec<u32>, u32, bool)>>,
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
     /// the owning allocation lives in Stepper::jit
     jit_arena_ptr: *mut u64,
@@ -497,6 +501,7 @@ impl Interp {
             vcd_mod_vars: HashMap::new(),
             stepper: None,
             jit_tokens: Vec::new(),
+            jit_prim_tokens: Vec::new(),
             jit_arena_ptr: std::ptr::null_mut(),
             jit_reset_slots: Vec::new(),
         };
@@ -3398,10 +3403,15 @@ impl Interp {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
                             let ap = j.arena_ptr();
+                            // the C++ schedule zeroes every enable at the
+                            // top of the pass; compiled call sites set them
+                            for &s in &j.en_slots {
+                                unsafe { *ap.add(s as usize) = 0 };
+                            }
                             let envp = self as *mut Interp as *mut core::ffi::c_void;
                             for n in nodes {
                                 match *n {
-                                    jit::JitNode::Sched(f) => unsafe { f(ap) },
+                                    jit::JitNode::Sched(f) => unsafe { f(ap, envp) },
                                     jit::JitNode::Exec(f) => unsafe {
                                         f(ap, envp);
                                     },
