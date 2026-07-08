@@ -42,9 +42,57 @@ fn main() -> ExitCode {
             let mut max_cycles = u64::MAX;
             let mut plusargs: Vec<String> = Vec::new();
             let mut vcd_file: Option<String> = None;
+            // bluesim.tcl's usage text, printed for -h and after the
+            // deprecated-flag notices; the driver exits 0 in both cases
+            let script = path
+                .strip_suffix(".bir")
+                .unwrap_or(path)
+                .to_string();
+            let usage_exit = || -> ExitCode {
+                println!("Usage: {script} [opts]");
+                println!();
+                println!("Options:");
+                println!("  -c <commands> = execute commands given as an argument");
+                println!("  -f <file>     = execute script from file");
+                println!("  -h            = print help and exit");
+                println!("  -m <N>        = execute for N cycles");
+                println!("  -v            = print version information and exit");
+                println!("  -V [<file>]   = dump waveforms to VCD file (default: dump.vcd)");
+                println!("  +<arg>        = Verilog-style plus-arg");
+                println!();
+                println!("Examples:");
+                println!("  {script}");
+                println!("  {script} -m 3000");
+                println!("  {script} -V sim.vcd");
+                println!("  {script} +doFoo");
+                ExitCode::SUCCESS
+            };
             let mut it = rest.iter().peekable();
             while let Some(a) = it.next() {
                 match *a {
+                    // deprecated interactive-debug flags: notice + usage,
+                    // exit 0 (matching bluesim.tcl)
+                    f @ ("-s" | "-ss" | "-r" | "-cc") => {
+                        println!(
+                            "Error: {f} is deprecated in favor of scriptable debug"
+                        );
+                        println!("See entry #031 in the KPnS document.");
+                        return usage_exit();
+                    }
+                    "-h" | "-help" | "--help" => return usage_exit(),
+                    "-v" => {
+                        println!(
+                            "trs {} (TRS runtime)",
+                            env!("CARGO_PKG_VERSION")
+                        );
+                        return ExitCode::SUCCESS;
+                    }
+                    "--script_name" => {
+                        let _ = it.next();
+                    }
+                    "--creation_time" => {
+                        let _ = it.next();
+                    }
                     "-m" => {
                         max_cycles = it
                             .next()
