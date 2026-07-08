@@ -179,6 +179,16 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
             path,
             strs.first().map(|f| (f.clone(), carg(consts, 4) != 0)),
         )),
+        "BRAM1BELoad" | "BRAM2BELoad" => Box::new(Bram::new(
+            carg(consts, 0) != 0,
+            carg(consts, 1) as u32,
+            carg(consts, 2) as u32,
+            carg(consts, 3) as u32,
+            carg(consts, 4) as u32,
+            carg(consts, 5),
+            path,
+            strs.first().map(|f| (f.clone(), carg(consts, 6) != 0)),
+        )),
         // dynamic clock sources (bs_prim_mod_clockgen.h)
         "MakeClock" => Box::new(MakeClock::new(consts)),
         "ClockDiv" => Box::new(ClockDivider::new(consts)),
