@@ -2666,8 +2666,29 @@ impl Interp {
                 clocks.push(c.clock);
             }
         }
-        let sources: Vec<ClockSource> =
-            clocks.iter().map(|&c| self.resolve_source(c)).collect();
+        let sources: Vec<ClockSource> = clocks
+            .iter()
+            .map(|&c| {
+                // a phantom prim domain (getPrimDomainInfo's homeless
+                // port clock, e.g. RegAligned's "clk_src"): all its
+                // compositions are empty, and the name resolves nowhere.
+                // Reference bluesim likewise defines a kernel clock that
+                // never receives edges, so it must stay in the clock
+                // list (VCD order) but never fire.
+                let unused = Some(c) != self.d.default_clock
+                    && comps.iter().filter(|k| k.clock == c).all(|k| {
+                        k.entries.is_empty()
+                            && k.ticks.is_empty()
+                            && k.early.is_empty()
+                            && k.cross_inhibits.is_empty()
+                    });
+                if unused {
+                    ClockSource::Never
+                } else {
+                    self.resolve_source(c)
+                }
+            })
+            .collect();
         if std::env::var_os("TRS_TRACE_CLK").is_some() {
             for (ci, &c) in clocks.iter().enumerate() {
                 let k = match &sources[ci] {

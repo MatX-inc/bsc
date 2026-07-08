@@ -103,6 +103,9 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "RegUN" => Box::new(Reg::new(consts, false, false)),
         "CrossingRegN" | "CrossingRegA" => Box::new(Reg::new(consts, true, name == "CrossingRegA")),
         "CrossingRegUN" => Box::new(Reg::new(consts, false, false)),
+        // an aligned-edge crossing reg: written from the source domain,
+        // updated on the realClock tick
+        "RegAligned" => Box::new(RegAligned::new(consts)),
         // a reverting virtual reg exists for scheduling; Bluesim uses the
         // no-reset MOD_Reg ctor, which loads the init value directly at
         // construction (regType NRst — no reset line, no ticks)
@@ -1385,6 +1388,106 @@ impl Prim for Reg {
                 self.value = self.reset_value.clone();
                 self.suppress = true;
             }
+        } else {
+            self.suppress = false;
+        }
+    }
+}
+
+// ===============
+
+/// MOD_RegAligned (bs_prim_mod_reg.h:230): RegA semantics, except the
+/// write is made from the source domain and only commits on the
+/// realClock tick — unless realClock already ticked at this instant
+/// (aligned edges), in which case the write lands immediately.  Only
+/// instantiated with an async reset (SimPrimitiveModules regType ARst).
+/// VCD hooks (value/RST/EN/D_IN with clk_src back-dating) are TODO,
+/// like SyncFIFO's.
+struct RegAligned {
+    value: Value,
+    next_value: Value,
+    reset_value: Value,
+    tick_at: u64,
+    written_at: u64,
+    in_reset: bool,
+    suppress: bool,
+}
+
+impl RegAligned {
+    fn new(consts: &[Value]) -> RegAligned {
+        // instantiation args: [width, init]; like Reg, the value starts
+        // undet and the init arrives via the reset network
+        let width = carg(consts, 0) as u32;
+        let reset_value = consts
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Value::undet(width))
+            .zext(width);
+        RegAligned {
+            value: Value::undet(width),
+            next_value: Value::undet(width),
+            reset_value,
+            tick_at: u64::MAX,
+            written_at: u64::MAX,
+            in_reset: false,
+            suppress: false,
+        }
+    }
+
+    // rst_tick_realClock (bs_prim_mod_reg.h:331); the caller checks the
+    // clock gate
+    fn load_reset(&mut self) {
+        self.value = self.reset_value.clone();
+        self.next_value = self.reset_value.clone();
+        self.suppress = true;
+    }
+}
+
+impl Prim for RegAligned {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        match method {
+            "read" | "_read" => self.value.clone(),
+            m => panic!("RegAligned: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "write" | "_write" => {
+                // METH__write (bs_prim_mod_reg.h:284): stage the value;
+                // commit immediately if realClock already ticked at now
+                if !self.suppress {
+                    self.next_value = args[0].clone();
+                    if self.tick_at == now {
+                        self.value = self.next_value.clone();
+                        self.written_at = now;
+                    }
+                }
+            }
+            m => panic!("RegAligned: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, port: &str, now: u64, _clk_val: bool, _gate: bool) {
+        // realClock() ignores the gate (bs_prim_mod_reg.h:297)
+        match port {
+            "realClock" => {
+                self.tick_at = now;
+                if !self.suppress {
+                    self.value = self.next_value.clone();
+                }
+            }
+            p => panic!("RegAligned: unknown tick port {p:?}"),
+        }
+    }
+    fn rst_tick(&mut self, _now: u64) {
+        if self.in_reset {
+            self.load_reset();
+        }
+    }
+    fn set_in_reset(&mut self, asserted: bool) {
+        self.in_reset = asserted;
+        if asserted {
+            // async: reset_RST performs the tick immediately
+            self.load_reset();
         } else {
             self.suppress = false;
         }
