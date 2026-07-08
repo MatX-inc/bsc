@@ -115,6 +115,9 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "Counter" => Box::new(Counter::new(consts)),
         "RegFile" => Box::new(RegFile::new(consts, None, path)),
         "RegFileLoad" => Box::new(RegFile::new(consts, strs.first().cloned(), path)),
+        // MOD_DualPortRam (bs_prim_mod_synchronizers.h): CF read/write
+        // with begin-of-cycle read on simultaneous same-address access
+        "DualPortRam" => Box::new(DualPortRam::new(consts)),
         "ConfigRegN" | "ConfigRegA" => Box::new(ConfigReg::new(consts, true, name == "ConfigRegA")),
         "ConfigRegUN" => Box::new(ConfigReg::new(consts, false, false)),
         "RWire" => Box::new(RWire::new(consts, false)),
@@ -1038,6 +1041,65 @@ impl Prim for RegFile {
                 self.data.insert(a, args[1].clone());
             }
             m => panic!("RegFile: unknown action method {m:?}"),
+        }
+    }
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+}
+
+/// MOD_DualPortRam: unclocked dual-port memory used by the MCD AsyncRAM
+/// library; a read of the address written at the same instant returns the
+/// begin-of-cycle value.  Contributes nothing to dump_state or VCD.
+struct DualPortRam {
+    width: u32,
+    data: std::collections::HashMap<u64, Value>,
+    written_at: u64,
+    write_addr: u64,
+    prev_value: Value,
+}
+
+impl DualPortRam {
+    fn new(consts: &[Value]) -> DualPortRam {
+        let width = carg(consts, 1) as u32;
+        DualPortRam {
+            width,
+            data: Default::default(),
+            written_at: u64::MAX,
+            write_addr: 0,
+            prev_value: Value::undet(width.max(1)),
+        }
+    }
+    fn get(&self, addr: u64) -> Value {
+        self.data
+            .get(&addr)
+            .cloned()
+            .unwrap_or_else(|| Value::undet(self.width.max(1)))
+    }
+}
+
+impl Prim for DualPortRam {
+    fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
+        match method {
+            "read" | "sub" => {
+                let addr = args[0].as_u64();
+                if self.write_addr == addr && self.written_at == now {
+                    self.prev_value.clone()
+                } else {
+                    self.get(addr)
+                }
+            }
+            m => panic!("DualPortRam: unknown value method {m:?}"),
+        }
+    }
+    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        match method {
+            "write" | "upd" => {
+                let addr = args[0].as_u64();
+                self.written_at = now;
+                self.write_addr = addr;
+                self.prev_value = self.get(addr);
+                self.data.insert(addr, args[1].clone());
+            }
+            m => panic!("DualPortRam: unknown action method {m:?}"),
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
