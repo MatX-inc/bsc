@@ -102,16 +102,31 @@ Build + run: `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18 cargo build
 The default build has no LLVM dependency; the installed trs is
 interp-only unless built with the feature.
 
-Verified: diffsweep 556/0 with TRS_JIT=1; battery 9/9 both modes.
-sysLongCnt 5M cycles: 0.60s vs 35.7s interp (~60x), vs 0.27s compiled
-C++ (~2.2x — P2's initial target).  Compile cost ~10ms/small design.
+Verified on the EXTENDED sweep corpus (1037 designs — diffsweep now
+covers mk* tops and .bs sources; the old sys*/.bsv-only sweep was why
+the suite kept catching bugs the sweep couldn't see): interp baseline
+968 PASS / 0 DIFF; with TRS_JIT=1 967 PASS / 0 DIFF / 1 TIMEOUT —
+the timeout IS the acceptance marker: sudoku mkGenerateTest3 under the
+5s long-test leash (enable-gated dirs get max(5s, 5x reference wall);
+normal tests keep the flat 60s).  It falls back to the interpreter
+until method calls + RWire compile; when they land, that line flips
+to PASS.  Battery 9/9 both modes.  Exact-width iN values landed
+(24fa8727): no 64-bit cap, wide regs are multi-slot, Quot/Rem SIGFPE.
+sysLongCnt 5M cycles: 0.50s vs 35.7s interp (~70x), vs 0.27s compiled
+C++ (~1.9x).  Compile cost ~10ms/small design.
 
 NEXT (in rough order of value):
-- Coverage: FIFO/RegFile/BRAM prim calls as extern "C" into trs-rt
-  (DESIGN.md monomorphized entry points) — unlocks most real designs
-  (sudoku/MPEG4 class).  Per-composition fallback granularity (needs
-  latch bridging for cross-composition inhibitor reads).  Wide values
-  via LLVM iN.  Quot/Rem with a SIGFPE-raising guard.
+- Sudoku unlock (its BIR needs NO fifo/regfile prims!): child-module
+  method-call inlining — compile callee value-method cones and action
+  bodies against the callee instance's slot maps, EN arena slots
+  zeroed per edge and stored at call sites (the C++ enable protocol;
+  method WFs read EN) — plus RWire as a two-slot arena prim.  Then
+  mkGenerateTest3's sweep TIMEOUT flips to PASS and the suite's
+  long-test gate can loosen.
+- FIFO/RegFile/BRAM prim calls as extern "C" into trs-rt (DESIGN.md
+  monomorphized entry points) — the MPEG4/general-design class.
+  Per-composition fallback granularity (needs latch bridging for
+  cross-composition inhibitor reads).
 - The all-or-nothing check runs per design at prime(): watch startup
   cost on big designs (trial lowering is cheap but not free).
 - Ship it: enable the jit feature in the Makefile release build once
