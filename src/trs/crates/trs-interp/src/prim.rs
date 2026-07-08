@@ -816,8 +816,21 @@ impl RegFile {
     }
 
     fn addr_hex(&self, a: u64) -> String {
-        let digits = ((self.addr_bits + 3) / 4).max(1) as usize;
-        format!("{a:0digits$x}")
+        addr_dump_val(a, self.addr_bits)
+    }
+}
+
+/// wide_data.cxx dump_val for narrow values: the out-of-bounds warning's
+/// address rendering ("0x" prefix, width/4 zero-padded digits; width 1
+/// prints True/False).
+fn addr_dump_val(a: u64, width: u32) -> String {
+    match width {
+        0 => "()".to_string(),
+        1 => (if a != 0 { "True" } else { "False" }).to_string(),
+        _ => {
+            let digits = ((width + 3) / 4) as usize;
+            format!("0x{a:0digits$x}")
+        }
     }
 }
 
@@ -4233,8 +4246,7 @@ impl Bram {
     }
 
     fn addr_hex(&self, a: u64) -> String {
-        let digits = ((self.addr_bits + 3) / 4).max(1) as usize;
-        format!("{a:0digits$x}")
+        addr_dump_val(a, self.addr_bits)
     }
 
     fn put(&mut self, port_b: bool, wens: u64, addr: u64, val: Value, now: u64, pname: &str) {
