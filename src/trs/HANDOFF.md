@@ -115,20 +115,33 @@ to PASS.  Battery 9/9 both modes.  Exact-width iN values landed
 sysLongCnt 5M cycles: 0.50s vs 35.7s interp (~70x), vs 0.27s compiled
 C++ (~1.9x).  Compile cost ~10ms/small design.
 
+SUDOKU UNLOCKED (22299140): cross-module method inlining (per-instance
+InstEnvs, fresh child frames, EN-slot enable protocol), the generic
+prim TRAMPOLINE (any prim method — FIFO/ConfigReg/RegFile/BRAM —
+compiles as a tabled callback into the interpreter's boxed prim),
+native $display-arg marshaling (no more callback re-evaluation rules),
+$time-class tasks, RWire arena backing, dynamic extracts (runtime-hi
+masking — the sweep caught the first cut ignoring hi), and lazy
+If/Case control flow (select would fire untaken-arm prim side
+effects).  mkGenerateTest3: byte-identical, 15s wall (~13s JIT
+compile, ~2s sim vs 0.36s reference) — the interpreter never finished
+it.  Extended sweep with TRS_JIT=1: 965 PASS / 0 DIFF; the 2
+TIMEOUTs (sudoku, conflict_free_large) are COMPILE TIME vs the 5s
+long-test leash, which is the next target.
+
 NEXT (in rough order of value):
-- Sudoku unlock (its BIR needs NO fifo/regfile prims!): child-module
-  method-call inlining — compile callee value-method cones and action
-  bodies against the callee instance's slot maps, EN arena slots
-  zeroed per edge and stored at call sites (the C++ enable protocol;
-  method WFs read EN) — plus RWire as a two-slot arena prim.  Then
-  mkGenerateTest3's sweep TIMEOUT flips to PASS and the suite's
-  long-test gate can loosen.
-- FIFO/RegFile/BRAM prim calls as extern "C" into trs-rt (DESIGN.md
-  monomorphized entry points) — the MPEG4/general-design class.
-  Per-composition fallback granularity (needs latch bridging for
+- JIT compile time (~13s for sudoku's 221 rules): (1) per-MODULE-TYPE
+  code sharing — pass a per-instance slot-offset table instead of
+  baking slot constants, so N instances of a module compile once
+  (DESIGN.md §5.2); (2) emit shared cone defs once per module instead
+  of re-expanding per rule; (3) lazy/tiered compilation per DESIGN.md
+  §6 (compile at first fire, -O0 first) — also flips the two sweep
+  TIMEOUT markers to PASS.
+- Prim arena fast paths for FIFO2/ConfigReg (hot trampoline calls) and
+  the latch/tick machinery bypass — sudoku sim is ~6x off reference;
+  these close most of it.
+- Per-composition fallback granularity (needs latch bridging for
   cross-composition inhibitor reads).
-- The all-or-nothing check runs per design at prime(): watch startup
-  cost on big designs (trial lowering is cheap but not free).
 - Ship it: enable the jit feature in the Makefile release build once
   llvm-18-dev is a build prerequisite Ravi accepts.
 
