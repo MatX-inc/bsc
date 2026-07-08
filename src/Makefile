@@ -10,11 +10,13 @@ CC_TOOLS=$(CC) $(CXX) $(LD)
 BSC_TOOLS=ghc ghc-pkg
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
+TRS_TOOLS=cargo
 
 TOOLS=$(CC_TOOLS) \
       $(BSC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
+      $(TRS_TOOLS) \
 
 GHC_PKGS=regex-compat syb old-time split strict-concurrency
 
@@ -68,5 +70,6 @@ install clean full_clean:
 	$(MAKE)  -C Verilog.Vivado   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C bluetcl    PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C bluesim    PREFIX=$(PREFIX)  $@
+	$(MAKE)  -C trs   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Verilator  PREFIX=$(PREFIX)  $@
 
