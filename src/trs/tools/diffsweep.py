@@ -30,10 +30,16 @@ import sys
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
 # the release build keeps heavyweight tests (SHA512, GlibcRandom) well
-# under the timeout; fall back to debug if it hasn't been built
-TRS = os.path.join(REPO, "src", "trs", "target", "release", "trs")
-if not os.path.exists(TRS):
-    TRS = os.path.join(REPO, "src", "trs", "target", "debug", "trs")
+# under the timeout; fall back to debug if it hasn't been built.
+# DIFFSWEEP_TRS (set by --trs) is read at module level because pool
+# workers re-import this module under spawn/forkserver (Python >= 3.14
+# default): a global assigned only in main() would silently revert to
+# the default path in every worker.
+TRS = os.environ.get("DIFFSWEEP_TRS", "")
+if not TRS:
+    TRS = os.path.join(REPO, "src", "trs", "target", "release", "trs")
+    if not os.path.exists(TRS):
+        TRS = os.path.join(REPO, "src", "trs", "target", "debug", "trs")
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
@@ -208,7 +214,20 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
     ap.add_argument("--out", default="diffsweep-results.json")
+    ap.add_argument(
+        "--trs",
+        default="",
+        help="trs binary to sweep (default: the repo release build); "
+        "lets a scratch build be tested without touching target/release",
+    )
     args = ap.parse_args()
+    if args.trs:
+        global TRS
+        TRS = os.path.abspath(args.trs)
+        # workers re-import this module (spawn/forkserver); hand the
+        # override down via the environment
+        os.environ["DIFFSWEEP_TRS"] = TRS
+    print(f"trs binary: {TRS}", flush=True)
 
     jobs = []
     workroot = os.path.join(os.path.dirname(args.out) or ".", "diffsweep-work")
