@@ -37,7 +37,8 @@ if not os.path.exists(TRS):
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
-TIMEOUT = 25
+# heavyweight interpreter runs take ~8s solo but contend under 8 jobs
+TIMEOUT = 60
 
 
 def find_source(testdir, top):
