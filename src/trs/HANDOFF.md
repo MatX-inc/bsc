@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`ecba6505` — ALWAYS `git push personal`, never bare `git push origin`:
+`524a3564` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -163,10 +163,51 @@ across repeated runs; LongCnt 0.51s.  Battery 9/9.  Sweep: 967 PASS
 PASS (the -m 4000 probe runs in 1.8s), so the whole extended corpus
 is green under TRS_JIT=1.
 
+AOT PERSISTENT ARTIFACT (Ravi's call: match how Verilator/VCS/Bluesim
+amortize compiles — and make our compile directly comparable to
+theirs).  `trs link <top>.bir [-o <out>]` compiles everything at
+build time and emits <out> (wrapper script, same CLI as reference
+.cexe — needs trs on PATH like reference needs bluetcl), <out>.bir,
+and <out>.so (PIC objects, cc -shared).  `trs run --code <so>`
+resolves every rule's sched_/exec_ function from the artifact instead
+of compiling; the wrapper passes it automatically.  Key mechanics:
+callbacks are POINTER-GLOBALS (trs_cb_foreign/sigfpe/prim) defined
+once in a meta object and filled by the loader after dlopen — chunk
+objects only declare them (defining in every chunk = duplicate-symbol
+ld failure), and the JIT path bakes the addresses as constants
+instead (no more add_global_mapping).  Slot allocation had to become
+DETERMINISTIC across processes (link bakes slot numbers, load
+re-derives them): two HashMap-iteration loops (children reg/wire
+slots, EN ports) now iterate sorted — proven by hashing full IR dumps
+from separate processes (identical after masking ASLR'd baked
+callback addresses).  The load path re-runs the plan walk +
+trial_lower (~0.35s on sudoku) to rebuild call-site spec tables; the
+artifact carries trs_bir_hash (FNV-1a of the .bir) and
+trs_layout_rev globals, checked at load — any mismatch warns and
+falls back to in-process compilation (verified: swapped .so runs
+correctly via fallback).  INELIGIBLE designs still link: the artifact
+just omits --code and runs interpreted (reference Bluesim always
+yields an executable; only infra failures — LLVM/cc/IO — fail the
+link).  BDPI: link copies the <in>.bdpi.so sibling to
+<out>.bdpi.so — the artifact renames the .bir, which silently broke
+the sibling-lookup convention (7 sweep panics taught us).  diffsweep
+--aot sweeps the whole corpus through link+artifact.  Sudoku numbers:
+link 4.7s TOTAL vs reference C++ link 13.94s (~3x, at -O0, before
+body splitting); artifact runs 1.9-2.2s byte-identical (was 5.8s
+streaming JIT), -m 4000 probe 0.49s.  Coverage: 697/966 designs
+compile; the first AOT sweep's ineligibility histogram is the JIT
+coverage roadmap — "def inside conditional arm" 146 designs,
+"expression kind not compilable" 56, zero-width 20, avaction 8.
+Follow-ups: serialize FnProtos into the artifact to skip trial_lower
+at load (goal <0.1s startup); artifacts bake host CPU features (like
+-march=native) — a generic-arch knob if artifacts should move
+between machines.
+
 NEXT (in rough order of value):
 - Cone/body splitting into helper fns — two sudoku rule bodies carry
   ~130k-insn cones and set the body-compile floor (~3.5s wall in the
-  background); splitting also unlocks raising TRS_JIT_OPT.
+  background); splitting also unlocks raising TRS_JIT_OPT.  With
+  AOT this matters doubly: link time AND affordable -O2 artifacts.
 - Heuristic escape hatch for sched compile if a cone-heavy design
   makes the blocking phase noticeable (trial_lower already measures
   sched IR size per design for free; aggregate TRS_JIT_TIME across
@@ -181,7 +222,10 @@ NEXT (in rough order of value):
 - Per-composition fallback granularity (the arena fall-through in
   eval Def now provides the cross-composition read path naturally).
 - Ship it: enable the jit feature in the Makefile release build once
-  llvm-18-dev is a build prerequisite Ravi accepts.
+  llvm-18-dev is a build prerequisite Ravi accepts; then point bsc's
+  trsLink at `trs link` so every -trs build produces the
+  persistent artifact (build-vs-build and run-vs-run then compare
+  column-for-column against reference Bluesim).
 
 ## Cardinal rules / gotchas
 
