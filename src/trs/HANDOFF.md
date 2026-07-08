@@ -86,6 +86,13 @@ nothing else — worth running once to confirm before deep perf work.
 
 ## Next phase: performance (task #19)
 
+LLVM toolchain is READY: llvm-18-dev + libzstd-dev + libpolly-18-dev
+installed; `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18 cargo build -p
+trs-codegen --features llvm` builds and its JIT smoke test passes.
+Fresh microbench baseline (5M-cycle counter): reference 0.27 s vs
+interp 50.2 s = ~190x.
+
+
 Correctness ledger is clean modulo the one Gating bug.  Start with the
 resumable-stepper refactor (event heap + resolved comps as Interp
 fields; the trs-kernel crate's Yield/Quit scaffolding anticipates
