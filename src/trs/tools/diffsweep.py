@@ -107,12 +107,18 @@ def one_test(job):
 
     common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk,
               "-p", wk + ":" + testdir + ":+"]
-    r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk)
+    r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk, timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
+        if r is None:
+            return (rel, top, "COMPILE_FAIL", "compile timeout")
+        if "(G0097)" in msg or "(G0098)" in msg:
+            # Inout is not supported by Bluesim at all
+            return (rel, top, "NOT_SUPPORTED", first_error(msg))
         return (rel, top, "COMPILE_FAIL", first_error(msg))
 
-    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common, cwd=wk)
+    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common, cwd=wk,
+            timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
         if "SimExportIR" in msg:
