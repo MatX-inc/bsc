@@ -10,6 +10,7 @@ pub struct Value {
 
 /// Marker width for string-valued `Value`s (see `Value::str_ref`).
 pub const STR_MARKER: u32 = u32::MAX;
+pub const REAL_MARKER: u32 = u32::MAX - 1;
 
 fn nlimbs(width: u32) -> usize {
     ((width as usize) + 63) / 64
@@ -325,8 +326,8 @@ impl Value {
     }
 
     pub fn zext(&self, w: u32) -> Value {
-        if self.width == STR_MARKER {
-            // string values pass through width adjustments unchanged
+        if self.width == STR_MARKER || self.width == REAL_MARKER {
+            // string/real values pass through width adjustments unchanged
             // (they only ever flow into task arguments)
             return self.clone();
         }
@@ -347,6 +348,21 @@ impl Value {
     pub fn as_str_id(&self) -> Option<u32> {
         if self.width == STR_MARKER {
             Some(self.limbs[0] as u32)
+        } else {
+            None
+        }
+    }
+
+    /// A real-valued constant: carries f64 bits behind a marker width so
+    /// it stays inert through muxes and def stores (only ever consumed as
+    /// a task argument or module parameter).
+    pub fn real(v: f64) -> Value {
+        Value { width: REAL_MARKER, limbs: vec![v.to_bits()] }
+    }
+
+    pub fn as_real(&self) -> Option<f64> {
+        if self.width == REAL_MARKER {
+            Some(f64::from_bits(self.limbs[0]))
         } else {
             None
         }

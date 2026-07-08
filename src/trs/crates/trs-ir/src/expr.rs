@@ -40,6 +40,9 @@ pub enum Expr {
     /// An abstract clock value (`ASClock`) — appears in instantiation
     /// arguments; oscillator and gate expressions.
     Clock { osc: Box<Expr>, gate: Box<Expr> },
+    /// Real-valued constant (BSV `Real` is elaboration-time; it reaches
+    /// simulation only as task arguments and module parameters).
+    Real(f64),
     /// An abstract reset value (`ASReset`) — appears in instantiation
     /// arguments.
     Reset { wire: Box<Expr> },
@@ -70,6 +73,7 @@ impl Expr {
             | Expr::Case { width, .. } => *width,
             Expr::Gate { .. } => 1,
             Expr::Clock { .. } | Expr::Reset { .. } => 1,
+            Expr::Real(_) => 64,
             // Def/Port/Param/Str widths come from their declarations.
             Expr::Def(_) | Expr::Port(_) | Expr::Param(_) | Expr::Str(_) => 0,
         }
@@ -104,6 +108,8 @@ pub enum PrimOp {
     /// Dynamic bit-select of an array-of-values (post `expandDynSel` this
     /// only appears in forms codegen supports directly).
     Select,
+    /// Concatenation of string-typed values (parameters/literals).
+    StringConcat,
 }
 
 /// One statement of a rule or method body: bodies are the exact

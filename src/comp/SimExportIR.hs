@@ -1005,6 +1005,7 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
 aTypeWidth :: AType -> Word32
 aTypeWidth (ATBit n) = fromIntegral n
 aTypeWidth (ATString _) = 0
+aTypeWidth ATReal = 64
 aTypeWidth t = internalError ("SimExportIR.aTypeWidth: " ++ ppReadable t)
 
 -- An Integer as little-endian 32-bit limbs (matching WideData layout).
@@ -1021,6 +1022,7 @@ encExpr (ASInt _ t lit) =
           [ ("width", encW32 w)
           , ("limbs", encList (map encW32 (toLimbs w (ilValue lit))))
           ]
+encExpr (ASReal _ _ d) = return $ encVariant "Real" (C.encodeDouble d)
 encExpr (ASDef _ i) = encVariant "Def" <$> idE i
 encExpr (ASPort _ i) = encVariant "Port" <$> idE i
 encExpr (ASParam _ i) = encVariant "Param" <$> idE i
@@ -1122,6 +1124,7 @@ encCaseArms es =
     internalError ("SimExportIR.encCaseArms: " ++ ppReadable es)
 
 primOpName :: PrimOp -> String
+primOpName PrimStringConcat = "StringConcat"
 primOpName PrimAdd = "Add"
 primOpName PrimSub = "Sub"
 primOpName PrimAnd = "And"

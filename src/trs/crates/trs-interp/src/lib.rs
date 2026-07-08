@@ -42,6 +42,9 @@ pub struct Interp {
     fd_files: Vec<FSlot>,
     /// per-key pushback stack for $ungetc; $fgetc pops from here first
     pushback: HashMap<u64, Vec<u8>>,
+    /// runtime-created strings (PrimStringConcat results); string ids at
+    /// or past the design table's length index into this arena
+    dyn_strs: Vec<String>,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
@@ -209,6 +212,7 @@ impl Interp {
             mcd_files: vec![FSlot::Stdout],
             fd_files: vec![FSlot::Stdin, FSlot::Stdout, FSlot::Stderr],
             pushback: HashMap::new(),
+            dyn_strs: Vec::new(),
             finished: None,
             cycle: 0,
             now: 0,
@@ -241,7 +245,18 @@ impl Interp {
     }
 
     fn s(&self, id: StrId) -> &str {
-        &self.d.strings[id as usize]
+        let n = self.d.strings.len();
+        if (id as usize) < n {
+            &self.d.strings[id as usize]
+        } else {
+            &self.dyn_strs[id as usize - n]
+        }
+    }
+
+    /// Intern a runtime-created string (StringConcat) into the arena.
+    fn intern_dyn(&mut self, text: String) -> StrId {
+        self.dyn_strs.push(text);
+        (self.d.strings.len() + self.dyn_strs.len() - 1) as StrId
     }
 
     /// The string id bound to a string-valued parameter of an instance,
@@ -423,7 +438,13 @@ impl Interp {
                             }
                             _ => {
                                 let mut c = Ctx::default();
-                                consts.push(self.eval(slot, &mut c, a));
+                                let v = self.eval(slot, &mut c, a);
+                                // computed strings (e.g. StringConcat of
+                                // parameters) are string args, not consts
+                                match v.as_str_id() {
+                                    Some(id) => strs.push(self.s(id).to_string()),
+                                    None => consts.push(v),
+                                }
                             }
                         }
                     }
@@ -688,6 +709,7 @@ impl Interp {
             }
             Expr::Clock { .. } => Value::from_u64(1, 1),
             Expr::Reset { wire } => self.eval(inst, ctx, wire),
+            Expr::Real(r) => Value::real(*r),
             Expr::Prim { op, width, args } => self.eval_prim(inst, ctx, *op, *width, args),
             Expr::If { width, cond, then_, else_ } => {
                 if self.eval(inst, ctx, cond).as_bool() {
@@ -838,6 +860,18 @@ impl Interp {
             PrimOp::Select => {
                 panic!("PrimArrayDynSelect should be expanded by simPackageOpt")
             }
+            PrimOp::StringConcat => {
+                let mut text = String::new();
+                for a in args {
+                    let v = self.eval(inst, ctx, a);
+                    match v.as_str_id() {
+                        Some(id) => text.push_str(self.s(id)),
+                        None => panic!("StringConcat of a non-string value"),
+                    }
+                }
+                let id = self.intern_dyn(text);
+                Value::str_ref(id)
+            }
         }
     }
 
@@ -860,8 +894,11 @@ impl Interp {
         }
     }
 
-    /// Dynamically selected strings surface as marker values.
+    /// Dynamically selected strings and reals surface as marker values.
     fn val_arg(&self, v: Value, signed: bool) -> Arg {
+        if let Some(r) = v.as_real() {
+            return Arg::Real(r);
+        }
         match v.as_str_id() {
             Some(id) => Arg::Str(self.s(id).to_string()),
             None => Arg::Val(v, signed),
@@ -1190,11 +1227,14 @@ impl Interp {
                     Some(Arg::Val(v, _)) => v.as_u64(),
                     _ => 0x8000_0000,
                 };
-                let mut text = format::format_args(&args[1..], base, self.now, loc);
+                let mut errs = Vec::new();
+                let mut text =
+                    format::format_args(&args[1..], base, self.now, loc, &mut errs);
                 if name.starts_with("$fdisplay") {
                     text.push('\n');
                 }
                 self.write_fd(fd, &text);
+                emit_output_errors(&errs);
             }
             "$fclose" => {
                 if let Some(Arg::Val(v, _)) = args.first() {
@@ -1240,18 +1280,52 @@ impl Interp {
                     }
                 }
             }
-            "$display" => println!("{}", format::format_args(args, 10, self.now, loc)),
-            "$displayh" => println!("{}", format::format_args(args, 16, self.now, loc)),
-            "$displayb" => println!("{}", format::format_args(args, 2, self.now, loc)),
-            "$displayo" => println!("{}", format::format_args(args, 8, self.now, loc)),
-            "$write" => print!("{}", format::format_args(args, 10, self.now, loc)),
-            "$writeh" => print!("{}", format::format_args(args, 16, self.now, loc)),
-            "$writeb" => print!("{}", format::format_args(args, 2, self.now, loc)),
-            "$writeo" => print!("{}", format::format_args(args, 8, self.now, loc)),
+            "$display" => {
+                let mut errs = Vec::new();
+                println!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$displayh" => {
+                let mut errs = Vec::new();
+                println!("{}", format::format_args(args, 16, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$displayb" => {
+                let mut errs = Vec::new();
+                println!("{}", format::format_args(args, 2, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$displayo" => {
+                let mut errs = Vec::new();
+                println!("{}", format::format_args(args, 8, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$write" => {
+                let mut errs = Vec::new();
+                print!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$writeh" => {
+                let mut errs = Vec::new();
+                print!("{}", format::format_args(args, 16, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$writeb" => {
+                let mut errs = Vec::new();
+                print!("{}", format::format_args(args, 2, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
+            "$writeo" => {
+                let mut errs = Vec::new();
+                print!("{}", format::format_args(args, 8, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
+            }
             // dollar_error/dollar_warning/dollar_info format exactly like
             // $display — bsc compiles the severity prefix into the message
             "$error" | "$warning" | "$info" => {
-                println!("{}", format::format_args(args, 10, self.now, loc));
+                let mut errs = Vec::new();
+                println!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
             }
             "$fatal" => {
                 // first argument is the exit status (dollar_fatal)
@@ -1259,7 +1333,9 @@ impl Interp {
                     Some((Arg::Val(v, _), rest)) => (v.as_u64() as i32, rest),
                     _ => (0, args),
                 };
-                println!("{}", format::format_args(rest, 10, self.now, loc));
+                let mut errs = Vec::new();
+                println!("{}", format::format_args(rest, 10, self.now, loc, &mut errs));
+                emit_output_errors(&errs);
                 self.finished = Some(status);
             }
             "$finish" => {
@@ -1383,8 +1459,11 @@ impl Interp {
                     "$swritehAV" => 16,
                     _ => 10,
                 };
-                let text =
-                    format::format_sformat(args, base, self.now, loc, name == "$sformatAV");
+                let mut errs = Vec::new();
+                let text = format::format_sformat(
+                    args, base, self.now, loc, name == "$sformatAV", &mut errs,
+                );
+                emit_output_errors(&errs);
                 let packed = format::str_value(&text);
                 if packed.width >= w {
                     packed.extract(w as u64 - 1, 0, w)
@@ -2006,6 +2085,14 @@ impl Interp {
             .unwrap_or_else(|| panic!("unknown rule name {rname:?}"))
             as StrId;
         (inst, rid)
+    }
+}
+
+/// dollar_display's Target collects errors with push_front and prints
+/// them after the task output: "Output error: <msg>", newest first.
+fn emit_output_errors(errs: &[String]) {
+    for e in errs.iter().rev() {
+        print!("Output error: {e}");
     }
 }
 
