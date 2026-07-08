@@ -26,6 +26,7 @@ BSCFLAGS_EXT += -vsearch $(BUILDDIR)
 override BSCFLAGS += $(BSCFLAGS_EXT)
 
 BSC ?= $(BINDIR)/bsc
+BO2BLOOGLE ?= $(BINDIR)/bo2bloogle
 
 # The installed bsc is no longer a wrapper script that sets BLUESPECDIR;
 # point it at the runtime being assembled in $(PREFIX)/lib (unconditionally,
