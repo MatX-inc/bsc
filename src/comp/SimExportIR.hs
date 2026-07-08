@@ -56,6 +56,7 @@ import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg)
 import SimDomainInfo (DomainInfo(..))
+import ForeignFunctions (ForeignFunction(..), ForeignType(..))
 import ASyntax
 import SimPackage
 
@@ -172,6 +173,7 @@ encDesign ssys =
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
           compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
                                        (ssys_schedules ssys)
+          ffEnc <- mapM encForeignFunc (M.toList (ssys_ffuncmap ssys))
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
           return
@@ -181,7 +183,7 @@ encDesign ssys =
             , ("modules", encList modsEnc)
             , ("instance_map", encList instEnc)
             , ("compositions", encList compsEnc)
-            , ("foreign_funcs", encList [])  -- P0 TODO: from ssys_ffuncmap
+            , ("foreign_funcs", encList ffEnc)
             , ("default_clock", encMaybe encW32 clkId)
             , ("default_reset", encMaybe encW32 rstId)
             ]
@@ -793,6 +795,29 @@ encReset (rid, rst) = do
       [ ("id", encW32 (fromIntegral (writeResetId rid)))
       , ("wire", wireEnc)
       ]
+
+-- BDPI import signatures; the C ABI is fixed by toCtype/mkFFDecl:
+-- narrow by value, wide/poly as unsigned int* limb pointers, strings as
+-- char*, wide/poly returns via a first-argument out-pointer.
+encForeignFunc :: (String, ForeignFunction) -> EncM C.Encoding
+encForeignFunc (linkname, FF fname rt ats) = do
+    nm <- strE linkname
+    cn <- idE fname
+    argsEnc <- mapM encForeignType ats
+    retEnc <- encForeignType rt
+    return $ encStruct
+      [ ("name", nm)
+      , ("c_name", cn)
+      , ("ret", retEnc)
+      , ("args", encList argsEnc)
+      ]
+
+encForeignType :: ForeignType -> EncM C.Encoding
+encForeignType Void = return $ encUnitVariant "Void"
+encForeignType (Narrow n) = return $ encVariant "Bits" (encW32 (fromIntegral n))
+encForeignType (Wide n) = return $ encVariant "Wide" (encW32 (fromIntegral n))
+encForeignType Polymorphic = return $ encUnitVariant "Poly"
+encForeignType StringPtr = return $ encUnitVariant "CString"
 
 encInput :: AAbstractInput -> EncM [C.Encoding]
 encInput (AAI_Port (i, t)) = (: []) <$> encPort (i, t) "MethodArg"

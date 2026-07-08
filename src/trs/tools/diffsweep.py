@@ -108,6 +108,22 @@ def one_test(job):
 
     common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk,
               "-p", wk + ":" + testdir + ":+"]
+
+    # BDPI designs need the user's C files at link (the .exp recipes pass
+    # them; .c.keep is the testsuite convention for inactive copies)
+    cfiles = []
+    has_bdpi = any(
+        'import "BDPI"' in open(os.path.join(testdir, f), errors="replace").read()
+        for f in os.listdir(testdir) if f.endswith(".bsv")
+    )
+    if has_bdpi:
+        for f in os.listdir(testdir):
+            if f.endswith(".c"):
+                shutil.copy(os.path.join(testdir, f), wk)
+                cfiles.append(f)
+            elif f.endswith(".c.keep"):
+                shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
+                cfiles.append(f[:-5])
     r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk, timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
@@ -118,8 +134,8 @@ def one_test(job):
             return (rel, top, "NOT_SUPPORTED", first_error(msg))
         return (rel, top, "COMPILE_FAIL", first_error(msg))
 
-    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common, cwd=wk,
-            timeout=180)
+    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common + cfiles,
+            cwd=wk, timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
         if "SimExportIR" in msg:

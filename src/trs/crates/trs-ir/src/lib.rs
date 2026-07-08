@@ -223,9 +223,15 @@ pub struct ForeignFunc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ForeignType {
     Void,
-    /// Narrow value returned/passed directly.
+    /// Narrow value passed/returned by value: char for <=8 bits,
+    /// unsigned int for <=32, unsigned long long for <=64 (toCtype).
     Bits(u32),
-    /// Wide/polymorphic: passed as `unsigned int*` (buffered return).
+    /// Wide value: passed as an `unsigned int*` little-endian 32-bit limb
+    /// pointer; a wide RETURN becomes an out-pointer first argument with a
+    /// void return (mkFFDecl).
+    Wide(u32),
+    /// Polymorphic: pointer to the value in 32-bit storage (any actual
+    /// width); returns use the wide out-pointer convention.
     Poly,
     CString,
 }

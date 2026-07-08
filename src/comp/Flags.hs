@@ -59,6 +59,7 @@ data Flags = Flags {
         finalcleanup :: Int,
         genABin :: Bool,
         genBir :: Bool,
+        genTrs :: Bool,
         genName :: [String],
         genSysC :: Bool,
         ifcPathRaw :: [String],

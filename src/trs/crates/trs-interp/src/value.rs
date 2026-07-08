@@ -353,6 +353,31 @@ impl Value {
         }
     }
 
+    /// The value as little-endian 32-bit limbs (Bluesim's WideData layout
+    /// and the BDPI `unsigned int*` ABI).
+    pub fn to_u32_limbs(&self) -> Vec<u32> {
+        let n = ((self.width.max(1) as usize) + 31) / 32;
+        let mut out = Vec::with_capacity(n);
+        for k in 0..n {
+            let limb = self.limbs.get(k / 2).copied().unwrap_or(0);
+            out.push(if k % 2 == 0 { limb as u32 } else { (limb >> 32) as u32 });
+        }
+        out
+    }
+
+    /// Rebuild a value from little-endian 32-bit limbs.
+    pub fn from_u32_limbs(w: u32, limbs: &[u32]) -> Value {
+        let mut v = Value::zero(w.max(1));
+        for (k, &l) in limbs.iter().enumerate() {
+            let idx = k / 2;
+            if idx < v.limbs.len() {
+                v.limbs[idx] |= (l as u64) << (32 * (k % 2));
+            }
+        }
+        v.mask();
+        v
+    }
+
     /// A real-valued constant: carries f64 bits behind a marker width so
     /// it stays inert through muxes and def stores (only ever consumed as
     /// a task argument or module parameter).

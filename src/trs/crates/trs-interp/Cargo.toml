@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 trs-ir = { path = "../trs-ir" }
+libloading = "0.8"

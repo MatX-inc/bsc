@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
+mod bdpi;
+
 use format::Arg;
 use prim::Prim;
 use value::Value;
@@ -45,6 +47,8 @@ pub struct Interp {
     /// runtime-created strings (PrimStringConcat results); string ids at
     /// or past the design table's length index into this arena
     dyn_strs: Vec<String>,
+    /// dlopened user BDPI code (from the companion .bdpi.so)
+    bdpi: Option<bdpi::Bdpi>,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
@@ -216,6 +220,7 @@ impl Interp {
             fd_files: vec![FSlot::Stdin, FSlot::Stdout, FSlot::Stderr],
             pushback: HashMap::new(),
             dyn_strs: Vec::new(),
+            bdpi: None,
             finished: None,
             fataled: false,
             cycle: 0,
@@ -1206,6 +1211,37 @@ impl Interp {
         }
     }
 
+    /// dlopen the companion BDPI shared object and resolve the design's
+    /// imported functions.
+    pub fn load_bdpi(&mut self, path: &str) -> Result<(), String> {
+        let funcs: Vec<(String, String)> = self
+            .d
+            .foreign_funcs
+            .iter()
+            .map(|f| (self.s(f.name).to_string(), self.s(f.c_name).to_string()))
+            .collect();
+        self.bdpi = Some(bdpi::Bdpi::load(std::path::Path::new(path), &funcs)?);
+        Ok(())
+    }
+
+    /// Dispatch a non-builtin task name as a BDPI import, if the design
+    /// declares one.
+    fn bdpi_call(&mut self, name: &str, args: &[Arg], w: u32) -> Option<Value> {
+        let ff = self
+            .d
+            .foreign_funcs
+            .iter()
+            .find(|f| self.s(f.name) == name)?
+            .clone();
+        let b = self.bdpi.as_ref().unwrap_or_else(|| {
+            panic!(
+                "BDPI function {name:?} called but no .bdpi.so was found \
+                 next to the .bir (link with the user's C files)"
+            )
+        });
+        Some(b.call(&ff, name, args, w))
+    }
+
     /// %m location string: the hierarchical name of the module executing
     /// the task (the C++ passes `this` and write_name prints it).
     fn loc_of(&self, inst: usize) -> String {
@@ -1354,7 +1390,11 @@ impl Interp {
             "$stop" => self.finished = Some(0),
             "$dumpvars" | "$dumpon" | "$dumpoff" | "$dumpfile" | "$dumpall"
             | "$dumplimit" | "$dumpflush" => {} // waves: P2
-            other => panic!("trs-interp: unimplemented system task {other:?}"),
+            other => {
+                if self.bdpi_call(other, args, 1).is_none() {
+                    panic!("trs-interp: unimplemented system task {other:?}");
+                }
+            }
         }
     }
 
@@ -1483,7 +1523,12 @@ impl Interp {
                 }
                 Value::zero(w.max(1))
             }
-            other => panic!("trs-interp: unimplemented value task {other:?} ({args:?})"),
+            other => match self.bdpi_call(other, args, w) {
+                Some(v) => v.zext(w.max(1)),
+                None => {
+                    panic!("trs-interp: unimplemented value task {other:?} ({args:?})")
+                }
+            },
         }
     }
 
@@ -2113,5 +2158,10 @@ pub fn run_file(path: &str, max_cycles: u64) -> Result<i32, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let design = Design::decode(&bytes).map_err(|e| e.to_string())?;
     let mut interp = Interp::new(design);
+    // user BDPI code lives in a companion shared object next to the .bir
+    let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
+    if std::path::Path::new(&so).exists() {
+        interp.load_bdpi(&so)?;
+    }
     Ok(interp.run(max_cycles))
 }
