@@ -13,6 +13,7 @@ Every failure is classified so the output is a work list, not a score:
   REF_FAIL       reference Bluesim run failed/timed out
   DECODE_FAIL    trs could not decode the .bir
   INTERP_PANIC   interpreter hit an unimplemented feature (reason kept)
+  TIMEOUT        trs exceeded the per-run limit (known-slow interp)
   DIFF           both ran; stdout differs
   PASS           bit-identical stdout
 """
@@ -43,32 +44,47 @@ if not TRS:
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
-# heavyweight interpreter runs take ~8s solo but contend under 8 jobs
-TIMEOUT = 60
+TIMEOUT = 60          # reference runs, compiles, and normal trs runs
+# Enable-gated long tests (their directory carries a *.exp.golden, the
+# bsc.long_tests convention) are exactly the designs whose interpreter
+# runs blow up; they get a tight leash instead of the flat TIMEOUT:
+# max(TIMEOUT_FLOOR, TIMEOUT_FACTOR x the reference's wall time).
+TIMEOUT_FLOOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FLOOR", "5"))
+TIMEOUT_FACTOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FACTOR", "5"))
 
 
 def find_source(testdir, top):
     def scan(name):
-        cand = os.path.join(testdir, name + ".bsv")
-        if os.path.exists(cand):
-            return cand
+        for ext in (".bsv", ".bs"):
+            cand = os.path.join(testdir, name + ext)
+            if os.path.exists(cand):
+                return cand
         pats = [
             re.compile(r"module\s+(?:\[[^\]]*\]\s*)?" + re.escape(name) + r"\b"),
             re.compile(r"`define\s+\w+\s+" + re.escape(name) + r"\b"),
         ]
+        # .bs (Bluespec Haskell syntax): a top-level type signature or
+        # binding for the module name (sysMips was invisible to the sweep
+        # until the full testsuite caught a bug in it — scan .bs too)
+        bs_pats = [
+            re.compile(r"^" + re.escape(name) + r"\s*::", re.M),
+            re.compile(r"^" + re.escape(name) + r"\s*=", re.M),
+        ]
         for f in sorted(os.listdir(testdir)):
-            if f.endswith(".bsv"):
+            if f.endswith((".bsv", ".bs")):
                 try:
                     text = open(os.path.join(testdir, f), errors="replace").read()
                 except OSError:
                     continue
-                if any(p.search(text) for p in pats):
+                use = bs_pats if f.endswith(".bs") else pats
+                if any(p.search(text) for p in use):
                     return os.path.join(testdir, f)
-        # filename convention: sysFoo defined in Foo.bsv
+        # filename convention: sysFoo defined in Foo.bsv (or .bs)
         if name.startswith("sys"):
-            cand = os.path.join(testdir, name[3:] + ".bsv")
-            if os.path.exists(cand):
-                return cand
+            for ext in (".bsv", ".bs"):
+                cand = os.path.join(testdir, name[3:] + ext)
+                if os.path.exists(cand):
+                    return cand
         return None
 
     # expected files may carry a variant suffix: sysFoo_flagvariant
@@ -157,15 +173,20 @@ def one_test(job):
     if not os.path.exists(bir):
         return (rel, top, "EXPORT_FAIL", "no .bir produced")
 
+    import time as _time
+    t0 = _time.monotonic()
     ref = run(["./sim.exe", "-m", MAX_CYCLES], cwd=wk)
+    ref_secs = _time.monotonic() - t0
     if ref is None:
         return (rel, top, "REF_FAIL", "timeout")
     if ref.returncode < 0:
         return (rel, top, "REF_FAIL", f"signal {-ref.returncode}")
 
-    inp = run([TRS, "run", bir, "-m", MAX_CYCLES], cwd=wk)
+    is_long = any(f.endswith(".exp.golden") for f in os.listdir(testdir))
+    limit = max(TIMEOUT_FLOOR, TIMEOUT_FACTOR * ref_secs) if is_long else TIMEOUT
+    inp = run([TRS, "run", bir, "-m", MAX_CYCLES], cwd=wk, timeout=limit)
     if inp is None:
-        return (rel, top, "INTERP_PANIC", "timeout")
+        return (rel, top, "TIMEOUT", f"limit {limit:.0f}s (ref {ref_secs:.2f}s)")
     if inp.returncode != 0 and "panicked" in inp.stderr:
         return (rel, top, "INTERP_PANIC", panic_reason(inp.stderr))
     if "error" in inp.stderr.lower() and inp.returncode != 0:
@@ -214,6 +235,12 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
     ap.add_argument("--out", default="diffsweep-results.json")
+    ap.add_argument("--timeout-floor", type=float, default=None,
+                    help="minimum trs timeout for enable-gated long "
+                    "tests, seconds (default 5)")
+    ap.add_argument("--timeout-factor", type=float, default=None,
+                    help="long-test trs timeout as a multiple of the "
+                    "reference's wall time (default 5)")
     ap.add_argument(
         "--trs",
         default="",
@@ -227,13 +254,17 @@ def main():
         # workers re-import this module (spawn/forkserver); hand the
         # override down via the environment
         os.environ["DIFFSWEEP_TRS"] = TRS
+    if args.timeout_floor is not None:
+        os.environ["DIFFSWEEP_TIMEOUT_FLOOR"] = str(args.timeout_floor)
+    if args.timeout_factor is not None:
+        os.environ["DIFFSWEEP_TIMEOUT_FACTOR"] = str(args.timeout_factor)
     print(f"trs binary: {TRS}", flush=True)
 
     jobs = []
     workroot = os.path.join(os.path.dirname(args.out) or ".", "diffsweep-work")
     for dirpath, _dirs, files in os.walk(os.path.join(REPO, "testsuite")):
         for f in files:
-            m = re.match(r"(sys\w+)\.out\.expected$", f)
+            m = re.match(r"((?:sys|mk)\w+)\.out\.expected$", f)
             if m and (not args.filter or args.filter in dirpath):
                 jobs.append((dirpath, m.group(1), workroot))
     jobs.sort()
