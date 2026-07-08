@@ -9,9 +9,14 @@
 
 # Test for various data widths (for Bluesim)
 test_veri_only_bsv BRAMWidthTest
-# Bluesim fails to link (Bug 1731)
 compile_object_pass BRAMWidthTest.bsv
-link_objects_pass_bug {} sysBRAMWidthTest 1731
+# The C++ backend fails to compile/link the generated code (Bug 1731);
+# -trs has no generated C++, so the link succeeds there
+if { [cxx_codegen_tests] } {
+    link_objects_pass_bug {} sysBRAMWidthTest 1731
+} else {
+    link_objects_pass {} sysBRAMWidthTest
+}
 
 if { $ctest == 1 } {
 compile_object_fail_error BRAMBE1Test.bsv S0015

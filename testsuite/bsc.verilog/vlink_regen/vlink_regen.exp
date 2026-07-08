@@ -5,6 +5,13 @@
 # files as found) when the design's .ba hierarchy is unavailable.
 #
 
+# Everything below links Verilog produced by the initial
+# compile_verilog_pass, which self-gates on vtest.
+if { $vtest != 1 } {
+    verbose "Skipping Verilog link-regeneration tests (VTEST=0)" 1
+    return
+}
+
 # run "bsc -verilog -e" capturing output; expect success
 proc vlink_run { toplevel output {files ""} } {
     set opts "-no-show-timestamps -no-show-version -verilog -e $toplevel -o $toplevel.vexe $files"

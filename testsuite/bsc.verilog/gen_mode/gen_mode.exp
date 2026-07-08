@@ -42,6 +42,10 @@ proc vgen_pass { module { options "" } } {
 # -------------------------
 # Elaborate a two-level design; -verilog writes .v and .ba for each module
 
+# The -g compiles self-gate on vtest, so everything consuming their
+# .v/.ba output is gated too
+if { $vtest == 1 } {
+
 compile_verilog_pass GenMode.bsv mkGenSub
 compile_verilog_pass GenMode.bsv mkGenTop
 
@@ -74,10 +78,10 @@ compile_verilog_pass GenModeTb.bsv sysGenModeTb
 erase mkGenSub.v
 vgen_pass mkGenSub
 files_exist { mkGenSub.v }
-if { $vtest == 1 } {
-    link_verilog_pass {sysGenModeTb.v mkGenSub.v} sysGenModeTb
-    sim_verilog sysGenModeTb
-    compare_file sysGenModeTb.out sysGenModeTb.out.expected
+link_verilog_pass {sysGenModeTb.v mkGenSub.v} sysGenModeTb
+sim_verilog sysGenModeTb
+compare_file sysGenModeTb.out sysGenModeTb.out.expected
+
 }
 
 # -------------------------
