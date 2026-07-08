@@ -104,7 +104,9 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         // no-reset MOD_Reg ctor, which loads the init value directly at
         // construction (regType NRst — no reset line, no ticks)
         "RevertReg" => Box::new(Reg::preset(consts)),
-        "Probe" | "ProbeWire" => Box::new(Probe),
+        "Probe" => Box::new(Probe::new(consts)),
+        // ProbeWire contributes nothing to VCD (bs_prim_mod_probe.h:103-133)
+        "ProbeWire" => Box::new(ProbeWire),
         // no reset modeling yet: reset outputs read as deasserted
         "ResetToBool" => Box::new(ResetToBool { in_reset: false }),
         "Counter" => Box::new(Counter::new(consts)),
@@ -227,12 +229,60 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
 
 // ===============
 
-/// Probe: waveform-only sink.
-struct Probe;
+/// Probe: waveform-only sink (bs_prim_mod_probe.h:11-99): one $var
+/// named "<inst>$PROBE", clock-backdated, value from the last write.
+struct Probe {
+    value: Value,
+    vcd_id: u32,
+    vcd_back: Option<Value>,
+}
+
+impl Probe {
+    fn new(consts: &[Value]) -> Probe {
+        let width = carg(consts, 0) as u32;
+        Probe { value: Value::undet(width.max(1)), vcd_id: 0, vcd_back: None }
+    }
+}
 
 impl Prim for Probe {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        self.vcd_id = w.reserve_ids(1);
+        w.set_clock(self.vcd_id, clk);
+        w.write_def(self.vcd_id, &format!("{name}$PROBE"), self.value.width);
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        let v = self.value.clone();
+        vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
+    }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         panic!("Probe: unknown value method {method:?}")
+    }
+    fn action_method(&mut self, _method: &str, args: &[Value], _now: u64) {
+        if let Some(v) = args.first() {
+            self.value = v.clone();
+        }
+    }
+    fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+}
+
+/// ProbeWire: sink with no VCD contribution.
+struct ProbeWire;
+
+impl Prim for ProbeWire {
+    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        panic!("ProbeWire: unknown value method {method:?}")
     }
     fn action_method(&mut self, _method: &str, _args: &[Value], _now: u64) {}
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
@@ -1381,6 +1431,14 @@ struct CReg {
     in_reset: bool,
     async_rst: bool,
     suppress: bool,
+    // VCD state (bs_prim_mod_reg.h:817+): per-port write history, the
+    // registered value at cycle start, latched ENs
+    write_val: Vec<Value>,
+    did_write: Vec<bool>,
+    did_write_rec: Vec<bool>,
+    read_val0: Value,
+    vcd_base: u32,
+    vcd_back: Option<(Vec<Value>, Vec<bool>, Vec<Value>)>,
 }
 
 impl CReg {
@@ -1398,11 +1456,113 @@ impl CReg {
             in_reset: false,
             async_rst,
             suppress: false,
+            write_val: (0..5).map(|_| Value::undet(width)).collect(),
+            did_write: vec![false; 5],
+            did_write_rec: vec![false; 5],
+            read_val0: Value::undet(width),
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for CReg {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_reg.h:989-1022: parent-scope alias shares Q_OUT_0's
+        // id; per-port Q_OUT_i/EN_i/D_IN_i, all clock-backdated
+        let bits = self.value.width;
+        let mut n = w.reserve_ids(3 * 5);
+        self.vcd_base = n;
+        w.write_def(n, name, bits);
+        w.scope_start(name);
+        for i in 0..5 {
+            w.set_clock(n, clk);
+            w.write_def(n, &format!("Q_OUT_{i}"), bits);
+            n += 1;
+            w.set_clock(n, clk);
+            w.write_def(n, &format!("EN_{i}"), 1);
+            n += 1;
+            w.set_clock(n, clk);
+            w.write_def(n, &format!("D_IN_{i}"), bits);
+            n += 1;
+        }
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bits = self.value.width;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let mut num = self.vcd_base;
+        // chained Q_OUT values: port i sees earlier ports' writes
+        let mut qouts: Vec<Value> = Vec::with_capacity(5);
+        let mut tmp = self.read_val0.clone();
+        for i in 0..5 {
+            qouts.push(tmp.clone());
+            if self.did_write_rec[i] {
+                tmp = self.write_val[i].clone();
+            }
+        }
+        match dt {
+            D::Xs => {
+                for _ in 0..5 {
+                    w.write_x(num, bits, now);
+                    num += 1;
+                    w.write_x(num, 1, now);
+                    num += 1;
+                    w.write_x(num, bits, now);
+                    num += 1;
+                }
+            }
+            D::Changes => {
+                let (bq, be, bd) = self.vcd_back.clone().unwrap_or_else(|| {
+                    (
+                        (0..5).map(|_| Value::undet(bits)).collect(),
+                        vec![false; 5],
+                        (0..5).map(|_| Value::undet(bits)).collect(),
+                    )
+                });
+                for i in 0..5 {
+                    if qouts[i] != bq[i] {
+                        w.write_val(num, &qouts[i], now);
+                    }
+                    num += 1;
+                    if self.did_write_rec[i] != be[i] {
+                        w.write_val(num, &bit(self.did_write_rec[i]), now);
+                    }
+                    num += 1;
+                    if self.write_val[i] != bd[i] {
+                        w.write_val(num, &self.write_val[i], now);
+                    }
+                    num += 1;
+                }
+            }
+            _ => {
+                for i in 0..5 {
+                    w.write_val(num, &qouts[i], now);
+                    num += 1;
+                    w.write_val(num, &bit(self.did_write_rec[i]), now);
+                    num += 1;
+                    w.write_val(num, &self.write_val[i], now);
+                    num += 1;
+                }
+            }
+        }
+        self.vcd_back =
+            Some((qouts, self.did_write_rec.clone(), self.write_val.clone()));
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         // portK__read returns the live value (port 0 sees the registered
         // value at cycle start because nothing has written yet)
@@ -1416,6 +1576,11 @@ impl Prim for CReg {
         if method.starts_with("port") && method.ends_with("__write") {
             if !(self.async_rst && self.suppress) {
                 self.value = args[0].clone();
+                let i = method.as_bytes()[4].saturating_sub(b'0') as usize;
+                if i < 5 {
+                    self.did_write[i] = true;
+                    self.write_val[i] = args[0].clone();
+                }
             }
         } else {
             panic!("CReg: unknown action method {method:?}")
@@ -1423,7 +1588,13 @@ impl Prim for CReg {
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
         if !gate { return; }
+        // Q_OUT_0 starts from the value registered before this cycle
+        self.read_val0 = self.value_reg.clone();
         self.value_reg = self.value.clone();
+        for i in 0..5 {
+            self.did_write_rec[i] = self.did_write[i];
+            self.did_write[i] = false;
+        }
     }
     fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
