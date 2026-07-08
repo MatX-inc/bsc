@@ -245,13 +245,36 @@ enum ClockSource {
 /// One composition pre-resolved against the instance tree: the kernel
 /// clock index and edge it fires on, plus entries, cross-inhibits and
 /// ticks in directly executable form.
+/// One resolved schedule entry: a segment's nodes for one instance, plus
+/// the defs the C++ schedule computes eagerly at this position.
+struct REntry {
+    inst: usize,
+    /// module clock domain (used for VCD wiring at prime time)
+    domain: u32,
+    /// schedule segment nodes, resolved once at prime() so the per-edge
+    /// pass never searches domain schedules or clones node lists
+    nodes: Vec<SchedNode>,
+    /// defs the C++ schedule_posedge_* computes at this position: the
+    /// CAN_FIRE/WILL_FIRE cone of this entry's Sched rules (getExprIds
+    /// True in SimMakeCBlocks), transitively through every mux arm,
+    /// minus defs already attached to an earlier entry of the same
+    /// composition, in module def-table (dependency) order.  Hoisted
+    /// prim value-method calls live here, so their side effects (RegFile
+    /// bounds warnings) fire once per edge even when no rule runs; rule
+    /// bodies that alias these defs (C++ `DEF_x = DEF_x;`) reuse the
+    /// schedule-time values via the latch instead of recomputing against
+    /// later mid-cycle state.  CAN_FIRE/WILL_FIRE defs themselves are
+    /// traversed but never latched: rule CF/WFs are computed (with
+    /// inhibitors) by latch_rule, and method WFs follow the call-time
+    /// EN protocol (the C++ schedule re-derives them from EN ports after
+    /// the calling rules have run).
+    eager: Vec<StrId>,
+}
+
 struct RComp {
     clk: usize,
     posedge: bool,
-    // (instance idx, module clock domain, schedule segment nodes) —
-    // nodes are resolved once at prime() so the per-edge pass never
-    // searches domain schedules or clones node lists
-    entries: Vec<(usize, u32, Vec<SchedNode>)>,
+    entries: Vec<REntry>,
     cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
     // (prim instance, resolved port name, is_reset_tick, owner instance
     // for gate evaluation, gate expr)
@@ -260,6 +283,49 @@ struct RComp {
     // run in the after-edge pass at end of timeslice (the C++
     // schedule_after_posedge_* at PG_FINAL)
     early: HashSet<(usize, StrId)>,
+}
+
+/// Collect the def names an expression references, descending into every
+/// subexpression (both mux arms — the C++ schedule assigns eagerly).
+fn collect_def_refs(e: &Expr, out: &mut Vec<StrId>) {
+    match e {
+        Expr::Def(d) => out.push(*d),
+        Expr::MethCall { args, .. } | Expr::ForeignCall { args, .. } => {
+            for a in args {
+                collect_def_refs(a, out);
+            }
+        }
+        Expr::Prim { args, .. } => {
+            for a in args {
+                collect_def_refs(a, out);
+            }
+        }
+        Expr::If { cond, then_, else_, .. } => {
+            collect_def_refs(cond, out);
+            collect_def_refs(then_, out);
+            collect_def_refs(else_, out);
+        }
+        Expr::Case { scrutinee, arms, default, .. } => {
+            collect_def_refs(scrutinee, out);
+            for (_, a) in arms {
+                collect_def_refs(a, out);
+            }
+            collect_def_refs(default, out);
+        }
+        Expr::Clock { osc, gate } => {
+            collect_def_refs(osc, out);
+            collect_def_refs(gate, out);
+        }
+        Expr::Reset { wire } => collect_def_refs(wire, out),
+        Expr::Const { .. }
+        | Expr::Port(_)
+        | Expr::Param(_)
+        | Expr::MethValue { .. }
+        | Expr::TaskValue { .. }
+        | Expr::Str(_)
+        | Expr::Real(_)
+        | Expr::Gate { .. } => {}
+    }
 }
 
 /// Resumable event-loop state.  Everything run() used to build locally
@@ -2916,7 +2982,7 @@ impl Interp {
         let rcomps: Vec<RComp> = comps
             .iter()
             .map(|comp| {
-                let entries = comp
+                let mut entries: Vec<REntry> = comp
                     .entries
                     .iter()
                     .map(|e| {
@@ -2941,7 +3007,12 @@ impl Interp {
                                     self.s(self.d.modules[mir].name)
                                 )
                             });
-                        (ii, e.domain, ms.segments[e.segment as usize].nodes.clone())
+                        REntry {
+                            inst: ii,
+                            domain: e.domain,
+                            nodes: ms.segments[e.segment as usize].nodes.clone(),
+                            eager: Vec::new(),
+                        }
                     })
                     .collect();
 
@@ -2977,11 +3048,60 @@ impl Interp {
                     })
                     .collect();
 
-                let early = comp
+                let early: HashSet<(usize, StrId)> = comp
                     .early
                     .iter()
                     .map(|q| self.split_qual(*q))
                     .collect();
+
+                // per-entry eager schedule defs (see REntry::eager): walk
+                // entries in merged order, attaching each cone def to the
+                // first entry whose Sched rules reach it
+                let mut attached: HashSet<(usize, StrId)> = HashSet::new();
+                for en in &mut entries {
+                    let ii = en.inst;
+                    let module = self.module_of(ii);
+                    let mir = self.mods[module].ir;
+                    let mut stack: Vec<StrId> = Vec::new();
+                    for &node in &en.nodes {
+                        let SchedNode::Sched(r) = node else { continue };
+                        if early.contains(&(ii, r)) {
+                            continue;
+                        }
+                        let Some(&ri) = self.mods[module].rules.get(&r) else {
+                            continue;
+                        };
+                        let rr = &self.d.modules[mir].rules[ri];
+                        stack.push(rr.can_fire);
+                        stack.push(rr.will_fire);
+                    }
+                    let mut visited: HashSet<StrId> = HashSet::new();
+                    let mut wanted: HashSet<StrId> = HashSet::new();
+                    while let Some(dn) = stack.pop() {
+                        if !visited.insert(dn) {
+                            continue;
+                        }
+                        let Some(&di) = self.mods[module].defs.get(&dn) else {
+                            continue;
+                        };
+                        let d = &self.d.modules[mir].defs[di];
+                        // CF/WF defs (rule or method) are never latched
+                        // here; new cone defs attach to this entry
+                        if !d.props.can_fire
+                            && !d.props.will_fire
+                            && !attached.contains(&(ii, dn))
+                        {
+                            wanted.insert(dn);
+                        }
+                        collect_def_refs(&d.expr, &mut stack);
+                    }
+                    for d in &self.d.modules[mir].defs {
+                        if wanted.contains(&d.name) {
+                            attached.insert((ii, d.name));
+                            en.eager.push(d.name);
+                        }
+                    }
+                }
 
                 RComp {
                     clk: clocks.iter().position(|&c| c == comp.clock).unwrap(),
@@ -3043,9 +3163,9 @@ impl Interp {
         self.vcd_inst_clock = vec![0; self.insts.len()];
         self.vcd_inst_domclock.clear();
         for rc in &rcomps {
-            for &(inst, domain, _) in &rc.entries {
-                self.vcd_inst_clock[inst] = rc.clk;
-                self.vcd_inst_domclock.insert((inst, domain), rc.clk);
+            for en in &rc.entries {
+                self.vcd_inst_clock[en.inst] = rc.clk;
+                self.vcd_inst_domclock.insert((en.inst, en.domain), rc.clk);
             }
             for (inst, pname, is_rst, owner, _) in &rc.ticks {
                 self.vcd_inst_clock[*inst] = rc.clk;
@@ -3239,9 +3359,17 @@ impl Interp {
                     }
                 }
 
-                for (inst, _, nodes) in &rc.entries {
-                    let inst = *inst;
-                    for &node in nodes {
+                for en in &rc.entries {
+                    let inst = en.inst;
+                    // this entry's schedule-position cone defs: computed
+                    // eagerly here like the C++ schedule function — side
+                    // effects (hoisted prim value-method calls) included
+                    for &dn in &en.eager {
+                        let mut c = Ctx::default();
+                        let v = self.eval(inst, &mut c, &Expr::Def(dn));
+                        self.set_latched(inst, dn, v);
+                    }
+                    for &node in &en.nodes {
                         if self.finished.is_some() {
                             break;
                         }
@@ -3328,9 +3456,9 @@ impl Interp {
                     if rc.early.is_empty() {
                         continue;
                     }
-                    for (inst, _, nodes) in &rc.entries {
-                        let inst = *inst;
-                        for &node in nodes {
+                    for en in &rc.entries {
+                        let inst = en.inst;
+                        for &node in &en.nodes {
                             if self.finished.is_some() {
                                 break;
                             }
