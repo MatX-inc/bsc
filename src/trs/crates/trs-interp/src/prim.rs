@@ -2078,6 +2078,8 @@ struct SyncBit {
     s: SyncVar,
     reset_value: Value,
     in_reset: bool,
+    vcd_base: u32,
+    vcd_back: Option<(Value, Value, Value)>,
 }
 
 impl SyncBit {
@@ -2090,11 +2092,85 @@ impl SyncBit {
             s: SyncVar::new(Value::undet(1)),
             reset_value: rv,
             in_reset: false,
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for SyncBit {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // MOD_Sync2/Sync15: dSyncReg1/dSyncReg2/sSyncReg;
+        // MOD_Sync1: dSyncReg1/sSyncReg
+        let n = w.reserve_ids(if self.two_stage { 3 } else { 2 });
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(n, "dSyncReg1", 1);
+        if self.two_stage {
+            w.write_def(n + 1, "dSyncReg2", 1);
+            w.write_def(n + 2, "sSyncReg", 1);
+        } else {
+            w.write_def(n + 1, "sSyncReg", 1);
+        }
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let n = self.vcd_base;
+        let ss = self.s.read(now);
+        match dt {
+            D::Xs => {
+                w.write_x(n, 1, now);
+                w.write_x(n + 1, 1, now);
+                if self.two_stage {
+                    w.write_x(n + 2, 1, now);
+                }
+            }
+            D::Changes => {
+                let (b1, b2, bs) = self.vcd_back.clone().unwrap_or((
+                    Value::undet(1),
+                    Value::undet(1),
+                    Value::undet(1),
+                ));
+                if self.d1 != b1 {
+                    w.write_val(n, &self.d1, now);
+                }
+                if self.two_stage {
+                    if self.d2 != b2 {
+                        w.write_val(n + 1, &self.d2, now);
+                    }
+                    if ss != bs {
+                        w.write_val(n + 2, &ss, now);
+                    }
+                } else if ss != bs {
+                    w.write_val(n + 1, &ss, now);
+                }
+            }
+            _ => {
+                w.write_val(n, &self.d1, now);
+                if self.two_stage {
+                    w.write_val(n + 1, &self.d2, now);
+                    w.write_val(n + 2, &ss, now);
+                } else {
+                    w.write_val(n + 1, &ss, now);
+                }
+            }
+        }
+        self.vcd_back = Some((self.d1.clone(), self.d2.clone(), ss));
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "read" | "_read" => {
@@ -2148,6 +2224,8 @@ struct SyncPulse {
     d1: Value,
     s: SyncVar,
     in_reset: bool,
+    vcd_base: u32,
+    vcd_back: Option<(Value, Value, Value, Value)>,
 }
 
 impl SyncPulse {
@@ -2158,11 +2236,70 @@ impl SyncPulse {
             d1: Value::undet(1),
             s: SyncVar::new(Value::undet(1)),
             in_reset: false,
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for SyncPulse {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        let n = w.reserve_ids(4);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(n, "dSyncReg1", 1);
+        w.write_def(n + 1, "dSyncReg2", 1);
+        w.write_def(n + 2, "dSyncPulse", 1);
+        w.write_def(n + 3, "sSyncReg", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let n = self.vcd_base;
+        let ss = self.s.read(now);
+        let cur = [self.d1.clone(), self.d2.clone(), self.d_pulse.clone(), ss];
+        match dt {
+            D::Xs => {
+                for i in 0..4 {
+                    w.write_x(n + i, 1, now);
+                }
+            }
+            D::Changes => {
+                let b = self.vcd_back.clone().unwrap_or((
+                    Value::undet(1),
+                    Value::undet(1),
+                    Value::undet(1),
+                    Value::undet(1),
+                ));
+                let back = [b.0, b.1, b.2, b.3];
+                for (i, v) in cur.iter().enumerate() {
+                    if *v != back[i] {
+                        w.write_val(n + i as u32, v, now);
+                    }
+                }
+            }
+            _ => {
+                for (i, v) in cur.iter().enumerate() {
+                    w.write_val(n + i as u32, v, now);
+                }
+            }
+        }
+        self.vcd_back =
+            Some((cur[0].clone(), cur[1].clone(), cur[2].clone(), cur[3].clone()));
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "pulse" | "read" | "_read" => self.d2.xor(&self.d_pulse, 1),
