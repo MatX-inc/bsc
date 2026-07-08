@@ -51,6 +51,10 @@ TIMEOUT = 60          # reference runs, compiles, and normal trs runs
 # max(TIMEOUT_FLOOR, TIMEOUT_FACTOR x the reference's wall time).
 TIMEOUT_FLOOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FLOOR", "5"))
 TIMEOUT_FACTOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FACTOR", "5"))
+# --aot: trs link to a persistent artifact, then run the wrapper
+# script (build cost is NOT counted against the sim-time leash — the
+# incumbents amortize their compiles the same way)
+AOT = os.environ.get("DIFFSWEEP_AOT", "") == "1"
 
 
 def find_source(testdir, top):
@@ -98,10 +102,10 @@ def find_source(testdir, top):
         name = name.rsplit("_", 1)[0]
 
 
-def run(cmd, cwd, timeout=TIMEOUT):
+def run(cmd, cwd, timeout=TIMEOUT, env=None):
     try:
         return subprocess.run(
-            cmd, cwd=cwd, env=ENV, timeout=timeout,
+            cmd, cwd=cwd, env=env or ENV, timeout=timeout,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
     except subprocess.TimeoutExpired:
@@ -184,7 +188,18 @@ def one_test(job):
 
     is_long = any(f.endswith(".exp.golden") for f in os.listdir(testdir))
     limit = max(TIMEOUT_FLOOR, TIMEOUT_FACTOR * ref_secs) if is_long else TIMEOUT
-    inp = run([TRS, "run", bir, "-m", MAX_CYCLES], cwd=wk, timeout=limit)
+    if AOT:
+        cexe = os.path.join(wk, top + ".aot.cexe")
+        lk = run([TRS, "link", bir, "-o", cexe], cwd=wk, timeout=300)
+        if lk is None or lk.returncode != 0:
+            msg = "" if lk is None else (lk.stderr + lk.stdout)
+            return (rel, top, "AOT_LINK_FAIL",
+                    "timeout" if lk is None else first_error(msg))
+        env = dict(ENV)
+        env["PATH"] = os.path.dirname(TRS) + os.pathsep + env.get("PATH", "")
+        inp = run([cexe, "-m", MAX_CYCLES], cwd=wk, timeout=limit, env=env)
+    else:
+        inp = run([TRS, "run", bir, "-m", MAX_CYCLES], cwd=wk, timeout=limit)
     if inp is None:
         return (rel, top, "TIMEOUT", f"limit {limit:.0f}s (ref {ref_secs:.2f}s)")
     if inp.returncode != 0 and "panicked" in inp.stderr:
@@ -235,6 +250,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
     ap.add_argument("--out", default="diffsweep-results.json")
+    ap.add_argument("--aot", action="store_true",
+                    help="trs link + run the artifact script instead of trs run")
     ap.add_argument("--timeout-floor", type=float, default=None,
                     help="minimum trs timeout for enable-gated long "
                     "tests, seconds (default 5)")
@@ -258,6 +275,10 @@ def main():
         os.environ["DIFFSWEEP_TIMEOUT_FLOOR"] = str(args.timeout_floor)
     if args.timeout_factor is not None:
         os.environ["DIFFSWEEP_TIMEOUT_FACTOR"] = str(args.timeout_factor)
+    if args.aot:
+        global AOT
+        AOT = True
+        os.environ["DIFFSWEEP_AOT"] = "1"
     print(f"trs binary: {TRS}", flush=True)
 
     jobs = []

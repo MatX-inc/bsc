@@ -36,6 +36,10 @@ type JitPlans = std::convert::Infallible;
 type JitShared = std::sync::Arc<jit::LazyJit>;
 #[cfg(not(feature = "jit"))]
 type JitShared = std::convert::Infallible;
+#[cfg(feature = "jit")]
+type JitRequestT = jit::JitRequest;
+#[cfg(not(feature = "jit"))]
+type JitRequestT = ();
 
 /// BDPI imports satisfied by the Bluesim library itself (libbsprim.a's
 /// rand32.cxx), not by user C files.
@@ -154,6 +158,13 @@ pub struct Interp {
     /// schedule-position defs: interpreted evaluation falls through to
     /// the slots the native scheds keep current
     jit_eager_slots: HashMap<(usize, StrId), (u32, u32)>,
+    /// what prime()'s planning pass should do: JIT in-process (default),
+    /// emit an AOT artifact, or load one (trs link / run --code)
+    pub(crate) jit_request: JitRequestT,
+    /// outcome of an Emit request (trs link reads this after prime)
+    pub(crate) jit_emit_result: Option<AotEmit>,
+    /// FNV-1a fingerprint of the loaded .bir bytes (artifact check)
+    pub(crate) bir_hash: u64,
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
     /// the owning allocation lives in Stepper::jit
     jit_arena_ptr: *mut u64,
@@ -510,6 +521,9 @@ impl Interp {
             jit_shared: None,
             jit_en_slots: HashMap::new(),
             jit_eager_slots: HashMap::new(),
+            jit_request: Default::default(),
+            jit_emit_result: None,
+            bir_hash: 0,
             jit_arena_ptr: std::ptr::null_mut(),
             jit_reset_slots: Vec::new(),
         };
@@ -3716,6 +3730,62 @@ fn cookie_key(cookie: u32) -> StrId {
     0x8000_0000 | cookie
 }
 
+/// Outcome of a trs link Emit request.
+pub enum AotEmit {
+    /// artifact .so written; the wrapper should pass --code
+    Compiled,
+    /// design can't run in compiled mode (reason) — the artifact is
+    /// still valid, it just runs interpreted (no --code)
+    Ineligible(String),
+    /// infrastructure failure (LLVM, cc, IO): link must fail
+    Failed(String),
+}
+
+/// FNV-1a over the .bir bytes: the fingerprint baked into AOT
+/// artifacts and checked at load.
+pub fn bir_fingerprint(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+#[cfg(feature = "jit")]
+impl Interp {
+    /// trs link: make prime() emit the artifact .so instead of
+    /// setting up a run.
+    pub fn aot_request_emit(&mut self, so: std::path::PathBuf) {
+        self.jit_request = jit::JitRequest::Emit { so };
+    }
+
+    /// trs run --code: resolve compiled functions from the artifact.
+    pub fn aot_request_code(&mut self, so: std::path::PathBuf) {
+        self.jit_request = jit::JitRequest::Load { so };
+    }
+
+    /// Outcome of an Emit request (valid after prime()).
+    pub fn aot_take_emit_result(&mut self) -> Option<AotEmit> {
+        self.jit_emit_result.take()
+    }
+}
+#[cfg(not(feature = "jit"))]
+impl Interp {
+    pub fn aot_request_emit(&mut self, _so: std::path::PathBuf) {}
+    pub fn aot_request_code(&mut self, _so: std::path::PathBuf) {
+        eprintln!(
+            "trs: warning: built without JIT/AOT support; \
+             --code ignored (running interpreted)"
+        );
+    }
+    pub fn aot_take_emit_result(&mut self) -> Option<AotEmit> {
+        Some(AotEmit::Failed(
+            "this trs was built without JIT/AOT support (feature `jit`)".into(),
+        ))
+    }
+}
+
 /// Load a .bir (and its companion .bdpi.so, if any) into an Interp ready
 /// to run — the driver's -c/-f scripting needs the handle between steps.
 pub fn load_file(
@@ -3726,6 +3796,7 @@ pub fn load_file(
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let design = Design::decode(&bytes).map_err(|e| e.to_string())?;
     let mut interp = Interp::new(design);
+    interp.bir_hash = bir_fingerprint(&bytes);
     interp.plusargs = plusargs.to_vec();
     interp.vcd_file_pending = vcd_file.map(str::to_string);
     // user BDPI code lives in a companion shared object next to the .bir
@@ -3744,7 +3815,11 @@ pub fn run_file(
     max_cycles: u64,
     plusargs: &[String],
     vcd_file: Option<&str>,
+    code: Option<&str>,
 ) -> Result<i32, String> {
     let mut interp = load_file(path, plusargs, vcd_file)?;
+    if let Some(so) = code {
+        interp.aot_request_code(so.into());
+    }
     Ok(interp.run(max_cycles))
 }

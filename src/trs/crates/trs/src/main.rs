@@ -12,7 +12,8 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!("trs {} (phase P0 scaffold)", env!("CARGO_PKG_VERSION"));
     eprintln!("usage: trs ir dump <module.bir>");
-    eprintln!("       trs run <module.bir> [-m max_cycles]");
+    eprintln!("       trs link <module.bir> [-o <out.cexe>]");
+    eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>]");
     ExitCode::from(2)
 }
 
@@ -35,6 +36,110 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        // trs link: compile the design ahead of time and write the
+        // persistent artifact: <out> (wrapper script with the same CLI
+        // as reference Bluesim), <out>.bir, <out>.so.  Runs never
+        // compile again — same amortization as Verilator/VCS/Bluesim.
+        ["link", path, rest @ ..] => {
+            let mut out: Option<String> = None;
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "-o" => out = it.next().map(|s| s.to_string()),
+                    other => {
+                        eprintln!("Error: invalid link option '{other}'");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            let base = out.unwrap_or_else(|| {
+                format!("{}.cexe", path.strip_suffix(".bir").unwrap_or(path))
+            });
+            let mut interp = match trs_interp::load_file(path, &[], None) {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("trs: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            interp.aot_request_emit(format!("{base}.so").into());
+            interp.prime();
+            // ineligible designs still get a valid artifact — it runs
+            // interpreted (reference Bluesim always yields an
+            // executable); only infrastructure failures fail the link
+            let compiled = match interp.aot_take_emit_result() {
+                Some(trs_interp::AotEmit::Compiled) => true,
+                Some(trs_interp::AotEmit::Failed(e)) => {
+                    eprintln!("trs link: {e}");
+                    return ExitCode::FAILURE;
+                }
+                Some(trs_interp::AotEmit::Ineligible(e)) => {
+                    eprintln!(
+                        "trs link: note: compiled mode unavailable ({e}); \
+                         artifact will run interpreted"
+                    );
+                    false
+                }
+                None => {
+                    eprintln!(
+                        "trs link: note: compiled mode unavailable \
+                         (TRS_JIT_TRACE=1 shows why); artifact will run \
+                         interpreted"
+                    );
+                    false
+                }
+            };
+            // .bir sibling: the script runs <base>.bir next to the .so
+            let bir_dst = format!("{base}.bir");
+            if std::path::Path::new(path).canonicalize().ok()
+                != std::path::Path::new(&bir_dst).canonicalize().ok()
+            {
+                if let Err(e) = std::fs::copy(path, &bir_dst) {
+                    eprintln!("trs link: copy {path} -> {bir_dst}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            // user BDPI code travels with the artifact: load_file looks
+            // for <base>.bdpi.so next to the (renamed) .bir
+            let bdpi_src =
+                format!("{}.bdpi.so", path.strip_suffix(".bir").unwrap_or(path));
+            let bdpi_dst = format!("{base}.bdpi.so");
+            if std::path::Path::new(&bdpi_src).exists()
+                && std::path::Path::new(&bdpi_src).canonicalize().ok()
+                    != std::path::Path::new(&bdpi_dst).canonicalize().ok()
+            {
+                if let Err(e) = std::fs::copy(&bdpi_src, &bdpi_dst) {
+                    eprintln!("trs link: copy {bdpi_src} -> {bdpi_dst}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            // wrapper script (trs must be on PATH, like bluetcl for
+            // reference Bluesim executables)
+            let script = if compiled {
+                format!(
+                    "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
+                     exec trs run \"$d/$b.bir\" --code \"$d/$b.so\" ${{1+\"$@\"}}\n"
+                )
+            } else {
+                format!(
+                    "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
+                     exec trs run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
+                )
+            };
+            if let Err(e) = std::fs::write(&base, script) {
+                eprintln!("trs link: {base}: {e}");
+                return ExitCode::FAILURE;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &base,
+                    std::fs::Permissions::from_mode(0o755),
+                );
+            }
+            ExitCode::SUCCESS
+        }
         ["run", path, rest @ ..] => {
             // mirror the bluesim.tcl driver's argument handling: -m N is
             // the cycle limit, +foo registers a plusarg (sans '+'),
@@ -42,6 +147,7 @@ fn main() -> ExitCode {
             let mut max_cycles = u64::MAX;
             let mut plusargs: Vec<String> = Vec::new();
             let mut vcd_file: Option<String> = None;
+            let mut code_so: Option<String> = None;
             let mut script_cmds = String::new();
             // bluesim.tcl's usage text, printed for -h and after the
             // deprecated-flag notices; the driver exits 0 in both cases
@@ -90,6 +196,9 @@ fn main() -> ExitCode {
                     }
                     "--script_name" => {
                         let _ = it.next();
+                    }
+                    "--code" => {
+                        code_so = it.next().map(|s| s.to_string());
                     }
                     "--creation_time" => {
                         let _ = it.next();
@@ -148,9 +257,22 @@ fn main() -> ExitCode {
                 }
             }
             if !script_cmds.is_empty() {
-                return run_script(path, max_cycles, &plusargs, vcd_file.as_deref(), &script_cmds);
+                return run_script(
+                    path,
+                    max_cycles,
+                    &plusargs,
+                    vcd_file.as_deref(),
+                    code_so.as_deref(),
+                    &script_cmds,
+                );
             }
-            match trs_interp::run_file(path, max_cycles, &plusargs, vcd_file.as_deref()) {
+            match trs_interp::run_file(
+                path,
+                max_cycles,
+                &plusargs,
+                vcd_file.as_deref(),
+                code_so.as_deref(),
+            ) {
                 Ok(code) => {
                     use std::io::Write;
                     let _ = std::io::stdout().flush();
@@ -180,6 +302,7 @@ fn run_script(
     max_cycles: u64,
     plusargs: &[String],
     vcd: Option<&str>,
+    code: Option<&str>,
     script: &str,
 ) -> ExitCode {
     let mut interp = match trs_interp::load_file(path, plusargs, vcd) {
@@ -189,6 +312,9 @@ fn run_script(
             return ExitCode::FAILURE;
         }
     };
+    if let Some(so) = code {
+        interp.aot_request_code(so.into());
+    }
     for raw in script.split(['\n', ';']) {
         let cmd = raw.trim();
         if cmd.is_empty() {

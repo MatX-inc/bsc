@@ -30,8 +30,8 @@ use trs_ir::{Action, Design, Expr, PrimOp, Stmt, StrId};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::IntType;
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::types::{FunctionType, IntType};
+use inkwell::values::{FunctionValue, GlobalValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
 /// Callback for foreign statements inside compiled bodies (the
@@ -212,90 +212,116 @@ pub fn llvm_init_once() {
     });
 }
 
+/// Call-site tables a lowering produces for one rule's sched and exec
+/// functions.  Token `local` indices point into these; the AOT load
+/// path rebuilds them by re-running trial_lower (deterministic).
+pub struct FnProtos {
+    pub sched_foreign: Vec<ForeignSpec>,
+    pub sched_prims: Vec<PrimCallSpec>,
+    pub exec_foreign: Vec<ForeignSpec>,
+    pub exec_prims: Vec<PrimCallSpec>,
+}
+
 /// Eligibility check: run the full lowering into a throwaway context
 /// (no engine, no LLVM codegen — ~ms per rule) so ineligibility is
 /// decided synchronously before any compiled dispatch is planned.
-pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<(), Ineligible> {
+/// Returns each rule's call-site tables.
+pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, Ineligible> {
     let ctx = Context::create();
-    let module = ctx.create_module("trs_trial");
-    let i64t = ctx.i64_type();
-    let i32t = ctx.i32_type();
-    let ptrt = ctx.ptr_type(AddressSpace::default());
-    let cb_ty =
-        i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
-    let cb_fn = module.add_function("trs_jit_foreign", cb_ty, None);
-    let fpe_ty = ctx.void_type().fn_type(&[], false);
-    let fpe_fn = module.add_function("trs_jit_sigfpe", fpe_ty, None);
-    let prim_ty = ctx
-        .void_type()
-        .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
-    let prim_fn = module.add_function("trs_jit_prim", prim_ty, None);
+    let (module, cbs) = make_module(&ctx, None);
+    let mut protos = Vec::with_capacity(specs.len());
     for spec in specs {
         let mut lc = Lower {
             env,
             ctx: &ctx,
             module: &module,
             builder: ctx.create_builder(),
-            cb_fn,
-            fpe_fn,
-            prim_fn,
+            cbs,
             spec,
             token_kind: 0,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
         lc.lower_sched()?;
+        let sched_foreign = std::mem::take(&mut lc.foreign_stmts);
+        let sched_prims = std::mem::take(&mut lc.prim_calls);
         lc.token_kind = TOKEN_KIND_EXEC;
         lc.lower_exec()?;
+        protos.push(FnProtos {
+            sched_foreign,
+            sched_prims,
+            exec_foreign: lc.foreign_stmts,
+            exec_prims: lc.prim_calls,
+        });
     }
-    Ok(())
+    Ok(protos)
+}
+
+/// How compiled code reaches the runtime callbacks: the JIT bakes the
+/// addresses as constant pointers; AOT objects (and the trial
+/// lowering) load them from named pointer-globals the loader fills
+/// after dlopen — no --export-dynamic on the host binary.
+#[derive(Clone, Copy)]
+enum CbAddr<'ctx> {
+    Baked(PointerValue<'ctx>),
+    Global(GlobalValue<'ctx>),
+}
+
+#[derive(Clone, Copy)]
+struct Callbacks<'ctx> {
+    cb_ty: FunctionType<'ctx>,
+    fpe_ty: FunctionType<'ctx>,
+    prim_ty: FunctionType<'ctx>,
+    cb: CbAddr<'ctx>,
+    fpe: CbAddr<'ctx>,
+    prim: CbAddr<'ctx>,
 }
 
 fn make_module<'ctx>(
     ctx: &'ctx Context,
-) -> (Module<'ctx>, FunctionValue<'ctx>, FunctionValue<'ctx>, FunctionValue<'ctx>) {
+    baked: Option<(ForeignCb, SigfpeCb, PrimCb)>,
+) -> (Module<'ctx>, Callbacks<'ctx>) {
     let module = ctx.create_module("trs_rules");
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
     let cb_ty =
         i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
-    let cb_fn = module.add_function("trs_jit_foreign", cb_ty, None);
     let fpe_ty = ctx.void_type().fn_type(&[], false);
-    let fpe_fn = module.add_function("trs_jit_sigfpe", fpe_ty, None);
     let prim_ty = ctx
         .void_type()
         .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
-    let prim_fn = module.add_function("trs_jit_prim", prim_ty, None);
-    (module, cb_fn, fpe_fn, prim_fn)
+    let (cb, fpe, prim) = match baked {
+        Some((f, s, p)) => {
+            let addr = |a: usize| {
+                CbAddr::Baked(i64t.const_int(a as u64, false).const_to_pointer(ptrt))
+            };
+            (addr(f as usize), addr(s as usize), addr(p as usize))
+        }
+        None => {
+            // declaration only (no initializer): every chunk object
+            // references these; the meta object DEFINES them once
+            let global = |name: &str| CbAddr::Global(module.add_global(ptrt, None, name));
+            (
+                global("trs_cb_foreign"),
+                global("trs_cb_sigfpe"),
+                global("trs_cb_prim"),
+            )
+        }
+    };
+    (module, Callbacks { cb_ty, fpe_ty, prim_ty, cb, fpe, prim })
 }
 
 fn finish_engine(
     module: Module<'static>,
-    foreign_cb: ForeignCb,
-    sigfpe_cb: SigfpeCb,
-    prim_cb: PrimCb,
 ) -> Result<inkwell::execution_engine::ExecutionEngine<'static>, Ineligible> {
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    // JIT default is -O0 (DESIGN.md §6: iterate-run starts fast; -O0
-    // halves LLVM time and costs ~4% sim speed on compute-bound loops)
-    let opt = match std::env::var("TRS_JIT_OPT").as_deref() {
-        Ok("1") => OptimizationLevel::Less,
-        Ok("2") => OptimizationLevel::Default,
-        Ok("3") => OptimizationLevel::Aggressive,
-        _ => OptimizationLevel::None,
-    };
-    let cb = module.get_function("trs_jit_foreign").unwrap();
-    let fpe = module.get_function("trs_jit_sigfpe").unwrap();
-    let prim = module.get_function("trs_jit_prim").unwrap();
+    let opt = opt_level();
     let ee = module
         .create_jit_execution_engine(opt)
         .map_err(|e| Ineligible(format!("LLVM JIT engine: {e}")))?;
-    ee.add_global_mapping(&cb, foreign_cb as usize);
-    ee.add_global_mapping(&fpe, sigfpe_cb as usize);
-    ee.add_global_mapping(&prim, prim_cb as usize);
     Ok(ee)
 }
 
@@ -309,7 +335,7 @@ pub fn compile_scheds(
     prim_cb: PrimCb,
 ) -> Result<Vec<CompiledSched>, Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
-    let (module, cb_fn, fpe_fn, prim_fn) = make_module(ctx);
+    let (module, cbs) = make_module(ctx, Some((foreign_cb, sigfpe_cb, prim_cb)));
     let mut protos = Vec::new();
     for spec in specs {
         let mut lc = Lower {
@@ -317,9 +343,7 @@ pub fn compile_scheds(
             ctx,
             module: &module,
             builder: ctx.create_builder(),
-            cb_fn,
-            fpe_fn,
-            prim_fn,
+            cbs,
             spec,
             token_kind: 0,
             foreign_stmts: Vec::new(),
@@ -328,7 +352,7 @@ pub fn compile_scheds(
         lc.lower_sched()?;
         protos.push((lc.foreign_stmts, lc.prim_calls));
     }
-    let ee = finish_engine(module, foreign_cb, sigfpe_cb, prim_cb)?;
+    let ee = finish_engine(module)?;
     let mut out = Vec::new();
     for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
         let addr = ee
@@ -354,7 +378,7 @@ pub fn compile_execs(
     prim_cb: PrimCb,
 ) -> Result<Vec<CompiledExec>, Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
-    let (module, cb_fn, fpe_fn, prim_fn) = make_module(ctx);
+    let (module, cbs) = make_module(ctx, Some((foreign_cb, sigfpe_cb, prim_cb)));
     let mut protos = Vec::new();
     for spec in specs {
         let mut lc = Lower {
@@ -362,9 +386,7 @@ pub fn compile_execs(
             ctx,
             module: &module,
             builder: ctx.create_builder(),
-            cb_fn,
-            fpe_fn,
-            prim_fn,
+            cbs,
             spec,
             token_kind: TOKEN_KIND_EXEC,
             foreign_stmts: Vec::new(),
@@ -373,7 +395,7 @@ pub fn compile_execs(
         lc.lower_exec()?;
         protos.push((lc.foreign_stmts, lc.prim_calls));
     }
-    let ee = finish_engine(module, foreign_cb, sigfpe_cb, prim_cb)?;
+    let ee = finish_engine(module)?;
     let mut out = Vec::new();
     for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
         let addr = ee
@@ -389,14 +411,106 @@ pub fn compile_execs(
     Ok(out)
 }
 
+/// Default is -O0 (DESIGN.md §6: iterate-run starts fast; -O0 halves
+/// LLVM time and costs ~4% sim speed on compute-bound loops);
+/// TRS_JIT_OPT=1/2/3 raises it for both JIT and AOT emission.
+fn opt_level() -> OptimizationLevel {
+    match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok("1") => OptimizationLevel::Less,
+        Ok("2") => OptimizationLevel::Default,
+        Ok("3") => OptimizationLevel::Aggressive,
+        _ => OptimizationLevel::None,
+    }
+}
+
+/// AOT layout revision, baked into every artifact: bump whenever slot
+/// allocation, token layout, or callback ABI changes so a stale .so is
+/// refused at load instead of silently misreading the arena.
+pub const AOT_LAYOUT_REV: u64 = 1;
+
+fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
+    use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
+    llvm_init_once();
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple)
+        .map_err(|e| Ineligible(format!("LLVM target: {e}")))?;
+    target
+        .create_target_machine(
+            &triple,
+            &TargetMachine::get_host_cpu_name().to_string(),
+            &TargetMachine::get_host_cpu_features().to_string(),
+            opt_level(),
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| Ineligible("LLVM target machine creation failed".into()))
+}
+
+/// AOT: lower a batch (sched + exec per rule, callbacks through
+/// pointer-globals) and emit one PIC object file for the artifact .so.
+pub fn compile_object_chunk(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            token_kind: 0,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+        };
+        lc.lower_sched()?;
+        // reset the call-site tables between the two functions: token
+        // local indices are per-function (must match trial_lower)
+        lc.foreign_stmts = Vec::new();
+        lc.prim_calls = Vec::new();
+        lc.token_kind = TOKEN_KIND_EXEC;
+        lc.lower_exec()?;
+    }
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
+/// AOT: the fingerprint object.  The loader checks these globals before
+/// trusting the artifact's baked slot numbers.
+pub fn compile_meta_object(bir_hash: u64) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let module = ctx.create_module("trs_meta");
+    let i64t = ctx.i64_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let h = module.add_global(i64t, None, "trs_bir_hash");
+    h.set_initializer(&i64t.const_int(bir_hash, false));
+    let r = module.add_global(i64t, None, "trs_layout_rev");
+    r.set_initializer(&i64t.const_int(AOT_LAYOUT_REV, false));
+    // single definition of the callback pointer-globals every chunk
+    // object references; the loader fills them after dlopen
+    for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim"] {
+        let g = module.add_global(ptrt, None, name);
+        g.set_initializer(&ptrt.const_null());
+    }
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("meta object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
 struct Lower<'a, 'ctx> {
     env: &'a PlanEnv<'a>,
     ctx: &'ctx Context,
     module: &'a Module<'ctx>,
     builder: Builder<'ctx>,
-    cb_fn: FunctionValue<'ctx>,
-    fpe_fn: FunctionValue<'ctx>,
-    prim_fn: FunctionValue<'ctx>,
+    cbs: Callbacks<'ctx>,
     spec: &'a RuleSpec,
     /// OR'd into callback tokens (TOKEN_KIND_EXEC for body passes)
     token_kind: u64,
@@ -433,6 +547,23 @@ struct Frame<'ctx> {
 }
 
 impl<'a, 'ctx> Lower<'a, 'ctx> {
+    /// Callable pointer for a runtime callback: the baked constant, or
+    /// a load from the named global (AOT; filled by the loader).
+    fn cb_callee(&self, a: CbAddr<'ctx>) -> PointerValue<'ctx> {
+        match a {
+            CbAddr::Baked(p) => p,
+            CbAddr::Global(g) => self
+                .builder
+                .build_load(
+                    self.ctx.ptr_type(AddressSpace::default()),
+                    g.as_pointer_value(),
+                    "cbp",
+                )
+                .unwrap()
+                .into_pointer_value(),
+        }
+    }
+
     fn ie(&self, inst: usize) -> Result<&'a InstEnv, Ineligible> {
         match self.env.insts.get(&inst) {
             Some(e) => Ok(e),
@@ -858,9 +989,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ret_width: if is_action { 0 } else { ret_width },
             is_action,
         });
+        let prim_callee = self.cb_callee(self.cbs.prim);
         self.builder
-            .build_call(
-                self.prim_fn,
+            .build_indirect_call(
+                self.cbs.prim_ty,
+                prim_callee,
                 &[
                     envp.into(),
                     i64t.const_int(token, false).into(),
@@ -1232,7 +1365,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let ok_bb = self.ctx.append_basic_block(func, "divok");
                 self.builder.build_conditional_branch(z, trap_bb, ok_bb).unwrap();
                 self.builder.position_at_end(trap_bb);
-                self.builder.build_call(self.fpe_fn, &[], "fpe").unwrap();
+                let fpe_callee = self.cb_callee(self.cbs.fpe);
+                self.builder
+                    .build_indirect_call(self.cbs.fpe_ty, fpe_callee, &[], "fpe")
+                    .unwrap();
                 self.builder.build_unreachable().unwrap();
                 self.builder.position_at_end(ok_bb);
                 let r = if op == PrimOp::Quot {
@@ -1400,10 +1536,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ret_width,
             args: spec_args,
         });
+        let cb_callee = self.cb_callee(self.cbs.cb);
         let call = self
             .builder
-            .build_call(
-                self.cb_fn,
+            .build_indirect_call(
+                self.cbs.cb_ty,
+                cb_callee,
                 &[
                     envp.into(),
                     i64t.const_int(token, false).into(),

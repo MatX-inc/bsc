@@ -17,7 +17,8 @@ use std::sync::{Arc, OnceLock};
 
 use trs_codegen::lower::{
     compile_execs, compile_scheds, trial_lower, CompiledExec, CompiledSched, FArgSpec,
-    InstEnv, PlanEnv, RuleSpec, TOKEN_KIND_EXEC,
+    FnProtos, ForeignCb, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
+    TOKEN_KIND_EXEC,
 };
 use prim::ArenaKind;
 
@@ -74,6 +75,21 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
 pub(crate) enum JitNode {
     Sched(u32),
     Exec(u32),
+}
+
+/// What prime()'s planning pass should do with the compiled form:
+/// JIT in-process (default), emit a persistent artifact .so (trs
+/// link), or load one (trs run --code).
+#[derive(Default)]
+pub(crate) enum JitRequest {
+    #[default]
+    Run,
+    Emit {
+        so: std::path::PathBuf,
+    },
+    Load {
+        so: std::path::PathBuf,
+    },
 }
 
 /// Shared compilation state: eligibility was proven by a synchronous
@@ -219,11 +235,192 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
     interp.finished.is_some() as i32
 }
 
+/// Eager parallel sched compile (in-process JIT path).
+fn aot_or_jit_scheds(
+    interp: &Interp,
+    inst_envs: &HashMap<usize, InstEnv>,
+    specs: &[RuleSpec],
+    nworkers: usize,
+    trace: bool,
+) -> Option<Vec<CompiledSched>> {
+    trs_codegen::lower::llvm_init_once();
+    let t0 = std::time::Instant::now();
+    let n = specs.len();
+    let chunk = n.div_ceil(nworkers).max(1);
+    let sched_results: Vec<_> = std::thread::scope(|sc| {
+        let d = &interp.d;
+        specs
+            .chunks(chunk)
+            .map(|c| {
+                sc.spawn(move || {
+                    let env = PlanEnv { d, insts: inst_envs };
+                    compile_scheds(&env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("sched compile thread"))
+            .collect()
+    });
+    let mut scheds = Vec::with_capacity(n);
+    for r in sched_results {
+        match r {
+            Ok(mut v) => scheds.append(&mut v),
+            Err(e) => {
+                if trace {
+                    eprintln!("trs jit: off (sched compile: {e})");
+                }
+                return None;
+            }
+        }
+    }
+    if std::env::var_os("TRS_JIT_TIME").is_some() {
+        eprintln!("trs jit: sched compile {:?}", t0.elapsed());
+    }
+    Some(scheds)
+}
+
+/// trs link: compile every rule (sched + exec) into PIC objects in
+/// parallel, add the fingerprint object, and cc -shared them into the
+/// artifact .so.
+fn aot_emit(
+    d: &Design,
+    inst_envs: &HashMap<usize, InstEnv>,
+    specs: &[RuleSpec],
+    so: &std::path::Path,
+    bir_hash: u64,
+) -> Result<(), String> {
+    use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
+    trs_codegen::lower::llvm_init_once();
+    let t0 = std::time::Instant::now();
+    let nworkers = jit_workers(specs.len());
+    let chunk = specs.len().div_ceil(nworkers).max(1);
+    let objs: Vec<Result<Vec<u8>, _>> = std::thread::scope(|sc| {
+        specs
+            .chunks(chunk)
+            .map(|c| {
+                sc.spawn(move || {
+                    let env = PlanEnv { d, insts: inst_envs };
+                    compile_object_chunk(&env, c)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("aot compile thread"))
+            .collect()
+    });
+    let tmp = std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let mut files = Vec::new();
+    for (i, o) in objs.into_iter().enumerate() {
+        let bytes = o.map_err(|e| format!("object compile: {e}"))?;
+        let f = tmp.join(format!("chunk{i}.o"));
+        std::fs::write(&f, bytes).map_err(|e| e.to_string())?;
+        files.push(f);
+    }
+    let meta = compile_meta_object(bir_hash).map_err(|e| format!("meta object: {e}"))?;
+    let mf = tmp.join("meta.o");
+    std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
+    files.push(mf);
+    let st = std::process::Command::new("cc")
+        .args(["-shared", "-o"])
+        .arg(so)
+        .args(&files)
+        .status()
+        .map_err(|e| format!("cc: {e}"))?;
+    std::fs::remove_dir_all(&tmp).ok();
+    if !st.success() {
+        return Err("cc -shared failed".into());
+    }
+    if std::env::var_os("TRS_JIT_TIME").is_some() {
+        eprintln!("trs aot: emit + link {:?}", t0.elapsed());
+    }
+    Ok(())
+}
+
+/// trs run --code: dlopen the artifact, verify its fingerprint, fill
+/// the callback pointer-globals, and resolve every rule's sched/exec
+/// function.  Any failure falls back to in-process compilation.
+fn aot_load(
+    so: &std::path::Path,
+    bir_hash: u64,
+    specs: &[RuleSpec],
+    protos: Vec<FnProtos>,
+) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>), String> {
+    unsafe {
+        let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
+        let h: libloading::Symbol<*const u64> =
+            lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
+        if **h != bir_hash {
+            return Err("BIR fingerprint mismatch (stale artifact)".into());
+        }
+        let r: libloading::Symbol<*const u64> =
+            lib.get(b"trs_layout_rev").map_err(|e| e.to_string())?;
+        if **r != AOT_LAYOUT_REV {
+            return Err(format!(
+                "layout revision {} (this trs expects {AOT_LAYOUT_REV})",
+                **r
+            ));
+        }
+        for (name, addr) in [
+            (&b"trs_cb_foreign"[..], jit_foreign_cb as ForeignCb as usize),
+            (&b"trs_cb_sigfpe"[..], jit_sigfpe_cb as SigfpeCb as usize),
+            (&b"trs_cb_prim"[..], jit_prim_cb as PrimCb as usize),
+        ] {
+            let g: libloading::Symbol<*mut usize> =
+                lib.get(name).map_err(|e| e.to_string())?;
+            **g = addr;
+        }
+        let mut scheds = Vec::with_capacity(specs.len());
+        let mut execs = Vec::with_capacity(specs.len());
+        for (spec, proto) in specs.iter().zip(protos.into_iter()) {
+            let sf: libloading::Symbol<
+                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
+            > = lib
+                .get(format!("sched_{}\0", spec.label).as_bytes())
+                .map_err(|e| e.to_string())?;
+            let ef: libloading::Symbol<
+                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32,
+            > = lib
+                .get(format!("exec_{}\0", spec.label).as_bytes())
+                .map_err(|e| e.to_string())?;
+            scheds.push(CompiledSched {
+                sched: *sf,
+                foreign_stmts: proto.sched_foreign,
+                prim_calls: proto.sched_prims,
+            });
+            execs.push(CompiledExec {
+                exec: *ef,
+                foreign_stmts: proto.exec_foreign,
+                prim_calls: proto.exec_prims,
+            });
+        }
+        // the artifact stays mapped for the process lifetime
+        std::mem::forget(lib);
+        Ok((scheds, execs))
+    }
+}
+
+/// Worker-thread count for compile fan-out (TRS_JIT_THREADS caps).
+fn jit_workers(n: usize) -> usize {
+    std::env::var("TRS_JIT_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|x| x.get()).unwrap_or(8)
+        })
+        .clamp(1, 64)
+        .min(n.max(1))
+}
+
 impl Interp {
     /// Build the JIT plan for the resolved compositions, or None to run
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
-        if std::env::var_os("TRS_JIT").is_none() {
+        let request = std::mem::take(&mut self.jit_request);
+        if matches!(request, JitRequest::Run)
+            && std::env::var_os("TRS_JIT").is_none()
+        {
             return None;
         }
         let trace = std::env::var_os("TRS_JIT_TRACE").is_some();
@@ -257,7 +454,13 @@ impl Interp {
                 children.iter().map(|(k, v)| (*k, *v)).collect();
             let mut reg_slot = HashMap::new();
             let mut wire_slot = HashMap::new();
-            for (&name, &ci) in &children {
+            // sorted iteration: slot assignment must be deterministic
+            // across processes so an AOT artifact's baked slot numbers
+            // match a fresh planning walk at load time
+            let mut kids: Vec<(StrId, usize)> =
+                children.iter().map(|(&k, &v)| (k, v)).collect();
+            kids.sort_unstable();
+            for (name, ci) in kids {
                 let InstKind::Prim(p) = &self.insts[ci].kind else { continue };
                 match p.arena_kind() {
                     Some(ArenaKind::Reg { width }) => {
@@ -280,10 +483,15 @@ impl Interp {
             // every EN_* port gets a slot (zeroed per dispatch, stored
             // by compiled call sites; method WF cones read them)
             let mut en_slot = HashMap::new();
-            for (&pname, &(_w, kind)) in &self.mods[module].ports {
-                if kind == ir::PortKind::MethodEnable {
-                    en_slot.insert(pname, alloc(&mut nslots, 1));
-                }
+            let mut enps: Vec<StrId> = self.mods[module]
+                .ports
+                .iter()
+                .filter(|&(_, &(_w, kind))| kind == ir::PortKind::MethodEnable)
+                .map(|(&pn, _)| pn)
+                .collect();
+            enps.sort_unstable();
+            for pname in enps {
+                en_slot.insert(pname, alloc(&mut nslots, 1));
             }
             inst_envs.insert(
                 i,
@@ -456,66 +664,68 @@ impl Interp {
         // eligibility decided NOW, synchronously, by lowering into a
         // throwaway context (~ms/rule, no LLVM codegen); the expensive
         // engine work is deferred to per-rule cells
-        {
+        let protos = {
             let env = PlanEnv { d: &self.d, insts: &inst_envs };
             let t0 = std::time::Instant::now();
-            if let Err(e) = trial_lower(&env, &specs) {
-                if trace {
-                    eprintln!("trs jit: off ({e})");
+            match trial_lower(&env, &specs) {
+                Ok(p) => {
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!("trs jit: trial lower {:?}", t0.elapsed());
+                    }
+                    p
                 }
-                return None;
-            }
-            if std::env::var_os("TRS_JIT_TIME").is_some() {
-                eprintln!("trs jit: trial lower {:?}", t0.elapsed());
-            }
-        }
-
-        let n = specs.len();
-        let nworkers = std::env::var("TRS_JIT_THREADS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism().map(|x| x.get()).unwrap_or(8)
-            })
-            .clamp(1, 64)
-            .min(n.max(1));
-
-        // SCHED functions compile eagerly (blocking, parallel): they
-        // run on every edge and the cone-sharing keeps them small
-        trs_codegen::lower::llvm_init_once();
-        let t0 = std::time::Instant::now();
-        let chunk = n.div_ceil(nworkers).max(1);
-        let sched_results: Vec<_> = std::thread::scope(|sc| {
-            let d = &self.d;
-            let ie = &inst_envs;
-            specs
-                .chunks(chunk)
-                .map(|c| {
-                    sc.spawn(move || {
-                        let env = PlanEnv { d, insts: ie };
-                        compile_scheds(&env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
-                    })
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|h| h.join().expect("sched compile thread"))
-                .collect()
-        });
-        let mut scheds = Vec::with_capacity(n);
-        for r in sched_results {
-            match r {
-                Ok(mut v) => scheds.append(&mut v),
                 Err(e) => {
+                    if let JitRequest::Emit { .. } = &request {
+                        self.jit_emit_result =
+                            Some(crate::AotEmit::Ineligible(e.to_string()));
+                    }
                     if trace {
-                        eprintln!("trs jit: off (sched compile: {e})");
+                        eprintln!("trs jit: off ({e})");
                     }
                     return None;
                 }
             }
+        };
+
+        // trs link: emit the artifact .so and stop (nothing runs)
+        if let JitRequest::Emit { so } = &request {
+            self.jit_emit_result =
+                Some(match aot_emit(&self.d, &inst_envs, &specs, so, self.bir_hash) {
+                    Ok(()) => crate::AotEmit::Compiled,
+                    Err(e) => crate::AotEmit::Failed(e),
+                });
+            return None;
         }
-        if std::env::var_os("TRS_JIT_TIME").is_some() {
-            eprintln!("trs jit: sched compile {:?}", t0.elapsed());
-        }
+
+        // trs run --code: resolve compiled functions from the
+        // artifact instead of compiling; fall back to in-process JIT
+        // if the artifact is missing or stale
+        let preloaded = if let JitRequest::Load { so } = &request {
+            match aot_load(so, self.bir_hash, &specs, protos) {
+                Ok(l) => Some(l),
+                Err(e) => {
+                    eprintln!(
+                        "trs: artifact {}: {e}; compiling in-process instead",
+                        so.display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let n = specs.len();
+        let nworkers = jit_workers(n);
+
+        // SCHED functions compile eagerly (blocking, parallel): they
+        // run on every edge and the cone-sharing keeps them small
+        let chunk = n.div_ceil(nworkers).max(1);
+        let (scheds, preexecs) = if let Some((s, e)) = preloaded {
+            (s, Some(e))
+        } else {
+            (aot_or_jit_scheds(self, &inst_envs, &specs, nworkers, trace)?, None)
+        };
 
         let lazy = Arc::new(LazyJit {
             design: self.d.clone(),
@@ -524,23 +734,37 @@ impl Interp {
             scheds,
             next_batch: std::sync::atomic::AtomicUsize::new(0),
             batch_size: chunk,
-            cold: std::sync::atomic::AtomicUsize::new(n),
+            cold: std::sync::atomic::AtomicUsize::new(if preexecs.is_some() {
+                0
+            } else {
+                n
+            }),
             cells: (0..n).map(|_| OnceLock::new()).collect(),
         });
         self.jit_shared = Some(lazy.clone());
 
-        // bodies compile in the background; cold bodies interpret
-        for _ in 0..nworkers {
-            let lz = lazy.clone();
-            std::thread::spawn(move || lz.work());
-        }
-        if std::env::var_os("TRS_JIT_SYNC").is_some() {
-            let t0 = std::time::Instant::now();
-            while (0..n).any(|i| lazy.cells[i].get().is_none()) {
-                std::thread::yield_now();
+        match preexecs {
+            Some(execs) => {
+                // artifact bodies: every cell warm from the start
+                for (i, ce) in execs.into_iter().enumerate() {
+                    let _ = lazy.cells[i].set(ce);
+                }
             }
-            if std::env::var_os("TRS_JIT_TIME").is_some() {
-                eprintln!("trs jit: sync body compile {:?}", t0.elapsed());
+            None => {
+                // bodies compile in the background; cold bodies interpret
+                for _ in 0..nworkers {
+                    let lz = lazy.clone();
+                    std::thread::spawn(move || lz.work());
+                }
+                if std::env::var_os("TRS_JIT_SYNC").is_some() {
+                    let t0 = std::time::Instant::now();
+                    while (0..n).any(|i| lazy.cells[i].get().is_none()) {
+                        std::thread::yield_now();
+                    }
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!("trs jit: sync body compile {:?}", t0.elapsed());
+                    }
+                }
             }
         }
 
