@@ -661,6 +661,20 @@ encModule pkgNames msi pkg = do
                        _ -> return constZero
            return (encPair (encW32 pn) oscEnc)
       | f@(AIClock {}) <- sp_interface pkg ]
+    -- interface output clock GATES, keyed by the clock's interface
+    -- method name (what AMGate references): a parent rule that calls a
+    -- method clocked by a child's gated clock reads this through
+    -- Expr::Gate (Bug 1677 lifts the gate into the rule condition)
+    ifcClkGatesEnc <- sequence
+      [ do gn <- str (getIdBaseString (aif_name f))
+           gateEnc <- case aclock_gate (aif_clock f) of
+                        ASPort _ i | not (null (getIdQualString i)) ->
+                            encVariant "Port" <$>
+                              (encW32 <$> str (getIdQualString i ++ "$"
+                                               ++ getIdBaseString i))
+                        g -> encExpr g
+           return (encPair (encW32 gn) gateEnc)
+      | f@(AIClock {}) <- sp_interface pkg ]
     -- interface output resets: external port name -> the internal reset
     -- wire being re-exported (parents refer to it as "<inst>$<port>")
     let orsts = output_resets (wRst (sp_external_wires pkg))
@@ -685,6 +699,7 @@ encModule pkgNames msi pkg = do
       , ("resets", encList rstsEnc)
       , ("inputs", encList insEnc)
       , ("ifc_clocks", encList ifcClksEnc)
+      , ("ifc_clock_gates", encList ifcClkGatesEnc)
       , ("ifc_resets", encList ifcRstsEnc)
       , ("instances", encList instsEnc)
       , ("defs", encList defsEnc)

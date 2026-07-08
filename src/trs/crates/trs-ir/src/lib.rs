@@ -64,6 +64,12 @@ pub struct Module {
     /// the internal osc wire being re-exported (a constant = noClock,
     /// which never ticks).
     pub ifc_clocks: Vec<(StrId, Expr)>,
+    /// Interface output clock GATES, keyed by the clock's interface
+    /// method name (what `Expr::Gate` references): a parent rule calling
+    /// a method clocked by a child's gated clock reads the gate through
+    /// this (Bug 1677 lifts the gate into the rule condition).
+    #[serde(default)]
+    pub ifc_clock_gates: Vec<(StrId, Expr)>,
     /// Interface output resets: external port name -> the internal reset
     /// wire being re-exported (parents refer to it as "<inst>$<port>").
     #[serde(default)]
@@ -317,6 +323,7 @@ mod tests {
                 resets: vec![],
                 inputs: vec![],
                 ifc_clocks: vec![],
+                ifc_clock_gates: vec![],
                 ifc_resets: vec![],
                 instances: vec![],
                 defs: vec![],

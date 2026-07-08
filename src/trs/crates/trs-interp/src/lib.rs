@@ -910,12 +910,30 @@ impl Interp {
                 let loc = self.loc_of(inst);
                 self.foreign_value(&fname, &argv, *width, &loc)
             }
-            Expr::Gate { instance, .. } => {
+            Expr::Gate { instance, clock } => {
                 let child = self.child_of(inst, *instance);
                 match &self.insts[child].kind {
                     InstKind::Prim(p) => Value::from_u64(1, p.gate_out() as u64),
-                    // a user module's exported gate: not modeled yet
-                    _ => Value::from_u64(1, 1),
+                    InstKind::User { module, .. } => {
+                        // a user module's exported gate: evaluate the
+                        // child's recorded gate expr in the child's
+                        // context (it may chase further Gates or a
+                        // prim's $CLK_GATE_OUT port)
+                        let mir = self.mods[*module].ir;
+                        let g = self.d.modules[mir]
+                            .ifc_clock_gates
+                            .iter()
+                            .find(|(n, _)| n == clock)
+                            .map(|(_, e)| e.clone());
+                        match g {
+                            Some(e) => {
+                                let mut c = Ctx::default();
+                                self.eval(child, &mut c, &e)
+                            }
+                            // no gate recorded = ungated
+                            None => Value::from_u64(1, 1),
+                        }
+                    }
                 }
             }
             Expr::Clock { .. } => Value::from_u64(1, 1),
