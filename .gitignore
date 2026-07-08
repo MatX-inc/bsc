@@ -13,3 +13,6 @@ build
 
 .vagrant/
 vagrant-out/
+
+# BIR run artifacts (trs) are never source
+*.bir
