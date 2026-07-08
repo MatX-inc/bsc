@@ -152,17 +152,51 @@ pub fn format_sformat(
     fmt_first: bool,
     errs: &mut Vec<String>,
 ) -> String {
-    if fmt_first {
-        if let Some(Arg::Val(v, _)) = args.first() {
-            let mut out = String::new();
-            let mut i = 1;
+    if !fmt_first {
+        // $swrite*: format("d", ..., restricted=false) — the $display
+        // engine exactly
+        return format_args(args, default_base, now, loc, errs);
+    }
+    // $sformat: format("d", ..., restricted=true) — ONLY the first
+    // argument is a format (a string, or a bit-packed string value);
+    // remaining strings are literal text, remaining values print in the
+    // default base (bsc.verilog/tasks sysStringFormat2)
+    let mut out = String::new();
+    let mut i = 0;
+    match args.first() {
+        Some(Arg::Str(f)) => {
+            i = 1;
+            let fmt = f.clone();
+            format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
+        }
+        Some(Arg::Val(v, _)) => {
+            i = 1;
             let fmt = unpack_str(v);
             format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
-            out.push_str(&format_args(&args[i..], default_base, now, loc, errs));
-            return out;
         }
+        _ => {}
     }
-    format_args(args, default_base, now, loc, errs)
+    while i < args.len() {
+        match &args[i] {
+            Arg::Str(text) => out.push_str(text),
+            Arg::Val(v, sg) => {
+                out.push_str(&fmt_val(
+                    v, default_base, false,
+                    Some(max_width(v.width, default_base, *sg)), *sg,
+                ));
+            }
+            Arg::Real(r) => {
+                errs.push("unexpected real number argument\n".to_string());
+                let v = Value::from_u64(64, (*r as i64) as u64);
+                out.push_str(&fmt_val(
+                    &v, default_base, false,
+                    Some(max_width(64, default_base, true)), true,
+                ));
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 fn next_val(args: &[Arg], i: &mut usize, errs: &mut Vec<String>) -> (Value, bool) {
