@@ -55,8 +55,8 @@ all: install
 
 # The binaries installed into $(PREFIX)/bin by default, and the extra
 # (developer) binaries installed only by 'install-extra'
-BIN_TARGETS=bsc bluetcl
-EXTRA_BIN_TARGETS=bo2bloogle bsc2bsv bsv2bsc dumpbo dumpba showrules vcdcheck
+BIN_TARGETS=bsc bluetcl bo2bloogle
+EXTRA_BIN_TARGETS=bsc2bsv bsv2bsc dumpbo dumpba showrules vcdcheck
 
 # GHCJOBS: how many modules GHC compiles in parallel;
 # GHCRTSFLAGS: RTS options for GHC itself (e.g. heap sizing, "+RTS -M5G -RTS").
