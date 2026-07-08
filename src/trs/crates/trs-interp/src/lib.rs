@@ -32,6 +32,10 @@ use jit::JitPlans;
 /// `jit` feature.
 #[cfg(not(feature = "jit"))]
 type JitPlans = std::convert::Infallible;
+#[cfg(feature = "jit")]
+type JitShared = std::sync::Arc<jit::LazyJit>;
+#[cfg(not(feature = "jit"))]
+type JitShared = std::convert::Infallible;
 
 /// BDPI imports satisfied by the Bluesim library itself (libbsprim.a's
 /// rand32.cxx), not by user C files.
@@ -140,13 +144,16 @@ pub struct Interp {
     /// resumable event-loop state, built once by prime(); run() =
     /// prime + advance + finish
     stepper: Option<Stepper>,
-    /// JIT foreign call-site tokens: rule ordinal -> per-site
-    /// (instance, func, ret width, args as (is_str, strid-or-width,
-    /// signed)); resolved by the compiled-code callback
-    jit_tokens: Vec<Vec<(usize, StrId, u32, Vec<(bool, u32, bool)>)>>,
-    /// rule ordinal -> prim call sites: (prim instance, method, arg
-    /// widths, result width, is_action) for the trampoline
-    jit_prim_tokens: Vec<Vec<(usize, StrId, Vec<u32>, u32, bool)>>,
+    /// lazy JIT compile cells; the compiled-code callbacks resolve
+    /// their call-site specs through this (rule ordinal -> cell)
+    jit_shared: Option<JitShared>,
+    /// (instance, EN port) -> arena slot: interpreted method calls
+    /// during body fallback write EN through so native scheds see them
+    jit_en_slots: HashMap<(usize, StrId), u32>,
+    /// (instance, def) -> (arena base, width) for fire signals and
+    /// schedule-position defs: interpreted evaluation falls through to
+    /// the slots the native scheds keep current
+    jit_eager_slots: HashMap<(usize, StrId), (u32, u32)>,
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
     /// the owning allocation lives in Stepper::jit
     jit_arena_ptr: *mut u64,
@@ -500,8 +507,9 @@ impl Interp {
             vcd_layouts: HashMap::new(),
             vcd_mod_vars: HashMap::new(),
             stepper: None,
-            jit_tokens: Vec::new(),
-            jit_prim_tokens: Vec::new(),
+            jit_shared: None,
+            jit_en_slots: HashMap::new(),
+            jit_eager_slots: HashMap::new(),
             jit_arena_ptr: std::ptr::null_mut(),
             jit_reset_slots: Vec::new(),
         };
@@ -939,6 +947,21 @@ impl Interp {
                 }
                 if let Some(v) = self.latched(inst, *name) {
                     return v;
+                }
+                // JIT mode: fire signals and schedule-position defs live
+                // in arena slots kept current by the native scheds
+                if !self.jit_arena_ptr.is_null() {
+                    if let Some(&(base, w)) = self.jit_eager_slots.get(&(inst, *name)) {
+                        let words = ((w.max(1) as usize) + 63) / 64;
+                        let limbs = unsafe {
+                            std::slice::from_raw_parts(
+                                self.jit_arena_ptr.add(base as usize),
+                                words,
+                            )
+                        }
+                        .to_vec();
+                        return Value::from_limbs64(w.max(1), limbs);
+                    }
                 }
                 let module = self.module_of(inst);
                 let mir = self.mods[module].ir;
@@ -1402,6 +1425,12 @@ impl Interp {
         if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
             if let InstKind::User { latched, .. } = &mut self.insts[callee].kind {
                 latched.insert(en_id as StrId, Value::from_u64(1, 1));
+            }
+            // JIT body fallback: native scheds read EN from the arena
+            if !self.jit_arena_ptr.is_null() {
+                if let Some(&slot) = self.jit_en_slots.get(&(callee, en_id as StrId)) {
+                    unsafe { *self.jit_arena_ptr.add(slot as usize) = 1 };
+                }
             }
         }
     }
@@ -2691,14 +2720,24 @@ impl Interp {
             Some(ri) => *ri,
             None => return,
         };
-        let r = self.d.modules[mir].rules[ri].clone();
-        let fire = self
-            .latched(inst, r.will_fire)
-            .map(|v| v.as_bool())
-            .unwrap_or(false);
+        let wf = self.d.modules[mir].rules[ri].will_fire;
+        let fire = self.latched(inst, wf).map(|v| v.as_bool()).unwrap_or(false);
         if !fire {
             return;
         }
+        self.exec_rule_forced(inst, rule_name);
+    }
+
+    /// Execute a rule body unconditionally (the caller has already
+    /// established WILL_FIRE — the JIT dispatch reads it from the slot).
+    fn exec_rule_forced(&mut self, inst: usize, rule_name: StrId) {
+        let module = self.module_of(inst);
+        let mir = self.mods[module].ir;
+        let ri = match self.mods[module].rules.get(&rule_name) {
+            Some(ri) => *ri,
+            None => return,
+        };
+        let r = self.d.modules[mir].rules[ri].clone();
         let mut ctx = Ctx::default();
         for st in &r.body {
             self.exec_stmt(inst, &mut ctx, st);
@@ -3403,6 +3442,20 @@ impl Interp {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
                             let ap = j.arena_ptr();
+                            let warming = j.lazy.any_cold();
+                            if warming {
+                                // interpreted fallback bodies latch state
+                                // as they run; clear per edge or stale
+                                // latched defs would shadow the arena
+                                // fall-through (latched() wins in eval)
+                                for i in 0..self.insts.len() {
+                                    if let InstKind::User { latched, .. } =
+                                        &mut self.insts[i].kind
+                                    {
+                                        latched.clear();
+                                    }
+                                }
+                            }
                             // the C++ schedule zeroes every enable at the
                             // top of the pass; compiled call sites set them
                             for &s in &j.en_slots {
@@ -3411,10 +3464,33 @@ impl Interp {
                             let envp = self as *mut Interp as *mut core::ffi::c_void;
                             for n in nodes {
                                 match *n {
-                                    jit::JitNode::Sched(f) => unsafe { f(ap, envp) },
-                                    jit::JitNode::Exec(f) => unsafe {
-                                        f(ap, envp);
-                                    },
+                                    jit::JitNode::Sched(ord) => {
+                                        let f = j.lazy.scheds[ord as usize].sched;
+                                        unsafe { f(ap, envp) }
+                                    }
+                                    jit::JitNode::Exec(ord) => {
+                                        match j.lazy.exec(ord as usize) {
+                                            Some(ce) => {
+                                                let f = ce.exec;
+                                                unsafe {
+                                                    f(ap, envp);
+                                                }
+                                            }
+                                            None => {
+                                                // cold body: the native
+                                                // sched wrote the WF slot;
+                                                // interpret the body if set
+                                                let (inst, rname, wf_slot) =
+                                                    j.exec_fallback[ord as usize];
+                                                let wf = unsafe {
+                                                    *ap.add(wf_slot as usize)
+                                                };
+                                                if wf != 0 {
+                                                    self.exec_rule_forced(inst, rname);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 if self.finished.is_some() {
                                     break;
@@ -3424,7 +3500,7 @@ impl Interp {
                         }
                         None => false,
                     },
-                    None => false,
+                    _ => false,
                 };
                 #[cfg(not(feature = "jit"))]
                 let ran_jit = false;

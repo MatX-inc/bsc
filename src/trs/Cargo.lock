@@ -30,6 +30,7 @@ dependencies = [
  "trs-kernel",
  "trs-rt",
  "trs-wave",
+ "libc",
 ]
 
 [[package]]

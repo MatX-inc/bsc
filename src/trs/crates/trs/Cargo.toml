@@ -17,6 +17,7 @@ trs-kernel = { path = "../trs-kernel" }
 trs-rt = { path = "../trs-rt" }
 trs-wave = { path = "../trs-wave" }
 trs-codegen = { path = "../trs-codegen" }
+libc = "0.2"
 
 [features]
 llvm = ["trs-codegen/llvm"]

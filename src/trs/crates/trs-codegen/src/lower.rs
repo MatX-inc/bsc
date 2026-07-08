@@ -106,7 +106,7 @@ pub struct InstEnv {
 /// can touch.
 pub struct PlanEnv<'a> {
     pub d: &'a Design,
-    pub insts: HashMap<usize, InstEnv>,
+    pub insts: &'a HashMap<usize, InstEnv>,
 }
 
 /// One rule to compile.
@@ -153,16 +153,26 @@ pub enum FArgSpec {
     Num { width: u32, signed: bool },
 }
 
-/// A compiled rule: raw function pointers into the JIT (kept alive by
-/// the owning [`JitEngine`]).
-pub struct CompiledRule {
+/// A compiled rule sched function (kept alive by the leaked engine).
+pub struct CompiledSched {
     pub sched: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
-    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32,
-    /// token -> foreign call-site spec
+    /// token -> foreign call-site spec (cones can reach foreign value
+    /// paths only through prim calls today, but keep both tables)
     pub foreign_stmts: Vec<ForeignSpec>,
     /// token -> prim call site
     pub prim_calls: Vec<PrimCallSpec>,
 }
+
+/// A compiled rule body.
+pub struct CompiledExec {
+    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32,
+    pub foreign_stmts: Vec<ForeignSpec>,
+    pub prim_calls: Vec<PrimCallSpec>,
+}
+
+/// Which half of a rule a callback token belongs to (bit 16; the rule
+/// ordinal sits at bit 17+, the site index in the low 16 bits).
+pub const TOKEN_KIND_EXEC: u64 = 1 << 16;
 
 /// Why a rule cannot be compiled; the caller falls back to the
 /// interpreter (this is expected and silent — coverage grows over time).
@@ -202,21 +212,17 @@ pub fn llvm_init_once() {
     });
 }
 
-pub fn compile_rules(
-    env: &PlanEnv,
-    specs: &[RuleSpec],
-    foreign_cb: ForeignCb,
-    sigfpe_cb: SigfpeCb,
-    prim_cb: PrimCb,
-) -> Result<Vec<CompiledRule>, Ineligible> {
-    llvm_init_once();
-    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
-    let module = ctx.create_module("trs_rules");
+/// Eligibility check: run the full lowering into a throwaway context
+/// (no engine, no LLVM codegen — ~ms per rule) so ineligibility is
+/// decided synchronously before any compiled dispatch is planned.
+pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<(), Ineligible> {
+    let ctx = Context::create();
+    let module = ctx.create_module("trs_trial");
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
-    let cb_ty = i32t
-        .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
+    let cb_ty =
+        i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
     let cb_fn = module.add_function("trs_jit_foreign", cb_ty, None);
     let fpe_ty = ctx.void_type().fn_type(&[], false);
     let fpe_fn = module.add_function("trs_jit_sigfpe", fpe_ty, None);
@@ -224,8 +230,86 @@ pub fn compile_rules(
         .void_type()
         .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
     let prim_fn = module.add_function("trs_jit_prim", prim_ty, None);
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cb_fn,
+            fpe_fn,
+            prim_fn,
+            spec,
+            token_kind: 0,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+        };
+        lc.lower_sched()?;
+        lc.token_kind = TOKEN_KIND_EXEC;
+        lc.lower_exec()?;
+    }
+    Ok(())
+}
 
-    let t_lower = std::time::Instant::now();
+fn make_module<'ctx>(
+    ctx: &'ctx Context,
+) -> (Module<'ctx>, FunctionValue<'ctx>, FunctionValue<'ctx>, FunctionValue<'ctx>) {
+    let module = ctx.create_module("trs_rules");
+    let i64t = ctx.i64_type();
+    let i32t = ctx.i32_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let cb_ty =
+        i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
+    let cb_fn = module.add_function("trs_jit_foreign", cb_ty, None);
+    let fpe_ty = ctx.void_type().fn_type(&[], false);
+    let fpe_fn = module.add_function("trs_jit_sigfpe", fpe_ty, None);
+    let prim_ty = ctx
+        .void_type()
+        .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
+    let prim_fn = module.add_function("trs_jit_prim", prim_ty, None);
+    (module, cb_fn, fpe_fn, prim_fn)
+}
+
+fn finish_engine(
+    module: Module<'static>,
+    foreign_cb: ForeignCb,
+    sigfpe_cb: SigfpeCb,
+    prim_cb: PrimCb,
+) -> Result<inkwell::execution_engine::ExecutionEngine<'static>, Ineligible> {
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    // JIT default is -O0 (DESIGN.md §6: iterate-run starts fast; -O0
+    // halves LLVM time and costs ~4% sim speed on compute-bound loops)
+    let opt = match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok("1") => OptimizationLevel::Less,
+        Ok("2") => OptimizationLevel::Default,
+        Ok("3") => OptimizationLevel::Aggressive,
+        _ => OptimizationLevel::None,
+    };
+    let cb = module.get_function("trs_jit_foreign").unwrap();
+    let fpe = module.get_function("trs_jit_sigfpe").unwrap();
+    let prim = module.get_function("trs_jit_prim").unwrap();
+    let ee = module
+        .create_jit_execution_engine(opt)
+        .map_err(|e| Ineligible(format!("LLVM JIT engine: {e}")))?;
+    ee.add_global_mapping(&cb, foreign_cb as usize);
+    ee.add_global_mapping(&fpe, sigfpe_cb as usize);
+    ee.add_global_mapping(&prim, prim_cb as usize);
+    Ok(ee)
+}
+
+/// Compile the SCHED functions for a batch of rules (eager: they run
+/// on every edge).  All-or-nothing per call.
+pub fn compile_scheds(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    foreign_cb: ForeignCb,
+    sigfpe_cb: SigfpeCb,
+    prim_cb: PrimCb,
+) -> Result<Vec<CompiledSched>, Ineligible> {
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let (module, cb_fn, fpe_fn, prim_fn) = make_module(ctx);
     let mut protos = Vec::new();
     for spec in specs {
         let mut lc = Lower {
@@ -237,70 +321,70 @@ pub fn compile_rules(
             fpe_fn,
             prim_fn,
             spec,
+            token_kind: 0,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
         lc.lower_sched()?;
-        lc.lower_exec()?;
         protos.push((lc.foreign_stmts, lc.prim_calls));
     }
-
-    if std::env::var_os("TRS_JIT_DUMP").is_some() {
-        eprintln!("{}", module.print_to_string().to_string());
-    }
-    let lower_elapsed = t_lower.elapsed();
-    if std::env::var_os("TRS_JIT_TIME").is_some() {
-        let mut insns = 0usize;
-        let mut fun = module.get_first_function();
-        let mut nfun = 0usize;
-        while let Some(f) = fun {
-            nfun += 1;
-            let mut bb = f.get_first_basic_block();
-            while let Some(b) = bb {
-                insns += b.get_instructions().count();
-                bb = b.get_next_basic_block();
-            }
-            fun = f.get_next_function();
-        }
-        eprintln!(
-            "trs jit: {} fns, {} instructions, lower {:?}",
-            nfun, insns, lower_elapsed
-        );
-    }
-    // JIT default is -O0 (DESIGN.md §6: iterate-run starts fast; -O0
-    // halves LLVM time and costs ~4% sim speed on compute-bound loops)
-    let opt = match std::env::var("TRS_JIT_OPT").as_deref() {
-        Ok("1") => OptimizationLevel::Less,
-        Ok("2") => OptimizationLevel::Default,
-        Ok("3") => OptimizationLevel::Aggressive,
-        _ => OptimizationLevel::None,
-    };
-    let ee = module
-        .create_jit_execution_engine(opt)
-        .map_err(|e| Ineligible(format!("LLVM JIT engine: {e}")))?;
-    ee.add_global_mapping(&cb_fn, foreign_cb as usize);
-    ee.add_global_mapping(&fpe_fn, sigfpe_cb as usize);
-    ee.add_global_mapping(&prim_fn, prim_cb as usize);
-
-
+    let ee = finish_engine(module, foreign_cb, sigfpe_cb, prim_cb)?;
     let mut out = Vec::new();
     for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
-        let sched_addr = ee
+        let addr = ee
             .get_function_address(&format!("sched_{}", spec.label))
             .map_err(|e| Ineligible(format!("sched fn address: {e}")))?;
-        let exec_addr = ee
-            .get_function_address(&format!("exec_{}", spec.label))
-            .map_err(|e| Ineligible(format!("exec fn address: {e}")))?;
-        out.push(CompiledRule {
-            sched: unsafe { std::mem::transmute::<usize, _>(sched_addr as usize) },
-            exec: unsafe { std::mem::transmute::<usize, _>(exec_addr as usize) },
+        out.push(CompiledSched {
+            sched: unsafe { std::mem::transmute::<usize, _>(addr as usize) },
             foreign_stmts,
             prim_calls,
         });
     }
-    // the engine (and the leaked context) live for the process: the
-    // returned raw fn pointers stay valid, and pointers are Send —
-    // batches compile on worker threads (contexts are thread-bound)
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// Compile the EXEC (body) functions for a batch of rules (lazy: they
+/// run only when the rule fires; an uncompiled body interprets).
+pub fn compile_execs(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    foreign_cb: ForeignCb,
+    sigfpe_cb: SigfpeCb,
+    prim_cb: PrimCb,
+) -> Result<Vec<CompiledExec>, Ineligible> {
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let (module, cb_fn, fpe_fn, prim_fn) = make_module(ctx);
+    let mut protos = Vec::new();
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cb_fn,
+            fpe_fn,
+            prim_fn,
+            spec,
+            token_kind: TOKEN_KIND_EXEC,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+        };
+        lc.lower_exec()?;
+        protos.push((lc.foreign_stmts, lc.prim_calls));
+    }
+    let ee = finish_engine(module, foreign_cb, sigfpe_cb, prim_cb)?;
+    let mut out = Vec::new();
+    for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
+        let addr = ee
+            .get_function_address(&format!("exec_{}", spec.label))
+            .map_err(|e| Ineligible(format!("exec fn address: {e}")))?;
+        out.push(CompiledExec {
+            exec: unsafe { std::mem::transmute::<usize, _>(addr as usize) },
+            foreign_stmts,
+            prim_calls,
+        });
+    }
     std::mem::forget(ee);
     Ok(out)
 }
@@ -314,6 +398,8 @@ struct Lower<'a, 'ctx> {
     fpe_fn: FunctionValue<'ctx>,
     prim_fn: FunctionValue<'ctx>,
     spec: &'a RuleSpec,
+    /// OR'd into callback tokens (TOKEN_KIND_EXEC for body passes)
+    token_kind: u64,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -764,7 +850,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             off += words;
         }
-        let token = self.spec.token_base + self.prim_calls.len() as u64;
+        let token = self.spec.token_base | self.token_kind | self.prim_calls.len() as u64;
         self.prim_calls.push(PrimCallSpec {
             inst: prim_inst,
             method,
@@ -1306,7 +1392,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             off += words_for(wa);
         }
-        let token = self.spec.token_base + self.foreign_stmts.len() as u64;
+        let token =
+            self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
         self.foreign_stmts.push(ForeignSpec {
             inst: f.inst,
             func: func_id,

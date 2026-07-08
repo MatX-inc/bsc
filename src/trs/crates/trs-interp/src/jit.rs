@@ -12,14 +12,14 @@
 //! and per-prim dump hooks want the interpreted paths).
 
 use super::*;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
+
 use trs_codegen::lower::{
-    compile_rules, CompiledRule, InstEnv, PlanEnv, RuleSpec,
+    compile_execs, compile_scheds, trial_lower, CompiledExec, CompiledSched, FArgSpec,
+    InstEnv, PlanEnv, RuleSpec, TOKEN_KIND_EXEC,
 };
 use prim::ArenaKind;
-
-fn words_for(w: u32) -> u32 {
-    w.div_ceil(64)
-}
 
 /// Zero-divisor trap for compiled Quot/Rem: raise SIGFPE like the
 /// interpreter (Value::quot) and native division.
@@ -36,11 +36,18 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     out: *mut u64,
 ) {
     let interp = &mut *(env as *mut Interp);
-    let ordinal = (token >> 16) as usize;
+    let ordinal = (token >> 17) as usize;
+    let is_exec = token & TOKEN_KIND_EXEC != 0;
     let local = (token & 0xffff) as usize;
-    let (inst, method, ref arg_widths, ret_width, is_action) =
-        interp.jit_prim_tokens[ordinal][local];
-    let arg_widths = arg_widths.clone();
+    let lz = interp.jit_shared.as_ref().expect("jit prim cb without plan").clone();
+    let pc = if is_exec {
+        &lz.cells[ordinal].get().expect("prim cb from uncompiled body").prim_calls[local]
+    } else {
+        &lz.scheds[ordinal].prim_calls[local]
+    };
+    let (inst, method, ret_width, is_action) =
+        (pc.inst, pc.method, pc.ret_width, pc.is_action);
+    let arg_widths = pc.arg_widths.clone();
     let mut argv = Vec::with_capacity(arg_widths.len());
     let mut off = 0usize;
     for &w in &arg_widths {
@@ -62,10 +69,75 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     }
 }
 
-/// One dispatch step of a compiled composition, in entries order.
+/// One dispatch step of a compiled composition, in entries order (rule
+/// ordinals resolved through LazyJit at dispatch time).
 pub(crate) enum JitNode {
-    Sched(unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)),
-    Exec(unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32),
+    Sched(u32),
+    Exec(u32),
+}
+
+/// Shared compilation state: eligibility was proven by a synchronous
+/// trial lowering at prime(); SCHED functions compile eagerly (they
+/// run on every edge — sudoku's scheds are 4% of the IR thanks to
+/// eager-slot cone sharing), and EXEC bodies fill per-rule cells on
+/// background workers.  An Exec node whose cell is cold interprets the
+/// body over the same arena-backed state (the interpreter's Def
+/// evaluation falls through to the arena slots), so no global mode
+/// flip exists.
+pub(crate) struct LazyJit {
+    /// owned snapshot the compile threads read (decouples lifetimes
+    /// from the Interp)
+    design: Design,
+    insts: HashMap<usize, InstEnv>,
+    specs: Vec<RuleSpec>,
+    /// eagerly compiled sched fns, one per rule ordinal
+    pub(crate) scheds: Vec<CompiledSched>,
+    /// batch index counter for body workers
+    next_batch: std::sync::atomic::AtomicUsize,
+    batch_size: usize,
+    /// bodies not yet compiled (0 = fully warm: dispatch skips the
+    /// latch/bridge machinery entirely)
+    cold: std::sync::atomic::AtomicUsize,
+    cells: Vec<OnceLock<CompiledExec>>,
+}
+
+impl LazyJit {
+    pub(crate) fn exec(&self, ord: usize) -> Option<&CompiledExec> {
+        self.cells[ord].get()
+    }
+
+    pub(crate) fn any_cold(&self) -> bool {
+        self.cold.load(Ordering::Acquire) != 0
+    }
+
+    /// Worker loop: claim body batches, compile, fill cells.
+    fn work(&self) {
+        loop {
+            let b = self.next_batch.fetch_add(1, Ordering::AcqRel);
+            let lo = b * self.batch_size;
+            if lo >= self.specs.len() {
+                return;
+            }
+            let hi = (lo + self.batch_size).min(self.specs.len());
+            let env = PlanEnv { d: &self.design, insts: &self.insts };
+            let compiled = compile_execs(
+                &env,
+                &self.specs[lo..hi],
+                jit_foreign_cb,
+                jit_sigfpe_cb,
+                jit_prim_cb,
+            )
+            .unwrap_or_else(|e| {
+                // trial_lower proved eligibility at prime; only an
+                // LLVM-level failure can land here
+                panic!("trs jit: compile of proven-eligible bodies failed: {e}")
+            });
+            for (k, cr) in compiled.into_iter().enumerate() {
+                let _ = self.cells[lo + k].set(cr);
+            }
+            self.cold.fetch_sub(hi - lo, Ordering::AcqRel);
+        }
+    }
 }
 
 /// Compiled state carried by the Stepper.
@@ -79,6 +151,12 @@ pub(crate) struct JitPlans {
     /// EN slots to zero before dispatching a composition (the C++
     /// schedule zeroes every enable at the top of the pass)
     pub(crate) en_slots: Vec<u32>,
+    /// lazy compile cells (also reachable from Interp::jit_shared for
+    /// the callbacks)
+    pub(crate) lazy: Arc<LazyJit>,
+    /// rule ordinal -> (instance, rule name, WF slot) for the
+    /// interpreted-body fallback while its cell is cold
+    pub(crate) exec_fallback: Vec<(usize, StrId, u32)>,
 }
 
 impl JitPlans {
@@ -99,21 +177,31 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
     out: *mut u64,
 ) -> i32 {
     let interp = &mut *(env as *mut Interp);
-    let ordinal = (token >> 16) as usize;
+    let ordinal = (token >> 17) as usize;
+    let is_exec = token & TOKEN_KIND_EXEC != 0;
     let local = (token & 0xffff) as usize;
-    let (inst, func, ret_width, ref spec) = interp.jit_tokens[ordinal][local];
-    let spec = spec.clone();
-    let mut argv = Vec::with_capacity(spec.len());
+    let lz = interp.jit_shared.as_ref().expect("jit foreign cb without plan").clone();
+    let fs = if is_exec {
+        &lz.cells[ordinal].get().expect("foreign cb from uncompiled body").foreign_stmts
+            [local]
+    } else {
+        &lz.scheds[ordinal].foreign_stmts[local]
+    };
+    let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
+    let mut argv = Vec::with_capacity(fs.args.len());
     let mut off = 0usize;
-    for &(is_str, id_or_width, signed) in &spec {
-        if is_str {
-            argv.push(Arg::Str(interp.s(id_or_width as StrId).to_string()));
-        } else {
-            let w = id_or_width;
-            let words = ((w.max(1) as usize) + 63) / 64;
-            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
-            argv.push(Arg::Val(Value::from_limbs64(w.max(1), limbs), signed));
-            off += words;
+    for a in &fs.args {
+        match *a {
+            FArgSpec::Str(sid) => {
+                argv.push(Arg::Str(interp.s(sid).to_string()));
+            }
+            FArgSpec::Num { width, signed } => {
+                let w = width;
+                let words = ((w.max(1) as usize) + 63) / 64;
+                let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+                argv.push(Arg::Val(Value::from_limbs64(w.max(1), limbs), signed));
+                off += words;
+            }
         }
     }
     let fname = interp.s(func).to_string();
@@ -147,7 +235,7 @@ impl Interp {
         }
 
         let mut nslots: u32 = 0;
-        let mut alloc = |n: &mut u32, words: u32| {
+        let alloc = |n: &mut u32, words: u32| {
             let s = *n;
             *n += words;
             s
@@ -316,18 +404,17 @@ impl Interp {
             }
         }
 
-        // one design-wide compile batch
-        let env = PlanEnv { d: &self.d, insts: inst_envs };
+        // one design-wide spec list (ordinal order)
         let mut specs = Vec::new();
         for ri in &rules {
-            let mir = env.insts[&ri.inst].mir;
+            let mir = inst_envs[&ri.inst].mir;
             let rr = &self.d.modules[mir].rules[ri.rule_idx];
             let module = self.module_of(ri.inst);
             let mut inhibit_slots = Vec::new();
             for other in &rr.me_inhibits {
                 let other_ri = self.mods[module].rules[other];
                 let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
-                match env.insts[&ri.inst].cfwf_slot.get(&other_cf) {
+                match inst_envs[&ri.inst].cfwf_slot.get(&other_cf) {
                     Some(&s) => inhibit_slots.push(s),
                     None => {
                         if trace {
@@ -340,7 +427,7 @@ impl Interp {
             for rc in rcomps {
                 if let Some(cs) = rc.cross.get(&(ri.inst, rr.name)) {
                     for (oi, ocf) in cs {
-                        match env.insts.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
+                        match inst_envs.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
                             Some(&s) => inhibit_slots.push(s),
                             None => {
                                 if trace {
@@ -363,88 +450,100 @@ impl Interp {
                 eager: ri.eager.clone(),
                 shared: ri.shared.clone(),
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
-                token_base: (ri.ordinal as u64) << 16,
+                token_base: (ri.ordinal as u64) << 17,
             });
         }
-        // compile in parallel: rule batches are self-contained (their
-        // own LLVM context/engine, leaked for the process); only raw fn
-        // pointers cross threads
-        trs_codegen::lower::llvm_init_once();
-        let t0 = std::time::Instant::now();
-        let nthreads = std::env::var("TRS_JIT_THREADS")
+        // eligibility decided NOW, synchronously, by lowering into a
+        // throwaway context (~ms/rule, no LLVM codegen); the expensive
+        // engine work is deferred to per-rule cells
+        {
+            let env = PlanEnv { d: &self.d, insts: &inst_envs };
+            let t0 = std::time::Instant::now();
+            if let Err(e) = trial_lower(&env, &specs) {
+                if trace {
+                    eprintln!("trs jit: off ({e})");
+                }
+                return None;
+            }
+            if std::env::var_os("TRS_JIT_TIME").is_some() {
+                eprintln!("trs jit: trial lower {:?}", t0.elapsed());
+            }
+        }
+
+        let n = specs.len();
+        let nworkers = std::env::var("TRS_JIT_THREADS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or_else(|| {
-                std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8)
+                std::thread::available_parallelism().map(|x| x.get()).unwrap_or(8)
             })
             .clamp(1, 64)
-            .min(specs.len().max(1));
-        let chunk = specs.len().div_ceil(nthreads).max(1);
-        let results: Vec<Result<Vec<CompiledRule>, _>> = std::thread::scope(|sc| {
-            let env = &env;
+            .min(n.max(1));
+
+        // SCHED functions compile eagerly (blocking, parallel): they
+        // run on every edge and the cone-sharing keeps them small
+        trs_codegen::lower::llvm_init_once();
+        let t0 = std::time::Instant::now();
+        let chunk = n.div_ceil(nworkers).max(1);
+        let sched_results: Vec<_> = std::thread::scope(|sc| {
+            let d = &self.d;
+            let ie = &inst_envs;
             specs
                 .chunks(chunk)
                 .map(|c| {
                     sc.spawn(move || {
-                        compile_rules(env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
+                        let env = PlanEnv { d, insts: ie };
+                        compile_scheds(&env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
                     })
                 })
                 .collect::<Vec<_>>()
                 .into_iter()
-                .map(|h| h.join().expect("jit compile thread"))
+                .map(|h| h.join().expect("sched compile thread"))
                 .collect()
         });
-        let mut compiled: Vec<CompiledRule> = Vec::with_capacity(specs.len());
-        for r in results {
+        let mut scheds = Vec::with_capacity(n);
+        for r in sched_results {
             match r {
-                Ok(mut v) => compiled.append(&mut v),
+                Ok(mut v) => scheds.append(&mut v),
                 Err(e) => {
                     if trace {
-                        eprintln!("trs jit: off ({e})");
+                        eprintln!("trs jit: off (sched compile: {e})");
                     }
                     return None;
                 }
             }
         }
         if std::env::var_os("TRS_JIT_TIME").is_some() {
-            eprintln!("trs jit: compile {:?}", t0.elapsed());
+            eprintln!("trs jit: sched compile {:?}", t0.elapsed());
         }
 
-        // token table + dispatch lists
-        self.jit_prim_tokens = compiled
-            .iter()
-            .map(|cr| {
-                cr.prim_calls
-                    .iter()
-                    .map(|pc| {
-                        (pc.inst, pc.method, pc.arg_widths.clone(), pc.ret_width, pc.is_action)
-                    })
-                    .collect()
-            })
-            .collect();
-        self.jit_tokens = compiled
-            .iter()
-            .map(|cr| {
-                cr.foreign_stmts
-                    .iter()
-                    .map(|fs| {
-                        let args: Vec<(bool, u32, bool)> = fs
-                            .args
-                            .iter()
-                            .map(|a| match a {
-                                trs_codegen::lower::FArgSpec::Str(sid) => {
-                                    (true, *sid, false)
-                                }
-                                trs_codegen::lower::FArgSpec::Num { width, signed } => {
-                                    (false, *width, *signed)
-                                }
-                            })
-                            .collect();
-                        (fs.inst, fs.func, fs.ret_width, args)
-                    })
-                    .collect()
-            })
-            .collect();
+        let lazy = Arc::new(LazyJit {
+            design: self.d.clone(),
+            insts: inst_envs,
+            specs,
+            scheds,
+            next_batch: std::sync::atomic::AtomicUsize::new(0),
+            batch_size: chunk,
+            cold: std::sync::atomic::AtomicUsize::new(n),
+            cells: (0..n).map(|_| OnceLock::new()).collect(),
+        });
+        self.jit_shared = Some(lazy.clone());
+
+        // bodies compile in the background; cold bodies interpret
+        for _ in 0..nworkers {
+            let lz = lazy.clone();
+            std::thread::spawn(move || lz.work());
+        }
+        if std::env::var_os("TRS_JIT_SYNC").is_some() {
+            let t0 = std::time::Instant::now();
+            while (0..n).any(|i| lazy.cells[i].get().is_none()) {
+                std::thread::yield_now();
+            }
+            if std::env::var_os("TRS_JIT_TIME").is_some() {
+                eprintln!("trs jit: sync body compile {:?}", t0.elapsed());
+            }
+        }
+
         let comp_nodes: Vec<Option<Vec<JitNode>>> = rcomps
             .iter()
             .map(|rc| {
@@ -455,12 +554,11 @@ impl Interp {
                             SchedNode::Sched(r) => (r, true),
                             SchedNode::Exec(r) => (r, false),
                         };
-                        let ord = rule_ord[&(en.inst, r)];
-                        let cr = &compiled[ord];
+                        let ord = rule_ord[&(en.inst, r)] as u32;
                         nodes.push(if is_sched {
-                            JitNode::Sched(cr.sched)
+                            JitNode::Sched(ord)
                         } else {
-                            JitNode::Exec(cr.exec)
+                            JitNode::Exec(ord)
                         });
                     }
                 }
@@ -468,7 +566,7 @@ impl Interp {
             })
             .collect();
         let en_slots: Vec<u32> =
-            env.insts.values().flat_map(|e| e.en_slot.values().copied()).collect();
+            lazy.insts.values().flat_map(|e| e.en_slot.values().copied()).collect();
 
         // allocate + wire the arena
         let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
@@ -491,6 +589,41 @@ impl Interp {
                 comp_nodes.len()
             );
         }
-        Some(JitPlans { _arena: arena, arena_ptr, comp_nodes, en_slots })
+        let exec_fallback: Vec<(usize, StrId, u32)> = {
+            let mut v = Vec::with_capacity(rules.len());
+            for ri in &rules {
+                let mir = lazy.insts[&ri.inst].mir;
+                v.push((ri.inst, self.d.modules[mir].rules[ri.rule_idx].name, ri.wf_slot));
+            }
+            v
+        };
+        // interpreted bodies resolve fire signals and schedule-position
+        // defs straight from the arena (same values the native scheds
+        // stored; matches the proven full-interpreter eager semantics)
+        self.jit_eager_slots = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| {
+                e.cfwf_slot
+                    .iter()
+                    .map(move |(&d, &s)| ((i, d), (s, 1u32)))
+                    .chain(e.eager_slot.iter().map(move |(&d, &(b, w))| ((i, d), (b, w))))
+            })
+            .collect();
+        // interp method calls during body fallback must write EN slots
+        // through so native scheds see them
+        self.jit_en_slots = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| e.en_slot.iter().map(move |(&p, &s)| ((i, p), s)))
+            .collect();
+        Some(JitPlans {
+            _arena: arena,
+            arena_ptr,
+            comp_nodes,
+            en_slots,
+            lazy,
+            exec_fallback,
+        })
     }
 }

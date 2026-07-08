@@ -151,7 +151,14 @@ fn main() -> ExitCode {
                 return run_script(path, max_cycles, &plusargs, vcd_file.as_deref(), &script_cmds);
             }
             match trs_interp::run_file(path, max_cycles, &plusargs, vcd_file.as_deref()) {
-                Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
+                Ok(code) => {
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                    let _ = std::io::stderr().flush();
+                    // bypass atexit teardown: JIT body workers may still
+                    // be inside LLVM and would stall process exit
+                    unsafe { libc::_exit(code.clamp(0, 255) as i32) }
+                }
                 Err(e) => {
                     eprintln!("trs: {e}");
                     ExitCode::FAILURE
