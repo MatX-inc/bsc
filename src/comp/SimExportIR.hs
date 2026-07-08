@@ -595,8 +595,22 @@ encModule pkgNames msi pkg = do
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
     insEnc <- concat <$> mapM encInput (sp_inputs pkg)
-    instsEnc <- mapM (encInstance pkgNames (sp_method_order_map pkg))
-                     (M.elems (sp_state_instances pkg))
+    instsEnc0 <- mapM (encInstance pkgNames (sp_method_order_map pkg))
+                      (M.elems (sp_state_instances pkg))
+    -- noinline functions instantiate as argument-less modules whose one
+    -- value method computes the function
+    niEnc <- mapM (\(iname, mname) -> do
+                     nmEnc <- strE iname
+                     kEnc <- encVariant "Module" <$> strE mname
+                     return $ encStruct
+                       [ ("name", nmEnc)
+                       , ("kind", kEnc)
+                       , ("args", encList [])
+                       , ("method_order", encList [])
+                       , ("port_counts", encList [])
+                       ])
+                  (sp_noinline_instances pkg)
+    let instsEnc = instsEnc0 ++ niEnc
     -- interface ActionValue return defs join the def table so the
     -- Def-reference results resolve on the backend side
     let av_defs = [ d | AIActionValue { aif_value = d } <- sp_interface pkg
