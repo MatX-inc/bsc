@@ -28,7 +28,11 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
-TRS = os.path.join(REPO, "src", "trs", "target", "debug", "trs")
+# the release build keeps heavyweight tests (SHA512, GlibcRandom) well
+# under the timeout; fall back to debug if it hasn't been built
+TRS = os.path.join(REPO, "src", "trs", "target", "release", "trs")
+if not os.path.exists(TRS):
+    TRS = os.path.join(REPO, "src", "trs", "target", "debug", "trs")
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
