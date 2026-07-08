@@ -1,136 +1,130 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`b9276b1`).  Read `DESIGN.md` (goals/architecture), `BIR.md` (export
+`fad21d8d`).  Read `DESIGN.md` (goals/architecture), `BIR.md` (export
 format), `docs/VCD-CONTRACT.md` (byte-level VCD semantics), and
 `docs/PERF-BASELINE.md` (measured numbers) alongside this.
 
-## What this is
+## Current state
 
-A replacement Bluesim backend: bsc grows a first-class `-trs` flag
-whose compile phase is identical to `-sim` (same `.ba`), but whose link
-phase exports a CBOR "BIR" file (`src/comp/SimExportIR.hs`), compiles
-any user BDPI C into a companion `<top>.bdpi.so`, and writes a wrapper
-script that execs the Rust runtime: `trs run <top>.bir [args]`.
-Everything downstream of the `.ba` is Rust (`src/trs/crates/`).
+- **Full testsuite** (`env CONFIG_SHELL=/bin/sh SIM_BACKEND_FLAG=-trs
+  TRS=<repo>/src/trs/target/release/trs make VTEST=0
+  SYSTEMCTEST=0 check` from testsuite/): last complete run was
+  6971 PASS / 128 FAIL / 23 XFAIL, and every FAIL was triaged.  Since
+  that run, fixes landed for all real bugs but ONE (below); the other
+  FAILs were: 47 Tcl-surface tests (44 bsc.bluesim/interactive + 3
+  scattered `-c` tests — now partially covered by the driver's -c/-f
+  subset), ~25 spurious test-script bugs (unguarded VTEST=0 compares —
+  all guarded now), and 6 slow-interpreter watchdog artifacts (sudoku
+  generator, MPEG4: legitimate ~7-minute interpreter runs killed at 6
+  min; the P2 JIT is the real fix).  A fresh full run should be near
+  zero unexpected failures modulo those categories.
+- **Differential sweep** (`python3 tools/diffsweep.py`, ~40 min):
+  554 PASS / 0 DIFF / 0 panics.  VCD battery (`tests/vcd/run.sh`): 9/9.
+- The install now packages trs: `make install-src` builds the release
+  runtime via `src/trs/Makefile` into `inst/bin/trs`.
 
-Phase status:
-- **P0/P1 complete** — full BIR export + a reference interpreter
-  (`trs-interp`) with exact TRS semantics: 551/699 differential
-  designs byte-match reference Bluesim stdout+exit (rest are
-  no-source/negative/unsupported), zero diffs, zero panics.
-- **BDPI complete** — dlopen + integer-class trampolines, wide/poly
-  out-pointer ABI, string args; stdout flush discipline around calls.
-- **VCD complete** — `-V` and all `$dump*` tasks at **byte parity**
-  with reference Bluesim (modulo the `$date` line).  The 9-design
-  regression battery is `tests/vcd/run.sh`
-  (`BSC=... TRS=... sh run.sh [workdir]`) — keep it at 9/9.
-- **P2 next: LLVM JIT** (task list #19).  The interpreter is the
-  oracle, not the product: measured ~335x slower than compiled Bluesim
-  on a tight loop, >1600x on sudoku (see PERF-BASELINE.md).  Link is
-  already 11-20x faster than `-sim` C++ codegen.
+## Fixed this session (each verified byte-exact vs reference)
 
-## In flight right now (finish this first)
+- RegAligned primitive; phantom prim-domain clocks resolve to Never
+  (SpecialSyncReg/SpecialSyncFIFO).
+- GatedClock: cross-domain setGateCond while the input clock is low
+  propagates through the transparent latch immediately, via a new
+  `Prim::clock_level` pre-rules hook (mcd_Rand).
+- Native library BDPI rand32/srand via glibc random/srandom
+  (bsc.lib/Divide, SquareRoot); library names excluded from .bdpi.so
+  eager resolution.
+- Driver `-c`/`-f` scripting subset: one `sim run`/`sim step N` plus
+  `sim time` / `sim clock` (getClockInfo tuple) / `puts [...]`
+  (2x2-switch, sysEmptyModule, bsc.if b*).
+- **Per-node schedule segments**: compositions now reproduce bsc's flat
+  merged order exactly (getput sysTestUGFIFOF CF-order divergence; also
+  kills the SRAMFile cyclic-segment class).  touchingRules/meRules
+  analysis deleted.
+- always_enabled check_rdy: BIR Method carries the pragma; the interp
+  gates the body on the sibling RDY_<m> method (rdy_en_pragmas x3,
+  sysTestBypassWire).
+- $swrite/$sformat use the full format engine (every string arg is a
+  format; sysFormat4/5).
+- Divide-by-zero raises SIGFPE like native division (bsc.misc/divmod).
+- GatedClockDiv = ClockDivider with a gated input clock (ClockDividers).
+- ifc_clock_gates: exported per interface clock; Expr::Gate on a user
+  child chases the child's gate expr recursively (Bug-1677 family).
+- Testsuite: many VTEST=0 guards (arrays, b381, b1490, Cntrs,
+  CompletionBuffer, NullCrossing, SShow, primtcons, prims/name,
+  NoClock, log2_loop.golden, misc ccomp compares).
 
-1. **bsc rebuild running** (`make install-src`, log:
-   `$SCRATCH/bscbuild3.log`).  It carries the new `ifc_resets` export
-   (SimExportIR.hs) — the fix for interface **output resets**
-   (`fifo.rd_rst_o` style).  Without it, parents bind such resets to a
-   fresh never-driven node and downstream registers never leave their
-   undet state (this froze the read side of the
-   `bsc.interra/MCD_library/SpecialSyncFIFO` and `SpecialSyncReg`
-   testbenches — they spin forever).  The Rust side (BIR field with
-   serde default + node-merge in `instantiate()`) is already merged.
-2. After the rebuild: `make -C src/Libraries install` if Prelude .bo
-   version errors appear, then **regenerate and verify**:
-   `cd testsuite/bsc.interra/MCD_library/SpecialSyncFIFO`, rebuild with
-   `bsc -trs`, run each `mkTestbench_*` and diff against
-   `*.out.expected`.  Same for SpecialSyncReg and a spot-check of
-   NullCrossing.
-3. **Rebuild the release runtime**: `cd src/trs && cargo build
-   --release` (the release binary predates today's DualPortRam,
-   LatchCrossingReg, BDPI-flush, BypassWire0 and driver-flag fixes).
-4. **Regression battery**: `tests/vcd/run.sh` (9/9) and a full
-   differential sweep (`python3 tools/diffsweep.py`, ~40 min; last
-   clean run: sweep 22, 551 PASS / 0 DIFF).
-5. **Clean full testsuite run** for the final tally:
-   `cd testsuite && env CONFIG_SHELL=/bin/sh SIM_BACKEND_FLAG=-trs
-   TRS=<repo>/src/trs/target/release/trs
-   make VTEST=0 SYSTEMCTEST=0 check`
-   (locale `en_US.UTF-8` must exist; dejagnu + csh installed).  The
-   last run processed 862 .exp files and aborted near the end on an
-   unrelated `-dparsed` dump flake in `bsc.syntax/bsv05_parse_pretty`
-   (passes standalone — likely load-transient; re-check).
+## THE ONE REMAINING REAL BUG (finish this first)
 
-## Expected remaining testsuite failures (all triaged)
+`bsc.mcd/Gating`: 6 designs (GatedClock_TwoModTwoSyn, SubMethod,
+SubRule, MethodTb, RuleTb, MethodTb2) share an identical residual
+diff — a ONE-EDGE-LATE gate window (`18,30c18,30`, rg2 = b0 vs af over
+t=180..300, re-converging after).  Repro: copy bsc.mcd/Gating/*.bsv to
+scratch, build each with `bsc -u -trs -g sys<T> <T>.bsv` (+ `-g
+mkGatedClock_TwoModTwoSyn_Sub` for TwoModTwoSyn), diff against
+sysGatedClock_OneMod.out.expected.  Evidence so far (SubMethod, via
+keep-fires VCD diff of ref -sim vs -trs): g1.new_gate matches
+everywhere; the divergence is `s.sg.ssg.new_gate` — reference holds it
+0 for the whole g1-off window (165..295), trs shows one extra toggle
+pair at 165/175 and resumes late (315 vs 295).  Key C++ semantics not
+yet replicated: MOD_GatedClock's latch output is
+`PORT_CLK_GATE_OUT = clk_in_gate & reg` — the INPUT clock's gate
+participates, so when the outer gate (g1) is off, the inner gate (ssg,
+whose clk_in is the g1-gated clock) must go 0 regardless of its own
+cond register, and rules gated by ssg must stop.  Check (a) what gate
+expr the ssg prim's clk_in tick receives in the BIR composition (it
+must be g1's gate, not constant true) on BOTH edges, (b) whether the
+rule toggling ssg's cond (top rule r1, itself g1-gated through TWO
+boundaries) fires one edge too long — i.e. whether the Expr::Gate
+conjunct is evaluated at Sched (latch) time vs the C++'s port read.
+The vcdcmp.py comparator (name-keyed VCD diff) from this session is a
+10-minute rewrite if needed: parse $scope/$var, replay changes keyed
+by hierarchical name, report first divergence excluding `____d\d+$`
+defs and CLK* aliases.
 
-- `bsc.bluesim/interactive` (+ scattered `-c {sim ...}` tests in
-  bsc.if, bsc.mcd, bsc.bluesim/misc): the **Tcl scripting surface**.
-  trs handles `-m`, `-V`, `+args`, `-h/-v`, and exits 0 on the
-  deprecated `-s/-ss/-r/-cc` exactly like bluesim.tcl, but `-c`/`-f`
-  (interactive `sim step/run/time/clock/lookup...`) is an open product
-  decision — ask the user (task #20) before building anything.
-- Codegen-inspection tests are guarded via `cxx_codegen_tests` in
-  `testsuite/config/unix.exp` (skip under `-trs`, run under `-sim`).
-- Transient missing-file flakes (bsc.arrays, primtcons,
-  evaluator/prims/name): pass standalone; re-run.
-- `bsc.bsv_examples/mcd_Rand` mkTop diff and the
-  `bsc.interra/libraries/SRAMFile` link failure are **unverified** —
-  investigate.  `bsc.codegen/rdy_en_pragmas` (3 tests) is a **real
-  open bug**: top-level `always_enabled` methods must be gated on
-  their RDY when invoked every cycle (cvtIFace `check_rdy` wraps the C++
-  method body in `if (RDY)`; the interpreter's top-method invocation
-  path doesn't).  Reference: Cycle N shows Count N-1; trs shows N.
+## Also open (not blocking the perf shift)
 
-## Cardinal rules / gotchas
+- Tcl surface: 44 bsc.bluesim/interactive tests need the bk_* compat
+  .so (DESIGN.md §7; task #20 approved by Ravi).  Plan: resumable
+  stepper refactor (shared with JIT) -> trs-capi cdylib exporting the
+  46 bk_* + new_MODEL_<top> symbols BluesimLoader.hs dlsyms -> driver
+  thread for async run -> symbol table incrementally.  trsLink should
+  emit a tiny per-design shim .so (it already builds .bdpi.so) linking
+  the shipped runtime; spike dlsym-through-dependency early.
+- VCD clock-alias parity: trs maps a module's input-clock alias vars
+  (dut.CLK vs dut.CLK_c1) to one kernel-clock id where reference keeps
+  them distinct; latent (battery green), matters for byte-parity goals.
+- SyncFIFO + RegAligned VCD hooks still TODO (silent-default class).
+- Watchdogged slow tests (sudoku mkGenerateTest3, MPEG4): expected
+  until the JIT lands.
+- Stray tracked artifacts to clean up (ask Ravi): testsuite
+  a.out.bir files (gcd, fifo, rwire, mcd/Misc), root dump.txt and
+  sysGatedClock_OneMod.bir — run artifacts accidentally in git.
 
-- **Never rebuild `inst/bin/bsc` or `target/release/trs` while a
-  sweep, battery, or testsuite run is using them.**  Develop against
-  `CARGO_TARGET_DIR=$SCRATCH/cargo-alt cargo build` (debug) instead.
-- The interpreter panics on unimplemented prims — a wedged/spinning
-  `trs run` in the testsuite means a *semantic* bug (like the
-  ifc_resets one), and dejagnu may not time it out; watchdog-kill
-  processes older than ~6 min during suite runs.
+## Next phase: performance (task #19)
+
+Correctness ledger is clean modulo the one Gating bug.  Start with the
+resumable-stepper refactor (event heap + resolved comps as Interp
+fields; the trs-kernel crate's Yield/Quit scaffolding anticipates
+it), then LLVM lowering per DESIGN.md behind the `llvm` feature
+(needs llvm-18-dev), interpreter as differential oracle, sweep +
+battery as the net.  Baseline: ~335x slower than compiled Bluesim on
+tight loops, >1600x on sudoku; link already 11-20x faster than -sim.
+Per-node segments made compositions per-rule-node — the entries loop
+clones each 1-node segment per edge; fold that into the stepper
+refactor (pre-resolve entries to node slices once).
+
+## Cardinal rules / gotchas (unchanged)
+
+- Never rebuild `inst/bin/bsc` or `target/release/trs` while a
+  sweep, battery, or testsuite run is using them.  Develop against
+  `CARGO_TARGET_DIR=<scratch>/cargo-alt cargo build` (debug).
+- Watchdog-kill wedged `trs run` processes during suite runs — but
+  known-slow tests (sudoku, MPEG4) legitimately exceed 6 minutes.
 - Reference executables are scripts needing `bluetcl` on PATH
-  (`PATH=<repo>/inst/bin:$PATH`).
-- BIR files are re-exported by the *installed* bsc; after exporter
-  changes, stale `.bir`/`.ba` need regeneration (Binary version
-  mismatch errors → recompile the design; stale Prelude → reinstall
-  src/Libraries).
-- The undet pattern is 0xAA...; prim state dumps it, but **method
-  ports zero-initialize** (mkPortInit) — VCD initial values differ
-  accordingly.
-- VCD member selection replicates `SimCOpt.moveDefsOntoStack` (defs
-  referenced by >=2 generated functions, or >64-bit, or task defs, or
-  pinned by `-keep-fires`).  See `vcd_mod_vars` in
-  `crates/trs-interp/src/lib.rs` and the reference quirks noted
-  inline (SyncReset/handshake clock aliases use kernel clock 0's id;
-  `backing.in_reset` never updates; ClockDivider blocks ticks in
-  reset; the FIFO's reset calls METH_clear).
-- Prim VCD hooks still TODO: SyncFIFO (depth+13 ids), RegAligned;
-  everything else common is done and battery-verified.
-
-## Key file map
-
-- `src/comp/SimExportIR.hs` — BIR exporter (runs on `sim_system_opt`,
-  the exact SimPackage the C++ backend consumes).
-- `src/comp/bsc.hs` — `-trs` flow: `genModuleC` early-exit +
-  `trsLink` (BIR copy, BDPI .so via C compiler + `cxxCompile
-  -shared`, wrapper script).  Flags/FlagsDecode/GenABin carry
-  `genTrs` (Bin Flags is 138 fields — keep read/write in sync).
-- `crates/trs-ir` — schema (serde CBOR; new fields need
-  `#[serde(default)]`).
-- `crates/trs-interp` — `lib.rs` (instantiation, eval, run loop,
-  reset network, VCD walks), `prim.rs` (all primitives + VCD hooks),
-  `vcd.rs` (writer: back-dating via `time_of_change`, `min_pending`
-  buffering), `bdpi.rs`, `format.rs`, `value.rs`.
-- `tools/diffsweep.py` — 699-design differential harness.
-- `tests/vcd/run.sh` — VCD byte-parity battery.
-
-## Task list
-
-#18 finish the triage/verification above; #19 P2 LLVM JIT
-(inkwell/LLJIT, interpreter as differential oracle, wide-data lowering
-to u32-limb ops, prims stay as calls into the runtime); #20 the Tcl
-`-c/-f` decision (user input needed).  Standing directive: keep
-commits small and pushed; keep going fast.
+  (`PATH=<repo>/inst/bin:$PATH`); beware the OTHER bsc checkout on
+  PATH (~/bluespec/bsc) — always prepend this repo's inst/bin.
+- BIR files are re-exported by the *installed* bsc; stale .bir/.ba
+  need regeneration after exporter changes.
+- Commit policy: small commits, push to `personal claude/trs`
+  freely (Ravi's standing OK); trailers per session convention.
