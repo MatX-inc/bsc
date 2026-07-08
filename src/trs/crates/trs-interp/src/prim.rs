@@ -3106,6 +3106,8 @@ pub struct MakeClock {
     new_gate: bool,
     in_reset: bool,
     edges: Vec<bool>,
+    vcd_base: u32,
+    vcd_back: Option<(bool, bool)>,
 }
 
 impl MakeClock {
@@ -3121,11 +3123,61 @@ impl MakeClock {
             new_gate: init_gate,
             in_reset: false,
             edges: Vec::new(),
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for MakeClock {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        // CLK_OUT aliases the driven kernel clock; CLK_GATE_OUT and
+        // CLK_VAL_OUT are the gate/value registers
+        let n = w.reserve_ids(2);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(clk_vcd_id, "CLK_OUT", 1);
+        w.write_def(n, "CLK_GATE_OUT", 1);
+        w.write_def(n + 1, "CLK_VAL_OUT", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let n = self.vcd_base;
+        match dt {
+            D::Xs => {
+                w.write_x(n, 1, now);
+                w.write_x(n + 1, 1, now);
+            }
+            D::Changes => {
+                let (bg, bc) = self.vcd_back.unwrap_or((false, false));
+                if self.gate_out != bg {
+                    w.write_val(n, &bit(self.gate_out), now);
+                }
+                if self.current_high != bc {
+                    w.write_val(n + 1, &bit(self.current_high), now);
+                }
+            }
+            _ => {
+                w.write_val(n, &bit(self.gate_out), now);
+                w.write_val(n + 1, &bit(self.current_high), now);
+            }
+        }
+        self.vcd_back = Some((self.gate_out, self.current_high));
+    }
     fn gate_out(&self) -> bool {
         self.gate_out
     }
@@ -3195,6 +3247,9 @@ pub struct ClockDivider {
     gate_out: bool,
     in_reset: bool,
     edges: Vec<bool>,
+    vcd_base: u32,
+    vcd_in_clk_id: u32,
+    vcd_back: Option<(bool, u64)>,
 }
 
 impl ClockDivider {
@@ -3212,11 +3267,68 @@ impl ClockDivider {
             gate_out: false,
             in_reset: false,
             edges: Vec::new(),
+            vcd_base: 0,
+            vcd_in_clk_id: 0,
+            vcd_back: None,
         }
     }
 }
 
 impl Prim for ClockDivider {
+    fn vcd_port_clock(&mut self, _port: &str, _clk: usize, clk_vcd_id: u32) {
+        // the tick port is driven by the INPUT clock (CLK_IN alias)
+        self.vcd_in_clk_id = clk_vcd_id;
+    }
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        let n = w.reserve_ids(2);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(self.vcd_in_clk_id, "CLK_IN", 1);
+        w.write_def(clk_vcd_id, "CLK_OUT", 1);
+        w.write_def(n, "RST", 1);
+        w.write_def(n + 1, "PREEDGE", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let n = self.vcd_base;
+        let pre = self.cntr == self.transition.wrapping_sub(1);
+        match dt {
+            D::Xs => {
+                w.write_x(n, 1, now);
+                w.write_x(n + 1, 1, now);
+            }
+            D::Changes => {
+                let (b_rst, b_cntr) = self.vcd_back.unwrap_or((false, 0));
+                if self.in_reset != b_rst {
+                    w.write_val(n, &bit(!self.in_reset), now);
+                }
+                if self.cntr != b_cntr
+                    && (pre || b_cntr != self.transition.wrapping_sub(1))
+                {
+                    w.write_val(n + 1, &bit(pre), now);
+                }
+            }
+            _ => {
+                w.write_val(n, &bit(!self.in_reset), now);
+                w.write_val(n + 1, &bit(pre), now);
+            }
+        }
+        self.vcd_back = Some((self.in_reset, self.cntr));
+    }
     fn gate_out(&self) -> bool {
         self.gate_out
     }
@@ -3278,15 +3390,94 @@ pub struct ClockInverter {
     current_high: bool,
     gate_out: bool,
     edges: Vec<bool>,
+    vcd_base: u32,
+    vcd_in_clk_id: u32,
+    vcd_preedge: bool,
+    vcd_back: Option<(bool, bool, bool, bool)>,
 }
 
 impl ClockInverter {
     fn new() -> ClockInverter {
-        ClockInverter { current_high: false, gate_out: true, edges: Vec::new() }
+        ClockInverter {
+            current_high: false,
+            gate_out: true,
+            edges: Vec::new(),
+            vcd_base: 0,
+            vcd_in_clk_id: 0,
+            vcd_preedge: false,
+            vcd_back: None,
+        }
     }
 }
 
 impl Prim for ClockInverter {
+    fn vcd_port_clock(&mut self, _port: &str, _clk: usize, clk_vcd_id: u32) {
+        self.vcd_in_clk_id = clk_vcd_id;
+    }
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        clk_vcd_id: u32,
+    ) {
+        let n = w.reserve_ids(4);
+        self.vcd_base = n;
+        w.scope_start(name);
+        w.write_def(n, "CLK_IN", 1);
+        w.write_def(n + 1, "CLK_GATE_IN", 1);
+        w.write_def(n + 2, "PREEDGE", 1);
+        w.write_def(clk_vcd_id, "CLK_OUT", 1);
+        w.write_def(n + 3, "CLK_GATE_OUT", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let n = self.vcd_base;
+        // clk_in is the (inverted) opposite of the current output level
+        let clk_in = !self.current_high;
+        match dt {
+            D::Xs => {
+                for i in 0..4 {
+                    w.write_x(n + i, 1, now);
+                }
+                self.vcd_preedge = false;
+            }
+            D::Changes => {
+                let (bi, bg, bp, bo) =
+                    self.vcd_back.unwrap_or((false, false, false, false));
+                if clk_in != bi {
+                    w.write_val(n, &bit(clk_in), now);
+                }
+                if self.gate_out != bg {
+                    w.write_val(n + 1, &bit(self.gate_out), now);
+                }
+                self.vcd_preedge = true;
+                if self.vcd_preedge != bp {
+                    w.write_val(n + 2, &bit(true), now);
+                }
+                if self.gate_out != bo {
+                    w.write_val(n + 3, &bit(self.gate_out), now);
+                }
+            }
+            _ => {
+                w.write_val(n, &bit(clk_in), now);
+                w.write_val(n + 1, &bit(self.gate_out), now);
+                self.vcd_preedge = true;
+                w.write_val(n + 2, &bit(true), now);
+                w.write_val(n + 3, &bit(self.gate_out), now);
+            }
+        }
+        self.vcd_back =
+            Some((clk_in, self.gate_out, self.vcd_preedge, self.gate_out));
+    }
     fn gate_out(&self) -> bool {
         self.gate_out
     }
@@ -4159,6 +4350,8 @@ struct GatedClock {
     clk_low: bool,
     in_reset: bool,
     suppress: bool,
+    vcd_id: u32,
+    vcd_back: Option<bool>,
 }
 
 impl GatedClock {
@@ -4173,6 +4366,8 @@ impl GatedClock {
             clk_low: true,
             in_reset: false,
             suppress: false,
+            vcd_id: 0,
+            vcd_back: None,
         }
     }
     fn update_new_gate(&mut self) {
@@ -4183,6 +4378,34 @@ impl GatedClock {
 }
 
 impl Prim for GatedClock {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        _clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_gatedclock.h: one "new_gate" var = CLK_GATE_OUT
+        self.vcd_id = w.reserve_ids(1);
+        w.scope_start(name);
+        w.write_def(self.vcd_id, "new_gate", 1);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        _clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        if dt == D::Xs {
+            w.write_x(self.vcd_id, 1, now);
+        } else if dt != D::Changes || self.vcd_back != Some(self.gate_out) {
+            w.write_val(self.vcd_id, &Value::from_u64(1, self.gate_out as u64), now);
+            self.vcd_back = Some(self.gate_out);
+        }
+    }
     fn gate_out(&self) -> bool {
         self.gate_out
     }
