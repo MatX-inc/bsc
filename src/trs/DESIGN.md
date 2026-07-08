@@ -30,10 +30,11 @@ work builds on.
    synchronizers, clock generators) remain runtime calls.
 7. **Drop-in compatibility.**  Keep the `bk_*` kernel C ABI and the
    `bluesim.tcl`/bluetcl driver working unchanged; keep BDPI, `$display`
-   formatting, plusargs, and (eventually) the SystemC wrapper.
+   formatting, and plusargs.
 
-Non-goals (initially): 4-state simulation (Bluesim is 2-state today), save/
-restore checkpointing (does not exist today either), Verilog co-simulation.
+Non-goals: the SystemC wrapper (dropped by decision 2026-07-08), 4-state
+simulation (Bluesim is 2-state today), save/restore checkpointing (does
+not exist today either), Verilog co-simulation.
 
 ## 2. Where Bluesim stands today
 
@@ -505,7 +506,8 @@ Verilator (`--threads 1` and best-N) on the same RTL.
   object cache, `-c` integration per PR #2 conventions, AOT mode, FST.
 - **P5 — Performance program.**  Layout, branch metadata, small-FIFO
   inlining, wave-capture tuning; publish benchmark suite vs Verilator.
-- **P6 — Parallel execution; SystemC wrapper.**
+- **P6 — Parallel execution.**  (The SystemC wrapper was dropped from
+  scope: trs will not provide one.)
 
 ## 11. Risks and mitigations
 

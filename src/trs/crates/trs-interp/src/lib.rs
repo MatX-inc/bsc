@@ -33,13 +33,15 @@ struct ModIx {
 
 pub struct Interp {
     d: Design,
-    /// open files from $fopen, keyed by descriptor (bit 31 set, as
-    /// Verilog file descriptors are; 0x8000_0000 reserved for stdout
-    /// behavior of the MCD form is not modeled yet)
-    files: HashMap<u64, std::fs::File>,
-    /// per-fd pushback stack for $ungetc; $fgetc pops from here first
+    /// Verilog file handles, mirroring VLFiles (dollar_display.cxx):
+    /// one-arg $fopen returns a one-hot MCD key (slot 0 = stdout, first
+    /// user file = 0x2, writes fan out to every set bit); two-arg $fopen
+    /// returns 0x8000_0000+index with stdin/stdout/stderr preregistered
+    /// (first user fd = 0x8000_0003)
+    mcd_files: Vec<FSlot>,
+    fd_files: Vec<FSlot>,
+    /// per-key pushback stack for $ungetc; $fgetc pops from here first
     pushback: HashMap<u64, Vec<u8>>,
-    next_fd: u64,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
@@ -72,6 +74,16 @@ pub struct Interp {
     /// reset nodes asserted from time 0 (InitialReset outputs), broadcast
     /// at run() start once instantiation is complete
     initial_asserts: Vec<usize>,
+}
+
+/// One Verilog file-table slot (VLFiles keeps FILE*; the std streams are
+/// distinguished so they are never closed and write to the right place).
+enum FSlot {
+    Stdin,
+    Stdout,
+    Stderr,
+    File(std::fs::File),
+    Closed,
 }
 
 /// A periodic clock waveform.  The default clock is LOW with first edge
@@ -185,9 +197,9 @@ impl Interp {
             mod_by_name,
             inst_by_path: HashMap::new(),
             insts: Vec::new(),
-            files: HashMap::new(),
+            mcd_files: vec![FSlot::Stdout],
+            fd_files: vec![FSlot::Stdin, FSlot::Stdout, FSlot::Stderr],
             pushback: HashMap::new(),
-            next_fd: 0x8000_0001,
             finished: None,
             cycle: 0,
             now: 0,
@@ -1044,12 +1056,63 @@ impl Interp {
     // ===============
     // System tasks
 
-    fn write_fd(&mut self, fd: u64, text: &str) {
+    /// Write to every channel a file key names (VLFiles::findFiles): keys
+    /// with bit 31 index the fd table; smaller keys are MCD bitmasks
+    /// fanning out to each set bit (bit 0 = stdout).
+    fn write_fd(&mut self, key: u64, text: &str) {
         use std::io::Write;
-        if fd == 0x8000_0000 {
-            print!("{text}");
-        } else if let Some(f) = self.files.get_mut(&fd) {
-            let _ = f.write_all(text.as_bytes());
+        let write_slot = |s: &mut FSlot| match s {
+            FSlot::Stdout => print!("{text}"),
+            FSlot::Stderr => eprint!("{text}"),
+            FSlot::File(f) => {
+                let _ = f.write_all(text.as_bytes());
+            }
+            _ => {}
+        };
+        if key >= 0x8000_0000 {
+            let idx = (key - 0x8000_0000) as usize;
+            if let Some(s) = self.fd_files.get_mut(idx) {
+                write_slot(s);
+            }
+        } else {
+            let mut k = key;
+            let mut i = 0usize;
+            while k != 0 {
+                if k & 1 == 1 {
+                    if let Some(s) = self.mcd_files.get_mut(i) {
+                        write_slot(s);
+                    }
+                }
+                k >>= 1;
+                i += 1;
+            }
+        }
+    }
+
+    /// VLFiles::closeFiles: fd keys above the std handles close their
+    /// slot; MCD masks close every set bit except stdout (bit 0).
+    fn close_files(&mut self, key: u64) {
+        if key > 0x8000_0002 {
+            let idx = (key - 0x8000_0000) as usize;
+            if let Some(s) = self.fd_files.get_mut(idx) {
+                if matches!(s, FSlot::File(_)) {
+                    *s = FSlot::Closed;
+                }
+            }
+        } else if key < 0x0800_0000 {
+            let mut k = key >> 1; // skip stdout
+            let mut i = 1usize;
+            while k != 0 {
+                if k & 1 == 1 {
+                    if let Some(s) = self.mcd_files.get_mut(i) {
+                        if matches!(s, FSlot::File(_)) {
+                            *s = FSlot::Closed;
+                        }
+                    }
+                }
+                k >>= 1;
+                i += 1;
+            }
         }
     }
 
@@ -1086,17 +1149,46 @@ impl Interp {
             }
             "$fclose" => {
                 if let Some(Arg::Val(v, _)) = args.first() {
-                    self.files.remove(&v.as_u64());
+                    self.close_files(v.as_u64());
                 }
             }
             "$fflush" => {
                 use std::io::Write;
-                if let Some(Arg::Val(v, _)) = args.first() {
-                    if let Some(f) = self.files.get_mut(&v.as_u64()) {
-                        let _ = f.flush();
+                let _ = std::io::stdout().flush();
+                let key = match args.first() {
+                    Some(Arg::Val(v, _)) => Some(v.as_u64()),
+                    _ => None,
+                };
+                for tbl in [&mut self.fd_files, &mut self.mcd_files] {
+                    for s in tbl.iter_mut() {
+                        if let FSlot::File(f) = s {
+                            if key.is_none() {
+                                let _ = f.flush();
+                            }
+                        }
                     }
-                } else {
-                    let _ = std::io::stdout().flush();
+                }
+                if let Some(k) = key {
+                    // flush the key's fan-out by writing nothing through
+                    // the same decode path, then flushing each file
+                    if k >= 0x8000_0000 {
+                        if let Some(FSlot::File(f)) =
+                            self.fd_files.get_mut((k - 0x8000_0000) as usize)
+                        {
+                            let _ = f.flush();
+                        }
+                    } else {
+                        let (mut kk, mut i) = (k, 0usize);
+                        while kk != 0 {
+                            if kk & 1 == 1 {
+                                if let Some(FSlot::File(f)) = self.mcd_files.get_mut(i) {
+                                    let _ = f.flush();
+                                }
+                            }
+                            kk >>= 1;
+                            i += 1;
+                        }
+                    }
                 }
             }
             "$display" => println!("{}", format::format_args(args, 10, self.now, loc)),
@@ -1107,16 +1199,19 @@ impl Interp {
             "$writeh" => print!("{}", format::format_args(args, 16, self.now, loc)),
             "$writeb" => print!("{}", format::format_args(args, 2, self.now, loc)),
             "$writeo" => print!("{}", format::format_args(args, 8, self.now, loc)),
+            // dollar_error/dollar_warning/dollar_info format exactly like
+            // $display — bsc compiles the severity prefix into the message
             "$error" | "$warning" | "$info" => {
-                // severity prefix, then the message (dollar_display.cxx)
-                let sev = &name[1..];
-                let mut t = sev[..1].to_uppercase();
-                t.push_str(&sev[1..]);
-                println!("{}: {}", t, format::format_args(args, 10, self.now, loc));
+                println!("{}", format::format_args(args, 10, self.now, loc));
             }
             "$fatal" => {
-                println!("Fatal: {}", format::format_args(args, 10, self.now, loc));
-                self.finished = Some(1);
+                // first argument is the exit status (dollar_fatal)
+                let (status, rest) = match args.split_first() {
+                    Some((Arg::Val(v, _), rest)) => (v.as_u64() as i32, rest),
+                    _ => (0, args),
+                };
+                println!("{}", format::format_args(rest, 10, self.now, loc));
+                self.finished = Some(status);
             }
             "$finish" => {
                 let code = match args.first() {
@@ -1140,6 +1235,8 @@ impl Interp {
                     Some(Arg::Str(s)) => s.clone(),
                     _ => return Value::zero(w.max(1)),
                 };
+                // one-arg form = MCD (always write mode); two-arg = fd
+                let mcd = !matches!(args.get(1), Some(Arg::Str(_)));
                 let write_mode = !matches!(args.get(1), Some(Arg::Str(m)) if m.starts_with('r'));
                 let f = if write_mode {
                     std::fs::File::create(&path)
@@ -1148,10 +1245,27 @@ impl Interp {
                 };
                 match f {
                     Ok(f) => {
-                        let fd = self.next_fd;
-                        self.next_fd += 1;
-                        self.files.insert(fd, f);
-                        Value::from_u64(w.max(32), fd)
+                        let key = if mcd {
+                            // registerFile(true,..): append below 31 bits,
+                            // else reuse a closed slot
+                            if self.mcd_files.len() < 31 {
+                                self.mcd_files.push(FSlot::File(f));
+                                1u64 << (self.mcd_files.len() - 1)
+                            } else if let Some(i) = self
+                                .mcd_files
+                                .iter()
+                                .position(|s| matches!(s, FSlot::Closed))
+                            {
+                                self.mcd_files[i] = FSlot::File(f);
+                                1u64 << i
+                            } else {
+                                return Value::zero(w.max(1));
+                            }
+                        } else {
+                            self.fd_files.push(FSlot::File(f));
+                            0x8000_0000 + (self.fd_files.len() as u64 - 1)
+                        };
+                        Value::from_u64(w.max(32), key)
                     }
                     Err(_) => Value::zero(w.max(1)),
                 }
@@ -1166,10 +1280,21 @@ impl Interp {
                 if let Some(b) = self.pushback.get_mut(&fd).and_then(|s| s.pop()) {
                     return Value::from_u64(w.max(32), b as u64);
                 }
+                // getFD: the fd table only
                 let mut byte = [0u8; 1];
-                if let Some(f) = self.files.get_mut(&fd) {
-                    if f.read_exact(&mut byte).is_ok() {
-                        return Value::from_u64(w.max(32), byte[0] as u64);
+                if fd >= 0x8000_0000 {
+                    match self.fd_files.get_mut((fd - 0x8000_0000) as usize) {
+                        Some(FSlot::File(f)) => {
+                            if f.read_exact(&mut byte).is_ok() {
+                                return Value::from_u64(w.max(32), byte[0] as u64);
+                            }
+                        }
+                        Some(FSlot::Stdin) => {
+                            if std::io::stdin().read_exact(&mut byte).is_ok() {
+                                return Value::from_u64(w.max(32), byte[0] as u64);
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 // EOF / bad fd: -1
@@ -1186,7 +1311,13 @@ impl Interp {
                     Some(Arg::Val(v, _)) => v.as_u64(),
                     _ => 0,
                 };
-                if self.files.contains_key(&fd) || fd == 0x8000_0000 {
+                // valid on any live fd-table entry (getFD != NULL)
+                let live = fd >= 0x8000_0000
+                    && !matches!(
+                        self.fd_files.get((fd - 0x8000_0000) as usize),
+                        None | Some(FSlot::Closed)
+                    );
+                if live {
                     self.pushback.entry(fd).or_default().push(c);
                     Value::from_u64(w.max(32), c as u64)
                 } else {
@@ -1214,7 +1345,7 @@ impl Interp {
             }
             "$fclose" => {
                 if let Some(Arg::Val(v, _)) = args.first() {
-                    self.files.remove(&v.as_u64());
+                    self.close_files(v.as_u64());
                 }
                 Value::zero(w.max(1))
             }
@@ -1436,6 +1567,10 @@ impl Interp {
             // (prim instance, port, is_reset_tick, owner instance for
             // gate evaluation, gate expr)
             ticks: Vec<(usize, StrId, bool, usize, Option<Expr>)>,
+            // clock-crossing "early" rules: excluded from the edge pass,
+            // run in the after-edge pass at end of timeslice (the C++
+            // schedule_after_posedge_* at PG_FINAL)
+            early: std::collections::HashSet<(usize, StrId)>,
         }
         let rcomps: Vec<RComp> = comps
             .iter()
@@ -1484,12 +1619,19 @@ impl Interp {
                     })
                     .collect();
 
+                let early = comp
+                    .early
+                    .iter()
+                    .map(|q| self.split_qual(*q))
+                    .collect();
+
                 RComp {
                     clk: clocks.iter().position(|&c| c == comp.clock).unwrap(),
                     posedge: comp.posedge,
                     entries,
                     cross,
                     ticks,
+                    early,
                 }
             })
             .collect();
@@ -1542,6 +1684,10 @@ impl Interp {
         }
         self.flush_reset_pending();
 
+        // (clock,edge) compositions that fired in the current timeslice,
+        // for the after-edge (PG_FINAL) pass
+        let mut fired_this_slice: Vec<usize> = Vec::new();
+
         while self.finished.is_none() {
             let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
             // top reset deasserts at t=2 after that instant's logic
@@ -1557,7 +1703,12 @@ impl Interp {
             }
             self.now = t;
 
-            for rc in rcomps.iter().filter(|r| r.clk == ci && r.posedge == pos) {
+            for (rci, rc) in rcomps
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.clk == ci && r.posedge == pos)
+            {
+                fired_this_slice.push(rci);
                 // fresh latch space for this edge
                 for i in 0..self.insts.len() {
                     if let InstKind::User { latched, .. } = &mut self.insts[i].kind {
@@ -1583,6 +1734,13 @@ impl Interp {
                     for node in nodes {
                         if self.finished.is_some() {
                             break;
+                        }
+                        // clock-crossing rules run in the after-edge pass
+                        let r0 = match node {
+                            SchedNode::Sched(r) | SchedNode::Exec(r) => r,
+                        };
+                        if rc.early.contains(&(inst, r0)) {
+                            continue;
                         }
                         match node {
                             SchedNode::Sched(r) => {
@@ -1640,11 +1798,54 @@ impl Interp {
                 }
             }
 
-            // end of timeslice: apply deferred reset transitions before
-            // moving to the next simulation time
+            // end of timeslice: apply deferred reset transitions, then run
+            // the after-edge pass (clock-crossing "early" rules sample
+            // post-edge, post-reset state — kernel PG_FINAL, after
+            // PG_AFTER_LOGIC reset flushing)
             let same_time = matches!(heap.peek(), Some(Reverse((nt, _, _, _))) if *nt == t);
             if !same_time {
                 self.flush_reset_pending();
+                for rci in std::mem::take(&mut fired_this_slice) {
+                    let rc = &rcomps[rci];
+                    if rc.early.is_empty() {
+                        continue;
+                    }
+                    for &(inst, module, domain, seg) in &rc.entries {
+                        let mir = self.mods[module].ir;
+                        let sched = &self.d.modules[mir].schedule;
+                        let ms = sched
+                            .domains
+                            .iter()
+                            .find(|ms| ms.domain == domain && ms.posedge == rc.posedge)
+                            .or_else(|| {
+                                sched.domains.iter().find(|ms| ms.domain == domain)
+                            })
+                            .unwrap();
+                        let nodes: Vec<SchedNode> = ms.segments[seg].nodes.clone();
+                        for node in nodes {
+                            if self.finished.is_some() {
+                                break;
+                            }
+                            let r0 = match node {
+                                SchedNode::Sched(r) | SchedNode::Exec(r) => r,
+                            };
+                            if !rc.early.contains(&(inst, r0)) {
+                                continue;
+                            }
+                            match node {
+                                SchedNode::Sched(r) => {
+                                    let ci2 = rc
+                                        .cross
+                                        .get(&(inst, r))
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    self.latch_rule(inst, r, &ci2);
+                                }
+                                SchedNode::Exec(r) => self.exec_rule(inst, r),
+                            }
+                        }
+                    }
+                }
             }
 
             // the cycle limit stops the simulation at the Nth default
