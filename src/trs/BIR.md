@@ -66,7 +66,16 @@ constraints, foreign-call ordering) is bsc's job, not the backend's.
 - `modules`, `instance_map`, `top`, `default_clock`/`default_reset`,
   `foreign_funcs` (BDPI signatures; the C ABI itself is unchanged from
   today's conventions).
+- `keep_fires`: bsc was invoked with -keep-fires — CAN_FIRE/WILL_FIRE
+  defs and method ports are pinned as VCD members (they are never
+  demoted to stack locals in the reference backend's SimCOpt pass).
 - `compositions`: the design schedule, hierarchically (§4).
+
+Each module additionally carries `ifc_clocks` (interface output clock
+port -> internal oscillator wire) and `ifc_resets` (interface output
+reset port -> internal reset wire), so a parent's references to
+"<inst>$<port>" chase through the interface to the driving oscillator
+or reset node.
 
 ## 4. The hierarchical schedule
 
