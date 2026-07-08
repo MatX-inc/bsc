@@ -47,6 +47,7 @@ import Id (Id, getIdBaseString, getIdQualString, isSignedId,
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
+import SCC (tsort)
 import Pragma (RulePragma(..), isAlwaysEn)
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
 import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..), VResetInfo(..))
@@ -517,8 +518,35 @@ encComposition instToMod msis topGates ss = do
                 then Just (getIdQualString prim, getIdBaseString prim,
                            getIdBaseString port, aclock_gate clk)
                 else Nothing
-        all_prims = [ p | di <- M.elems (ss_domain_info_map ss)
-                        , p <- di_prims di ]
+        -- gate-dependency tick order (SimMakeCBlocks.sortTickCalls): a
+        -- group whose ticked prim drives another group's clock GATE runs
+        -- first, so tick gate arguments read post-update values
+        -- (GatedClock chains: bsc.mcd/Gating)
+        all_prims0 = [ p | di <- M.elems (ss_domain_info_map ss)
+                         , p <- di_prims di ]
+        primPathOf i = qp (getIdQualString i) (getIdBaseString i)
+        gateSrcPath (AMGate _ o _) = Just (primPathOf o)
+        gateSrcPath (ASPort _ i)
+            | not (null (getIdQualString i)) = Just (getIdQualString i)
+        gateSrcPath _ = Nothing
+        tickGroups = M.fromListWith (++)
+                       [ (clk, [pr]) | pr@(_, (_, clk)) <- all_prims0 ]
+        -- gate-producing instance path -> the clocks its gate feeds
+        gateClockMap = M.fromListWith (++)
+                         [ (src, [clk])
+                         | clk <- M.keys tickGroups
+                         , Just src <- [gateSrcPath (aclock_gate clk)] ]
+        tickOrderEdges =
+            [ (clk, concat [ M.findWithDefault [] (primPathOf p) gateClockMap
+                           | (p, _) <- prs ])
+            | (clk, prs) <- M.toList tickGroups ]
+        all_prims =
+            case tsort tickOrderEdges of
+              Left is -> internalError
+                ("SimExportIR: cyclic tick gate dependencies: "
+                 ++ ppReadable is)
+              Right cs -> concat [ reverse (M.findWithDefault [] c tickGroups)
+                                 | c <- reverse cs ]
         -- conditional reset ticks (mkResetTickStmt; posedge only), after
         -- the regular ticks; each carries the prim's clock gate
         -- (addGateInfo), with top-level input gates as constant true
