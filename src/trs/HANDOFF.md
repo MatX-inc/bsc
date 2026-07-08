@@ -1,9 +1,9 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`8bc49016` — ALWAYS `git push personal`, never bare `git push origin`:
-origin is the B-lang-org repo and one bare push this session created a
-stray public branch there; see "Ask Ravi" below).  Read `DESIGN.md`
+`eaae283b` — ALWAYS `git push personal`, never bare `git push origin`:
+origin is the B-lang-org repo; a bare push once created a stray public
+branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
@@ -82,18 +82,6 @@ numbers) alongside this.
 - wallace/testCombServer can flake under full -j128 suite load
   (DejaGnu per-test timeout on a ~30s-solo interpreter run); goes away
   with the JIT.
-
-## Ask Ravi
-
-- A bare `git push origin` accidentally created branch `claude/trs`
-  on https://github.com/B-lang-org/bsc (same commits as the personal
-  fork).  Deleting a remote branch needs his say-so:
-  `git push origin --delete claude/trs`.
-- Stray tracked run artifacts (grown this session — suite runs
-  regenerate them): testsuite a.out.bir (gcd, fifo, rwire, mcd/Misc,
-  verilog/astate, verilog/tasks), verilog/noinline module_*.bir ×4 +
-  a.out.bir.  `.gitignore` covers *.bir; `git rm --cached` them in a
-  cleanup commit?
 
 ## Next phase: performance (task #19)
 
