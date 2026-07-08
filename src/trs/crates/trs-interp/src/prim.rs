@@ -24,6 +24,13 @@ pub trait Prim {
     /// `clk_val` is the clock level after the edge (true on posedge) —
     /// Both-edge ticks (ClockInverter, GatedClock) depend on it.
     fn tick(&mut self, port: &str, now: u64, clk_val: bool, gate: bool);
+    /// Live clock-level update, delivered BEFORE the edge's rules run:
+    /// the kernel flips a clock's value before executing its schedule
+    /// (bk_clock_val), so a method called from a rule at this edge — or
+    /// from another domain between edges — observes the true level.
+    /// GatedClock's transparent-low latch needs this; the end-of-edge
+    /// tick still delivers the gate and the latch update.
+    fn clock_level(&mut self, _port: &str, _level: bool) {}
     /// The prim's output clock gate (PORT_CLK_GATE_OUT) for `Expr::Gate`
     /// reads; 1 for prims without a gate output.
     fn gate_out(&self) -> bool {
@@ -4734,15 +4741,20 @@ impl Prim for GatedClock {
         match method {
             "setGateCond" => {
                 if !self.suppress {
-                    // rules run while the clock is high (the kernel flips
-                    // the level before edge logic), so the transparent-low
-                    // latch never updates here; the value lands at the
-                    // next negedge clk_in tick
                     self.reg = args[0].as_bool();
+                    // METH_setGateCond consults the live clock level
+                    // (bk_clock_val, tracked via clock_level): a change
+                    // made while the input clock is low propagates
+                    // through the transparent latch immediately —
+                    // observable when the setter runs in another domain
+                    self.update_new_gate();
                 }
             }
             m => panic!("GatedClock: unknown action method {m:?}"),
         }
+    }
+    fn clock_level(&mut self, _port: &str, level: bool) {
+        self.clk_low = !level;
     }
     fn tick(&mut self, port: &str, _now: u64, clk_val: bool, gate: bool) {
         match port {

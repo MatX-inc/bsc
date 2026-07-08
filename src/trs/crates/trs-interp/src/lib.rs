@@ -2990,6 +2990,19 @@ impl Interp {
                     }
                 }
 
+                // live clock-level updates before rules run (the kernel
+                // flips a clock's value before executing its schedule;
+                // GatedClock's transparent-low latch queries it)
+                for &(inst, port, is_rst, _, _) in &rc.ticks {
+                    if is_rst {
+                        continue;
+                    }
+                    let pname = self.d.strings[port as usize].clone();
+                    if let InstKind::Prim(p) = &mut self.insts[inst].kind {
+                        p.clock_level(&pname, pos);
+                    }
+                }
+
                 for &(inst, module, domain, seg) in &rc.entries {
                     let mir = self.mods[module].ir;
                     let sched = &self.d.modules[mir].schedule;
