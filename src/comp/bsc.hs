@@ -1344,7 +1344,7 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- export the TRS IR when requested
        when (genBir flags) $
-            writeBirFile (prefix ++ toplevel ++ ".bir") sim_system_opt
+            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags) sim_system_opt
 
        -- the -trs backend stops here: the .bir plus the user's C files
        -- (compiled separately for dlopen) are the whole simulation

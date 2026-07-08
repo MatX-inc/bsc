@@ -44,6 +44,11 @@ pub struct Design {
     pub foreign_funcs: Vec<ForeignFunc>,
     pub default_clock: Option<StrId>,
     pub default_reset: Option<StrId>,
+    /// bsc was invoked with -keep-fires: CAN_FIRE/WILL_FIRE defs and
+    /// method ports are never demoted to stack locals, so they all get
+    /// VCD variables (SimCOpt shouldMove's cfwfOkToMove/portOkToMove).
+    #[serde(default)]
+    pub keep_fires: bool,
 }
 
 /// One synthesized module (one `.ba` / one `SimPackage`).
@@ -314,6 +319,7 @@ mod tests {
             foreign_funcs: vec![],
             default_clock: None,
             default_reset: None,
+            keep_fires: false,
         }
     }
 

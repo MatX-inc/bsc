@@ -140,15 +140,15 @@ encStr = C.encodeString . T.pack
 -- SimSystem -> BIR
 
 -- | Encode a 'SimSystem' as a BIR design document.
-simSystemToBir :: SimSystem -> L.ByteString
-simSystemToBir ssys = CW.toLazyByteString (encDesign ssys)
+simSystemToBir :: Bool -> SimSystem -> L.ByteString
+simSystemToBir keepF ssys = CW.toLazyByteString (encDesign keepF ssys)
 
 -- | Write the design's .bir file.
-writeBirFile :: FilePath -> SimSystem -> IO ()
-writeBirFile path ssys = L.writeFile path (simSystemToBir ssys)
+writeBirFile :: FilePath -> Bool -> SimSystem -> IO ()
+writeBirFile path keepF ssys = L.writeFile path (simSystemToBir keepF ssys)
 
-encDesign :: SimSystem -> C.Encoding
-encDesign ssys =
+encDesign :: Bool -> SimSystem -> C.Encoding
+encDesign keepF ssys =
     let pkgs = M.elems (ssys_packages ssys)
         pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
         instmap = M.toList (ssys_instmap ssys)
@@ -186,6 +186,7 @@ encDesign ssys =
             , ("foreign_funcs", encList ffEnc)
             , ("default_clock", encMaybe encW32 clkId)
             , ("default_reset", encMaybe encW32 rstId)
+            , ("keep_fires", encBool keepF)
             ]
 
         (fields, finalTbl) = runState action emptyStrTable

@@ -101,6 +101,9 @@ pub struct Interp {
     /// last (edge time, args) of each user-module method call, for the
     /// EN_<m>/<m>_<arg> port values
     vcd_meth_calls: HashMap<(usize, StrId), (u64, Vec<Value>)>,
+    /// last returned value of each user-module value-method call, for
+    /// result-port values (C++ assigns PORT_<m> at call time)
+    vcd_meth_results: HashMap<(usize, StrId), Value>,
     /// per-instance kernel clock index (from the composition that runs it)
     vcd_inst_clock: Vec<usize>,
     /// kernel clock VCD state, in composition clock order
@@ -314,6 +317,7 @@ impl Interp {
             vcd_file_pending: None,
             vcd_def_vals: HashMap::new(),
             vcd_meth_calls: HashMap::new(),
+            vcd_meth_results: HashMap::new(),
             vcd_inst_clock: Vec::new(),
             vcd_clocks: Vec::new(),
             vcd_layouts: HashMap::new(),
@@ -1041,7 +1045,14 @@ impl Interp {
                 let result = self.d.modules[mir].methods[mi].result.clone();
                 let mut ctx = self.method_ctx(module, mi, argv, true);
                 match result {
-                    Some(r) => self.eval(callee, &mut ctx, &r).zext(w),
+                    Some(r) => {
+                        let v = self.eval(callee, &mut ctx, &r).zext(w);
+                        if self.vcd_trace {
+                            self.vcd_meth_results
+                                .insert((callee, method), v.clone());
+                        }
+                        v
+                    }
                     None => panic!("value call to method without result"),
                 }
             }
@@ -1899,7 +1910,11 @@ impl Interp {
             }
             let n_fns = usage.get(&d.name).map(|s| s.len()).unwrap_or(0);
             let is_task = matches!(d.expr, Expr::TaskValue { .. });
-            let keep = n_fns >= 2 || (n_fns >= 1 && (d.width > 64 || is_task));
+            // -keep-fires pins CAN_FIRE/WILL_FIRE defs (cfwfOkToMove)
+            let pinned_fire =
+                self.d.keep_fires && (d.props.can_fire || d.props.will_fire);
+            let keep =
+                n_fns >= 2 || (n_fns >= 1 && (d.width > 64 || is_task || pinned_fire));
             if keep {
                 let dname = self.s(d.name).to_string();
                 // an action method's WILL_FIRE follows the call, like EN
@@ -1928,7 +1943,7 @@ impl Interp {
                 let en = format!("EN_{}", self.s(me.name));
                 if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
                     let n_fns = usage.get(&(en_id as StrId)).map(|s| s.len()).unwrap_or(0);
-                    if n_fns >= 2 {
+                    if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
                             name: en,
                             src: VcdSrc::PortEn(me.name),
@@ -1940,7 +1955,7 @@ impl Interp {
             }
             for (ai, a) in me.args.iter().enumerate() {
                 let n_fns = usage.get(&a.name).map(|s| s.len()).unwrap_or(0);
-                if n_fns >= 2 || a.width > 64 {
+                if n_fns >= 2 || a.width > 64 || (self.d.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(a.name).to_string(),
                         src: VcdSrc::PortArg(me.name, ai),
@@ -1952,7 +1967,7 @@ impl Interp {
             if let Some(res) = &me.result {
                 let n_fns = usage.get(&me.name).map(|s| s.len()).unwrap_or(0);
                 let w = res.width();
-                if n_fns >= 2 || w > 64 {
+                if n_fns >= 2 || w > 64 || (self.d.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(me.name).to_string(),
                         src: VcdSrc::PortRes(me.name),
@@ -2099,6 +2114,9 @@ impl Interp {
                 .map(|x| x.zext(v.width.max(1)))
                 .unwrap_or_else(|| Value::undet(v.width.max(1))),
             VcdSrc::PortRes(mth) => {
+                if let Some(r) = self.vcd_meth_results.get(&(inst, *mth)) {
+                    return r.clone().zext(v.width.max(1));
+                }
                 let module = self.module_of(inst);
                 let mir = self.mods[module].ir;
                 let mi = match self.mods[module].methods.get(mth) {
@@ -2111,8 +2129,14 @@ impl Interp {
                 }
                 match me.result.clone() {
                     Some(r) => {
+                        // dump-time evaluation must not disturb the
+                        // recorded def values (C++ reads the port member)
+                        let saved = self.vcd_trace;
+                        self.vcd_trace = false;
                         let mut ctx = Ctx::default();
-                        self.eval(inst, &mut ctx, &r).zext(v.width.max(1))
+                        let out = self.eval(inst, &mut ctx, &r).zext(v.width.max(1));
+                        self.vcd_trace = saved;
+                        out
                     }
                     None => Value::undet(v.width.max(1)),
                 }

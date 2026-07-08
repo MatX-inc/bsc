@@ -274,8 +274,27 @@ struct Counter {
     a_at: u64,
     b: Value,
     b_at: u64,
+    c: Value,
+    c_at: u64,
+    f: Value,
+    f_at: u64,
     in_reset: bool,
     suppress: bool,
+    vcd_base: u32,
+    vcd_back: Option<CounterVcdBack>,
+}
+
+#[derive(Clone)]
+struct CounterVcdBack {
+    val: Value,
+    adda: bool,
+    a: Value,
+    addb: bool,
+    b: Value,
+    setc: bool,
+    c: Value,
+    setf: bool,
+    f: Value,
 }
 
 impl Counter {
@@ -292,8 +311,14 @@ impl Counter {
             a_at: u64::MAX,
             b: Value::zero(width),
             b_at: u64::MAX,
+            c: Value::zero(width),
+            c_at: u64::MAX,
+            f: Value::zero(width),
+            f_at: u64::MAX,
             in_reset: false,
             suppress: false,
+            vcd_base: 0,
+            vcd_back: None,
         }
     }
     fn save(&mut self, now: u64) {
@@ -305,6 +330,143 @@ impl Counter {
 }
 
 impl Prim for Counter {
+    fn vcd_defs(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        name: &str,
+        clk: usize,
+        _clk_vcd_id: u32,
+    ) {
+        // bs_prim_mod_counter.h:168-193: parent-scope var, then a scope
+        // of clocked port signals; q_state/Q_OUT alias the parent var
+        let n0 = w.reserve_ids(9);
+        self.vcd_base = n0;
+        let bits = self.width;
+        w.write_def(n0, name, bits);
+        w.scope_start(name);
+        let mut n = n0 + 1;
+        for (pname, pw) in [
+            ("ADDA", 1),
+            ("DATA_A", bits),
+            ("ADDB", 1),
+            ("DATA_B", bits),
+            ("SETC", 1),
+            ("DATA_C", bits),
+            ("SETF", 1),
+            ("DATA_F", bits),
+        ] {
+            w.set_clock(n, clk);
+            w.write_def(n, pname, pw);
+            n += 1;
+        }
+        w.write_def(n0, "q_state", bits);
+        w.write_def(n0, "Q_OUT", bits);
+        w.scope_end();
+    }
+    fn vcd_dump(
+        &mut self,
+        w: &mut crate::vcd::Vcd,
+        dt: crate::vcd::DumpType,
+        now: u64,
+        clk_edge_now: bool,
+    ) {
+        use crate::vcd::DumpType as D;
+        let bits = self.width;
+        let bit = |b: bool| Value::from_u64(1, b as u64);
+        let mut num = self.vcd_base;
+        let mut back = self.vcd_back.take().unwrap_or_else(|| CounterVcdBack {
+            val: Value::undet(bits),
+            adda: false,
+            a: Value::zero(bits),
+            addb: false,
+            b: Value::zero(bits),
+            setc: false,
+            c: Value::zero(bits),
+            setf: false,
+            f: Value::zero(bits),
+        });
+        let adda = self.a_at == now;
+        let addb = self.b_at == now;
+        let setc = self.c_at == now;
+        let setf = self.f_at == now;
+        match dt {
+            D::Xs => {
+                for pw in [bits, 1, bits, 1, bits, 1, bits, 1, bits] {
+                    w.write_x(num, pw, now);
+                    num += 1;
+                }
+            }
+            D::Changes => {
+                if back.val != self.val {
+                    w.write_val(num, &self.val, now);
+                }
+                num += 1;
+                if clk_edge_now {
+                    if back.adda != adda {
+                        w.write_val(num, &bit(adda), now);
+                        back.adda = adda;
+                    }
+                    num += 1;
+                    if back.a != self.a {
+                        w.write_val(num, &self.a, now);
+                    }
+                    num += 1;
+                    if back.addb != addb {
+                        w.write_val(num, &bit(addb), now);
+                        back.addb = addb;
+                    }
+                    num += 1;
+                    if back.b != self.b {
+                        w.write_val(num, &self.b, now);
+                    }
+                    num += 1;
+                    if back.setc != setc {
+                        w.write_val(num, &bit(setc), now);
+                        back.setc = setc;
+                    }
+                    num += 1;
+                    if back.c != self.c {
+                        w.write_val(num, &self.c, now);
+                    }
+                    num += 1;
+                    if back.setf != setf {
+                        w.write_val(num, &bit(setf), now);
+                        back.setf = setf;
+                    }
+                    num += 1;
+                    if back.f != self.f {
+                        w.write_val(num, &self.f, now);
+                    }
+                }
+            }
+            _ => {
+                w.write_val(num, &self.val, now);
+                num += 1;
+                for (flag, data) in [
+                    (adda, self.a.clone()),
+                    (addb, self.b.clone()),
+                    (setc, self.c.clone()),
+                    (setf, self.f.clone()),
+                ] {
+                    w.write_val(num, &bit(flag), now);
+                    num += 1;
+                    w.write_val(num, &data, now);
+                    num += 1;
+                }
+                back.adda = adda;
+                back.addb = addb;
+                back.setc = setc;
+                back.setf = setf;
+            }
+        }
+        back.val = self.val.clone();
+        back.a = self.a.clone();
+        back.b = self.b.clone();
+        back.c = self.c.clone();
+        back.f = self.f.clone();
+        self.vcd_back = Some(back);
+    }
+
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "value" | "_read" => {
@@ -337,6 +499,8 @@ impl Prim for Counter {
             }
             "setC" | "update" => {
                 self.save(now);
+                self.c_at = now;
+                self.c = args[0].clone();
                 self.val = args[0].clone();
                 if self.a_at == now {
                     self.val = self.val.add(&self.a.clone(), w);
@@ -347,6 +511,8 @@ impl Prim for Counter {
             }
             "setF" | "_write" => {
                 self.save(now);
+                self.f_at = now;
+                self.f = args[0].clone();
                 self.val = args[0].clone();
             }
             m => panic!("Counter: unknown action method {m:?}"),
@@ -359,6 +525,8 @@ impl Prim for Counter {
             self.saved_at = u64::MAX;
             self.a_at = u64::MAX;
             self.b_at = u64::MAX;
+            self.c_at = u64::MAX;
+            self.f_at = u64::MAX;
             self.suppress = true;
         }
     }
