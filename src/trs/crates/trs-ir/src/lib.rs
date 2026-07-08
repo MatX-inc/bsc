@@ -55,6 +55,10 @@ pub struct Module {
     pub clock_domains: Vec<ClockDomain>,
     pub resets: Vec<Reset>,
     pub inputs: Vec<Port>,
+    /// Interface output clocks: external port name (e.g. CLK_outclk) ->
+    /// the internal osc wire being re-exported (a constant = noClock,
+    /// which never ticks).
+    pub ifc_clocks: Vec<(StrId, Expr)>,
     /// Submodule / primitive instances.
     pub instances: Vec<Instance>,
     /// Combinational defs, including CAN_FIRE_* / WILL_FIRE_*.

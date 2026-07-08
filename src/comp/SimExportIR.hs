@@ -49,7 +49,7 @@ import PPrint (ppReadable)
 import Prim (PrimOp(..))
 import Pragma (RulePragma(..))
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
-import VModInfo (vName, getVNameString)
+import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..))
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
 import ASyntaxUtil (aVars)
 import SimCCBlock (SimCCFnStmt(..))
@@ -605,12 +605,32 @@ encModule pkgNames msi pkg = do
     rulesEnc <- mapM (encRule msi pkg) (sp_rules pkg)
     methodsEnc <- concat <$> mapM (encMethod pkg) (sp_interface pkg)
     schedEnc <- encSchedule msi pkg
+    -- interface output clocks: external port name -> the internal osc
+    -- wire being re-exported (constant = noClock, never ticks)
+    let oclks = output_clocks (wClk (sp_external_wires pkg))
+        oclkPortName n = case lookup n oclks of
+                           Just (Just (vn, _)) -> getVNameString vn
+                           _ -> "CLK_" ++ getIdBaseString n
+        constZero = encVariant "Const" $ encStruct
+                      [ ("width", encW32 1), ("limbs", encList [encW32 0]) ]
+    ifcClksEnc <- sequence
+      [ do pn <- str (oclkPortName (aif_name f))
+           oscEnc <- case aclock_osc (aif_clock f) of
+                       ASPort _ i | not (null (getIdQualString i)) ->
+                           encVariant "Port" <$>
+                             (encW32 <$> str (getIdQualString i ++ "$"
+                                              ++ getIdBaseString i))
+                       p@(ASPort {}) -> encExpr p
+                       _ -> return constZero
+           return (encPair (encW32 pn) oscEnc)
+      | f@(AIClock {}) <- sp_interface pkg ]
     return $ encStruct
       [ ("name", nameId)
       , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
       , ("clock_domains", encList domsEnc)
       , ("resets", encList rstsEnc)
       , ("inputs", encList insEnc)
+      , ("ifc_clocks", encList ifcClksEnc)
       , ("instances", encList instsEnc)
       , ("defs", encList defsEnc)
       , ("rules", encList rulesEnc)

@@ -101,12 +101,15 @@ struct Wave {
     has_init: bool,
 }
 
-/// How a clock's edges are produced: a periodic waveform, or triggered at
-/// runtime by a clock-generating primitive (bk_trigger_clock_edge).
+/// How a clock's edges are produced: a periodic waveform, triggered at
+/// runtime by a clock-generating primitive (bk_trigger_clock_edge), or
+/// never (noClock and top-level input clocks with no waveform — the
+/// kernel defines them with period 0 and they never fire).
 #[derive(Clone, Copy)]
 enum ClockSource {
     Wave(Wave),
     Triggered { init_high: bool, driver: usize },
+    Never,
 }
 
 struct Inst {
@@ -134,6 +137,11 @@ enum InstKind {
         /// expression it was instantiated with, evaluated in the parent
         /// instance (mkGateSubstMap semantics)
         gates: HashMap<StrId, (usize, Expr)>,
+        /// local input clock port name (e.g. CLK_gclk) -> the osc
+        /// expression it was instantiated with, resolved in the parent
+        /// instance (used to chase interface/laundered clocks to their
+        /// driving oscillator)
+        clk_binds: HashMap<StrId, (usize, Expr)>,
     },
     Prim(Box<dyn Prim>),
 }
@@ -226,6 +234,7 @@ impl Interp {
             HashMap::new(),
             top_binds,
             HashMap::new(),
+            HashMap::new(),
         );
         it
     }
@@ -242,6 +251,7 @@ impl Interp {
         str_params: HashMap<StrId, String>,
         reset_binds: HashMap<StrId, usize>,
         gate_binds: HashMap<StrId, (usize, Expr)>,
+        clk_binds: HashMap<StrId, (usize, Expr)>,
     ) -> usize {
         let slot = self.insts.len();
         let mir = self.mods[module].ir;
@@ -272,6 +282,7 @@ impl Interp {
                 str_params,
                 resets,
                 gates: gate_binds,
+                clk_binds,
             },
         });
         self.inst_by_path.insert(path.clone(), slot);
@@ -306,6 +317,7 @@ impl Interp {
                     let mut str_params = HashMap::new();
                     let mut child_binds = HashMap::new();
                     let mut gate_binds = HashMap::new();
+                    let mut clk_binds = HashMap::new();
                     // inputs align positionally with the instantiation
                     // args, except that a gated input clock occupies TWO
                     // input ports (Clock then ClockGate) bound from one
@@ -319,6 +331,12 @@ impl Interp {
                         pi += 1;
                         match kind_ {
                             ir::PortKind::Clock => {
+                                if let Expr::Clock { osc, .. } = arg {
+                                    clk_binds.insert(
+                                        pname_,
+                                        (slot, osc.as_ref().clone()),
+                                    );
+                                }
                                 if pi < inputs.len()
                                     && inputs[pi].1 == ir::PortKind::ClockGate
                                 {
@@ -361,6 +379,7 @@ impl Interp {
                         str_params,
                         child_binds,
                         gate_binds,
+                        clk_binds,
                     )
                 }
                 ir::InstanceKind::Prim(p) => {
@@ -1497,33 +1516,110 @@ impl Interp {
         }
     }
 
+    fn default_wave() -> ClockSource {
+        ClockSource::Wave(Wave { init_high: false, delay: 0, hi: 5, lo: 5, has_init: false })
+    }
+
     /// Resolve a composition clock: the default clock is the fixed 5/5
     /// wave; "<path>$CLK_OUT" names a ClockGen (periodic) or a dynamic
     /// clock prim (MakeClock/ClockDiv/ClockInverter, prim-triggered
-    /// edges).  GatedClock/ClockMux are not modeled yet and fail loudly.
+    /// edges); interface output clocks and input clock ports chase
+    /// through ifc_clocks / instantiation bindings to their oscillator;
+    /// noClock and non-default top input clocks never fire.
     fn resolve_source(&self, clock: StrId) -> ClockSource {
         if Some(clock) == self.d.default_clock {
-            return ClockSource::Wave(Wave {
-                init_high: false,
-                delay: 0,
-                hi: 5,
-                lo: 5,
-                has_init: false,
-            });
+            return Self::default_wave();
         }
-        let name = self.s(clock);
-        if let Some(w) = self.clockgen_waves.get(name) {
+        let name = self.s(clock).to_string();
+        self.resolve_clock_at(0, &name)
+    }
+
+    /// Resolve a clock wire name relative to an instance.
+    fn resolve_clock_at(&self, inst: usize, wire: &str) -> ClockSource {
+        // prim-driven clocks register absolute "<abs.path>$CLK_OUT" keys
+        let abs = {
+            let base = &self.insts[inst].path;
+            if base.is_empty() {
+                wire.to_string()
+            } else {
+                format!("{base}.{wire}")
+            }
+        };
+        if let Some(w) = self.clockgen_waves.get(&abs) {
             return ClockSource::Wave(*w);
         }
-        if let Some(&init_high) = self.dynclk_init.get(name) {
-            let path = name.strip_suffix("$CLK_OUT").unwrap_or(name);
+        if let Some(&init_high) = self.dynclk_init.get(&abs) {
+            let path = abs.strip_suffix("$CLK_OUT").unwrap_or(&abs);
             let driver = *self
                 .inst_by_path
                 .get(path)
                 .unwrap_or_else(|| panic!("unknown clock driver {path:?}"));
             return ClockSource::Triggered { init_high, driver };
         }
-        panic!("trs-interp: unimplemented clock source {name:?} (P1 bring-up)");
+        // child-qualified wire ("i$CLK_outclk", "a.b$CLK_x"): resolve
+        // inside the child instance
+        if let Some(k) = wire.rfind('$') {
+            let (qual, base) = (&wire[..k], &wire[k + 1..]);
+            let cpath = if self.insts[inst].path.is_empty() {
+                qual.to_string()
+            } else {
+                format!("{}.{}", self.insts[inst].path, qual)
+            };
+            if let Some(&ci) = self.inst_by_path.get(&cpath) {
+                return self.resolve_clock_at(ci, base);
+            }
+            panic!("trs-interp: unimplemented clock source {wire:?} (P1 bring-up)");
+        }
+        // top-level wires: the default clock name resolves to the fixed
+        // wave; other top input clocks have no waveform and never fire
+        let module = self.module_of(inst);
+        let mir = self.mods[module].ir;
+        if self.insts[inst].path.is_empty() {
+            if let Some(dc) = self.d.default_clock {
+                if self.s(dc) == wire {
+                    return Self::default_wave();
+                }
+            }
+        }
+        // interface output clock of this module: follow the internal wire
+        if let Some((_, osc)) = self.d.modules[mir]
+            .ifc_clocks
+            .iter()
+            .find(|(n, _)| self.s(*n) == wire)
+        {
+            return match osc {
+                Expr::Port(p) => {
+                    let inner = self.s(*p).to_string();
+                    self.resolve_clock_at(inst, &inner)
+                }
+                _ => ClockSource::Never, // constant = noClock
+            };
+        }
+        // input clock port: chase the parent's instantiation binding
+        if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
+            if let Some((owner, osc)) =
+                clk_binds.iter().find(|(k, _)| self.s(**k) == wire).map(|(_, v)| v)
+            {
+                return match osc {
+                    Expr::Port(p) => {
+                        let inner = self.s(*p).to_string();
+                        self.resolve_clock_at(*owner, &inner)
+                    }
+                    _ => ClockSource::Never,
+                };
+            }
+        }
+        // a top input clock port that is not the default clock: defined
+        // with period 0, never ticks
+        if self.insts[inst].path.is_empty()
+            && self.d.modules[mir]
+                .inputs
+                .iter()
+                .any(|p| p.kind == ir::PortKind::Clock && self.s(p.name) == wire)
+        {
+            return ClockSource::Never;
+        }
+        panic!("trs-interp: unimplemented clock source {wire:?} (P1 bring-up)");
     }
 
     /// Run until $finish or the cycle limit.  Returns the exit code.
@@ -1672,6 +1768,7 @@ impl Interp {
                         heap.push(Reverse((0, 0, ci, dir)));
                     }
                 }
+                ClockSource::Never => {}
             }
         }
 
