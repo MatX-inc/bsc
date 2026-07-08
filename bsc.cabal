@@ -347,6 +347,14 @@ executable bluetcl
   other-modules:
     BlueTcl
 
+executable bo2bloogle
+  import: common_exes
+  build-depends:
+    bytestring ^>=0.11.5.4,
+    mtl        ^>=2.3.1,
+  ghc-options: -main-is Main_bo2bloogle
+  main-is: bo2bloogle.hs
+
 executable bsc2bsv
   import: common_exes
   ghc-options: -main-is Main_bsc2bsv
