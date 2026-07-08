@@ -83,20 +83,39 @@ numbers) alongside this.
   (DejaGnu per-test timeout on a ~30s-solo interpreter run); goes away
   with the JIT.
 
-## Next phase: performance (task #19)
+## Performance (task #19): hybrid JIT v1 LANDED
 
-LLVM toolchain is READY: llvm-18-dev + libzstd-dev + libpolly-18-dev
-installed; `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18 cargo build -p
-trs-codegen --features llvm` builds and its JIT smoke test passes.
-START: LLVM lowering per DESIGN.md behind the `llvm` feature, rule
-bodies and CF/WF cones as native code, prims as calls into trs-rt;
-the interpreter is the differential oracle (sweep + battery as the
-net); the harness = `prime()` / `advance(to_cycle)` / compare /
-continue on both engines.  Note the eager per-entry def lists in
-REntry are exactly the def-statement lists the JIT should compile per
-schedule position.  Baseline (quiet machine): 5M-cycle counter
-reference 0.27s vs interp ~35s post-refactor (~130x); sudoku-class
-cones >1600x — the JIT is the fix.
+The P2 slice is in (2b4d2d1f/f105f91d/b1b26e8d): eligible rules run as
+LLVM-compiled Sched/Exec functions inside the interpreter's event loop
+over a shared u64 arena (plain ≤64-bit sync regs, reset levels, CF/WF,
+eager defs).  $display-family statements call back into the
+interpreter with their condition FORCED TRUE (the compiled branch
+already decided it — re-evaluating after a same-body register store
+skipped $finish; 16 sweep DIFFs taught us that).  v1 is all-or-nothing
+per design; anything ineligible (wide values, non-reg prims, dynamic
+extract, AV, Quot/Rem, async-reset regs, method schedule nodes,
+crossing rules, VCD) falls back to the interpreter.
+
+Build + run: `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18 cargo build
+--release -p trs --features jit`, then `TRS_JIT=1 trs run ...`
+(TRS_JIT_TRACE=1 says on/off and why; TRS_JIT_DUMP=1 prints IR).
+The default build has no LLVM dependency; the installed trs is
+interp-only unless built with the feature.
+
+Verified: diffsweep 556/0 with TRS_JIT=1; battery 9/9 both modes.
+sysLongCnt 5M cycles: 0.60s vs 35.7s interp (~60x), vs 0.27s compiled
+C++ (~2.2x — P2's initial target).  Compile cost ~10ms/small design.
+
+NEXT (in rough order of value):
+- Coverage: FIFO/RegFile/BRAM prim calls as extern "C" into trs-rt
+  (DESIGN.md monomorphized entry points) — unlocks most real designs
+  (sudoku/MPEG4 class).  Per-composition fallback granularity (needs
+  latch bridging for cross-composition inhibitor reads).  Wide values
+  via LLVM iN.  Quot/Rem with a SIGFPE-raising guard.
+- The all-or-nothing check runs per design at prime(): watch startup
+  cost on big designs (trial lowering is cheap but not free).
+- Ship it: enable the jit feature in the Makefile release build once
+  llvm-18-dev is a build prerequisite Ravi accepts.
 
 ## Cardinal rules / gotchas
 
