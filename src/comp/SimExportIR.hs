@@ -726,7 +726,7 @@ encModule pkgNames msi pkg = do
                            Just (Just vn, _) -> getVNameString vn
                            _ -> getIdBaseString n
         rstWireName i = if null (getIdQualString i)
-                        then getIdString i
+                        then getIdBaseString i
                         else getIdQualString i ++ "$" ++ getIdBaseString i
     ifcRstsEnc <- sequence
       [ do pn <- str (orstPortName (aif_name f))
