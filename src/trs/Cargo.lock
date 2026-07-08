@@ -44,6 +44,7 @@ dependencies = [
 name = "trs-interp"
 version = "0.0.1"
 dependencies = [
+ "trs-codegen",
  "trs-ir",
  "libc",
  "libloading",

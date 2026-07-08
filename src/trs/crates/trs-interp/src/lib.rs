@@ -19,10 +19,19 @@ use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
+#[cfg(feature = "jit")]
+mod jit;
 
 use format::Arg;
 use prim::Prim;
 use value::Value;
+
+#[cfg(feature = "jit")]
+use jit::JitPlans;
+/// Placeholder so Stepper's field exists (always None) without the
+/// `jit` feature.
+#[cfg(not(feature = "jit"))]
+type JitPlans = std::convert::Infallible;
 
 /// BDPI imports satisfied by the Bluesim library itself (libbsprim.a's
 /// rand32.cxx), not by user C files.
@@ -131,6 +140,14 @@ pub struct Interp {
     /// resumable event-loop state, built once by prime(); run() =
     /// prime + advance + finish
     stepper: Option<Stepper>,
+    /// JIT foreign-statement tokens: rule ordinal -> (instance, rule
+    /// index, statement paths); resolved by the compiled-code callback
+    jit_tokens: Vec<(usize, usize, Vec<Vec<u32>>)>,
+    /// raw view of the JIT arena for reset mirroring (null = JIT off);
+    /// the owning allocation lives in Stepper::jit
+    jit_arena_ptr: *mut u64,
+    /// reset node -> arena slot holding the port level (1 = deasserted)
+    jit_reset_slots: Vec<u32>,
 }
 
 /// Kernel-side clock state mirrored for VCD (tClockInfo essentials).
@@ -351,6 +368,9 @@ struct Stepper {
     /// the final VCD flush (buffered changes at exactly this time are
     /// dropped, matching vcd_reset at bk_shutdown)
     final_now: u64,
+    /// compiled dispatch state (feature `jit` + TRS_JIT=1); None runs
+    /// the interpreted entries loop
+    jit: Option<JitPlans>,
 }
 
 struct Inst {
@@ -476,6 +496,9 @@ impl Interp {
             vcd_layouts: HashMap::new(),
             vcd_mod_vars: HashMap::new(),
             stepper: None,
+            jit_tokens: Vec::new(),
+            jit_arena_ptr: std::ptr::null_mut(),
+            jit_reset_slots: Vec::new(),
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
@@ -2689,6 +2712,13 @@ impl Interp {
                 continue;
             }
             self.rst_asserted[n] = v;
+            // mirror the port LEVEL into the JIT arena (compiled reset
+            // guards read it there)
+            if !self.jit_arena_ptr.is_null() {
+                unsafe {
+                    *self.jit_arena_ptr.add(self.jit_reset_slots[n] as usize) = (!v) as u64;
+                }
+            }
             if std::env::var_os("TRS_TRACE_CLK").is_some() {
                 eprintln!("[t={}] reset node {n} -> asserted={v}", self.now);
             }
@@ -3265,6 +3295,11 @@ impl Interp {
         }
         self.flush_reset_pending();
 
+        #[cfg(feature = "jit")]
+        let jit = self.jit_plan(&rcomps);
+        #[cfg(not(feature = "jit"))]
+        let jit = None;
+
         self.stepper = Some(Stepper {
             clocks,
             sources,
@@ -3273,6 +3308,7 @@ impl Interp {
             heap,
             fired_this_slice: Vec::new(),
             final_now: 0,
+            jit,
         });
     }
 
@@ -3295,6 +3331,7 @@ impl Interp {
             mut heap,
             mut fired_this_slice,
             mut final_now,
+            jit,
         } = self.stepper.take().unwrap();
 
         while self.finished.is_none() {
@@ -3340,12 +3377,6 @@ impl Interp {
                 .filter(|(_, r)| r.clk == ci && r.posedge == pos)
             {
                 fired_this_slice.push(rci);
-                // fresh latch space for this edge
-                for i in 0..self.insts.len() {
-                    if let InstKind::User { latched, .. } = &mut self.insts[i].kind {
-                        latched.clear();
-                    }
-                }
 
                 // live clock-level updates before rules run (the kernel
                 // flips a clock's value before executing its schedule;
@@ -3359,33 +3390,71 @@ impl Interp {
                     }
                 }
 
-                for en in &rc.entries {
-                    let inst = en.inst;
-                    // this entry's schedule-position cone defs: computed
-                    // eagerly here like the C++ schedule function — side
-                    // effects (hoisted prim value-method calls) included
-                    for &dn in &en.eager {
-                        let mut c = Ctx::default();
-                        let v = self.eval(inst, &mut c, &Expr::Def(dn));
-                        self.set_latched(inst, dn, v);
-                    }
-                    for &node in &en.nodes {
-                        if self.finished.is_some() {
-                            break;
-                        }
-                        // clock-crossing rules run in the after-edge pass
-                        let r0 = match node {
-                            SchedNode::Sched(r) | SchedNode::Exec(r) => r,
-                        };
-                        if rc.early.contains(&(inst, r0)) {
-                            continue;
-                        }
-                        match node {
-                            SchedNode::Sched(r) => {
-                                let ci2 = rc.cross.get(&(inst, r)).cloned().unwrap_or_default();
-                                self.latch_rule(inst, r, &ci2);
+                // compiled dispatch: the whole composition runs as native
+                // Sched/Exec functions over the arena (no latch space —
+                // fire signals and schedule-position defs live in slots)
+                #[cfg(feature = "jit")]
+                let ran_jit = match &jit {
+                    Some(j) => match &j.comp_nodes[rci] {
+                        Some(nodes) => {
+                            let ap = j.arena_ptr();
+                            let envp = self as *mut Interp as *mut core::ffi::c_void;
+                            for n in nodes {
+                                match *n {
+                                    jit::JitNode::Sched(f) => unsafe { f(ap) },
+                                    jit::JitNode::Exec(f) => unsafe {
+                                        f(ap, envp);
+                                    },
+                                }
+                                if self.finished.is_some() {
+                                    break;
+                                }
                             }
-                            SchedNode::Exec(r) => self.exec_rule(inst, r),
+                            true
+                        }
+                        None => false,
+                    },
+                    None => false,
+                };
+                #[cfg(not(feature = "jit"))]
+                let ran_jit = false;
+
+                if !ran_jit {
+                    // fresh latch space for this edge
+                    for i in 0..self.insts.len() {
+                        if let InstKind::User { latched, .. } = &mut self.insts[i].kind {
+                            latched.clear();
+                        }
+                    }
+                    for en in &rc.entries {
+                        let inst = en.inst;
+                        // this entry's schedule-position cone defs: computed
+                        // eagerly here like the C++ schedule function — side
+                        // effects (hoisted prim value-method calls) included
+                        for &dn in &en.eager {
+                            let mut c = Ctx::default();
+                            let v = self.eval(inst, &mut c, &Expr::Def(dn));
+                            self.set_latched(inst, dn, v);
+                        }
+                        for &node in &en.nodes {
+                            if self.finished.is_some() {
+                                break;
+                            }
+                            // clock-crossing rules run in the after-edge pass
+                            let r0 = match node {
+                                SchedNode::Sched(r) | SchedNode::Exec(r) => r,
+                            };
+                            if rc.early.contains(&(inst, r0)) {
+                                continue;
+                            }
+                            match node {
+                                SchedNode::Sched(r) => {
+                                    let ci2 =
+                                        rc.cross.get(&(inst, r)).cloned().unwrap_or_default();
+                                    self.latch_rule(inst, r, &ci2);
+                                }
+                                SchedNode::Exec(r) => self.exec_rule(inst, r),
+                            }
                         }
                     }
                 }
@@ -3500,6 +3569,7 @@ impl Interp {
             heap,
             fired_this_slice,
             final_now,
+            jit,
         });
         if self.fataled { 1 } else { 0 }
     }

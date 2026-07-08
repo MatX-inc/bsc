@@ -8,5 +8,11 @@ repository.workspace = true
 
 [dependencies]
 trs-ir = { path = "../trs-ir" }
+trs-codegen = { path = "../trs-codegen", optional = true }
 libloading = "0.8"
 libc = "0.2"
+
+[features]
+# hybrid JIT: eligible rules run as LLVM-compiled functions inside the
+# interpreter's event loop (TRS_JIT=1 at runtime; needs llvm-18-dev)
+jit = ["dep:trs-codegen", "trs-codegen/llvm"]

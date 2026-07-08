@@ -20,3 +20,5 @@ trs-codegen = { path = "../trs-codegen" }
 
 [features]
 llvm = ["trs-codegen/llvm"]
+# hybrid JIT in the interpreter (TRS_JIT=1 at runtime)
+jit = ["trs-interp/jit"]
