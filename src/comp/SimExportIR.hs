@@ -38,12 +38,12 @@ import Data.Word (Word32)
 import qualified Codec.CBOR.Encoding as C
 import qualified Codec.CBOR.Write as CW
 
-import Data.List (foldl', nub)
-import Data.Maybe (mapMaybe)
+import Data.List (foldl', nub, sortBy)
+import Data.Maybe (mapMaybe, isJust)
 
 import ErrorUtil (internalError)
 import Id (Id, getIdBaseString, getIdQualString, isSignedId,
-           mkIdCanFire, mkIdWillFire)
+           mkIdCanFire, mkIdWillFire, cmpIdByName)
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
@@ -210,6 +210,8 @@ data ModSchedInfo = ModSchedInfo
     , msi_segIdx  :: M.Map String ((Int, Int), Int)
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
     , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
+    , msi_taskRules   :: S.Set String  -- rules with system/foreign tasks
+    , msi_finishRules :: S.Set String  -- rules calling $finish/$fatal/$stop
     }
 
 -- Segment lookup key for a schedule node ("S:rule" / "E:rule"), local
@@ -301,6 +303,25 @@ analyzeModule pkgNames pkg =
 
         doms = nub (M.elems ruleDom)
 
+        -- Rules with observable task effects: a $finish/$fatal in one rule
+        -- makes the relative Exec order with any other task-bearing rule
+        -- observable (bk_finished suppresses later output in the same
+        -- instant), so encComposition pins those orders to bsc's flat
+        -- order; finish rules also get singleton segments below
+        actTaskName (AFCall { afcall_fun = f }) = Just f
+        actTaskName (ATaskAction { ataskact_fun = f }) = Just f
+        actTaskName _ = Nothing
+        taskRules = S.fromList
+            [ getIdBaseString (arule_id r)
+            | r <- sp_rules pkg
+            , any (isJust . actTaskName) (arule_actions r) ]
+        finishRules = S.fromList
+            [ getIdBaseString (arule_id r)
+            | r <- sp_rules pkg
+            , any (\a -> actTaskName a `elem` [Just "$finish", Just "$fatal",
+                                               Just "$stop"])
+                  (arule_actions r) ]
+
         -- Rules in any ME (disjoint) relation also get per-node singleton
         -- segments: bsc's merged graph carries no ordering edge between ME
         -- rules, yet its flat order keeps every Sched ahead of the ME
@@ -309,6 +330,7 @@ analyzeModule pkgNames pkg =
         meRules = S.unions (M.elems disj)
                   `S.union` S.fromList [ r | (r, ds) <- M.toList disj
                                            , not (S.null ds) ]
+                  `S.union` finishRules
 
         -- Split this domain's rule nodes into segments: cut at interface
         -- method positions AND isolate child-calling / ME rules as
@@ -349,7 +371,9 @@ analyzeModule pkgNames pkg =
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
                      , msi_execPos = execPos
-                     , msi_disj = disj }
+                     , msi_disj = disj
+                     , msi_taskRules = taskRules
+                     , msi_finishRules = finishRules }
 
 -- ===============
 -- Compositions
@@ -436,7 +460,35 @@ encComposition instToMod msis topGates ss = do
                       ++ qualPath d)
               else True ]
 
-        unitEdges = graphEdges `S.union` meEdges
+        -- $finish/$fatal end output for the rest of the instant, so the
+        -- Exec order between a finish-calling rule and ANY task-bearing
+        -- rule is observable even with no graph edge; pin those pairs to
+        -- bsc's flat order (finish rules have singleton segments)
+        execUnit = M.fromList [ (qualPath n, u)
+                              | e@(Exec n) <- order
+                              , Just u <- [resolve e] ]
+        instMsi i = M.lookup (M.findWithDefault "" i instToMod) msis
+        qualsOf sel = [ q
+                      | i <- nub [ i' | (i', _) <- units ]
+                      , Just msi <- [instMsi i]
+                      , b <- S.toList (sel msi)
+                      , let q = qp i b
+                      , M.member q execPos ]
+        finishQs = qualsOf msi_finishRules
+        taskQs = qualsOf msi_taskRules
+        finishEdges = S.fromList
+            [ (ue, ul)
+            | f <- finishQs
+            , t <- taskQs
+            , f /= t
+            , let (e_, l_) = if execPos M.! f < execPos M.! t
+                             then (f, t)
+                             else (t, f)
+            , Just ue <- [M.lookup e_ execUnit]
+            , Just ul <- [M.lookup l_ execUnit]
+            , ue /= ul ]
+
+        unitEdges = graphEdges `S.union` meEdges `S.union` finishEdges
 
         -- Kahn's algorithm; ties broken by first appearance in the flat
         -- order so the output tracks bsc's own choice.
@@ -618,8 +670,11 @@ encModule pkgNames msi pkg = do
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
     insEnc <- concat <$> mapM encInput (sp_inputs pkg)
-    instsEnc0 <- mapM (encInstance pkgNames (sp_method_order_map pkg))
+    -- construction order matters for load-time output (RegFileLoad gap
+    -- warnings): match the C++ backend's alphabetization (raw_avis)
+    let avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                       (M.elems (sp_state_instances pkg))
+    instsEnc0 <- mapM (encInstance pkgNames (sp_method_order_map pkg)) avis
     -- noinline functions instantiate as argument-less modules whose one
     -- value method computes the function
     niEnc <- mapM (\(iname, mname) -> do
