@@ -3180,6 +3180,9 @@ pub fn run_file(
     // user BDPI code lives in a companion shared object next to the .bir
     let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
     if std::path::Path::new(&so).exists() {
+        // dlopen treats a bare filename as a library-search-path lookup;
+        // make the sibling path explicit
+        let so = if so.contains('/') { so } else { format!("./{so}") };
         interp.load_bdpi(&so)?;
     }
     Ok(interp.run(max_cycles))

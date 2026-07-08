@@ -1627,7 +1627,12 @@ impl Prim for BypassWire {
     }
     fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
         match method {
-            "wset" | "write" => self.value = args[0].clone(),
+            // zero-width wires (BypassWire0) are set with no argument
+            "wset" | "write" => {
+                if let Some(v) = args.first() {
+                    self.value = v.clone();
+                }
+            }
             m => panic!("BypassWire: unknown action method {m:?}"),
         }
     }

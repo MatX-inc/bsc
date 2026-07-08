@@ -57,6 +57,14 @@ impl Bdpi {
         let sym = *self.syms.get(name).unwrap_or_else(|| {
             panic!("BDPI function {name:?} not loaded");
         });
+        // user C code prints through libc stdio while the interpreter
+        // prints through Rust's buffered stdout — flush ours before the
+        // call and libc's after so interleaving matches the reference
+        // (where everything shares one stdio buffer)
+        {
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
 
         let mut slots: Vec<u64> = Vec::new();
         // keep-alive storage for pointer arguments
@@ -101,6 +109,7 @@ impl Bdpi {
         }
 
         let r = unsafe { call_integer_abi(sym, &slots) };
+        unsafe { libc::fflush(std::ptr::null_mut()) };
 
         match ff.ret {
             ForeignType::Void => Value::zero(1),
