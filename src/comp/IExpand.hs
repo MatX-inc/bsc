@@ -4980,6 +4980,77 @@ doIf f as = internalError("IExpand.doIf : " ++ ppReadable f ++ ppReadable as)
 -- improve the static elaboration of the output of an if
 -- to prevent exponential growth with conditional assignments and updates
 improveIf :: HExpr -> IType -> HExpr -> HExpr -> HExpr -> G (HExpr, Bool)
+-- Merge two held coercions of the same kind at the same type into ONE
+-- held coercion over a merged payload, materializing NEITHER: the
+-- merged node's payload (lzOrig) and applied form (lzApplied) are both
+-- unevaluated ifs over the branches' respective cells, so a
+-- distinct-payload mux (e.g. r2 <= (c ? r1 : r3) at a non-Bit type)
+-- stays cancellable against a later opposite coercion, where the
+-- squeeze clauses below would materialize both instance-method
+-- applications and leave the round trip's residue to ITransform.
+-- Nothing is forced here, and held nodes carry no predicate of their
+-- own (creation deliberately detaches the payload's implicit
+-- conditions; see the PrimPack/PrimUnpack hold arms in conAp'), so no
+-- pa == pTrue guard is needed: the branch cells' conditions surface
+-- later, exactly when (and if) the merged node is forced or cancelled.
+-- Fast path: when both nodes hold the SAME payload cell (two
+-- independently created coercions of one value; cmpC deliberately
+-- ignores lzApplied), the "then" node is returned unchanged, keeping
+-- the shared lzOrig ref.  Mixed kinds or mismatched type arguments
+-- fall through to the squeeze clauses below, so this arm only ever
+-- ADDS cancellations.
+improveIf f t cnd thn@(ICon i1 n1@(ICLazyPack { lzTa = ta1, lzTn = tn1,
+                                                lzOrig = o1, lzApplied = a1 }))
+                  (ICon _ (ICLazyPack { lzTa = ta2, lzTn = tn2,
+                                        lzOrig = o2, lzApplied = a2 }))
+    | ta1 == ta2, tn1 == tn2 =
+    if o1 == o2
+     then return (thn, True)
+     else do
+       when doTraceIf $ traceM("improveIf held pack merge: " ++ ppReadable (ta1, tn1))
+       -- the payload if has the payload type (ta), the applied if the
+       -- packed type (t = Bit tn = iConType of the node)
+       -- lzOrig must reference an evaluated cell (the creation path in
+       -- conAp' builds it with evalUH, and the cancellation path hands
+       -- it to consumers that unheap it), so heap the residual payload
+       -- mux in WHNF state; lzApplied stays unevaluated, as at creation.
+       o' <- toHeapWHNF "improve-if-held" ta1 (P pTrue (IAps f [ta1] [cnd, o1, o2])) Nothing
+       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
+improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
+                                                  lzOrig = o1, lzApplied = a1 }))
+                  (ICon _ (ICLazyUnpack { lzTa = ta2, lzTn = tn2,
+                                          lzOrig = o2, lzApplied = a2 }))
+    | ta1 == ta2, tn1 == tn2 =
+    if o1 == o2
+     then return (thn, True)
+     else do
+       when doTraceIf $ traceM("improveIf held unpack merge: " ++ ppReadable (ta1, tn1))
+       -- the payload if has the packed type (Bit tn), the applied if
+       -- the payload type (t = ta = iConType of the node)
+       -- see the pack arm above: lzOrig must be an evaluated cell
+       o' <- toHeapWHNF "improve-if-held" (aitBit tn1) (P pTrue (IAps f [aitBit tn1] [cnd, o1, o2])) Nothing
+       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
+-- Muxing a held coercion against an undefined value drops the undefined
+-- side and keeps the held node, subject to the same improveIfUndet
+-- policy as the general undefined-dropping clauses at the end of this
+-- function.  These clauses must come BEFORE the squeeze clauses below:
+-- a held node reaching the squeeze would forcibly materialize the
+-- instance method -- destroying the cancellability of exactly the
+-- residue this feature exists to remove -- only to then merge with an
+-- undefined value that the policy says can simply be dropped.  When the
+-- policy refuses the drop (a user-written don't-care, or a Bit-typed
+-- mux, i.e. a held pack), fall through to the squeeze clauses as
+-- before.
+improveIf f t cnd thn els@(ICon _ (ICUndet { iuKind = u }))
+    | isHeldCoercion thn, improveIfUndet u t = do
+  when doTraceIf $ traceM ("improveIf held/Undet (els) triggered " ++ ppReadable (cnd, thn, els))
+  return (thn, True)
+improveIf f t cnd thn@(ICon _ (ICUndet { iuKind = u })) els
+    | isHeldCoercion els, improveIfUndet u t = do
+  when doTraceIf $ traceM ("improveIf held/Undet (thn) triggered " ++ ppReadable (cnd, thn, els))
+  return (els, True)
 -- Squeeze a held pack/unpack coercion in either branch, so that it can
 -- merge with the other branch's structure.  Without this, a conditional
 -- update chain over an unpacked register (v' = if c then upd(v) else v,
@@ -5214,6 +5285,11 @@ improveIfUndet _         t | isSimpleType t = True
 improveIfUndet UDontCare _ = False
 -- Removing undefined bits gets in the way of pack . unpack optimization
 improveIfUndet _         t = not $ isBitType t
+
+isHeldCoercion :: HExpr -> Bool
+isHeldCoercion (ICon _ (ICLazyPack { }))   = True
+isHeldCoercion (ICon _ (ICLazyUnpack { })) = True
+isHeldCoercion _                           = False
 
 -- simplify evaluated dyn-sel expressions, not just to reduce the order of
 -- growth of elaboration, but also to avoid triggering elaboration errors
