@@ -274,7 +274,8 @@ pub(crate) struct JitPlans {
     pub(crate) covered_ticks: Vec<std::collections::HashSet<usize>>,
     /// fused per-composition edge fns (task #17): compiled once all
     /// bodies are warm; 0 = composition not fused (fall back to the
-    /// node walk).  fn(arena, env, now) -> i32 (nonzero = $finish).
+    /// node walk).  fn(arena, env, now) -> i32 (nonzero = abort;
+    /// $finish/$stop complete the edge and return 0).
     pub(crate) fused: std::sync::OnceLock<Vec<usize>>,
 }
 
@@ -350,8 +351,9 @@ impl JitPlans {
 /// The callback compiled code uses for foreign statements: rebuild
 /// the Arg list from the call-site spec (numeric args arrive as word
 /// runs, strings ride the table), dispatch through the interpreter's
-/// foreign machinery, and marshal a task's result back.  Returns
-/// nonzero when $finish was called.
+/// foreign machinery, and marshal a task's result back.  A nonzero
+/// return aborts the compiled edge (stop_bb) — reserved for genuine
+/// aborts, never $finish/$stop.
 pub(crate) unsafe extern "C" fn jit_foreign_cb(
     env: *mut core::ffi::c_void,
     token: u64,
@@ -403,7 +405,13 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         prof::add(&prof::FOREIGN_NS, t0);
         prof::FOREIGN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    interp.finished.is_some() as i32
+    // $finish/$stop do NOT abort compiled code: the reference runs the
+    // in-flight edge (and the finishing rule's remaining statements) TO
+    // COMPLETION — post-finish output is gated inside foreign_action
+    // (dollar_display.cxx family) and the runtime loops stop at the
+    // slice boundary.  The nonzero return -> stop_bb path is reserved
+    // for genuine aborts; nothing requests one today.
+    0
 }
 
 /// Body-splitting cone analysis: child classification for one module

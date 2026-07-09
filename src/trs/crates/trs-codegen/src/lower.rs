@@ -13,8 +13,11 @@
 //!   exec_<label>(arena: *mut u64, env: *mut c_void) -> i32
 //!     — loads WF, executes the body: SSA defs, conditional register
 //!       stores, Cond control flow; $display-family statements call
-//!       back into the interpreter (`ForeignCb`), and a nonzero return
-//!       (=$finish) unwinds immediately.  Returns nonzero iff stopped.
+//!       back into the interpreter (`ForeignCb`).  A nonzero callback
+//!       return unwinds immediately (reserved for genuine aborts —
+//!       NEVER $finish/$stop, which complete the edge; the runtime
+//!       loops stop at the slice boundary).  Returns nonzero iff
+//!       aborted.
 //!
 //! Values are native LLVM iN integers of their exact BSV width — LLVM
 //! legalizes arbitrary widths — so no masking and no 64-bit cap.
@@ -39,7 +42,8 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 /// evaluates the arguments natively at the statement position and
 /// passes their words in `args` (string literals occupy no words —
 /// the call-site table carries them); a task's result words land in
-/// `out`.  Returns nonzero to stop the simulation ($finish).
+/// `out`.  A nonzero return aborts the compiled edge — reserved for
+/// genuine aborts, never $finish/$stop (edge-completion contract).
 pub type ForeignCb = unsafe extern "C" fn(
     env: *mut core::ffi::c_void,
     token: u64,
@@ -1121,9 +1125,9 @@ pub enum FusedNode {
 
 /// A composition's fused edge: EN slots to zero, then the node
 /// sequence as DIRECT calls — replaces the interpreter's per-node
-/// walk (match + atomic cell load + indirect call + finished check,
-/// ~77M visits on sudoku).  Returns nonzero when a body signalled
-/// $finish mid-edge, preserving the walk's early-stop semantics.
+/// walk (match + atomic cell load + indirect call, ~77M visits on
+/// sudoku).  Returns nonzero when a body aborted (reserved path;
+/// $finish/$stop complete the edge and return 0).
 pub struct FusedComp {
     pub en_slots: Vec<u32>,
     pub now_slot: u32,

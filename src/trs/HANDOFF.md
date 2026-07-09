@@ -35,15 +35,25 @@ products, like VCS:
   (N=32: 27.4s vs 150.1s); run ahead except N=32 where the deficit
   is O(instances) STARTUP (type-keyed analysis is the queued fix).
   bsc's own frontend is everyone's wall (511s at N=32).
-- INTERACTIVE: battery 22/22 BYTE-IDENTICAL vs reference Bluesim
+- INTERACTIVE: battery 23/23 BYTE-IDENTICAL vs reference Bluesim
   (tests/interactive/run.sh mirrors testsuite/bsc.bluesim/
-  interactive).  Async runs on the jit engine (capability tiers:
-  peek tests pin engines=interp).  Model .so is 49MB after
-  gc-sections/strip.
-- $FINISH SEMANTICS (interp): completes the in-flight edge schedule
-  (kernel contract), suppresses the whole dollar_display.cxx output
-  family post-finish, and the yield preempts the PG_FINAL after-edge
-  pass.  COMPILED paths still mid-edge-abort — the top queued item.
+  interactive + local FinishPeek witness).  Async runs on the jit
+  engine (capability tiers: peek tests pin engines=interp).  Model
+  .so is 49MB after gc-sections/strip.
+- $FINISH SEMANTICS (all engines): completes the in-flight edge
+  schedule (kernel contract), suppresses the whole dollar_display.cxx
+  output family post-finish, and the yield preempts the PG_FINAL
+  after-edge pass.  COMPILED paths fixed to the same contract: the
+  foreign callback no longer signals stop_bb for $finish/$stop
+  (reserved for genuine aborts), the JIT dispatch walk and central
+  player run the edge to completion, loops stop at the slice
+  boundary.  Witnesses: FinishEdge (regress: suppression; vcd:
+  boundary), FinishPeek (battery, jit engine: post-finish state
+  writes peeked from the arena — discriminated the pre-fix binary,
+  mark=0 vs 1000042).  MEASURED: the reference DROPS the finish
+  instant's buffered VCD changes at shutdown (vcd.cxx flush_changes
+  early-return at t==now), so post-finish writes never appear in any
+  VCD — peeks are the only state witness.
 - ULTRACODE REVIEW (7 finders, 72/72 verdicts upheld): 10 findings
   fixed+sealed (4e5df577), 9 queued below.
 
@@ -63,8 +73,8 @@ products, like VCS:
   Perf fence flags = treat like DIFFs (ratios vs tools/perf-fence.json;
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
-- Local ladders: tests/regress/run.sh (5), tests/vcd/run.sh (9),
-  tests/interactive/run.sh (22; needs TRS_CAPI_LIB=<libtrs_capi.a>),
+- Local ladders: tests/regress/run.sh (6), tests/vcd/run.sh (10),
+  tests/interactive/run.sh (23; needs TRS_CAPI_LIB=<libtrs_capi.a>),
   plus sudoku + sysMips byte-parity from kept .bir (copy designs to a
   STABLE dir — sweeps rm -rf their work dirs).
 - Traps: TRS_JIT env is is_none()-tested — ANY value (even 0)
@@ -76,24 +86,14 @@ products, like VCS:
 
 ## NEXT UP (in order)
 
-1. COMPILED-PATH $FINISH: same contract as the interp fix —
-   task-callback stops signaling abort for $finish/$stop (stop_bb
-   reserved for genuine aborts), fused edge fns + exec bodies run to
-   completion, runtime loops stop at the slice boundary (their
-   while-not-finished checks already exist; also remove the finished
-   breaks in the JIT dispatch walk lib.rs~3893 and central player
-   ~3675).  Output suppression already shared via foreign_action.
-   ADD the regress witness: a state-writing rule scheduled after the
-   $finish rule on the same edge, verified via interactive peeks AND
-   the final VCD cycle.  Gates: battery, VCD, corpus sweep.
-2. Finish task #10 (capi): VCD-under-Tcl (bk_set_VCD_file/enable/
+1. Finish task #10 (capi): VCD-under-Tcl (bk_set_VCD_file/enable/
    disable -> the interp's vcd_file_pending machinery); ORACLE mode
    (secondary-engine quiet flag, lockstep compare at stops, AOT
    engine construction from the artifact pair, trs_* control entry
    points); packaging (install libtrs_capi.a next to the binary;
    add the interactive battery to the standing gates; BDPI companion
    loading for from_bir_bytes).
-3. Review backlog (all confirmed, file:line in the 4e5df577 commit
+2. Review backlog (all confirmed, file:line in the 4e5df577 commit
    message): $stop-vs-$finish resume; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
    const-ready RDY interim; same pattern as the def `sym` flag in
@@ -102,17 +102,17 @@ products, like VCS:
    feature-probe (nm the staticlib for LLVM refs); fence mode-
    awareness; prime()'s detached compile workers vs dlclose; add
    module.verify() in debug codegen builds.
-4. Hygiene: idle-box re-verify fence flags (sysCRCTest1 link,
+3. Hygiene: idle-box re-verify fence flags (sysCRCTest1 link,
    sysTrafficBRAM run — repeat offenders, load-correlated); full
    `make -j128 -C testsuite fullparallel` to re-certify zero-fail
    after the exporter changes (TEST_SYSTEMC_* env per global CLAUDE.md).
-5. Scale arc: loop-rolled spine (planner run-detection over
+4. Scale arc: loop-rolled spine (planner run-detection over
    comp_nodes + affine base/token strides + counted-loop emission
    around the EXISTING outlined-body call ABI; bail unless provably
    affine; exec sites first, sched sections after) -> type-keyed
    analysis (startup) -> pools -> lanes.  Long-run grid measurement
    (1M cycles) still untaken.
-6. PR #1027 rebase (task #7): onto personal/bluesim-fst (superset of
+5. PR #1027 rebase (task #7): onto personal/bluesim-fst (superset of
    -dump-formats).  merge-base 534241d5; conflicts concentrated in 9
    files/18 commits (flag tables, bsc.hs Verilog link path).  Needs
    quiet tree, full bsc rebuild, testsuite, fence re-baseline.

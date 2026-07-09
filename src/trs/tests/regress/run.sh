@@ -37,4 +37,10 @@ check AvMethInline sysAvMethInline
 # COMPILED (a fallback-to-interp regression still passes stdout —
 # the artifact note is the tell, but byte-parity is the contract)
 check BdpiMin sysBdpiMin ops.c
+# $finish edge completion (compiled paths): rules scheduled after
+# the $finish rule still run — state lands, output suppressed.
+# Batch stdout gates the suppression half (count's finish-edge line
+# must vanish); the state half is peeked by the interactive
+# FinishPeek witness (same shape, jit engine)
+check FinishEdge sysFinishEdge
 exit $fail

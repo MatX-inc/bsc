@@ -50,4 +50,8 @@ check SyncB sysSyncB -m 20
 check SyncHR sysSyncHR -m 22
 check BramVcd sysBramVcd -m 25
 check CDiv sysCDiv -m 25
+# $finish edge boundary: the reference DROPS the finish instant's
+# buffered changes at shutdown (vcd.cxx flush_changes early-return
+# at t==now) — the post-finish state writes must NOT appear
+check FinishEdge sysFinishEdge -m 20
 exit $fail

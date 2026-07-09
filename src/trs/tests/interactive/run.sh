@@ -7,7 +7,8 @@
 # even where the checked-in .expected files drift.
 #
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
-# interactive.exp — keep in sync (22 sim_output assertions).
+# interactive.exp — keep in sync (22 sim_output assertions), plus
+# local witnesses at the end (FinishPeek: 23 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -28,6 +29,9 @@ cd "$WK" || exit 2
 # engine's speed and touches no symbols — set per test below
 export TRS_CAPI_ENGINES=interp
 cp "$TSRC"/*.bsv "$TSRC"/*.bs "$TSRC"/*.cmd . 2>/dev/null
+# local witnesses (not in the reference testsuite) live beside this
+# script
+cp "$SRC"/*.bsv "$SRC"/*.cmd . 2>/dev/null
 
 fail=0
 build() { # src top extra-link-flags...
@@ -98,5 +102,15 @@ fi
 if build TimescaleTest.bs mkTimescaleTest; then
     check mkTimescaleTest timescale.cmd
     check mkTimescaleTest timescale2.cmd
+fi
+# $finish edge-completion witness (local): rules scheduled after the
+# $finish rule on the finish edge still write state — peeked on the
+# JIT engine (register peeks are arena-resident on that tier, so
+# this witnesses the COMPILED path's post-finish writes; a mid-edge
+# abort answers mark=0)
+if build FinishPeek.bsv sysFinishPeek; then
+    export TRS_CAPI_ENGINES=jit
+    check sysFinishPeek finishpeek.cmd
+    export TRS_CAPI_ENGINES=interp
 fi
 exit $fail

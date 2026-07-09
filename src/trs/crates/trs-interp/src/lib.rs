@@ -3713,9 +3713,10 @@ impl Interp {
                         u64,
                     ) -> i32 = unsafe { std::mem::transmute(fused[rci]) };
                     unsafe { f(ap, envp, tp) };
-                    if self.finished.is_some() {
-                        break;
-                    }
+                    // NO finished break: $finish completes the
+                    // instant's edge schedules; the while condition
+                    // stops at the slice boundary (exit bookkeeping
+                    // identical to the pre-fix path)
                 }
                 if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
                     break;
@@ -3931,9 +3932,9 @@ impl Interp {
                                         }
                                     }
                                 }
-                                if self.finished.is_some() {
-                                    break;
-                                }
+                                // NO finished break: $finish completes
+                                // the in-flight edge schedule (see
+                                // exec_stmt) — the walk runs every node
                             }
                             if let Some(t0) = _dt0 {
                                 jit::prof::add(&jit::prof::DISPATCH_NS, t0);
