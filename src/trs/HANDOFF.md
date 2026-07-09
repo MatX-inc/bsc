@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`524a3564` — ALWAYS `git push personal`, never bare `git push origin`:
+`07c13ed2` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -203,7 +203,29 @@ at load (goal <0.1s startup); artifacts bake host CPU features (like
 -march=native) — a generic-arch knob if artifacts should move
 between machines.
 
+PRIM FAST PATHS TIER 1 (07c13ed2): TRS_PROF=1 profiling
+(dispatch/ticks/trampoline split + per-method histogram) showed 67%
+of sudoku's 3.97M trampoline calls were ConfigReg reads.  ConfigReg
+reads and FIFO value methods (notFull/notEmpty/first/i_notFull/
+i_notEmpty) now compile inline over mirrored arena state; a global
+now-slot (stamped per edge) reproduces the interpreter's
+begin-of-instant rules exactly (written_at/saved_elems selection —
+do NOT commit on tick: same-instant cross-clock reads would see the
+new value).  Actions (write/enq/deq/clear) stay on the trampoline
+and mirror.  AOT_LAYOUT_REV=2.  Sudoku artifact 1.93s -> 1.46s;
+trampoline 0.59s -> 0.08s.  Remaining gap to reference (0.36s) is
+-O0 jitted code: dispatch 0.89s, startup (trial-lower) 0.32s.
+Measured on the IR dump: exec_i69_155 == exec_i92_208 byte-identical
+after constant normalization (module-type dedup = exact 2x), sibling
+tactics 155 vs 156 overlap 96% (stable-def sharing needs the
+intervening-write analysis — the sched cone-sharing corruption is
+the cautionary tale).  Tier B2 (inline enq/deq/write fast paths with
+trampoline warning slow-path) parked as cold-path polish.
+
 NEXT (in rough order of value):
+- Per-MODULE-TYPE code dedup (offset tables instead of baked slot
+  constants) — proven exact on sudoku; halves body compile and
+  shrinks icache.
 - Cone/body splitting into helper fns — two sudoku rule bodies carry
   ~130k-insn cones and set the body-compile floor (~3.5s wall in the
   background); splitting also unlocks raising TRS_JIT_OPT.  With
