@@ -3426,6 +3426,95 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.position_at_end(sk_bb);
                     return Ok(());
                 }
+                if let Some(&(base, rw, lo, hi)) = ie.regfile_slot.get(instance) {
+                    if mname.as_str() != "upd" || args.len() != 2 {
+                        return nope("non-upd RegFile action");
+                    }
+                    let Some(&child) = ie.children.get(instance) else {
+                        return nope("call on unknown child");
+                    };
+                    // taken-path inline (ConfigReg rule); out-of-range
+                    // bounces to the boxed prim (warning + drop), which
+                    // is arena-authoritative already
+                    let i64t = self.ctx.i64_type();
+                    let words = rw.max(1).div_ceil(64);
+                    let aw = self.expr_width(f, &args[0])?;
+                    let a0 = self.expr(f, &args[0])?;
+                    let a = self.to_w(a0, aw, 64, false);
+                    let wv = self.expr_width(f, &args[1])?;
+                    let v0 = self.expr(f, &args[1])?;
+                    let vv = self.to_w(v0, wv, rw, false);
+                    let wr_bb = self.ctx.append_basic_block(func, "rfw");
+                    let fast_bb = self.ctx.append_basic_block(func, "rfwf");
+                    let slow_bb = self.ctx.append_basic_block(func, "rfws");
+                    let done_bb = self.ctx.append_basic_block(func, "rfwd");
+                    self.builder.build_conditional_branch(cz, wr_bb, done_bb).unwrap();
+
+                    self.builder.position_at_end(wr_bb);
+                    let inlo = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::UGE,
+                            a,
+                            i64t.const_int(lo, false),
+                            "rfwlo",
+                        )
+                        .unwrap();
+                    let inhi = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::ULE,
+                            a,
+                            i64t.const_int(hi, false),
+                            "rfwhi",
+                        )
+                        .unwrap();
+                    let inb = self.builder.build_and(inlo, inhi, "rfwin").unwrap();
+                    self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+
+                    self.builder.position_at_end(fast_bb);
+                    // one-deep bypass bookkeeping, branchless within the
+                    // taken path: snapshot prev on the instant's first
+                    // upd (or on an address change); the header stores
+                    // are idempotent when not-first
+                    let upd_at = self.load_word(f, base);
+                    let upd_addr = self.load_word(f, base + 1);
+                    let now = self.load_word(f, self.env.now_slot);
+                    let at_now = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, upd_at, now, "rfwan")
+                        .unwrap();
+                    let same_a = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, upd_addr, a, "rfwsa")
+                        .unwrap();
+                    let not_first = self.builder.build_and(at_now, same_a, "rfwnf").unwrap();
+                    let idx = self
+                        .builder
+                        .build_int_sub(a, i64t.const_int(lo, false), "rfwi")
+                        .unwrap();
+                    let dcur = self.load_val_dyn(f, base + 2 + words, idx, rw);
+                    let oldprev = self.load_val(f, base + 2, rw);
+                    let newprev = self
+                        .builder
+                        .build_select(not_first, oldprev, dcur, "rfwp")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base + 2, rw, newprev);
+                    self.store_word(f, base, now);
+                    self.store_word(f, base + 1, a);
+                    self.store_val_dyn(f, base + 2 + words, idx, rw, vv);
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(slow_bb);
+                    let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                    self.emit_prim_call(f, child, *method, args, 0, true)?;
+                    f.ssa = saved;
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
                 if let Some(&(base, fw, size, guarded)) =
                     ie.fifo_slot.get(instance).copied().as_ref()
                 {

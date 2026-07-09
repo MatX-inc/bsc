@@ -122,16 +122,24 @@ fn main() -> ExitCode {
                 format!(" --split {split}")
             };
             // honor $TRS like bsc's interp wrapper (the testsuite
-            // points it at a specific build)
+            // points it at a specific build); the DEFAULT is the
+            // absolute path of the binary that linked the artifact —
+            // a bare `trs` PATH lookup silently picked up stale
+            // installs (caught by the perf fence: every artifact ran
+            // interpreted under an old inst/bin binary)
+            let self_exe = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.to_str().map(String::from))
+                .unwrap_or_else(|| "trs".into());
             let script = if compiled {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec \"${{TRS:-trs}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} ${{1+\"$@\"}}\n"
                 )
             } else {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec \"${{TRS:-trs}}\" run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
                 )
             };
             if let Err(e) = std::fs::write(&base, script) {
