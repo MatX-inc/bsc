@@ -324,6 +324,175 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
     interp.finished.is_some() as i32
 }
 
+/// Body-splitting cone analysis: child classification for one module
+/// type (uniform across its instances).
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ChildClass {
+    Reg,
+    CfgReg,
+    Wire,
+    Fifo,
+    Other,
+}
+
+/// Per-def piece statistics: bottom-up selection marks a def OUTLINED
+/// when the DAG size of its piece (own nodes + each transitive
+/// non-outlined def counted ONCE — matching the SSA-memoized lowering
+/// cost) crosses the threshold.  Outlined children become unit-cost
+/// calls, cutting monster cones into balanced pieces.
+#[derive(Clone)]
+pub(crate) struct PieceInfo {
+    /// DAG node count of the piece rooted here
+    pub eff: u32,
+    /// piece is inline-lowerable and callback-free
+    pub outlinable: bool,
+    /// selected for outlining
+    pub outlined: bool,
+}
+
+/// Analyze one module type and select the outlined def set.
+pub(crate) fn select_outlined(
+    d: &Design,
+    mir: usize,
+    child_kind: &dyn Fn(StrId) -> ChildClass,
+    thresh: u32,
+) -> HashMap<StrId, PieceInfo> {
+    use trs_ir::Expr;
+    let m = &d.modules[mir];
+    let n = m.defs.len();
+    let by_name: HashMap<StrId, usize> =
+        m.defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect();
+    let words = n.div_ceil(64).max(1);
+
+    // own expression stats per def: node count (Def refs cost 1),
+    // direct def refs, leaf-driven outlinability
+    struct Own {
+        nodes: u32,
+        refs: Vec<usize>,
+        outl: bool,
+    }
+    fn scan(
+        e: &Expr,
+        d: &Design,
+        by_name: &HashMap<StrId, usize>,
+        child_kind: &dyn Fn(StrId) -> ChildClass,
+        o: &mut Own,
+    ) {
+        use trs_ir::Expr as E;
+        o.nodes = o.nodes.saturating_add(1);
+        match e {
+            E::Const { .. } | E::Str(_) | E::Real(_) => {}
+            E::Def(dn) => match by_name.get(dn) {
+                Some(&i) => o.refs.push(i),
+                None => o.outl = false,
+            },
+            E::MethCall { instance, method, args, .. } => {
+                for a in args {
+                    scan(a, d, by_name, child_kind, o);
+                }
+                let mname = &d.strings[*method as usize];
+                let ok = match child_kind(*instance) {
+                    ChildClass::Reg | ChildClass::CfgReg => {
+                        matches!(mname.as_str(), "read" | "get" | "_read")
+                    }
+                    ChildClass::Wire => matches!(mname.as_str(), "whas" | "wget"),
+                    ChildClass::Fifo => matches!(
+                        mname.as_str(),
+                        "i_notFull" | "i_notEmpty" | "first" | "notFull" | "notEmpty"
+                    ),
+                    ChildClass::Other => false,
+                };
+                o.outl &= ok;
+            }
+            E::Prim { args, .. } => {
+                for a in args {
+                    scan(a, d, by_name, child_kind, o);
+                }
+            }
+            E::If { cond, then_, else_, .. } => {
+                scan(cond, d, by_name, child_kind, o);
+                scan(then_, d, by_name, child_kind, o);
+                scan(else_, d, by_name, child_kind, o);
+            }
+            E::Case { scrutinee, arms, default, .. } => {
+                scan(scrutinee, d, by_name, child_kind, o);
+                for (_, a) in arms {
+                    scan(a, d, by_name, child_kind, o);
+                }
+                scan(default, d, by_name, child_kind, o);
+            }
+            _ => o.outl = false,
+        }
+    }
+    let owns: Vec<Own> = m
+        .defs
+        .iter()
+        .map(|dd| {
+            let mut o = Own { nodes: 0, refs: Vec::new(), outl: true };
+            scan(&dd.expr, d, &by_name, child_kind, &mut o);
+            o
+        })
+        .collect();
+
+    // bottom-up over the DAG (iterative post-order): reach bitset of
+    // non-outlined transitive defs; outlined refs stop propagation
+    let mut reach: Vec<Option<Vec<u64>>> = (0..n).map(|_| None).collect();
+    let mut info: Vec<Option<PieceInfo>> = (0..n).map(|_| None).collect();
+    for root in 0..n {
+        if info[root].is_some() {
+            continue;
+        }
+        let mut stack: Vec<(usize, bool)> = vec![(root, false)];
+        while let Some((i, ready)) = stack.pop() {
+            if info[i].is_some() {
+                continue;
+            }
+            if !ready {
+                stack.push((i, true));
+                for &r in &owns[i].refs {
+                    if info[r].is_none() {
+                        stack.push((r, false));
+                    }
+                }
+                continue;
+            }
+            let mut bs = vec![0u64; words];
+            let mut outl = owns[i].outl;
+            for &r in &owns[i].refs {
+                let ri = info[r].as_ref().expect("post-order");
+                outl &= ri.outlinable;
+                if !ri.outlined {
+                    bs[r / 64] |= 1 << (r % 64);
+                    if let Some(rb) = &reach[r] {
+                        for (a, b) in bs.iter_mut().zip(rb) {
+                            *a |= b;
+                        }
+                    }
+                }
+            }
+            let mut eff = owns[i].nodes;
+            for (w, &bw) in bs.iter().enumerate() {
+                let mut bits = bw;
+                while bits != 0 {
+                    let j = w * 64 + bits.trailing_zeros() as usize;
+                    eff = eff.saturating_add(owns[j].nodes);
+                    bits &= bits - 1;
+                }
+            }
+            let outlined = outl && eff >= thresh;
+            if !outlined {
+                reach[i] = Some(bs);
+            }
+            info[i] = Some(PieceInfo { eff, outlinable: outl, outlined });
+        }
+    }
+    m.defs
+        .iter()
+        .enumerate()
+        .map(|(i, dd)| (dd.name, info[i].clone().expect("all visited")))
+        .collect()
+}
+
 /// Eager parallel sched compile (in-process JIT path).
 fn aot_or_jit_scheds(
     interp: &Interp,
@@ -692,7 +861,7 @@ impl Interp {
                         wire_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
-                    Some(ArenaKind::CReg { width }) => {
+                    Some(ArenaKind::ConfigReg { width }) => {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 2 * words + 1);
                         creg_slot.insert(name, (base, width));
@@ -948,6 +1117,46 @@ impl Interp {
                 }
             }
         };
+
+        // body-splitting reconnaissance (TRS_JIT_SPLIT_STATS=1):
+        // per module type, how much cone mass is outlinable/memoizable
+        if std::env::var_os("TRS_JIT_SPLIT_STATS").is_some() {
+            let mut seen_mir: HashMap<usize, usize> = HashMap::new();
+            for (&i, e) in &inst_envs {
+                seen_mir.entry(e.mir).or_insert(i);
+            }
+            let mut mirs: Vec<_> = seen_mir.iter().collect();
+            mirs.sort_unstable();
+            for (&mir, &ex) in mirs {
+                let ie = &inst_envs[&ex];
+                let ck = |name: StrId| -> ChildClass {
+                    match ie.children.get(&name).map(|&c| &self.insts[c].kind) {
+                        Some(InstKind::Prim(p)) => match p.arena_kind() {
+                            Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
+                            Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
+                            Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
+                            Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
+                            None => ChildClass::Other,
+                        },
+                        _ => ChildClass::Other,
+                    }
+                };
+                let thresh = std::env::var("TRS_JIT_SPLIT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1000);
+                let stats = select_outlined(&self.d, mir, &ck, thresh);
+                let ndefs = stats.len();
+                let outlined: Vec<_> =
+                    stats.iter().filter(|(_, st)| st.outlined).collect();
+                let mass: u64 = outlined.iter().map(|(_, st)| st.eff as u64).sum();
+                let maxeff = stats.values().map(|st| st.eff).max().unwrap_or(0);
+                eprintln!(
+                    "trs split: mir={mir} defs={ndefs} outlined={} piece-mass={mass} max-piece={maxeff}",
+                    outlined.len()
+                );
+            }
+        }
 
         // ---- exec dedup classes: one compiled body per class ----
         let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();

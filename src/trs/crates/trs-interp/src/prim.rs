@@ -125,7 +125,7 @@ pub enum ArenaKind {
     /// value (w words), written_at instant (1 word).  Compiled reads
     /// select old/current by comparing written_at against the global
     /// now slot; writes stay on the trampoline and mirror all three.
-    CReg { width: u32 },
+    ConfigReg { width: u32 },
     /// Simple guarded FIFO (FIFO1/FIFO2/SizedFIFO): value methods
     /// compile inline over the mirrored header + data; enq/deq/clear
     /// stay on the trampoline (guard warnings, saved_elems rules) and
@@ -1759,7 +1759,7 @@ impl Prim for ConfigReg {
         // async-reset ConfigRegs suppress writes while in reset, which
         // the trampoline write honors — but the reset re-mirror happens
         // out of tick order; keep them fully boxed like async Regs
-        (!self.async_rst).then_some(ArenaKind::CReg { width: self.value.width })
+        (!self.async_rst).then_some(ArenaKind::ConfigReg { width: self.value.width })
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         self.slot = Some(slot);
