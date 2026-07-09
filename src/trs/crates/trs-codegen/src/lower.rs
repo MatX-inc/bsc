@@ -414,6 +414,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         lc.lower_sched()?;
         let sched_foreign = std::mem::take(&mut lc.foreign_stmts);
@@ -585,6 +586,7 @@ pub fn compile_scheds(
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         lc.lower_sched()?;
         protos.push((lc.foreign_stmts, lc.prim_calls));
@@ -632,6 +634,7 @@ pub fn compile_execs(
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         lc.lower_exec()?;
         protos.push((lc.foreign_stmts, lc.prim_calls));
@@ -737,6 +740,7 @@ pub fn compile_object_chunk(
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         if do_sched {
             lc.lower_sched()?;
@@ -858,6 +862,7 @@ fn lower_helpers<'ctx>(
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         lc.lower_helper(hs).map_err(|e| {
             Ineligible(format!("{} (def {}): {e}", hs.sym, hs.def))
@@ -886,6 +891,7 @@ pub fn compile_design_object(
     helper_specs: &[HelperSpec],
     refs: &HelperMap,
     fused: &[FusedComp],
+    edge_plan: Option<&EdgeSsaPlan>,
 ) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
@@ -907,6 +913,7 @@ pub fn compile_design_object(
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         lc.lower_sched()?;
     }
@@ -925,10 +932,18 @@ pub fn compile_design_object(
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
+            edge: None,
         };
         lc.lower_exec()?;
     }
-    let _ = lower_fused(&ctx, &module, fused);
+    match edge_plan {
+        Some(p) => {
+            lower_edge_ssa(env, &ctx, &module, cbs, specs, refs_opt, p, fused)?
+        }
+        None => {
+            let _ = lower_fused(&ctx, &module, fused);
+        }
+    }
     run_ir_passes(&module)?;
     let tm = aot_target_machine()?;
     let buf = tm
@@ -980,6 +995,27 @@ pub fn compile_helpers_object(
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
         .map_err(|e| Ineligible(format!("helper object emit: {e}")))?;
     Ok(buf.as_slice().to_vec())
+}
+
+/// Edge-SSA emission plan (task #24 M2): everything the whole-edge
+/// inlining emitter needs beyond the FusedComp symbol lists.
+/// `nodes` mirrors the per-comp FusedComp node order but carries SPEC
+/// ORDINALS so sections lower inline; the read/write tables drive the
+/// online eviction that enforces the sharing doctrine.
+pub struct EdgeSsaPlan {
+    /// per composition: (is_exec, spec ordinal) in schedule order
+    pub nodes: Vec<Vec<(bool, usize)>>,
+    /// per spec ordinal: prim instances its exec body writes
+    pub exec_writes: Vec<Vec<usize>>,
+    /// per (instance, def): prim instances its cone reads with NO
+    /// stability contract; defs ABSENT from this table must never be
+    /// cached across sections (conservative)
+    pub def_reads: HashMap<(usize, StrId), Vec<usize>>,
+    /// per composition, per section index: shared PURE defs to hoist
+    /// (computed unconditionally before the section — first-consumer
+    /// position; pure = no warning-emitting or callback reads, so the
+    /// unconditional evaluation is output-invisible)
+    pub hoists: Vec<Vec<Vec<(usize, StrId)>>>,
 }
 
 /// One node of a fused per-composition edge function.
@@ -1117,6 +1153,128 @@ fn lower_fused<'ctx>(
     syms
 }
 
+/// Whole-edge SSA emission (task #24 M2): one edge_c<k> per
+/// composition with every sched/exec section lowered INLINE, sharing
+/// an EdgeCtx value cache across sections — latched CF/WF/eager values
+/// replace slot loads, and hoisted pure shared defs replace cross-rule
+/// cone recomputation (evicted on intervening writes).  Same symbols
+/// and signature as lower_fused, so the loader and runtime are
+/// untouched.  Every existing slot STORE is preserved (interp/debug
+/// contract).
+#[allow(clippy::too_many_arguments)]
+fn lower_edge_ssa<'ctx>(
+    env: &PlanEnv,
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    cbs: Callbacks<'ctx>,
+    specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
+    plan: &EdgeSsaPlan,
+    fused: &[FusedComp],
+) -> Result<(), Ineligible> {
+    let i64t = ctx.i64_type();
+    let i32t = ctx.i32_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let writes: Vec<std::collections::HashSet<usize>> = plan
+        .exec_writes
+        .iter()
+        .map(|v| v.iter().copied().collect())
+        .collect();
+    for (k, comp) in fused.iter().enumerate() {
+        let sym = format!("edge_c{k}");
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+        let func = module.add_function(&sym, fnty, None);
+        let entry = ctx.append_basic_block(func, "entry");
+        let stop_bb = ctx.append_basic_block(func, "stop");
+        let b = ctx.create_builder();
+        b.position_at_end(entry);
+        let arena = func.get_nth_param(0).unwrap().into_pointer_value();
+        let envp = func.get_nth_param(1).unwrap().into_pointer_value();
+        let now = func.get_nth_param(2).unwrap().into_int_value();
+        let gep = |slot: u32| unsafe {
+            b.build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "s")
+                .unwrap()
+        };
+        b.build_store(gep(comp.now_slot), now).unwrap();
+        for &en in &comp.en_slots {
+            b.build_store(gep(en), i64t.const_zero()).unwrap();
+        }
+
+        let mut edge_ctx = EdgeCtx::default();
+        let mut cur = entry;
+        for (s, &(is_exec, o)) in plan.nodes[k].iter().enumerate() {
+            let spec = &specs[o];
+            let mut lc = Lower {
+                env,
+                ctx,
+                module,
+                builder: ctx.create_builder(),
+                cbs,
+                spec,
+                token_kind: if is_exec { TOKEN_KIND_EXEC } else { 0 },
+                outlined,
+                helper_self: None,
+                dedup: None,
+                foreign_stmts: Vec::new(),
+                prim_calls: Vec::new(),
+                edge: Some(std::mem::take(&mut edge_ctx)),
+            };
+            lc.builder.position_at_end(cur);
+            // hoist prelude: shared pure defs whose first consumer is
+            // this section, computed unconditionally on the spine (so
+            // the values dominate every later section)
+            for &(hi, hd) in &plan.hoists[k][s] {
+                let mut hf = Frame {
+                    arena,
+                    envp: Some(envp),
+                    inst: hi,
+                    method_idx: None,
+                    args: HashMap::new(),
+                    ssa: HashMap::new(),
+                    expanding: Vec::new(),
+                    tasks: HashMap::new(),
+                    is_exec: true,
+                    depth: 0,
+                };
+                let v = lc.def(&mut hf, hd)?;
+                lc.edge.as_mut().unwrap().shared.insert((hi, hd), v);
+            }
+            let mut f = Frame {
+                arena,
+                envp: Some(envp),
+                inst: spec.inst,
+                method_idx: None,
+                args: HashMap::new(),
+                ssa: HashMap::new(),
+                expanding: Vec::new(),
+                tasks: HashMap::new(),
+                is_exec,
+                depth: 0,
+            };
+            if is_exec {
+                lc.exec_section(&mut f, func, stop_bb)?;
+                // evict shares whose cone the body may have invalidated
+                let ws = &writes[o];
+                lc.edge.as_mut().unwrap().shared.retain(|key, _| {
+                    plan.def_reads
+                        .get(key)
+                        .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
+                });
+            } else {
+                lc.sched_section(&mut f)?;
+            }
+            cur = lc.builder.get_insert_block().unwrap();
+            edge_ctx = lc.edge.take().unwrap();
+        }
+        let bend = ctx.create_builder();
+        bend.position_at_end(cur);
+        bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
+        bend.position_at_end(stop_bb);
+        bend.build_return(Some(&i32t.const_int(1, false))).unwrap();
+    }
+    Ok(())
+}
+
 /// JIT: compile fused edge functions (baked callee addresses) into
 /// one engine; returns per-comp fn addresses.
 pub fn compile_fused(
@@ -1155,6 +1313,23 @@ pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> 
     Ok(buf.as_slice().to_vec())
 }
 
+/// Cross-section value cache for whole-edge SSA emission (task #24).
+/// Lives for one composition's edge function; sections hand it forward.
+/// Insertions happen ONLY at points that dominate every later section
+/// (section top level / the driver's hoist prelude) — never from
+/// inside def() recursion, so arm-local values can never leak.
+#[derive(Default)]
+struct EdgeCtx<'ctx> {
+    /// position-latched values: CF/WF and eager defs at their compute
+    /// position — what the arena slots hold.  NEVER evicted (eviction
+    /// would change latched semantics, not just performance).
+    latched: HashMap<(usize, StrId), IntValue<'ctx>>,
+    /// speculative cross-rule shares (unslotted body defs, hoisted by
+    /// the driver); the driver evicts after any exec section whose
+    /// write-set intersects the def's unstable-read set.
+    shared: HashMap<(usize, StrId), IntValue<'ctx>>,
+}
+
 struct Lower<'a, 'ctx> {
     env: &'a PlanEnv<'a>,
     ctx: &'ctx Context,
@@ -1162,6 +1337,9 @@ struct Lower<'a, 'ctx> {
     builder: Builder<'ctx>,
     cbs: Callbacks<'ctx>,
     spec: &'a RuleSpec,
+    /// whole-edge SSA cache; None outside edge-function emission.
+    /// Owned by the section's Lower and handed back to the driver.
+    edge: Option<EdgeCtx<'ctx>>,
     /// OR'd into callback tokens (TOKEN_KIND_EXEC for body passes)
     token_kind: u64,
     /// outlined def pieces callable from this lowering (None while the
@@ -2013,6 +2191,24 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         if let Some(v) = f.ssa.get(&n) {
             return Ok(*v);
         }
+        // whole-edge SSA cache: a value latched (CF/WF/eager at its
+        // schedule position) or legally shared by an earlier section of
+        // this edge function replaces the slot load / cone re-expansion.
+        // Frames with bound method args are excluded: their defs may be
+        // call-site-specific.
+        if f.args.is_empty() {
+            if let Some(e) = &self.edge {
+                if let Some(v) = e
+                    .latched
+                    .get(&(f.inst, n))
+                    .or_else(|| e.shared.get(&(f.inst, n)))
+                {
+                    let v = *v;
+                    f.ssa.insert(n, v);
+                    return Ok(v);
+                }
+            }
+        }
         let ie = self.ie(f.inst)?;
         // other rules' fire signals read their (already computed) slots;
         // this rule's own CF/WF must expand its cone instead — the sched
@@ -2400,7 +2596,6 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
     /// sched_<label>(arena): cone eval, inhibitors, CF/WF + eager stores.
     fn lower_sched(&mut self) -> Result<(), Ineligible> {
-        let r = self.rule().clone();
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let fnty = self.ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
         let func = self.module.add_function(&format!("sched_{}", self.spec.label), fnty, None);
@@ -2418,37 +2613,61 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             is_exec: false,
             depth: 0,
         };
+        self.sched_section(&mut f)?;
+        self.builder.build_return(None).unwrap();
+        Ok(())
+    }
 
-        let mut cf = self.def(&mut f, r.can_fire)?; // i1
+    /// The sched body at the builder's current position: cone eval,
+    /// inhibitors, CF/WF + eager stores.  Reused by the whole-edge SSA
+    /// emitter (one section per Sched node); every value computed here
+    /// is at the section's top level, so recording it in the edge
+    /// cache is dominance-safe.
+    fn sched_section(&mut self, f: &mut Frame<'ctx>) -> Result<(), Ineligible> {
+        let r = self.rule().clone();
+        let mut cf = self.def(f, r.can_fire)?; // i1
         for &slot in &self.spec.inhibit_slots {
             edge_ssa_count(0, 1);
-            let other = self.load_word(&f, slot);
+            let other = self.load_word(f, slot);
             let nz = self.nonzero(other, 64);
             let zero = self.ctx.bool_type().const_zero();
             cf = self.builder.build_select(nz, zero, cf, "inh").unwrap().into_int_value();
         }
         let cf64 = self.to_w(cf, 1, 64, false);
-        self.store_word(&f, self.spec.cf_slot, cf64);
+        self.store_word(f, self.spec.cf_slot, cf64);
         // the WF cone reads the (inhibited) latched CF, not the raw cone
         f.ssa.insert(r.can_fire, cf);
-        let wf = self.def(&mut f, r.will_fire)?;
+        let wf = self.def(f, r.will_fire)?;
         let wf64 = self.to_w(wf, 1, 64, false);
-        self.store_word(&f, self.spec.wf_slot, wf64);
+        self.store_word(f, self.spec.wf_slot, wf64);
         // eager defs the cones did not reach still need their slots
         // stored (later rules' cones or bodies may reload them)
+        let mut eager_vals = Vec::new();
         for &e in &self.spec.eager {
             if !self.ie(self.spec.inst)?.eager_slot.contains_key(&e) {
                 return nope("eager def without slot");
             }
-            self.def(&mut f, e)?; // def() stores to the slot on compute
+            let v = self.def(f, e)?; // def() stores to the slot on compute
+            eager_vals.push((e, v));
         }
-        self.builder.build_return(None).unwrap();
+        // edge cache: CF/WF and eager defs are POSITION-LATCHED values
+        // (what the slots hold); later sections read them in place of
+        // slot loads.  Never evicted — eviction would change latched
+        // semantics, not just performance.
+        if self.edge.is_some() {
+            let inst = self.spec.inst;
+            let e = self.edge.as_mut().unwrap();
+            e.latched.insert((inst, r.can_fire), cf);
+            e.latched.insert((inst, r.will_fire), wf);
+            for (n, v) in eager_vals {
+                e.latched.insert((inst, n), v);
+            }
+        }
         Ok(())
     }
 
     /// exec_<label>(arena, env) -> i32: WF-gated body execution.
     fn lower_exec(&mut self) -> Result<(), Ineligible> {
-        let r = self.rule().clone();
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i32t = self.ctx.i32_type();
         let i64t = self.ctx.i64_type();
@@ -2460,8 +2679,6 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
         let func = self.module.add_function(&format!("exec_{}", self.spec.label), fnty, None);
         let entry = self.ctx.append_basic_block(func, "entry");
-        let body_bb = self.ctx.append_basic_block(func, "body");
-        let done_bb = self.ctx.append_basic_block(func, "done");
         let stop_bb = self.ctx.append_basic_block(func, "stop");
 
         self.builder.position_at_end(entry);
@@ -2472,7 +2689,6 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             func.get_nth_param(2).unwrap().into_int_value(),
             func.get_nth_param(3).unwrap().into_int_value(),
         ));
-        let always = self.spec.always_fire;
         let mut f = Frame {
             arena: func.get_nth_param(0).unwrap().into_pointer_value(),
             envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
@@ -2485,24 +2701,51 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             is_exec: true,
             depth: 0,
         };
-        if always {
-            // WILL_FIRE == const true: no gate (Ravi's static case)
-            self.builder.build_unconditional_branch(body_bb).unwrap();
-        } else {
-            edge_ssa_count(0, 1);
-            let wf = self.load_word(&f, self.spec.wf_slot);
-            let fire = self.nonzero(wf, 64);
-            self.builder.build_conditional_branch(fire, body_bb, done_bb).unwrap();
-        }
-
-        self.builder.position_at_end(body_bb);
-        self.stmts(&mut f, func, &r.body, stop_bb)?;
-        self.builder.build_unconditional_branch(done_bb).unwrap();
-
-        self.builder.position_at_end(done_bb);
+        self.exec_section(&mut f, func, stop_bb)?;
         self.builder.build_return(Some(&i32t.const_int(0, false))).unwrap();
         self.builder.position_at_end(stop_bb);
         self.builder.build_return(Some(&i32t.const_int(1, false))).unwrap();
+        Ok(())
+    }
+
+    /// The WF gate + body at the builder's current position; leaves the
+    /// builder at the section's continuation block.  $finish paths jump
+    /// to `stop_bb` (owned by the caller).  Reused by the whole-edge
+    /// SSA emitter, where the gate reads the sched's latched WF value
+    /// instead of the slot.
+    fn exec_section(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<(), Ineligible> {
+        let r = self.rule().clone();
+        let body_bb = self.ctx.append_basic_block(func, "body");
+        let cont_bb = self.ctx.append_basic_block(func, "cont");
+        if self.spec.always_fire {
+            // WILL_FIRE == const true: no gate (Ravi's static case)
+            self.builder.build_unconditional_branch(body_bb).unwrap();
+        } else {
+            let latched = self
+                .edge
+                .as_ref()
+                .and_then(|e| e.latched.get(&(self.spec.inst, r.will_fire)))
+                .copied();
+            let fire = match latched {
+                Some(v) => self.nonzero(v, 1),
+                None => {
+                    edge_ssa_count(0, 1);
+                    let wf = self.load_word(f, self.spec.wf_slot);
+                    self.nonzero(wf, 64)
+                }
+            };
+            self.builder.build_conditional_branch(fire, body_bb, cont_bb).unwrap();
+        }
+
+        self.builder.position_at_end(body_bb);
+        self.stmts(f, func, &r.body, stop_bb)?;
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        self.builder.position_at_end(cont_bb);
         Ok(())
     }
 

@@ -735,6 +735,7 @@ fn aot_emit(
     en_slots: &[u32],
     so: &std::path::Path,
     bir_hash: u64,
+    edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
 ) -> Result<(), String> {
     use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
     trs_codegen::lower::llvm_init_once();
@@ -797,6 +798,7 @@ fn aot_emit(
             helper_specs,
             refs_sym,
             &comps,
+            edge_plan,
         )
         .map_err(|e| format!("design object: {e}"))?;
         if std::env::var_os("TRS_JIT_TIME").is_some() {
@@ -1089,15 +1091,17 @@ impl Interp {
     /// ConfigReg reads, FIFO i_* views).  Prints the shareable vs
     /// must-recompute mass and a kill histogram; this table is what
     /// the SSA edge emitter (M2) consumes as its legality oracle.
-    fn edge_ssa_analysis(
+    fn edge_ssa_plan(
         &self,
         inst_envs: &HashMap<usize, InstEnv>,
-        rcomps: &[RComp],
-    ) {
+        nodes: &[Vec<(bool, usize)>],
+        specs_lite: &[(usize, usize)],
+        stats: bool,
+    ) -> trs_codegen::lower::EdgeSsaPlan {
         use trs_ir::{Action as A, Expr as E, InstanceKind, Primitive as P, Stmt};
         use std::collections::HashSet;
 
-        #[derive(Default, Clone)]
+        #[derive(Clone)]
         struct Cone {
             /// prim instances this cone reads with NO stability contract
             reads: HashSet<usize>,
@@ -1105,11 +1109,22 @@ impl Interp {
             defs: HashSet<(usize, StrId)>,
             /// root def's own expr node count (share-census units)
             mass: u64,
+            /// hoistable: every prim read is arena-inline for its
+            /// instance (junk-when-invalid is never observed) and no
+            /// foreign/task refs — unconditional evaluation is
+            /// output-invisible
+            pure: bool,
+        }
+        impl Default for Cone {
+            fn default() -> Self {
+                Cone { reads: HashSet::new(), defs: HashSet::new(), mass: 0, pure: true }
+            }
         }
         impl Cone {
             fn absorb(&mut self, o: &Cone) {
                 self.reads.extend(o.reads.iter().copied());
                 self.defs.extend(o.defs.iter().copied());
+                self.pure &= o.pure;
             }
         }
 
@@ -1217,6 +1232,16 @@ impl Interp {
                             if !stable_read(pc, cx.itp.s(*method)) {
                                 out.reads.insert(gi);
                             }
+                            // hoist purity: the read must be an
+                            // arena-inline load for THIS instance
+                            let ie = &cx.inst_envs[&inst];
+                            let inline_ok = ie.reg_slot.contains_key(instance)
+                                || ie.wire_slot.contains_key(instance)
+                                || ie.creg_slot.contains_key(instance)
+                                || ie.fifo_slot.contains_key(instance);
+                            if !inline_ok {
+                                out.pure = false;
+                            }
                         }
                         Some((gi, InstanceKind::Module(_))) => {
                             let cmir = cx.inst_envs[&gi].mir;
@@ -1237,7 +1262,13 @@ impl Interp {
                         None => {}
                     }
                 }
-                E::Prim { args, .. } | E::ForeignCall { args, .. } => {
+                E::Prim { args, .. } => {
+                    for a in args {
+                        walk_expr(cx, inst, a, out);
+                    }
+                }
+                E::ForeignCall { args, .. } => {
+                    out.pure = false;
                     for a in args {
                         walk_expr(cx, inst, a, out);
                     }
@@ -1253,6 +1284,13 @@ impl Interp {
                         walk_expr(cx, inst, a, out);
                     }
                     walk_expr(cx, inst, default, out);
+                }
+                // ports poison hoistability: method args are
+                // call-site-specific, EN ports mutate DURING the edge
+                // (unmodeled by the read-sets), and a hoisted frame has
+                // no port bindings at all
+                E::Port(_) | E::TaskValue { .. } => {
+                    out.pure = false;
                 }
                 _ => {}
             }
@@ -1384,45 +1422,58 @@ impl Interp {
             write_memo: HashMap::new(),
         };
 
+        // per-ordinal exec write sets (all rules, once)
+        let mut exec_writes: Vec<Vec<usize>> = Vec::with_capacity(specs_lite.len());
+        let mut write_sets: Vec<HashSet<usize>> = Vec::with_capacity(specs_lite.len());
+        for &(inst, ridx) in specs_lite {
+            let mir = inst_envs[&inst].mir;
+            let body = self.d.modules[mir].rules[ridx].body.clone();
+            let mut w = HashSet::new();
+            stmt_writes(&mut cx, inst, &body, &mut w);
+            let mut v: Vec<usize> = w.iter().copied().collect();
+            v.sort_unstable();
+            exec_writes.push(v);
+            write_sets.push(w);
+        }
+
+        let mut def_reads: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
+        let mut hoists: Vec<Vec<Vec<(usize, StrId)>>> = Vec::with_capacity(nodes.len());
         let mut tot_recompute = 0u64;
         let mut tot_saved = 0u64;
         let mut tot_gaps = 0usize;
         let mut tot_legal = 0usize;
+        let mut tot_hoists = 0usize;
         let mut kills: HashMap<&'static str, usize> = HashMap::new();
-        for (k, rc) in rcomps.iter().enumerate() {
-            // linear exec order with per-node body cones + write sets
-            let mut execs: Vec<(Cone, HashSet<usize>)> = Vec::new();
-            for en in &rc.entries {
-                for &node in &en.nodes {
-                    let SchedNode::Exec(r) = node else { continue };
-                    if rc.early.contains(&(en.inst, r)) {
-                        continue;
+        for (k, comp_nodes) in nodes.iter().enumerate() {
+            // per-section body cones (exec sections only; scheds share
+            // via the latched CF/WF/eager mechanism)
+            let sections: Vec<Option<(Cone, usize)>> = comp_nodes
+                .iter()
+                .map(|&(is_exec, o)| {
+                    if !is_exec {
+                        return None;
                     }
-                    let mir = inst_envs[&en.inst].mir;
-                    let Some(rr) = self.d.modules[mir]
-                        .rules
-                        .iter()
-                        .find(|x| x.name == r)
-                        .cloned()
-                    else {
-                        continue;
-                    };
+                    let (inst, ridx) = specs_lite[o];
+                    let mir = inst_envs[&inst].mir;
+                    let body = self.d.modules[mir].rules[ridx].body.clone();
                     let mut c = Cone::default();
-                    for st in &rr.body {
-                        walk_stmt_defs(&mut cx, en.inst, st, &mut c);
+                    for st in &body {
+                        walk_stmt_defs(&mut cx, inst, st, &mut c);
                     }
-                    let mut w = HashSet::new();
-                    stmt_writes(&mut cx, en.inst, &rr.body, &mut w);
-                    execs.push((c, w));
-                }
-            }
-            // consumers per (inst, def), positions in schedule order
+                    Some((c, o))
+                })
+                .collect();
+            // consumers per (inst, def), section indices in order
             let mut consumers: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
-            for (p, (c, _)) in execs.iter().enumerate() {
-                for &d0 in &c.defs {
-                    consumers.entry(d0).or_default().push(p);
+            for (p, sec) in sections.iter().enumerate() {
+                if let Some((c, _)) = sec {
+                    for &d0 in &c.defs {
+                        consumers.entry(d0).or_default().push(p);
+                    }
                 }
             }
+            let mut comp_hoists: Vec<Vec<(usize, StrId)>> =
+                vec![Vec::new(); comp_nodes.len()];
             let mut comp_saved = 0u64;
             let mut comp_recompute = 0u64;
             let mut shared_defs = 0usize;
@@ -1436,11 +1487,15 @@ impl Interp {
                 }
                 shared_defs += 1;
                 comp_recompute += dc.mass * (ps.len() as u64 - 1);
+                // legality stats (anchor re-anchors on kill, anchor's
+                // own writes included: the emitter post-evicts)
                 let mut anchor = ps[0];
                 for &pj in &ps[1..] {
                     tot_gaps += 1;
                     let killer = (anchor..pj).find_map(|q| {
-                        execs[q].1.intersection(&dc.reads).next().copied()
+                        sections[q].as_ref().and_then(|(_, o)| {
+                            write_sets[*o].intersection(&dc.reads).next().copied()
+                        })
                     });
                     match killer {
                         None => {
@@ -1455,48 +1510,72 @@ impl Interp {
                         }
                     }
                 }
+                // emitter tables: only PURE, UNSLOTTED defs are cached/
+                // hoisted (latched slots cover CF/WF/eager; impure cones
+                // must never evaluate unconditionally)
+                if !dc.pure {
+                    continue;
+                }
+                let iev = &inst_envs[&di];
+                if iev.eager_slot.contains_key(&dn) || iev.cfwf_slot.contains_key(&dn)
+                {
+                    continue;
+                }
+                let mut reads: Vec<usize> = dc.reads.iter().copied().collect();
+                reads.sort_unstable();
+                def_reads.insert((di, dn), reads);
+                // emitter-exact hoist walk: cache state tracks the
+                // driver (pre/post-eviction on write intersection;
+                // self-killing consumers never hoist — body-position
+                // semantics)
+                let mut cached = false;
+                let mut pi = 0usize; // next consumer index in ps
+                for (q, sec) in sections.iter().enumerate() {
+                    let is_consumer = pi < ps.len() && ps[pi] == q;
+                    let self_kill = sec.as_ref().is_some_and(|(_, o)| {
+                        write_sets[*o].intersection(&dc.reads).next().is_some()
+                    });
+                    if is_consumer {
+                        pi += 1;
+                        if !cached && !self_kill {
+                            comp_hoists[q].push((di, dn));
+                            tot_hoists += 1;
+                            cached = true;
+                        }
+                    }
+                    if self_kill {
+                        cached = false; // post-evict
+                    }
+                }
             }
             tot_recompute += comp_recompute;
             tot_saved += comp_saved;
-            if shared_defs > 0 {
+            if stats && shared_defs > 0 {
                 eprintln!(
-                    "trs edge-ssa: comp {k}: execs={} shared-defs={shared_defs} \
+                    "trs edge-ssa: comp {k}: sections={} shared-defs={shared_defs} \
                      mass shareable={comp_saved}/{comp_recompute}",
-                    execs.len()
-                );
-                // arg-budget feasibility for the call-boundary variant
-                // (bodies stay per-module-type fns, shared values passed
-                // as args): how many shared defs does each body consume?
-                let mut per_body: Vec<usize> = execs
-                    .iter()
-                    .map(|(c, _)| {
-                        c.defs
-                            .iter()
-                            .filter(|d0| {
-                                consumers.get(d0).is_some_and(|ps| ps.len() >= 2)
-                            })
-                            .count()
-                    })
-                    .collect();
-                per_body.sort_unstable();
-                let n = per_body.len();
-                eprintln!(
-                    "trs edge-ssa: comp {k}: shared-def args/body \
-                     p50={} p90={} max={}",
-                    per_body[n / 2],
-                    per_body[n * 9 / 10],
-                    per_body[n - 1]
+                    comp_nodes.len()
                 );
             }
+            hoists.push(comp_hoists);
         }
-        let mut ks: Vec<_> = kills.iter().collect();
-        ks.sort_by(|a, b| b.1.cmp(a.1));
-        let ks: Vec<String> = ks.iter().map(|(c, n)| format!("{c}={n}")).collect();
-        eprintln!(
-            "trs edge-ssa: TOTAL gaps legal={tot_legal}/{tot_gaps} \
-             mass shareable={tot_saved}/{tot_recompute} kills: {}",
-            ks.join(" ")
-        );
+        if stats {
+            let mut ks: Vec<_> = kills.iter().collect();
+            ks.sort_by(|a, b| b.1.cmp(a.1));
+            let ks: Vec<String> = ks.iter().map(|(c, n)| format!("{c}={n}")).collect();
+            eprintln!(
+                "trs edge-ssa: TOTAL gaps legal={tot_legal}/{tot_gaps} \
+                 mass shareable={tot_saved}/{tot_recompute} hoists={tot_hoists} \
+                 kills: {}",
+                ks.join(" ")
+            );
+        }
+        trs_codegen::lower::EdgeSsaPlan {
+            nodes: nodes.to_vec(),
+            exec_writes,
+            def_reads,
+            hoists,
+        }
     }
 
     /// Build the JIT plan for the resolved compositions, or None to run
@@ -2039,7 +2118,30 @@ impl Interp {
         // an SSA edge lowering may legally perform — the emitter's
         // classification table.
         if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
-            self.edge_ssa_analysis(&inst_envs, rcomps);
+            let nodes: Vec<Vec<(bool, usize)>> = rcomps
+                .iter()
+                .map(|rc| {
+                    let mut v = Vec::new();
+                    for en in &rc.entries {
+                        for &node in &en.nodes {
+                            let (is_exec, r) = match node {
+                                SchedNode::Sched(r) => (false, r),
+                                SchedNode::Exec(r) => (true, r),
+                            };
+                            if rc.early.contains(&(en.inst, r)) {
+                                continue;
+                            }
+                            if let Some(&o) = rule_ord.get(&(en.inst, r)) {
+                                v.push((is_exec, o));
+                            }
+                        }
+                    }
+                    v
+                })
+                .collect();
+            let specs_lite: Vec<(usize, usize)> =
+                rules.iter().map(|ri| (ri.inst, ri.rule_idx)).collect();
+            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs_lite, true);
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
@@ -2381,6 +2483,31 @@ impl Interp {
 
         // trs link: emit the artifact .so and stop (nothing runs)
         if let JitRequest::Emit { so } = &request {
+            // whole-edge SSA emission (task #24, opt-in): build the
+            // legality tables the edge emitter consumes
+            let edge_plan = std::env::var("TRS_EDGE_SSA")
+                .as_deref()
+                .is_ok_and(|v| v == "1")
+                .then(|| {
+                    let nodes: Vec<Vec<(bool, usize)>> = comp_nodes
+                        .iter()
+                        .map(|ns| {
+                            ns.as_ref()
+                                .map(|ns| {
+                                    ns.iter()
+                                        .map(|n| match *n {
+                                            JitNode::Sched(o) => (false, o as usize),
+                                            JitNode::Exec(o) => (true, o as usize),
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    let specs_lite: Vec<(usize, usize)> =
+                        specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
+                    self.edge_ssa_plan(&inst_envs, &nodes, &specs_lite, false)
+                });
             self.jit_emit_result = Some(
                 match aot_emit(
                     &self.d,
@@ -2396,6 +2523,7 @@ impl Interp {
                     &en_slots,
                     so,
                     self.bir_hash,
+                    edge_plan.as_ref(),
                 ) {
                     Ok(()) => crate::AotEmit::Compiled,
                     Err(e) => crate::AotEmit::Failed(e),
