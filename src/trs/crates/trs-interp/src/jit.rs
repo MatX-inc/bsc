@@ -22,6 +22,52 @@ use trs_codegen::lower::{
 };
 use prim::ArenaKind;
 
+/// TRS_PROF=1: cheap wall-time accounting of where a JIT/AOT run
+/// spends its time (trampoline vs dispatch vs ticks).  Off = one
+/// cached-bool branch per site.
+pub(crate) mod prof {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+    pub static PRIM_NS: AtomicU64 = AtomicU64::new(0);
+    pub static PRIM_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static FOREIGN_NS: AtomicU64 = AtomicU64::new(0);
+    pub static FOREIGN_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
+    pub static TICK_NS: AtomicU64 = AtomicU64::new(0);
+    /// per prim-method call counts (TRS_PROF=1)
+    pub static PRIM_HIST: std::sync::Mutex<
+        Option<std::collections::HashMap<String, u64>>,
+    > = std::sync::Mutex::new(None);
+    pub fn on() -> bool {
+        static P: OnceLock<bool> = OnceLock::new();
+        *P.get_or_init(|| std::env::var_os("TRS_PROF").is_some())
+    }
+    pub fn add(cell: &AtomicU64, t0: std::time::Instant) {
+        cell.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+    pub fn dump(total: std::time::Duration) {
+        if let Some(h) = PRIM_HIST.lock().unwrap().as_ref() {
+            let mut v: Vec<_> = h.iter().collect();
+            v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
+            for (meth, n) in v.into_iter().take(12) {
+                eprintln!("trs prof:   {n:>9}  .{meth}");
+            }
+        }
+        let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        eprintln!(
+            "trs prof: total {:.3}s | dispatch {:.3}s | ticks {:.3}s | \
+             prim cb {:.3}s ({} calls) | foreign cb {:.3}s ({} calls)",
+            total.as_secs_f64(),
+            g(&DISPATCH_NS) as f64 / 1e9,
+            g(&TICK_NS) as f64 / 1e9,
+            g(&PRIM_NS) as f64 / 1e9,
+            g(&PRIM_CALLS),
+            g(&FOREIGN_NS) as f64 / 1e9,
+            g(&FOREIGN_CALLS),
+        );
+    }
+}
+
 /// Zero-divisor trap for compiled Quot/Rem: raise SIGFPE like the
 /// interpreter (Value::quot) and native division.
 pub(crate) unsafe extern "C" fn jit_sigfpe_cb() {
@@ -36,6 +82,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     args: *const u64,
     out: *mut u64,
 ) {
+    let _t0 = prof::on().then(std::time::Instant::now);
     let interp = &mut *(env as *mut Interp);
     let ordinal = (token >> 17) as usize;
     let is_exec = token & TOKEN_KIND_EXEC != 0;
@@ -67,6 +114,18 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         for (i, d) in dst.iter_mut().enumerate() {
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
+    }
+    if let Some(t0) = _t0 {
+        prof::add(&prof::PRIM_NS, t0);
+        prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let meth = interp.s(method).to_string();
+        prof::PRIM_HIST
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Default::default)
+            .entry(meth)
+            .and_modify(|n| *n += 1)
+            .or_insert(1);
     }
 }
 
@@ -106,6 +165,7 @@ pub(crate) struct LazyJit {
     design: Design,
     insts: HashMap<usize, InstEnv>,
     specs: Vec<RuleSpec>,
+    now_slot: u32,
     /// eagerly compiled sched fns, one per rule ordinal
     pub(crate) scheds: Vec<CompiledSched>,
     /// batch index counter for body workers
@@ -135,7 +195,11 @@ impl LazyJit {
                 return;
             }
             let hi = (lo + self.batch_size).min(self.specs.len());
-            let env = PlanEnv { d: &self.design, insts: &self.insts };
+            let env = PlanEnv {
+                d: &self.design,
+                insts: &self.insts,
+                now_slot: self.now_slot,
+            };
             let compiled = compile_execs(
                 &env,
                 &self.specs[lo..hi],
@@ -167,6 +231,8 @@ pub(crate) struct JitPlans {
     /// EN slots to zero before dispatching a composition (the C++
     /// schedule zeroes every enable at the top of the pass)
     pub(crate) en_slots: Vec<u32>,
+    /// slot stamped with the current instant at every edge
+    pub(crate) now_slot: u32,
     /// lazy compile cells (also reachable from Interp::jit_shared for
     /// the callbacks)
     pub(crate) lazy: Arc<LazyJit>,
@@ -192,6 +258,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
     args: *const u64,
     out: *mut u64,
 ) -> i32 {
+    let _t0 = prof::on().then(std::time::Instant::now);
     let interp = &mut *(env as *mut Interp);
     let ordinal = (token >> 17) as usize;
     let is_exec = token & TOKEN_KIND_EXEC != 0;
@@ -232,6 +299,10 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
+    if let Some(t0) = _t0 {
+        prof::add(&prof::FOREIGN_NS, t0);
+        prof::FOREIGN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     interp.finished.is_some() as i32
 }
 
@@ -240,6 +311,7 @@ fn aot_or_jit_scheds(
     interp: &Interp,
     inst_envs: &HashMap<usize, InstEnv>,
     specs: &[RuleSpec],
+    now_slot: u32,
     nworkers: usize,
     trace: bool,
 ) -> Option<Vec<CompiledSched>> {
@@ -253,7 +325,7 @@ fn aot_or_jit_scheds(
             .chunks(chunk)
             .map(|c| {
                 sc.spawn(move || {
-                    let env = PlanEnv { d, insts: inst_envs };
+                    let env = PlanEnv { d, insts: inst_envs, now_slot };
                     compile_scheds(&env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
                 })
             })
@@ -287,6 +359,7 @@ fn aot_emit(
     d: &Design,
     inst_envs: &HashMap<usize, InstEnv>,
     specs: &[RuleSpec],
+    now_slot: u32,
     so: &std::path::Path,
     bir_hash: u64,
 ) -> Result<(), String> {
@@ -300,7 +373,7 @@ fn aot_emit(
             .chunks(chunk)
             .map(|c| {
                 sc.spawn(move || {
-                    let env = PlanEnv { d, insts: inst_envs };
+                    let env = PlanEnv { d, insts: inst_envs, now_slot };
                     compile_object_chunk(&env, c)
                 })
             })
@@ -443,6 +516,8 @@ impl Interp {
         let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
         let reset_node_slot: Vec<u32> =
             (0..self.rst_asserted.len()).map(|_| alloc(&mut nslots, 1)).collect();
+        // the dispatcher stamps the current instant here at every edge
+        let now_slot = alloc(&mut nslots, 1);
         for i in 0..self.insts.len() {
             let InstKind::User { module, children, resets, .. } = &self.insts[i].kind
             else {
@@ -454,6 +529,8 @@ impl Interp {
                 children.iter().map(|(k, v)| (*k, *v)).collect();
             let mut reg_slot = HashMap::new();
             let mut wire_slot = HashMap::new();
+            let mut creg_slot = HashMap::new();
+            let mut fifo_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -471,6 +548,18 @@ impl Interp {
                     Some(ArenaKind::Wire { width }) => {
                         let base = alloc(&mut nslots, 1 + width.max(1).div_ceil(64));
                         wire_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::CReg { width }) => {
+                        let words = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 2 * words + 1);
+                        creg_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::Fifo { width, size }) => {
+                        let words = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 6 + size * words);
+                        fifo_slot.insert(name, (base, width, size));
                         attach.push((ci, base));
                     }
                     None => {}
@@ -500,6 +589,8 @@ impl Interp {
                     children,
                     reg_slot,
                     wire_slot,
+                    creg_slot,
+                    fifo_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot: HashMap::new(),
@@ -665,7 +756,7 @@ impl Interp {
         // throwaway context (~ms/rule, no LLVM codegen); the expensive
         // engine work is deferred to per-rule cells
         let protos = {
-            let env = PlanEnv { d: &self.d, insts: &inst_envs };
+            let env = PlanEnv { d: &self.d, insts: &inst_envs, now_slot };
             let t0 = std::time::Instant::now();
             match trial_lower(&env, &specs) {
                 Ok(p) => {
@@ -690,7 +781,7 @@ impl Interp {
         // trs link: emit the artifact .so and stop (nothing runs)
         if let JitRequest::Emit { so } = &request {
             self.jit_emit_result =
-                Some(match aot_emit(&self.d, &inst_envs, &specs, so, self.bir_hash) {
+                Some(match aot_emit(&self.d, &inst_envs, &specs, now_slot, so, self.bir_hash) {
                     Ok(()) => crate::AotEmit::Compiled,
                     Err(e) => crate::AotEmit::Failed(e),
                 });
@@ -724,13 +815,17 @@ impl Interp {
         let (scheds, preexecs) = if let Some((s, e)) = preloaded {
             (s, Some(e))
         } else {
-            (aot_or_jit_scheds(self, &inst_envs, &specs, nworkers, trace)?, None)
+            (
+                aot_or_jit_scheds(self, &inst_envs, &specs, now_slot, nworkers, trace)?,
+                None,
+            )
         };
 
         let lazy = Arc::new(LazyJit {
             design: self.d.clone(),
             insts: inst_envs,
             specs,
+            now_slot,
             scheds,
             next_batch: std::sync::atomic::AtomicUsize::new(0),
             batch_size: chunk,
@@ -846,6 +941,7 @@ impl Interp {
             arena_ptr,
             comp_nodes,
             en_slots,
+            now_slot,
             lazy,
             exec_fallback,
         })

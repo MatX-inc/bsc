@@ -87,6 +87,13 @@ pub struct InstEnv {
     /// local RWire/PulseWire instance name -> (base slot, width): valid
     /// word at base, value words after it
     pub wire_slot: HashMap<StrId, (u32, u32)>,
+    /// local ConfigReg instance name -> (base slot, width): old value,
+    /// current value, written_at instant (see ArenaKind::CReg)
+    pub creg_slot: HashMap<StrId, (u32, u32)>,
+    /// local FIFO instance name -> (base slot, width, size): header
+    /// (elems, saved_elems, fst, enq_at, deq_at, clear_at) then data
+    /// (see ArenaKind::Fifo)
+    pub fifo_slot: HashMap<StrId, (u32, u32, u32)>,
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
     pub reset_slot: HashMap<StrId, u32>,
@@ -105,6 +112,9 @@ pub struct InstEnv {
 /// Design-wide plan: one InstEnv per user instance the compiled code
 /// can touch.
 pub struct PlanEnv<'a> {
+    /// arena slot the dispatcher stamps with the current instant at
+    /// every edge (ConfigReg reads compare written_at against it)
+    pub now_slot: u32,
     pub d: &'a Design,
     pub insts: &'a HashMap<usize, InstEnv>,
 }
@@ -426,7 +436,7 @@ fn opt_level() -> OptimizationLevel {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 1;
+pub const AOT_LAYOUT_REV: u64 = 2;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -682,6 +692,53 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         acc
     }
 
+    /// Load a width-w value whose first slot is base + idx*ceil(w/64)
+    /// with idx only known at run time (FIFO first: data[fst]).
+    fn load_val_dyn(
+        &self,
+        f: &Frame<'ctx>,
+        base: u32,
+        idx: IntValue<'ctx>,
+        w: u32,
+    ) -> IntValue<'ctx> {
+        let i64t = self.ctx.i64_type();
+        let words = w.max(1).div_ceil(64);
+        let scaled = self
+            .builder
+            .build_int_mul(idx, i64t.const_int(words as u64, false), "fsc")
+            .unwrap();
+        let off = self
+            .builder
+            .build_int_add(scaled, i64t.const_int(base as u64, false), "foff")
+            .unwrap();
+        if w <= 64 {
+            let p = unsafe {
+                self.builder.build_gep(i64t, f.arena, &[off], "fdp").unwrap()
+            };
+            let word =
+                self.builder.build_load(i64t, p, "fdl").unwrap().into_int_value();
+            return self.to_w(word, 64, w, false);
+        }
+        let t = self.ity(w);
+        let mut acc = t.const_zero();
+        for k in 0..words {
+            let ok = self
+                .builder
+                .build_int_add(off, i64t.const_int(k as u64, false), "fok")
+                .unwrap();
+            let p = unsafe {
+                self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap()
+            };
+            let word =
+                self.builder.build_load(i64t, p, "fdl").unwrap().into_int_value();
+            let wide = self.builder.build_int_z_extend(word, t, "wz").unwrap();
+            let sh = t.const_int((64 * k) as u64, false);
+            let pos = self.builder.build_left_shift(wide, sh, "wsh").unwrap();
+            acc = self.builder.build_or(acc, pos, "wor").unwrap();
+        }
+        acc
+    }
+
     /// Store a width-w value into ceil(w/64) consecutive slots.
     fn store_val(&self, f: &Frame<'ctx>, base: u32, w: u32, v: IntValue<'ctx>) {
         if w <= 64 {
@@ -819,6 +876,85 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 "wget" if ww >= 1 && ww == width => Ok(self.load_val(f, base + 1, ww)),
                 _ => nope("wire read mismatch"),
+            };
+        }
+        if let Some(&(base, rw)) = ie.creg_slot.get(&instance) {
+            if !matches!(mname.as_str(), "read" | "get" | "_read") || !args.is_empty() {
+                return nope("non-read ConfigReg method in expression");
+            }
+            if rw != width {
+                return nope("ConfigReg read width mismatch");
+            }
+            // read = (written_at == now) ? old : current — exactly the
+            // interpreter's begin-of-instant rule
+            let words = rw.max(1).div_ceil(64);
+            let old = self.load_val(f, base, rw);
+            let cur = self.load_val(f, base + words, rw);
+            let wat = self.load_word(f, base + 2 * words);
+            let now = self.load_word(f, self.env.now_slot);
+            let wr = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, wat, now, "cregwr")
+                .unwrap();
+            return Ok(self
+                .builder
+                .build_select(wr, old, cur, "cregv")
+                .unwrap()
+                .into_int_value());
+        }
+        if let Some(&(base, fw, _size)) = ie.fifo_slot.get(&instance) {
+            if !args.is_empty() {
+                return nope("FIFO value method with args");
+            }
+            let i64t = self.ctx.i64_type();
+            let load = |k: u32| self.load_word(f, base + k);
+            // begin-of-instant element count for the i_ variants:
+            // (enq_at==now || deq_at==now || clear_at==now)
+            //   ? saved_elems : elems   (FifoType::Simple only)
+            let inst_elems = |lc: &Self| -> IntValue<'ctx> {
+                let now = lc.load_word(f, lc.env.now_slot);
+                let mut any = lc
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, load(3), now, "fe")
+                    .unwrap();
+                for k in [4u32, 5] {
+                    let c = lc
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, load(k), now, "fe")
+                        .unwrap();
+                    any = lc.builder.build_or(any, c, "feo").unwrap();
+                }
+                lc.builder
+                    .build_select(any, load(1), load(0), "fsel")
+                    .unwrap()
+                    .into_int_value()
+            };
+            let cmp_w1 = |lc: &Self, pred, a: IntValue<'ctx>, b: IntValue<'ctx>| {
+                let c = lc.builder.build_int_compare(pred, a, b, "fc").unwrap();
+                lc.builder
+                    .build_int_z_extend(c, lc.ity(1), "fb")
+                    .unwrap()
+            };
+            return match mname.as_str() {
+                "first" if fw == width => {
+                    let fst = load(2);
+                    Ok(self.load_val_dyn(f, base + 6, fst, fw))
+                }
+                "notFull" if width == 1 => {
+                    Ok(cmp_w1(self, IntPredicate::ULT, load(0), i64t.const_int(_size as u64, false)))
+                }
+                "notEmpty" if width == 1 => {
+                    Ok(cmp_w1(self, IntPredicate::NE, load(0), i64t.const_zero()))
+                }
+                "i_notFull" if width == 1 => {
+                    let e = inst_elems(self);
+                    Ok(cmp_w1(self, IntPredicate::ULT, e, i64t.const_int(_size as u64, false)))
+                }
+                "i_notEmpty" if width == 1 => {
+                    let e = inst_elems(self);
+                    Ok(cmp_w1(self, IntPredicate::NE, e, i64t.const_zero()))
+                }
+                _ => nope("FIFO value method mismatch"),
             };
         }
         // other prim children: trampoline into the interpreter's prim

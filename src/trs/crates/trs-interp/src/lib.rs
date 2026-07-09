@@ -2978,8 +2978,15 @@ impl Interp {
 
     /// Run until $finish or the cycle limit.  Returns the exit code.
     pub fn run(&mut self, max_cycles: u64) -> i32 {
+        #[cfg(feature = "jit")]
+        let t0 = jit::prof::on().then(std::time::Instant::now);
         self.advance(max_cycles);
-        self.finish()
+        let rc = self.finish();
+        #[cfg(feature = "jit")]
+        if let Some(t0) = t0 {
+            jit::prof::dump(t0.elapsed());
+        }
+        rc
     }
 
     /// Default-clock posedges processed so far (the `sim step` cursor).
@@ -3456,6 +3463,8 @@ impl Interp {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
                             let ap = j.arena_ptr();
+                            // ConfigReg reads compare written_at to now
+                            unsafe { *ap.add(j.now_slot as usize) = t };
                             let warming = j.lazy.any_cold();
                             if warming {
                                 // interpreted fallback bodies latch state
@@ -3476,6 +3485,7 @@ impl Interp {
                                 unsafe { *ap.add(s as usize) = 0 };
                             }
                             let envp = self as *mut Interp as *mut core::ffi::c_void;
+                            let _dt0 = jit::prof::on().then(std::time::Instant::now);
                             for n in nodes {
                                 match *n {
                                     jit::JitNode::Sched(ord) => {
@@ -3509,6 +3519,9 @@ impl Interp {
                                 if self.finished.is_some() {
                                     break;
                                 }
+                            }
+                            if let Some(t0) = _dt0 {
+                                jit::prof::add(&jit::prof::DISPATCH_NS, t0);
                             }
                             true
                         }
@@ -3561,6 +3574,8 @@ impl Interp {
 
                 // end-of-edge ticks (reset ticks are conditional: the
                 // prim itself checks its reset line)
+                #[cfg(feature = "jit")]
+                let _tt0 = jit::prof::on().then(std::time::Instant::now);
                 for (inst, pname, is_rst, owner, gexpr) in &rc.ticks {
                     let inst = *inst;
                     let gate = match gexpr {
@@ -3597,6 +3612,10 @@ impl Interp {
                             heap.push(Reverse((t, 1, out_ci, pos_edge)));
                         }
                     }
+                }
+                #[cfg(feature = "jit")]
+                if let Some(t0) = _tt0 {
+                    jit::prof::add(&jit::prof::TICK_NS, t0);
                 }
             }
 

@@ -120,6 +120,19 @@ pub enum ArenaKind {
     /// ceil(max(width,1)/64) words after it.  The end-of-edge tick
     /// clears the valid word (interpreted, like all ticks).
     Wire { width: u32 },
+    /// ConfigReg: reads must see the begin-of-instant value even after
+    /// a same-instant write.  Layout: old value (w words), current
+    /// value (w words), written_at instant (1 word).  Compiled reads
+    /// select old/current by comparing written_at against the global
+    /// now slot; writes stay on the trampoline and mirror all three.
+    CReg { width: u32 },
+    /// Simple guarded FIFO (FIFO1/FIFO2/SizedFIFO): value methods
+    /// compile inline over the mirrored header + data; enq/deq/clear
+    /// stay on the trampoline (guard warnings, saved_elems rules) and
+    /// mirror.  Layout: elems, saved_elems, fst, enq_at, deq_at,
+    /// clear_at (1 word each), then size * ceil(max(width,1)/64) data
+    /// words.
+    Fifo { width: u32, size: u32 },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -1624,6 +1637,25 @@ struct ConfigReg {
     suppress: bool,
     vcd_id: u32,
     vcd_back: Option<Value>,
+    /// arena mirror (JIT/AOT): [old (w), value (w), written_at (1)]
+    slot: Option<*mut u64>,
+}
+
+impl ConfigReg {
+    fn words(&self) -> usize {
+        (self.value.width.max(1) as usize).div_ceil(64)
+    }
+    /// Mirror the full state into the arena so compiled reads see it.
+    fn mirror(&self) {
+        let Some(slot) = self.slot else { return };
+        let w = self.words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot, 2 * w + 1) };
+        for i in 0..w {
+            dst[i] = self.old_value.limbs64().get(i).copied().unwrap_or(0);
+            dst[w + i] = self.value.limbs64().get(i).copied().unwrap_or(0);
+        }
+        dst[2 * w] = self.written_at;
+    }
 }
 
 impl ConfigReg {
@@ -1644,6 +1676,7 @@ impl ConfigReg {
             suppress: false,
             vcd_id: 0,
             vcd_back: None,
+            slot: None,
         }
     }
 }
@@ -1692,6 +1725,7 @@ impl Prim for ConfigReg {
                     self.written_at = now;
                 }
                 self.value = args[0].clone();
+                self.mirror();
             }
             m => panic!("ConfigReg: unknown action method {m:?}"),
         }
@@ -1703,6 +1737,7 @@ impl Prim for ConfigReg {
             self.old_value = self.reset_value.clone();
             self.written_at = u64::MAX;
             self.suppress = true;
+            self.mirror();
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
@@ -1713,10 +1748,22 @@ impl Prim for ConfigReg {
                 self.old_value = self.reset_value.clone();
                 self.written_at = u64::MAX;
                 self.suppress = true;
+                self.mirror();
             }
         } else {
             self.suppress = false;
         }
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // async-reset ConfigRegs suppress writes while in reset, which
+        // the trampoline write honors — but the reset re-mirror happens
+        // out of tick order; keep them fully boxed like async Regs
+        (!self.async_rst).then_some(ArenaKind::CReg { width: self.value.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        self.mirror();
     }
 }
 
@@ -2148,6 +2195,8 @@ struct Fifo {
     dummyval: Value,
     vcd_base: u32,
     vcd_back: Option<FifoVcdBack>,
+    /// arena mirror (JIT/AOT): header + data, see ArenaKind::Fifo
+    slot: Option<*mut u64>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -2197,6 +2246,32 @@ impl Fifo {
             dummyval: Value::undet(width.max(1)),
             vcd_base: 0,
             vcd_back: None,
+            slot: None,
+        }
+    }
+
+    fn arena_words(&self) -> usize {
+        (self.width.max(1) as usize).div_ceil(64)
+    }
+    /// Mirror the header (elems/saved/fst/instants) into the arena.
+    fn mirror_header(&self) {
+        let Some(slot) = self.slot else { return };
+        let h = unsafe { std::slice::from_raw_parts_mut(slot, 6) };
+        h[0] = self.elems as u64;
+        h[1] = self.saved_elems as u64;
+        h[2] = self.fst as u64;
+        h[3] = self.enq_at;
+        h[4] = self.deq_at;
+        h[5] = self.clear_at;
+    }
+    /// Mirror one data element into the arena.
+    fn mirror_data(&self, idx: usize) {
+        let Some(slot) = self.slot else { return };
+        let w = self.arena_words();
+        let dst =
+            unsafe { std::slice::from_raw_parts_mut(slot.add(6 + idx * w), w) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = self.data[idx].limbs64().get(i).copied().unwrap_or(0);
         }
     }
 }
@@ -2446,9 +2521,12 @@ impl Prim for Fifo {
                     } else {
                         args[0].clone()
                     };
-                    self.data[(self.fst + self.elems) % self.size] = v;
+                    let idx = (self.fst + self.elems) % self.size;
+                    self.data[idx] = v;
                     self.elems += 1;
+                    self.mirror_data(idx);
                 }
+                self.mirror_header();
             }
             "deq" => {
                 self.deq_at = now;
@@ -2466,6 +2544,7 @@ impl Prim for Fifo {
                     self.fst = (self.fst + 1) % self.size;
                     self.elems -= 1;
                 }
+                self.mirror_header();
             }
             "clear" => {
                 self.clear_at = now;
@@ -2473,6 +2552,7 @@ impl Prim for Fifo {
                     self.saved_elems = self.elems;
                 }
                 self.elems = 0;
+                self.mirror_header();
             }
             m => panic!("FIFO: unknown action method {m:?}"),
         }
@@ -2488,12 +2568,29 @@ impl Prim for Fifo {
             }
             self.elems = 0;
             self.suppress = true;
+            self.mirror_header();
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
         if !asserted {
             self.suppress = false;
+        }
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // Simple guarded FIFOs only: Loopy/Bypass change the
+        // begin-of-instant selection rules the inline reads bake in
+        (self.ftype == FifoType::Simple).then_some(ArenaKind::Fifo {
+            width: self.width,
+            size: self.size as u32,
+        })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        self.mirror_header();
+        for i in 0..self.size {
+            self.mirror_data(i);
         }
     }
 }
