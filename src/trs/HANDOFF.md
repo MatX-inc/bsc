@@ -25,8 +25,8 @@ products, like VCS:
 
 - CORPUS: 975 PASS / 0 DIFF / 0 anything-ours (1037 designs; the 62
   non-PASS are all upstream: bsc COMPILE_FAIL 25, NO_SOURCE 20,
-  NOT_SUPPORTED/BVI 14, bsc-side LINK_FAIL 3).  Sealed 7x on frozen
-  binaries 2026-07-09.  ~825 of the 975 run COMPILED; ~120 interp
+  NOT_SUPPORTED/BVI 14, bsc-side LINK_FAIL 3).  Sealed 8x on frozen
+  binaries 2026-07-09 (latest: b8691ab4, compiled-path $finish).  ~825 of the 975 run COMPILED; ~120 interp
   fallback (MCD/Sync, module input ports, VCD tests by design,
   exotic prims).
 - PERF: sudoku ~1.35x ahead (0.27s); LongCnt ~5x; corpus link ratio
@@ -102,10 +102,14 @@ products, like VCS:
    feature-probe (nm the staticlib for LLVM refs); fence mode-
    awareness; prime()'s detached compile workers vs dlclose; add
    module.verify() in debug codegen builds.
-3. Hygiene: idle-box re-verify fence flags (sysCRCTest1 link,
-   sysTrafficBRAM run — repeat offenders, load-correlated); full
-   `make -j128 -C testsuite fullparallel` to re-certify zero-fail
-   after the exporter changes (TEST_SYSTEMC_* env per global CLAUDE.md).
+3. Hygiene: sysCRCTest1's link fence flag now REPRODUCES on an idle
+   box (0.40-0.45 vs baseline 0.22, b3_link ~1.3-1.5s) on BOTH the
+   b8691ab4 and pre-fix binaries — binary-independent drift, so the
+   0.22 baseline is stale; rebaseline it at the next accepted
+   equilibrium (memq flagged once under sweep load, idle-clean;
+   sysTrafficBRAM did not flag).  Full `make -j128 -C testsuite
+   fullparallel` to re-certify zero-fail after the exporter changes
+   (TEST_SYSTEMC_* env per global CLAUDE.md).
 4. Scale arc: loop-rolled spine (planner run-detection over
    comp_nodes + affine base/token strides + counted-loop emission
    around the EXISTING outlined-body call ABI; bail unless provably
