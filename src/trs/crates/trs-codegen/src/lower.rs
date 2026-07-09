@@ -1092,6 +1092,48 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         acc
     }
 
+    /// Store a width-w value at base + idx*ceil(w/64) with idx only
+    /// known at run time (FIFO enq: data[(fst+elems)%size]).
+    #[allow(dead_code)]
+    fn store_val_dyn(
+        &self,
+        f: &Frame<'ctx>,
+        base: u32,
+        idx: IntValue<'ctx>,
+        w: u32,
+        v: IntValue<'ctx>,
+    ) {
+        let i64t = self.ctx.i64_type();
+        let words = w.max(1).div_ceil(64);
+        let scaled = self
+            .builder
+            .build_int_mul(idx, i64t.const_int(words as u64, false), "fsc")
+            .unwrap();
+        let bidx = self.slot_index(base);
+        let off = self.builder.build_int_add(scaled, bidx, "foff").unwrap();
+        let t = self.ity(w.max(1));
+        for k in 0..words {
+            let ok = self
+                .builder
+                .build_int_add(off, i64t.const_int(k as u64, false), "fok")
+                .unwrap();
+            let p = unsafe {
+                self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap()
+            };
+            let word = if w <= 64 {
+                self.to_w(v, w, 64, false)
+            } else {
+                let sh = t.const_int((64 * k) as u64, false);
+                let shifted =
+                    self.builder.build_right_shift(v, sh, false, "fsh").unwrap();
+                self.builder
+                    .build_int_truncate(shifted, i64t, "ftr")
+                    .unwrap()
+            };
+            self.builder.build_store(p, word).unwrap();
+        }
+    }
+
     /// Store a width-w value into ceil(w/64) consecutive slots.
     fn store_val(&self, f: &Frame<'ctx>, base: u32, w: u32, v: IntValue<'ctx>) {
         if w <= 64 {
