@@ -469,10 +469,35 @@ pub fn compile_execs(
 /// TRS_JIT_OPT=1/2/3 raises it for both JIT and AOT emission.
 fn opt_level() -> OptimizationLevel {
     match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok("0") => OptimizationLevel::None,
         Ok("1") => OptimizationLevel::Less,
         Ok("2") => OptimizationLevel::Default,
         Ok("3") => OptimizationLevel::Aggressive,
+        // ARTIFACTS default to O1: the measured ladder (O0 2.74s /
+        // O1 1.78s / O2 1.82s / O3 1.83s run; links 5.9/7.6/8.5/7.9)
+        // shows O1 captures the whole win on this workload.  The JIT
+        // keeps O0 for compile latency.
+        _ if AOT_MODE.with(|m| m.get()) => OptimizationLevel::Less,
         _ => OptimizationLevel::None,
+    }
+}
+
+thread_local! {
+    /// set while emitting artifact objects (opt default differs)
+    pub static AOT_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII guard: artifact emission runs with the AOT opt default.
+pub struct AotModeGuard;
+impl AotModeGuard {
+    pub fn set() -> AotModeGuard {
+        AOT_MODE.with(|m| m.set(true));
+        AotModeGuard
+    }
+}
+impl Drop for AotModeGuard {
+    fn drop(&mut self) {
+        AOT_MODE.with(|m| m.set(false));
     }
 }
 

@@ -678,6 +678,7 @@ fn aot_emit(
     let mut helpers_on = !helper_specs.is_empty();
     let mut helper_obj: Option<Vec<u8>> = None;
     if helpers_on {
+        let _g = trs_codegen::lower::AotModeGuard::set();
         let env = PlanEnv { d, insts: inst_envs, now_slot };
         let pseudo = specs[0].clone();
         match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
@@ -694,12 +695,14 @@ fn aot_emit(
         let mut handles = Vec::new();
         for c in specs.chunks(chunk) {
             handles.push(sc.spawn(move || {
+                let _g = trs_codegen::lower::AotModeGuard::set();
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
             }));
         }
         for c in reps.chunks(rchunk) {
             handles.push(sc.spawn(move || {
+                let _g = trs_codegen::lower::AotModeGuard::set();
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
             }));
