@@ -4199,6 +4199,22 @@ impl Interp {
             .collect()
     }
 
+    /// Instantiation parameters of a user-module instance
+    /// (SYM_PARAM symbols): (name, bound value).
+    pub fn inst_params(&self, i: usize) -> Vec<(String, Value)> {
+        match &self.insts[i].kind {
+            InstKind::User { params, .. } => {
+                let mut v: Vec<(String, Value)> = params
+                    .iter()
+                    .map(|(n, val)| (self.s(*n).to_string(), val.clone()))
+                    .collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Rule names of a user-module instance (SYM_RULE symbols).
     pub fn inst_rules(&self, i: usize) -> Vec<String> {
         match &self.insts[i].kind {
@@ -4222,20 +4238,8 @@ impl Interp {
                 self.d.modules[mir]
                     .defs
                     .iter()
-                    .filter_map(|d| {
-                        let n = self.s(d.name);
-                        // the reference registers only defs that
-                        // survive as C++ MEMBERS; compiler temporaries
-                        // (`...___d<N>`) become locals with no symbol
-                        if let Some(k) = n.rfind("___d") {
-                            if n.len() > k + 4
-                                && n[k + 4..].chars().all(|c| c.is_ascii_digit())
-                            {
-                                return None;
-                            }
-                        }
-                        Some((n.to_string(), d.width, d.name))
-                    })
+                    .filter(|d| d.props.sym)
+                    .map(|d| (self.s(d.name).to_string(), d.width, d.name))
                     .collect()
             }
             _ => Vec::new(),
@@ -4278,6 +4282,11 @@ impl Interp {
         let mut interp = Interp::new(design);
         interp.bir_hash = bir_fingerprint(bytes);
         Ok(interp)
+    }
+
+    /// Top module name (the new_MODEL_<top> shim symbol).
+    pub fn top_name(&self) -> &str {
+        self.s(self.d.top)
     }
 
     /// Stage a +arg (without the '+') for $test$plusargs/$value$plusargs.

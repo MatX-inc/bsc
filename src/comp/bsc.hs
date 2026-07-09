@@ -1343,8 +1343,23 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
        -- export the TRS IR when requested
-       when (genBir flags) $
-            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags) sim_system_opt
+       when (genBir flags) $ do
+            -- the debug-tier symbol set: defs surviving as C++
+            -- members (post-SimCOpt public defs, isOkId-filtered) —
+            -- blocks are recomputed here (pure) so the export stays
+            -- decoupled from the C++ generation path below
+            let (sbs, sscheds, scgs, sgis, _sbtop) =
+                    simMakeCBlocks flags sim_system_opt
+                (sbs_opt, _, _, _) =
+                    simCOpt flags (ssys_instmap sim_system_opt)
+                            (sbs, sscheds, scgs, sgis)
+                symMap = M.fromListWith S.union
+                    [ (sb_name sb,
+                       S.fromList [ i | (_, i) <- sb_publicDefs sb
+                                      , isOkId i ])
+                    | sb <- sbs_opt ]
+            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags)
+                         symMap sim_system_opt
 
        -- the -trs backend stops here: the .bir plus the user's C files
        -- (compiled separately for dlopen) are the whole simulation

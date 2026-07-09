@@ -103,6 +103,8 @@ enum SymKind {
     PrimValue { inst: usize },
     /// a def signal; peeks read the LAST-COMPUTED value
     Def { inst: usize, id: trs_ir::StrId },
+    /// an instantiation parameter (value bound at elaboration)
+    Param { inst: usize, name: String },
     Rule,
     /// an addressable range's "" child (RegFile)
     Range { inst: usize, lo: u64, hi: u64 },
@@ -208,6 +210,15 @@ unsafe fn build_symbols(stp: *mut SimState) {
             syms[mod_sym[*p]].children.push(child);
         }
         if *is_user {
+            for (pn, pv) in st.primary().inst_params(i) {
+                let k = syms.len();
+                syms.push(sym(
+                    &pn,
+                    pv.width,
+                    SymKind::Param { inst: i, name: pn.clone() },
+                ));
+                syms[mod_sym[i]].children.push(k);
+            }
             for r in st.primary().inst_rules(i) {
                 let k = syms.len();
                 syms.push(sym(&r, 0, SymKind::Rule));
@@ -308,7 +319,7 @@ pub extern "C" fn bk_is_rule(p: *mut c_void) -> u8 {
 pub extern "C" fn bk_is_single_value(p: *mut c_void) -> u8 {
     matches!(
         sym(p).map(|s| &s.kind),
-        Some(SymKind::Def { .. } | SymKind::PrimValue { .. })
+        Some(SymKind::Def { .. } | SymKind::PrimValue { .. } | SymKind::Param { .. })
     ) as u8
 }
 
@@ -353,6 +364,18 @@ pub extern "C" fn bk_peek_symbol_value(p: *mut c_void) -> *const u32 {
             Some(v) => peek_words(st, &v),
             None => std::ptr::null(),
         },
+        SymKind::Param { inst, ref name } => {
+            let v = st
+                .primary()
+                .inst_params(inst)
+                .into_iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v);
+            match v {
+                Some(v) => peek_words(st, &v),
+                None => std::ptr::null(),
+            }
+        }
         _ => std::ptr::null(),
     }
 }

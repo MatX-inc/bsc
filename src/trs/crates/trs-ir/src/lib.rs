@@ -185,6 +185,11 @@ pub struct DefProps {
     pub will_fire: bool,
     /// Signed display preference (from removed sign casts).
     pub signed: bool,
+    /// Survives as a C++ member in the reference (post-SimCOpt
+    /// public defs): the debug-tier symbol set (bk symbol tree).
+    /// Absent in pre-flag BIRs -> false (no def symbols).
+    #[serde(default)]
+    pub sym: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

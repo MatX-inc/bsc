@@ -141,15 +141,19 @@ encStr = C.encodeString . T.pack
 -- SimSystem -> BIR
 
 -- | Encode a 'SimSystem' as a BIR design document.
-simSystemToBir :: Bool -> SimSystem -> L.ByteString
-simSystemToBir keepF ssys = CW.toLazyByteString (encDesign keepF ssys)
+simSystemToBir :: Bool -> M.Map String (S.Set AId) -> SimSystem
+               -> L.ByteString
+simSystemToBir keepF symMap ssys =
+    CW.toLazyByteString (encDesign keepF symMap ssys)
 
 -- | Write the design's .bir file.
-writeBirFile :: FilePath -> Bool -> SimSystem -> IO ()
-writeBirFile path keepF ssys = L.writeFile path (simSystemToBir keepF ssys)
+writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
+             -> IO ()
+writeBirFile path keepF symMap ssys =
+    L.writeFile path (simSystemToBir keepF symMap ssys)
 
-encDesign :: Bool -> SimSystem -> C.Encoding
-encDesign keepF ssys =
+encDesign :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
+encDesign keepF symMap ssys =
     let pkgs = M.elems (ssys_packages ssys)
         pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
         instmap = M.toList (ssys_instmap ssys)
@@ -169,7 +173,10 @@ encDesign keepF ssys =
         action = do
           topId <- str (getIdBaseString (ssys_top ssys))
           modsEnc <- mapM (\p -> encModule pkgNames
-                                   (msis M.! getIdBaseString (sp_name p)) p)
+                                   (msis M.! getIdBaseString (sp_name p))
+                                   (M.findWithDefault S.empty
+                                      (getIdBaseString (sp_name p)) symMap)
+                                   p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
           compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
@@ -637,8 +644,9 @@ oscName clk = case aclock_osc clk of
 -- ===============
 -- Modules
 
-encModule :: S.Set String -> ModSchedInfo -> SimPackage -> EncM C.Encoding
-encModule pkgNames msi pkg = do
+encModule :: S.Set String -> ModSchedInfo -> S.Set AId -> SimPackage
+          -> EncM C.Encoding
+encModule pkgNames msi symSet pkg = do
     nameId <- idE (sp_name pkg)
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
@@ -666,7 +674,7 @@ encModule pkgNames msi pkg = do
     -- Def-reference results resolve on the backend side
     let av_defs = [ d | AIActionValue { aif_value = d } <- sp_interface pkg
                   , not (M.member (adef_objid d) (sp_local_defs pkg)) ]
-    defsEnc <- mapM encDef (M.elems (sp_local_defs pkg) ++ av_defs)
+    defsEnc <- mapM (encDef symSet) (M.elems (sp_local_defs pkg) ++ av_defs)
     rulesEnc <- mapM (encRule msi pkg) (sp_rules pkg)
     methodsEnc <- concat <$> mapM (encMethod pkg) (sp_interface pkg)
     schedEnc <- encSchedule msi pkg
@@ -889,8 +897,8 @@ substAV (AMethCall ty obj meth es) = AMethCall ty obj meth (map substAV es)
 substAV (AFunCall ty i f isC es) = AFunCall ty i f isC (map substAV es)
 substAV e = e
 
-encDef :: ADef -> EncM C.Encoding
-encDef (ADef i t e0 _props) = do
+encDef :: S.Set AId -> ADef -> EncM C.Encoding
+encDef symSet (ADef i t e0 _props) = do
     let e = substAV e0
     nameId <- idE i
     exprEnc <- encExpr e
@@ -905,6 +913,10 @@ encDef (ADef i t e0 _props) = do
           [ ("can_fire", encBool isCF)
           , ("will_fire", encBool isWF)
           , ("signed", encBool False)   -- P0 TODO: from id props
+          -- the def survives as a C++ MEMBER in the reference
+          -- (post-SimCOpt sb_publicDefs, isOkId-filtered): the
+          -- debug-tier symbol set (bk symbol tree, sim ls)
+          , ("sym", encBool (i `S.member` symSet))
           ])
       ]
 
