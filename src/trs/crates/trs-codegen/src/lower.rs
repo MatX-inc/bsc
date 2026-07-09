@@ -62,6 +62,7 @@ pub type PrimCb = unsafe extern "C" fn(
 );
 
 /// One compiled prim call site (resolved by the trampoline).
+#[derive(Clone)]
 pub struct PrimCallSpec {
     /// global instance index of the prim
     pub inst: usize,
@@ -97,6 +98,10 @@ pub struct InstEnv {
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
     pub reset_slot: HashMap<StrId, u32>,
+    /// subtree arena region [start, end): every slot this instance's
+    /// compiled code can touch (own state + descendants); the basis
+    /// for per-module-type code dedup (base-relative addressing)
+    pub region: (u32, u32),
     /// EN_<m> port name -> arena slot; zeroed at composition dispatch,
     /// stored by compiled call sites (the C++ enable protocol)
     pub en_slot: HashMap<StrId, u32>,
@@ -120,6 +125,7 @@ pub struct PlanEnv<'a> {
 }
 
 /// One rule to compile.
+#[derive(Clone)]
 pub struct RuleSpec {
     /// owning instance (key into PlanEnv::insts)
     pub inst: usize,
@@ -147,6 +153,7 @@ pub struct RuleSpec {
 
 /// One compiled foreign call site: everything the interpreter needs
 /// to rebuild the Arg list and dispatch ($display family, value tasks).
+#[derive(Clone)]
 pub struct ForeignSpec {
     /// instance for $display location reporting
     pub inst: usize,
@@ -158,6 +165,7 @@ pub struct ForeignSpec {
 
 /// One foreign argument: a string literal (no marshaled words) or a
 /// numeric value of the given width with its signed-display flag.
+#[derive(Clone)]
 pub enum FArgSpec {
     Str(StrId),
     Num { width: u32, signed: bool },
@@ -173,9 +181,11 @@ pub struct CompiledSched {
     pub prim_calls: Vec<PrimCallSpec>,
 }
 
-/// A compiled rule body.
+/// A compiled rule body: (arena, env, region base index, token base).
+/// One compiled body serves every instance of its module type.
 pub struct CompiledExec {
-    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32,
+    pub exec:
+        unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
     pub foreign_stmts: Vec<ForeignSpec>,
     pub prim_calls: Vec<PrimCallSpec>,
 }
@@ -249,6 +259,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             cbs,
             spec,
             token_kind: 0,
+            dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
@@ -356,6 +367,7 @@ pub fn compile_scheds(
             cbs,
             spec,
             token_kind: 0,
+            dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
@@ -399,6 +411,7 @@ pub fn compile_execs(
             cbs,
             spec,
             token_kind: TOKEN_KIND_EXEC,
+            dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
@@ -436,7 +449,7 @@ fn opt_level() -> OptimizationLevel {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 2;
+pub const AOT_LAYOUT_REV: u64 = 3;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -458,7 +471,12 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
 
 /// AOT: lower a batch (sched + exec per rule, callbacks through
 /// pointer-globals) and emit one PIC object file for the artifact .so.
-pub fn compile_object_chunk(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<u8>, Ineligible> {
+pub fn compile_object_chunk(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    do_sched: bool,
+    do_exec: bool,
+) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     for spec in specs {
@@ -470,16 +488,22 @@ pub fn compile_object_chunk(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<u8>
             cbs,
             spec,
             token_kind: 0,
+            dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
-        lc.lower_sched()?;
+        if do_sched {
+            lc.lower_sched()?;
+        }
         // reset the call-site tables between the two functions: token
         // local indices are per-function (must match trial_lower)
         lc.foreign_stmts = Vec::new();
         lc.prim_calls = Vec::new();
         lc.token_kind = TOKEN_KIND_EXEC;
-        lc.lower_exec()?;
+        lc.dedup = None;
+        if do_exec {
+            lc.lower_exec()?;
+        }
     }
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
@@ -524,6 +548,11 @@ struct Lower<'a, 'ctx> {
     spec: &'a RuleSpec,
     /// OR'd into callback tokens (TOKEN_KIND_EXEC for body passes)
     token_kind: u64,
+    /// exec dedup mode: (subtree region of spec.inst, base param,
+    /// token-base param).  In-region slots address as base + (slot -
+    /// region.0); call-site tokens OR the runtime token base.  None =
+    /// baked absolute addressing (sched fns, trial).
+    dedup: Option<(u32, u32, IntValue<'ctx>, IntValue<'ctx>)>,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -653,11 +682,27 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
     fn slot_ptr(&self, f: &Frame<'ctx>, slot: u32) -> PointerValue<'ctx> {
         let i64t = self.ctx.i64_type();
-        unsafe {
-            self.builder
-                .build_gep(i64t, f.arena, &[i64t.const_int(slot as u64, false)], "sp")
-                .unwrap()
+        let idx = self.slot_index(slot);
+        unsafe { self.builder.build_gep(i64t, f.arena, &[idx], "sp").unwrap() }
+    }
+
+    /// Arena index for a slot: region-relative through the base param
+    /// in exec dedup mode (globals like now/reset stay absolute).
+    fn slot_index(&self, slot: u32) -> IntValue<'ctx> {
+        let i64t = self.ctx.i64_type();
+        if let Some((r0, r1, base, _)) = self.dedup {
+            if slot >= r0 && slot < r1 {
+                return self
+                    .builder
+                    .build_int_add(
+                        base,
+                        i64t.const_int((slot - r0) as u64, false),
+                        "rsl",
+                    )
+                    .unwrap();
+            }
         }
+        i64t.const_int(slot as u64, false)
     }
 
     /// Load one raw arena word.
@@ -707,10 +752,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .builder
             .build_int_mul(idx, i64t.const_int(words as u64, false), "fsc")
             .unwrap();
-        let off = self
-            .builder
-            .build_int_add(scaled, i64t.const_int(base as u64, false), "foff")
-            .unwrap();
+        let bidx = self.slot_index(base);
+        let off = self.builder.build_int_add(scaled, bidx, "foff").unwrap();
         if w <= 64 {
             let p = unsafe {
                 self.builder.build_gep(i64t, f.arena, &[off], "fdp").unwrap()
@@ -1117,7 +1160,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             off += words;
         }
-        let token = self.spec.token_base | self.token_kind | self.prim_calls.len() as u64;
+        let token_const =
+            self.token_kind | self.prim_calls.len() as u64;
+        let token = self.spec.token_base | token_const;
         self.prim_calls.push(PrimCallSpec {
             inst: prim_inst,
             method,
@@ -1125,17 +1170,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ret_width: if is_action { 0 } else { ret_width },
             is_action,
         });
+        let tokv = match self.dedup {
+            Some((_, _, _, tb)) => self
+                .builder
+                .build_or(tb, i64t.const_int(token_const, false), "tok")
+                .unwrap(),
+            None => i64t.const_int(token, false),
+        };
         let prim_callee = self.cb_callee(self.cbs.prim);
         self.builder
             .build_indirect_call(
                 self.cbs.prim_ty,
                 prim_callee,
-                &[
-                    envp.into(),
-                    i64t.const_int(token, false).into(),
-                    abuf.into(),
-                    obuf.into(),
-                ],
+                &[envp.into(), tokv.into(), abuf.into(), obuf.into()],
                 "pc",
             )
             .unwrap();
@@ -1570,7 +1617,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let r = self.rule().clone();
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i32t = self.ctx.i32_type();
-        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into()], false);
+        let i64t = self.ctx.i64_type();
+        // exec fns take (arena, env, region base index, token base):
+        // all in-region state addresses relative to base and call-site
+        // tokens OR the runtime token base, so ONE compiled body serves
+        // every instance of the module type (per-module-type dedup)
+        let fnty = i32t
+            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
         let func = self.module.add_function(&format!("exec_{}", self.spec.label), fnty, None);
         let entry = self.ctx.append_basic_block(func, "entry");
         let body_bb = self.ctx.append_basic_block(func, "body");
@@ -1578,6 +1631,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let stop_bb = self.ctx.append_basic_block(func, "stop");
 
         self.builder.position_at_end(entry);
+        let region = self.ie(self.spec.inst)?.region;
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            func.get_nth_param(3).unwrap().into_int_value(),
+        ));
         let mut f = Frame {
             arena: func.get_nth_param(0).unwrap().into_pointer_value(),
             envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
@@ -1666,24 +1726,27 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let token =
             self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
+        let token_const = self.token_kind | (self.foreign_stmts.len() as u64);
         self.foreign_stmts.push(ForeignSpec {
             inst: f.inst,
             func: func_id,
             ret_width,
             args: spec_args,
         });
+        let tokv = match self.dedup {
+            Some((_, _, _, tb)) => self
+                .builder
+                .build_or(tb, i64t.const_int(token_const, false), "tok")
+                .unwrap(),
+            None => i64t.const_int(token, false),
+        };
         let cb_callee = self.cb_callee(self.cbs.cb);
         let call = self
             .builder
             .build_indirect_call(
                 self.cbs.cb_ty,
                 cb_callee,
-                &[
-                    envp.into(),
-                    i64t.const_int(token, false).into(),
-                    abuf.into(),
-                    obuf.into(),
-                ],
+                &[envp.into(), tokv.into(), abuf.into(), obuf.into()],
                 "fcb",
             )
             .unwrap();

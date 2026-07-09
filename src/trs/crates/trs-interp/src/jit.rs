@@ -166,6 +166,14 @@ pub(crate) struct LazyJit {
     insts: HashMap<usize, InstEnv>,
     specs: Vec<RuleSpec>,
     now_slot: u32,
+    /// per-ordinal exec args: (region base index, token base) — the
+    /// compiled body is shared across instances of a module type
+    pub(crate) exec_args: Vec<(u64, u64)>,
+    /// per-ordinal call-site tables (from trial_lower; per-ordinal even
+    /// when the compiled body is shared, because prim targets differ)
+    protos: Vec<FnProtos>,
+    /// exec dedup classes: (representative ordinal, member ordinals)
+    classes: Vec<(usize, Vec<usize>)>,
     /// eagerly compiled sched fns, one per rule ordinal
     pub(crate) scheds: Vec<CompiledSched>,
     /// batch index counter for body workers
@@ -186,23 +194,27 @@ impl LazyJit {
         self.cold.load(Ordering::Acquire) != 0
     }
 
-    /// Worker loop: claim body batches, compile, fill cells.
+    /// Worker loop: claim CLASS batches, compile one representative
+    /// per class, fill every member's cell with the shared body and
+    /// its own call-site tables.
     fn work(&self) {
         loop {
             let b = self.next_batch.fetch_add(1, Ordering::AcqRel);
             let lo = b * self.batch_size;
-            if lo >= self.specs.len() {
+            if lo >= self.classes.len() {
                 return;
             }
-            let hi = (lo + self.batch_size).min(self.specs.len());
+            let hi = (lo + self.batch_size).min(self.classes.len());
             let env = PlanEnv {
                 d: &self.design,
                 insts: &self.insts,
                 now_slot: self.now_slot,
             };
+            let reps: Vec<RuleSpec> =
+                (lo..hi).map(|c| self.specs[self.classes[c].0].clone()).collect();
             let compiled = compile_execs(
                 &env,
-                &self.specs[lo..hi],
+                &reps,
                 jit_foreign_cb,
                 jit_sigfpe_cb,
                 jit_prim_cb,
@@ -212,8 +224,14 @@ impl LazyJit {
                 // LLVM-level failure can land here
                 panic!("trs jit: compile of proven-eligible bodies failed: {e}")
             });
-            for (k, cr) in compiled.into_iter().enumerate() {
-                let _ = self.cells[lo + k].set(cr);
+            for (c, cr) in (lo..hi).zip(compiled) {
+                for &m in &self.classes[c].1 {
+                    let _ = self.cells[m].set(CompiledExec {
+                        exec: cr.exec,
+                        foreign_stmts: self.protos[m].exec_foreign.clone(),
+                        prim_calls: self.protos[m].exec_prims.clone(),
+                    });
+                }
             }
             self.cold.fetch_sub(hi - lo, Ordering::AcqRel);
         }
@@ -360,6 +378,7 @@ fn aot_emit(
     inst_envs: &HashMap<usize, InstEnv>,
     specs: &[RuleSpec],
     now_slot: u32,
+    classes: &[(usize, Vec<usize>)],
     so: &std::path::Path,
     bir_hash: u64,
 ) -> Result<(), String> {
@@ -368,16 +387,25 @@ fn aot_emit(
     let t0 = std::time::Instant::now();
     let nworkers = jit_workers(specs.len());
     let chunk = specs.len().div_ceil(nworkers).max(1);
+    // sched functions per ordinal; exec bodies once per dedup class
+    let reps: Vec<RuleSpec> =
+        classes.iter().map(|(rep, _)| specs[*rep].clone()).collect();
+    let rchunk = reps.len().div_ceil(nworkers).max(1);
     let objs: Vec<Result<Vec<u8>, _>> = std::thread::scope(|sc| {
-        specs
-            .chunks(chunk)
-            .map(|c| {
-                sc.spawn(move || {
-                    let env = PlanEnv { d, insts: inst_envs, now_slot };
-                    compile_object_chunk(&env, c)
-                })
-            })
-            .collect::<Vec<_>>()
+        let mut handles = Vec::new();
+        for c in specs.chunks(chunk) {
+            handles.push(sc.spawn(move || {
+                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                compile_object_chunk(&env, c, true, false)
+            }));
+        }
+        for c in reps.chunks(rchunk) {
+            handles.push(sc.spawn(move || {
+                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                compile_object_chunk(&env, c, false, true)
+            }));
+        }
+        handles
             .into_iter()
             .map(|h| h.join().expect("aot compile thread"))
             .collect()
@@ -418,7 +446,8 @@ fn aot_load(
     so: &std::path::Path,
     bir_hash: u64,
     specs: &[RuleSpec],
-    protos: Vec<FnProtos>,
+    protos: &[FnProtos],
+    classes: &[(usize, Vec<usize>)],
 ) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>), String> {
     unsafe {
         let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
@@ -445,29 +474,39 @@ fn aot_load(
             **g = addr;
         }
         let mut scheds = Vec::with_capacity(specs.len());
-        let mut execs = Vec::with_capacity(specs.len());
-        for (spec, proto) in specs.iter().zip(protos.into_iter()) {
+        for (spec, proto) in specs.iter().zip(protos.iter()) {
             let sf: libloading::Symbol<
                 unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
             > = lib
                 .get(format!("sched_{}\0", spec.label).as_bytes())
                 .map_err(|e| e.to_string())?;
-            let ef: libloading::Symbol<
-                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void) -> i32,
-            > = lib
-                .get(format!("exec_{}\0", spec.label).as_bytes())
-                .map_err(|e| e.to_string())?;
             scheds.push(CompiledSched {
                 sched: *sf,
-                foreign_stmts: proto.sched_foreign,
-                prim_calls: proto.sched_prims,
-            });
-            execs.push(CompiledExec {
-                exec: *ef,
-                foreign_stmts: proto.exec_foreign,
-                prim_calls: proto.exec_prims,
+                foreign_stmts: proto.sched_foreign.clone(),
+                prim_calls: proto.sched_prims.clone(),
             });
         }
+        // exec bodies: one symbol per dedup class, shared by members
+        let mut execs: Vec<Option<CompiledExec>> =
+            (0..specs.len()).map(|_| None).collect();
+        for (rep, members) in classes {
+            let ef: libloading::Symbol<
+                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
+            > = lib
+                .get(format!("exec_{}\0", specs[*rep].label).as_bytes())
+                .map_err(|e| e.to_string())?;
+            for &m in members {
+                execs[m] = Some(CompiledExec {
+                    exec: *ef,
+                    foreign_stmts: protos[m].exec_foreign.clone(),
+                    prim_calls: protos[m].exec_prims.clone(),
+                });
+            }
+        }
+        let execs: Vec<CompiledExec> = execs
+            .into_iter()
+            .map(|o| o.expect("every ordinal belongs to a class"))
+            .collect();
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);
         Ok((scheds, execs))
@@ -511,18 +550,121 @@ impl Interp {
             s
         };
 
-        // per-instance environments: children, prim slots, resets, ENs
+        // ---- pass A: collect scheduled rules (NO allocation) ----
+        // Schedule order defines ordinals and shared-cone ownership;
+        // slots are handed out in pass B per instance in
+        // module-canonical order, so twin instances of one module type
+        // get identical region-relative layouts (code dedup).
+        struct RuleInfo {
+            inst: usize,
+            rule_idx: usize,
+            ordinal: usize,
+            cf_slot: u32,
+            wf_slot: u32,
+            eager: Vec<StrId>,
+            shared: Vec<StrId>,
+        }
+        let mut rules: Vec<RuleInfo> = Vec::new();
+        let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
+        for rc in rcomps {
+            if !rc.early.is_empty() {
+                if trace {
+                    eprintln!("trs jit: off (early rules)");
+                }
+                return None;
+            }
+            // eager defs owned by entries already walked in THIS comp,
+            // per instance: later rules of the same instance may load
+            // their slots instead of re-expanding the cone
+            let mut owned_so_far: HashMap<usize, Vec<StrId>> = HashMap::new();
+            for en in &rc.entries {
+                for &node in &en.nodes {
+                    let SchedNode::Sched(r) = node else { continue };
+                    if rule_ord.contains_key(&(en.inst, r)) {
+                        continue;
+                    }
+                    let module = self.module_of(en.inst);
+                    let mir = self.mods[module].ir;
+                    let Some(&ri) = self.mods[module].rules.get(&r) else {
+                        if trace {
+                            eprintln!("trs jit: off (method node in schedule)");
+                        }
+                        return None;
+                    };
+                    let shared =
+                        owned_so_far.get(&en.inst).cloned().unwrap_or_default();
+                    owned_so_far
+                        .entry(en.inst)
+                        .or_default()
+                        .extend(en.eager.iter().copied());
+                    rule_ord.insert((en.inst, r), rules.len());
+                    rules.push(RuleInfo {
+                        inst: en.inst,
+                        rule_idx: ri,
+                        ordinal: rules.len(),
+                        cf_slot: 0,
+                        wf_slot: 0,
+                        eager: en.eager.clone(),
+                        shared,
+                    });
+                    let _ = mir;
+                }
+            }
+        }
+        let mut per_inst_rules: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (k, ri) in rules.iter().enumerate() {
+            per_inst_rules.entry(ri.inst).or_default().push(k);
+        }
+        for v in per_inst_rules.values_mut() {
+            v.sort_by_key(|&k| rules[k].rule_idx);
+        }
+
+        // ---- pass B: DFS subtree-contiguous allocation ----
+        // Every slot an instance's compiled code touches (its prims,
+        // ENs, rule cf/wf/eager, and everything in its submodule
+        // subtree) lands in one contiguous region, at offsets that are
+        // uniform across instances of the same module type.
         let mut inst_envs: HashMap<usize, InstEnv> = HashMap::new();
         let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
         let reset_node_slot: Vec<u32> =
             (0..self.rst_asserted.len()).map(|_| alloc(&mut nslots, 1)).collect();
         // the dispatcher stamps the current instant here at every edge
         let now_slot = alloc(&mut nslots, 1);
+        let mut is_child = vec![false; self.insts.len()];
         for i in 0..self.insts.len() {
+            if let InstKind::User { children, .. } = &self.insts[i].kind {
+                for (_, &c) in children.iter() {
+                    is_child[c] = true;
+                }
+            }
+        }
+        enum Walk {
+            Enter(usize),
+            Exit(usize),
+        }
+        let mut stack: Vec<Walk> = (0..self.insts.len())
+            .rev()
+            .filter(|&i| {
+                !is_child[i] && matches!(self.insts[i].kind, InstKind::User { .. })
+            })
+            .map(Walk::Enter)
+            .collect();
+        let mut subtree: HashMap<usize, (u32, u32)> = HashMap::new();
+        let mut dfs_order: Vec<usize> = Vec::new();
+        while let Some(w) = stack.pop() {
+            let i = match w {
+                Walk::Exit(i) => {
+                    subtree.get_mut(&i).expect("exit before enter").1 = nslots;
+                    continue;
+                }
+                Walk::Enter(i) => i,
+            };
             let InstKind::User { module, children, resets, .. } = &self.insts[i].kind
             else {
                 continue;
             };
+            dfs_order.push(i);
+            let region_start = nslots;
             let module = *module;
             let mir = self.mods[module].ir;
             let children: HashMap<StrId, usize> =
@@ -537,7 +679,7 @@ impl Interp {
             let mut kids: Vec<(StrId, usize)> =
                 children.iter().map(|(&k, &v)| (k, v)).collect();
             kids.sort_unstable();
-            for (name, ci) in kids {
+            for &(name, ci) in &kids {
                 let InstKind::Prim(p) = &self.insts[ci].kind else { continue };
                 match p.arena_kind() {
                     Some(ArenaKind::Reg { width }) => {
@@ -582,6 +724,53 @@ impl Interp {
             for pname in enps {
                 en_slot.insert(pname, alloc(&mut nslots, 1));
             }
+            // per-rule cf/wf slots in module-canonical rule order, then
+            // the instance's eager-def UNION in sorted order: eager
+            // attachment (first-Sched-node) can split differently
+            // between twin instances, but the union and this layout
+            // stay type-uniform (dedup depends on it)
+            let mut cfwf_slot = HashMap::new();
+            let mut eager_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
+            if let Some(rks) = per_inst_rules.get(&i) {
+                for &k in rks {
+                    let cf_slot = alloc(&mut nslots, 1);
+                    let wf_slot = alloc(&mut nslots, 1);
+                    let rr = &self.d.modules[mir].rules[rules[k].rule_idx];
+                    cfwf_slot.insert(rr.can_fire, cf_slot);
+                    cfwf_slot.insert(rr.will_fire, wf_slot);
+                    rules[k].cf_slot = cf_slot;
+                    rules[k].wf_slot = wf_slot;
+                }
+                let mut union: Vec<StrId> = Vec::new();
+                for &k in rks {
+                    for &e in &rules[k].eager {
+                        if !union.contains(&e) {
+                            union.push(e);
+                        }
+                    }
+                }
+                union.sort_unstable();
+                for e in union {
+                    let Some(ed) =
+                        self.d.modules[mir].defs.iter().find(|d| d.name == e)
+                    else {
+                        if trace {
+                            eprintln!("trs jit: off (eager def unknown)");
+                        }
+                        return None;
+                    };
+                    let ew = ed.width.max(1);
+                    let base = alloc(&mut nslots, ew.div_ceil(64));
+                    eager_slot.insert(e, (base, ew));
+                }
+            }
+            subtree.insert(i, (region_start, 0));
+            stack.push(Walk::Exit(i));
+            for &(_, c) in kids.iter().rev() {
+                if matches!(self.insts[c].kind, InstKind::User { .. }) {
+                    stack.push(Walk::Enter(c));
+                }
+            }
             inst_envs.insert(
                 i,
                 InstEnv {
@@ -593,100 +782,82 @@ impl Interp {
                     fifo_slot,
                     reset_slot,
                     en_slot,
-                    cfwf_slot: HashMap::new(),
-                    eager_slot: HashMap::new(),
+                    cfwf_slot,
+                    eager_slot,
+                    region: (region_start, 0),
                 },
             );
         }
+        // subtree extents (known only after the whole subtree walked)
+        for (i, &(s0, s1)) in &subtree {
+            if let Some(e) = inst_envs.get_mut(i) {
+                e.region = (s0, s1);
+            }
+        }
 
-        // CF/WF and eager-def slots for every scheduled rule
-        struct RuleInfo {
-            inst: usize,
-            rule_idx: usize,
-            ordinal: usize,
-            cf_slot: u32,
-            wf_slot: u32,
-            eager: Vec<StrId>,
-            shared: Vec<StrId>,
-        }
-        let mut rules: Vec<RuleInfo> = Vec::new();
-        let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
-        for rc in rcomps {
-            if !rc.early.is_empty() {
-                if trace {
-                    eprintln!("trs jit: off (early rules)");
-                }
-                return None;
+        // ---- per-instance subtree signatures (exec dedup classes) ----
+        // Two instances share compiled exec bodies iff their signatures
+        // match.  The sig must cover EVERY input the exec lowering
+        // reads: module IR id, region-relative slot layout (all maps),
+        // absolute reset-node slots, and the user children recursively.
+        // (Stage-2a made twin IR raw-identical; the sweep + twin test
+        // referee this invariant.)
+        let inst_sig: HashMap<usize, u64> = {
+            use std::hash::{Hash, Hasher};
+            let mut sigs: HashMap<usize, u64> = HashMap::new();
+            for &i in dfs_order.iter().rev() {
+                let e = &inst_envs[&i];
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                e.mir.hash(&mut h);
+                (e.region.1 - e.region.0).hash(&mut h);
+                let r0 = e.region.0;
+                let mut m1: Vec<_> =
+                    e.reg_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
+                m1.sort_unstable();
+                m1.hash(&mut h);
+                let mut m2: Vec<_> =
+                    e.wire_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
+                m2.sort_unstable();
+                m2.hash(&mut h);
+                let mut m3: Vec<_> =
+                    e.creg_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
+                m3.sort_unstable();
+                m3.hash(&mut h);
+                let mut m4: Vec<_> = e
+                    .fifo_slot
+                    .iter()
+                    .map(|(&k, &(b, w, sz))| (k, b - r0, w, sz))
+                    .collect();
+                m4.sort_unstable();
+                m4.hash(&mut h);
+                let mut m5: Vec<_> =
+                    e.en_slot.iter().map(|(&k, &b)| (k, b - r0)).collect();
+                m5.sort_unstable();
+                m5.hash(&mut h);
+                let mut m6: Vec<_> =
+                    e.cfwf_slot.iter().map(|(&k, &b)| (k, b - r0)).collect();
+                m6.sort_unstable();
+                m6.hash(&mut h);
+                let mut m7: Vec<_> =
+                    e.eager_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
+                m7.sort_unstable();
+                m7.hash(&mut h);
+                // reset nodes are design-global: absolute slots baked
+                let mut m8: Vec<_> =
+                    e.reset_slot.iter().map(|(&k, &b)| (k, b)).collect();
+                m8.sort_unstable();
+                m8.hash(&mut h);
+                let mut kids: Vec<_> = e
+                    .children
+                    .iter()
+                    .filter_map(|(&n, &c)| sigs.get(&c).map(|&sg| (n, sg)))
+                    .collect();
+                kids.sort_unstable();
+                kids.hash(&mut h);
+                sigs.insert(i, h.finish());
             }
-            // eager defs owned by entries already walked in THIS comp,
-            // per instance: later rules of the same instance may load
-            // their slots instead of re-expanding the cone
-            let mut owned_so_far: HashMap<usize, Vec<StrId>> = HashMap::new();
-            for en in &rc.entries {
-                for &node in &en.nodes {
-                    let SchedNode::Sched(r) = node else { continue };
-                    if rule_ord.contains_key(&(en.inst, r)) {
-                        continue;
-                    }
-                    let module = self.module_of(en.inst);
-                    let mir = self.mods[module].ir;
-                    let Some(&ri) = self.mods[module].rules.get(&r) else {
-                        if trace {
-                            eprintln!("trs jit: off (method node in schedule)");
-                        }
-                        return None;
-                    };
-                    let rr = &self.d.modules[mir].rules[ri];
-                    let cf_slot = alloc(&mut nslots, 1);
-                    let wf_slot = alloc(&mut nslots, 1);
-                    let (can_fire, will_fire) = (rr.can_fire, rr.will_fire);
-                    let mut eager_adds: Vec<(StrId, u32, u32)> = Vec::new();
-                    {
-                        let ie = inst_envs.get(&en.inst)?;
-                        for &e in &en.eager {
-                            if ie.eager_slot.contains_key(&e)
-                                || eager_adds.iter().any(|(n, _, _)| *n == e)
-                            {
-                                continue;
-                            }
-                            let Some(ed) =
-                                self.d.modules[mir].defs.iter().find(|d| d.name == e)
-                            else {
-                                if trace {
-                                    eprintln!("trs jit: off (eager def unknown)");
-                                }
-                                return None;
-                            };
-                            let ew = ed.width.max(1);
-                            let base = alloc(&mut nslots, ew.div_ceil(64));
-                            eager_adds.push((e, base, ew));
-                        }
-                    }
-                    let ie = inst_envs.get_mut(&en.inst)?;
-                    ie.cfwf_slot.insert(can_fire, cf_slot);
-                    ie.cfwf_slot.insert(will_fire, wf_slot);
-                    for (e, base, ew) in eager_adds {
-                        ie.eager_slot.insert(e, (base, ew));
-                    }
-                    let shared =
-                        owned_so_far.get(&en.inst).cloned().unwrap_or_default();
-                    owned_so_far
-                        .entry(en.inst)
-                        .or_default()
-                        .extend(en.eager.iter().copied());
-                    rule_ord.insert((en.inst, r), rules.len());
-                    rules.push(RuleInfo {
-                        inst: en.inst,
-                        rule_idx: ri,
-                        ordinal: rules.len(),
-                        cf_slot,
-                        wf_slot,
-                        eager: en.eager.clone(),
-                        shared,
-                    });
-                }
-            }
-        }
+            sigs
+        };
 
         // any Exec node must belong to a scheduled rule above
         for rc in rcomps {
@@ -778,13 +949,43 @@ impl Interp {
             }
         };
 
+        // ---- exec dedup classes: one compiled body per class ----
+        let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
+        {
+            let mut key_to_class: HashMap<(u64, usize), usize> = HashMap::new();
+            for (o, sp) in specs.iter().enumerate() {
+                let key = (inst_sig[&sp.inst], sp.rule_idx);
+                let c = *key_to_class.entry(key).or_insert_with(|| {
+                    classes.push((o, Vec::new()));
+                    classes.len() - 1
+                });
+                classes[c].1.push(o);
+            }
+        }
+        if trace {
+            eprintln!(
+                "trs jit: {} exec bodies in {} classes",
+                specs.len(),
+                classes.len()
+            );
+        }
+
         // trs link: emit the artifact .so and stop (nothing runs)
         if let JitRequest::Emit { so } = &request {
-            self.jit_emit_result =
-                Some(match aot_emit(&self.d, &inst_envs, &specs, now_slot, so, self.bir_hash) {
+            self.jit_emit_result = Some(
+                match aot_emit(
+                    &self.d,
+                    &inst_envs,
+                    &specs,
+                    now_slot,
+                    &classes,
+                    so,
+                    self.bir_hash,
+                ) {
                     Ok(()) => crate::AotEmit::Compiled,
                     Err(e) => crate::AotEmit::Failed(e),
-                });
+                },
+            );
             return None;
         }
 
@@ -792,7 +993,7 @@ impl Interp {
         // artifact instead of compiling; fall back to in-process JIT
         // if the artifact is missing or stale
         let preloaded = if let JitRequest::Load { so } = &request {
-            match aot_load(so, self.bir_hash, &specs, protos) {
+            match aot_load(so, self.bir_hash, &specs, &protos, &classes) {
                 Ok(l) => Some(l),
                 Err(e) => {
                     eprintln!(
@@ -821,18 +1022,30 @@ impl Interp {
             )
         };
 
+        let exec_args: Vec<(u64, u64)> = specs
+            .iter()
+            .map(|sp| {
+                let r0 = inst_envs[&sp.inst].region.0 as u64;
+                (r0, sp.token_base)
+            })
+            .collect();
+        let nclasses = classes.len();
+        let cchunk = nclasses.div_ceil(nworkers).max(1);
         let lazy = Arc::new(LazyJit {
             design: self.d.clone(),
             insts: inst_envs,
             specs,
             now_slot,
+            exec_args,
+            protos,
+            classes,
             scheds,
             next_batch: std::sync::atomic::AtomicUsize::new(0),
-            batch_size: chunk,
+            batch_size: cchunk,
             cold: std::sync::atomic::AtomicUsize::new(if preexecs.is_some() {
                 0
             } else {
-                n
+                nclasses
             }),
             cells: (0..n).map(|_| OnceLock::new()).collect(),
         });

@@ -3496,8 +3496,10 @@ impl Interp {
                                         match j.lazy.exec(ord as usize) {
                                             Some(ce) => {
                                                 let f = ce.exec;
+                                                let (b, tb) =
+                                                    j.lazy.exec_args[ord as usize];
                                                 unsafe {
-                                                    f(ap, envp);
+                                                    f(ap, envp, b, tb);
                                                 }
                                             }
                                             None => {
