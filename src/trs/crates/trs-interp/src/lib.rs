@@ -3460,10 +3460,19 @@ impl Interp {
             if self.vcd.is_active()
                 || !driver_clock.is_empty()
                 || !self.rstgen_out.is_empty()
-                || self.rst_asserted.iter().any(|&a| a)
-                || !self.rst_pending.is_empty()
             {
                 { CENTRAL_BAIL[4].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            }
+            // the initial reset pulse is TRANSIENT: AOT artifacts have
+            // fused edges at t=0 while it is still in flight, and
+            // burning the attempt here left the central loop
+            // permanently off for every artifact run.  Un-burn and let
+            // the deassert boundary retry; without generators (bailed
+            // above) reset state cannot reassert, so the re-probe is
+            // bounded to the few reset slices.
+            if self.rst_asserted.iter().any(|&a| a) || !self.rst_pending.is_empty() {
+                central_tried = false;
+                { CENTRAL_BAIL[15].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
             }
             // exactly one periodic Wave clock
             let mut wave = None;
