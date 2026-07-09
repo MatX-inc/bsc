@@ -2517,13 +2517,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let wv = self.expr_width(f, &args[0])?;
                     let v0 = self.expr(f, &args[0])?;
                     let v = self.to_w(v0, wv, rw, false);
-                    let wr_bb = self.ctx.append_basic_block(func, "wr");
-                    let sk_bb = self.ctx.append_basic_block(func, "sk");
-                    self.builder.build_conditional_branch(cz, wr_bb, sk_bb).unwrap();
-                    self.builder.position_at_end(wr_bb);
-                    self.store_val(f, base, rw, v);
-                    self.builder.build_unconditional_branch(sk_bb).unwrap();
-                    self.builder.position_at_end(sk_bb);
+                    // the value is evaluated eagerly either way — the
+                    // old wr/sk branch protected only the store.
+                    // Branchless: store(select(cond, new, old)); the
+                    // monsters' 14k branches are mostly these.
+                    let old = self.load_val(f, base, rw);
+                    let sel = self
+                        .builder
+                        .build_select(cz, v, old, "wsel")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base, rw, sel);
                     return Ok(());
                 }
                 if let Some(&(base, ww)) = ie.wire_slot.get(instance) {
@@ -2537,17 +2541,23 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     } else {
                         None
                     };
-                    let wr_bb = self.ctx.append_basic_block(func, "wr");
-                    let sk_bb = self.ctx.append_basic_block(func, "sk");
-                    self.builder.build_conditional_branch(cz, wr_bb, sk_bb).unwrap();
-                    self.builder.position_at_end(wr_bb);
-                    let one = self.ctx.i64_type().const_int(1, false);
-                    self.store_word(f, base, one);
+                    // branchless wset: valid |= cond; value = select
+                    let ov = self.load_word(f, base);
+                    let cz64 = self
+                        .builder
+                        .build_int_z_extend(cz, self.ctx.i64_type(), "wsz")
+                        .unwrap();
+                    let nv = self.builder.build_or(ov, cz64, "wsv").unwrap();
+                    self.store_word(f, base, nv);
                     if let Some(v) = v {
-                        self.store_val(f, base + 1, ww, v);
+                        let oldv = self.load_val(f, base + 1, ww);
+                        let selv = self
+                            .builder
+                            .build_select(cz, v, oldv, "wvv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base + 1, ww, selv);
                     }
-                    self.builder.build_unconditional_branch(sk_bb).unwrap();
-                    self.builder.position_at_end(sk_bb);
                     return Ok(());
                 }
 
