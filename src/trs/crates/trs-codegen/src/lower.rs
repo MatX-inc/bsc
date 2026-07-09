@@ -2034,6 +2034,83 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 _ => nope("FIFO value method mismatch"),
             };
         }
+        if let Some(&(base, rw, lo, hi)) = ie.regfile_slot.get(&instance) {
+            // RegFile sub: in-range reads inline over the dense image
+            // with the ONE-DEEP same-instant bypass; out-of-range takes
+            // the trampoline (bounds warning on stdout + undet) — the
+            // B2 cold-path shape.
+            if mname.as_str() != "sub" || args.len() != 1 {
+                return nope("regfile method mismatch");
+            }
+            if rw != width {
+                return nope("regfile read width mismatch");
+            }
+            let Some(&child) = ie.children.get(&instance) else {
+                return nope("call on unknown child");
+            };
+            let i64t = self.ctx.i64_type();
+            let aw = self.expr_width(f, &args[0])?;
+            let a0 = self.expr(f, &args[0])?;
+            let a = self.to_w(a0, aw, 64, false);
+            let inlo = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, a, i64t.const_int(lo, false), "rflo")
+                .unwrap();
+            let inhi = self
+                .builder
+                .build_int_compare(IntPredicate::ULE, a, i64t.const_int(hi, false), "rfhi")
+                .unwrap();
+            let inb = self.builder.build_and(inlo, inhi, "rfin").unwrap();
+            let func =
+                self.builder.get_insert_block().unwrap().get_parent().unwrap();
+            let fast_bb = self.ctx.append_basic_block(func, "rff");
+            let slow_bb = self.ctx.append_basic_block(func, "rfs");
+            let join_bb = self.ctx.append_basic_block(func, "rfj");
+            self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+
+            self.builder.position_at_end(fast_bb);
+            let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+            let words = rw.max(1).div_ceil(64);
+            let upd_at = self.load_word(f, base);
+            let upd_addr = self.load_word(f, base + 1);
+            let now = self.load_word(f, self.env.now_slot);
+            let at_now = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, upd_at, now, "rfan")
+                .unwrap();
+            let same_a = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, upd_addr, a, "rfsa")
+                .unwrap();
+            let byp = self.builder.build_and(at_now, same_a, "rfb").unwrap();
+            let pv = self.load_val(f, base + 2, rw);
+            let idx = self
+                .builder
+                .build_int_sub(a, i64t.const_int(lo, false), "rfi")
+                .unwrap();
+            let dv = self.load_val_dyn(f, base + 2 + words, idx, rw);
+            let fv = self
+                .builder
+                .build_select(byp, pv, dv, "rfv")
+                .unwrap()
+                .into_int_value();
+            f.ssa = saved.clone();
+            let f_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+
+            self.builder.position_at_end(slow_bb);
+            let sv = self
+                .emit_prim_call(f, child, method, args, width, false)?
+                .expect("value prim call returns");
+            f.ssa = saved;
+            let s_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+
+            self.builder.position_at_end(join_bb);
+            let phi = self.builder.build_phi(self.ity(rw), "rfp").unwrap();
+            phi.add_incoming(&[(&fv, f_end), (&sv, s_end)]);
+            return Ok(phi.as_basic_value().into_int_value());
+        }
         // other prim children: trampoline into the interpreter's prim
         let Some(&child) = ie.children.get(&instance) else {
             return nope("call on unknown child");
