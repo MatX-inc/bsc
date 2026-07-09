@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`07c13ed2` — ALWAYS `git push personal`, never bare `git push origin`:
+`981a6be2` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -222,10 +222,20 @@ intervening-write analysis — the sched cone-sharing corruption is
 the cautionary tale).  Tier B2 (inline enq/deq/write fast paths with
 trampoline warning slow-path) parked as cold-path polish.
 
+PER-MODULE-TYPE EXEC DEDUP (981a6be2): DFS subtree-contiguous arena
+regions with type-canonical layouts (eager slots allocate as a
+per-instance sorted UNION — schedule attachment splits them
+differently between twins); exec fns take (arena, env, region base,
+token base) with in-region slots base-relative and runtime tokens;
+rules group by recursive subtree signature and compile ONCE per
+class (per-ordinal call-site tables come from trial protos).  Twin
+IR proven raw-identical before grouping.  Sudoku: 276 bodies -> 221
+classes, .so 2.94 -> 1.59MB, link 4.70 -> 3.26s; N-replicated
+designs dedup N-fold.  AOT_LAYOUT_REV=3.  The signature MUST cover
+every input the exec lowering reads — extend it when the lowering
+grows new inputs (the sweep + twin-hash check referee).
+
 NEXT (in rough order of value):
-- Per-MODULE-TYPE code dedup (offset tables instead of baked slot
-  constants) — proven exact on sudoku; halves body compile and
-  shrinks icache.
 - Cone/body splitting into helper fns — two sudoku rule bodies carry
   ~130k-insn cones and set the body-compile floor (~3.5s wall in the
   background); splitting also unlocks raising TRS_JIT_OPT.  With
