@@ -1948,6 +1948,7 @@ impl Interp {
         }
         if matches!(request, JitRequest::Run)
             && std::env::var_os("TRS_JIT").is_none()
+            && !self.jit_armed
         {
             return None;
         }

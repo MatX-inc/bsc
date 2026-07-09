@@ -76,12 +76,29 @@ pub struct SimState {
     aborted: bool,
     /// bk_set_timescale (VCD header)
     timescale: Option<(String, u64)>,
+    /// async run in flight (bk_advance(async): engines move to the
+    /// worker; bk_sync joins and moves them back)
+    runner: Option<Runner>,
     /// the symbol tree (built once at bk_init; NEVER mutated after —
     /// tSymbol handles are raw pointers into this Vec)
     syms: Vec<Sym>,
     /// bk_peek_* word buffer (valid until the next peek, like the
     /// reference's internal storage)
     peek_buf: Vec<u32>,
+}
+
+/// The engines while they live on the async worker thread.  Interp
+/// holds raw prim/arena pointers (not Send in general), but the
+/// vector is moved WHOLE between threads with exclusive ownership —
+/// never aliased across the boundary.
+struct EngineBox(Vec<Engine>);
+unsafe impl Send for EngineBox {}
+
+struct Runner {
+    join: std::thread::JoinHandle<(EngineBox, i32)>,
+    abort: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    progress: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// One node of the symbol tree.  Carries a back-pointer to its
@@ -150,14 +167,27 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
         })
         .collect();
     let kinds = if kinds.is_empty() {
-        vec![EngineKind::Interp]
+        // shipped default (Ravi): fast `sim run` via the hybrid JIT
+        // when the library carries it; the lean build is interp-only.
+        // Introspection tiers per docs/TCL-CAPI.md: def peeks need
+        // the interp engine's recording.
+        if cfg!(feature = "jit") {
+            vec![EngineKind::Jit]
+        } else {
+            vec![EngineKind::Interp]
+        }
     } else {
         kinds
     };
     let mut engines = Vec::new();
     for kind in kinds {
         match Interp::from_bir_bytes(bir) {
-            Ok(interp) => engines.push(Engine { interp, kind }),
+            Ok(mut interp) => {
+                if kind == EngineKind::Jit {
+                    interp.arm_jit();
+                }
+                engines.push(Engine { interp, kind });
+            }
             Err(e) => {
                 eprintln!("trs capi: bk_init: {e}");
                 return std::ptr::null_mut();
@@ -174,6 +204,7 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
         interactive: false,
         aborted: false,
         timescale: None,
+        runner: None,
         syms: Vec::new(),
         peek_buf: Vec::new(),
     });
@@ -181,8 +212,13 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     // protocol seeded — `sim clock` works right after `sim load`
     for e in &mut st.engines {
         e.interp.prime();
-        // debug tier: retain last-computed def values for peeks
-        e.interp.set_sym_trace();
+        // debug tier: the INTERP engine retains last-computed def
+        // values for peeks; JIT engines skip the recording (their
+        // def visibility degrades per the capability tiers — and
+        // sym_trace would disable the hybrid entirely)
+        if e.kind == EngineKind::Interp {
+            e.interp.set_sym_trace();
+        }
     }
     let raw = Box::into_raw(st);
     unsafe { build_symbols(raw) };
@@ -490,6 +526,13 @@ pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
 pub extern "C" fn bk_now(hdl: *mut c_void) -> u64 {
     let st = state(hdl);
     let f = st.timescale.as_ref().map(|(_, f)| *f).unwrap_or(1);
+    if let Some(r) = &st.runner {
+        // async run in flight: the worker publishes per-slice
+        return r
+            .progress
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .wrapping_mul(f);
+    }
     st.primary().now().wrapping_mul(f)
 }
 
@@ -507,7 +550,11 @@ pub extern "C" fn bk_append_argument(hdl: *mut c_void, arg: *const c_char) {
 /// `bk_finished`: has $finish been called.
 #[no_mangle]
 pub extern "C" fn bk_finished(hdl: *mut c_void) -> u8 {
-    state(hdl).primary().is_finished() as u8
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return 0; // async run in flight
+    }
+    st.primary().is_finished() as u8
 }
 
 /// `bk_exit_status`: status of the last $stop/$finish.
@@ -548,6 +595,9 @@ impl SimState {
         p
     }
     fn clock(&mut self, h: u32) -> Option<trs_interp::ClockInfo> {
+        if self.engines.is_empty() {
+            return None; // async run in flight
+        }
         self.primary().clock_info().into_iter().nth(h as usize)
     }
 }
@@ -679,8 +729,11 @@ pub extern "C" fn bk_set_interactive(hdl: *mut c_void) {
 }
 
 #[no_mangle]
-pub extern "C" fn bk_advance(hdl: *mut c_void, _async: u8) -> i32 {
+pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
     let st = state(hdl);
+    if st.runner.is_some() || st.engines.is_empty() {
+        return BK_ERROR; // already running
+    }
     // effective stop condition: armed limits only (above the current
     // per-clock count), plus outstanding UI events
     let clocks = st.primary().clock_info();
@@ -693,11 +746,36 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, _async: u8) -> i32 {
             (lim > count).then_some((h as usize, dir, lim))
         })
         .collect();
-    let cond = trs_interp::StopCond {
+    let mut cond = trs_interp::StopCond {
         max_cycles: u64::MAX,
         edge_limits,
         at_times: st.ui_events.clone(),
+        ..Default::default()
     };
+    if is_async != 0 {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        let abort = Arc::new(AtomicBool::new(false));
+        let running = Arc::new(AtomicBool::new(true));
+        let progress = Arc::new(AtomicU64::new(st.primary().now()));
+        cond.abort = Some(abort.clone());
+        cond.progress = Some(progress.clone());
+        let mut engines = EngineBox(std::mem::take(&mut st.engines));
+        let running2 = running.clone();
+        let join = std::thread::spawn(move || {
+            let mut rc = BK_SUCCESS;
+            for e in &mut engines.0 {
+                let r = e.interp.advance_until(&cond);
+                if r != 0 {
+                    rc = r;
+                }
+            }
+            running2.store(false, Ordering::SeqCst);
+            (engines, rc)
+        });
+        st.runner = Some(Runner { join, abort, running, progress });
+        return BK_SUCCESS;
+    }
     let mut rc = BK_SUCCESS;
     // primary first (owns stdout); oracle comparison lands with the
     // quiet flag for secondaries
@@ -715,18 +793,38 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, _async: u8) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn bk_is_running(_hdl: *mut c_void) -> u8 {
-    0
+pub extern "C" fn bk_is_running(hdl: *mut c_void) -> u8 {
+    state(hdl)
+        .runner
+        .as_ref()
+        .map(|r| r.running.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false) as u8
 }
 
+/// Block for an async run and move the engines back.
 #[no_mangle]
 pub extern "C" fn bk_sync(hdl: *mut c_void) -> u64 {
+    let st = state(hdl);
+    if let Some(r) = st.runner.take() {
+        if let Ok((engines, rc)) = r.join.join() {
+            st.engines = engines.0;
+            st.exit_status = rc;
+        }
+        let now = st.primary().now();
+        st.ui_events.retain(|&t| t > now);
+    }
     bk_now(hdl)
 }
 
+/// External abort: the run stops at the next slice boundary
+/// (bluetcl's `sim stop` = bk_abort_now + bk_sync).
 #[no_mangle]
 pub extern "C" fn bk_abort_now(hdl: *mut c_void) {
-    state(hdl).aborted = true;
+    let st = state(hdl);
+    st.aborted = true;
+    if let Some(r) = &st.runner {
+        r.abort.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[no_mangle]

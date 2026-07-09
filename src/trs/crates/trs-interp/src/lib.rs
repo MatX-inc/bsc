@@ -88,6 +88,9 @@ pub struct Interp {
     bdpi: Option<bdpi::Bdpi>,
     /// command-line +args (without the '+'), for $test$plusargs
     plusargs: Vec<String>,
+    /// capi Jit engine: arm the hybrid JIT without the TRS_JIT env
+    /// (jit.rs run-mode gate honors this flag too)
+    pub(crate) jit_armed: bool,
     /// bk_set_timescale factor: $time/%t display = now * timescale
     /// (kernel bk_now semantics).  CAVEAT: the edge-SSA join
     /// re-materialization of $time loads the raw now slot — the
@@ -411,6 +414,12 @@ pub struct StopCond {
     /// stop at the end of timeslice t; time advances to t even when
     /// no design event lands there
     pub at_times: Vec<u64>,
+    /// bk_abort_now: stop at the next slice boundary when set
+    /// (checked between slices — "end of cycle" semantics)
+    pub abort: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// async runs publish the current slice time here so bk_now can
+    /// answer live from another thread
+    pub progress: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl Default for StopCond {
@@ -419,13 +428,18 @@ impl Default for StopCond {
             max_cycles: u64::MAX,
             edge_limits: Vec::new(),
             at_times: Vec::new(),
+            abort: None,
+            progress: None,
         }
     }
 }
 
 impl StopCond {
     fn trivial(&self) -> bool {
-        self.edge_limits.is_empty() && self.at_times.is_empty()
+        self.edge_limits.is_empty()
+            && self.at_times.is_empty()
+            && self.abort.is_none()
+            && self.progress.is_none()
     }
 }
 
@@ -554,6 +568,7 @@ impl Interp {
             dyn_strs: Vec::new(),
             bdpi: None,
             plusargs: Vec::new(),
+            jit_armed: false,
             timescale: 1,
             finished: None,
             fataled: false,
@@ -3702,6 +3717,19 @@ impl Interp {
                 try_central!();
                 continue;
             }
+            if let Some(p) = &cond.progress {
+                p.store(t, std::sync::atomic::Ordering::Relaxed);
+            }
+            // bk_abort_now: end-of-cycle stop — the finished slice is
+            // complete, the popped edge waits for the next advance
+            if cond
+                .abort
+                .as_ref()
+                .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+            {
+                heap.push(Reverse((t, prio, ci, pos)));
+                break;
+            }
             // bk_quit_at / UI events: every timeslice <= tq is done
             // once the next event lies beyond tq; the kernel's UI
             // callback is an event AT tq, so time advances to tq
@@ -4445,6 +4473,13 @@ impl Interp {
         let mut interp = Interp::new(design);
         interp.bir_hash = bir_fingerprint(bytes);
         Ok(interp)
+    }
+
+    /// capi EngineKind::Jit: enable the hybrid JIT for this engine
+    /// regardless of the TRS_JIT environment (no-op without the
+    /// jit feature — the lean build stays interp-only).
+    pub fn arm_jit(&mut self) {
+        self.jit_armed = true;
     }
 
     /// bk_set_timescale: scale factor applied to $time/%t values.

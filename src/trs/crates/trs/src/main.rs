@@ -327,6 +327,25 @@ fn main() -> ExitCode {
 /// `puts [...]` printing.  The full interactive surface arrives with the
 /// bk_* compat .so (task #20); anything beyond this subset errors out
 /// loudly.
+/// The dlsym'd bk surface (docs/TCL-CAPI.md) — the -u keep list for
+/// the interactive .so link.
+const BK_EXPORTS: &[&str] = &[
+    "bk_init", "bk_shutdown", "bk_now", "bk_set_timescale", "bk_version",
+    "bk_append_argument", "bk_define_clock", "bk_num_clocks",
+    "bk_get_nth_clock", "bk_clock_name", "bk_get_clock_by_name",
+    "bk_clock_initial_value", "bk_clock_first_edge", "bk_clock_duration",
+    "bk_clock_val", "bk_clock_cycle_count", "bk_clock_edge_count",
+    "bk_clock_last_edge", "bk_quit_after_edge", "bk_schedule_ui_event",
+    "bk_remove_ui_event", "bk_set_interactive", "bk_advance",
+    "bk_is_running", "bk_sync", "bk_abort_now", "bk_finished",
+    "bk_exit_status", "bk_fataled", "bk_top_symbol", "bk_lookup_symbol",
+    "bk_get_size", "bk_get_key", "bk_is_module", "bk_is_rule",
+    "bk_is_single_value", "bk_is_value_range", "bk_peek_symbol_value",
+    "bk_get_range_min_addr", "bk_get_range_max_addr",
+    "bk_peek_range_value", "bk_num_symbols", "bk_get_nth_symbol",
+    "bk_set_VCD_file", "bk_enable_VCD_dumping", "bk_disable_VCD_dumping",
+];
+
 /// `trs link --interactive`: produce <base>.so (the bk_* capi model
 /// with the BIR embedded via incbin) and <base>, the same bluesim.tcl
 /// wrapper the reference emits — `sim load`-able by stock bluetcl and
@@ -406,22 +425,51 @@ void* new_MODEL_{top}(void) {{
         return fail(format!("write {}: {e}", map.display()));
     }
     let so = format!("{base}.so");
-    let st = std::process::Command::new("cc")
-        .arg("-shared")
+    let mut cc = std::process::Command::new("cc");
+    cc.arg("-shared")
         .arg("-fPIC")
         .arg("-o")
         .arg(&so)
         .arg(&shim_c)
-        .arg(&shim_s)
-        .arg("-Wl,--whole-archive")
-        .arg(&lib)
-        .arg("-Wl,--no-whole-archive")
+        .arg(&shim_s);
+    // force-keep exactly the exported surface: --whole-archive would
+    // drag every llvm-sys binding object (LineEditor -> libedit, ffi
+    // stubs) into the .so; -u pulls only what the bk_*/new_MODEL
+    // closure actually needs
+    for sym in BK_EXPORTS {
+        cc.arg(format!("-Wl,-u,{sym}"));
+    }
+    cc.arg(&lib)
         .arg("-Wl,-Bsymbolic")
         .arg(format!("-Wl,--version-script={}", map.display()))
         .arg("-lpthread")
         .arg("-ldl")
-        .arg("-lm")
-        .status();
+        .arg("-lm");
+    if cfg!(feature = "jit") {
+        // a jit-featured capi staticlib references LLVM (rustc links
+        // it into BINARIES only); use the shared libLLVM
+        let libdir = std::process::Command::new("llvm-config-18")
+            .arg("--libdir")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "/usr/lib/llvm-18/lib".into());
+        cc.arg(format!("-L{libdir}"))
+            .arg("-lLLVM-18")
+            .arg("-lstdc++")
+            .arg("-lz")
+            // the execution engine bindings reference libffi (shared
+            // libLLVM does not re-export it)
+            .arg("-lffi")
+            // terminfo + zstd: llvm-sys support-library residue
+            .arg("-ltinfo")
+            .arg("-lzstd")
+            // -shared tolerates undefined symbols; RTLD_NOW does not —
+            // fail at LINK time instead of at sim load
+            .arg("-Wl,--no-undefined");
+    }
+    let st = cc.status();
     match st {
         Ok(s) if s.success() => {}
         Ok(s) => return fail(format!("cc exited {s}")),

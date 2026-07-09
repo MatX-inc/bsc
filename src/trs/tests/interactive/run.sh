@@ -23,6 +23,10 @@ esac
 WK=${1:-$(mktemp -d)}
 mkdir -p "$WK" || exit 2
 cd "$WK" || exit 2
+# capability tiers (docs/TCL-CAPI.md): def/symbol peeks need the
+# INTERP engine's recording; async.cmd's fixed wall needs the JIT
+# engine's speed and touches no symbols — set per test below
+export TRS_CAPI_ENGINES=interp
 cp "$TSRC"/*.bsv "$TSRC"/*.bs "$TSRC"/*.cmd . 2>/dev/null
 
 fail=0
@@ -71,7 +75,9 @@ if build APeriodicTest.bsv sysAPeriodicTest; then
     check sysAPeriodicTest debug4.cmd
 fi
 if build Long.bsv mkLong; then
+    export TRS_CAPI_ENGINES=jit
     check mkLong async.cmd
+    export TRS_CAPI_ENGINES=interp
 fi
 if build hier.bsv mkTop -keep-fires; then
     check mkTop hier.cmd
