@@ -93,6 +93,43 @@ The model .so multiplexes the three engines behind one bk_* surface:
      -out loop is trivial; the work is in the stop-condition and
      comparison plumbing.
 
+## Capability tiers + degradation contract (Ravi, 2026-07-09)
+
+The bk_* API must represent ABSENCE honestly — the fast compile has
+no debug contract (export elision strips CF/WF and def slots by
+design), and the reference API already has the vocabulary for it
+(NULL peeks / NoValue errors in bluetcl, unknown tags, whatever
+child list we enumerate).  Per-engine tiers on one symbol tree:
+
+- interp: full introspection (modules, rules, defs, state, ranges).
+- hybrid JIT: architectural state (regs, RegFiles, FIFO contents)
+  is arena-resident and edge-coherent -> peekable at stops; rule/
+  def views degrade to NoValue where the compiled path owns them.
+- fast/AOT: architectural state only — STATE was never elided, only
+  the observability scaffolding; rules/defs enumerate valueless or
+  not at all.  `sim describe`/`ls` reflect reality; peeks that need
+  more error with the remedy (relink --engines=interp), in the
+  linker-note voice.
+
+Degradation policy: bk_init returns NULL only for hard failures
+(unparseable BIR); a requested engine that cannot construct (AOT
+artifact missing / bir_hash mismatch) DOWNGRADES to interp with a
+stderr note.  Unsupported-per-engine ops answer in the reference's
+own failure vocabulary (BAD_CLOCK_HANDLE, status false, NULL peek).
+All notes go to stderr — stdout is byte-parity territory.  Oracle
+divergence: stderr report (instant + mismatching quantity), then
+the fatal flag flips so scripts stop AT the divergence.
+
+Flagship debug configuration: --engines=interp,aot — fast execution
+with full introspection on the interp twin, cross-checked at every
+stop.
+
+Internal API this needs: stepper advance_until(StopCond) with
+per-clock (dir, edge-count) targets + quit_at(time) + UI events
+(today advance() counts default-clock posedges only); pub accessors
+for per-clock cycle/edge counters (already tracked for VCD); an
+Interp quiet flag for secondary oracle engines.
+
 ## Mapping onto trs
 
 Crate `trs-capi` (cdylib).  `new_MODEL_<top>` cannot be known at
