@@ -93,6 +93,19 @@ The model .so multiplexes the three engines behind one bk_* surface:
      -out loop is trivial; the work is in the stop-condition and
      comparison plumbing.
 
+## Namespaces (Ravi, 2026-07-09)
+
+Two prefixes in one library:
+- `bk_*` + `new_MODEL_<top>`: FROZEN to the measured Bluesim
+  contract, bit-for-bit — stock bluetcl loads us unmodified, and we
+  never extend or reinterpret names here.
+- `trs_*`: everything of ours — new capabilities (engine
+  selection/query at runtime, oracle control, capability queries)
+  AND fancier variants of existing bk functionality (e.g. a
+  `trs_advance` with richer stop conditions lives beside the
+  compatible `bk_advance`; the bk name never grows options).
+  Export maps whitelist both prefixes.
+
 ## Capability tiers + degradation contract (Ravi, 2026-07-09)
 
 The bk_* API must represent ABSENCE honestly — the fast compile has
