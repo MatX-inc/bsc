@@ -355,6 +355,9 @@ pub(crate) struct PieceInfo {
     pub outlinable: bool,
     pub stable: bool,
     pub outlined: bool,
+    /// unbound data-port reads in the piece: helper parameters (v2);
+    /// nonempty => no per-instant memo (value is per-call)
+    pub ports: Vec<StrId>,
 }
 
 /// Bottom-up outline selection over a module's def DAG, recursing
@@ -388,27 +391,37 @@ impl<'a> ConeAnalyzer<'a> {
             return r.clone();
         }
         if self.seen.contains(&(mir, n)) {
-            return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false };
+            return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false, ports: Vec::new() };
         }
         let Some(di) = self.d.modules[mir].defs.iter().position(|dd| dd.name == n) else {
-            return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false };
+            return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false, ports: Vec::new() };
         };
         self.seen.push((mir, n));
         let e = self.d.modules[mir].defs[di].expr.clone();
         let mut rs = std::collections::HashSet::new();
-        let (nodes, outl, stab) = self.walk(mir, &e, None, &mut rs);
+        let mut ports = std::collections::BTreeSet::new();
+        let (nodes, outl, stab) = self.walk(mir, &e, None, &mut rs, &mut ports);
         self.seen.pop();
         let mut eff = nodes;
         for k in &rs {
             eff = eff.saturating_add(*self.own.get(k).unwrap_or(&0));
         }
         self.own.insert((mir, n), nodes);
+        // cap the parameter count: huge signatures cost more than the
+        // split saves
+        let outl = outl && ports.len() <= 8;
         let outlined = outl && eff >= self.thresh;
         if !outlined {
             rs.insert((mir, n));
             self.reach.insert((mir, n), rs);
         }
-        let r = PieceInfo { eff, outlinable: outl, stable: stab, outlined };
+        let r = PieceInfo {
+            eff,
+            outlinable: outl,
+            stable: stab,
+            outlined,
+            ports: ports.into_iter().collect(),
+        };
         self.memo.insert((mir, n), r.clone());
         r
     }
@@ -421,12 +434,13 @@ impl<'a> ConeAnalyzer<'a> {
         e: &trs_ir::Expr,
         margs: Option<&std::collections::HashSet<StrId>>,
         rs: &mut std::collections::HashSet<(usize, StrId)>,
+        ports: &mut std::collections::BTreeSet<StrId>,
     ) -> (u32, bool, bool) {
         use trs_ir::Expr as E;
         let (mut nodes, mut outl, mut stab) = (1u32, true, true);
         macro_rules! sub {
             ($x:expr) => {{
-                let (c, o, sb) = self.walk(mir, $x, margs, rs);
+                let (c, o, sb) = self.walk(mir, $x, margs, rs, ports);
                 nodes = nodes.saturating_add(c);
                 outl &= o;
                 stab &= sb;
@@ -435,17 +449,36 @@ impl<'a> ConeAnalyzer<'a> {
         match e {
             E::Const { .. } | E::Str(_) | E::Real(_) => {}
             E::Port(pn) => {
-                let ok = margs.map(|a| a.contains(pn)).unwrap_or(false);
-                if !ok && std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
-                    eprintln!("why: unbound-port {}", self.d.strings[*pn as usize]);
+                if margs.map(|a| a.contains(pn)).unwrap_or(false) {
+                    // bound method arg: accounted at the call site
+                } else {
+                    let m = &self.d.modules[mir];
+                    let is_en = m.inputs.iter().any(|q| {
+                        q.name == *pn && q.kind == trs_ir::PortKind::MethodEnable
+                    });
+                    let is_data = m.inputs.iter().any(|q| {
+                        q.name == *pn && q.kind != trs_ir::PortKind::MethodEnable
+                    });
+                    if is_en {
+                        // EN slots change during dispatch
+                        stab = false;
+                    } else if is_data {
+                        // data/method-arg port: helper parameter (v2)
+                        ports.insert(*pn);
+                        stab = false;
+                    } else {
+                        // reset ports lower as slot loads; unknown taints
+                        stab = false;
+                    }
                 }
-                outl &= ok;
-                stab &= ok;
             }
             E::Def(dn) => {
                 let r = self.def_piece(mir, *dn);
                 outl &= r.outlinable || r.outlined;
                 stab &= r.stable;
+                // a piece's port params propagate to its callers
+                // (outlined callees receive them as call arguments)
+                ports.extend(r.ports.iter().copied());
                 if r.outlined {
                     nodes = nodes.saturating_add(1);
                 } else {
@@ -490,9 +523,14 @@ impl<'a> ConeAnalyzer<'a> {
                                 let aset: std::collections::HashSet<StrId> =
                                     m.args.iter().map(|p| p.name).collect();
                                 let res = m.result.clone().unwrap();
-                                let (c, o, sb) = self.walk(cmir, &res, Some(&aset), rs);
+                                // callee ports beyond its bound args
+                                // are the CALLEE module's — v1 cannot
+                                // parameterize across modules: taint
+                                let mut cports = Default::default();
+                                let (c, o, sb) =
+                                    self.walk(cmir, &res, Some(&aset), rs, &mut cports);
                                 nodes = nodes.saturating_add(c);
-                                outl &= o;
+                                outl &= o && cports.is_empty();
                                 stab &= sb;
                             }
                             Some(m) => {
@@ -877,7 +915,7 @@ impl Interp {
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&t| t > 0);
-        let outlined_sel: HashMap<(usize, StrId), (u32, bool)> = if let Some(th) =
+        let outlined_sel: HashMap<(usize, StrId), (u32, bool, Vec<StrId>)> = if let Some(th) =
             split_thresh
         {
             let mut exemplar: HashMap<usize, usize> = HashMap::new();
@@ -931,7 +969,8 @@ impl Interp {
                             .find(|dd| dd.name == name)
                             .map(|dd| dd.width.max(1))
                             .unwrap_or(1);
-                        sel.insert((mir, name), (w, pi.stable));
+                        let stable = pi.stable && pi.ports.is_empty();
+                        sel.insert((mir, name), (w, stable, pi.ports.clone()));
                     }
                 }
             }
@@ -939,7 +978,7 @@ impl Interp {
                 eprintln!(
                     "trs jit: split thresh={th}: {} pieces ({} memoized)",
                     sel.len(),
-                    sel.values().filter(|(_, st)| *st).count()
+                    sel.values().filter(|(_, st, _)| *st).count()
                 );
             }
             sel
@@ -1100,8 +1139,8 @@ impl Interp {
             {
                 let mut ms: Vec<(StrId, u32)> = outlined_sel
                     .iter()
-                    .filter(|((m, _), (_, st))| *m == mir && *st)
-                    .map(|((_, dn), (w, _))| (*dn, *w))
+                    .filter(|((m, _), (_, st, _))| *m == mir && *st)
+                    .map(|((_, dn), (w, _, _))| (*dn, *w))
                     .collect();
                 ms.sort_unstable();
                 for (dn, w) in ms {
@@ -1417,7 +1456,18 @@ impl Interp {
                     continue;
                 }
                 let ex = exemplar[&mir];
-                let (w, st) = outlined_sel[&(mir, dn)];
+                let (w, st, ref pnames) = outlined_sel[&(mir, dn)];
+                let mut ports: Vec<(StrId, u32)> = Vec::new();
+                let mut ok = true;
+                for &pn in pnames {
+                    match self.d.modules[mir].inputs.iter().find(|q| q.name == pn) {
+                        Some(q) => ports.push((pn, q.width.max(1))),
+                        None => ok = false,
+                    }
+                }
+                if !ok {
+                    continue;
+                }
                 helper_specs.push(HelperSpec {
                     mir,
                     def: dn,
@@ -1429,12 +1479,15 @@ impl Interp {
                     } else {
                         None
                     },
+                    ports,
                 });
             }
         }
         let refs_sym: HelperMap = helper_specs
             .iter()
-            .map(|h| ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width)))
+            .map(|h| {
+                ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width, h.ports.clone()))
+            })
             .collect();
         // deferred: Load requests only need addresses if the artifact
         // fails to load (in-process fallback) — never compile helpers
@@ -1460,7 +1513,10 @@ impl Interp {
                     helper_specs
                         .iter()
                         .map(|h| {
-                            ((h.mir, h.def), (HelperRef::Addr(am[&h.sym]), h.width))
+                            (
+                                (h.mir, h.def),
+                                (HelperRef::Addr(am[&h.sym]), h.width, h.ports.clone()),
+                            )
                         })
                         .collect()
                 }

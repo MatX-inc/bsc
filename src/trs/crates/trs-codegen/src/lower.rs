@@ -565,8 +565,9 @@ pub enum HelperRef {
     Sym(String),
 }
 
-/// Outlined pieces available to a lowering: (module ir, def) -> helper.
-pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32 /*width*/)>;
+/// Outlined pieces available to a lowering: (module ir, def) ->
+/// (helper, result width, port params in signature order).
+pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32, Vec<(StrId, u32)>)>;
 
 /// One outlined def piece to compile as a helper function.
 pub struct HelperSpec {
@@ -582,6 +583,8 @@ pub struct HelperSpec {
     /// per-instant memo: region slot base (stamp word, then value
     /// words) — None for unstable pieces
     pub memo_slot: Option<u32>,
+    /// unbound data-port reads: helper parameters, signature order
+    pub ports: Vec<(StrId, u32)>,
 }
 
 /// Lower a batch of helper functions into one module.  Same-batch
@@ -1415,28 +1418,37 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         if let Some(out) = self.outlined {
             if self.helper_self == Some((ie.mir, n)) {
                 // lowering this piece's own body: fall through to expand
-            } else if let Some((href, w)) = out.get(&(ie.mir, n)) {
+            } else if let Some((href, w, hports)) = out.get(&(ie.mir, n)) {
+                // parameterized pieces need every port bound in this
+                // frame; otherwise expand inline as before
+                let bound = hports.iter().all(|(p, _)| f.args.contains_key(p));
+                if !bound {
+                    // fall through to inline expansion below
+                } else {
                 let w = *w;
                 let i64t = self.ctx.i64_type();
                 let ptrt = self.ctx.ptr_type(AddressSpace::default());
-                let hty = self.ity(w).fn_type(
-                    &[ptrt.into(), ptrt.into(), i64t.into()],
-                    false,
-                );
+                let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                    vec![ptrt.into(), ptrt.into(), i64t.into()];
+                for (_, pw) in hports {
+                    ptys.push(self.ity(*pw).into());
+                }
+                let hty = self.ity(w).fn_type(&ptys, false);
                 let callee_base = self.slot_index(self.ie(f.inst)?.region.0);
                 let envp = f.envp.ok_or_else(|| Ineligible("helper needs env".into()))?;
+                let mut hargs: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    vec![f.arena.into(), envp.into(), callee_base.into()];
+                for (pn, pw) in hports {
+                    let (v, vw) = f.args[pn];
+                    hargs.push(self.to_w(v, vw, *pw, false).into());
+                }
                 let cs = match href {
                     HelperRef::Addr(a) => {
                         let fp = i64t
                             .const_int(*a as u64, false)
                             .const_to_pointer(ptrt);
                         self.builder
-                            .build_indirect_call(
-                                hty,
-                                fp,
-                                &[f.arena.into(), envp.into(), callee_base.into()],
-                                "hlp",
-                            )
+                            .build_indirect_call(hty, fp, &hargs, "hlp")
                             .unwrap()
                     }
                     HelperRef::Sym(name) => {
@@ -1444,13 +1456,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             .module
                             .get_function(name)
                             .unwrap_or_else(|| self.module.add_function(name, hty, None));
-                        self.builder
-                            .build_call(
-                                hf,
-                                &[f.arena.into(), envp.into(), callee_base.into()],
-                                "hlp",
-                            )
-                            .unwrap()
+                        self.builder.build_call(hf, &hargs, "hlp").unwrap()
                     }
                 };
                 let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
@@ -1459,6 +1465,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let v = rv.into_int_value();
                 f.ssa.insert(n, v);
                 return Ok(v);
+                }
             }
         }
         if f.expanding.contains(&n) {
@@ -1860,7 +1867,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i64t = self.ctx.i64_type();
         let w = hs.width.max(1);
-        let fnty = self.ity(w).fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+            vec![ptrt.into(), ptrt.into(), i64t.into()];
+        for (_, pw) in &hs.ports {
+            ptys.push(self.ity(*pw).into());
+        }
+        let fnty = self.ity(w).fn_type(&ptys, false);
         let func = self.module.add_function(&hs.sym, fnty, None);
         let entry = self.ctx.append_basic_block(func, "entry");
         self.builder.position_at_end(entry);
@@ -1872,12 +1884,22 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             // helpers carry no callback sites (v1): token base unused
             i64t.const_zero(),
         ));
+        let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
+        for (k, (pn, pw)) in hs.ports.iter().enumerate() {
+            args.insert(
+                *pn,
+                (
+                    func.get_nth_param(3 + k as u32).unwrap().into_int_value(),
+                    *pw,
+                ),
+            );
+        }
         let mut f = Frame {
             arena: func.get_nth_param(0).unwrap().into_pointer_value(),
             envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
             inst: hs.inst,
             method_idx: None,
-            args: HashMap::new(),
+            args,
             ssa: HashMap::new(),
             expanding: Vec::new(),
             tasks: HashMap::new(),
