@@ -275,6 +275,9 @@ impl JitPlans {
     /// per composition.  Requires every body cell warm (the fused code
     /// bakes cell addresses).  Failure leaves the node walk in place.
     pub(crate) fn try_fuse(&self) {
+        if std::env::var_os("TRS_NO_FUSION").is_some() {
+            return;
+        }
         let _ = self.fused.get_or_init(|| {
             let comps: Vec<FusedComp> = self
                 .comp_nodes
@@ -1586,6 +1589,135 @@ impl Interp {
                 token_base: (ri.ordinal as u64) << 17,
             });
         }
+        // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
+        // consumed by 2+ rules of the same module — the cross-rule
+        // recompute mass the memo/#25 lever would save per edge
+        if std::env::var_os("TRS_JIT_SHARE_STATS").is_some() {
+            use trs_ir::Expr as E;
+            fn refs(e: &E, out: &mut Vec<StrId>) {
+                match e {
+                    E::Def(n) => out.push(*n),
+                    E::MethCall { args, .. } | E::Prim { args, .. }
+                    | E::ForeignCall { args, .. } => {
+                        for a in args {
+                            refs(a, out);
+                        }
+                    }
+                    E::If { cond, then_, else_, .. } => {
+                        refs(cond, out);
+                        refs(then_, out);
+                        refs(else_, out);
+                    }
+                    E::Case { scrutinee, arms, default, .. } => {
+                        refs(scrutinee, out);
+                        for (_, a) in arms {
+                            refs(a, out);
+                        }
+                        refs(default, out);
+                    }
+                    _ => {}
+                }
+            }
+            let mut mirs: Vec<usize> = inst_envs.values().map(|e| e.mir).collect();
+            mirs.sort_unstable();
+            mirs.dedup();
+            for mir in mirs {
+                let m = &self.d.modules[mir];
+                let by: HashMap<StrId, usize> =
+                    m.defs.iter().enumerate().map(|(i, d)| (d.name, i)).collect();
+                // transitive def set per rule (cf+wf+body)
+                let mut counts: HashMap<StrId, u32> = HashMap::new();
+                let mut own: HashMap<StrId, u32> = HashMap::new();
+                for d in &m.defs {
+                    let mut r = Vec::new();
+                    refs(&d.expr, &mut r);
+                    let mut n = 0u32;
+                    fn sz(e: &E, n: &mut u32) {
+                        *n += 1;
+                        match e {
+                            E::MethCall { args, .. } | E::Prim { args, .. }
+                            | E::ForeignCall { args, .. } => {
+                                for a in args {
+                                    sz(a, n);
+                                }
+                            }
+                            E::If { cond, then_, else_, .. } => {
+                                sz(cond, n);
+                                sz(then_, n);
+                                sz(else_, n);
+                            }
+                            E::Case { scrutinee, arms, default, .. } => {
+                                sz(scrutinee, n);
+                                for (_, a) in arms {
+                                    sz(a, n);
+                                }
+                                sz(default, n);
+                            }
+                            _ => {}
+                        }
+                    }
+                    sz(&d.expr, &mut n);
+                    own.insert(d.name, n);
+                }
+                for r in &m.rules {
+                    let mut seen: std::collections::HashSet<StrId> = Default::default();
+                    let mut work: Vec<StrId> = vec![r.can_fire, r.will_fire];
+                    for st in &r.body {
+                        match st {
+                            trs_ir::Stmt::Def { expr, .. } => refs(expr, &mut work),
+                            trs_ir::Stmt::Action(a)
+                            | trs_ir::Stmt::AvAction { action: a, .. } => {
+                                use trs_ir::Action as A;
+                                match a {
+                                    A::MethCall { cond, args, .. } => {
+                                        refs(cond, &mut work);
+                                        for x in args {
+                                            refs(x, &mut work);
+                                        }
+                                    }
+                                    A::Foreign { cond, args, .. } => {
+                                        refs(cond, &mut work);
+                                        for x in args {
+                                            refs(x, &mut work);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    while let Some(n) = work.pop() {
+                        if !seen.insert(n) {
+                            continue;
+                        }
+                        if let Some(&di) = by.get(&n) {
+                            refs(&m.defs[di].expr, &mut work);
+                        }
+                    }
+                    for n in seen {
+                        *counts.entry(n).or_insert(0) += 1;
+                    }
+                }
+                let shared: Vec<_> =
+                    counts.iter().filter(|(_, &c)| c >= 2).collect();
+                let mass: u64 = shared
+                    .iter()
+                    .map(|(n, &c)| {
+                        own.get(n).copied().unwrap_or(0) as u64 * (c as u64 - 1)
+                    })
+                    .sum();
+                let total: u64 = own.values().map(|&v| v as u64).sum();
+                eprintln!(
+                    "trs share: mir={mir} rules={} defs={} shared(2+ rules)={} \
+                     recompute-mass={mass} (module DAG mass {total})",
+                    m.rules.len(),
+                    m.defs.len(),
+                    shared.len()
+                );
+            }
+        }
+
         // ---- exec dedup classes: one compiled body per class ----
         let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
         {

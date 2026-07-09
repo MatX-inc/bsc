@@ -1061,6 +1061,9 @@ pub fn compile_fused(
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
     let module = ctx.create_module("trs_fused");
     let syms = lower_fused(ctx, &module, comps);
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
     let ee = finish_engine(module)?;
     let mut out = Vec::with_capacity(syms.len());
     for sym in &syms {
