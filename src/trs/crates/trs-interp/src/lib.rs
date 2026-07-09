@@ -3669,6 +3669,7 @@ impl Interp {
                 // fire signals and schedule-position defs live in slots)
                 #[cfg(feature = "jit")]
                 let mut _ran_fused = false;
+                #[cfg(feature = "jit")]
                 let ran_jit = match &jit {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
@@ -4065,6 +4066,22 @@ impl Interp {
         Some(AotEmit::Failed(
             "this trs was built without JIT/AOT support (feature `jit`)".into(),
         ))
+    }
+}
+
+impl Interp {
+    /// Construct from in-memory BIR bytes (the capi's embedded-BIR
+    /// path — no file I/O at `sim load` time).
+    pub fn from_bir_bytes(bytes: &[u8]) -> Result<Interp, String> {
+        let design = Design::decode(bytes).map_err(|e| e.to_string())?;
+        let mut interp = Interp::new(design);
+        interp.bir_hash = bir_fingerprint(bytes);
+        Ok(interp)
+    }
+
+    /// Stage a +arg (without the '+') for $test$plusargs/$value$plusargs.
+    pub fn append_plusarg(&mut self, a: &str) {
+        self.plusargs.push(a.to_string());
     }
 }
 
