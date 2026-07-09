@@ -8,6 +8,44 @@ branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
 
+## IN FLIGHT: trs-capi (task #10) — the bluetcl surface
+
+Landed (7a0cd508..38293521): crate scaffold (staticlib, jit feature
+DEFAULT ON per Ravi — 'sim run' at hybrid speed; --no-default-
+features keeps a lean LLVM-free .so and the no-jit interp build is
+repaired), multi-engine SimState (interp/jit/aot, one or SEVERAL =
+interactive oracle; primary owns stdout), docs/TCL-CAPI.md carries
+the FULL contract: measured dlsym set + load protocol, namespaces
+(bk_* FROZEN bit-for-bit; trs_* for everything ours INCLUDING
+fancier variants of bk functionality — bk names never grow options),
+capability tiers (fast/AOT engines have NO debug introspection by
+design — architectural state peeks only, absence rendered in the
+reference API's own vocabulary: NULL peek / NoValue), degradation
+contract (downgrade-to-interp with stderr notes; stdout is
+byte-parity territory), oracle divergence stops at the divergent
+instant.  Flagship debug config: --engines=interp,aot.
+
+NEXT BLOCK (start here): stepper stop conditions.
+- VcdClock is already the tClockInfo mirror (bk_clock_* fields
+  labeled in comments); it lacks a NEG_COUNT (bk_clock_edge_count
+  needs both directions) — add + increment beside pos_count.
+- StopCond { edge_limits: Vec<(clock_idx, posedge, count)>,
+  at_times: Vec<u64>, max_cycles } + advance_until(StopCond);
+  advance(max_cycles) delegates.  Semantics: bk_quit_after_edge =
+  stop AFTER edge #count of (clock, dir) completes (bluetcl
+  computes count = bk_clock_edge_count + N); bk_quit_at = stop at
+  END of time slice t (pop of an event with time > t stops, edge
+  pushed back like the max_cycles path at lib.rs ~3619).
+- CENTRAL LOOP engages only for a pure default-clock-cycles cond
+  (anything else bails — its niche is batch runs).
+- Gates: the stepper is shared by ALL paths — full battery +
+  sudoku/sysMips parity + corpus sweep before sealing.
+Then: bk clock surface (mostly reading VcdClock/ClockInfo), symbol
+tree, 'trs link --interactive' shim (embed BIR + new_MODEL_<top>,
+cc-link with libtrs_capi.a, export map), rung 1 under real
+bluetcl (sim load/time/ls on testsuite/bsc.bluesim/interactive
+mkTest).
+
 ## SEALED (2026-07-09 latest): replication-aware outline dial
 
 99f167a9: OUTLINE_FLOOR / k (k = module-type replication in the
