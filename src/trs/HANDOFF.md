@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-decc231e, the regression-hunt resolution — ALWAYS `git push personal`, never bare `git push origin`:
+7fa5f46e, gate green + leash fairness — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -47,14 +47,51 @@ FIXES LANDED (all pushed to personal):
   (VCD, driver clocks, rstgen_out) still burn.  LongCnt artifact
   0.51s -> 0.11s (loaded machine), central engaged.
 
-GATE STATE: AOT sweep on the always-fire fix alone: 965 PASS /
-0 DIFF (+ the expected pre-width-cap sysInit65536Bit link timeout).
-Definitive 3-leg gate (AOT / JIT-sync / JIT-lazy) on decc231e was
-IN FLIGHT at handoff-write time — tallies land in f2-{aot,jitsync,
-jit}.json in the session scratchpad; battery 9/9 on decc231e; both
-repros green both paths.  Once green: measurement queue UNBLOCKS
-(O-ladder post-inlining, fresh profile, alias experiment, #24
-edge-SSA if needed) -> compute parity -> testsuite AOT comparison.
+GATE: ALL GREEN on decc231e (definitive 3-leg, 1037 designs).
+AOT 966 PASS / 0 DIFF / 0 TIMEOUT (best AOT leg ever: always-fire
+DIFFs gone, width-cap link timeout gone, central-loop-at-scale
+clean); JIT-sync 966 / 0 DIFF; JIT-lazy 966 / 0 DIFF.  Battery 9/9.
+Quiet re-measure: sudoku link 8.1s / run 0.48s byte-identical (the
+fixes cost nothing); LongCnt ARTIFACT 0.05-0.06s — beats the 0.09s
+streaming floor (no compile workers at startup), ~5x ahead of
+reference 0.27s.  Sudoku does NOT central-loop: bail #9, its
+ConfigReg/FIFO prims need per-edge ticks — folding prim ticks into
+the fused edge is the future rung if tick-bearing designs should
+qualify.
+
+LEASH FAIRNESS (7fa5f46e, Ravi's call): diffsweep now times the
+reference build and floors every trs run limit at the reference's
+own build+run wall — sync-JIT compiles inside the timed window while
+the reference compiled off the clock (conflict_free_large: leash was
+max(5s, 5 x 0.09s ref run) against a reference whose C++ build alone
+takes minutes).  Both conflict_free_large designs TIMEOUT->PASS
+under JIT-sync; the leash stays tight for the interpreter-blowup
+class.
+
+NEXT (revised with Ravi, this session): edge-SSA (#24) PROMOTED from
+fallback to primary parity lever — DOUBLE WIN: (1) eager defs stop
+round-tripping through arena slots (no alias proof needed — the
+value never touches memory); (2) cross-rule sharing comes free and
+sound (a def computed once per edge IS the shared SSA value;
+intervening writes are handled by construction) — this SUBSUMES the
+per-instant memo machinery AND the stability doctrine/certification
+workstream (both parked; memo returns only for cross-edge-fn residue:
+coincident multi-clock edges, early/clock-crossing rules — MCD-only,
+not on the parity path; note cross_inhibits are cross-MODULE ME
+pairs, same composition, SSA-friendly).  Milestone 1 = the LINK-TIME
+INTROSPECTION pass (Ravi: "turn the knob on introspection at
+compile/link time" — link already re-runs the plan walk, budget is
+fine): a def-position dataflow map (producer entry + every
+consumer's (composition, schedule position) via the cross-module
+use-walk) driving (a) SSA-vs-slot-export classification, (b) wire-
+instance certification (Ravi's third proof route) nearly free, (c)
+schedule-grounded WF constant proofs (deeper always-fire).  Also a
+seam inventory: which entries can run interpreted -> which exports
+the debug contract needs per design.  BEFORE building: share-stats
+census (TRS_JIT_SHARE_STATS exists) + one alias-metadata probe to
+SIZE both wins; then O-ladder re-run AFTER edge-SSA lands (SSA-form
+edges are what O2/O3 optimize best) -> compute parity -> testsuite
+AOT comparison.
 
 ## Current state
 
