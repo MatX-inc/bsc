@@ -1106,12 +1106,40 @@ impl RegFile {
     }
 }
 
+thread_local! {
+    /// debug (TRS_WARN_DEBUG): the trampoline token of the compiled
+    /// cold path currently running (u64::MAX = interp eval)
+    pub(crate) static FROM_COMPILED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(u64::MAX) };
+}
+
 impl Prim for RegFile {
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
             "sub" => {
                 let a = args[0].as_u64();
                 if !self.in_range(a) {
+                    if std::env::var_os("TRS_WARN_DEBUG").is_some() {
+                        let tok = FROM_COMPILED.with(|c| c.get());
+                        let src = if tok == u64::MAX {
+                            "I".to_string()
+                        } else {
+                            format!(
+                                "C:{}{}:{}",
+                                if tok & (1 << 16) != 0 { "exec" } else { "sched" },
+                                tok >> 17,
+                                tok & 0xffff
+                            )
+                        };
+                        println!(
+                            "Warning: RegFile '{}' -- Read address is out of bounds: {} [now={} src={}]",
+                            self.full_name,
+                            self.addr_hex(a),
+                            now,
+                            src
+                        );
+                        return Value::undet(self.width);
+                    }
                     println!(
                         "Warning: RegFile '{}' -- Read address is out of bounds: {}",
                         self.full_name,

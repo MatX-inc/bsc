@@ -1328,6 +1328,7 @@ fn lower_edge_ssa<'ctx>(
                     args: HashMap::new(),
                     ssa: HashMap::new(),
                     expanding: Vec::new(),
+                    thunks: HashMap::new(),
             dead_defs: Default::default(),
                     tasks: HashMap::new(),
                     is_exec: true,
@@ -1344,6 +1345,7 @@ fn lower_edge_ssa<'ctx>(
                 args: HashMap::new(),
                 ssa: HashMap::new(),
                 expanding: Vec::new(),
+                thunks: HashMap::new(),
             dead_defs: Default::default(),
                 tasks: HashMap::new(),
                 is_exec,
@@ -1573,6 +1575,10 @@ struct Frame<'ctx> {
     /// ActionValue task results by cookie (Expr::TaskValue reads):
     /// (value, width)
     tasks: HashMap<u32, (IntValue<'ctx>, u32)>,
+    /// effectful-eval def memos (value alloca, valid-flag alloca):
+    /// evaluate at FIRST dynamic reference this invocation, reuse
+    /// after — even across Cond joins where the ssa binding dies
+    thunks: HashMap<StrId, (PointerValue<'ctx>, PointerValue<'ctx>)>,
     /// exec-body scope (reloads eager slots) vs sched scope (stores them)
     is_exec: bool,
     /// inline depth (method-call recursion guard)
@@ -2669,6 +2675,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args: HashMap::new(),
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            thunks: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: f.is_exec,
@@ -2702,6 +2709,201 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         b.build_array_alloca(elem, elem.const_int(count, false), name)
             .unwrap()
+    }
+
+    /// Whether evaluating `e` is OBSERVABLE: a dynamic-address prim
+    /// read (RegFile.sub prints a bounds warning when the address is
+    /// out of range) or a trapping op (Quot/Rem by a dynamic zero).
+    /// Such cones must evaluate exactly as often as the interpreter
+    /// evaluates them — see def_thunk.
+    fn effectful_expr(
+        &self,
+        inst: usize,
+        e: &Expr,
+        seen: &mut std::collections::HashSet<(usize, StrId)>,
+    ) -> bool {
+        use trs_ir::Expr as E;
+        match e {
+            E::Def(n) => {
+                if !seen.insert((inst, *n)) {
+                    return false;
+                }
+                let Some(ie) = self.env.insts.get(&inst) else {
+                    return true;
+                };
+                let m = &self.env.d.modules[ie.mir];
+                m.defs
+                    .iter()
+                    .find(|d| d.name == *n)
+                    .is_some_and(|d| self.effectful_expr(inst, &d.expr, seen))
+            }
+            E::MethCall { instance, method, args, .. } => {
+                if args.iter().any(|a| self.effectful_expr(inst, a, seen)) {
+                    return true;
+                }
+                let Some(ie) = self.env.insts.get(&inst) else {
+                    return true;
+                };
+                let Some(&child) = ie.children.get(instance) else {
+                    return true;
+                };
+                if let Some(ce) = self.env.insts.get(&child) {
+                    // inlined module: a value call evaluates the
+                    // result closure only
+                    let cm = &self.env.d.modules[ce.mir];
+                    return cm
+                        .methods
+                        .iter()
+                        .find(|mm| mm.name == *method)
+                        .and_then(|mm| mm.result.as_ref())
+                        .is_some_and(|r| self.effectful_expr(child, r, seen));
+                }
+                // prim child: dynamic-arg value reads may warn —
+                // except a FULL-RANGE RegFile (mkRegFileFull), where
+                // every representable address is in [lo, hi] and the
+                // bounds warning is unreachable (sudoku's hot LUTs:
+                // thunking those cost 2.4x)
+                if args.is_empty() {
+                    return false;
+                }
+                if let Some(&(_, _, lo, hi)) = ie.regfile_slot.get(instance) {
+                    // full coverage is judged against the ADDRESS
+                    // WIDTH: every aw-bit address must land in
+                    // [lo, hi] (a power-of-two SIZE with a wider
+                    // address port still warns — sysMips ram_arr)
+                    let aw = match &args[0] {
+                        E::Def(dn) => self.def_width(inst, *dn).unwrap_or(0),
+                        a => a.width(),
+                    };
+                    let full = (1..=64).contains(&aw)
+                        && lo == 0
+                        && hi >= if aw == 64 {
+                            u64::MAX
+                        } else {
+                            (1u64 << aw) - 1
+                        };
+                    return !full;
+                }
+                true
+            }
+            E::Prim { op, args, .. } => {
+                matches!(op, PrimOp::Quot | PrimOp::Rem)
+                    || args.iter().any(|a| self.effectful_expr(inst, a, seen))
+            }
+            E::If { cond, then_, else_, .. } => {
+                self.effectful_expr(inst, cond, seen)
+                    || self.effectful_expr(inst, then_, seen)
+                    || self.effectful_expr(inst, else_, seen)
+            }
+            E::Case { scrutinee, arms, default, .. } => {
+                self.effectful_expr(inst, scrutinee, seen)
+                    || arms.iter().any(|(_, a)| self.effectful_expr(inst, a, seen))
+                    || self.effectful_expr(inst, default, seen)
+            }
+            E::Clock { osc, gate } => {
+                self.effectful_expr(inst, osc, seen)
+                    || self.effectful_expr(inst, gate, seen)
+            }
+            E::Reset { wire } => self.effectful_expr(inst, wire, seen),
+            _ => false,
+        }
+    }
+
+    /// Expand an effectful-eval def through a first-reference memo:
+    /// entry allocas hold (value, valid); every reference checks the
+    /// flag and only the first evaluates.  This is the interpreter's
+    /// ctx.locals semantics in dominance-correct form — a plain ssa
+    /// memo dies at Cond joins, and RE-expanding a def whose cone
+    /// warns (RegFile bounds) re-fires the warning (sysMips: 116
+    /// warnings vs the reference's 66).
+    fn def_thunk(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        n: StrId,
+        dex: &Expr,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let w = self.expr_width(f, dex)?.max(1);
+        let ty = self.ity(w);
+        let i8t = self.ctx.i8_type();
+        let (vp, gp) = match f.thunks.get(&n) {
+            Some(&t) => t,
+            None => {
+                let vp = self.entry_alloca(ty, 1, "thv");
+                let gp = self.entry_alloca(i8t, 1, "thg");
+                // the valid flag initializes FALSE at function entry
+                // (the init must dominate every reference site)
+                let b = self.ctx.create_builder();
+                match gp.as_instruction().and_then(|i| i.get_next_instruction()) {
+                    Some(next) => b.position_before(&next),
+                    None => {
+                        let entry = self
+                            .builder
+                            .get_insert_block()
+                            .unwrap()
+                            .get_parent()
+                            .unwrap()
+                            .get_first_basic_block()
+                            .unwrap();
+                        b.position_at_end(entry);
+                    }
+                }
+                b.build_store(gp, i8t.const_zero()).unwrap();
+                f.thunks.insert(n, (vp, gp));
+                (vp, gp)
+            }
+        };
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let g = self
+            .builder
+            .build_load(i8t, gp, "thok")
+            .unwrap()
+            .into_int_value();
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::NE, g, i8t.const_zero(), "thok0")
+            .unwrap();
+        let ev_bb = self.ctx.append_basic_block(func, "thev");
+        let jn_bb = self.ctx.append_basic_block(func, "thjn");
+        self.builder
+            .build_conditional_branch(ok, jn_bb, ev_bb)
+            .unwrap();
+        self.builder.position_at_end(ev_bb);
+        f.expanding.push(n);
+        let v = self.expr(f, dex)?;
+        f.expanding.pop();
+        // schedule-position slot store (mirrors the plain expansion
+        // path): the owning sched fn publishes the eager slot at its
+        // first — and only — evaluation
+        if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
+            if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
+                if self
+                    .edge
+                    .as_ref()
+                    .is_none_or(|e| e.exports.contains(&base))
+                {
+                    edge_ssa_count(3, 0);
+                    self.store_val(f, base, w, v);
+                }
+            }
+        }
+        self.builder.build_store(vp, v).unwrap();
+        self.builder
+            .build_store(gp, i8t.const_int(1, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(jn_bb).unwrap();
+        self.builder.position_at_end(jn_bb);
+        let out = self
+            .builder
+            .build_load(ty, vp, "thval")
+            .unwrap()
+            .into_int_value();
+        f.ssa.insert(n, out);
+        Ok(out)
     }
 
     fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
@@ -2833,6 +3035,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return nope("unknown def");
         };
         let dex = d.expr.clone();
+        {
+            let mut seen = std::collections::HashSet::new();
+            if self.effectful_expr(f.inst, &dex, &mut seen) {
+                return self.def_thunk(f, n, &dex);
+            }
+        }
         f.expanding.push(n);
         let v = self.expr(f, &dex)?;
         f.expanding.pop();
@@ -3138,6 +3346,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args: HashMap::new(),
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            thunks: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: false,
@@ -3155,6 +3364,26 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// cache is dominance-safe.
     fn sched_section(&mut self, f: &mut Frame<'ctx>) -> Result<(), Ineligible> {
         let r = self.rule().clone();
+        // EFFECTFUL eager defs latch FIRST, in list order — the
+        // interpreter evaluates REntry::eager into the latch before
+        // the entry's nodes, and for these evaluation order and count
+        // are observable (RegFile bounds warnings, Quot/Rem traps).
+        // Pure eager defs stay lazy: the cones reach them on demand
+        // and the leftover loop below publishes unreached slots.
+        for &e in &self.spec.eager {
+            if !self.ie(self.spec.inst)?.eager_slot.contains_key(&e) {
+                return nope("eager def without slot");
+            }
+            let m = &self.env.d.modules[self.ie(f.inst)?.mir];
+            let Some(d) = m.defs.iter().find(|d| d.name == e) else {
+                continue;
+            };
+            let dex = d.expr.clone();
+            let mut seen = std::collections::HashSet::new();
+            if self.effectful_expr(f.inst, &dex, &mut seen) {
+                self.def(f, e)?; // stores the slot on compute
+            }
+        }
         let mut cf = self.def(f, r.can_fire)?; // i1
         for &slot in &self.spec.inhibit_slots {
             edge_ssa_count(0, 1);
@@ -3181,9 +3410,6 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // stored (later rules' cones or bodies may reload them)
         let mut eager_vals = Vec::new();
         for &e in &self.spec.eager {
-            if !self.ie(self.spec.inst)?.eager_slot.contains_key(&e) {
-                return nope("eager def without slot");
-            }
             let v = self.def(f, e)?; // def() stores to the slot on compute
             eager_vals.push((e, v));
         }
@@ -3234,6 +3460,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args: HashMap::new(),
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            thunks: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: true,
@@ -3337,6 +3564,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args,
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            thunks: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: true,

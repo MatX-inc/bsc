@@ -108,6 +108,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         argv.push(Value::from_limbs64(w.max(1), limbs));
         off += words;
     }
+    crate::prim::FROM_COMPILED.with(|c| c.set(token));
     if is_action {
         interp.call_action(inst, method, &argv);
     } else {
@@ -118,6 +119,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
+    crate::prim::FROM_COMPILED.with(|c| c.set(u64::MAX));
     if let Some(t0) = _t0 {
         prof::add(&prof::PRIM_NS, t0);
         prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

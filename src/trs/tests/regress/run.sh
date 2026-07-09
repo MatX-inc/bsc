@@ -27,6 +27,9 @@ check() { # name top [cfile]
 }
 check EdgeSelfKill sysEdgeSelfKill
 check HoistDivTrap sysHoistDivTrap
+# sched-cone RegFile warnings: evaluation count (proven: pre-fix
+# doubled 2 -> 4) and eager-list order are part of byte parity
+check RegFileWarnCone sysRegFileWarnCone
 # direct-BDPI (task #22): narrow + wide value imports must run
 # COMPILED (a fallback-to-interp regression still passes stdout —
 # the artifact note is the tell, but byte-parity is the contract)
