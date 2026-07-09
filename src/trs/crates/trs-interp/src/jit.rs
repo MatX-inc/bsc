@@ -1690,7 +1690,25 @@ impl Interp {
                     .then_some(((di, dn), dc.mass))
                 })
                 .collect();
-            // second pass: outline iff large AND shares little
+            // replication count per (mir, rule_idx): k instances of
+            // the same module-type rule inline the same body k times
+            // into the mega-edge, while ONE outlined body serves all
+            // of them (per-module-type dedup)
+            let mut type_reps: HashMap<(usize, usize), u64> = HashMap::new();
+            for (sec, &(_, o)) in sections.iter().zip(comp_nodes.iter()) {
+                if sec.is_some() {
+                    let (inst, ridx) = specs_lite[o];
+                    let mir = inst_envs[&inst].mir;
+                    *type_reps.entry((mir, ridx)).or_insert(0) += 1;
+                }
+            }
+            // second pass: outline iff large AND shares little.  The
+            // floor amortizes over replication (grid v3: 1024 program
+            // tiles inlined the same body 1024x — 202s link, 166s of
+            // LLVM IR passes; Bluesim calls per-TYPE class methods).
+            // Intra-tile sharing scales with k on both sides of the
+            // comparison, so only the floor divides; k=1 designs keep
+            // every existing decision.
             for (sec, &(_, o)) in sections.iter().zip(comp_nodes.iter()) {
                 if let Some((c, _)) = sec {
                     let body_mass: u64 = c
@@ -1703,12 +1721,18 @@ impl Interp {
                         .iter()
                         .filter_map(|d0| sharable.get(d0))
                         .sum();
+                    let (inst, ridx) = specs_lite[o];
+                    let k = type_reps
+                        .get(&(inst_envs[&inst].mir, ridx))
+                        .copied()
+                        .unwrap_or(1)
+                        .max(1);
                     let outline = match outline_abs {
                         Some(t) => body_mass > t,
                         None => {
                             outline_factor > 0
                                 && body_mass
-                                    > OUTLINE_FLOOR
+                                    > (OUTLINE_FLOOR / k)
                                         .max(outline_factor * shared_mass)
                         }
                     };
@@ -1718,7 +1742,7 @@ impl Interp {
                     if stats && body_mass > 400 {
                         eprintln!(
                             "trs edge-ssa: body o={o} mass={body_mass} \
-                             shared={shared_mass} outline={outline}"
+                             shared={shared_mass} reps={k} outline={outline}"
                         );
                     }
                 }
