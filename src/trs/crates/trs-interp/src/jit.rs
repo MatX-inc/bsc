@@ -1209,9 +1209,12 @@ impl Interp {
         &self,
         inst_envs: &HashMap<usize, InstEnv>,
         nodes: &[Vec<(bool, usize)>],
-        specs_lite: &[(usize, usize)],
+        specs: &[RuleSpec],
         stats: bool,
     ) -> trs_codegen::lower::EdgeSsaPlan {
+        let specs_lite: Vec<(usize, usize)> =
+            specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
+        let specs_lite = &specs_lite[..];
         use trs_ir::{Action as A, Expr as E, InstanceKind, Primitive as P, Stmt};
         use std::collections::HashSet;
 
@@ -1810,6 +1813,35 @@ impl Interp {
                 .collect();
             eprintln!("trs edge-ssa: poisoned shared defs: {}", po.join(" "));
         }
+        // export keep-set (specialized compile: slot stores survive
+        // only for COMPILED consumers — inhibitor loads and outlined
+        // bodies; the slot-level debug contract is not part of the
+        // edge-SSA artifact surface)
+        let mut export_slots: std::collections::HashSet<u32> = specs
+            .iter()
+            .flat_map(|sp| sp.inhibit_slots.iter().copied())
+            .collect();
+        for &o in &outlined_execs {
+            export_slots.insert(specs[o].wf_slot);
+            let (inst, ridx) = specs_lite[o];
+            let mir = inst_envs[&inst].mir;
+            let body = self.d.modules[mir].rules[ridx].body.clone();
+            let mut c = Cone::default();
+            for st in &body {
+                walk_stmt_defs(&mut cx, inst, st, &mut c);
+            }
+            for &(di, dn) in &c.defs {
+                let iev = &inst_envs[&di];
+                if let Some(&slot) = iev.cfwf_slot.get(&dn) {
+                    export_slots.insert(slot);
+                }
+                if di == inst {
+                    if let Some(&(base, _w)) = iev.eager_slot.get(&dn) {
+                        export_slots.insert(base);
+                    }
+                }
+            }
+        }
         trs_codegen::lower::EdgeSsaPlan {
             nodes: nodes.to_vec(),
             exec_writes,
@@ -1817,6 +1849,7 @@ impl Interp {
             hoists,
             outlined_execs,
             wire_clears: Vec::new(),
+            export_slots,
         }
     }
 
@@ -2381,9 +2414,7 @@ impl Interp {
                     v
                 })
                 .collect();
-            let specs_lite: Vec<(usize, usize)> =
-                rules.iter().map(|ri| (ri.inst, ri.rule_idx)).collect();
-            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs_lite, true);
+            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, true);
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
@@ -2729,9 +2760,9 @@ impl Interp {
         if let JitRequest::Emit { so } = &request {
             // whole-edge SSA emission (task #24, opt-in): build the
             // legality tables the edge emitter consumes
-            let edge_plan = std::env::var("TRS_EDGE_SSA")
-                .as_deref()
-                .is_ok_and(|v| v == "1")
+            // DEFAULT ON for AOT links (the specialized fast compile);
+            // TRS_EDGE_SSA=0 restores the classic emission
+            let edge_plan = (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0"))
                 .then(|| {
                     let nodes: Vec<Vec<(bool, usize)>> = comp_nodes
                         .iter()
@@ -2748,10 +2779,8 @@ impl Interp {
                                 .unwrap_or_default()
                         })
                         .collect();
-                    let specs_lite: Vec<(usize, usize)> =
-                        specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
                     let mut plan =
-                        self.edge_ssa_plan(&inst_envs, &nodes, &specs_lite, false);
+                        self.edge_ssa_plan(&inst_envs, &nodes, &specs, false);
                     plan.wire_clears =
                         self.wire_tick_coverage(&inst_envs, rcomps).0;
                     plan

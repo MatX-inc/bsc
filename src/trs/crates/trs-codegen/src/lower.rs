@@ -534,7 +534,9 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
             if module_max_int_width(module) > IR_PASS_WIDTH_CAP {
                 return Ok(());
             }
-            1
+            // O3 default (measured on the edge-SSA + outline-model
+            // IR: ~22% run for +1s link vs O1; reference ships -O3)
+            3
         }
         Err(_) => return Ok(()),
     };
@@ -1063,6 +1065,8 @@ pub struct EdgeSsaPlan {
     /// position; pure = no warning-emitting or callback reads, so the
     /// unconditional evaluation is output-invisible)
     pub hoists: Vec<Vec<Vec<(usize, StrId)>>>,
+    /// slots whose stores survive export elision (see EdgeCtx::exports)
+    pub export_slots: std::collections::HashSet<u32>,
     /// per composition: arena valid-slot numbers of ungated wire ticks
     /// to clear (store 0) at the END of the edge fn — the compiled form
     /// of RWire/PulseWire::tick (the boxed `written` latch only feeds
@@ -1252,7 +1256,10 @@ fn lower_edge_ssa<'ctx>(
             b.build_store(gep(en), i64t.const_zero()).unwrap();
         }
 
-        let mut edge_ctx = EdgeCtx::default();
+        let mut edge_ctx = EdgeCtx {
+            exports: plan.export_slots.clone(),
+            ..Default::default()
+        };
         let mut cur = entry;
         for (s, &(is_exec, o)) in plan.nodes[k].iter().enumerate() {
             let spec = &specs[o];
@@ -1443,6 +1450,12 @@ pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> 
 /// inside def() recursion, so arm-local values can never leak.
 #[derive(Default)]
 struct EdgeCtx<'ctx> {
+    /// slots whose stores must SURVIVE export elision: CF slots read
+    /// by inhibitor loads, WF/eager slots read by outlined bodies.
+    /// Everything else is dead weight in the specialized compile
+    /// (Ravi: speed first — the slot-level debug contract is not part
+    /// of the edge-SSA artifact surface).
+    exports: std::collections::HashSet<u32>,
     /// position-latched values: CF/WF and eager defs at their compute
     /// position — what the arena slots hold.  NEVER evicted (eviction
     /// would change latched semantics, not just performance).
@@ -2442,8 +2455,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // frame writing call-time values would corrupt them)
         if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
             if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
-                edge_ssa_count(3, 0);
-                self.store_val(f, base, w, v);
+                if self
+                    .edge
+                    .as_ref()
+                    .is_none_or(|e| e.exports.contains(&base))
+                {
+                    edge_ssa_count(3, 0);
+                    self.store_val(f, base, w, v);
+                }
             }
         }
         Ok(v)
@@ -2756,13 +2775,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             let zero = self.ctx.bool_type().const_zero();
             cf = self.builder.build_select(nz, zero, cf, "inh").unwrap().into_int_value();
         }
-        let cf64 = self.to_w(cf, 1, 64, false);
-        self.store_word(f, self.spec.cf_slot, cf64);
+        let keep = |e: &Option<EdgeCtx>, slot: u32| {
+            e.as_ref().is_none_or(|e| e.exports.contains(&slot))
+        };
+        if keep(&self.edge, self.spec.cf_slot) {
+            let cf64 = self.to_w(cf, 1, 64, false);
+            self.store_word(f, self.spec.cf_slot, cf64);
+        }
         // the WF cone reads the (inhibited) latched CF, not the raw cone
         f.ssa.insert(r.can_fire, cf);
         let wf = self.def(f, r.will_fire)?;
-        let wf64 = self.to_w(wf, 1, 64, false);
-        self.store_word(f, self.spec.wf_slot, wf64);
+        if keep(&self.edge, self.spec.wf_slot) {
+            let wf64 = self.to_w(wf, 1, 64, false);
+            self.store_word(f, self.spec.wf_slot, wf64);
+        }
         // eager defs the cones did not reach still need their slots
         // stored (later rules' cones or bodies may reload them)
         let mut eager_vals = Vec::new();
