@@ -635,7 +635,9 @@ fn lower_helpers<'ctx>(
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
         };
-        lc.lower_helper(hs)?;
+        lc.lower_helper(hs).map_err(|e| {
+            Ineligible(format!("{} (def {}): {e}", hs.sym, hs.def))
+        })?;
         if !lc.foreign_stmts.is_empty() || !lc.prim_calls.is_empty() {
             return Err(Ineligible(format!(
                 "helper piece has callback sites (analysis bug): {}",
@@ -997,12 +999,33 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.value_call(f, *width, *instance, *method, *port, args)
             }
             Expr::If { width, cond, then_, else_ } => {
-                // real control flow, matching the interpreter's lazy arm
-                // evaluation (prim calls in arms can have side effects);
-                // LLVM if-converts pure arms back to selects
                 let wc = self.expr_width(f, cond)?;
                 let c = self.expr(f, cond)?;
                 let cz = self.nonzero(c, wc);
+                // bsc LIFTS shared updates into mux dataflow; lowering
+                // every If as a branch diamond re-manufactures control
+                // flow LLVM's capped speculation cannot fully undo (the
+                // monster bodies' 14k branches).  Pure, small arms keep
+                // bsc's shape: evaluate both, one select.  Arms with
+                // possible side effects (callbacks, unexpanded defs)
+                // stay lazy, matching the interpreter.
+                const SPEC_CAP: u32 = 64;
+                let spec = self
+                    .pure_size(f, then_, SPEC_CAP)
+                    .zip(self.pure_size(f, else_, SPEC_CAP));
+                if spec.is_some() {
+                    let wt = self.expr_width(f, then_)?;
+                    let tv0 = self.expr(f, then_)?;
+                    let tv = self.to_w(tv0, wt, (*width).max(1), false);
+                    let we = self.expr_width(f, else_)?;
+                    let ev0 = self.expr(f, else_)?;
+                    let ev = self.to_w(ev0, we, (*width).max(1), false);
+                    return Ok(self
+                        .builder
+                        .build_select(cz, tv, ev, "sel")
+                        .unwrap()
+                        .into_int_value());
+                }
                 self.lazy_mux(f, *width, cz, then_, else_)
             }
             Expr::Case { width, scrutinee, arms, default } => {
@@ -1239,6 +1262,74 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             let v = lc.expr(f, else_)?;
             Ok(lc.to_w(v, wx, width, false))
         })
+    }
+
+    /// Node count of a pure, speculation-safe expression: consts,
+    /// ssa-resident defs (already computed in this function), inline
+    /// arena-prim reads, arithmetic, and nested pure If/Case.  None =
+    /// impure (possible side effects / unexpanded def) or over cap.
+    fn pure_size(&self, f: &Frame<'ctx>, e: &Expr, cap: u32) -> Option<u32> {
+        use trs_ir::Expr as E;
+        if cap == 0 {
+            return None;
+        }
+        let sub2 = |a: &Expr, b: &Expr| -> Option<u32> {
+            let ca = self.pure_size(f, a, cap - 1)?;
+            let cb = self.pure_size(f, b, cap.checked_sub(1 + ca)?)?;
+            Some(1 + ca + cb)
+        };
+        match e {
+            E::Const { .. } | E::Real(_) => Some(1),
+            E::Def(n) => f.ssa.contains_key(n).then_some(1),
+            E::Port(p) => {
+                if f.args.contains_key(p) {
+                    return Some(1);
+                }
+                let ie = self.ie(f.inst).ok()?;
+                (ie.reset_slot.contains_key(p) || ie.en_slot.contains_key(p))
+                    .then_some(1)
+            }
+            E::MethCall { instance, method, args, .. } => {
+                if !args.is_empty() {
+                    // dynamic-arg reads (RegFile.sub etc.) may warn
+                    return None;
+                }
+                let ie = self.ie(f.inst).ok()?;
+                let mname = &self.env.d.strings[*method as usize];
+                let ok = (ie.reg_slot.contains_key(instance)
+                    || ie.creg_slot.contains_key(instance))
+                    && matches!(mname.as_str(), "read" | "get" | "_read")
+                    || ie.wire_slot.contains_key(instance)
+                        && matches!(mname.as_str(), "whas" | "wget")
+                    || ie.fifo_slot.contains_key(instance)
+                        && matches!(
+                            mname.as_str(),
+                            "first" | "notFull" | "notEmpty" | "i_notFull" | "i_notEmpty"
+                        );
+                ok.then_some(2)
+            }
+            E::Prim { args, .. } => {
+                let mut total = 1u32;
+                for a in args {
+                    total += self.pure_size(f, a, cap.checked_sub(total)?)?;
+                }
+                Some(total)
+            }
+            E::If { cond, then_, else_, .. } => {
+                let cc = self.pure_size(f, cond, cap - 1)?;
+                let rest = sub2(then_, else_)?;
+                (cc + rest <= cap).then_some(cc + rest)
+            }
+            E::Case { scrutinee, arms, default, .. } => {
+                let mut total = 1 + self.pure_size(f, scrutinee, cap - 1)?;
+                for (_, a) in arms {
+                    total += self.pure_size(f, a, cap.checked_sub(total)?)?;
+                }
+                total += self.pure_size(f, default, cap.checked_sub(total)?)?;
+                (total <= cap).then_some(total)
+            }
+            _ => None,
+        }
     }
 
     fn lazy_mux_fn(
@@ -1911,7 +2002,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ptys.push(self.ity(*pw).into());
         }
         let fnty = self.ity(w).fn_type(&ptys, false);
-        let func = self.module.add_function(&hs.sym, fnty, None);
+        // an earlier helper may have DECLARED this symbol at a call
+        // site; adding a same-named function would silently rename the
+        // definition (sym.1) and leave the declaration bodyless —
+        // define into the existing declaration instead
+        let func = self
+            .module
+            .get_function(&hs.sym)
+            .unwrap_or_else(|| self.module.add_function(&hs.sym, fnty, None));
         let entry = self.ctx.append_basic_block(func, "entry");
         self.builder.position_at_end(entry);
         let region = self.ie(hs.inst)?.region;

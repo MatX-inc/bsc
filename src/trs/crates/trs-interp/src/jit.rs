@@ -456,9 +456,20 @@ impl<'a> ConeAnalyzer<'a> {
                     let is_en = m.inputs.iter().any(|q| {
                         q.name == *pn && q.kind == trs_ir::PortKind::MethodEnable
                     });
+                    // data ports live in Module.inputs; METHOD ARG
+                    // ports live in Method.args — both parameterize
                     let is_data = m.inputs.iter().any(|q| {
                         q.name == *pn && q.kind != trs_ir::PortKind::MethodEnable
-                    });
+                    }) || m
+                        .methods
+                        .iter()
+                        .any(|me| me.args.iter().any(|q| q.name == *pn));
+                    let is_reset = m
+                        .resets
+                        .iter()
+                        .any(|_| false) // reset PORT names resolve via InstEnv; conservative below
+                        ;
+                    let _ = is_reset;
                     if is_en {
                         // EN slots change during dispatch
                         stab = false;
@@ -467,7 +478,9 @@ impl<'a> ConeAnalyzer<'a> {
                         ports.insert(*pn);
                         stab = false;
                     } else {
-                        // reset ports lower as slot loads; unknown taints
+                        // unknown port kind (reset wires etc.): the
+                        // lowering may not have a binding — taint
+                        outl = false;
                         stab = false;
                     }
                 }
@@ -659,7 +672,24 @@ fn aot_emit(
     let reps: Vec<RuleSpec> =
         classes.iter().map(|(rep, _)| specs[*rep].clone()).collect();
     let rchunk = reps.len().div_ceil(nworkers).max(1);
-    let helpers_on = !helper_specs.is_empty();
+    // helpers are best-effort in AOT exactly as in JIT: if their
+    // object fails to compile, drop them and link the design unsplit
+    // rather than failing the artifact
+    let mut helpers_on = !helper_specs.is_empty();
+    let mut helper_obj: Option<Vec<u8>> = None;
+    if helpers_on {
+        let env = PlanEnv { d, insts: inst_envs, now_slot };
+        let pseudo = specs[0].clone();
+        match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
+            Ok(o) => helper_obj = Some(o),
+            Err(e) => {
+                eprintln!(
+                    "trs link: note: split helpers disabled for this design ({e})"
+                );
+                helpers_on = false;
+            }
+        }
+    }
     let objs: Vec<Result<Vec<u8>, _>> = std::thread::scope(|sc| {
         let mut handles = Vec::new();
         for c in specs.chunks(chunk) {
@@ -674,18 +704,12 @@ fn aot_emit(
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
             }));
         }
-        if helpers_on {
-            handles.push(sc.spawn(move || {
-                let env = PlanEnv { d, insts: inst_envs, now_slot };
-                let pseudo = specs[0].clone();
-                compile_helpers_object(&env, helper_specs, refs_sym, &pseudo)
-            }));
-        }
         handles
             .into_iter()
             .map(|h| h.join().expect("aot compile thread"))
             .collect()
     });
+    let helper_obj = helpers_on.then_some(helper_obj).flatten();
     let tmp = std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let mut files = Vec::new();
@@ -693,6 +717,11 @@ fn aot_emit(
         let bytes = o.map_err(|e| format!("object compile: {e}"))?;
         let f = tmp.join(format!("chunk{i}.o"));
         std::fs::write(&f, bytes).map_err(|e| e.to_string())?;
+        files.push(f);
+    }
+    if let Some(o) = helper_obj {
+        let f = tmp.join("helpers.o");
+        std::fs::write(&f, o).map_err(|e| e.to_string())?;
         files.push(f);
     }
     let meta = compile_meta_object(bir_hash, split_thresh as u64)
@@ -1460,8 +1489,19 @@ impl Interp {
                 let mut ports: Vec<(StrId, u32)> = Vec::new();
                 let mut ok = true;
                 for &pn in pnames {
-                    match self.d.modules[mir].inputs.iter().find(|q| q.name == pn) {
-                        Some(q) => ports.push((pn, q.width.max(1))),
+                    let m = &self.d.modules[mir];
+                    let w = m
+                        .inputs
+                        .iter()
+                        .find(|q| q.name == pn)
+                        .map(|q| q.width)
+                        .or_else(|| {
+                            m.methods.iter().find_map(|me| {
+                                me.args.iter().find(|q| q.name == pn).map(|q| q.width)
+                            })
+                        });
+                    match w {
+                        Some(w) => ports.push((pn, w.max(1))),
                         None => ok = false,
                     }
                 }
