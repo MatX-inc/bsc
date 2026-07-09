@@ -25,7 +25,30 @@ contract (downgrade-to-interp with stderr notes; stdout is
 byte-parity territory), oracle divergence stops at the divergent
 instant.  Flagship debug config: --engines=interp,aot.
 
-NEXT BLOCK (start here): stepper stop conditions.
+PROGRESS (this session, all pushed):
+- f6a2c00e StopCond/advance_until SEALED 975/0 (4 fence flags are
+  suspect — capi builds ran during the timing window, violating the
+  quiet-sweep rule; re-verify sysTrafficBRAM/sysRegSelect/
+  sysConflictFreeNotOKLarge/sysCRCTest1 quietly before accepting).
+- 60e7b733 dlsym-complete surface: STOCK BLUETCL LOADS US.  Probe
+  (scratchpad capi-probe/: embedded-BIR shim.c + --whole-archive
+  libtrs_capi.a + stock export map) runs sim load/time/clock/
+  step/run BYTE-IDENTICAL vs the reference model .so on mkTest.
+- 6ee6d08b clock surface + run control (limit slots absolute,
+  disarmed at-or-below count = bluetcl's restore idiom).
+- 31d31edc symbol tree: ls/lookup/cd/pwd/get/describe live;
+  get/describe/cd/pwd BYTE-IDENTICAL.  'sim ls' def subset still
+  approximate: the reference registers only defs SURVIVING AS C++
+  MEMBERS = CF/WF cone closure (SimMakeCBlocks.hs:264-269
+  getExprIds) minus SimCOpt-deleted inlinees (SimCOpt.hs:266).
+  EXACT FIX (next): bsc-side — SimExportIR emits a per-def `sym`
+  flag taken from the post-SimCOpt sb_publicDefs/sb_privateDefs
+  survivor set (bsc.hs has both the blocks and the exporter call;
+  encDef currently discards props), BIR field with serde(default),
+  full bsc rebuild + testsuite, then drop the interim ___d<N>
+  filter in Interp::def_symbols.
+
+NEXT BLOCK (original plan, stop conditions DONE):
 - VcdClock is already the tClockInfo mirror (bk_clock_* fields
   labeled in comments); it lacks a NEG_COUNT (bk_clock_edge_count
   needs both directions) — add + increment beside pos_count.
