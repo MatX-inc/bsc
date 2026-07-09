@@ -456,6 +456,32 @@ fn make_module<'ctx>(
     (module, Callbacks { cb_ty, fpe_ty, prim_ty, cb, fpe, prim })
 }
 
+/// Widest integer type the default middle-end pipeline accepts; wider
+/// modules skip it (backend codegen still runs).  65536 is a measured
+/// >90s wedge; 4096 keeps every realistic datapath optimized.
+const IR_PASS_WIDTH_CAP: u32 = 4096;
+
+/// Max integer bit-width appearing as an instruction result type.
+/// Wide values only exist by being ASSEMBLED (zext/shl/or chains from
+/// arena slots), so result types are a complete witness.
+fn module_max_int_width(module: &Module) -> u32 {
+    let mut w = 0;
+    let mut f = module.get_first_function();
+    while let Some(func) = f {
+        for bb in func.get_basic_blocks() {
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                if let inkwell::types::AnyTypeEnum::IntType(t) = i.get_type() {
+                    w = w.max(t.get_bit_width());
+                }
+                ins = i.get_next_instruction();
+            }
+        }
+        f = func.get_next_function();
+    }
+    w
+}
+
 /// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
 /// asks for optimization.  The engine/object paths only apply BACKEND
 /// codegen opts; without this the IR pass pipeline (GVN, instcombine,
@@ -469,7 +495,17 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
         Ok("2") => 2,
         Ok("3") => 3,
         Ok(_) => return Ok(()),
-        Err(_) if AOT_MODE.with(|m| m.get()) => 1,
+        Err(_) if AOT_MODE.with(|m| m.get()) => {
+            // width cap on the DEFAULT pipeline only: LLVM's known-bits
+            // reasoning is quadratic in integer width, and one i65536
+            // body wedges default<O1> for minutes (sysInit65536Bit AOT
+            // link timeout).  An explicit TRS_JIT_OPT still forces
+            // the pipeline.
+            if module_max_int_width(module) > IR_PASS_WIDTH_CAP {
+                return Ok(());
+            }
+            1
+        }
         Err(_) => return Ok(()),
     };
     let tm = aot_target_machine()?;
