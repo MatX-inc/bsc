@@ -843,6 +843,176 @@ pub fn compile_helpers_object(
     Ok(buf.as_slice().to_vec())
 }
 
+/// One node of a fused per-composition edge function.
+pub enum FusedNode {
+    /// sched fn: baked address (JIT) or symbol (AOT)
+    Sched(HelperRef),
+    /// exec fn + its (region base, token base) args
+    Exec(HelperRef, u64, u64),
+}
+
+/// A composition's fused edge: EN slots to zero, then the node
+/// sequence as DIRECT calls — replaces the interpreter's per-node
+/// walk (match + atomic cell load + indirect call + finished check,
+/// ~77M visits on sudoku).  Returns nonzero when a body signalled
+/// $finish mid-edge, preserving the walk's early-stop semantics.
+pub struct FusedComp {
+    pub en_slots: Vec<u32>,
+    pub now_slot: u32,
+    pub nodes: Vec<FusedNode>,
+}
+
+fn lower_fused<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    comps: &[FusedComp],
+) -> Vec<String> {
+    let i64t = ctx.i64_type();
+    let i32t = ctx.i32_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let sched_ty = ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
+    let exec_ty = i32t
+        .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+    let b = ctx.create_builder();
+    let mut syms = Vec::with_capacity(comps.len());
+    for (k, comp) in comps.iter().enumerate() {
+        let sym = format!("edge_c{k}");
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+        let func = module.add_function(&sym, fnty, None);
+        let entry = ctx.append_basic_block(func, "entry");
+        b.position_at_end(entry);
+        let arena = func.get_nth_param(0).unwrap().into_pointer_value();
+        let envp = func.get_nth_param(1).unwrap().into_pointer_value();
+        let now = func.get_nth_param(2).unwrap().into_int_value();
+        // now stamp + EN zeroing, inline
+        let gep = |slot: u32| unsafe {
+            b.build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "s")
+                .unwrap()
+        };
+        b.build_store(gep(comp.now_slot), now).unwrap();
+        for &en in &comp.en_slots {
+            b.build_store(gep(en), i64t.const_zero()).unwrap();
+        }
+        let callee = |r: &HelperRef, ty: inkwell::types::FunctionType<'ctx>| match r {
+            HelperRef::Addr(a) => (
+                None,
+                Some(
+                    i64t.const_int(*a as u64, false).const_to_pointer(ptrt),
+                ),
+                ty,
+            ),
+            HelperRef::Sym(name) => (
+                Some(
+                    module
+                        .get_function(name)
+                        .unwrap_or_else(|| module.add_function(name, ty, None)),
+                ),
+                None,
+                ty,
+            ),
+        };
+        let mut stop_bbs = Vec::new();
+        for n in &comp.nodes {
+            match n {
+                FusedNode::Sched(r) => {
+                    let (f_, p_, ty) = callee(r, sched_ty);
+                    match (f_, p_) {
+                        (Some(f_), _) => {
+                            b.build_call(f_, &[arena.into(), envp.into()], "s")
+                                .unwrap();
+                        }
+                        (_, Some(p_)) => {
+                            b.build_indirect_call(
+                                ty,
+                                p_,
+                                &[arena.into(), envp.into()],
+                                "s",
+                            )
+                            .unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                FusedNode::Exec(r, base, tok) => {
+                    let (f_, p_, ty) = callee(r, exec_ty);
+                    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        arena.into(),
+                        envp.into(),
+                        i64t.const_int(*base, false).into(),
+                        i64t.const_int(*tok, false).into(),
+                    ];
+                    let cs = match (f_, p_) {
+                        (Some(f_), _) => b.build_call(f_, &args, "e").unwrap(),
+                        (_, Some(p_)) => {
+                            b.build_indirect_call(ty, p_, &args, "e").unwrap()
+                        }
+                        _ => unreachable!(),
+                    };
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value()
+                    else {
+                        unreachable!()
+                    };
+                    let stop = b
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            rv.into_int_value(),
+                            i32t.const_zero(),
+                            "st",
+                        )
+                        .unwrap();
+                    let cont = ctx.append_basic_block(func, "c");
+                    let halt = ctx.append_basic_block(func, "h");
+                    b.build_conditional_branch(stop, halt, cont).unwrap();
+                    stop_bbs.push(halt);
+                    b.position_at_end(cont);
+                }
+            }
+        }
+        b.build_return(Some(&i32t.const_zero())).unwrap();
+        for h in stop_bbs {
+            b.position_at_end(h);
+            b.build_return(Some(&i32t.const_int(1, false))).unwrap();
+        }
+        syms.push(sym);
+    }
+    syms
+}
+
+/// JIT: compile fused edge functions (baked callee addresses) into
+/// one engine; returns per-comp fn addresses.
+pub fn compile_fused(
+    comps: &[FusedComp],
+) -> Result<Vec<usize>, Ineligible> {
+    llvm_init_once();
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let module = ctx.create_module("trs_fused");
+    let syms = lower_fused(ctx, &module, comps);
+    let ee = finish_engine(module)?;
+    let mut out = Vec::with_capacity(syms.len());
+    for sym in &syms {
+        let a = ee
+            .get_function_address(sym)
+            .map_err(|e| Ineligible(format!("fused fn address: {e}")))?;
+        out.push(a as usize);
+    }
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// AOT: emit the fused edge functions as one PIC object (symbol
+/// callees resolve at artifact link).
+pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let module = ctx.create_module("trs_fused");
+    let _ = lower_fused(&ctx, &module, comps);
+    run_ir_passes(&module)?;
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("fused object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
 struct Lower<'a, 'ctx> {
     env: &'a PlanEnv<'a>,
     ctx: &'ctx Context,
