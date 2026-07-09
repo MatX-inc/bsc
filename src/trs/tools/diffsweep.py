@@ -171,8 +171,11 @@ def one_test(job):
 
     import time as _time
     tb0 = _time.monotonic()
+    # 420s: sysBRAM0Test/sysFloatTest reference builds measure
+    # 166-256s depending on load and FLAPPED at a 180s ceiling
+    # (LINK_FAIL "unknown" = timeout with empty stderr)
     r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common + cfiles,
-            cwd=wk, timeout=180)
+            cwd=wk, timeout=420)
     ref_build_secs = _time.monotonic() - tb0
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)

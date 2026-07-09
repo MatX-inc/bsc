@@ -1,13 +1,41 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-09cb6a86, arm defs + BDPI actions + effectful-eval fidelity, 973/0
-SEALED — ALWAYS `git push personal`, never bare `git push origin`:
+19110cdc, AvAction-on-module-children + AV-cone poison, 973/0
+SEALED (971 sweep + 2 verified timeout-flappers; RadixSort newly
+compiled) — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
+
+## SEALED (2026-07-09 later): ActionValue methods on module children
+
+c9c60f5f + 19110cdc: AvAction MethCall on INLINED MODULE CHILDREN
+lowers (EN protocol, body stmts in a child frame under the call
+cond, result expr, phi out of the taken arm; skip = undet zeros).
+Two lessons, both regress-tested:
+- synthetic AV result defs are in NO def table: binding width must
+  come from the evaluated result (an intermediate def_width version
+  built an i1 phi — grid v3's checksum caught the truncation;
+  tests/regress/AvMethInline.bsv keeps it caught), and expr_width
+  consults Frame.av_widths.
+- cone(): a def-table miss now POISONS the cone (poison|=1,
+  context-bound like an arg port).  Edge-SSA had hoisted slices of
+  another rule's AV result into a section with no binding (PAClib
+  RadixSort rev4: hard 'unknown def' AFTER screening passed).
+  RadixSort now COMPILES, byte-identical, b3_run 0.060 vs ref 0.111.
+- 'unknown def' diagnostics now name the def + lowering context +
+  expansion chain.
+- diffsweep ref-build timeout 180 -> 420s: sysBRAM0Test/sysFloatTest
+  ref builds measure 166-256s under load and flapped at the 180s
+  ceiling as LINK_FAIL "unknown"; both re-verified PASS.
+- bench/grid v3 (default tile): program tiles (case-ROM, PC, RegFile,
+  opcode dispatch) + ActionValue oTake drains in the link-rule arms.
+- docs/TCL-CAPI.md: the measured bluetcl contract (47 dlsym'd bk_*
+  fns, load protocol, symbol-tree semantics, interactive-test usage
+  profile) + the trs-capi design for the DEBUG compile mode.
 
 ## SEALED (2026-07-09): conditional-arm class + direct BDPI actions
 
