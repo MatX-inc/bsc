@@ -178,6 +178,34 @@ NEXT SESSION QUEUE:
     MCD tick classes, quiescence gating (the VCS-sparsity answer),
     content-hash incremental link.
 
+## DIRECTION SET BY RAVI (2026-07-09 late): compile modes + finish the product surfaces
+
+COMPILE MODES, LIKE VCS: stop making one artifact serve everything.
+The FAST compile is what we built (edge-SSA, export elision, O3 —
+the debug contract is explicitly not its surface).  A DEBUG/
+INTERACTIVE compile mode gets slot exports, interp-visible state,
+bk_*-linkability, stepping — the mode the Tcl surface and the 44
+interactive tests target.  This dissolves the export-elision-vs-bk
+tension permanently: bk never needed the fast artifact.
+
+PRODUCT SURFACES TO *DONE* (before the scale arc):
+1. BDPI actions/ActionValue (finish #22 core; value slice landed
+   d2d6e12e, byte-identical compiled both paths).
+2. def-inside-conditional-arm eligibility (146 designs — largest
+   coverage bucket).
+3. Tcl bk_* surface: trs-capi cdylib (46 bk_* + new_MODEL_<top>,
+   BluesimLoader dlsym, driver thread) on the resumable stepper;
+   builds against the DEBUG mode by definition.
+4. VCD parity residue (clock-alias vars, never-computed initial
+   dumps, SyncFIFO/RegAligned hooks) — debug-mode territory.
+5. MCD/Sync execution story (remaining tick classes, multi-clock).
+
+THEN the scale arc (type-keyed analysis -> loop-rolled spine ->
+pools -> LANES/multicore), for which the grid v2 (cde57a4c) is the
+instrument; Ravi capped the grid at N=32 and restructured it (rich
+synthesized tiles, K large link rules — bsc scheduling is O(rules^2),
+the 71s frontend wall was probably benchmark shape).
+
 ## Current state
 
 - **Resumable stepper landed** (981ad24a): `run()` = `prime()` (one-time
