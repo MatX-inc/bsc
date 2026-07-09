@@ -16,7 +16,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use trs_codegen::lower::{
-    compile_execs, compile_helpers, compile_helpers_object, compile_scheds, trial_lower,
+    compile_execs, compile_helpers, compile_helpers_object, compile_scheds, decode_protos,
+    encode_protos, trial_lower,
     CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
     HelperSpec, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
@@ -651,6 +652,7 @@ fn aot_or_jit_scheds(
 /// parallel, add the fingerprint object, and cc -shared them into the
 /// artifact .so.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn aot_emit(
     d: &Design,
     inst_envs: &HashMap<usize, InstEnv>,
@@ -660,6 +662,7 @@ fn aot_emit(
     helper_specs: &[HelperSpec],
     refs_sym: &HelperMap,
     split_thresh: u32,
+    protos: &[FnProtos],
     so: &std::path::Path,
     bir_hash: u64,
 ) -> Result<(), String> {
@@ -727,8 +730,9 @@ fn aot_emit(
         std::fs::write(&f, o).map_err(|e| e.to_string())?;
         files.push(f);
     }
-    let meta = compile_meta_object(bir_hash, split_thresh as u64)
-        .map_err(|e| format!("meta object: {e}"))?;
+    let meta =
+        compile_meta_object(bir_hash, split_thresh as u64, &encode_protos(protos))
+            .map_err(|e| format!("meta object: {e}"))?;
     let mf = tmp.join("meta.o");
     std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
     files.push(mf);
@@ -755,10 +759,9 @@ fn aot_load(
     so: &std::path::Path,
     bir_hash: u64,
     specs: &[RuleSpec],
-    protos: &[FnProtos],
     classes: &[(usize, Vec<usize>)],
     split_thresh: u32,
-) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>), String> {
+) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>), String> {
     unsafe {
         let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
         let h: libloading::Symbol<*const u64> =
@@ -791,6 +794,16 @@ fn aot_load(
             let g: libloading::Symbol<*mut usize> =
                 lib.get(name).map_err(|e| e.to_string())?;
             **g = addr;
+        }
+        let pl: libloading::Symbol<*const u64> =
+            lib.get(b"trs_protos_len").map_err(|e| e.to_string())?;
+        let pg: libloading::Symbol<*const u8> =
+            lib.get(b"trs_protos").map_err(|e| e.to_string())?;
+        let pbytes = std::slice::from_raw_parts(*pg, **pl as usize);
+        let protos = decode_protos(pbytes)
+            .ok_or("corrupt trs_protos table")?;
+        if protos.len() != specs.len() {
+            return Err("protos count mismatch".into());
         }
         let mut scheds = Vec::with_capacity(specs.len());
         for (spec, proto) in specs.iter().zip(protos.iter()) {
@@ -828,7 +841,7 @@ fn aot_load(
             .collect();
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);
-        Ok((scheds, execs))
+        Ok((scheds, execs, protos))
     }
 }
 
@@ -1345,105 +1358,6 @@ impl Interp {
                 token_base: (ri.ordinal as u64) << 17,
             });
         }
-        // eligibility decided NOW, synchronously, by lowering into a
-        // throwaway context (~ms/rule, no LLVM codegen); the expensive
-        // engine work is deferred to per-rule cells
-        let protos = {
-            let env = PlanEnv { d: &self.d, insts: &inst_envs, now_slot };
-            let t0 = std::time::Instant::now();
-            match trial_lower(&env, &specs) {
-                Ok(p) => {
-                    if std::env::var_os("TRS_JIT_TIME").is_some() {
-                        eprintln!("trs jit: trial lower {:?}", t0.elapsed());
-                    }
-                    p
-                }
-                Err(e) => {
-                    if let JitRequest::Emit { .. } = &request {
-                        self.jit_emit_result =
-                            Some(crate::AotEmit::Ineligible(e.to_string()));
-                    }
-                    if trace {
-                        eprintln!("trs jit: off ({e})");
-                    }
-                    return None;
-                }
-            }
-        };
-
-        // body-splitting reconnaissance (TRS_JIT_SPLIT_STATS=1):
-        // per module type, how much cone mass is outlinable/memoizable
-        if std::env::var_os("TRS_JIT_SPLIT_STATS").is_some() {
-            let mut seen_mir: HashMap<usize, usize> = HashMap::new();
-            for (&i, e) in &inst_envs {
-                seen_mir.entry(e.mir).or_insert(i);
-            }
-            let mut mirs: Vec<_> = seen_mir.iter().collect();
-            mirs.sort_unstable();
-            for (&mir, &ex) in mirs {
-                let ie = &inst_envs[&ex];
-                let ck = |name: StrId| -> ChildClass {
-                    match ie.children.get(&name).map(|&c| &self.insts[c].kind) {
-                        Some(InstKind::Prim(p)) => match p.arena_kind() {
-                            Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
-                            Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
-                            Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
-                            Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
-                            None => ChildClass::Other,
-                        },
-                        _ => ChildClass::Other,
-                    }
-                };
-                let thresh = std::env::var("TRS_JIT_SPLIT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(1000);
-                let exemplar = seen_mir.clone();
-                let insts = &self.insts;
-                let kind = move |m: usize, name: StrId| -> ChildRef {
-                    let Some(&ex) = exemplar.get(&m) else { return ChildRef::Opaque };
-                    let InstKind::User { children, .. } = &insts[ex].kind else {
-                        return ChildRef::Opaque;
-                    };
-                    let Some(&ci) = children.iter().find(|(k, _)| **k == name).map(|(_, v)| v)
-                    else {
-                        return ChildRef::Opaque;
-                    };
-                    match &insts[ci].kind {
-                        InstKind::Prim(p) => ChildRef::Prim(match p.arena_kind() {
-                            Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
-                            Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
-                            Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
-                            Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
-                            None => ChildClass::Other,
-                        }),
-                        InstKind::User { module, .. } => {
-                            ChildRef::User(self_mods_ir(insts, *module))
-                        }
-                    }
-                };
-                fn self_mods_ir(_i: &[Inst], m: usize) -> usize {
-                    m
-                }
-                let mut an = ConeAnalyzer::new(&self.d, &kind, thresh);
-                let mut mirs2: Vec<usize> = seen_mir.keys().copied().collect();
-                mirs2.sort_unstable();
-                for mir in mirs2 {
-                    let stats = an.module(mir);
-                    let outlined: Vec<_> =
-                        stats.values().filter(|st| st.outlined).collect();
-                    let stable = outlined.iter().filter(|st| st.stable).count();
-                    let mass: u64 = outlined.iter().map(|st| st.eff as u64).sum();
-                    let maxeff = stats.values().map(|st| st.eff).max().unwrap_or(0);
-                    eprintln!(
-                        "trs split: mir={mir} defs={} outlined={} stable={stable} piece-mass={mass} max-piece={maxeff}",
-                        stats.len(),
-                        outlined.len()
-                    );
-                }
-            }
-        }
-
         // ---- exec dedup classes: one compiled body per class ----
         let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
         {
@@ -1572,6 +1486,54 @@ impl Interp {
             }
         };
 
+        // Load attempt FIRST: an artifact carrying protos skips
+        // trial_lower entirely (0.32s of sudoku startup); any failure
+        // falls back to in-process compilation (which trials below)
+        let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
+        let mut protos_opt: Option<Vec<FnProtos>> = None;
+        if let JitRequest::Load { so } = &request {
+            match aot_load(so, self.bir_hash, &specs, &classes, split_thresh.unwrap_or(0))
+            {
+                Ok((sch, exe, pr)) => {
+                    preloaded = Some((sch, exe));
+                    protos_opt = Some(pr);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "trs: artifact {}: {e}; compiling in-process instead",
+                        so.display()
+                    );
+                }
+            }
+        }
+        // eligibility + call-site tables via trial lowering (link, run,
+        // and artifact-fallback paths; skipped on successful loads)
+        let protos: Vec<FnProtos> = match protos_opt {
+            Some(p) => p,
+            None => {
+                let env = PlanEnv { d: &self.d, insts: &inst_envs, now_slot };
+                let t0 = std::time::Instant::now();
+                match trial_lower(&env, &specs) {
+                    Ok(p) => {
+                        if std::env::var_os("TRS_JIT_TIME").is_some() {
+                            eprintln!("trs jit: trial lower {:?}", t0.elapsed());
+                        }
+                        p
+                    }
+                    Err(e) => {
+                        if let JitRequest::Emit { .. } = &request {
+                            self.jit_emit_result =
+                                Some(crate::AotEmit::Ineligible(e.to_string()));
+                        }
+                        if trace {
+                            eprintln!("trs jit: off ({e})");
+                        }
+                        return None;
+                    }
+                }
+            }
+        };
+
         // trs link: emit the artifact .so and stop (nothing runs)
         if let JitRequest::Emit { so } = &request {
             self.jit_emit_result = Some(
@@ -1584,6 +1546,7 @@ impl Interp {
                     &helper_specs,
                     &refs_sym,
                     split_thresh.unwrap_or(0),
+                    &protos,
                     so,
                     self.bir_hash,
                 ) {
@@ -1594,30 +1557,7 @@ impl Interp {
             return None;
         }
 
-        // trs run --code: resolve compiled functions from the
-        // artifact instead of compiling; fall back to in-process JIT
-        // if the artifact is missing or stale
-        let preloaded = if let JitRequest::Load { so } = &request {
-            match aot_load(
-                so,
-                self.bir_hash,
-                &specs,
-                &protos,
-                &classes,
-                split_thresh.unwrap_or(0),
-            ) {
-                Ok(l) => Some(l),
-                Err(e) => {
-                    eprintln!(
-                        "trs: artifact {}: {e}; compiling in-process instead",
-                        so.display()
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+
 
         let n = specs.len();
         let nworkers = jit_workers(n);

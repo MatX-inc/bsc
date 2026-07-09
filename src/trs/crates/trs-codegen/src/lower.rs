@@ -618,7 +618,7 @@ impl Drop for AotModeGuard {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 3;
+pub const AOT_LAYOUT_REV: u64 = 4;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -690,7 +690,11 @@ pub fn compile_object_chunk(
 
 /// AOT: the fingerprint object.  The loader checks these globals before
 /// trusting the artifact's baked slot numbers.
-pub fn compile_meta_object(bir_hash: u64, split_thresh: u64) -> Result<Vec<u8>, Ineligible> {
+pub fn compile_meta_object(
+    bir_hash: u64,
+    split_thresh: u64,
+    protos: &[u8],
+) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
     let i64t = ctx.i64_type();
@@ -709,6 +713,13 @@ pub fn compile_meta_object(bir_hash: u64, split_thresh: u64) -> Result<Vec<u8>, 
         let g = module.add_global(ptrt, None, name);
         g.set_initializer(&ptrt.const_null());
     }
+    // per-ordinal call-site tables: loading decodes these instead of
+    // re-running trial_lower
+    let pl = module.add_global(i64t, None, "trs_protos_len");
+    pl.set_initializer(&i64t.const_int(protos.len() as u64, false));
+    let arr = ctx.const_string(protos, false);
+    let pg = module.add_global(arr.get_type(), None, "trs_protos");
+    pg.set_initializer(&arr);
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
