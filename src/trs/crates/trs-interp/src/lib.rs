@@ -117,6 +117,10 @@ pub struct Interp {
     rst_subs: Vec<Vec<(usize, usize)>>,
     /// reset-generating prim instance -> the node its OUT_RST drives
     rstgen_out: HashMap<usize, usize>,
+    /// number of currently-asserted reset nodes: reset ticks are pure
+    /// no-ops while this is 0 (rst_tick acts only in_reset), so the
+    /// per-edge tick loop skips them in steady state
+    rst_active: usize,
     /// deferred (end-of-timeslice) reset transitions, mirroring
     /// reset_at_end_of_timeslice in bs_prim_mod_resets.h
     rst_pending: Vec<(usize, bool)>,
@@ -509,6 +513,7 @@ impl Interp {
             rst_asserted: vec![false],
             rst_subs: vec![Vec::new()],
             rstgen_out: HashMap::new(),
+            rst_active: 0,
             rst_pending: Vec::new(),
             initial_asserts: Vec::new(),
             vcd: vcd::Vcd::new(),
@@ -2775,6 +2780,11 @@ impl Interp {
                 continue;
             }
             self.rst_asserted[n] = v;
+            if v {
+                self.rst_active += 1;
+            } else {
+                self.rst_active -= 1;
+            }
             // mirror the port LEVEL into the JIT arena (compiled reset
             // guards read it there)
             if !self.jit_arena_ptr.is_null() {
@@ -3783,6 +3793,16 @@ impl Interp {
                 let _tt0 = jit::prof::on().then(std::time::Instant::now);
                 for (inst, pname, is_rst, owner, gexpr) in &rc.ticks {
                     let inst = *inst;
+                    // steady state: a reset tick is a no-op unless some
+                    // reset node is asserted (rst_tick acts only
+                    // in_reset); generators/drivers keep side duties
+                    if *is_rst
+                        && self.rst_active == 0
+                        && !self.rstgen_out.contains_key(&inst)
+                        && !driver_clock.contains_key(&inst)
+                    {
+                        continue;
+                    }
                     let gate = match gexpr {
                         None => true,
                         Some(g) => {
