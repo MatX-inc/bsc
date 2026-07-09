@@ -49,6 +49,9 @@ TIMEOUT = 60          # reference runs, compiles, and normal trs runs
 # bsc.long_tests convention) are exactly the designs whose interpreter
 # runs blow up; they get a tight leash instead of the flat TIMEOUT:
 # max(TIMEOUT_FLOOR, TIMEOUT_FACTOR x the reference's wall time).
+# Every limit is additionally floored at the reference's build+run
+# wall: sync-JIT compiles inside the timed window, and the reference's
+# own compile (C++ codegen + cc) happened off the clock.
 TIMEOUT_FLOOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FLOOR", "5"))
 TIMEOUT_FACTOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FACTOR", "5"))
 # --aot: trs link to a persistent artifact, then run the wrapper
@@ -160,8 +163,11 @@ def one_test(job):
             return (rel, top, "NOT_SUPPORTED", first_error(msg))
         return (rel, top, "COMPILE_FAIL", first_error(msg))
 
+    import time as _time
+    tb0 = _time.monotonic()
     r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common + cfiles,
             cwd=wk, timeout=180)
+    ref_build_secs = _time.monotonic() - tb0
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
         if "SimExportIR" in msg:
@@ -177,7 +183,6 @@ def one_test(job):
     if not os.path.exists(bir):
         return (rel, top, "EXPORT_FAIL", "no .bir produced")
 
-    import time as _time
     t0 = _time.monotonic()
     ref = run(["./sim.exe", "-m", MAX_CYCLES], cwd=wk)
     ref_secs = _time.monotonic() - t0
@@ -188,6 +193,11 @@ def one_test(job):
 
     is_long = any(f.endswith(".exp.golden") for f in os.listdir(testdir))
     limit = max(TIMEOUT_FLOOR, TIMEOUT_FACTOR * ref_secs) if is_long else TIMEOUT
+    # trs may compile INSIDE the timed window (sync JIT); the
+    # reference compiled off the clock in the bsc call above.  Floor
+    # the limit at the reference's own build+run wall so no mode is
+    # asked to beat a budget Bluesim itself did not meet.
+    limit = max(limit, ref_build_secs + ref_secs)
     if AOT:
         cexe = os.path.join(wk, top + ".aot.cexe")
         lk = run([TRS, "link", bir, "-o", cexe], cwd=wk, timeout=300)
