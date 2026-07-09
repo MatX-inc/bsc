@@ -41,3 +41,53 @@ the BIR to LLVM (rule bodies and CF/WF cones as native code, prims as
 calls into trs-rt), differential-tested against the interpreter.
 Target: within ~2x of the C++ backend initially, then faster than
 Verilator per the DESIGN.md goals.
+
+# Pre-edge-SSA baseline (2026-07-09, quiet machine)
+
+Frozen BEFORE the edge-SSA transformation (task #24) so its wins are
+measured against solid numbers.  Binary: decc231e + leash-fairness
+tree (all g2 fixes; gate all-green 966/0/0 x 3 legs).  Reference =
+installed bsc C++ Bluesim at -O3.  All runs byte-identical, x3.
+
+## Wall clock (sudoku mkGenerateTest3, -m default full run)
+
+| metric              | trs artifact (O1) | reference | ratio  |
+|---------------------|---------------------|-----------|--------|
+| run                 | 0.48-0.51 s         | 0.31 s    | ~1.55x |
+| startup (-m 1)      | 0.06 s              | 0.08 s    | win    |
+| link                | 8.1 s (one-module)  | 13.9 s    | win    |
+| LongCnt 5M (artifact, central loop) | 0.05-0.06 s | 0.27 s | 5x AHEAD |
+
+## Where trs's 0.51s goes (TRS_PROF)
+
+total 0.556s | dispatch 0.000s (fused edges: schedule IS code) |
+ticks 0.137s (~25% — prim tick machinery, UNTOUCHED by edge-SSA;
+also the central-loop #9 disqualifier) | prim cb 0 calls |
+foreign cb 768 calls, 0.001s.  Remainder ~0.32s = compiled edge code
+vs reference sim-only ~0.25s.
+
+## Hardware counters (perf stat, P-core, full run)
+
+| counter             | trs     | reference | ratio |
+|---------------------|-----------|-----------|-------|
+| cycles              | 1.060 B   | 0.667 B   | 1.59x |
+| instructions        | 2.775 B   | 1.747 B   | 1.59x |
+| IPC                 | 2.62      | 2.62      | SAME  |
+| branches            | 514 M     | 317 M     | 1.62x |
+| branch-miss rate    | 0.43%     | 0.62%     | win   |
+| L1-dcache loads     | 1.128 B   | 0.435 B   | 2.59x |
+| loads / instruction | 0.41      | 0.25      | —     |
+| L1d load misses     | 17.2 M    | 1.15 M    | 15x   |
+| LLC load misses     | 77 k      | 65 k      | ~same |
+
+READING: IPC is IDENTICAL — the gap is pure instruction/load VOLUME,
+not stalls.  Excess = 1.03B instructions, of which 0.69B (67%) are
+data loads: the arena-slot round-trip signature.  Edge-SSA attacks
+exactly this (values in registers, cross-rule sharing); the share
+census sizes the recompute side at ~45% of per-edge def-eval mass
+(recompute 16.6k vs total DAG 20.3k; hottest module type mir=2:
+recompute 12.3k EXCEEDS its own DAG 10.5k).  The 15x L1d miss count
+is the slot-scatter side effect (absorbed at same IPC today, but
+free to remove).  Ticks (0.137s) are the post-edge-SSA residue to
+attack next.  O-ladder: PARKED until full-edge composition (O3 today
+buys only ~0.05s for +3s link on pre-SSA IR).
