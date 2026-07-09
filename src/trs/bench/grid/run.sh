@@ -30,7 +30,7 @@ WK=${1:-$(mktemp -d)}
 mkdir -p "$WK" || exit 2
 WK=$(cd "$WK" && pwd)
 
-[ -f "$RESULTS" ] || echo "N,tiles,bsc_frontend_s,ref_build_s,b3_link_s,ref_run_s,b3_run_s,ref_rss_kb,b3_rss_kb,ir_passes_s,backend_s" > "$RESULTS"
+[ -f "$RESULTS" ] || echo "gen,N,tiles,bsc_frontend_s,ref_build_s,b3_link_s,ref_run_s,b3_run_s,ref_rss_kb,b3_rss_kb,ir_passes_s,backend_s" > "$RESULTS"
 
 now() { date +%s.%N; }
 dur() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.3f", b - a }'; }
@@ -113,7 +113,7 @@ bench() { # n
 
     ref_rss=$(rss ref.time)
     b3_rss=$(rss b3.time)
-    row="$n,$m,$fe_s,$rb_s,$lk_s,$rr_s,$br_s,$ref_rss,$b3_rss,$ir_s,$be_s"
+    row="v2,$n,$m,$fe_s,$rb_s,$lk_s,$rr_s,$br_s,$ref_rss,$b3_rss,$ir_s,$be_s"
     echo "$row" >> "$RESULTS"
     [ "$ok" = 1 ] && echo "PASS N=$n  $row"
 }
