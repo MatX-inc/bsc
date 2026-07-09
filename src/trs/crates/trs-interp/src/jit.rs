@@ -1512,13 +1512,22 @@ impl Interp {
 
         let mut def_reads: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
         let mut hoists: Vec<Vec<Vec<(usize, StrId)>>> = Vec::with_capacity(nodes.len());
-        // outline dial (link time): bodies whose def-cone mass exceeds
-        // the threshold stay standalone.  Default off until the knee
-        // is measured; TRS_EDGE_SSA_OUTLINE=<mass> engages.
-        let outline_thresh: u64 = std::env::var("TRS_EDGE_SSA_OUTLINE")
+        // outline dial (link time): big NON-SHARING bodies stay
+        // standalone.  Cost model (default): outline iff
+        //   body_mass > max(FLOOR, FACTOR x consumed-sharable-mass)
+        // — selects "large and shares little" directly instead of
+        // hoping raw mass is a proxy (the sudoku knee showed monsters
+        // are free to outline while mid-size sharers are not).
+        // TRS_EDGE_SSA_OUTLINE=<mass> forces an absolute threshold;
+        // TRS_EDGE_SSA_OUTLINE_FACTOR tunes the model (0 disables).
+        let outline_abs: Option<u64> = std::env::var("TRS_EDGE_SSA_OUTLINE")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let outline_factor: u64 = std::env::var("TRS_EDGE_SSA_OUTLINE_FACTOR")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(u64::MAX);
+            .unwrap_or(2);
+        const OUTLINE_FLOOR: u64 = 800;
         let mut outlined_execs: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
         let mut tot_recompute = 0u64;
@@ -1547,11 +1556,29 @@ impl Interp {
                     Some((c, o))
                 })
                 .collect();
-            // link-time outline dial: bodies over the threshold stay
-            // standalone (called from the edge fn, class-deduped) —
-            // they bound the mega-function; their cones never consult
-            // the cache, so they are not consumers (writes still count
-            // for eviction)
+            // outline selection.  First pass: the SHARABLE def set
+            // over ALL exec bodies (pure, unslotted, 2+ consumers) —
+            // what a body would forfeit by leaving the mega-function.
+            let mut all_counts: HashMap<(usize, StrId), usize> = HashMap::new();
+            for sec in sections.iter().flatten() {
+                for &d0 in &sec.0.defs {
+                    *all_counts.entry(d0).or_insert(0) += 1;
+                }
+            }
+            let sharable: HashMap<(usize, StrId), u64> = all_counts
+                .iter()
+                .filter(|(_, &c)| c >= 2)
+                .filter_map(|(&(di, dn), _)| {
+                    let dc = cone(&mut cx, di, dn);
+                    (dc.mass > 0 && dc.pure() && {
+                        let iev = &inst_envs[&di];
+                        !iev.eager_slot.contains_key(&dn)
+                            && !iev.cfwf_slot.contains_key(&dn)
+                    })
+                    .then_some(((di, dn), dc.mass))
+                })
+                .collect();
+            // second pass: outline iff large AND shares little
             for (sec, &(_, o)) in sections.iter().zip(comp_nodes.iter()) {
                 if let Some((c, _)) = sec {
                     let body_mass: u64 = c
@@ -1559,8 +1586,28 @@ impl Interp {
                         .iter()
                         .map(|&(di, dn)| cone(&mut cx, di, dn).mass)
                         .sum();
-                    if body_mass > outline_thresh {
+                    let shared_mass: u64 = c
+                        .defs
+                        .iter()
+                        .filter_map(|d0| sharable.get(d0))
+                        .sum();
+                    let outline = match outline_abs {
+                        Some(t) => body_mass > t,
+                        None => {
+                            outline_factor > 0
+                                && body_mass
+                                    > OUTLINE_FLOOR
+                                        .max(outline_factor * shared_mass)
+                        }
+                    };
+                    if outline {
                         outlined_execs.insert(o);
+                    }
+                    if stats && body_mass > 400 {
+                        eprintln!(
+                            "trs edge-ssa: body o={o} mass={body_mass} \
+                             shared={shared_mass} outline={outline}"
+                        );
                     }
                 }
             }
