@@ -218,6 +218,26 @@ instrument; Ravi capped the grid at N=32 and restructured it (rich
 synthesized tiles, K large link rules — bsc scheduling is O(rules^2),
 the 71s frontend wall was probably benchmark shape).
 
+REBASE PLAN (Ravi, 2026-07-09): rebase claude/trs onto upstream
+PR #1027 "Add FST support to Bluesim" (head personal/bluesim-fst —
+Ravi's fork branch; superset of PR #1000 "-dump-formats") when there
+is a chance (tree quiet, no sweep in flight).  Measured: merge-base
+534241d5, theirs 25 / ours 214 commits; we never touch src/bluesim
+(their main surface); conflict surface = 9 files across 18 of our
+commits — flag tables (Flags.hs / FlagsDecode.hs / bsc.hs: our
+-bir/-trs/-c vs their -dump-formats), bsc.help.out.expected,
+testsuite/config/unix.exp, CI ymls, user_guide.tex; the one
+real-thought spot is their "rework the Verilog dump harness" vs our
+Verilog link-path commits in bsc.hs.  Mechanics: `git rebase --onto
+personal/bluesim-fst 534241d5 claude/trs`, `git submodule
+update --init` (libfst), full rebuild + full local gates, force-push
+personal, then REGEN THE PERF FENCE BASELINE (ref Bluesim changed).
+Payoff: -dump-formats IS the link-time waveform contract the compile
+-mode split wants (fast = none, debug = vcd/fst); libfst in-tree
+enables FST output in the future debug mode; testsuite gains FST
+cross-checks wherever VCD is checked — plan an FST twin of the VCD
+battery.  Tracked as task #7.
+
 ## Current state
 
 - **Resumable stepper landed** (981ad24a): `run()` = `prime()` (one-time
