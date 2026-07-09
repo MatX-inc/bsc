@@ -41,6 +41,11 @@ type JitRequestT = jit::JitRequest;
 #[cfg(not(feature = "jit"))]
 type JitRequestT = ();
 
+/// central-loop bail diagnostics (task #21), dumped by finish() under
+/// TRS_JIT_TRACE
+static CENTRAL_BAIL: [std::sync::atomic::AtomicUsize; 16] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 16];
+
 /// BDPI imports satisfied by the Bluesim library itself (libbsprim.a's
 /// rand32.cxx), not by user C files.
 fn is_lib_bdpi(c_name: &str) -> bool {
@@ -2977,10 +2982,26 @@ impl Interp {
     }
 
     /// Run until $finish or the cycle limit.  Returns the exit code.
+    fn dump_central_bails(&self) {
+        if std::env::var_os("TRS_JIT_TRACE").is_none() {
+            return;
+        }
+        let v: Vec<String> = CENTRAL_BAIL
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.load(std::sync::atomic::Ordering::Relaxed) > 0)
+            .map(|(k, c)| format!("#{k}x{}", c.load(std::sync::atomic::Ordering::Relaxed)))
+            .collect();
+        if !v.is_empty() {
+            eprintln!("trs jit: central bails: {}", v.join(" "));
+        }
+    }
+
     pub fn run(&mut self, max_cycles: u64) -> i32 {
         #[cfg(feature = "jit")]
         let t0 = jit::prof::on().then(std::time::Instant::now);
         self.advance(max_cycles);
+        self.dump_central_bails();
         let rc = self.finish();
         #[cfg(feature = "jit")]
         if let Some(t0) = t0 {
@@ -3412,12 +3433,151 @@ impl Interp {
             jit,
         } = self.stepper.take().unwrap();
 
+        #[cfg(feature = "jit")]
+        let mut central_tried = false;
+        // ---- central loop (task #21): tight steady-state player ----
+        // A single Wave clock with fused, tick-free posedge comps and a
+        // quiet aperiodic world degenerates into a plain loop: no heap,
+        // no per-edge machinery.  Any irregularity bails back to the
+        // general event loop below (one shared semantics).
+        macro_rules! try_central {
+            () => {
+                #[cfg(feature = "jit")]
+                'central: {
+                    if central_tried {
+                        { CENTRAL_BAIL[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                    }
+
+            let Some(j) = jit.as_ref() else {
+                central_tried = true;
+                { CENTRAL_BAIL[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            };
+            // fusion may not exist yet (JIT compiles it once bodies
+            // warm): don't burn the attempt until it does
+            let Some(fused) = j.fused.get() else { { CENTRAL_BAIL[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; } };
+            central_tried = true;
+            if self.vcd.is_active()
+                || !driver_clock.is_empty()
+                || !self.rstgen_out.is_empty()
+                || self.rst_asserted.iter().any(|&a| a)
+                || !self.rst_pending.is_empty()
+            {
+                { CENTRAL_BAIL[4].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            }
+            // exactly one periodic Wave clock
+            let mut wave = None;
+            for (ci2, src) in sources.iter().enumerate() {
+                if let ClockSource::Wave(w) = src {
+                    if wave.is_some() {
+                        { CENTRAL_BAIL[5].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                    }
+                    wave = Some((ci2, w.hi, w.lo));
+                }
+            }
+            let Some((wci, hi, lo)) = wave else { { CENTRAL_BAIL[6].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; } };
+            if Some(clocks[wci]) != self.d.default_clock {
+                { CENTRAL_BAIL[7].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            }
+            // posedge comps: fused, no early rules, no residual ticks;
+            // negedge comps: none
+            let mut pos_rcis: Vec<usize> = Vec::new();
+            for (rci, rc) in rcomps.iter().enumerate() {
+                if rc.clk != wci {
+                    { CENTRAL_BAIL[8].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                }
+                if rc.posedge {
+                    // reset ticks are no-ops here: the preconditions
+                    // guarantee reset stays deasserted (no generators,
+                    // no drivers), and rst_tick acts only in_reset
+                    if !rc.early.is_empty()
+                        || rc.ticks.iter().any(|(_, _, is_rst, _, _)| !*is_rst)
+                        || fused[rci] == 0
+                    {
+                        { CENTRAL_BAIL[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                    }
+                    pos_rcis.push(rci);
+                } else if rc.entries.iter().any(|e| !e.nodes.is_empty()) {
+                    { CENTRAL_BAIL[10].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                }
+            }
+            if pos_rcis.is_empty() || j.lazy.any_cold() {
+                { CENTRAL_BAIL[11].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            }
+            // heap must hold exactly this clock's periodic edges
+            let mut t_pos = None;
+            let mut t_neg = None;
+            for Reverse((t, prio, ci, pos)) in heap.iter() {
+                if *ci != wci || *prio == 0 {
+                    { CENTRAL_BAIL[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                }
+                if *pos {
+                    t_pos = Some(*t);
+                } else {
+                    t_neg = Some(*t);
+                }
+            }
+            let (Some(mut tp), Some(mut tn)) = (t_pos, t_neg) else {
+                { CENTRAL_BAIL[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            };
+            if tp <= 2 {
+                // top reset not yet deasserted: let the general loop
+                // handle early instants
+                { CENTRAL_BAIL[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+            }
+            heap.clear();
+            if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                eprintln!("trs jit: central loop engaged (clock {wci})");
+            }
+            let period = hi + lo;
+            let ap = j.arena_ptr();
+            let envp = self as *mut Interp as *mut core::ffi::c_void;
+            while self.finished.is_none() && self.cycle < max_cycles {
+                self.cycle += 1;
+                self.now = tp;
+                final_now = tp;
+                for &rci in &pos_rcis {
+                    let f: unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                    ) -> i32 = unsafe { std::mem::transmute(fused[rci]) };
+                    unsafe { f(ap, envp, tp) };
+                    if self.finished.is_some() {
+                        break;
+                    }
+                }
+                if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
+                    break;
+                }
+                tp += period;
+                tn += period;
+            }
+            // clock bookkeeping for queries + re-arm the heap so the
+            // general loop (and later advance() calls) resume cleanly
+            {
+                let c = &mut self.vcd_clocks[wci];
+                c.pos_at = self.now;
+                c.pos_count = self.cycle;
+                c.cur = true;
+            }
+            heap.push(Reverse((tp, 1, wci, true)));
+            heap.push(Reverse((tn, 1, wci, false)));
+        
+                }
+            };
+        }
+
         while self.finished.is_none() {
             let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
             // top reset deasserts at t=2 after that instant's logic
             if t > 2 && self.rst_asserted[0] {
                 self.apply_reset(0, false);
                 self.flush_reset_pending();
+                // steady state begins here: push the in-flight edge
+                // back and try the central player once
+                heap.push(Reverse((t, prio, ci, pos)));
+                try_central!();
+                continue;
             }
             if pos && Some(clocks[ci]) == self.d.default_clock {
                 if self.cycle >= max_cycles {
@@ -3707,6 +3867,11 @@ impl Interp {
                 }
             }
 
+            // steady state may only begin here (fusion compiles after
+            // warm-up): retry the central player at slice boundaries
+            if !same_time && self.finished.is_none() && self.cycle < max_cycles {
+                try_central!();
+            }
             // the cycle limit stops the simulation at the Nth default
             // posedge, but the kernel finishes the current timeslice
             // first — same-instant edges of other clocks still run;
