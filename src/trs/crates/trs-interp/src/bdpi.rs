@@ -47,6 +47,10 @@ impl Bdpi {
         Ok(Bdpi { _lib: lib, syms })
     }
 
+    pub fn syms(&self) -> &std::collections::HashMap<String, usize> {
+        &self.syms
+    }
+
     pub fn has(&self, name: &str) -> bool {
         self.syms.contains_key(name)
     }

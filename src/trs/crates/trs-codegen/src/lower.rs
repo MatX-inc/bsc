@@ -90,6 +90,18 @@ pub fn edge_ssa_sites() -> [usize; 5] {
     EDGE_SSA_SITES.with(|c| c.get())
 }
 
+/// Direct-BDPI support (task #22): c_name -> function address for
+/// baked-mode (JIT) call emission, set once by the interpreter after
+/// dlopening the user .so.  AOT artifacts use per-function pointer
+/// globals filled by the loader instead.
+pub static BDPI_SYMS: std::sync::OnceLock<HashMap<String, usize>> =
+    std::sync::OnceLock::new();
+/// Address of the stdio-flush callback (phase 0 = flush Rust stdout
+/// before the C call, 1 = fflush(NULL) after) — preserves the byte
+/// interleaving of user printf with $display output, exactly like the
+/// interpreter's BDPI dispatch.
+pub static STDIO_CB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
 /// One compiled prim call site (resolved by the trampoline).
 #[derive(Clone)]
 pub struct PrimCallSpec {
@@ -779,6 +791,7 @@ pub fn compile_meta_object(
     split_thresh: u64,
     protos: &[u8],
     edge_wire_ticks: bool,
+    bdpi_names: &[String],
 ) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
@@ -799,8 +812,14 @@ pub fn compile_meta_object(
     wt.set_initializer(&i64t.const_int(edge_wire_ticks as u64, false));
     // single definition of the callback pointer-globals every chunk
     // object references; the loader fills them after dlopen
-    for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim"] {
+    for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim", "trs_cb_stdio"] {
         let g = module.add_global(ptrt, None, name);
+        g.set_initializer(&ptrt.const_null());
+    }
+    // direct-BDPI callee pointers, filled by the loader from the
+    // artifact's companion .bdpi.so
+    for n in bdpi_names {
+        let g = module.add_global(ptrt, None, &format!("trs_bdpi_{n}"));
         g.set_initializer(&ptrt.const_null());
     }
     // per-ordinal call-site tables: loading decodes these instead of
@@ -1919,7 +1938,212 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 None => nope("task value before its task"),
             },
             Expr::Prim { op, width, args } => self.prim(f, *op, *width, args),
+            Expr::ForeignCall { width, func, args } => {
+                self.bdpi_value_call(f, (*width).max(1), *func, args)
+            }
             _ => nope("expression kind not compilable"),
+        }
+    }
+
+    /// Direct BDPI value call (task #22): the interpreter's integer-
+    /// slot ABI emitted inline — Bits by i64, Wide/Poly as i32-limb
+    /// buffers, wide/poly returns via an out-pointer first arg; stdio
+    /// flushes around the call keep printf/$display interleaving
+    /// byte-exact.  System tasks and library-provided imports are not
+    /// in the registry/globals and stay ineligible (v1 posture).
+    fn bdpi_value_call(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        func: StrId,
+        args: &[Expr],
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        use trs_ir::ForeignType as FT;
+        let Some(ff) = self
+            .env
+            .d
+            .foreign_funcs
+            .iter()
+            .find(|ff| ff.name == func)
+            .cloned()
+        else {
+            return nope("foreign value call without BDPI import");
+        };
+        let c_name = self.env.d.strings[ff.c_name as usize].clone();
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let baked = matches!(self.cbs.cb, CbAddr::Baked(_));
+        // callee pointer
+        let callee: PointerValue<'ctx> = if baked {
+            let Some(&addr) = BDPI_SYMS.get().and_then(|m| m.get(&c_name)) else {
+                return nope("BDPI symbol not loaded");
+            };
+            i64t.const_int(addr as u64, false).const_to_pointer(ptrt)
+        } else {
+            let gname = format!("trs_bdpi_{c_name}");
+            let g = self
+                .module
+                .get_global(&gname)
+                .unwrap_or_else(|| self.module.add_global(ptrt, None, &gname));
+            self.builder
+                .build_load(ptrt, g.as_pointer_value(), "bdf")
+                .unwrap()
+                .into_pointer_value()
+        };
+        let stdio: PointerValue<'ctx> = if baked {
+            let Some(&addr) = STDIO_CB.get() else {
+                return nope("stdio cb not registered");
+            };
+            i64t.const_int(addr as u64, false).const_to_pointer(ptrt)
+        } else {
+            let g = self
+                .module
+                .get_global("trs_cb_stdio")
+                .unwrap_or_else(|| self.module.add_global(ptrt, None, "trs_cb_stdio"));
+            self.builder
+                .build_load(ptrt, g.as_pointer_value(), "bds")
+                .unwrap()
+                .into_pointer_value()
+        };
+        let stdio_ty = self.ctx.void_type().fn_type(&[i64t.into()], false);
+        let flush = |lc: &Self, phase: u64| {
+            lc.builder
+                .build_indirect_call(
+                    stdio_ty,
+                    stdio,
+                    &[i64t.const_int(phase, false).into()],
+                    "fl",
+                )
+                .unwrap();
+        };
+
+        // marshal
+        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+        let mut slots: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        let store_limbs = |lc: &Self, v: IntValue<'ctx>, w: u32| {
+            let n32 = (w.max(1) as u64 + 31) / 32;
+            let buf = lc
+                .builder
+                .build_array_alloca(i32t, i32t.const_int(n32, false), "bb")
+                .unwrap();
+            for k in 0..n32 {
+                let piece = if k == 0 {
+                    v
+                } else {
+                    let sh = lc.ity(w).const_int(32 * k, false);
+                    lc.builder.build_right_shift(v, sh, false, "bs").unwrap()
+                };
+                let word = lc.to_w(piece, w, 32, false);
+                let ip = unsafe {
+                    lc.builder
+                        .build_gep(i32t, buf, &[i64t.const_int(k, false)], "bi")
+                        .unwrap()
+                };
+                lc.builder.build_store(ip, word).unwrap();
+            }
+            buf
+        };
+        // wide/poly return: out-pointer first
+        let ret_buf = match ff.ret {
+            FT::Wide(n) => Some((n.max(1) as u64 + 31) / 32),
+            FT::Poly => Some((width as u64 + 31) / 32),
+            _ => None,
+        }
+        .map(|n32| {
+            let buf = self
+                .builder
+                .build_array_alloca(i32t, i32t.const_int(n32, false), "bo")
+                .unwrap();
+            ptys.push(ptrt.into());
+            slots.push(buf.into());
+            (buf, n32)
+        });
+        if args.len() != ff.args.len() {
+            return nope("BDPI arg count mismatch");
+        }
+        for (k, ft) in ff.args.iter().enumerate() {
+            match ft {
+                FT::Bits(_) => {
+                    let wa = self.expr_width(f, &args[k])?;
+                    let v = self.expr(f, &args[k])?;
+                    ptys.push(i64t.into());
+                    slots.push(self.to_w(v, wa, 64, false).into());
+                }
+                FT::Wide(m) => {
+                    let wa = self.expr_width(f, &args[k])?;
+                    let v0 = self.expr(f, &args[k])?;
+                    let v = self.to_w(v0, wa, (*m).max(1), false);
+                    ptys.push(ptrt.into());
+                    slots.push(store_limbs(self, v, (*m).max(1)).into());
+                }
+                FT::Poly => {
+                    let wa = self.expr_width(f, &args[k])?;
+                    let v = self.expr(f, &args[k])?;
+                    ptys.push(ptrt.into());
+                    slots.push(store_limbs(self, v, wa.max(1)).into());
+                }
+                FT::CString => {
+                    let Expr::Str(sid) = &args[k] else {
+                        return nope("BDPI string arg not a literal");
+                    };
+                    let text = self.env.d.strings[*sid as usize].clone();
+                    let gname = format!("trs_bdpistr_{sid}");
+                    let g = self.module.get_global(&gname).unwrap_or_else(|| {
+                        let arr = self.ctx.const_string(text.as_bytes(), true);
+                        let g = self.module.add_global(arr.get_type(), None, &gname);
+                        g.set_initializer(&arr);
+                        g.set_constant(true);
+                        g
+                    });
+                    ptys.push(ptrt.into());
+                    slots.push(g.as_pointer_value().into());
+                }
+                FT::Void => return nope("void BDPI argument"),
+            }
+        }
+
+        flush(self, 0);
+        let fnty = i64t.fn_type(&ptys, false);
+        let cs = self
+            .builder
+            .build_indirect_call(fnty, callee, &slots, "bdc")
+            .unwrap();
+        flush(self, 1);
+        let raw = match cs.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(rv) => rv.into_int_value(),
+            _ => i64t.const_zero(),
+        };
+        match ff.ret {
+            FT::Void => Ok(self.ity(width).const_zero()),
+            FT::Bits(n) => {
+                let nn = n.clamp(1, 64);
+                let masked = self.to_w(raw, 64, nn, false);
+                Ok(self.to_w(masked, nn, width, false))
+            }
+            FT::Wide(_) | FT::Poly => {
+                let (buf, n32) = ret_buf.unwrap();
+                let mut acc = self.ity(width).const_zero();
+                for k in 0..n32.min((width as u64 + 31) / 32) {
+                    let ip = unsafe {
+                        self.builder
+                            .build_gep(i32t, buf, &[i64t.const_int(k, false)], "br")
+                            .unwrap()
+                    };
+                    let w32 = self
+                        .builder
+                        .build_load(i32t, ip, "brl")
+                        .unwrap()
+                        .into_int_value();
+                    let ext = self.to_w(w32, 32, width, false);
+                    let sh = self.ity(width).const_int(32 * k, false);
+                    let shifted =
+                        self.builder.build_left_shift(ext, sh, "brs").unwrap();
+                    acc = self.builder.build_or(acc, shifted, "bro").unwrap();
+                }
+                Ok(acc)
+            }
+            FT::CString => nope("BDPI string return"),
         }
     }
 

@@ -12,11 +12,12 @@ esac
 WK=${1:-$(mktemp -d)}
 cd "$WK" || exit 2
 fail=0
-check() { # name top
-    name=$1; top=$2
+check() { # name top [cfile]
+    name=$1; top=$2; cfile=$3
     cp "$SRC/$name.bsv" .
+    [ -n "$cfile" ] && cp "$SRC/$cfile" .
     $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
     "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
@@ -26,4 +27,8 @@ check() { # name top
 }
 check EdgeSelfKill sysEdgeSelfKill
 check HoistDivTrap sysHoistDivTrap
+# direct-BDPI (task #22): narrow + wide value imports must run
+# COMPILED (a fallback-to-interp regression still passes stdout —
+# the artifact note is the tell, but byte-parity is the contract)
+check BdpiMin sysBdpiMin ops.c
 exit $fail

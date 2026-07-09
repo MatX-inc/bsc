@@ -742,6 +742,7 @@ fn aot_emit(
     so: &std::path::Path,
     bir_hash: u64,
     edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
+    bdpi_names: &[String],
 ) -> Result<(), String> {
     use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
     trs_codegen::lower::llvm_init_once();
@@ -855,6 +856,7 @@ fn aot_emit(
             split_thresh as u64,
             &encode_protos(protos),
             edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
+            bdpi_names,
         )
         .map_err(|e| format!("meta object: {e}"))?;
         let mf = tmp.join("meta.o");
@@ -984,6 +986,7 @@ fn aot_emit(
         split_thresh as u64,
         &encode_protos(protos),
         false, // chunked path never carries edge-SSA wire ticks
+        bdpi_names,
     )
     .map_err(|e| format!("meta object: {e}"))?;
     let mf = tmp.join("meta.o");
@@ -1016,6 +1019,7 @@ fn aot_load(
     classes: &[(usize, Vec<usize>)],
     split_thresh: u32,
     ncomps: usize,
+    bdpi_fill: &[(String, usize)],
 ) -> Result<
     (Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>, Vec<usize>, bool),
     String,
@@ -1129,6 +1133,16 @@ fn aot_load(
                 .map_err(|e| e.to_string())?;
             fused.push(*ef as usize);
         }
+        // stdio-flush + direct-BDPI callee globals (all optional:
+        // absent in old or BDPI-free artifacts)
+        if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_stdio") {
+            unsafe { **g = jit_stdio_cb as usize };
+        }
+        for (gname, addr) in bdpi_fill {
+            if let Ok(g) = lib.get::<*mut usize>(gname.as_bytes()) {
+                unsafe { **g = *addr };
+            }
+        }
         // edge fns carry compiled wire ticks (absent symbol = old
         // artifact = 0)
         let wire_ticks = lib
@@ -1151,6 +1165,18 @@ fn jit_workers(n: usize) -> usize {
         })
         .clamp(1, 64)
         .min(n.max(1))
+}
+
+/// Stdio-flush callback for direct BDPI calls: phase 0 flushes Rust's
+/// buffered stdout BEFORE the C call, phase 1 fflush(NULL)es libc's
+/// buffers after — the interleaving contract bdpi::Bdpi::call keeps.
+pub(crate) unsafe extern "C" fn jit_stdio_cb(phase: u64) {
+    if phase == 0 {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    } else {
+        unsafe { libc::fflush(std::ptr::null_mut()) };
+    }
 }
 
 impl Interp {
@@ -1866,6 +1892,27 @@ impl Interp {
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
         let request = std::mem::take(&mut self.jit_request);
+        // direct-BDPI registries (task #22): baked-mode call emission
+        // reads these; set-once, idempotent
+        let _ = trs_codegen::lower::STDIO_CB.set(jit_stdio_cb as usize);
+        if let Some(b) = &self.bdpi {
+            // registry keys are C names (what call sites resolve)
+            let m: std::collections::HashMap<String, usize> = b
+                .syms()
+                .iter()
+                .map(|(n, &a)| {
+                    let c = self
+                        .d
+                        .foreign_funcs
+                        .iter()
+                        .find(|ff| self.s(ff.name) == n)
+                        .map(|ff| self.s(ff.c_name).to_string())
+                        .unwrap_or_else(|| n.clone());
+                    (c, a)
+                })
+                .collect();
+            let _ = trs_codegen::lower::BDPI_SYMS.set(m);
+        }
         if matches!(request, JitRequest::Run)
             && std::env::var_os("TRS_JIT").is_none()
         {
@@ -2745,6 +2792,26 @@ impl Interp {
                 &classes,
                 split_thresh.unwrap_or(0),
                 comp_nodes.len(),
+                &self
+                    .bdpi
+                    .as_ref()
+                    .map(|b| {
+                        b.syms()
+                            .iter()
+                            .map(|(n, &a)| {
+                                // syms key by BSV name; globals by c_name
+                                let c = self
+                                    .d
+                                    .foreign_funcs
+                                    .iter()
+                                    .find(|ff| self.s(ff.name) == n)
+                                    .map(|ff| self.s(ff.c_name).to_string())
+                                    .unwrap_or_else(|| n.clone());
+                                (format!("trs_bdpi_{c}"), a)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
             ) {
                 Ok((sch, exe, pr, fu, wt)) => {
                     preloaded = Some((sch, exe));
@@ -2833,6 +2900,18 @@ impl Interp {
                     so,
                     self.bir_hash,
                     edge_plan.as_ref(),
+                    &{
+                        let mut v: Vec<String> = self
+                            .d
+                            .foreign_funcs
+                            .iter()
+                            .map(|f| self.s(f.c_name).to_string())
+                            .filter(|n| !crate::is_lib_bdpi(n))
+                            .collect();
+                        v.sort_unstable();
+                        v.dedup();
+                        v
+                    },
                 ) {
                     Ok(()) => crate::AotEmit::Compiled,
                     Err(e) => crate::AotEmit::Failed(e),
