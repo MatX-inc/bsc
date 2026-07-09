@@ -2578,16 +2578,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     {
                         return nope("non-write ConfigReg action");
                     }
-                    // branchless inline write, exactly the boxed
-                    // semantics: on the instant's FIRST write the old
-                    // value snapshots; the current value and stamp
-                    // update under the action condition.  Layout:
+                    // inline write under the action-condition branch
+                    // (write sites are arm-multiplied: branchless paid
+                    // loads+stores at every site every firing, a
+                    // measured regression; taken-path inline still
+                    // eliminates the trampoline).  Boxed semantics: the
+                    // instant's FIRST write snapshots old.  Layout:
                     // [old (w), cur (w), written_at].
                     let words = rw.max(1).div_ceil(64);
                     let wv = self.expr_width(f, &args[0])?;
                     let v0 = self.expr(f, &args[0])?;
                     let v = self.to_w(v0, wv, rw, false);
-                    let old = self.load_val(f, base, rw);
+                    let wr_bb = self.ctx.append_basic_block(func, "cwr");
+                    let sk_bb = self.ctx.append_basic_block(func, "csk");
+                    self.builder.build_conditional_branch(cz, wr_bb, sk_bb).unwrap();
+                    self.builder.position_at_end(wr_bb);
                     let cur = self.load_val(f, base + words, rw);
                     let wat = self.load_word(f, base + 2 * words);
                     let now = self.load_word(f, self.env.now_slot);
@@ -2595,25 +2600,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         .builder
                         .build_int_compare(IntPredicate::NE, wat, now, "cwf")
                         .unwrap();
-                    let snap = self.builder.build_and(cz, first, "cws").unwrap();
+                    let old = self.load_val(f, base, rw);
                     let old2 = self
                         .builder
-                        .build_select(snap, cur, old, "cwo")
-                        .unwrap()
-                        .into_int_value();
-                    let cur2 = self
-                        .builder
-                        .build_select(cz, v, cur, "cwc")
-                        .unwrap()
-                        .into_int_value();
-                    let wat2 = self
-                        .builder
-                        .build_select(cz, now, wat, "cww")
+                        .build_select(first, cur, old, "cwo")
                         .unwrap()
                         .into_int_value();
                     self.store_val(f, base, rw, old2);
-                    self.store_val(f, base + words, rw, cur2);
-                    self.store_word(f, base + 2 * words, wat2);
+                    self.store_val(f, base + words, rw, v);
+                    self.store_word(f, base + 2 * words, now);
+                    self.builder.build_unconditional_branch(sk_bb).unwrap();
+                    self.builder.position_at_end(sk_bb);
                     return Ok(());
                 }
                 if let Some(&(base, ww)) = ie.wire_slot.get(instance) {
