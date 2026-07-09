@@ -76,6 +76,36 @@ pub struct SimState {
     aborted: bool,
     /// bk_set_timescale (VCD header)
     timescale: Option<(String, u64)>,
+    /// the symbol tree (built once at bk_init; NEVER mutated after —
+    /// tSymbol handles are raw pointers into this Vec)
+    syms: Vec<Sym>,
+    /// bk_peek_* word buffer (valid until the next peek, like the
+    /// reference's internal storage)
+    peek_buf: Vec<u32>,
+}
+
+/// One node of the symbol tree.  Carries a back-pointer to its
+/// SimState because the bk_* symbol accessors take only tSymbol.
+pub struct Sym {
+    st: *mut SimState,
+    key: CString,
+    width: u32,
+    kind: SymKind,
+    /// child indices into SimState.syms, symOrd-sorted
+    /// (case-insensitive, then case-sensitive)
+    children: Vec<usize>,
+}
+
+enum SymKind {
+    /// user module or prim container ("module with value")
+    Module,
+    /// a value prim's "" child (module -> "" redirect target)
+    PrimValue { inst: usize },
+    /// a def signal; peeks read the LAST-COMPUTED value
+    Def { inst: usize, id: trs_ir::StrId },
+    Rule,
+    /// an addressable range's "" child (RegFile)
+    Range { inst: usize, lo: u64, hi: u64 },
 }
 
 impl SimState {
@@ -135,14 +165,249 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
         interactive: false,
         aborted: false,
         timescale: None,
+        syms: Vec::new(),
+        peek_buf: Vec::new(),
     });
     // one-time event-loop setup: clocks resolved, kernel reset
     // protocol seeded — `sim clock` works right after `sim load`
     for e in &mut st.engines {
         e.interp.prime();
+        // debug tier: retain last-computed def values for peeks
+        e.interp.set_sym_trace();
     }
-    Box::into_raw(st) as *mut c_void
+    let raw = Box::into_raw(st);
+    unsafe { build_symbols(raw) };
+    raw as *mut c_void
 }
+
+/// Build the symbol tree (module/def/rule/value/range nodes per
+/// docs/TCL-CAPI.md), sorted like the reference (case-insensitive,
+/// then case-sensitive).  Runs once; the Vec is never touched again
+/// so raw Sym pointers stay valid for the session.
+unsafe fn build_symbols(stp: *mut SimState) {
+    let st = &mut *stp;
+    let seed = st.primary().symbol_seed();
+    let mut syms: Vec<Sym> = Vec::new();
+    let mut mod_sym: Vec<usize> = Vec::with_capacity(seed.len());
+    let sym = |key: &str, width, kind| Sym {
+        st: stp,
+        key: CString::new(key).unwrap_or_default(),
+        width,
+        kind,
+        children: Vec::new(),
+    };
+    // one module node per instance
+    for (_, name, _) in &seed {
+        mod_sym.push(syms.len());
+        syms.push(sym(name, 0, SymKind::Module));
+    }
+    for (i, (parent, _, is_user)) in seed.iter().enumerate() {
+        // wire into the parent
+        if let Some(p) = parent {
+            let child = mod_sym[i];
+            syms[mod_sym[*p]].children.push(child);
+        }
+        if *is_user {
+            for r in st.primary().inst_rules(i) {
+                let k = syms.len();
+                syms.push(sym(&r, 0, SymKind::Rule));
+                syms[mod_sym[i]].children.push(k);
+            }
+            for (name, width, id) in st.primary().def_symbols(i) {
+                let k = syms.len();
+                syms.push(sym(&name, width, SymKind::Def { inst: i, id }));
+                syms[mod_sym[i]].children.push(k);
+            }
+        } else if let Some((lo, hi, w)) = st.primary().prim_range_info(i) {
+            let k = syms.len();
+            syms.push(sym("", w, SymKind::Range { inst: i, lo, hi }));
+            syms[mod_sym[i]].children.push(k);
+        } else if let Some(v) = st.primary().prim_peek(i) {
+            let k = syms.len();
+            syms.push(sym("", v.width, SymKind::PrimValue { inst: i }));
+            syms[mod_sym[i]].children.push(k);
+        }
+    }
+    // symOrd: case-insensitive, ties case-sensitive
+    let keys: Vec<String> = syms
+        .iter()
+        .map(|x| x.key.to_string_lossy().into_owned())
+        .collect();
+    for x in &mut syms {
+        x.children
+            .sort_by(|&a, &b| {
+                let (ka, kb) = (&keys[a], &keys[b]);
+                ka.to_lowercase()
+                    .cmp(&kb.to_lowercase())
+                    .then_with(|| ka.cmp(kb))
+            });
+    }
+    st.syms = syms;
+}
+
+fn sym<'a>(p: *mut c_void) -> Option<&'a Sym> {
+    unsafe { (p as *const Sym).as_ref() }
+}
+
+// =================================================================
+// Symbol surface
+
+#[no_mangle]
+pub extern "C" fn bk_top_symbol(hdl: *mut c_void) -> *mut c_void {
+    let st = state(hdl);
+    match st.syms.first() {
+        Some(s) => s as *const Sym as *mut c_void,
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Dotted-path resolution happens in the KERNEL (bluetcl passes
+/// whole segments through).
+#[no_mangle]
+pub extern "C" fn bk_lookup_symbol(
+    root: *mut c_void,
+    name: *const c_char,
+) -> *mut c_void {
+    let Some(mut cur) = sym(root) else {
+        return std::ptr::null_mut();
+    };
+    let path = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
+    let st = unsafe { &*cur.st };
+    for seg in path.split('.') {
+        let Some(&k) = cur.children.iter().find(|&&k| {
+            st.syms[k].key.to_bytes() == seg.as_bytes()
+        }) else {
+            return std::ptr::null_mut();
+        };
+        cur = &st.syms[k];
+    }
+    cur as *const Sym as *mut c_void
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_key(p: *mut c_void) -> *const c_char {
+    sym(p).map(|s| s.key.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_size(p: *mut c_void) -> u32 {
+    sym(p).map(|s| s.width).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_module(p: *mut c_void) -> u8 {
+    matches!(sym(p).map(|s| &s.kind), Some(SymKind::Module)) as u8
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_rule(p: *mut c_void) -> u8 {
+    matches!(sym(p).map(|s| &s.kind), Some(SymKind::Rule)) as u8
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_single_value(p: *mut c_void) -> u8 {
+    matches!(
+        sym(p).map(|s| &s.kind),
+        Some(SymKind::Def { .. } | SymKind::PrimValue { .. })
+    ) as u8
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_value_range(p: *mut c_void) -> u8 {
+    matches!(sym(p).map(|s| &s.kind), Some(SymKind::Range { .. })) as u8
+}
+
+/// Fill the peek buffer with a Value's little-endian u32 words and
+/// return it (valid until the next peek, like the reference).
+fn peek_words(st: &mut SimState, v: &trs_interp::value::Value) -> *const u32 {
+    let words = ((v.width as usize) + 31) / 32;
+    st.peek_buf.clear();
+    for l in v.limbs64() {
+        st.peek_buf.push(*l as u32);
+        st.peek_buf.push((*l >> 32) as u32);
+    }
+    st.peek_buf.truncate(words.max(1));
+    while st.peek_buf.len() < words.max(1) {
+        st.peek_buf.push(0);
+    }
+    st.peek_buf.as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_peek_symbol_value(p: *mut c_void) -> *const u32 {
+    let Some(s) = sym(p) else {
+        return std::ptr::null();
+    };
+    let st = unsafe { &mut *s.st };
+    match s.kind {
+        SymKind::Def { inst, id } => {
+            // last-computed value; zeros before first computation
+            // (reference member fields start zeroed)
+            let v = st
+                .primary()
+                .def_peek(inst, id)
+                .unwrap_or_else(|| trs_interp::value::Value::zero(s.width));
+            peek_words(st, &v)
+        }
+        SymKind::PrimValue { inst } => match st.primary().prim_peek(inst) {
+            Some(v) => peek_words(st, &v),
+            None => std::ptr::null(),
+        },
+        _ => std::ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_range_min_addr(p: *mut c_void) -> u64 {
+    match sym(p).map(|s| &s.kind) {
+        Some(&SymKind::Range { lo, .. }) => lo,
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_range_max_addr(p: *mut c_void) -> u64 {
+    match sym(p).map(|s| &s.kind) {
+        Some(&SymKind::Range { hi, .. }) => hi,
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_peek_range_value(p: *mut c_void, addr: u64) -> *const u32 {
+    let Some(s) = sym(p) else {
+        return std::ptr::null();
+    };
+    let st = unsafe { &mut *s.st };
+    match s.kind {
+        SymKind::Range { inst, lo, hi } if addr >= lo && addr <= hi => {
+            match st.primary().prim_range_peek(inst, addr) {
+                Some(v) => peek_words(st, &v),
+                None => std::ptr::null(),
+            }
+        }
+        _ => std::ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_num_symbols(p: *mut c_void) -> u32 {
+    sym(p).map(|s| s.children.len() as u32).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_nth_symbol(p: *mut c_void, n: u32) -> *mut c_void {
+    let Some(s) = sym(p) else {
+        return std::ptr::null_mut();
+    };
+    let st = unsafe { &*s.st };
+    match s.children.get(n as usize) {
+        Some(&k) => &st.syms[k] as *const Sym as *mut c_void,
+        None => std::ptr::null_mut(),
+    }
+}
+
+
 
 /// `bk_shutdown`: free everything.  bluetcl dlcloses afterwards.
 #[no_mangle]
@@ -433,88 +698,6 @@ pub extern "C" fn bk_set_timescale(
     let st = state(hdl);
     st.timescale = Some((unit, scale_factor));
     BK_SUCCESS
-}
-
-// =================================================================
-// Symbol tree — NOT YET BUILT (docs/TCL-CAPI.md rung 2).  The
-// loader dlsyms every name up front, so these must exist; they
-// answer in the reference API's absence vocabulary (NULL root,
-// empty modules) until the tree lands.
-
-#[no_mangle]
-pub extern "C" fn bk_top_symbol(_hdl: *mut c_void) -> *mut c_void {
-    std::ptr::null_mut()
-}
-
-#[no_mangle]
-pub extern "C" fn bk_lookup_symbol(
-    _root: *mut c_void,
-    _name: *const c_char,
-) -> *mut c_void {
-    std::ptr::null_mut()
-}
-
-#[no_mangle]
-pub extern "C" fn bk_get_key(_sym: *mut c_void) -> *const c_char {
-    std::ptr::null()
-}
-
-#[no_mangle]
-pub extern "C" fn bk_get_size(_sym: *mut c_void) -> u32 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_is_module(_sym: *mut c_void) -> u8 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_is_rule(_sym: *mut c_void) -> u8 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_is_single_value(_sym: *mut c_void) -> u8 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_is_value_range(_sym: *mut c_void) -> u8 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_peek_symbol_value(_sym: *mut c_void) -> *const u32 {
-    std::ptr::null()
-}
-
-#[no_mangle]
-pub extern "C" fn bk_get_range_min_addr(_sym: *mut c_void) -> u64 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_get_range_max_addr(_sym: *mut c_void) -> u64 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_peek_range_value(
-    _sym: *mut c_void,
-    _addr: u64,
-) -> *const u32 {
-    std::ptr::null()
-}
-
-#[no_mangle]
-pub extern "C" fn bk_num_symbols(_sym: *mut c_void) -> u32 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn bk_get_nth_symbol(_sym: *mut c_void, _n: u32) -> *mut c_void {
-    std::ptr::null_mut()
 }
 
 // =================================================================

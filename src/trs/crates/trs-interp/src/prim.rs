@@ -10,6 +10,18 @@
 use crate::value::Value;
 
 pub trait Prim {
+    /// Debug-tier symbol peeks (trs-capi): the prim's current value
+    /// for the module -> "" redirect.  Default: no value symbol.
+    fn sym_peek(&mut self, _now: u64) -> Option<Value> {
+        None
+    }
+    /// Addressable range (RegFile/BRAM): (lo, hi, data width).
+    fn sym_range(&self) -> Option<(u64, u64, u32)> {
+        None
+    }
+    fn sym_range_peek(&mut self, _addr: u64, _now: u64) -> Option<Value> {
+        None
+    }
     /// Value-method call (pure read).
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value;
     /// Action-method call (mutates).
@@ -1114,6 +1126,12 @@ thread_local! {
 }
 
 impl Prim for RegFile {
+    fn sym_range(&self) -> Option<(u64, u64, u32)> {
+        Some((self.lo, self.hi, self.width))
+    }
+    fn sym_range_peek(&mut self, addr: u64, now: u64) -> Option<Value> {
+        Some(self.value_method("sub", &[Value::from_u64(64, addr)], now))
+    }
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
             "sub" => {
@@ -1547,6 +1565,9 @@ impl Reg {
 }
 
 impl Prim for Reg {
+    fn sym_peek(&mut self, now: u64) -> Option<Value> {
+        Some(self.value_method("read", &[], now))
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,
@@ -1821,6 +1842,9 @@ impl ConfigReg {
 }
 
 impl Prim for ConfigReg {
+    fn sym_peek(&mut self, now: u64) -> Option<Value> {
+        Some(self.value_method("read", &[], now))
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,

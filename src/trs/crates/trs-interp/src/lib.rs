@@ -4163,6 +4163,114 @@ impl Interp {
 }
 
 impl Interp {
+    /// Debug-tier def recording: last-computed def values retained
+    /// (Bluesim's C++ member semantics) so symbol peeks see what the
+    /// simulation computed, not a fresh re-evaluation.
+    pub fn set_sym_trace(&mut self) {
+        self.vcd_trace = true;
+    }
+
+    /// Symbol-tree seed (trs-capi): per instance, (parent instance,
+    /// local name, is-user-module).  Parents derive from paths; the
+    /// root's local name is "" (the kernel top_symbol key).
+    pub fn symbol_seed(&self) -> Vec<(Option<usize>, String, bool)> {
+        let by_path: HashMap<&str, usize> = self
+            .insts
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.path.as_str(), i))
+            .collect();
+        self.insts
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let (parent, name) = match n.path.rfind('.') {
+                    Some(k) => (
+                        by_path.get(&n.path[..k]).copied(),
+                        n.path[k + 1..].to_string(),
+                    ),
+                    // top-level children carry dot-less paths; only
+                    // instance 0 is the true root (key "")
+                    None if i == 0 => (None, String::new()),
+                    None => (Some(0), n.path.clone()),
+                };
+                (parent, name, matches!(n.kind, InstKind::User { .. }))
+            })
+            .collect()
+    }
+
+    /// Rule names of a user-module instance (SYM_RULE symbols).
+    pub fn inst_rules(&self, i: usize) -> Vec<String> {
+        match &self.insts[i].kind {
+            InstKind::User { module, .. } => {
+                let mir = self.mods[*module].ir;
+                self.d.modules[mir]
+                    .rules
+                    .iter()
+                    .map(|r| self.s(r.name).to_string())
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Def symbols of a user-module instance: (name, width, id).
+    pub fn def_symbols(&self, i: usize) -> Vec<(String, u32, StrId)> {
+        match &self.insts[i].kind {
+            InstKind::User { module, .. } => {
+                let mir = self.mods[*module].ir;
+                self.d.modules[mir]
+                    .defs
+                    .iter()
+                    .filter_map(|d| {
+                        let n = self.s(d.name);
+                        // the reference registers only defs that
+                        // survive as C++ MEMBERS; compiler temporaries
+                        // (`...___d<N>`) become locals with no symbol
+                        if let Some(k) = n.rfind("___d") {
+                            if n.len() > k + 4
+                                && n[k + 4..].chars().all(|c| c.is_ascii_digit())
+                            {
+                                return None;
+                            }
+                        }
+                        Some((n.to_string(), d.width, d.name))
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Last-computed value of a def (set_sym_trace recording); zeros
+    /// until first computed, like the reference's member fields.
+    pub fn def_peek(&self, i: usize, d: StrId) -> Option<Value> {
+        self.vcd_def_vals.get(&(i, d)).cloned()
+    }
+
+    pub fn prim_peek(&mut self, i: usize) -> Option<Value> {
+        let now = self.now;
+        match &mut self.insts[i].kind {
+            InstKind::Prim(p) => p.sym_peek(now),
+            _ => None,
+        }
+    }
+
+    pub fn prim_range_info(&self, i: usize) -> Option<(u64, u64, u32)> {
+        match &self.insts[i].kind {
+            InstKind::Prim(p) => p.sym_range(),
+            _ => None,
+        }
+    }
+
+    pub fn prim_range_peek(&mut self, i: usize, addr: u64) -> Option<Value> {
+        let now = self.now;
+        match &mut self.insts[i].kind {
+            InstKind::Prim(p) => p.sym_range_peek(addr, now),
+            _ => None,
+        }
+    }
+
     /// Construct from in-memory BIR bytes (the capi's embedded-BIR
     /// path — no file I/O at `sim load` time).
     pub fn from_bir_bytes(bytes: &[u8]) -> Result<Interp, String> {
