@@ -2802,6 +2802,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 matches!(op, PrimOp::Quot | PrimOp::Rem)
                     || args.iter().any(|a| self.effectful_expr(inst, a, seen))
             }
+            // BDPI value calls: nominally pure, but observable when the
+            // C side prints or keeps state — the planner already
+            // poisons ForeignCall cones; match it (review fleet)
+            E::ForeignCall { args, .. } => {
+                true || args.is_empty()
+            }
             E::If { cond, then_, else_, .. } => {
                 self.effectful_expr(inst, cond, seen)
                     || self.effectful_expr(inst, then_, seen)
@@ -2885,9 +2891,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .build_conditional_branch(ok, jn_bb, ev_bb)
             .unwrap();
         self.builder.position_at_end(ev_bb);
+        // the eval block is CONDITIONAL: nested def expansions memoized
+        // during the cone eval are defined only on this path and must
+        // not leak past the join (review-fleet confirmed dominance
+        // hazard — same save/restore discipline as lazy_mux arms)
+        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
         f.expanding.push(n);
         let v = self.expr(f, dex)?;
         f.expanding.pop();
+        f.ssa = saved;
         // schedule-position slot store (mirrors the plain expansion
         // path): the owning sched fn publishes the eager slot at its
         // first — and only — evaluation

@@ -1890,8 +1890,10 @@ impl Prim for ConfigReg {
     fn sym_children(&self) -> Vec<PrimSym> {
         vec![PrimSym { key: "", width: self.value.width, range: None }]
     }
-    fn sym_read(&mut self, key: &str, now: u64) -> Option<Value> {
-        (key.is_empty()).then(|| self.value_method("read", &[], now))
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        // the reference symbol points at the raw CURRENT member; the
+        // read METHOD's boxed old-value view is rule-visible only
+        (key.is_empty()).then(|| self.value.clone())
     }
     fn vcd_defs(
         &mut self,

@@ -1603,6 +1603,13 @@ impl Interp {
                         args.iter().map(|x| self.eval(inst, ctx, x)).collect();
                     let child = self.child_of(inst, *instance);
                     let v = self.call_actionvalue(child, *method, &argv);
+                    if self.vcd_trace {
+                        // Result-port peeks read the LAST-RETURNED
+                        // value (review fleet: AV results were never
+                        // recorded)
+                        self.vcd_meth_results
+                            .insert((child, *method), v.clone());
+                    }
                     // synthetic AV temps are not in the def table; the
                     // callee's result already has the declared width
                     let v = match self.def_width(inst, *def) {
@@ -4337,7 +4344,12 @@ impl Interp {
                     MethPortKind::Arg(k),
                 ));
             }
-            out.push((format!("RDY_{mname}"), 1, m.name, MethPortKind::Rdy));
+            // const-true ready = always_ready: the reference has no
+            // RDY port to register (interim until the exporter carries
+            // the surviving methodPorts set)
+            if !matches!(m.ready, Some(Expr::Const { .. }) | None) {
+                out.push((format!("RDY_{mname}"), 1, m.name, MethPortKind::Rdy));
+            }
             if m.result.is_some() {
                 let w = match m.result.as_ref().unwrap() {
                     Expr::Def(dn) => self.d.modules[mir]

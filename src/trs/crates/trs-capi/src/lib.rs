@@ -423,7 +423,20 @@ fn peek_symbol_value_inner(p: *mut c_void) -> *const u32 {
         return std::ptr::null();
     };
     let st = unsafe { &mut *s.st };
+    if st.engines.is_empty() {
+        return std::ptr::null(); // async run in flight
+    }
+    // capability tiers: only the interp engine records defs/ports —
+    // other engines degrade to NoValue rather than fabricate zeros
+    let recording = st
+        .engines
+        .first()
+        .map(|e| e.kind == EngineKind::Interp)
+        .unwrap_or(false);
     match s.kind {
+        SymKind::Def { .. } | SymKind::MethPort { .. } if !recording => {
+            std::ptr::null()
+        }
         SymKind::Def { inst, id } => {
             // last-computed value; zeros before first computation
             // (reference member fields start zeroed)
@@ -478,10 +491,18 @@ pub extern "C" fn bk_get_range_max_addr(p: *mut c_void) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn bk_peek_range_value(p: *mut c_void, addr: u64) -> *const u32 {
+    std::panic::catch_unwind(|| peek_range_value_inner(p, addr))
+        .unwrap_or(std::ptr::null())
+}
+
+fn peek_range_value_inner(p: *mut c_void, addr: u64) -> *const u32 {
     let Some(s) = sym(p) else {
         return std::ptr::null();
     };
     let st = unsafe { &mut *s.st };
+    if st.engines.is_empty() {
+        return std::ptr::null(); // async run in flight
+    }
     match s.kind {
         SymKind::Range { inst, key, lo, hi } if addr >= lo && addr <= hi => {
             match st.primary().prim_sym_read_range(inst, key, addr) {
@@ -516,7 +537,15 @@ pub extern "C" fn bk_get_nth_symbol(p: *mut c_void, n: u32) -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
     if !hdl.is_null() {
-        drop(unsafe { Box::from_raw(hdl as *mut SimState) });
+        let mut st = unsafe { Box::from_raw(hdl as *mut SimState) };
+        // an in-flight async run must be stopped and JOINED: bluetcl
+        // dlcloses the .so immediately after, and a detached worker
+        // would be executing unmapped code
+        if let Some(r) = st.runner.take() {
+            r.abort.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = r.join.join();
+        }
+        drop(st);
     }
 }
 
@@ -604,12 +633,20 @@ impl SimState {
 
 #[no_mangle]
 pub extern "C" fn bk_num_clocks(hdl: *mut c_void) -> u32 {
-    state(hdl).primary().clock_info().len() as u32
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return 0; // async run in flight
+    }
+    st.primary().clock_info().len() as u32
 }
 
 #[no_mangle]
 pub extern "C" fn bk_get_nth_clock(hdl: *mut c_void, n: u32) -> u32 {
-    if (n as usize) < state(hdl).primary().clock_info().len() {
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return BAD_CLOCK; // async run in flight
+    }
+    if (n as usize) < st.primary().clock_info().len() {
         n
     } else {
         BAD_CLOCK
@@ -622,8 +659,11 @@ pub extern "C" fn bk_get_clock_by_name(
     name: *const c_char,
 ) -> u32 {
     let want = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
-    state(hdl)
-        .primary()
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return BAD_CLOCK; // async run in flight
+    }
+    st.primary()
         .clock_info()
         .iter()
         .position(|c| c.name == want)
@@ -810,10 +850,21 @@ pub extern "C" fn bk_sync(hdl: *mut c_void) -> u64 {
             st.engines = engines.0;
             st.exit_status = rc;
         }
+        // a panicked worker leaves the engines LOST; answer inertly
+        // rather than aborting the bluetcl session
+        if st.engines.is_empty() {
+            eprintln!("trs capi: async worker died; session is inert");
+            return 0;
+        }
         let now = st.primary().now();
         st.ui_events.retain(|&t| t > now);
     }
-    bk_now(hdl)
+    // the kernel's bk_sync returns RAW sim_time (no timescale)
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return 0;
+    }
+    st.primary().now()
 }
 
 /// External abort: the run stops at the next slice boundary
@@ -864,6 +915,10 @@ pub extern "C" fn bk_set_timescale(
         .to_string_lossy()
         .into_owned();
     let st = state(hdl);
+    if st.engines.is_empty() || st.primary().now() > 0 {
+        // the kernel rejects timescale changes mid-simulation
+        return BK_ERROR;
+    }
     st.timescale = Some((unit, scale_factor));
     for e in &mut st.engines {
         e.interp.set_timescale(scale_factor);
