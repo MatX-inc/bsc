@@ -62,6 +62,7 @@ HEADER = """\
 
 import FIFOF :: *;
 import ConfigReg :: *;
+import RegFile :: *;
 
 interface Tile;
    method Bool     oValid;
@@ -73,21 +74,41 @@ endinterface
 
 (* synthesize, always_ready *)
 module mkTile(Tile);
+   // v2 (Ravi): richer unit behind a HARD SYNTHESIS BOUNDARY —
+   // 4-stage mixing pipeline, a 16-entry RegFile history (exercises
+   // the inline sub/upd fast paths), a multiply, and the link FIFO.
+   // Always-fire throughout; RegFile reads are gated by a saturating
+   // warm-up counter so uninitialized entries never reach the
+   // checksum (determinism across simulators).
    Wire#(Bit#(32))  inw  <- mkDWire(32'h{gold:08x});
    Reg#(Bit#(32))   s1   <- mkReg(0);
    Reg#(Bit#(32))   s2   <- mkReg(1);
+   Reg#(Bit#(32))   s3   <- mkReg(32'h{mix:08x});
+   Reg#(Bit#(32))   s4   <- mkReg(3);
    Reg#(Bit#(32))   acc  <- mkConfigReg(0);
+   RegFile#(Bit#(4), Bit#(32)) hist <- mkRegFileFull;
+   Reg#(Bit#(4))    hptr <- mkReg(0);
+   Reg#(Bit#(5))    warm <- mkReg(0);
    FIFOF#(Bit#(32)) fout <- mkUGFIFOF;
 
    (* fire_when_enabled, no_implicit_conditions *)
    rule step;
-      Bit#(32) x = inw;
-      Bit#(32) r = {{ x[30:0], x[31] }};        // rotl 1
-      Bit#(32) y = (s1 ^ r) + s2;
-      s1  <= x + 32'h{gold:08x};
-      s2  <= {{ s2[28:0], s2[31:29] }} ^ x;     // rotl 3, xor
-      acc <= (acc ^ y) + 32'h01000193;          // FNV prime
-      if (fout.notFull) fout.enq(y);
+      Bit#(32) x  = inw;
+      Bit#(32) r1 = {{ x[30:0], x[31] }};                 // rotl 1
+      Bit#(32) h0 = hist.sub(hptr);
+      Bit#(32) h  = (warm[4] == 1) ? h0 : 32'h0;
+      Bit#(32) y0 = (s1 ^ r1) + s2;
+      Bit#(32) y1 = y0 * 32'h0000_9E37;                   // odd mult
+      Bit#(32) y  = (y1 ^ {{ s3[24:0], s3[31:25] }}) + s4; // rotl 7
+      s1   <= x + 32'h{gold:08x};
+      s2   <= {{ s2[28:0], s2[31:29] }} ^ x;              // rotl 3
+      s3   <= y0 ^ h;
+      s4   <= (s4 + 32'h{mix:08x}) ^ {{ y0[15:0], y0[31:16] }};
+      hist.upd(hptr, y ^ h);
+      hptr <= hptr + 1;
+      warm <= (warm[4] == 1) ? warm : warm + 1;
+      acc  <= (acc ^ y ^ h) + 32'h01000193;               // FNV prime
+      if (fout.notFull) fout.enq(y ^ h);
    endrule
 
    method Bool     oValid = fout.notEmpty;
@@ -103,10 +124,10 @@ endmodule
 """
 
 
-def emit(n, cycles, out):
+def emit(n, cycles, link_rules, out):
     m = n * n
     w = out.write
-    w(HEADER.format(n=n, m=m, cycles=cycles, gold=GOLD))
+    w(HEADER.format(n=n, m=m, cycles=cycles, gold=GOLD, mix=MIX))
     w("\n(* synthesize *)\n")
     w("module sysGrid%d(Empty);\n" % n)
     w("   // %d tiles, row-major: t<i> is (row i/%d, col i%%%d); tile i\n"
@@ -132,20 +153,26 @@ def emit(n, cycles, out):
       % (n, n))
     w("      $finish(0);\n")
     w("   endrule\n")
-    # link rules: forward with a distinct per-link twist so tile
-    # histories diverge by grid position (the tile module itself is
-    # identical everywhere; identity lives in the top's wiring)
-    for i in range(m):
-        j = (i + 1) % m
-        w("""
-   (* fire_when_enabled, no_implicit_conditions *)
-   rule link_%d;
-      if (t%d.oValid) begin
-         t%d.put(t%d.oData ^ 32'h%08x);
-         t%d.oDeq;
-      end
-   endrule
-""" % (i, i, j, i, twist(j), i))
+    # links: a FEW LARGE rules with many actions instead of m rules —
+    # bsc's inferred scheduling is O(rules^2), and 1024 top-level link
+    # rules measured 71s of frontend; each tile pair is touched by
+    # exactly one action (deq on i, put on j), so packing links into
+    # one atomic rule is conflict-free.  Per-link twists keep tile
+    # histories position-distinct.
+    per = max(1, (m + link_rules - 1) // link_rules)
+    for k in range(link_rules):
+        lo, hi = k * per, min((k + 1) * per, m)
+        if lo >= hi:
+            break
+        w("\n   (* fire_when_enabled, no_implicit_conditions *)\n")
+        w("   rule links_%d;   // links %d..%d\n" % (k, lo, hi - 1))
+        for i in range(lo, hi):
+            j = (i + 1) % m
+            w("      if (t%d.oValid) begin\n" % i)
+            w("         t%d.put(t%d.oData ^ 32'h%08x);\n" % (j, i, twist(j)))
+            w("         t%d.oDeq;\n" % i)
+            w("      end\n")
+        w("   endrule\n")
     w("endmodule\n")
 
 
@@ -155,6 +182,9 @@ def main():
     ap.add_argument("n", type=int, help="grid edge (N x N tiles)")
     ap.add_argument("-o", "--out", default="",
                     help="output file (default Grid<N>.bsv; '-' for stdout)")
+    ap.add_argument("--link-rules", type=int, default=4,
+                    help="number of large link rules the transfers are "
+                    "packed into (bsc scheduling is O(rules^2))")
     ap.add_argument("--cycles", type=int, default=1000,
                     help="cycle at which the checksum prints and the "
                     "simulation finishes (default 1000)")
@@ -163,10 +193,10 @@ def main():
         ap.error("N must be >= 1")
     path = args.out or ("Grid%d.bsv" % args.n)
     if path == "-":
-        emit(args.n, args.cycles, sys.stdout)
+        emit(args.n, args.cycles, args.link_rules, sys.stdout)
     else:
         with open(path, "w") as f:
-            emit(args.n, args.cycles, f)
+            emit(args.n, args.cycles, args.link_rules, f)
 
 
 if __name__ == "__main__":
