@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-0cdd785a, sudoku FASTER than reference — ALWAYS `git push personal`, never bare `git push origin`:
+695b042a, session complete: 11 green legs — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -131,16 +131,52 @@ made the middle-end's scope real.  __me_check entries are RULES
 (already compiled), not ticks; remaining interp ticks are MCD prims
 in central-ineligible designs.
 
-NEXT: (1) ninth sweep IN FLIGHT (wt-o3.json): the full proposed
-default stack (edge-SSA + outline cost model + O3 + wire ticks) —
-if green, flip the AOT link default to exactly that; (2) ultracode
-adversarial review workflow over the session's commits IN FLIGHT —
-addres confirmed findings before defaulting; (3) JIT-sync/lazy legs
-re-run (belt-and-braces post tick skip); (4) compute-parity call is
-arguably MADE (run + link both ahead on sudoku; LongCnt 5x) ->
-testsuite AOT comparison (fullparallel) once the default flips;
-(5) backlog: #15 arm outlining, #22 foreign fast path, Tcl surface,
-VCD parity classes, seam-inventory export elision, MCD tick classes.
+SESSION COMPLETE — ELEVEN SWEEP LEGS, ALL GREEN (966/0).  Final
+state (fb0f1888 defaults + 1b3e147a review fixes + 695b042a tests):
+- bare `trs link` = edge-SSA + outline cost model + O3 + wire
+  ticks + export elision (TRS_EDGE_SSA=0 restores classic).
+  Ravi's ruling: the artifact is a SPECIALIZED compile — speed and
+  scale first; the slot-level debug contract is NOT its surface.
+- Sudoku: run 0.22-0.26s vs reference 0.29-0.32s; link ~10s vs
+  13.9s.  Corpus timing table (diffsweep now records ref_build/
+  ref_run/b3_link/b3_run per PASS): link ratio median 0.03 / p90
+  0.06 / max 0.85 — trs links faster than the reference build on
+  EVERY corpus design; run ratio median 0.25 (startup-dominated for
+  small tests).  Export elision was worth ~10% (stores are
+  optimization barriers — Ravi called it, my store-count arithmetic
+  undercounted).
+- ULTRACODE adversarial review (6 lenses x 2 skeptics over the
+  session's commits): 4 confirmed findings; fixed same-day
+  (1b3e147a): CRITICAL pre-evict at self-killing consumers (later
+  shown SHIELDED by bsc's tsort positioned-body-defs contract — fix
+  kept as defense-in-depth; see tests/regress/EdgeSelfKill.bsv),
+  MAJOR x2 hoisted Quot/Rem SIGFPE (PROVEN by
+  tests/regress/HoistDivTrap.bsv: pre-fix exit 136 vs 0), MINOR
+  cost-model shared-mass credit from outlined partners (logged, not
+  fixed — model v2).
+- tests/regress/ battery landed (run.sh, VCD-battery-style).
+
+NEXT SESSION QUEUE:
+(1) #22 DIRECT BDPI — the keystone: deletes the foreign round-trip
+    (MatX priority), makes call sites memory-annotatable, unlocks
+    alias metadata + cross-call value residency, both gated
+    per-design on trampoline-freedom (the linker knows from protos);
+(2) RegFile inline fast path (B2 shape: in-bounds arena array +
+    cold-path warning callback) — biggest remaining trampoline;
+(3) parameterized N x N grid benchmark — link/run/memory/analysis
+    curves vs Bluesim/Verilator (+VCS reasoning recorded in session
+    transcript): measures the spine-growth wall; spine SUBTREE
+    SEGMENTATION is the designed answer (regions give the cut
+    points), type-keyed analysis + LOOP-ROLLED spine over
+    stride-regular replicas (arena regions are DFS-contiguous with
+    type-canonical layouts — the invariants already exist) is the
+    replicated-design win and the #20 pools/lanes substrate;
+(4) JIT-sync/lazy belt-and-braces legs; timing-threshold fence in
+    the sweep summary (perf regressions have no automated guard);
+(5) fullparallel testsuite AOT comparison — parity is arguably MADE;
+(6) backlog: #15 arm outlining, Tcl surface, VCD parity classes,
+    MCD tick classes, quiescence gating (the VCS-sparsity answer),
+    content-hash incremental link.
 
 ## Current state
 
