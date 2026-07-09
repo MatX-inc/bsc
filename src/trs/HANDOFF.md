@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`981a6be2` — ALWAYS `git push personal`, never bare `git push origin`:
+`a9fc0204` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -234,6 +234,33 @@ classes, .so 2.94 -> 1.59MB, link 4.70 -> 3.26s; N-replicated
 designs dedup N-fold.  AOT_LAYOUT_REV=3.  The signature MUST cover
 every input the exec lowering reads — extend it when the lowering
 grows new inputs (the sweep + twin-hash check referee).
+
+BODY SPLITTING (task #14, IN PROGRESS — recon landed 2ae22835 +
+a9fc0204, lowering NOT yet built): select_outlined() picks def
+pieces bottom-up over the module def DAG (DAG-accurate sizing;
+TRS_JIT_SPLIT threshold, default 1000, 200 looks right;
+TRS_JIT_SPLIT_STATS=1 prints recon).  KEY FINDINGS: (1) sudoku's
+def DAGs are small (max 2.6k nodes) — the 52k-insn bodies are
+If/Case ARM-SCOPED SSA re-expansion (~20x), so splitting RESTORES
+sharing the lowering loses (reference C++ has the same pathology);
+(2) STABILITY IS FREE (Ravi): the scheduler confines every legal
+read — Reg read SB write, RWire wset SB wget, ConfigReg contract,
+FIFO i_* snapshots — so every read site in an instant sees one
+value; recon: 38/38 outlined pieces memo-eligible.  Exceptions:
+FIFO immediate views, mkCReg ports (window-stable per port, future),
+eager-set defs (their discipline is the eager-slot mechanism).
+REMAINING WORK: (a) classifier must recurse through user-child
+method cones (mir=3, the biggest type, outlines 0 — tainted by
+inlined submodule calls); (b) helper lowering: Expr::Def hook emits
+call to hlp fn (arena, env, base) -> iN, base-relative (dedup
+composes; helpers keyed (inst_sig, def)); per-type helper LLVM
+module compiled before execs in the worker queue, baked addresses
+for JIT / symbols for AOT; (c) per-instant memo prologue for stable
+pieces: [stamp, value] slots in the instance region (EXTEND THE
+DEDUP SIG with the memo map!), stamps initialized to u64::MAX at
+arena init, compare against the now slot; (d) gates: twin-IR hash,
+sudoku x3 both modes, battery, dual sweeps, and O2 trial
+(TRS_JIT_OPT=2 becomes affordable on split functions).
 
 NEXT (in rough order of value):
 - Cone/body splitting into helper fns — two sudoku rule bodies carry
