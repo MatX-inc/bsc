@@ -1575,9 +1575,11 @@ impl Interp {
     /// Execute one body statement: defs are computed at their exact
     /// position (a later action must not affect them).
     fn exec_stmt(&mut self, inst: usize, ctx: &mut Ctx, st: &Stmt) {
-        if self.finished.is_some() {
-            return;
-        }
+        // NO finished check: $finish marks the stop but the reference
+        // runs the in-flight edge (and the finishing rule's remaining
+        // statements) TO COMPLETION — only console display tasks are
+        // suppressed afterwards (dollar_display.cxx).  The transient
+        // hunt's witness: gcd RL_flip after RL_exit's $finish.
         match st {
             Stmt::Def { name, expr } => {
                 let v = self.eval(inst, ctx, expr);
@@ -1647,9 +1649,7 @@ impl Interp {
     }
 
     fn exec_action(&mut self, inst: usize, ctx: &mut Ctx, a: &Action) {
-        if self.finished.is_some() {
-            return;
-        }
+        // no finished check — see exec_stmt
         match a {
             Action::MethCall { instance, method, cond, args, .. } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
@@ -1823,6 +1823,24 @@ impl Interp {
     }
 
     fn foreign_action(&mut self, name: &str, args: &[Arg], loc: &str) {
+        if self.finished.is_some()
+            && matches!(
+                name,
+                "$display"
+                    | "$displayb"
+                    | "$displayo"
+                    | "$displayh"
+                    | "$write"
+                    | "$writeb"
+                    | "$writeo"
+                    | "$writeh"
+            )
+        {
+            // post-$finish console output is suppressed in the
+            // reference (dollar_display.cxx: if (!bk_finished));
+            // the rules themselves still run
+            return;
+        }
         match name {
             "$fdisplay" | "$fwrite" | "$fdisplayh" | "$fwriteh"
             | "$fdisplayb" | "$fwriteb" | "$fdisplayo" | "$fwriteo" => {
@@ -3925,9 +3943,6 @@ impl Interp {
                             self.set_latched(inst, dn, v);
                         }
                         for &node in &en.nodes {
-                            if self.finished.is_some() {
-                                break;
-                            }
                             // clock-crossing rules run in the after-edge pass
                             let r0 = match node {
                                 SchedNode::Sched(r) | SchedNode::Exec(r) => r,
@@ -4047,9 +4062,6 @@ impl Interp {
                     for en in &rc.entries {
                         let inst = en.inst;
                         for &node in &en.nodes {
-                            if self.finished.is_some() {
-                                break;
-                            }
                             let r0 = match node {
                                 SchedNode::Sched(r) | SchedNode::Exec(r) => r,
                             };
