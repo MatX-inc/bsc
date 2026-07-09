@@ -34,9 +34,29 @@ pub struct Model {
     pub top: *const c_char,
 }
 
+/// One executor: all three engines are Interp-rooted (plain interp;
+/// hybrid JIT = the TRS_JIT machinery inside the interp; AOT = the
+/// artifact's design .so loaded the artifact way).
+pub struct Engine {
+    pub interp: Interp,
+    pub kind: EngineKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EngineKind {
+    Interp,
+    Jit,
+    Aot,
+}
+
 /// The `tSimStateHdl` behind every `bk_*` call.
+///
+/// engines[0] is PRIMARY: it owns stdout and answers queries.  More
+/// than one engine = interactive ORACLE (docs/TCL-CAPI.md): run
+/// control fans out to all engines in lockstep; time/status/peeks
+/// are cross-checked and a divergence reports at the stop point.
 pub struct SimState {
-    interp: Interp,
+    engines: Vec<Engine>,
     /// plusargs staged before/after init (`bk_append_argument`)
     args: Vec<String>,
     /// interned CStrings handed out by `bk_*` name accessors (the C
@@ -44,6 +64,12 @@ pub struct SimState {
     names: Vec<CString>,
     /// exit protocol mirror (bk_finished / bk_exit_status / bk_fataled)
     exit_status: i32,
+}
+
+impl SimState {
+    fn primary(&mut self) -> &mut Interp {
+        &mut self.engines[0].interp
+    }
 }
 
 fn state<'a>(hdl: *mut c_void) -> &'a mut SimState {
@@ -60,15 +86,35 @@ fn state<'a>(hdl: *mut c_void) -> &'a mut SimState {
 pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     let m = unsafe { &*(model as *const Model) };
     let bir = unsafe { std::slice::from_raw_parts(m.bir_ptr, m.bir_len) };
-    let interp = match Interp::from_bir_bytes(bir) {
-        Ok(i) => i,
-        Err(e) => {
-            eprintln!("trs capi: bk_init: {e}");
-            return std::ptr::null_mut();
-        }
+    // engine set: link-time default (shim Model, TBD) overridden by
+    // TRS_CAPI_ENGINES=interp[,jit][,aot] at load
+    let sel = std::env::var("TRS_CAPI_ENGINES").unwrap_or_default();
+    let kinds: Vec<EngineKind> = sel
+        .split(',')
+        .filter_map(|k| match k.trim() {
+            "interp" => Some(EngineKind::Interp),
+            "jit" => Some(EngineKind::Jit),
+            "aot" => Some(EngineKind::Aot),
+            _ => None,
+        })
+        .collect();
+    let kinds = if kinds.is_empty() {
+        vec![EngineKind::Interp]
+    } else {
+        kinds
     };
+    let mut engines = Vec::new();
+    for kind in kinds {
+        match Interp::from_bir_bytes(bir) {
+            Ok(interp) => engines.push(Engine { interp, kind }),
+            Err(e) => {
+                eprintln!("trs capi: bk_init: {e}");
+                return std::ptr::null_mut();
+            }
+        }
+    }
     let st = Box::new(SimState {
-        interp,
+        engines,
         args: Vec::new(),
         names: Vec::new(),
         exit_status: 0,
@@ -87,7 +133,7 @@ pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
 /// `bk_now`: current simulation time.
 #[no_mangle]
 pub extern "C" fn bk_now(hdl: *mut c_void) -> u64 {
-    state(hdl).interp.now()
+    state(hdl).primary().now()
 }
 
 /// `bk_append_argument`: stage a plusarg.
@@ -95,14 +141,16 @@ pub extern "C" fn bk_now(hdl: *mut c_void) -> u64 {
 pub extern "C" fn bk_append_argument(hdl: *mut c_void, arg: *const c_char) {
     let s = unsafe { CStr::from_ptr(arg) }.to_string_lossy().into_owned();
     let st = state(hdl);
-    st.interp.append_plusarg(&s);
+    for e in &mut st.engines {
+        e.interp.append_plusarg(&s);
+    }
     st.args.push(s);
 }
 
 /// `bk_finished`: has $finish been called.
 #[no_mangle]
 pub extern "C" fn bk_finished(hdl: *mut c_void) -> u8 {
-    state(hdl).interp.is_finished() as u8
+    state(hdl).primary().is_finished() as u8
 }
 
 /// `bk_exit_status`: status of the last $stop/$finish.

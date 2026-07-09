@@ -60,6 +60,39 @@ frequency: lookup 30, ls 27, cd 23, step 22, get 22, pwd 18,
 clock 15, time 11, up 5, run 4, getrange 3, timescale/sync/
 nextedge/describe/stop/runto few.
 
+## Engines (Ravi, 2026-07-09): interp, JIT, AOT — one or several
+
+The model .so multiplexes the three engines behind one bk_* surface:
+
+- selection at bk_init: link-time default baked into the shim's
+  Model struct (`trs link --interactive --engines=jit,aot,...`),
+  overridable by TRS_CAPI_ENGINES at load.  One engine = normal
+  interactive use (interp for full-fidelity debug, hybrid JIT for
+  fast `sim run`, AOT for artifact-exact execution).
+- SEVERAL engines = interactive ORACLE: SimState holds
+  Vec<Engine>, run control fans out (every engine advances to the
+  same stop condition), queries answer from engines[0] (primary).
+  After each advance: compare now, per-clock cycle/edge counts,
+  finished/stop/exit status; `sim get`/`getrange` peeks compare
+  across engines on demand — a mismatch reports loudly on stderr
+  and (policy TBD) flips bk_fataled so scripts stop at the point
+  of divergence.  This is diffsweep's differential oracle made
+  interactive: step to the divergent instant, then inspect state.
+- design wrinkles, decided up front:
+  1. stdout ownership: ONLY the primary engine's $display output
+     reaches stdout; secondary engines run output-suppressed (an
+     Interp quiet flag) — otherwise every task effect prints k
+     times and byte-parity vs the reference dies.  Output
+     COMPARISON (vs suppression) needs per-engine capture and is
+     a later refinement.
+  2. AOT engine = the artifact pair (.bir + design .so loaded the
+     artifact way, bir_hash/layout-rev checked); JIT engine = the
+     hybrid inside the interpreter (TRS_JIT machinery); interp
+     engine = plain.  All three are Interp-rooted, so the engine
+     vector is Vec<Interp> with per-engine mode flags — the fan
+     -out loop is trivial; the work is in the stop-condition and
+     comparison plumbing.
+
 ## Mapping onto trs
 
 Crate `trs-capi` (cdylib).  `new_MODEL_<top>` cannot be known at
