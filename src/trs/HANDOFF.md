@@ -1,12 +1,53 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-0d71922b, BDPI values done, 973/0 — ALWAYS `git push personal`, never bare `git push origin`:
+09cb6a86, arm defs + BDPI actions + effectful-eval fidelity, 973/0
+SEALED — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
+
+## SEALED (2026-07-09): conditional-arm class + direct BDPI actions
+
+Ravi's "fix actionvalue and conditional arm" is DONE end to end:
+- 21bacd87: Frame.dead_defs discipline (arm defs allowed; only a
+  post-arm USE of a dead def is ineligible, error names the def),
+  same-port-pure-cond Cond-run merging, IDEMPOTENT-task join
+  re-materialization ($time/$stime from the now slot;
+  $test$plusargs/$value$plusargs re-called — run-constant,
+  side-effect-free), and direct BDPI Action::Foreign +
+  AvAction{Foreign} (integer-slot ABI, stdio flush pair, ActionValue
+  phi-binding out of the taken arm).  mkTestValues: interpreter
+  fallback -> FULLY COMPILED, byte-identical.
+- 09cb6a86: the sweep's one DIFF (sysMips 116 RegFile bounds warnings
+  vs 66) exposed EFFECTFUL-EVAL fidelity: evaluation of a cone that
+  can WARN (partial-range RegFile.sub) or TRAP (Quot/Rem) is
+  observable, so compiled code must evaluate exactly as often — and
+  where — the interpreter does.  Count fix: effectful defs expand
+  through an entry-alloca THUNK (value + valid flag; first dynamic
+  reference evaluates, later ones reuse — ssa memos die at Cond/mux
+  joins for dominance, and re-expansion re-fired warnings).  Order
+  fix: sched sections latch EFFECTFUL eager defs first in
+  REntry::eager list order (interp latch position); pure defs stay
+  lazy.  Full-range RegFiles exempt, judged against the ADDRESS
+  WIDTH (mkRegFileFull can't warn; thunking sudoku's LUTs cost 2.4x;
+  power-of-two-SIZED partial ranges like sysMips ram_arr still
+  warn).  TRS_WARN_DEBUG=1 tags warnings [now= src=I|C:kindN:local]
+  via a thread-local trampoline token — the instrument that pinned
+  both mechanisms.  tests/regress/RegFileWarnCone.bsv is the proven
+  witness (pre-fix binary: 4 warnings vs ref 2).
+- SEALING SWEEP on frozen 09cb6a86: 973 PASS / 0 DIFF (ties the
+  all-time high, now WITH the arm-def class compiled).  All 8 fence
+  flags were link-time on former early-bail designs now doing real
+  LLVM work (0.01 -> 0.07-0.10s) — new-coverage cost, accepted;
+  fence REBASELINED to 947 designs (09cb6a86).
+- Constraint cost A/B (loose 21bacd87 vs fidelity 09cb6a86):
+  sysMips 0.04s both; synthetic hot partial-range-RegFile guard+body
+  bench 0.40 vs 0.39s (equal, ~2.8x ahead of Bluesim 1.14s).  The
+  fidelity is free where it now applies; the 2.4x/1.3x costs were
+  the over-broad first cuts, scoped away.
 
 ## RESOLVED: the g2 regression was ONE bug — always-fire (task #23)
 
