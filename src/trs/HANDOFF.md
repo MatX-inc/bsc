@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`60f75e58` — ALWAYS `git push personal`, never bare `git push origin`:
+`7fd231db` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -235,7 +235,39 @@ designs dedup N-fold.  AOT_LAYOUT_REV=3.  The signature MUST cover
 every input the exec lowering reads — extend it when the lowering
 grows new inputs (the sweep + twin-hash check referee).
 
-BODY SPLITTING (task #14, IN PROGRESS — recon landed 2ae22835 +
+BODY SPLITTING v1+v2 LANDED, opt-in TRS_JIT_SPLIT=<thresh>
+(671d73fb, 7b8cd9ac): def pieces outline as helper fns (arena, env,
+base[, port args]) -> iN — base-relative (dedups across twins),
+arg-parameterized for method-arg cones (widths from module inputs,
+cap 8, inline fallback in unbound frames), per-instant memo for
+STABLE arg-free pieces ([stamp,value] region slots vs the now slot,
+stamps init u64::MAX, dedup sig extended).  JIT bakes helper
+addresses (compiled before execs); artifacts carry helpers as .so
+symbols and BAKE the split threshold (trs_split_thresh global +
+--split pinned in the wrapper — the threshold changes the arena
+layout; mismatch warns and falls back, verified).  Helpers must be
+callback-free (hard error otherwise).  Sudoku: 112 pieces (38
+memoized), byte-identical everywhere, total IR 508k -> 291k (-43%);
+runtime parity.  THE MONSTERS ARE IMMUNE: their 52-55k bodies are
+giant inline DECISION TREES (14k branches/4.8k phis from If action
+arms; def refs short-circuit to eager slots; zero helper calls at
+any threshold) — reducing them needs ARM OUTLINING (outline/dedup
+If-Case ACTION arms as parameterized action-helpers; needs action
+lowering + token plumbing; the dedup-within-a-rule analog).  Split
+stays opt-in until that lands.  Split-forced JIT sweep: 966/0.
+
+CODEGEN QUALITY (7fd231db): TRS_JIT_OPT only ever set the BACKEND
+level — the middle-end pipeline (GVN/instcombine/SimplifyCFG) NEVER
+RAN.  run_ir_passes() now runs default<O{1,2,3}> before engine/
+object creation: +8-10% sim at O2, link unchanged.  Case lowers as
+one llvm switch (jump tables) instead of icmp ladders —
+runtime-neutral on sudoku (branch mass is If trees), kept as better
+IR.  O3: one-env-var experiment, low expectation (branchy scalar).
+Startup decomposition: 1.26s artifact run = 0.32s trial/plan
+(FnProtos serialization kills it) + 0.94s sim vs 0.36s reference =
+~2.4-2.6x true codegen gap.
+
+BODY SPLITTING analysis trail (task #14, recon commits — recon landed 2ae22835 +
 a9fc0204, lowering NOT yet built): select_outlined() picks def
 pieces bottom-up over the module def DAG (DAG-accurate sizing;
 TRS_JIT_SPLIT threshold, default 1000, 200 looks right;
