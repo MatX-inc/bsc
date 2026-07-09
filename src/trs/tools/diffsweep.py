@@ -282,6 +282,9 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
     ap.add_argument("--out", default="diffsweep-results.json")
+    ap.add_argument("--costs", default="",
+                    help="prior sweep --out JSON for LPT scheduling "
+                    "(default tools/sweep-costs.json if present)")
     ap.add_argument("--fence-baseline", action="store_true",
                     help="write tools/perf-fence.json from this run's "
                     "timings instead of checking against it")
@@ -326,6 +329,32 @@ def main():
     jobs.sort()
     if args.limit:
         jobs = jobs[: args.limit]
+
+    # LPT scheduling: the tail of a sweep is one straggler (FloatTest's
+    # multi-minute reference build) behind idle workers.  Sort the
+    # queue by recorded per-design cost DESCENDING using a prior
+    # sweep's --out JSON (--costs, or the file next to the fence);
+    # unknown designs keep their alphabetical order after the known
+    # ones (they are overwhelmingly small).  Same jobs count, same
+    # timing fidelity — only the schedule changes.
+    costs_path = args.costs or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "sweep-costs.json")
+    try:
+        prior = json.load(open(costs_path))
+        cost = {}
+        for rel, top, status, note in prior:
+            if status == "PASS" and note.startswith("t "):
+                fv = dict(kv.split("=") for kv in note[2:].split())
+                cost[(rel, top)] = sum(float(v) for v in fv.values())
+        def jobkey(j):
+            rel = os.path.relpath(j[0], REPO)
+            return -cost.get((rel, j[1]), 0.0)
+        jobs.sort(key=jobkey)
+        if cost:
+            print(f"LPT schedule from {costs_path} ({len(cost)} costs)",
+                  flush=True)
+    except (OSError, ValueError):
+        pass
 
     print(f"sweeping {len(jobs)} tests with {args.jobs} jobs", flush=True)
     with multiprocessing.Pool(args.jobs) as pool:

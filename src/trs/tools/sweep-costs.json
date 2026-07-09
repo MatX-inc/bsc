@@ -1,0 +1,6224 @@
+[
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysBitInBounds2",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.121 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysArrayInBounds2",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.132 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysListInBounds2",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.131 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysArrayInBounds1",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.105 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysBitInBounds1",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.119 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysListInBounds1",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.129 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysVectorInBounds1",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.129 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysArrayInBounds1",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.127 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysListNInBounds1",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.120 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysListNInBounds2",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.118 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysArrayInBounds2",
+  "PASS",
+  "t ref_build=1.82 ref_run=0.128 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/select",
+  "sysVectorInBounds2",
+  "PASS",
+  "t ref_build=2.36 ref_run=0.121 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.arrays",
+  "sysLoopUpdate",
+  "PASS",
+  "t ref_build=3.32 ref_run=0.109 b3_link=1.06 b3_run=0.039"
+ ],
+ [
+  "testsuite/bsc.arrays",
+  "sysLoopUpdate2",
+  "PASS",
+  "t ref_build=3.51 ref_run=0.129 b3_link=0.94 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysListInBounds1",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.131 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysBitInBounds2",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.129 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysBitInBounds1",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.119 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysListInBounds2",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.123 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysListNInBounds1",
+  "PASS",
+  "t ref_build=1.97 ref_run=0.118 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysListNInBounds2",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.122 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysVectorInBounds1",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.121 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/bounds/update",
+  "sysVectorInBounds2",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.123 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysDynamicArrayDynamicUpdate",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.121 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysDynamicListDynamicActionDynamicIndex",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.123 b3_link=0.07 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysDynamicActionDynamicIndex",
+  "PASS",
+  "t ref_build=2.34 ref_run=0.116 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysDynamicListDynamicUpdate",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.118 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysDynamicSelectUpdateArray",
+  "PASS",
+  "t ref_build=2.20 ref_run=0.120 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysDynamicSelectUpdateList",
+  "PASS",
+  "t ref_build=2.13 ref_run=0.120 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysSimpleDynamicList",
+  "PASS",
+  "t ref_build=2.30 ref_run=0.122 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysSimpleDynamicAction",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.123 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysSimpleDynamicListAction",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.120 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysSimpleDynamicTest",
+  "PASS",
+  "t ref_build=2.14 ref_run=0.121 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysTwoLevelUpdate",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.120 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.arrays/dynamic",
+  "sysTwoLevelUpdateList",
+  "PASS",
+  "t ref_build=2.13 ref_run=0.122 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectArrayUndefinedIndex",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.119 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectUndefinedArrayStatic",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.123 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectListUndefinedIndex",
+  "PASS",
+  "t ref_build=2.26 ref_run=0.123 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.assertions/sequences",
+  "sysSemanticsTest",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.assertions/sequences/SemanticsTest.bsv\", line 48, column 42: (P0005)"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectUndefinedArray",
+  "PASS",
+  "t ref_build=2.51 ref_run=0.122 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectUndefinedList",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.117 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectUndefinedListStatic",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.122 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectUndefinedVectorStatic",
+  "PASS",
+  "t ref_build=2.12 ref_run=0.122 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.arrays/undefined",
+  "sysSelectUndefinedVector",
+  "PASS",
+  "t ref_build=2.39 ref_run=0.121 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/debugging",
+  "mkMCDTest",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.121 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bluesim/debugging",
+  "mkRF",
+  "PASS",
+  "t ref_build=3.49 ref_run=0.121 b3_link=0.09 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkLong",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.134 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bluesim/debugging",
+  "mkRF",
+  "PASS",
+  "t ref_build=3.27 ref_run=0.123 b3_link=0.09 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/debugging",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=3.19 ref_run=0.133 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkMCDTest",
+  "PASS",
+  "t ref_build=2.16 ref_run=0.121 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/debugging",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=3.29 ref_run=0.120 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkPrims",
+  "PASS",
+  "t ref_build=2.60 ref_run=0.118 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=3.31 ref_run=0.107 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=3.02 ref_run=0.110 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.116 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=3.79 ref_run=0.122 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=2.96 ref_run=0.119 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=2.92 ref_run=0.108 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.123 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=2.58 ref_run=0.120 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=2.37 ref_run=0.110 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.132 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.121 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=2.20 ref_run=0.132 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.132 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.110 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTimescaleTest",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.119 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTest",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.117 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTimescaleTest",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.130 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "sysAPeriodicTest",
+  "PASS",
+  "t ref_build=1.97 ref_run=0.106 b3_link=0.02 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "sysAPeriodicTest",
+  "PASS",
+  "t ref_build=2.04 ref_run=0.119 b3_link=0.02 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysArithShift",
+  "PASS",
+  "t ref_build=2.31 ref_run=0.121 b3_link=0.09 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTop",
+  "PASS",
+  "t ref_build=4.16 ref_run=0.109 b3_link=0.02 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTop",
+  "PASS",
+  "t ref_build=4.38 ref_run=0.115 b3_link=0.02 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.bluesim/interactive",
+  "mkTop",
+  "PASS",
+  "t ref_build=4.13 ref_run=0.119 b3_link=0.02 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.assertions/properties",
+  "sysSemanticsTest",
+  "PASS",
+  "t ref_build=17.04 ref_run=0.109 b3_link=1.68 b3_run=0.047"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysClkTest",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.131 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysEmptyModule",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.131 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysMulTest",
+  "PASS",
+  "t ref_build=2.67 ref_run=0.129 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysSignedWideLiteral",
+  "PASS",
+  "t ref_build=1.98 ref_run=0.120 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bluesim/block_codegen_sweep",
+  "sysSchedFixTb",
+  "PASS",
+  "t ref_build=22.40 ref_run=0.119 b3_link=0.12 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysShowVersionTimestamps",
+  "PASS",
+  "t ref_build=2.37 ref_run=0.133 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysSameFamily",
+  "PASS",
+  "t ref_build=2.98 ref_run=0.121 b3_link=0.02 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysSparseRF",
+  "PASS",
+  "t ref_build=2.97 ref_run=0.131 b3_link=0.09 b3_run=0.051"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysWideSched",
+  "PASS",
+  "t ref_build=2.20 ref_run=0.131 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysWideModArgPortTest",
+  "PASS",
+  "t ref_build=3.65 ref_run=0.128 b3_link=0.01 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysWideRF",
+  "PASS",
+  "t ref_build=3.31 ref_run=0.121 b3_link=0.11 b3_run=0.040"
+ ],
+ [
+  "testsuite/bsc.bluesim/misc",
+  "sysWindowsRF",
+  "PASS",
+  "t ref_build=2.86 ref_run=0.118 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/operators",
+  "sysExtractSizes",
+  "PASS",
+  "t ref_build=3.37 ref_run=0.132 b3_link=0.35 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bluesim/operators",
+  "sysExtractBounds",
+  "PASS",
+  "t ref_build=3.74 ref_run=0.121 b3_link=0.40 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bluesim/parallel",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=3.19 ref_run=0.123 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bluesim/vcd",
+  "sysVCDTest1",
+  "PASS",
+  "t ref_build=4.03 ref_run=0.143 b3_link=0.02 b3_run=0.064"
+ ],
+ [
+  "testsuite/bsc.bluesim/vcd",
+  "sysVCDTest2",
+  "PASS",
+  "t ref_build=4.76 ref_run=0.141 b3_link=0.02 b3_run=0.092"
+ ],
+ [
+  "testsuite/bsc.bluesim/operators",
+  "sysShiftL",
+  "PASS",
+  "t ref_build=4.43 ref_run=0.124 b3_link=0.73 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.bluesim/operators",
+  "sysShiftR",
+  "PASS",
+  "t ref_build=4.41 ref_run=0.125 b3_link=0.68 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Amba_dmac",
+  "sysAmbaDmac",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AmbaLoadDemo",
+  "sysM1_25",
+  "PASS",
+  "t ref_build=4.26 ref_run=0.118 b3_link=0.19 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AssertionsDemo",
+  "sysAssertionWiresTest",
+  "PASS",
+  "t ref_build=2.96 ref_run=0.120 b3_link=0.08 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AmbaAdapters",
+  "sysM1_25",
+  "PASS",
+  "t ref_build=5.40 ref_run=0.131 b3_link=0.22 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.bluesim/operators",
+  "sysShiftRA",
+  "PASS",
+  "t ref_build=9.37 ref_run=0.118 b3_link=1.94 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AmbaTransModel",
+  "sysTB1m2s",
+  "PASS",
+  "t ref_build=8.49 ref_run=0.120 b3_link=0.01 b3_run=0.050"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AmbaAdapters",
+  "sysDMA",
+  "PASS",
+  "t ref_build=11.13 ref_run=0.120 b3_link=0.59 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "mkTesterA",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "mkTesterA64",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "mkTesterM",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "mkTesterM64",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "mkTesterMac",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "mkTesterMac64",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AssertionsDemo",
+  "sysTester",
+  "PASS",
+  "t ref_build=5.94 ref_run=0.133 b3_link=0.02 b3_run=0.064"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AssertionsDemo",
+  "sysTesterBug",
+  "PASS",
+  "t ref_build=5.46 ref_run=0.131 b3_link=0.02 b3_run=0.063"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AssertionsDemo",
+  "sysTesterWires",
+  "PASS",
+  "t ref_build=6.03 ref_run=0.132 b3_link=0.02 b3_run=0.081"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FIRFilter",
+  "sysFIRTest",
+  "PASS",
+  "t ref_build=2.66 ref_run=0.107 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AmbaSynthesis",
+  "sysDMA",
+  "PASS",
+  "t ref_build=12.98 ref_run=0.131 b3_link=0.50 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AssertionsDemo",
+  "sysTesterWiresBug",
+  "PASS",
+  "t ref_build=6.14 ref_run=0.132 b3_link=0.02 b3_run=0.068"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "sysTesterA",
+  "PASS",
+  "t ref_build=4.89 ref_run=0.119 b3_link=0.02 b3_run=0.059"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "sysTesterM",
+  "PASS",
+  "t ref_build=4.70 ref_run=0.119 b3_link=0.02 b3_run=0.050"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "sysTesterA64",
+  "PASS",
+  "t ref_build=5.81 ref_run=0.122 b3_link=0.02 b3_run=0.061"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "sysTesterM64",
+  "PASS",
+  "t ref_build=4.69 ref_run=0.120 b3_link=0.02 b3_run=0.048"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Hamming",
+  "sysHamming",
+  "PASS",
+  "t ref_build=2.78 ref_run=0.229 b3_link=0.02 b3_run=0.458"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/GlibcRandom",
+  "systbFast",
+  "PASS",
+  "t ref_build=3.26 ref_run=0.120 b3_link=0.76 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "sysTesterMac",
+  "PASS",
+  "t ref_build=4.80 ref_run=0.122 b3_link=0.02 b3_run=0.048"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/FloatingPoint",
+  "sysTesterMac64",
+  "PASS",
+  "t ref_build=4.74 ref_run=0.129 b3_link=0.03 b3_run=0.053"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Maxtree",
+  "sys_2q",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.bsv_examples/Maxtree/MaxTree.bsv\", line 148, column 33: (T0080)"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Life",
+  "sysLife",
+  "PASS",
+  "t ref_build=3.81 ref_run=0.130 b3_link=0.20 b3_run=0.039"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Maxtree",
+  "sys_p2_fifo",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.bsv_examples/Maxtree/MaxTree.bsv\", line 148, column 33: (T0080)"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Maxtree",
+  "sys_fifo_loopy",
+  "PASS",
+  "t ref_build=2.37 ref_run=0.140 b3_link=0.02 b3_run=0.063"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/RAMS",
+  "mkTop",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.bsv_examples/RAMS/Test.bsv\", line 25, column 23: (G0084)"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Maxtree",
+  "sys_fifo",
+  "PASS",
+  "t ref_build=3.04 ref_run=0.134 b3_link=0.02 b3_run=0.058"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/Misc",
+  "sysTestShifter64",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.121 b3_link=0.14 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/GlibcRandom",
+  "systbSlow",
+  "PASS",
+  "t ref_build=2.63 ref_run=0.120 b3_link=0.40 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/AES",
+  "sysAes_TB",
+  "PASS",
+  "t ref_build=17.43 ref_run=0.121 b3_link=9.12 b3_run=0.106"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/MacTestBench",
+  "mkTbEnv",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.bsv_examples/MacTestBench/TbEnvConfigs.bsv\", line 58, column 61: (T0020)"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/SHA1",
+  "sysKenSha1",
+  "PASS",
+  "t ref_build=3.73 ref_run=0.120 b3_link=0.37 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/MacTestBench",
+  "mkSimpleSwitch",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.bsv_examples/MacTestBench/TbEnvConfigs.bsv\", line 58, column 61: (T0020)"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/cpu",
+  "mkCPUTest",
+  "PASS",
+  "t ref_build=4.65 ref_run=0.114 b3_link=0.32 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/cpu",
+  "mkCPUTestBypass",
+  "PASS",
+  "t ref_build=4.96 ref_run=0.109 b3_link=0.26 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/SHA256",
+  "sysKenSha2",
+  "PASS",
+  "t ref_build=5.88 ref_run=0.107 b3_link=1.16 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo/fifo_FixedPtrSize",
+  "mkSFIFOTest",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.131 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/bsvfifo",
+  "sysSizedFIFOTest",
+  "PASS",
+  "t ref_build=7.36 ref_run=0.110 b3_link=0.43 b3_run=0.038"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/SHA512",
+  "sysKenSha2",
+  "PASS",
+  "t ref_build=5.83 ref_run=0.109 b3_link=2.00 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/cpu",
+  "mkCPUTestBypassPreFIFO",
+  "PASS",
+  "t ref_build=5.68 ref_run=0.121 b3_link=0.30 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo/fifo_UBit1",
+  "mkSFIFOTest",
+  "PASS",
+  "t ref_build=2.62 ref_run=0.120 b3_link=0.11 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo/fifo_UBit2",
+  "mkSFIFOTest",
+  "PASS",
+  "t ref_build=2.69 ref_run=0.107 b3_link=0.09 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/cpu",
+  "mkCPUTestV2",
+  "PASS",
+  "t ref_build=4.89 ref_run=0.109 b3_link=0.20 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo/fifo_RAM",
+  "mkSFIFOTest",
+  "PASS",
+  "t ref_build=2.96 ref_run=0.114 b3_link=0.10 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo_arb",
+  "mkTb1",
+  "PASS",
+  "t ref_build=3.43 ref_run=0.130 b3_link=0.02 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo_arb",
+  "mkTb2b",
+  "PASS",
+  "t ref_build=3.54 ref_run=0.119 b3_link=0.02 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo_arb",
+  "mkTb2",
+  "PASS",
+  "t ref_build=3.55 ref_run=0.118 b3_link=0.02 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/fifo_arb",
+  "mkTb3",
+  "PASS",
+  "t ref_build=3.41 ref_run=0.122 b3_link=0.02 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/gcd",
+  "mkTbGCD",
+  "PASS",
+  "t ref_build=2.89 ref_run=0.136 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/gcd",
+  "mkTbDIV3",
+  "PASS",
+  "t ref_build=3.27 ref_run=0.134 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/gcd",
+  "mkTbWideGCD",
+  "PASS",
+  "t ref_build=3.61 ref_run=0.121 b3_link=0.08 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb1",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.122 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb2",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.129 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/mcd_Rand",
+  "mkTop",
+  "PASS",
+  "t ref_build=5.51 ref_run=0.120 b3_link=0.02 b3_run=0.049"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv-cocoon",
+  "sysTestMesa",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv-cocoon/RPC.bsv\", line 40, column 16: (G0084)"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb3",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.122 b3_link=0.08 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb5",
+  "PASS",
+  "t ref_build=2.80 ref_run=0.121 b3_link=0.13 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb6",
+  "PASS",
+  "t ref_build=2.13 ref_run=0.121 b3_link=0.07 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb4",
+  "PASS",
+  "t ref_build=3.59 ref_run=0.124 b3_link=0.24 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/memq",
+  "sysDQueueTb",
+  "PASS",
+  "t ref_build=7.34 ref_run=0.132 b3_link=0.83 b3_run=0.039"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/stepcounter",
+  "sysTestStepCounter",
+  "PASS",
+  "t ref_build=2.13 ref_run=0.123 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb7",
+  "PASS",
+  "t ref_build=3.93 ref_run=0.123 b3_link=0.22 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/shifter",
+  "mkTb8",
+  "PASS",
+  "t ref_build=2.43 ref_run=0.118 b3_link=0.10 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/mimo",
+  "sysTrafficREG",
+  "PASS",
+  "t ref_build=8.91 ref_run=0.172 b3_link=1.52 b3_run=0.100"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1045",
+  "sysDesign",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.121 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1037",
+  "sysFoo",
+  "PASS",
+  "t ref_build=2.25 ref_run=0.121 b3_link=0.01 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/vending",
+  "sysTestVending",
+  "PASS",
+  "t ref_build=3.74 ref_run=0.122 b3_link=0.20 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1314",
+  "sysTest",
+  "PASS",
+  "t ref_build=2.44 ref_run=0.112 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1353",
+  "sysBug1353",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.113 b3_link=0.14 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysForLoop1",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.135 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv",
+  "sysTestMesa",
+  "PASS",
+  "t ref_build=16.56 ref_run=0.163 b3_link=0.62 b3_run=0.322"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysFunctionLocation1",
+  "PASS",
+  "t ref_build=2.26 ref_run=0.118 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysInstOrder1",
+  "PASS",
+  "t ref_build=1.97 ref_run=0.115 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysFunctionLocation2",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.116 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1302",
+  "sysRFile2",
+  "PASS",
+  "t ref_build=6.03 ref_run=0.107 b3_link=0.48 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/xbar",
+  "sysTb",
+  "PASS",
+  "t ref_build=6.14 ref_run=0.119 b3_link=1.14 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysInstOrder2",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.133 b3_link=0.06 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysRuleNameClash1",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.119 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysRuleNameClash2",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.119 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysRuleOrder1",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.117 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysRuleOrder2",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.117 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1424",
+  "sysRuleOrder3",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.108 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1666",
+  "sysBug1666",
+  "PASS",
+  "t ref_build=2.84 ref_run=0.098 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b1666",
+  "sysSignedTest",
+  "PASS",
+  "t ref_build=2.65 ref_run=0.108 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b335",
+  "mkDesignE",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.119 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b335",
+  "mkDesignI",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.130 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b431",
+  "sysBug431",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.110 b3_link=0.05 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b402",
+  "sysTest",
+  "PASS",
+  "t ref_build=2.82 ref_run=0.120 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b535",
+  "sysUnsetRWire",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.107 b3_link=0.07 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b540",
+  "sysBug540_1",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.107 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b540",
+  "sysBug540_2",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.110 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b621",
+  "sysDynamicVectorIfc",
+  "PASS",
+  "t ref_build=2.66 ref_run=0.109 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b810",
+  "sysBug810_1",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.120 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b621",
+  "sysStaticVectorIfc",
+  "PASS",
+  "t ref_build=2.97 ref_run=0.126 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b791",
+  "sysBug791",
+  "PASS",
+  "t ref_build=2.44 ref_run=0.119 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b810",
+  "sysBug810_3",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.121 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b810",
+  "sysOpt_bug",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.111 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b925",
+  "sysTest2",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.119 b3_link=0.10 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b925",
+  "sysTest1",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.116 b3_link=0.08 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b925",
+  "sysTest3",
+  "PASS",
+  "t ref_build=2.14 ref_run=0.105 b3_link=0.10 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b925",
+  "sysTest4",
+  "PASS",
+  "t ref_build=2.33 ref_run=0.122 b3_link=0.11 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b898",
+  "sysBug898",
+  "PASS",
+  "t ref_build=3.20 ref_run=0.127 b3_link=0.10 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.bugs/bluespec_inc/b898",
+  "sysBug898_2",
+  "PASS",
+  "t ref_build=3.46 ref_run=0.120 b3_link=0.12 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.bugs/github/gh836",
+  "sysZeroUndet",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.119 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.bugs/github/gh836",
+  "sysZeroSizeWires",
+  "PASS",
+  "t ref_build=2.10 ref_run=0.120 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.bugs/pre_bluespec_inc",
+  "sysBug122",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.111 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.codegen/case",
+  "sysDupResult",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.115 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.codegen",
+  "mkPrimPriMuxNSS",
+  "PASS",
+  "t ref_build=2.30 ref_run=0.118 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.codegen/case",
+  "sysIfElseCase_Func",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.120 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.codegen/case",
+  "sysIfElseCase_Inline",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.109 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/case",
+  "sysNoOp_LargerRes",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.123 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.codegen/case",
+  "sysNoOp_SameSize",
+  "PASS",
+  "t ref_build=1.98 ref_run=0.121 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIAction",
+  "PASS",
+  "t ref_build=2.34 ref_run=0.102 b3_link=0.05 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIActionValue",
+  "PASS",
+  "t ref_build=2.46 ref_run=0.119 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIActionValueIgnorePolyReturn",
+  "PASS",
+  "t ref_build=2.62 ref_run=0.122 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIActionValueIgnoreReturn",
+  "PASS",
+  "t ref_build=2.47 ref_run=0.129 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIActionValueIgnoreWideReturn",
+  "PASS",
+  "t ref_build=2.64 ref_run=0.116 b3_link=0.05 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIActionValueWithLogic",
+  "PASS",
+  "t ref_build=2.75 ref_run=0.105 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIActionValue_",
+  "PASS",
+  "t ref_build=2.25 ref_run=0.107 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIArg64",
+  "PASS",
+  "t ref_build=2.52 ref_run=0.131 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIBit8",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.117 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIBit97",
+  "PASS",
+  "t ref_build=2.54 ref_run=0.117 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIBitN",
+  "PASS",
+  "t ref_build=2.50 ref_run=0.120 b3_link=0.09 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIDynamicStringArg",
+  "PASS",
+  "t ref_build=2.67 ref_run=0.117 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/mimo",
+  "sysTrafficBRAM",
+  "PASS",
+  "t ref_build=26.35 ref_run=0.182 b3_link=20.07 b3_run=0.386"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPINonBit_Bool",
+  "PASS",
+  "t ref_build=2.37 ref_run=0.110 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIPrimAction",
+  "PASS",
+  "t ref_build=2.65 ref_run=0.107 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIPassingStruct",
+  "PASS",
+  "t ref_build=2.63 ref_run=0.118 b3_link=0.08 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIStringArg",
+  "PASS",
+  "t ref_build=2.50 ref_run=0.119 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPIWideResult",
+  "PASS",
+  "t ref_build=2.46 ref_run=0.106 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBDPI_CapitalLinkName",
+  "PASS",
+  "t ref_build=2.71 ref_run=0.098 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign",
+  "mkBug",
+  "PASS",
+  "t ref_build=3.55 ref_run=0.120 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestActionValuesUnusedValue",
+  "PASS",
+  "t ref_build=2.53 ref_run=0.111 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestActions",
+  "PASS",
+  "t ref_build=2.61 ref_run=0.111 b3_link=0.09 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestActionValues",
+  "PASS",
+  "t ref_build=3.04 ref_run=0.090 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/rdy_en_pragmas",
+  "sysAlwaysEnabledGated1",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.codegen/rdy_en_pragmas/AlwaysEnabledGated1.bsv\", line 11, column 8: (G0006)"
+ ],
+ [
+  "testsuite/bsc.codegen/rdy_en_pragmas",
+  "sysAlwaysEnabledNotOK",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.codegen/rdy_en_pragmas/AlwaysEnabledNotOK.bsv\", line 8, column 8: (G0006)"
+ ],
+ [
+  "testsuite/bsc.codegen/rdy_en_pragmas",
+  "sysAlwaysEnabledGated2",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.codegen/rdy_en_pragmas/AlwaysEnabledGated2.bsv\", line 10, column 8: (G0006)"
+ ],
+ [
+  "testsuite/bsc.codegen/rdy_en_pragmas",
+  "sysAlwaysReadyNotOK",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.codegen/rdy_en_pragmas/AlwaysReadyNotOK.bsv\", line 8, column 8: (G0006)"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestAggressiveConditions",
+  "PASS",
+  "t ref_build=3.54 ref_run=0.122 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestMultipleRules",
+  "PASS",
+  "t ref_build=2.90 ref_run=0.108 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.codegen/vector_modargs",
+  "sysClockedByPort",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.codegen/vector_modargs/ClockedByPort.bsv\", line 12, column 11: (G0058)"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestValues",
+  "PASS",
+  "t ref_build=2.48 ref_run=0.118 b3_link=0.12 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.codegen/strings",
+  "sysStringCharFunctions",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.102 b3_link=0.11 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.codegen/foreign/battery",
+  "mkTestMethodsTB",
+  "PASS",
+  "t ref_build=3.89 ref_run=0.124 b3_link=0.02 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysDerive1",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.120 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysDerive3",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.compile/letrec/Derive3.bsv\", line 44, column 23: (T0007)"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysDerive3b",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.compile/letrec/Derive3b.bsv\", line 46, column 23: (T0007)"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysDerive2",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.123 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.codegen/vector_modargs",
+  "sysClockedByReset",
+  "PASS",
+  "t ref_build=2.96 ref_run=0.105 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.codegen/vector_modargs",
+  "sysVecVecVecInt_Order",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.133 b3_link=0.11 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.codegen/vector_modargs",
+  "sysVecClockResetToRegIfc",
+  "PASS",
+  "t ref_build=3.21 ref_run=0.097 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysLetrec3",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.107 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysLetrecbit",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.105 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysLetrecmod",
+  "PASS",
+  "t ref_build=1.74 ref_run=0.110 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.driver/cpp",
+  "sysCpreprocess",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.driver/cpp/Cpreprocess.bsv\", line 1, column 1: (P0210)"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysLetrecmodx",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.118 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysList1",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.119 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysList2",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.108 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysList3",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.104 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator",
+  "mkMemUnit",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.evaluator/Bug45.bs\", line 55, column 42: (T0018)"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysList3b",
+  "PASS",
+  "t ref_build=1.87 ref_run=0.117 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.compile/letrec",
+  "sysUndef",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.110 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.driver/cpp",
+  "sysCpreprocess_unusual_format",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.107 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.driver/gensign",
+  "sysTestReReExport",
+  "PASS",
+  "t ref_build=1.87 ref_run=0.125 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator",
+  "sysFullMult",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.122 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator",
+  "sysNormalMult",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.120 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator",
+  "sysStaticIndex",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.116 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator",
+  "sysStaticInteger",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.092 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.evaluator",
+  "sysBug45aTest",
+  "PASS",
+  "t ref_build=3.22 ref_run=0.095 b3_link=0.07 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicAdd",
+  "PASS",
+  "t ref_build=1.97 ref_run=0.118 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicDiv",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.118 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicInteger",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.110 b3_link=0.05 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicIntegerNested",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.105 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicLT",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.121 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicNeg",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.108 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic",
+  "sysDynamicNeg2",
+  "PASS",
+  "t ref_build=2.25 ref_run=0.097 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysDynamicFormatString",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.122 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysStringConcat",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.120 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysStringEQ",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.110 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysStringInteger",
+  "PASS",
+  "t ref_build=2.10 ref_run=0.107 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysStringIntegerWithNull",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.105 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysStringLT",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.119 b3_link=0.09 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.evaluator/dynamic/strings",
+  "sysStringMux",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.119 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/literal",
+  "sysNegativeIntOK",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.118 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/literal",
+  "sysPositiveIntOK",
+  "PASS",
+  "t ref_build=1.97 ref_run=0.122 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/opt",
+  "sysConcatOpt2",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.116 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.evaluator/opt",
+  "sysConcatOpt",
+  "PASS",
+  "t ref_build=2.43 ref_run=0.119 b3_link=0.09 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/opt",
+  "sysNegInvOpts",
+  "PASS",
+  "t ref_build=2.12 ref_run=0.117 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/build_module",
+  "sysRoseTest",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.109 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/build_module",
+  "sysFShowFIFO",
+  "PASS",
+  "t ref_build=2.29 ref_run=0.112 b3_link=0.10 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysAVCond",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.116 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysArrayCond",
+  "PASS",
+  "t ref_build=1.98 ref_run=0.110 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysImpCondOf2",
+  "PASS",
+  "t ref_build=2.32 ref_run=0.121 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysListCond",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.119 b3_link=0.01 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysNoInlineCond",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.119 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysMaybeCond",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.129 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysPolyFieldCond",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.118 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysPolyFunctionFieldCond",
+  "PASS",
+  "t ref_build=1.82 ref_run=0.104 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysImpCondOf",
+  "PASS",
+  "t ref_build=2.66 ref_run=0.111 b3_link=0.14 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysSimpleCond",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.119 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysTupleCond",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.119 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/impcondof",
+  "sysWireCond",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.107 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/module_fix",
+  "sysIncDecFix",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.119 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/isancestor",
+  "sysIsAncestor",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.132 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/module_fix",
+  "sysIncDecFixContext",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.122 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/module_fix",
+  "sysIncDecFixMC",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.109 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/type_of",
+  "sysIsIfcType",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.107 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/prims/when",
+  "sysWhen",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.121 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInit128Bit",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.114 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInit1024Bit",
+  "PASS",
+  "t ref_build=2.14 ref_run=0.118 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInit2048Bit",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.123 b3_link=0.14 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInit16384Bit",
+  "PASS",
+  "t ref_build=2.10 ref_run=0.132 b3_link=0.25 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInit64Bit",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.126 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInitExp",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.115 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInitUndet",
+  "PASS",
+  "t ref_build=2.15 ref_run=0.117 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysDataAction2",
+  "PASS",
+  "t ref_build=2.16 ref_run=0.129 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysArrayReg3D",
+  "PASS",
+  "t ref_build=4.93 ref_run=0.125 b3_link=0.28 b3_run=0.038"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysNewtypeAction",
+  "PASS",
+  "t ref_build=2.04 ref_run=0.120 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysListReg3D",
+  "PASS",
+  "t ref_build=4.33 ref_run=0.119 b3_link=0.29 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysPackageTest",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.119 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysListNReg3D",
+  "PASS",
+  "t ref_build=4.85 ref_run=0.119 b3_link=0.29 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/reginit",
+  "sysInit65536Bit",
+  "PASS",
+  "t ref_build=3.32 ref_run=0.109 b3_link=3.16 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysPrimUndefined",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.106 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysTaggedUnionDynamicAction",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.123 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysUndefinedString",
+  "PASS",
+  "t ref_build=2.18 ref_run=0.118 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysListN3D",
+  "PASS",
+  "t ref_build=2.19 ref_run=0.131 b3_link=0.17 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysIfUninit",
+  "PASS",
+  "t ref_build=2.04 ref_run=0.103 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysStructUninitOK1",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.116 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysVector3D",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.117 b3_link=0.16 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysStructUninitOK2",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.130 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysUninitBit1OK2",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.123 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysVectorReg3D",
+  "PASS",
+  "t ref_build=4.37 ref_run=0.134 b3_link=0.41 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysFIFOSelect",
+  "PASS",
+  "t ref_build=9.07 ref_run=0.129 b3_link=6.47 b3_run=0.047"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysUninitBitOK2",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.evaluator/uninit/UninitBitOK2.bsv\", line 3, column 11: (G0028)"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysUninitBitOK1",
+  "PASS",
+  "t ref_build=2.31 ref_run=0.122 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysUninitBitRangeUpdOK",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.123 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysUninitStructBitOK",
+  "PASS",
+  "t ref_build=2.15 ref_run=0.123 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysVectorUninitOK1",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.133 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysVectorBitOK",
+  "PASS",
+  "t ref_build=2.18 ref_run=0.120 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.evaluator/uninit",
+  "sysVectorUninitOK2",
+  "PASS",
+  "t ref_build=1.86 ref_run=0.122 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.if",
+  "sysBasicIf",
+  "PASS",
+  "t ref_build=2.39 ref_run=0.133 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.if",
+  "sysIfMultiActionTest",
+  "PASS",
+  "t ref_build=2.42 ref_run=0.120 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.if",
+  "sysLiftOrder",
+  "PASS",
+  "t ref_build=2.16 ref_run=0.123 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.if",
+  "sysIfNestedTest",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.130 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.if",
+  "sysNoNosplitDeep",
+  "PASS",
+  "t ref_build=2.45 ref_run=0.136 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.if",
+  "sysOrderDisplayExit",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.122 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.if/split-execution/TurboFIFO/attribute",
+  "sysTurboFIFOTest",
+  "PASS",
+  "t ref_build=2.26 ref_run=0.123 b3_link=0.10 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.if/split-execution/2x2-switch",
+  "sysTestSwitch",
+  "PASS",
+  "t ref_build=2.96 ref_run=0.122 b3_link=0.18 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.if/split-execution/2x2-switch-split",
+  "sysTestSwitch",
+  "PASS",
+  "t ref_build=2.97 ref_run=0.122 b3_link=0.18 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.if/split-execution/TurboFIFO/original",
+  "sysTurboFIFOTest",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.118 b3_link=0.08 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/BGetPut",
+  "mkTestbench_MkBClientServer",
+  "PASS",
+  "t ref_build=2.47 ref_run=0.122 b3_link=0.12 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/BGetPut",
+  "mkTestbench_MkBGetPut",
+  "PASS",
+  "t ref_build=2.39 ref_run=0.121 b3_link=0.09 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/CGetPut",
+  "mkTestbench_MkCClientServer",
+  "PASS",
+  "t ref_build=2.90 ref_run=0.108 b3_link=0.11 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/CGetPut",
+  "mkTestbench_MkCGetPut",
+  "PASS",
+  "t ref_build=2.74 ref_run=0.117 b3_link=0.13 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/CGetPut",
+  "mkTestbench_MkCGetCPut",
+  "PASS",
+  "t ref_build=2.86 ref_run=0.118 b3_link=0.16 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.bsv_examples/sudoku",
+  "mkGenerateTest3",
+  "PASS",
+  "t ref_build=30.30 ref_run=0.128 b3_link=21.77 b3_run=0.114"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/CGetPut",
+  "mkTestbench_Mk_extrabuffer",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.117 b3_link=0.12 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_JoinServers",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.107 b3_link=0.11 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_MkRequestBuffer",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.117 b3_link=0.09 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_MkRequestResponseBuffer_1",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.105 b3_link=0.09 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_MkRequestResponseBuffer1",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.119 b3_link=0.12 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_MkResponseBuffer",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.137 b3_link=0.09 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysRegSelect",
+  "PASS",
+  "t ref_build=26.46 ref_run=0.120 b3_link=1.62 b3_run=0.061"
+ ],
+ [
+  "testsuite/bsc.evaluator/undefined",
+  "sysRegSelect2",
+  "PASS",
+  "t ref_build=26.63 ref_run=0.108 b3_link=1.63 b3_run=0.052"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_MkSizedRequestResponseBuffer",
+  "PASS",
+  "t ref_build=2.59 ref_run=0.117 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/ClientServer",
+  "mkTestbench_TwoJoinServers",
+  "PASS",
+  "t ref_build=2.84 ref_run=0.120 b3_link=0.14 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/GetPut",
+  "mkTestbench_MkGPFIFO",
+  "PASS",
+  "t ref_build=2.62 ref_run=0.119 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/GetPut",
+  "mkTestbench_MkGPFIFO_alt_rw",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.108 b3_link=0.09 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/GetPut",
+  "mkTestbench_MkGPFIFO_non_alt_rw",
+  "PASS",
+  "t ref_build=2.48 ref_run=0.108 b3_link=0.09 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/GetPut",
+  "mkTestbench_MkGPSizedFIFO",
+  "PASS",
+  "t ref_build=2.57 ref_run=0.128 b3_link=0.11 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/GetPut",
+  "mkTestbench_MkGetPut",
+  "PASS",
+  "t ref_build=2.65 ref_run=0.117 b3_link=0.10 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/RAM",
+  "mkTestbench_Ram",
+  "PASS",
+  "t ref_build=2.66 ref_run=0.108 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/RAM",
+  "mkTestbench_TagRam",
+  "PASS",
+  "t ref_build=2.71 ref_run=0.116 b3_link=0.10 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/SRAM",
+  "mkTestbench_MkWrapSRAM",
+  "PASS",
+  "t ref_build=2.92 ref_run=0.122 b3_link=0.11 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/AsyncRAM",
+  "mkTestbench_same_with_phase_diff",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.143 b3_link=0.11 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/AsyncRAM",
+  "mkTestbench_write_fast_read_slow",
+  "PASS",
+  "t ref_build=2.46 ref_run=0.118 b3_link=0.08 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/AsyncRAM",
+  "mkTestbench_write_slow_read_fast",
+  "PASS",
+  "t ref_build=2.61 ref_run=0.137 b3_link=0.11 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/SyncRAM",
+  "mkTestbench_SPSRam",
+  "PASS",
+  "t ref_build=3.49 ref_run=0.119 b3_link=0.11 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/Library_latency/SRAM",
+  "mkTestbench_MkWrapSTRAM",
+  "PASS",
+  "t ref_build=3.69 ref_run=0.111 b3_link=0.12 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/BitSync",
+  "mkTestbench_fast_to_slow",
+  "PASS",
+  "t ref_build=3.40 ref_run=0.134 b3_link=0.09 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/BitSync",
+  "mkTestbench_same_with_phase_diff",
+  "PASS",
+  "t ref_build=3.61 ref_run=0.119 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/BitSync1",
+  "mkTestbench_fast_to_slow",
+  "PASS",
+  "t ref_build=3.05 ref_run=0.108 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/NullCrossing",
+  "mkTestbench_fast_to_slow",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.interra/MCD_library/NullCrossing/Design.bsv\", line 37, column 2: (G0058)"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/BitSync",
+  "mkTestbench_slow_to_fast",
+  "PASS",
+  "t ref_build=3.38 ref_run=0.119 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/BitSync1",
+  "mkTestbench_slow_to_fast",
+  "PASS",
+  "t ref_build=2.69 ref_run=0.105 b3_link=0.07 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/BitSync1",
+  "mkTestbench_same_with_phase_diff",
+  "PASS",
+  "t ref_build=3.18 ref_run=0.114 b3_link=0.08 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/FIFOSync",
+  "mkTestbench_same_with_phase_diff",
+  "PASS",
+  "t ref_build=2.55 ref_run=0.103 b3_link=0.09 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/FIFOSync",
+  "mkTestbench_write_fast_read_slow",
+  "PASS",
+  "t ref_build=2.55 ref_run=0.115 b3_link=0.11 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/NullCrossing",
+  "mkTestbench_same_with_phase_diff",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.interra/MCD_library/NullCrossing/Design.bsv\", line 37, column 2: (G0058)"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/NullCrossing",
+  "mkTestbench_slow_to_fast",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.interra/MCD_library/NullCrossing/Design.bsv\", line 37, column 2: (G0058)"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/FIFOSync",
+  "mkTestbench_write_slow_read_fast",
+  "PASS",
+  "t ref_build=2.44 ref_run=0.120 b3_link=0.10 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/RegSync",
+  "mkTestbench_fast_to_slow",
+  "PASS",
+  "t ref_build=2.43 ref_run=0.094 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/PulseHandShakeSync",
+  "mkTestbench_same_with_phase_diff",
+  "PASS",
+  "t ref_build=2.73 ref_run=0.115 b3_link=0.08 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/PulseHandShakeSync",
+  "mkTestbench_slow_to_fast",
+  "PASS",
+  "t ref_build=2.75 ref_run=0.103 b3_link=0.09 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/RegSync",
+  "mkTestbench_same_with_phase_diff",
+  "PASS",
+  "t ref_build=2.80 ref_run=0.104 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/RegSync",
+  "mkTestbench_slow_to_fast",
+  "PASS",
+  "t ref_build=2.76 ref_run=0.115 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/PulseHandShakeSync",
+  "mkTestbench_fast_to_slow",
+  "PASS",
+  "t ref_build=2.82 ref_run=0.106 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/SpecialSyncReg",
+  "mkTestbench_fast_to_slow",
+  "PASS",
+  "t ref_build=2.64 ref_run=0.120 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/SpecialSyncFIFO",
+  "mkTestbench_write_slow_read_fast",
+  "PASS",
+  "t ref_build=2.93 ref_run=0.119 b3_link=0.10 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/bluesim/interactive/parity_checker",
+  "mkTestbench",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.105 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/bluesim/interactive/handshake_protocol",
+  "mkTestbench",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.116 b3_link=0.09 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/MCD_library/SpecialSyncReg",
+  "mkTestbench_slow_to_fast",
+  "PASS",
+  "t ref_build=2.52 ref_run=0.231 b3_link=0.19 b3_run=0.089"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Assert",
+  "mkTestbench_ContinuousAssert",
+  "PASS",
+  "t ref_build=3.48 ref_run=0.118 b3_link=0.12 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_hierar",
+  "mkTestbench",
+  "PASS",
+  "t ref_build=4.47 ref_run=0.106 b3_link=0.23 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/StmtFSM/CycleTest",
+  "sysCycleTest",
+  "PASS",
+  "t ref_build=4.41 ref_run=0.107 b3_link=0.27 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_separate",
+  "mkTestbench",
+  "PASS",
+  "t ref_build=4.77 ref_run=0.116 b3_link=0.25 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Assert",
+  "mkTestbench_DynamicAssert",
+  "PASS",
+  "t ref_build=2.98 ref_run=0.120 b3_link=0.10 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/StmtFSM/ServerInServer",
+  "sysServerInServer",
+  "PASS",
+  "t ref_build=5.05 ref_run=0.097 b3_link=0.36 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/CGetPut",
+  "mkTestbench_MkCGetCPut",
+  "PASS",
+  "t ref_build=2.45 ref_run=0.131 b3_link=0.11 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/CGetPut",
+  "mkTestbench_MkCClientServer",
+  "PASS",
+  "t ref_build=2.78 ref_run=0.118 b3_link=0.11 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ConfigReg",
+  "mkTestbench_MkConfigReg",
+  "PASS",
+  "t ref_build=2.57 ref_run=0.095 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/CGetPut",
+  "mkTestbench_MkCGetPut",
+  "PASS",
+  "t ref_build=2.45 ref_run=0.113 b3_link=0.13 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ConfigReg",
+  "mkTestbench_MkConfigRegU",
+  "PASS",
+  "t ref_build=2.34 ref_run=0.104 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_All",
+  "PASS",
+  "t ref_build=1.61 ref_run=0.118 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Any",
+  "PASS",
+  "t ref_build=1.54 ref_run=0.118 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/FiFo",
+  "mkTestbench_MkLFifo",
+  "PASS",
+  "t ref_build=3.02 ref_run=0.115 b3_link=0.10 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Append",
+  "PASS",
+  "t ref_build=1.59 ref_run=0.129 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/FiFoF",
+  "mkTestbench_MkLFifof",
+  "PASS",
+  "t ref_build=2.86 ref_run=0.097 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Concat",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.105 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Drop",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.106 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_DropWhile",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.118 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_DropWhileRev",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.118 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Elem",
+  "PASS",
+  "t ref_build=1.59 ref_run=0.104 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Equality",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.117 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Filter",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.114 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Fold",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.097 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Foldl",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.103 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Foldl1",
+  "PASS",
+  "t ref_build=1.61 ref_run=0.117 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Foldn",
+  "PASS",
+  "t ref_build=1.58 ref_run=0.115 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Foldr",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.104 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Foldr1",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.109 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Head",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.107 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Init",
+  "PASS",
+  "t ref_build=1.70 ref_run=0.106 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_JoinActions",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.106 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_JoinRules",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.126 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Last",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.121 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Length",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.117 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Map",
+  "PASS",
+  "t ref_build=1.58 ref_run=0.109 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_MapAccumL",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.108 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_MapAccumR",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.106 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_MapPairs",
+  "PASS",
+  "t ref_build=1.61 ref_run=0.117 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Mapn",
+  "PASS",
+  "t ref_build=1.59 ref_run=0.118 b3_link=0.07 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_PrimSelectability",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.101 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Reverse",
+  "PASS",
+  "t ref_build=1.53 ref_run=0.105 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Replicate",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.105 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Rotate",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.107 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_RotateR",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.108 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Scanl",
+  "PASS",
+  "t ref_build=1.58 ref_run=0.107 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Scanr",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.107 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Select",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.104 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Sscanl",
+  "PASS",
+  "t ref_build=1.54 ref_run=0.099 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Sscanr",
+  "PASS",
+  "t ref_build=1.54 ref_run=0.103 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Tail",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.104 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_TakeWhile",
+  "PASS",
+  "t ref_build=1.51 ref_run=0.106 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Take",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.107 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Transpose",
+  "PASS",
+  "t ref_build=1.52 ref_run=0.095 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_TakeWhileRev",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.104 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Update",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.117 b3_link=0.07 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Unzip",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.116 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Zip1",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.107 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Upto",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.106 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Zip2",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.103 b3_link=0.07 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Zip3",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.093 b3_link=0.08 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_ZipWith",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.113 b3_link=0.07 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_Zip4",
+  "PASS",
+  "t ref_build=1.59 ref_run=0.113 b3_link=0.07 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_ZipWith3",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.093 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_All",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.091 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/List",
+  "mkTestbench_ZipWith4",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.113 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Any",
+  "PASS",
+  "t ref_build=1.52 ref_run=0.103 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Append",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.103 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Concat",
+  "PASS",
+  "t ref_build=1.61 ref_run=0.108 b3_link=0.08 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Elem",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.131 b3_link=0.06 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Equality",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.105 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Fold",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.107 b3_link=0.04 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Foldl",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.119 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Foldl1",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.125 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_FoldM",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.102 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_FoldlM",
+  "PASS",
+  "t ref_build=1.72 ref_run=0.116 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Foldr",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.105 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Foldr1",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.111 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_FoldrM",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.117 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_GenList",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.097 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_GenWith",
+  "PASS",
+  "t ref_build=1.68 ref_run=0.118 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Head",
+  "PASS",
+  "t ref_build=1.61 ref_run=0.116 b3_link=0.06 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_GenWithM",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.096 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Last",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.108 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Init",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.107 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Map",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.129 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_MapAccumL",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.117 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_MapAccumR",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.117 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_MapM",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.126 b3_link=0.07 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_MapM_",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.106 b3_link=0.07 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_MapPairs",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.113 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Replicate",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.111 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ReplicateM",
+  "PASS",
+  "t ref_build=1.86 ref_run=0.120 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Reverse",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.120 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Rotate",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.120 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_RotateR",
+  "PASS",
+  "t ref_build=1.74 ref_run=0.109 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Scanl",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.119 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Scanr",
+  "PASS",
+  "t ref_build=1.82 ref_run=0.107 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Select",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.115 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Sscanl",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.133 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Sscanr",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.119 b3_link=0.08 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Take",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.108 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Tail",
+  "PASS",
+  "t ref_build=1.93 ref_run=0.120 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ToList",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.111 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ToListN",
+  "PASS",
+  "t ref_build=1.87 ref_run=0.118 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_TransposeLN",
+  "PASS",
+  "t ref_build=1.86 ref_run=0.106 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Transpose",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.116 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Update",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.119 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_UnZip",
+  "PASS",
+  "t ref_build=1.93 ref_run=0.130 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Zip3",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.121 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Zip",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.121 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_Zip4",
+  "PASS",
+  "t ref_build=2.12 ref_run=0.121 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWith",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.118 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipAny",
+  "PASS",
+  "t ref_build=2.03 ref_run=0.105 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWith3",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.118 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWith3M",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.119 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWithAny",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.129 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWithAny3",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.117 b3_link=0.08 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWithM",
+  "PASS",
+  "t ref_build=2.13 ref_run=0.116 b3_link=0.08 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/ListN",
+  "mkTestbench_ZipWithM_",
+  "PASS",
+  "t ref_build=2.15 ref_run=0.121 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Buffer",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.119 b3_link=0.09 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Buffered",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.111 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Apply",
+  "PASS",
+  "t ref_build=2.72 ref_run=0.107 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_FifoToPush",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.110 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Pass",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.120 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Passed",
+  "PASS",
+  "t ref_build=2.46 ref_run=0.128 b3_link=0.09 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Pipe",
+  "PASS",
+  "t ref_build=2.55 ref_run=0.118 b3_link=0.09 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Qbuffer",
+  "PASS",
+  "t ref_build=2.31 ref_run=0.117 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_RegToPush",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.131 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Spew",
+  "PASS",
+  "t ref_build=1.68 ref_run=0.120 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Qbuffered",
+  "PASS",
+  "t ref_build=2.31 ref_run=0.119 b3_link=0.09 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Sink",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.109 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Push",
+  "mkTestbench_Tee",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.120 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_All",
+  "PASS",
+  "t ref_build=1.86 ref_run=0.131 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Any",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.120 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Append",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.118 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Equality",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.129 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Fold",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.121 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Elem",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.116 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Concat",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.118 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_FoldM",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.120 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_FoldOrder",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.106 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Foldl",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.135 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_FoldlM",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.119 b3_link=0.05 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Foldl1",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.116 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Foldr",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.105 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_FoldrM",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.105 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Foldr1",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.120 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_GenList",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.119 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_GenWith",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.118 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_GenWithM",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.108 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Last",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.129 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Map",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.109 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Head",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.119 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_MapAccumL",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.116 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Init",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.120 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_MapAccumR",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.116 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_MapM",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.120 b3_link=0.07 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Replicate",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.115 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_MapPairs",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.117 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Reverse",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.129 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_MapM_",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.106 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ReplicateM",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.118 b3_link=0.05 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Rotate",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.122 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_RotateR",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.131 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Scanl",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.108 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Scanr",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.118 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Sscanl",
+  "PASS",
+  "t ref_build=1.68 ref_run=0.108 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Sscanr",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.118 b3_link=0.08 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Select",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.117 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Take",
+  "PASS",
+  "t ref_build=1.74 ref_run=0.116 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Tail",
+  "PASS",
+  "t ref_build=2.28 ref_run=0.123 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ToList",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.121 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ToListN",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.111 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_TransposeLN",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.109 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Zip",
+  "PASS",
+  "t ref_build=1.74 ref_run=0.118 b3_link=0.08 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Transpose",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.121 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_UnZip",
+  "PASS",
+  "t ref_build=1.77 ref_run=0.108 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Update",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.124 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Zip3",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.122 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_Zip4",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.110 b3_link=0.08 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipAny",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.109 b3_link=0.08 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWith",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.121 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWith3",
+  "PASS",
+  "t ref_build=1.82 ref_run=0.120 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM",
+  "sysBRAMPipelined",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWithAny",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.110 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWith3M",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.118 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWithAny3",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.118 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWithM",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.123 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.interra/libraries/Vector",
+  "mkTestbench_ZipWithM_",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.133 b3_link=0.06 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM",
+  "sysBRAMWidthTest",
+  "LINK_FAIL",
+  "Warning: Command line: (S0073)"
+ ],
+ [
+  "testsuite/bsc.interra/relax_method_urgency/byte_en",
+  "mkTestbench",
+  "PASS",
+  "t ref_build=2.95 ref_run=0.121 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.interra/relax_method_urgency/LoopyFIFO",
+  "mkTestbench",
+  "PASS",
+  "t ref_build=3.35 ref_run=0.104 b3_link=0.12 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM",
+  "sysGrayCounterTest",
+  "PASS",
+  "t ref_build=3.30 ref_run=0.120 b3_link=0.02 b3_run=0.072"
+ ],
+ [
+  "testsuite/bsc.lib/BuildList",
+  "sysTestBuildList",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.110 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/BuildVector",
+  "sysTestBuildVector",
+  "PASS",
+  "t ref_build=1.82 ref_run=0.121 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCReg2",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.107 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM",
+  "sysSyncBRAM2PortBETest",
+  "PASS",
+  "t ref_build=6.66 ref_run=0.123 b3_link=0.27 b3_run=0.075"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM",
+  "sysSizedBRAMFIFOTest",
+  "PASS",
+  "t ref_build=4.48 ref_run=0.120 b3_link=0.84 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCReg3",
+  "PASS",
+  "t ref_build=2.22 ref_run=0.110 b3_link=0.09 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCReg4",
+  "PASS",
+  "t ref_build=7.62 ref_run=0.129 b3_link=0.08 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCReg5",
+  "PASS",
+  "t ref_build=7.56 ref_run=0.118 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegA2",
+  "PASS",
+  "t ref_build=7.57 ref_run=0.133 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegA3",
+  "PASS",
+  "t ref_build=7.76 ref_run=0.124 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegA4",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.119 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegA5",
+  "PASS",
+  "t ref_build=2.32 ref_run=0.117 b3_link=0.10 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegA_ZeroWidth",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.133 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegU2",
+  "PASS",
+  "t ref_build=2.38 ref_run=0.120 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegU3",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.133 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegU4",
+  "PASS",
+  "t ref_build=2.91 ref_run=0.119 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegU5",
+  "PASS",
+  "t ref_build=2.21 ref_run=0.130 b3_link=0.09 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCRegU_ZeroWidth",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.132 b3_link=0.02 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM/Lat",
+  "sysLat112",
+  "PASS",
+  "t ref_build=14.29 ref_run=0.120 b3_link=3.66 b3_run=0.049"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM/Lat",
+  "sysLat122",
+  "PASS",
+  "t ref_build=13.93 ref_run=0.124 b3_link=3.88 b3_run=0.052"
+ ],
+ [
+  "testsuite/bsc.lib/CReg",
+  "sysTestCReg_ZeroWidth",
+  "PASS",
+  "t ref_build=2.80 ref_run=0.131 b3_link=0.01 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/ClientServer",
+  "sysTestToGPClientServer",
+  "PASS",
+  "t ref_build=2.73 ref_run=0.134 b3_link=0.11 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM/Lat",
+  "sysLat124",
+  "PASS",
+  "t ref_build=15.02 ref_run=0.120 b3_link=3.89 b3_run=0.050"
+ ],
+ [
+  "testsuite/bsc.lib/Complex",
+  "sysCmplxSatAdd",
+  "PASS",
+  "t ref_build=2.63 ref_run=0.118 b3_link=0.10 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.lib/Cntrs",
+  "sysCntrTest",
+  "PASS",
+  "t ref_build=3.67 ref_run=0.123 b3_link=0.44 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.lib/Cntrs",
+  "sysCntrs0",
+  "PASS",
+  "t ref_build=3.97 ref_run=0.120 b3_link=0.02 b3_run=0.060"
+ ],
+ [
+  "testsuite/bsc.lib/CompletionBuffer",
+  "sysTestCompletionBuffer",
+  "PASS",
+  "t ref_build=5.14 ref_run=0.123 b3_link=0.29 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/Complex",
+  "sysCmplxTest",
+  "PASS",
+  "t ref_build=3.90 ref_run=0.130 b3_link=0.20 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.lib/CShow",
+  "sysTestCShow",
+  "PASS",
+  "t ref_build=2.10 ref_run=0.122 b3_link=0.12 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/Cntrs",
+  "sysUCntrTest",
+  "PASS",
+  "t ref_build=4.18 ref_run=0.131 b3_link=0.47 b3_run=0.039"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_10_10",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.lib/FixedPoint/FromReal.bsv\", line 11, column 8: (P0145)"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysExtendedPrecision",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.lib/FixedPoint/ExtendedPrecision.bsv\", line 45, column 27: (T0020)"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFptest",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.lib/FixedPoint/Fptest.bsv\", line 66, column 8: (T0033)"
+ ],
+ [
+  "testsuite/bsc.lib/DefaultValue",
+  "sysDefaultValueTest",
+  "PASS",
+  "t ref_build=3.04 ref_run=0.121 b3_link=0.22 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/FShow",
+  "sysFShowTest",
+  "PASS",
+  "t ref_build=2.36 ref_run=0.110 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_1_5",
+  "PASS",
+  "t ref_build=1.93 ref_run=0.108 b3_link=0.25 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_500_1",
+  "PASS",
+  "t ref_build=2.14 ref_run=0.113 b3_link=0.27 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_1_500",
+  "PASS",
+  "t ref_build=2.33 ref_run=0.117 b3_link=0.41 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_5_1",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.119 b3_link=0.28 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_5_5",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.109 b3_link=0.24 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/Divide",
+  "sysTest_mkNonPipelinedDivider",
+  "PASS",
+  "t ref_build=5.02 ref_run=0.120 b3_link=0.03 b3_run=0.317"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysQuots",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.lib/FixedPoint/Quots.bsv\", line 64, column 28: (T0020)"
+ ],
+ [
+  "testsuite/bsc.lib/Divide",
+  "sysTest_mkDivider",
+  "PASS",
+  "t ref_build=6.57 ref_run=0.123 b3_link=0.03 b3_run=0.145"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysFromReal_6_6",
+  "PASS",
+  "t ref_build=2.44 ref_run=0.123 b3_link=0.25 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/Foldable",
+  "sysFoldable1Test",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.118 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/Foldable",
+  "sysFoldableTest",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.107 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysSaturateArith",
+  "PASS",
+  "t ref_build=2.92 ref_run=0.134 b3_link=0.22 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/FloatingPoint",
+  "sysFloat_Divide_TestConds",
+  "PASS",
+  "t ref_build=8.34 ref_run=0.108 b3_link=0.03 b3_run=0.053"
+ ],
+ [
+  "testsuite/bsc.lib/FloatingPoint",
+  "sysFloat_SquareRoot_TestConds",
+  "PASS",
+  "t ref_build=12.38 ref_run=0.119 b3_link=0.04 b3_run=0.087"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/RadixSort/rev1",
+  "sysTb",
+  "PASS",
+  "t ref_build=7.73 ref_run=0.131 b3_link=1.31 b3_run=0.046"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/RadixSort/rev2",
+  "sysTb",
+  "PASS",
+  "t ref_build=7.19 ref_run=0.132 b3_link=1.35 b3_run=0.049"
+ ],
+ [
+  "testsuite/bsc.lib/FixedPoint",
+  "sysRound",
+  "PASS",
+  "t ref_build=12.82 ref_run=0.121 b3_link=2.73 b3_run=0.052"
+ ],
+ [
+  "testsuite/bsc.lib/Memory",
+  "sysMemoryTest",
+  "PASS",
+  "t ref_build=6.54 ref_run=0.120 b3_link=1.30 b3_run=0.042"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/RadixSort/rev3",
+  "sysTb",
+  "PASS",
+  "t ref_build=8.84 ref_run=0.121 b3_link=1.29 b3_run=0.044"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysForFold_1",
+  "PASS",
+  "t ref_build=2.58 ref_run=0.124 b3_link=0.15 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/qsort/bsv",
+  "sysTb",
+  "PASS",
+  "t ref_build=8.78 ref_run=0.123 b3_link=1.76 b3_run=0.045"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/RadixSort/rev4",
+  "sysTb",
+  "PASS",
+  "t ref_build=10.66 ref_run=0.123 b3_link=1.65 b3_run=0.067"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysForFold_2",
+  "PASS",
+  "t ref_build=3.02 ref_run=0.134 b3_link=0.13 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysIfThenElse",
+  "PASS",
+  "t ref_build=3.16 ref_run=0.125 b3_link=0.14 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysForLoop",
+  "PASS",
+  "t ref_build=3.04 ref_run=0.119 b3_link=0.14 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysMap",
+  "PASS",
+  "t ref_build=3.57 ref_run=0.124 b3_link=0.14 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysMap_with_funnel_indexed",
+  "PASS",
+  "t ref_build=3.41 ref_run=0.121 b3_link=0.14 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysMap_with_funnel_indexed_2",
+  "PASS",
+  "t ref_build=3.37 ref_run=0.122 b3_link=0.12 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysReorder",
+  "PASS",
+  "t ref_build=3.89 ref_run=0.133 b3_link=0.17 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysSynchPipe",
+  "PASS",
+  "t ref_build=2.29 ref_run=0.119 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysWhileFold_1",
+  "PASS",
+  "t ref_build=2.42 ref_run=0.129 b3_link=0.12 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysWhileFold_2",
+  "PASS",
+  "t ref_build=2.56 ref_run=0.124 b3_link=0.11 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysfork_join",
+  "PASS",
+  "t ref_build=2.58 ref_run=0.120 b3_link=0.11 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/unit_tests",
+  "sysWhileLoop",
+  "PASS",
+  "t ref_build=3.23 ref_run=0.125 b3_link=0.18 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysAppendTuple",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.124 b3_link=0.13 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysCurryTypeClass",
+  "PASS",
+  "t ref_build=2.47 ref_run=0.123 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysEq0",
+  "PASS",
+  "t ref_build=3.23 ref_run=0.132 b3_link=0.23 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysEq1",
+  "PASS",
+  "t ref_build=3.34 ref_run=0.134 b3_link=0.20 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysTuplePack",
+  "PASS",
+  "t ref_build=1.89 ref_run=0.133 b3_link=0.07 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysTupleSize",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.124 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/Prelude",
+  "sysEq2",
+  "PASS",
+  "t ref_build=2.95 ref_run=0.120 b3_link=0.20 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/dft64/bsv",
+  "sysTb_v2",
+  "PASS",
+  "t ref_build=15.74 ref_run=0.132 b3_link=0.19 b3_run=20.400"
+ ],
+ [
+  "testsuite/bsc.lib/PrintType",
+  "sysTestPrintType",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.135 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/dft64/bsv",
+  "sysTb_v1",
+  "PASS",
+  "t ref_build=18.20 ref_run=0.135 b3_link=0.23 b3_run=20.741"
+ ],
+ [
+  "testsuite/bsc.lib/RegA",
+  "sysTestRegA",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.123 b3_link=0.05 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/PAClib/dft64/bsv",
+  "sysTb_v5",
+  "PASS",
+  "t ref_build=22.06 ref_run=0.145 b3_link=0.14 b3_run=19.570"
+ ],
+ [
+  "testsuite/bsc.lib/Reserved",
+  "sysReservedTest",
+  "PASS",
+  "t ref_build=2.98 ref_run=0.123 b3_link=0.29 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/Printf",
+  "sysPrintfTest",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.122 b3_link=0.15 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/Stmt/Modules",
+  "sysAlwaysFSM_OneAction",
+  "PASS",
+  "t ref_build=2.49 ref_run=0.122 b3_link=0.11 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/Stmt/FacTest",
+  "mkFacTest",
+  "PASS",
+  "t ref_build=2.77 ref_run=0.124 b3_link=0.13 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.lib/Stmt/RepeatTest",
+  "mkRepeatTest",
+  "PASS",
+  "t ref_build=2.68 ref_run=0.124 b3_link=0.20 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.lib/Traversable",
+  "sysTraversableTest",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.122 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/Tieoff",
+  "sysTieOffTest",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.134 b3_link=0.15 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/Stmt/Server",
+  "sysServerTest",
+  "PASS",
+  "t ref_build=3.52 ref_run=0.133 b3_link=0.26 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.lib/Stmt/Server",
+  "sysServerTestUpdate",
+  "PASS",
+  "t ref_build=3.62 ref_run=0.124 b3_link=0.30 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.lib/TreeMap",
+  "sysTreeMapInsertWith",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.121 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/TreeMap",
+  "sysTreeMapLookup",
+  "PASS",
+  "t ref_build=1.81 ref_run=0.109 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/TreeMap",
+  "sysTreeMapMember",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.124 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/TreeMap",
+  "sysTreeMapOrder",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.136 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/dreg",
+  "sysDRegTest0",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.125 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/SShow",
+  "sysTestSShow",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.121 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/dreg",
+  "sysDRegTest1",
+  "PASS",
+  "t ref_build=2.40 ref_run=0.123 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/fifo",
+  "mkTbBypassFIFO",
+  "PASS",
+  "t ref_build=3.37 ref_run=0.135 b3_link=0.08 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/fifo",
+  "sysMoreFIFOTest",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.122 b3_link=0.16 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/fifo",
+  "sysLFIFO2Test",
+  "PASS",
+  "t ref_build=3.09 ref_run=0.123 b3_link=0.14 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/fifo",
+  "sysFIFOErrors",
+  "PASS",
+  "t ref_build=3.45 ref_run=0.123 b3_link=0.22 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/fifo",
+  "sysLSizedFIFOTest",
+  "PASS",
+  "t ref_build=3.17 ref_run=0.119 b3_link=0.13 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysFIFOSyncCount",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysFIFOSyncLevel",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.lib/fork",
+  "sysForkTest",
+  "LINK_FAIL",
+  "Error: Command line: (S0040)"
+ ],
+ [
+  "testsuite/bsc.lib/fifo/depth_param",
+  "sysFIFOParamTest",
+  "PASS",
+  "t ref_build=3.29 ref_run=0.130 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/fifo/depth_param",
+  "sysLFIFOParamTest",
+  "PASS",
+  "t ref_build=3.14 ref_run=0.134 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/fifo/depth_param",
+  "sysZeroFIFOParamTest",
+  "PASS",
+  "t ref_build=3.05 ref_run=0.112 b3_link=0.02 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/fifo",
+  "sysSizedFIFOTest",
+  "PASS",
+  "t ref_build=5.47 ref_run=0.121 b3_link=1.26 b3_run=0.039"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFO",
+  "PASS",
+  "t ref_build=2.55 ref_run=0.122 b3_link=0.08 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOCount",
+  "PASS",
+  "t ref_build=3.04 ref_run=0.123 b3_link=0.10 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOCount0",
+  "PASS",
+  "t ref_build=2.70 ref_run=0.122 b3_link=0.02 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOF",
+  "PASS",
+  "t ref_build=2.43 ref_run=0.119 b3_link=0.10 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOF2",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.132 b3_link=0.09 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOFToFIFO",
+  "PASS",
+  "t ref_build=2.46 ref_run=0.124 b3_link=0.10 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOLevel",
+  "PASS",
+  "t ref_build=2.83 ref_run=0.130 b3_link=0.10 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOLevel0",
+  "PASS",
+  "t ref_build=2.67 ref_run=0.119 b3_link=0.02 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSync",
+  "PASS",
+  "t ref_build=2.58 ref_run=0.122 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSync0",
+  "PASS",
+  "t ref_build=2.57 ref_run=0.111 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSync1",
+  "PASS",
+  "t ref_build=2.74 ref_run=0.110 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSync10",
+  "PASS",
+  "t ref_build=2.64 ref_run=0.123 b3_link=0.02 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSyncCount",
+  "PASS",
+  "t ref_build=2.44 ref_run=0.124 b3_link=0.07 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSyncCount0",
+  "PASS",
+  "t ref_build=2.47 ref_run=0.121 b3_link=0.02 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSyncLevel",
+  "PASS",
+  "t ref_build=2.94 ref_run=0.123 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestToGPFunc",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.123 b3_link=0.09 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestFIFOSyncLevel0",
+  "PASS",
+  "t ref_build=2.95 ref_run=0.133 b3_link=0.02 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestToGPRWire",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.121 b3_link=0.09 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestToGPReg",
+  "PASS",
+  "t ref_build=2.56 ref_run=0.133 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/getput",
+  "sysTestToGPWire",
+  "PASS",
+  "t ref_build=2.77 ref_run=0.134 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/listn",
+  "sysApplicativeListN",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.124 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/oint",
+  "sysOIntDynamic",
+  "PASS",
+  "t ref_build=2.22 ref_run=0.122 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/list_ops",
+  "sysSortGroupTest",
+  "PASS",
+  "t ref_build=2.50 ref_run=0.135 b3_link=0.25 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/regfile",
+  "sysArrayFileTest",
+  "PASS",
+  "t ref_build=3.23 ref_run=0.121 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/regfile",
+  "sysParseTest",
+  "PASS",
+  "t ref_build=3.18 ref_run=0.133 b3_link=0.07 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/regfile",
+  "sysParseTest2",
+  "PASS",
+  "t ref_build=3.14 ref_run=0.137 b3_link=0.06 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/regfile",
+  "sysWarningTest",
+  "PASS",
+  "t ref_build=2.74 ref_run=0.134 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/regfile",
+  "sysTestRegFileLoad",
+  "PASS",
+  "t ref_build=3.17 ref_run=0.122 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/regfile",
+  "sysWarningTest2",
+  "PASS",
+  "t ref_build=3.15 ref_run=0.125 b3_link=0.08 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/regtwo",
+  "sysRegTwoTest",
+  "PASS",
+  "t ref_build=2.33 ref_run=0.125 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysBigBypassWire",
+  "PASS",
+  "t ref_build=2.29 ref_run=0.133 b3_link=0.28 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysPulseTest",
+  "PASS",
+  "t ref_build=2.19 ref_run=0.132 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysMethodPulse",
+  "PASS",
+  "t ref_build=3.49 ref_run=0.125 b3_link=0.07 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysPulseWireC",
+  "PASS",
+  "t ref_build=2.32 ref_run=0.133 b3_link=0.08 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysPulseWireSBR",
+  "PASS",
+  "t ref_build=2.31 ref_run=0.133 b3_link=0.07 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysRWireUrgency1",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.lib/rwire/RWireUrgency1.bsv\", line 4, column 8: (G0041)"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysRWireBoundary",
+  "PASS",
+  "t ref_build=3.26 ref_run=0.122 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysRWireNothing",
+  "PASS",
+  "t ref_build=2.40 ref_run=0.126 b3_link=0.07 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysTestRWire",
+  "PASS",
+  "t ref_build=2.15 ref_run=0.120 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysWire",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.121 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysTestBypassWire",
+  "PASS",
+  "t ref_build=3.30 ref_run=0.122 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysApplicativeVector",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.121 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysConcatTuple",
+  "PASS",
+  "t ref_build=2.44 ref_run=0.121 b3_link=0.10 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysCountElem",
+  "PASS",
+  "t ref_build=2.41 ref_run=0.120 b3_link=0.18 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.lib/rwire",
+  "sysValidValue",
+  "PASS",
+  "t ref_build=3.98 ref_run=0.109 b3_link=0.14 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysCountIf",
+  "PASS",
+  "t ref_build=2.66 ref_run=0.124 b3_link=0.16 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysMiscFunc",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.lib/vector/MiscFunc.bsv\", line 46, column 17: (T0020)"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysFindIndex",
+  "PASS",
+  "t ref_build=2.74 ref_run=0.122 b3_link=0.21 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysFindElem",
+  "PASS",
+  "t ref_build=3.29 ref_run=0.118 b3_link=0.29 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysZeroVector",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.106 b3_link=0.01 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysFromChunksTest",
+  "PASS",
+  "t ref_build=2.58 ref_run=0.120 b3_link=0.30 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysShiftTest",
+  "PASS",
+  "t ref_build=3.07 ref_run=0.097 b3_link=0.46 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysShiftOutTest",
+  "PASS",
+  "t ref_build=3.68 ref_run=0.118 b3_link=0.71 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockDividers",
+  "sysClockDivOffset",
+  "PASS",
+  "t ref_build=2.43 ref_run=0.109 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/vector",
+  "sysRotateBy",
+  "PASS",
+  "t ref_build=6.43 ref_run=0.120 b3_link=0.47 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockDividers",
+  "sysResetInv",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.mcd/ClockDividers/ResetInv.bsv\", line 12, column 10: (G0084)"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockDividers",
+  "sysClockInv",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.133 b3_link=0.08 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockDividers",
+  "sysGatedClockInv",
+  "PASS",
+  "t ref_build=2.19 ref_run=0.117 b3_link=0.02 b3_run=0.079"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockMux",
+  "sysClockMux",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.121 b3_link=0.02 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockMux",
+  "sysClockSelect",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.107 b3_link=0.02 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockMux",
+  "sysSlowSelectClock",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.120 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockMux",
+  "sysUngatedClockMux",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.106 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.mcd/ClockMux",
+  "sysUngatedClockSelect",
+  "PASS",
+  "t ref_build=2.10 ref_run=0.115 b3_link=0.07 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.mcd/Gating",
+  "sysDefaultClockMethod",
+  "PASS",
+  "t ref_build=2.38 ref_run=0.114 b3_link=0.01 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.mcd/Gating",
+  "sysGatedClockCycle",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.118 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.mcd/Gating",
+  "sysGatedClock_OneMod",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.106 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.mcd/Hierarchy",
+  "sysNoClock",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.mcd/Gating",
+  "sysInputClockMethod",
+  "PASS",
+  "t ref_build=2.56 ref_run=0.114 b3_link=0.01 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/Gating",
+  "sysMethodFalse",
+  "PASS",
+  "t ref_build=2.22 ref_run=0.105 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.mcd/Gating",
+  "sysMethodTrue",
+  "PASS",
+  "t ref_build=2.22 ref_run=0.117 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysFIFOCountTest",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.118 b3_link=0.11 b3_run=0.047"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysLevelFIFOTest1",
+  "PASS",
+  "t ref_build=2.39 ref_run=0.115 b3_link=0.10 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysLevelFIFOTest2",
+  "PASS",
+  "t ref_build=2.37 ref_run=0.115 b3_link=0.10 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysSyncFIFOCountTest",
+  "PASS",
+  "t ref_build=2.65 ref_run=0.126 b3_link=0.10 b3_run=0.066"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysSyncLevelFIFOTest",
+  "PASS",
+  "t ref_build=2.67 ref_run=0.107 b3_link=0.10 b3_run=0.040"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysClockOf",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.116 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysClocksOf",
+  "PASS",
+  "t ref_build=2.18 ref_run=0.119 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysInvertAbsoluteClock",
+  "PASS",
+  "t ref_build=2.15 ref_run=0.102 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysLaunderClock",
+  "PASS",
+  "t ref_build=2.12 ref_run=0.114 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysGFIFOLevelTest",
+  "PASS",
+  "t ref_build=12.38 ref_run=0.103 b3_link=2.63 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.mcd/LevelFifo",
+  "sysGFIFOCountTest",
+  "PASS",
+  "t ref_build=12.83 ref_run=0.105 b3_link=2.83 b3_run=0.043"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysTransitiveAncestor",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.mcd/Misc/TransitiveAncestor.bsv\", line 34, column 16: (G0084)"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysResetOf",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.133 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysTransitiveFamily",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.mcd/Misc/TransitiveFamily.bsv\", line 34, column 16: (G0084)"
+ ],
+ [
+  "testsuite/bsc.mcd/Misc",
+  "sysResetsOf",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.118 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/NoClock",
+  "sysUnclockedModule",
+  "PASS",
+  "t ref_build=1.76 ref_run=0.108 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/NullCrossing",
+  "sysNullCrossingReg",
+  "PASS",
+  "t ref_build=1.86 ref_run=0.113 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.mcd/NoClock",
+  "sysOutputNoClock",
+  "PASS",
+  "t ref_build=3.12 ref_run=0.119 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/MakeClock",
+  "sysMakeClockTest",
+  "PASS",
+  "t ref_build=13.93 ref_run=0.120 b3_link=0.07 b3_run=0.183"
+ ],
+ [
+  "testsuite/bsc.mcd/NullCrossing",
+  "sysNullSyncTest",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.115 b3_link=0.02 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.mcd/Reset",
+  "sysInitialResetTest",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.113 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/NullCrossing",
+  "sysNullSyncTest2",
+  "PASS",
+  "t ref_build=2.79 ref_run=0.124 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.mcd/Reset",
+  "sysMakeReset0",
+  "PASS",
+  "t ref_build=1.98 ref_run=0.134 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.mcd/Reset",
+  "sysMethodResetGuards",
+  "PASS",
+  "t ref_build=2.45 ref_run=0.118 b3_link=0.06 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.mcd/Reset",
+  "sysMultipleResetsForRule",
+  "PASS",
+  "t ref_build=1.97 ref_run=0.135 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.mcd/Reset",
+  "sysResetEither",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.131 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.mcd/Reset",
+  "sysResetMux",
+  "PASS",
+  "t ref_build=2.32 ref_run=0.110 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.lib/BRAM/BRAM0Test",
+  "sysBRAM0Test",
+  "PASS",
+  "t ref_build=168.45 ref_run=0.131 b3_link=0.34 b3_run=3.702"
+ ],
+ [
+  "testsuite/bsc.mcd/SyncReset",
+  "sysRstTest",
+  "PASS",
+  "t ref_build=2.19 ref_run=0.123 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.mcd/SyncReset",
+  "sysRstTest_V1",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.122 b3_link=0.09 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.mcd/SyncReset",
+  "sysRstTest_V2",
+  "PASS",
+  "t ref_build=2.12 ref_run=0.111 b3_link=0.09 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncBit05Test",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.111 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncBit15Test",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.122 b3_link=0.07 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncBit1Test",
+  "PASS",
+  "t ref_build=2.07 ref_run=0.132 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncBitTest",
+  "PASS",
+  "t ref_build=2.27 ref_run=0.121 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncFIFOTest",
+  "PASS",
+  "t ref_build=2.89 ref_run=0.109 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncFIFOTest1",
+  "PASS",
+  "t ref_build=2.79 ref_run=0.132 b3_link=0.10 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncFIFOTest2",
+  "PASS",
+  "t ref_build=2.97 ref_run=0.130 b3_link=0.11 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncHandshakeTest",
+  "PASS",
+  "t ref_build=2.26 ref_run=0.120 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncPulseTest",
+  "PASS",
+  "t ref_build=2.04 ref_run=0.133 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncHandshakeTest2",
+  "PASS",
+  "t ref_build=3.61 ref_run=0.133 b3_link=0.12 b3_run=0.041"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncFIFOTest1A",
+  "PASS",
+  "t ref_build=4.17 ref_run=0.125 b3_link=0.30 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncRegTest",
+  "PASS",
+  "t ref_build=2.41 ref_run=0.123 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncRegTest2",
+  "PASS",
+  "t ref_build=3.15 ref_run=0.120 b3_link=0.09 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.misc/bitextract",
+  "sysBitExtractInRange",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.108 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.misc/bitextract",
+  "sysBitUpdateInRange",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.103 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.mcd/Synchronizers",
+  "sysSyncRegTest3",
+  "PASS",
+  "t ref_build=3.31 ref_run=0.122 b3_link=0.13 b3_run=0.044"
+ ],
+ [
+  "testsuite/bsc.misc/divmod",
+  "sysDivMod",
+  "PASS",
+  "t ref_build=2.18 ref_run=0.133 b3_link=0.08 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.misc/divmod",
+  "sysDivModWide",
+  "PASS",
+  "t ref_build=2.40 ref_run=0.120 b3_link=0.12 b3_run=0.035"
+ ],
+ [
+  "testsuite/bsc.misc/format",
+  "sysBug1572",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.105 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.misc/divmod",
+  "sysSimpleTest",
+  "PASS",
+  "t ref_build=2.87 ref_run=0.113 b3_link=0.18 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.misc/format",
+  "sysFormat1",
+  "PASS",
+  "t ref_build=1.94 ref_run=0.117 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.misc/format",
+  "sysFormat2",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.122 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFCloseTypes",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.120 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.misc/format",
+  "sysFormat3",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.111 b3_link=0.02 b3_run=0.042"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFOpen",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.132 b3_link=0.02 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFOpen2",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.123 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFOpen_MCD",
+  "PASS",
+  "t ref_build=1.90 ref_run=0.121 b3_link=0.01 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFOpen_MCD2",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.120 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFWrite2",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.135 b3_link=0.02 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.misc/crc",
+  "sysCRCTest1",
+  "PASS",
+  "t ref_build=5.83 ref_run=0.122 b3_link=2.55 b3_run=0.038"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFWrite3",
+  "PASS",
+  "t ref_build=2.25 ref_run=0.133 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysGetC1",
+  "PASS",
+  "t ref_build=1.95 ref_run=0.128 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysFWrites",
+  "PASS",
+  "t ref_build=2.38 ref_run=0.119 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysMCD_ops",
+  "PASS",
+  "t ref_build=2.27 ref_run=0.134 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.misc/mul",
+  "sysComplex2",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.135 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.misc/mul",
+  "sysTest",
+  "PASS",
+  "t ref_build=2.49 ref_run=0.135 b3_link=0.09 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.misc/fwrite",
+  "sysGetC3",
+  "PASS",
+  "t ref_build=3.79 ref_run=0.135 b3_link=0.67 b3_run=0.042"
+ ],
+ [
+  "testsuite/bsc.misc/mul",
+  "sysSignedMul",
+  "PASS",
+  "t ref_build=2.54 ref_run=0.130 b3_link=1.17 b3_run=0.038"
+ ],
+ [
+  "testsuite/bsc.options/verilog-e",
+  "sysHello",
+  "PASS",
+  "t ref_build=2.16 ref_run=0.127 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.options",
+  "sysGCD",
+  "PASS",
+  "t ref_build=3.35 ref_run=0.123 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.real/evaluator/undef",
+  "sysDontCareDynSelectStaticArrayReal",
+  "PASS",
+  "t ref_build=2.50 ref_run=0.124 b3_link=0.02 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.scheduler",
+  "sysBoundary",
+  "PASS",
+  "t ref_build=3.09 ref_run=0.124 b3_link=0.07 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.scheduler/conflict_free",
+  "sysCFExecOrder2",
+  "PASS",
+  "t ref_build=2.26 ref_run=0.123 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.scheduler/conflict_free",
+  "sysCFExecOrder3",
+  "PASS",
+  "t ref_build=2.53 ref_run=0.120 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.scheduler/conflict_free",
+  "sysConflictFreeOK",
+  "PASS",
+  "t ref_build=3.63 ref_run=0.120 b3_link=0.16 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.scheduler/mutually_exclusive",
+  "sysMEExecOrder2",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.115 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.scheduler/conflict_free",
+  "sysConflictFreeResource",
+  "PASS",
+  "t ref_build=2.46 ref_run=0.106 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.scheduler/conflict_free",
+  "sysConflictFreeOK2",
+  "PASS",
+  "t ref_build=3.95 ref_run=0.119 b3_link=0.27 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.scheduler/conflict_free",
+  "sysConflictFreeOK3",
+  "PASS",
+  "t ref_build=4.22 ref_run=0.118 b3_link=0.28 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.scheduler/mutually_exclusive",
+  "sysMutuallyExclusiveBug1327",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.119 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.scheduler/mutually_exclusive",
+  "sysMutuallyExclusiveCheck",
+  "PASS",
+  "t ref_build=1.74 ref_run=0.117 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.scheduler/rulesort",
+  "sysRuleSort",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.119 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.scheduler/mutually_exclusive",
+  "sysMutuallyExclusiveCheckOK",
+  "PASS",
+  "t ref_build=2.16 ref_run=0.119 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.syntax/bh",
+  "sysLiteralTest",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.109 b3_link=0.05 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.syntax/bh",
+  "sysSizedLiteralMono",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.104 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.syntax/bh",
+  "sysSizedLiteralTest",
+  "PASS",
+  "t ref_build=2.04 ref_run=0.114 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05",
+  "sysOpPrecedence",
+  "PASS",
+  "t ref_build=1.93 ref_run=0.119 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.syntax/bh/bh_pragmas",
+  "sysProperties",
+  "PASS",
+  "t ref_build=2.64 ref_run=0.115 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.syntax/bh/bh_pragmas",
+  "sysPragmas",
+  "PASS",
+  "t ref_build=3.40 ref_run=0.116 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/case",
+  "sysCaseMatches_MixedLit",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.105 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/case",
+  "sysCaseMixedHex",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.118 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/case",
+  "sysCaseMixedOct",
+  "PASS",
+  "t ref_build=1.80 ref_run=0.132 b3_link=0.02 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/stmt",
+  "sysStmtFor",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.120 b3_link=0.11 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/stmt",
+  "sysStmtFor_ArrayUpd_Reg",
+  "PASS",
+  "t ref_build=2.08 ref_run=0.109 b3_link=0.10 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/stmt",
+  "sysStmtFor_ArrayUpd_Elem",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.120 b3_link=0.10 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/subvector-assignment",
+  "sysBitRangeUpdateAV",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/subvector-assignment",
+  "sysBitRangeUpdateEmptyRange",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/subvector-assignment",
+  "sysBitRangeUpdateRegs",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/subvector-assignment",
+  "sysBitRangeUpdateStatic",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/stmt",
+  "sysStmtFor_FieldUpd_Field",
+  "PASS",
+  "t ref_build=2.23 ref_run=0.119 b3_link=0.09 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/stmt",
+  "sysStmtFor_FieldUpd_Reg",
+  "PASS",
+  "t ref_build=2.18 ref_run=0.119 b3_link=0.11 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.typechecker/class_defaults",
+  "sysImportedInfixInDefaultImported",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.109 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.typechecker/constructors",
+  "sysIfcUpd",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.119 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/stmt",
+  "sysStmtFor_RangeUpd",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.123 b3_link=0.10 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.syntax/bsv05/strings",
+  "sysOctalCharsAsInteger",
+  "PASS",
+  "t ref_build=1.78 ref_run=0.121 b3_link=0.19 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.typechecker/constructors",
+  "sysStructUpd_QualImp_QualField",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.095 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/deriving",
+  "sysDeriveDefaultValue",
+  "PASS",
+  "t ref_build=1.72 ref_run=0.107 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.typechecker/deriving",
+  "sysDeriveFShow",
+  "PASS",
+  "t ref_build=1.91 ref_run=0.119 b3_link=0.14 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/deriving",
+  "sysIsoStruct",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.109 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/deriving",
+  "sysDerivingMod",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.121 b3_link=0.08 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.typechecker/display",
+  "sysDisplayBits",
+  "PASS",
+  "t ref_build=1.74 ref_run=0.120 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.typechecker/display",
+  "sysDisplayLiteral",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.108 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.typechecker/display",
+  "sysDisplaySizedLiteral",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.119 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/display",
+  "sysDisplayRealLiteral",
+  "PASS",
+  "t ref_build=2.01 ref_run=0.130 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/generics",
+  "sysCPrintType",
+  "PASS",
+  "t ref_build=1.61 ref_run=0.122 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.typechecker/generics",
+  "sysCustomBits",
+  "PASS",
+  "t ref_build=2.05 ref_run=0.108 b3_link=0.19 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.typechecker/higherrank",
+  "sysDeepSeqCond",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.122 b3_link=0.07 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.typechecker/higherrank",
+  "sysHigherRank",
+  "PASS",
+  "t ref_build=2.02 ref_run=0.121 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/higherrank",
+  "sysUndefined",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.120 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysOverlap",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.typechecker/generics",
+  "sysGenericTests",
+  "PASS",
+  "t ref_build=2.54 ref_run=0.119 b3_link=0.20 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.typechecker/higherrank",
+  "sysUninitializedStructBSV",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.130 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysFundepSelect",
+  "PASS",
+  "t ref_build=1.59 ref_run=0.118 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysMutualFundep",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.120 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysOverlapCtxReduce",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.119 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysOverlapWithSyn",
+  "PASS",
+  "t ref_build=1.58 ref_run=0.109 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysTypeFunInst",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.120 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances",
+  "sysTypeSynInst",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.116 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances/incoherent",
+  "sysIncoherentTwoLevel",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.128 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/instances/incoherent",
+  "sysIncoherentOrder",
+  "PASS",
+  "t ref_build=2.06 ref_run=0.108 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.typechecker/read_desugaring",
+  "sysListDesugar",
+  "PASS",
+  "t ref_build=1.68 ref_run=0.104 b3_link=0.05 b3_run=0.023"
+ ],
+ [
+  "testsuite/bsc.typechecker/read_desugaring",
+  "sysStructReg",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.114 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.typechecker/reflect",
+  "sysTypeEQ",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.121 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/reflect",
+  "sysTypeOf",
+  "PASS",
+  "t ref_build=1.50 ref_run=0.118 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/string",
+  "sysStringOf",
+  "PASS",
+  "t ref_build=1.54 ref_run=0.104 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.typechecker/string",
+  "sysStringOfBSV",
+  "PASS",
+  "t ref_build=1.51 ref_run=0.106 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.typechecker/string",
+  "sysTStrCat",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.120 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/string",
+  "sysTNumToStr",
+  "PASS",
+  "t ref_build=1.99 ref_run=0.117 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.typechecker/string",
+  "sysTypeClassString",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.106 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.typechecker/typeclasses",
+  "sysMutualRecContainer",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.130 b3_link=0.06 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysLib",
+  "COMPILE_FAIL",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.verilog/Lib.bs\", line 31, column 81: (T0020)"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysExpectedExclusiveActions",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.110 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysCase",
+  "PASS",
+  "t ref_build=1.98 ref_run=0.133 b3_link=0.08 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.typechecker/read_desugaring",
+  "sysTwoDUpdateTest",
+  "PASS",
+  "t ref_build=6.85 ref_run=0.120 b3_link=0.63 b3_run=0.037"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysMisc",
+  "PASS",
+  "t ref_build=2.34 ref_run=0.119 b3_link=0.14 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysSimpleFF",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.119 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysSimple",
+  "PASS",
+  "t ref_build=2.03 ref_run=0.107 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysOper",
+  "PASS",
+  "t ref_build=3.18 ref_run=0.108 b3_link=0.22 b3_run=0.040"
+ ],
+ [
+  "testsuite/bsc.verilog/astate",
+  "sysOneSetter",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.104 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/dollar",
+  "mkTbWideGCD",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.verilog/dollar/renaming",
+  "mkTbGCD",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.verilog/dollar/renaming2",
+  "mkTbGCD",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.verilog/dollar/renaming4",
+  "mkTbGCD",
+  "NO_SOURCE",
+  ""
+ ],
+ [
+  "testsuite/bsc.verilog/astate",
+  "sysMuxTest",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.103 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/inout",
+  "sysCond",
+  "NOT_SUPPORTED",
+  "Error: Unknown position: (G0098)"
+ ],
+ [
+  "testsuite/bsc.verilog/astate",
+  "sysRegFileVector",
+  "PASS",
+  "t ref_build=3.06 ref_run=0.120 b3_link=0.15 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/inout",
+  "sysFunctionInout",
+  "NOT_SUPPORTED",
+  "Error: Unknown position: (G0098)"
+ ],
+ [
+  "testsuite/bsc.lib/FloatingPoint",
+  "sysFloatTest",
+  "PASS",
+  "t ref_build=173.99 ref_run=0.159 b3_link=0.16 b3_run=32.647"
+ ],
+ [
+  "testsuite/bsc.verilog/astate",
+  "sysUseCondMux",
+  "PASS",
+  "t ref_build=2.71 ref_run=0.115 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/inout",
+  "sysHigherFunction",
+  "NOT_SUPPORTED",
+  "Error: Unknown position: (G0098)"
+ ],
+ [
+  "testsuite/bsc.verilog/inout",
+  "sysInoutUsed",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.verilog/inout/InoutUsed.bsv\", line 18, column 18: (G0098)"
+ ],
+ [
+  "testsuite/bsc.verilog/gen_mode",
+  "sysGenModeTb",
+  "PASS",
+  "t ref_build=2.53 ref_run=0.108 b3_link=0.06 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.verilog/inout",
+  "sysTbBoth",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.verilog/inout/TbBoth.bsv\", line 40, column 8: (G0097)"
+ ],
+ [
+  "testsuite/bsc.verilog",
+  "sysMips",
+  "PASS",
+  "t ref_build=5.57 ref_run=0.109 b3_link=0.57 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.verilog/noinline",
+  "sysNoInline",
+  "PASS",
+  "t ref_build=2.28 ref_run=0.119 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/noinline",
+  "sysNoInline_LessPatternsThanArgs",
+  "PASS",
+  "t ref_build=2.32 ref_run=0.110 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/noinline",
+  "sysNoInline_NoArgs",
+  "PASS",
+  "t ref_build=2.32 ref_run=0.115 b3_link=0.06 b3_run=0.024"
+ ],
+ [
+  "testsuite/bsc.verilog/noinline",
+  "sysNoInlineInSched",
+  "PASS",
+  "t ref_build=2.61 ref_run=0.114 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/noinline/divbug",
+  "sysDivTest",
+  "PASS",
+  "t ref_build=2.37 ref_run=0.105 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters",
+  "sysParamSizeDefault",
+  "LINK_FAIL",
+  "Error: Unknown position: (G0099)"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/real",
+  "sysSimpleRealImport",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.verilog/parameters/real/SimpleRealImport.bsv\", line 15, column 10: (G0084)"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/real",
+  "sysTwoLevelReal",
+  "NOT_SUPPORTED",
+  "Error: Unknown position: (G0084)"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters",
+  "sysModulePort_WithStaticValue_TwoLevel",
+  "PASS",
+  "t ref_build=3.32 ref_run=0.116 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters",
+  "sysParamSize",
+  "PASS",
+  "t ref_build=2.17 ref_run=0.106 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters",
+  "sysParamExpr_Param",
+  "PASS",
+  "t ref_build=2.87 ref_run=0.119 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters",
+  "sysParamTest",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.110 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/string",
+  "sysStringConcat1",
+  "PASS",
+  "t ref_build=2.29 ref_run=0.103 b3_link=0.01 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/real",
+  "sysTwoLevelReal2",
+  "PASS",
+  "t ref_build=2.87 ref_run=0.121 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/string",
+  "sysStringParam",
+  "PASS",
+  "t ref_build=2.22 ref_run=0.115 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/string",
+  "sysStringParamCond",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.116 b3_link=0.02 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/string",
+  "sysStringConcat2",
+  "PASS",
+  "t ref_build=3.24 ref_run=0.106 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/ClockDividers",
+  "sysResetInv",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.verilog/positivereset/ClockDividers/ResetInv.bsv\", line 12, column 10: (G0084)"
+ ],
+ [
+  "testsuite/bsc.verilog/parameters/string",
+  "sysTwoLevelString",
+  "PASS",
+  "t ref_build=3.03 ref_run=0.104 b3_link=0.01 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/ClockDividers",
+  "sysClockDivOffset",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.109 b3_link=0.08 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/ClockDividers",
+  "sysClockInv",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.109 b3_link=0.07 b3_run=0.042"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/ClockDividers",
+  "sysGatedClockInv",
+  "PASS",
+  "t ref_build=2.22 ref_run=0.118 b3_link=0.02 b3_run=0.064"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/Reset",
+  "sysInitialResetTest",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.105 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/Reset",
+  "sysMakeReset0",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.115 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/Reset",
+  "sysMethodResetGuards",
+  "PASS",
+  "t ref_build=2.42 ref_run=0.134 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/Reset",
+  "sysResetEither",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.120 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/Reset",
+  "sysMultipleResetsForRule",
+  "PASS",
+  "t ref_build=1.92 ref_run=0.116 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/Reset",
+  "sysResetMux",
+  "PASS",
+  "t ref_build=1.87 ref_run=0.104 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/SyncReset",
+  "sysRstTest",
+  "PASS",
+  "t ref_build=1.96 ref_run=0.116 b3_link=0.09 b3_run=0.034"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/SyncReset",
+  "sysRstTest_V1",
+  "PASS",
+  "t ref_build=2.09 ref_run=0.116 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/nameclash",
+  "sysTest3",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.104 b3_link=0.05 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/nameclash",
+  "sysTest4",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.116 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/SyncReset",
+  "sysRstTest_V2",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.108 b3_link=0.09 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/positivereset/simulation",
+  "sysNoReset",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.120 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/quirks",
+  "sysMulNegOperand",
+  "PASS",
+  "t ref_build=1.57 ref_run=0.118 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/quirks",
+  "sysQuotNegOperand",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.117 b3_link=0.05 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/quirks",
+  "sysNonConstantBitExtraction",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.117 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/quirks",
+  "sysRemNegOperand",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.120 b3_link=0.06 b3_run=0.032"
+ ],
+ [
+  "testsuite/bsc.verilog/schedule",
+  "sysEspositoPreempt",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.118 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/quirks",
+  "sysSRAConst",
+  "PASS",
+  "t ref_build=2.13 ref_run=0.117 b3_link=0.12 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/quirks",
+  "sysSRADynamic",
+  "PASS",
+  "t ref_build=2.35 ref_run=0.117 b3_link=0.22 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysDynamicFormat",
+  "PASS",
+  "t ref_build=2.11 ref_run=0.121 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.verilog/splitports",
+  "sysSomeArgNames",
+  "PASS",
+  "t ref_build=2.38 ref_run=0.124 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/splitports",
+  "sysInstanceSplit",
+  "PASS",
+  "t ref_build=3.44 ref_run=0.121 b3_link=0.03 b3_run=0.036"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysDynamicFormat2",
+  "PASS",
+  "t ref_build=1.84 ref_run=0.118 b3_link=0.02 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysErrorTest",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.117 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysExitTest",
+  "PASS",
+  "t ref_build=1.54 ref_run=0.106 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysEvenMoreDisplay",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.115 b3_link=0.07 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysFFReadTest",
+  "PASS",
+  "t ref_build=1.58 ref_run=0.094 b3_link=0.06 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysFFMuxTest",
+  "PASS",
+  "t ref_build=2.24 ref_run=0.105 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysFourDisplay",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.110 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysFFReadTest2",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.119 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/splitports",
+  "sysShallowSplit",
+  "PASS",
+  "t ref_build=3.50 ref_run=0.105 b3_link=0.03 b3_run=0.033"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysLineDisplay",
+  "PASS",
+  "t ref_build=1.72 ref_run=0.117 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysGetDisplay",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.105 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysLogicBetweenTasks",
+  "PASS",
+  "t ref_build=1.70 ref_run=0.105 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysLogicBetweenTasks3",
+  "PASS",
+  "t ref_build=2.29 ref_run=0.120 b3_link=0.06 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysLogicBetweenTasks4",
+  "PASS",
+  "t ref_build=2.43 ref_run=0.114 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysMoreDisplay",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.094 b3_link=0.05 b3_run=0.022"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysNegativeDisplay",
+  "PASS",
+  "t ref_build=1.51 ref_run=0.090 b3_link=0.05 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysNegativeDisplay2",
+  "PASS",
+  "t ref_build=1.73 ref_run=0.103 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysModuleDisplay",
+  "PASS",
+  "t ref_build=2.52 ref_run=0.117 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysRepeatedTask_OneRule",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.116 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysRepeatedTask_OneRule2",
+  "PASS",
+  "t ref_build=1.72 ref_run=0.107 b3_link=0.02 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysRepeatedTask_OneRule3",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.117 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysRepeatedTask_TwoRules",
+  "PASS",
+  "t ref_build=1.62 ref_run=0.107 b3_link=0.06 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysSWrite64",
+  "PASS",
+  "t ref_build=1.68 ref_run=0.121 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysSimpleTaskTest",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.122 b3_link=0.07 b3_run=0.031"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysStringFormat",
+  "PASS",
+  "t ref_build=1.72 ref_run=0.114 b3_link=0.02 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysStringDisplay",
+  "PASS",
+  "t ref_build=1.88 ref_run=0.116 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysStringFormat2",
+  "PASS",
+  "t ref_build=1.85 ref_run=0.104 b3_link=0.01 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysStringFormat3",
+  "PASS",
+  "t ref_build=1.67 ref_run=0.104 b3_link=0.06 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysWideDisplay",
+  "PASS",
+  "t ref_build=1.59 ref_run=0.117 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysZeroDisplay",
+  "PASS",
+  "t ref_build=1.55 ref_run=0.119 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks",
+  "sysZeroUnsignedDisplay",
+  "PASS",
+  "t ref_build=1.56 ref_run=0.109 b3_link=0.02 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/interfacecalls",
+  "sysInterfaceTaskCalls",
+  "PASS",
+  "t ref_build=1.69 ref_run=0.119 b3_link=0.06 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/interfacecalls",
+  "sysLiftedInterfaceTaskCalls",
+  "PASS",
+  "t ref_build=1.65 ref_run=0.115 b3_link=0.07 b3_run=0.028"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/plusargs",
+  "sysTestPlusargsSimple",
+  "PASS",
+  "t ref_build=1.60 ref_run=0.117 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/plusargs",
+  "sysTestPlusargsTwoUseDiffArg",
+  "PASS",
+  "t ref_build=1.79 ref_run=0.118 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/plusargs",
+  "sysTestPlusargsTwoUseSameArg",
+  "PASS",
+  "t ref_build=1.63 ref_run=0.117 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/real",
+  "sysRealDisplay",
+  "PASS",
+  "t ref_build=1.83 ref_run=0.118 b3_link=0.02 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/real",
+  "sysRealDisplay2",
+  "PASS",
+  "t ref_build=1.71 ref_run=0.118 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/real",
+  "sysRealDisplayErr1",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.121 b3_link=0.01 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/real",
+  "sysRealDisplayErr2",
+  "PASS",
+  "t ref_build=1.64 ref_run=0.119 b3_link=0.02 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/time",
+  "sysDisplayTime",
+  "PASS",
+  "t ref_build=1.75 ref_run=0.108 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/time",
+  "sysRegTime",
+  "PASS",
+  "t ref_build=1.68 ref_run=0.118 b3_link=0.07 b3_run=0.030"
+ ],
+ [
+  "testsuite/bsc.verilog/tasks/time",
+  "sysPrintTime",
+  "PASS",
+  "t ref_build=2.00 ref_run=0.117 b3_link=0.07 b3_run=0.029"
+ ],
+ [
+  "testsuite/bsc.verilog/undet",
+  "sysUndet1",
+  "PASS",
+  "t ref_build=1.66 ref_run=0.119 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/v95",
+  "sysParamOrder",
+  "NOT_SUPPORTED",
+  "Error: \"/home/ravi/bluespec/trs/bsc/testsuite/bsc.verilog/v95/ParamOrder.bsv\", line 25, column 15: (G0084)"
+ ],
+ [
+  "testsuite/bsc.verilog/undet",
+  "sysUndet2",
+  "PASS",
+  "t ref_build=1.69 ref_run=0.106 b3_link=0.06 b3_run=0.025"
+ ],
+ [
+  "testsuite/bsc.verilog/undet",
+  "sysUndet3",
+  "PASS",
+  "t ref_build=1.70 ref_run=0.105 b3_link=0.05 b3_run=0.027"
+ ],
+ [
+  "testsuite/bsc.verilog/v95",
+  "sysSigned",
+  "PASS",
+  "t ref_build=1.50 ref_run=0.103 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.verilog/vlink_regen",
+  "sysVRegenTb",
+  "PASS",
+  "t ref_build=2.16 ref_run=0.094 b3_link=0.05 b3_run=0.026"
+ ],
+ [
+  "testsuite/bsc.long_tests/conflict_free_large",
+  "sysConflictFreeNotOKLarge",
+  "PASS",
+  "t ref_build=190.02 ref_run=0.091 b3_link=18.35 b3_run=0.092"
+ ],
+ [
+  "testsuite/bsc.long_tests/conflict_free_large",
+  "sysConflictFreeOKLarge",
+  "PASS",
+  "t ref_build=206.68 ref_run=0.111 b3_link=16.80 b3_run=0.106"
+ ],
+ [
+  "testsuite/bsc.verilog/splitports",
+  "sysDeepSplit",
+  "PASS",
+  "t ref_build=2.14 ref_run=0.085 b3_link=0.27 b3_run=0.024"
+ ]
+]
