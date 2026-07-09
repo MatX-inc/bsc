@@ -34,6 +34,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trs-capi"
+version = "0.0.1"
+dependencies = [
+ "trs-interp",
+ "trs-ir",
+ "libc",
+]
+
+[[package]]
 name = "trs-codegen"
 version = "0.0.1"
 dependencies = [
