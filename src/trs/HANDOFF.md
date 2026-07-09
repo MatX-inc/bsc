@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`d97b7e4a` — ALWAYS `git push personal`, never bare `git push origin`:
+`60f75e58` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -250,8 +250,15 @@ snapshots — so every read site in an instant sees one value; recon:
 may rely only on VALUE-LEVEL prim contracts (ConfigReg written_at,
 FIFO i_* saved_elems) or schedule confinement of prims with NO
 unsafe wrapper (plain Reg) — mkUnsafeRWire reuses the RWire runtime
-prim with relaxed annotations, so WIRES ARE NOT STABLE; loopy FIFOs
-already excluded via the FifoType::Simple arena gate.  Also
+prim with relaxed annotations, so wires are not name-certifiable;
+loopy FIFOs already excluded via the FifoType::Simple arena gate.
+THIRD PROOF ROUTE (Ravi): certify wire INSTANCES from the emitted
+schedule itself — collect transitive readers/writers per wire via
+the cross-module use-walk (same machinery the classifier recursion
+needs), certify iff every reader position follows every writer
+position in each composition.  Unsafe wires fail the check
+automatically; the same per-window argument later admits mkCReg
+ports.  Also
 unstable: FIFO immediate views, mkCReg ports (window-stable per
 port, future), eager-set defs (their discipline is the eager-slot
 mechanism).
