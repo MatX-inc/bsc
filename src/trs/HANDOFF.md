@@ -48,7 +48,19 @@ PROGRESS (this session, all pushed):
   full bsc rebuild + testsuite, then drop the interim ___d<N>
   filter in Interp::def_symbols.
 
-INTERACTIVE BATTERY, FIRST CONTACT (frozen 5baca7b9 + capi):
+INTERACTIVE BATTERY: 20/22 (f3e221d2) — every fix pinned against
+the reference sources (timescale=bk_now scaling; static Wave.delay
+first_edge; SYM_PORT method ports with EN latch/arg recording/
+result-member/CAN_FIRE-alias RDY; per-prim sub-symbol tables from
+bs_prim_mod_*.h incl. the level->&size and raw-ring-fetch
+contracts; RegFile raw backing fetch at address width; catch_unwind
+peek belt).  REMAINING: mkLong async (driver thread) and mkTbGCD
+debug (2-line one-swap-behind transient at one stop, re-converges
+— step-boundary alignment, fresh eyes).  Batch gates green
+(regress 5/5, sudoku/sysMips identical; \$time gained a *1 multiply
+— identity at timescale=1; next sweep rides the next increment).
+
+FIRST CONTACT was (frozen 5baca7b9 + capi):
 14/22 PASS (mkTest all 6, mkTop all 3, aperiodic both, TbGCD
 debug3/4/5).  The 8 failures, root causes PINNED:
 1. mkMCDTest clock.cmd — derived clock (clk2$CLK_OUT) tuple: our
