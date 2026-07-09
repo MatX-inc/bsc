@@ -91,10 +91,10 @@ pub struct InstEnv {
     /// local ConfigReg instance name -> (base slot, width): old value,
     /// current value, written_at instant (see ArenaKind::CReg)
     pub creg_slot: HashMap<StrId, (u32, u32)>,
-    /// local FIFO instance name -> (base slot, width, size): header
-    /// (elems, saved_elems, fst, enq_at, deq_at, clear_at) then data
-    /// (see ArenaKind::Fifo)
-    pub fifo_slot: HashMap<StrId, (u32, u32, u32)>,
+    /// local FIFO instance name -> (base slot, width, size, guarded):
+    /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
+    /// data (see ArenaKind::Fifo)
+    pub fifo_slot: HashMap<StrId, (u32, u32, u32, bool)>,
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
     pub reset_slot: HashMap<StrId, u32>,
@@ -1335,7 +1335,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .unwrap()
                 .into_int_value());
         }
-        if let Some(&(base, fw, _size)) = ie.fifo_slot.get(&instance) {
+        if let Some(&(base, fw, _size, _g)) = ie.fifo_slot.get(&instance) {
             if !args.is_empty() {
                 return nope("FIFO value method with args");
             }
@@ -2612,6 +2612,147 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.build_unconditional_branch(sk_bb).unwrap();
                     self.builder.position_at_end(sk_bb);
                     return Ok(());
+                }
+                if let Some(&(base, fw, size, guarded)) =
+                    ie.fifo_slot.get(instance).copied().as_ref()
+                {
+                    let is_enq = mname.as_str() == "enq";
+                    let is_deq = mname.as_str() == "deq";
+                    if (is_enq || is_deq) && size > 0 {
+                        // taken-path inline (ConfigReg rule: keep the
+                        // action-condition branch); guard-warning slow
+                        // path bounces to the boxed prim, which
+                        // refresh()es from the arena first
+                        let i64t = self.ctx.i64_type();
+                        let words = fw.max(1).div_ceil(64);
+                        let v = if is_enq && fw > 0 {
+                            let wv = self.expr_width(f, &args[0])?;
+                            let v0 = self.expr(f, &args[0])?;
+                            Some(self.to_w(v0, wv, fw, false))
+                        } else {
+                            None
+                        };
+                        let go_bb = self.ctx.append_basic_block(func, "fgo");
+                        let warn_bb = self.ctx.append_basic_block(func, "fwr");
+                        let fast_bb = self.ctx.append_basic_block(func, "fft");
+                        let sk_bb = self.ctx.append_basic_block(func, "fsk");
+                        self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                        self.builder.position_at_end(go_bb);
+                        let elems = self.load_word(f, base);
+                        let saved = self.load_word(f, base + 1);
+                        let other_at =
+                            self.load_word(f, base + if is_enq { 4 } else { 3 });
+                        let now = self.load_word(f, self.env.now_slot);
+                        let szc = i64t.const_int(size as u64, false);
+                        let zero = i64t.const_zero();
+                        let (lim, slim) =
+                            if is_enq { (szc, szc) } else { (zero, zero) };
+                        let bad =
+                            self.builder
+                                .build_int_compare(IntPredicate::EQ, elems, lim, "fb")
+                                .unwrap();
+                        let warn = if guarded {
+                            let same = self
+                                .builder
+                                .build_int_compare(IntPredicate::EQ, other_at, now, "fs")
+                                .unwrap();
+                            let sbad = self
+                                .builder
+                                .build_int_compare(IntPredicate::EQ, saved, slim, "fsb")
+                                .unwrap();
+                            let g = self.builder.build_and(same, sbad, "fg").unwrap();
+                            self.builder.build_or(bad, g, "fw").unwrap()
+                        } else {
+                            bad
+                        };
+                        self.builder
+                            .build_conditional_branch(warn, warn_bb, fast_bb)
+                            .unwrap();
+                        // slow path: boxed prim (bookkeeping + println)
+                        self.builder.position_at_end(warn_bb);
+                        let targs: Vec<Expr> =
+                            if v.is_some() { vec![args[0].clone()] } else { vec![] };
+                        let _ = self.emit_prim_call(
+                            f,
+                            *ie.children.get(instance).ok_or_else(|| {
+                                Ineligible("fifo child missing".into())
+                            })?,
+                            *method,
+                            &targs,
+                            0,
+                            true,
+                        )?;
+                        self.builder.build_unconditional_branch(sk_bb).unwrap();
+                        // fast path: header bookkeeping + ring update
+                        self.builder.position_at_end(fast_bb);
+                        let osame = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, other_at, now, "fon")
+                            .unwrap();
+                        let saved2 = self
+                            .builder
+                            .build_select(osame, elems, saved, "fsv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_word(f, base + 1, saved2);
+                        self.store_word(f, base + if is_enq { 3 } else { 4 }, now);
+                        let fst = self.load_word(f, base + 2);
+                        if is_enq {
+                            let idx0 =
+                                self.builder.build_int_add(fst, elems, "fi").unwrap();
+                            let idx = if size.is_power_of_two() {
+                                self.builder
+                                    .build_and(
+                                        idx0,
+                                        i64t.const_int((size - 1) as u64, false),
+                                        "fim",
+                                    )
+                                    .unwrap()
+                            } else {
+                                self.builder
+                                    .build_int_unsigned_rem(idx0, szc, "fim")
+                                    .unwrap()
+                            };
+                            let dv = match v {
+                                Some(v) => v,
+                                None => self.ity(1).const_zero(),
+                            };
+                            self.store_val_dyn(f, base + 6, idx, fw.max(1), dv);
+                            let e2 = self
+                                .builder
+                                .build_int_add(elems, i64t.const_int(1, false), "fe2")
+                                .unwrap();
+                            self.store_word(f, base, e2);
+                        } else {
+                            let f1 = self
+                                .builder
+                                .build_int_add(fst, i64t.const_int(1, false), "ff1")
+                                .unwrap();
+                            let f2 = if size.is_power_of_two() {
+                                self.builder
+                                    .build_and(
+                                        f1,
+                                        i64t.const_int((size - 1) as u64, false),
+                                        "ffm",
+                                    )
+                                    .unwrap()
+                            } else {
+                                self.builder
+                                    .build_int_unsigned_rem(f1, szc, "ffm")
+                                    .unwrap()
+                            };
+                            self.store_word(f, base + 2, f2);
+                            let e2 = self
+                                .builder
+                                .build_int_sub(elems, i64t.const_int(1, false), "fe2")
+                                .unwrap();
+                            self.store_word(f, base, e2);
+                        }
+                        self.builder.build_unconditional_branch(sk_bb).unwrap();
+                        self.builder.position_at_end(sk_bb);
+                        return Ok(());
+                    }
+                    // clear and anything else: boxed prim below
                 }
                 if let Some(&(base, ww)) = ie.wire_slot.get(instance) {
                     if !matches!(mname.as_str(), "wset" | "send") {

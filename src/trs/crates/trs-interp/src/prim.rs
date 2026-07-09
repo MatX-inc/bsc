@@ -140,7 +140,7 @@ pub enum ArenaKind {
     /// mirror.  Layout: elems, saved_elems, fst, enq_at, deq_at,
     /// clear_at (1 word each), then size * ceil(max(width,1)/64) data
     /// words.
-    Fifo { width: u32, size: u32 },
+    Fifo { width: u32, size: u32, guard: bool },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -2293,6 +2293,25 @@ impl Fifo {
         h[4] = self.deq_at;
         h[5] = self.clear_at;
     }
+    /// Arena-authoritative refresh: compiled INLINE enq/deq update the
+    /// slots directly; boxed ops re-read them first.
+    fn refresh(&mut self) {
+        let Some(slot) = self.slot else { return };
+        let w = self.arena_words();
+        let h = unsafe { std::slice::from_raw_parts(slot, 6 + self.size * w) };
+        self.elems = h[0] as usize;
+        self.saved_elems = h[1] as usize;
+        self.fst = h[2] as usize;
+        self.enq_at = h[3];
+        self.deq_at = h[4];
+        self.clear_at = h[5];
+        let width = self.width.max(1);
+        for i in 0..self.size {
+            self.data[i] =
+                Value::from_limbs64(width, h[6 + i * w..6 + (i + 1) * w].to_vec());
+        }
+    }
+
     /// Mirror one data element into the arena.
     fn mirror_data(&self, idx: usize) {
         let Some(slot) = self.slot else { return };
@@ -2496,6 +2515,7 @@ impl Prim for Fifo {
     }
 
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+        self.refresh();
         match method {
             "first" => self.data[self.fst].clone(),
             "notFull" => Value::from_u64(1, (self.elems < self.size) as u64),
@@ -2524,6 +2544,7 @@ impl Prim for Fifo {
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+        self.refresh();
         if method == "enq" && !self.zero_width {
             // saved for VCD display before suppress/guard checks
             self.dummyval = args[0].clone();
@@ -2593,6 +2614,7 @@ impl Prim for Fifo {
     fn rst_tick(&mut self, now: u64) {
         // rst_tick_clk calls METH_clear (bs_prim_mod_fifo.h:227-233), so
         // clear_at is stamped — the VCD shows CLR=1 on the reset edge
+        self.refresh();
         if self.in_reset && !self.suppress {
             self.clear_at = now;
             if self.enq_at != now && self.deq_at != now {
@@ -2616,6 +2638,7 @@ impl Prim for Fifo {
         (self.ftype == FifoType::Simple).then_some(ArenaKind::Fifo {
             width: self.width,
             size: self.size as u32,
+            guard: self.guard,
         })
     }
     fn arena_attach(&mut self, slot: *mut u64) {

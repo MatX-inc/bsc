@@ -1112,10 +1112,10 @@ impl Interp {
                         creg_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
-                    Some(ArenaKind::Fifo { width, size }) => {
+                    Some(ArenaKind::Fifo { width, size, guard }) => {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 6 + size * words);
-                        fifo_slot.insert(name, (base, width, size));
+                        fifo_slot.insert(name, (base, width, size, guard));
                         attach.push((ci, base));
                     }
                     None => {}
@@ -1257,7 +1257,7 @@ impl Interp {
                 let mut m4: Vec<_> = e
                     .fifo_slot
                     .iter()
-                    .map(|(&k, &(b, w, sz))| (k, b - r0, w, sz))
+                    .map(|(&k, &(b, w, sz, g))| (k, b - r0, w, sz, g))
                     .collect();
                 m4.sort_unstable();
                 m4.hash(&mut h);
