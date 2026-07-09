@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-695b042a, session complete: 11 green legs — ALWAYS `git push personal`, never bare `git push origin`:
+0d71922b, BDPI values done, 973/0 — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -189,8 +189,20 @@ interactive tests target.  This dissolves the export-elision-vs-bk
 tension permanently: bk never needed the fast artifact.
 
 PRODUCT SURFACES TO *DONE* (before the scale arc):
-1. BDPI actions/ActionValue (finish #22 core; value slice landed
-   d2d6e12e, byte-identical compiled both paths).
+1. BDPI: VALUE IMPORTS DONE (d2d6e12e + bceb3f30) — direct C calls,
+   all widths byte-identical at O1/O2/O3; the newly-corpus-visible
+   mkBDPIBitN caught a 2-limb Poly miscompile (in-process
+   default<O2+> deleted correct out-buffer readback loads around the
+   opaque call; SYSTEM opt on identical IR does NOT reproduce —
+   open LLVM invocation-divergence item, repro in the session
+   scratchpad bitn/ dir).  Fix: VOLATILE buffer traffic (honest for
+   externally-touched memory) + entry-block allocas + debug envs
+   TRS_JIT_PIPELINE / TRS_JIT_DUMP_PRE/POST / TRS_JIT_NOVEC.
+   Sealing sweep: 973 PASS / 0 DIFF — highest ever (+7: foreign
+   battery now permanently in the corpus after the diffsweep .h
+   fix).  Fence rebaselined (939 designs, 0d71922b).  REMAINING:
+   direct-call the ACTION/ActionValue side (currently correct via
+   the interp callback), then per-design memory attributes.
 2. def-inside-conditional-arm eligibility (146 designs — largest
    coverage bucket).
 3. Tcl bk_* surface: trs-capi cdylib (46 bk_* + new_MODEL_<top>,
