@@ -273,6 +273,9 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
     ap.add_argument("--out", default="diffsweep-results.json")
+    ap.add_argument("--fence-baseline", action="store_true",
+                    help="write tools/perf-fence.json from this run's "
+                    "timings instead of checking against it")
     ap.add_argument("--aot", action="store_true",
                     help="trs link + run the artifact script instead of trs run")
     ap.add_argument("--timeout-floor", type=float, default=None,
