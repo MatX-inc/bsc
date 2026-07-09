@@ -1561,21 +1561,31 @@ impl Interp {
                     }
                 }
             }
-            // always-fire detection (task #23): WILL_FIRE (or CAN_FIRE
-            // with no inhibitors) is a constant-true def
+            // always-fire detection (task #23): the WILL_FIRE def
+            // resolves (through Def aliases) to a constant-true value.
+            // Only WF is the truth: bsc bakes preemption/urgency gating
+            // into the WF def EXPRESSION (WF_a = CF_a && !WF_b), never
+            // into me_inhibits — a const-true CAN_FIRE says nothing
+            // (sysEspositoPreempt/sysRegFileVector regression).
             let const_true = |name: StrId| -> bool {
-                self.d.modules[mir]
-                    .defs
-                    .iter()
-                    .find(|dd| dd.name == name)
-                    .map(|dd| {
-                        matches!(&dd.expr, trs_ir::Expr::Const { limbs, .. }
-                            if limbs.iter().any(|&l| l != 0))
-                    })
-                    .unwrap_or(false)
+                let defs = &self.d.modules[mir].defs;
+                let mut cur = name;
+                for _ in 0..32 {
+                    let Some(dd) = defs.iter().find(|dd| dd.name == cur) else {
+                        return false;
+                    };
+                    match &dd.expr {
+                        trs_ir::Expr::Const { limbs, .. } => {
+                            return limbs.iter().any(|&l| l != 0)
+                        }
+                        trs_ir::Expr::Def(n) => cur = *n,
+                        _ => return false,
+                    }
+                }
+                false
             };
-            let always_fire = inhibit_slots.is_empty()
-                && (const_true(rr.will_fire) || const_true(rr.can_fire));
+            let always_fire =
+                inhibit_slots.is_empty() && const_true(rr.will_fire);
             specs.push(RuleSpec {
                 always_fire,
                 inst: ri.inst,
