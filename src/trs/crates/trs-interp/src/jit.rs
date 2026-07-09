@@ -757,7 +757,20 @@ fn aot_emit(
                 rep_of[m] = *rep;
             }
         }
-        let rep_ords: Vec<usize> = classes.iter().map(|(r, _)| *r).collect();
+        // a class rep is needed only if some member's composition is
+        // not covered by an SSA edge fn (covered rules run inline in
+        // the edge; their standalone symbols would double the LLVM
+        // mass — the loader stubs the elided ones)
+        let covered: std::collections::HashSet<usize> = edge_plan
+            .map(|p| p.nodes.iter().flatten().map(|&(_, o)| o).collect())
+            .unwrap_or_default();
+        let rep_ords: Vec<usize> = classes
+            .iter()
+            .filter(|(_, members)| {
+                members.iter().any(|m| !covered.contains(m))
+            })
+            .map(|(r, _)| *r)
+            .collect();
         let comps: Vec<FusedComp> = comp_nodes
             .iter()
             .map(|nodes| FusedComp {
@@ -1020,15 +1033,31 @@ fn aot_load(
         if protos.len() != specs.len() {
             return Err("protos count mismatch".into());
         }
+        // edge-SSA artifacts elide standalone symbols for rules that
+        // run inline in an edge fn; the token TABLES stay per-ordinal
+        // (edge callbacks resolve through them).  A stub keeps the
+        // types simple and fails LOUDLY if a supposedly-dead path runs.
+        unsafe extern "C" fn missing_sched(_: *mut u64, _: *mut core::ffi::c_void) {
+            panic!("trs: sched symbol elided by edge-SSA artifact was called");
+        }
+        unsafe extern "C" fn missing_exec(
+            _: *mut u64,
+            _: *mut core::ffi::c_void,
+            _: u64,
+            _: u64,
+        ) -> i32 {
+            panic!("trs: exec symbol elided by edge-SSA artifact was called");
+        }
         let mut scheds = Vec::with_capacity(specs.len());
         for (spec, proto) in specs.iter().zip(protos.iter()) {
-            let sf: libloading::Symbol<
-                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
-            > = lib
-                .get(format!("sched_{}\0", spec.label).as_bytes())
-                .map_err(|e| e.to_string())?;
+            let sf = lib
+                .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)>(
+                    format!("sched_{}\0", spec.label).as_bytes(),
+                )
+                .map(|f| *f)
+                .unwrap_or(missing_sched);
             scheds.push(CompiledSched {
-                sched: *sf,
+                sched: sf,
                 foreign_stmts: proto.sched_foreign.clone(),
                 prim_calls: proto.sched_prims.clone(),
             });
@@ -1037,14 +1066,20 @@ fn aot_load(
         let mut execs: Vec<Option<CompiledExec>> =
             (0..specs.len()).map(|_| None).collect();
         for (rep, members) in classes {
-            let ef: libloading::Symbol<
-                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
-            > = lib
-                .get(format!("exec_{}\0", specs[*rep].label).as_bytes())
-                .map_err(|e| e.to_string())?;
+            let ef = lib
+                .get::<unsafe extern "C" fn(
+                    *mut u64,
+                    *mut core::ffi::c_void,
+                    u64,
+                    u64,
+                ) -> i32>(
+                    format!("exec_{}\0", specs[*rep].label).as_bytes(),
+                )
+                .map(|f| *f)
+                .unwrap_or(missing_exec);
             for &m in members {
                 execs[m] = Some(CompiledExec {
-                    exec: *ef,
+                    exec: ef,
                     foreign_stmts: protos[m].exec_foreign.clone(),
                     prim_calls: protos[m].exec_prims.clone(),
                 });
@@ -1109,22 +1144,23 @@ impl Interp {
             defs: HashSet<(usize, StrId)>,
             /// root def's own expr node count (share-census units)
             mass: u64,
-            /// hoistable: every prim read is arena-inline for its
-            /// instance (junk-when-invalid is never observed) and no
-            /// foreign/task refs — unconditional evaluation is
-            /// output-invisible
-            pure: bool,
+            /// hoist-poison bitmask (0 = pure/hoistable):
+            /// 1=port read, 2=foreign/task ref, 4=non-arena-inline prim
+            poison: u8,
         }
         impl Default for Cone {
             fn default() -> Self {
-                Cone { reads: HashSet::new(), defs: HashSet::new(), mass: 0, pure: true }
+                Cone { reads: HashSet::new(), defs: HashSet::new(), mass: 0, poison: 0 }
             }
         }
         impl Cone {
+            fn pure(&self) -> bool {
+                self.poison == 0
+            }
             fn absorb(&mut self, o: &Cone) {
                 self.reads.extend(o.reads.iter().copied());
                 self.defs.extend(o.defs.iter().copied());
-                self.pure &= o.pure;
+                self.poison |= o.poison;
             }
         }
 
@@ -1240,10 +1276,16 @@ impl Interp {
                                 || ie.creg_slot.contains_key(instance)
                                 || ie.fifo_slot.contains_key(instance);
                             if !inline_ok {
-                                out.pure = false;
+                                out.poison |= 4;
                             }
                         }
                         Some((gi, InstanceKind::Module(_))) => {
+                            // value methods inline LAZILY (child frame,
+                            // result expr, defs on demand) — the true
+                            // cone is the RESULT's closure only.
+                            // Walking the whole body drags in arg-
+                            // dependent defs the emitted code never
+                            // evaluates (over-poisoning; Ravi's catch)
                             let cmir = cx.inst_envs[&gi].mir;
                             let mm = cx.itp.d.modules[cmir]
                                 .methods
@@ -1251,9 +1293,6 @@ impl Interp {
                                 .find(|m| m.name == *method)
                                 .cloned();
                             if let Some(mm) = mm {
-                                for st in &mm.body {
-                                    walk_stmt_defs(cx, gi, st, out);
-                                }
                                 if let Some(res) = &mm.result {
                                     walk_expr(cx, gi, res, out);
                                 }
@@ -1268,7 +1307,7 @@ impl Interp {
                     }
                 }
                 E::ForeignCall { args, .. } => {
-                    out.pure = false;
+                    out.poison |= 2;
                     for a in args {
                         walk_expr(cx, inst, a, out);
                     }
@@ -1289,8 +1328,29 @@ impl Interp {
                 // call-site-specific, EN ports mutate DURING the edge
                 // (unmodeled by the read-sets), and a hoisted frame has
                 // no port bindings at all
-                E::Port(_) | E::TaskValue { .. } => {
-                    out.pure = false;
+                E::Port(n) => {
+                    // classify: MethodArg = call-site-specific (bit 1),
+                    // MethodEnable = intra-edge mutable EN (bit 8),
+                    // Reset/Clock/Parameter = frame-independent (bit 16
+                    // for now: admissible once the lowering resolves
+                    // them outside their home frame)
+                    let mir = cx.inst_envs[&inst].mir;
+                    let kind = cx.itp.d.modules[mir]
+                        .inputs
+                        .iter()
+                        .find(|pt| pt.name == *n)
+                        .map(|pt| pt.kind);
+                    out.poison |= match kind {
+                        Some(trs_ir::PortKind::MethodEnable) => 8,
+                        Some(trs_ir::PortKind::Reset)
+                        | Some(trs_ir::PortKind::Clock)
+                        | Some(trs_ir::PortKind::ClockGate)
+                        | Some(trs_ir::PortKind::Parameter) => 16,
+                        _ => 1,
+                    };
+                }
+                E::TaskValue { .. } => {
+                    out.poison |= 2;
                 }
                 _ => {}
             }
@@ -1444,6 +1504,7 @@ impl Interp {
         let mut tot_legal = 0usize;
         let mut tot_hoists = 0usize;
         let mut kills: HashMap<&'static str, usize> = HashMap::new();
+        let mut poisoned: HashMap<&'static str, (usize, u64)> = HashMap::new();
         for (k, comp_nodes) in nodes.iter().enumerate() {
             // per-section body cones (exec sections only; scheds share
             // via the latched CF/WF/eager mechanism)
@@ -1487,6 +1548,21 @@ impl Interp {
                 }
                 shared_defs += 1;
                 comp_recompute += dc.mass * (ps.len() as u64 - 1);
+                if dc.poison != 0 {
+                    for (bit, name) in [
+                        (1u8, "arg-port"),
+                        (2, "foreign"),
+                        (4, "prim"),
+                        (8, "en-port"),
+                        (16, "rst-clk-port"),
+                    ] {
+                        if dc.poison & bit != 0 {
+                            let e = poisoned.entry(name).or_insert((0usize, 0u64));
+                            e.0 += 1;
+                            e.1 += dc.mass * (ps.len() as u64 - 1);
+                        }
+                    }
+                }
                 // legality stats (anchor re-anchors on kill, anchor's
                 // own writes included: the emitter post-evicts)
                 let mut anchor = ps[0];
@@ -1513,7 +1589,7 @@ impl Interp {
                 // emitter tables: only PURE, UNSLOTTED defs are cached/
                 // hoisted (latched slots cover CF/WF/eager; impure cones
                 // must never evaluate unconditionally)
-                if !dc.pure {
+                if !dc.pure() {
                     continue;
                 }
                 let iev = &inst_envs[&di];
@@ -1569,6 +1645,13 @@ impl Interp {
                  kills: {}",
                 ks.join(" ")
             );
+            let mut po: Vec<_> = poisoned.iter().collect();
+            po.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+            let po: Vec<String> = po
+                .iter()
+                .map(|(n, (c, m))| format!("{n}={c}(mass {m})"))
+                .collect();
+            eprintln!("trs edge-ssa: poisoned shared defs: {}", po.join(" "));
         }
         trs_codegen::lower::EdgeSsaPlan {
             nodes: nodes.to_vec(),

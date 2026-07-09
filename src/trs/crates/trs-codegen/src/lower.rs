@@ -899,7 +899,16 @@ pub fn compile_design_object(
         lower_helpers(env, &ctx, &module, cbs, helper_specs, refs, &specs[0])?;
     }
     let refs_opt = (!refs.is_empty()).then_some(refs);
-    for spec in specs {
+    // rules covered by an SSA edge function need no standalone
+    // sched/exec symbols (the loader stubs them): emitting them only
+    // duplicated every body and doubled the LLVM mass
+    let covered: std::collections::HashSet<usize> = edge_plan
+        .map(|p| p.nodes.iter().flatten().map(|&(_, o)| o).collect())
+        .unwrap_or_default();
+    for (o, spec) in specs.iter().enumerate() {
+        if covered.contains(&o) {
+            continue;
+        }
         let mut lc = Lower {
             env,
             ctx: &ctx,
@@ -917,6 +926,9 @@ pub fn compile_design_object(
         };
         lc.lower_sched()?;
     }
+    // rep_ords arrives pre-filtered: a class rep is emitted iff some
+    // member's composition is NOT edge-SSA covered (the caller owns
+    // class membership; `covered` above only filters sched fns)
     for &o in rep_ords {
         let spec = &specs[o];
         let mut lc = Lower {
@@ -944,11 +956,23 @@ pub fn compile_design_object(
             let _ = lower_fused(&ctx, &module, fused);
         }
     }
+    let timing = std::env::var_os("TRS_JIT_TIME").is_some();
+    let t0 = std::time::Instant::now();
+    if timing {
+        eprintln!("trs aot: one-module lowering done");
+    }
     run_ir_passes(&module)?;
+    let t1 = std::time::Instant::now();
+    if timing {
+        eprintln!("trs aot: ir passes {:?}", t1 - t0);
+    }
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
         .map_err(|e| Ineligible(format!("design object emit: {e}")))?;
+    if timing {
+        eprintln!("trs aot: backend emit {:?}", t1.elapsed());
+    }
     Ok(buf.as_slice().to_vec())
 }
 
