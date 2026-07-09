@@ -16,8 +16,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use trs_codegen::lower::{
-    compile_execs, compile_helpers, compile_helpers_object, compile_scheds, decode_protos,
-    encode_protos, trial_lower,
+    compile_execs, compile_fused, compile_helpers, compile_helpers_object,
+    compile_scheds, decode_protos, encode_protos, trial_lower, FusedComp, FusedNode,
     CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
     HelperSpec, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
@@ -263,6 +263,70 @@ pub(crate) struct JitPlans {
     /// rule ordinal -> (instance, rule name, WF slot) for the
     /// interpreted-body fallback while its cell is cold
     pub(crate) exec_fallback: Vec<(usize, StrId, u32)>,
+    /// fused per-composition edge fns (task #17): compiled once all
+    /// bodies are warm; 0 = composition not fused (fall back to the
+    /// node walk).  fn(arena, env, now) -> i32 (nonzero = $finish).
+    pub(crate) fused: std::sync::OnceLock<Vec<usize>>,
+}
+
+impl JitPlans {
+    /// Promote the schedule from data to code: one direct-call edge fn
+    /// per composition.  Requires every body cell warm (the fused code
+    /// bakes cell addresses).  Failure leaves the node walk in place.
+    pub(crate) fn try_fuse(&self) {
+        let _ = self.fused.get_or_init(|| {
+            let comps: Vec<FusedComp> = self
+                .comp_nodes
+                .iter()
+                .map(|nodes| FusedComp {
+                    en_slots: self.en_slots.clone(),
+                    now_slot: self.now_slot,
+                    nodes: nodes
+                        .as_ref()
+                        .map(|ns| {
+                            ns.iter()
+                                .map(|n| match *n {
+                                    JitNode::Sched(o) => FusedNode::Sched(
+                                        trs_codegen::lower::HelperRef::Addr(
+                                            self.lazy.scheds[o as usize].sched as usize,
+                                        ),
+                                    ),
+                                    JitNode::Exec(o) => {
+                                        let (b, t) = self.lazy.exec_args[o as usize];
+                                        FusedNode::Exec(
+                                            trs_codegen::lower::HelperRef::Addr(
+                                                self.lazy.cells[o as usize]
+                                                    .get()
+                                                    .expect("fuse before warm")
+                                                    .exec
+                                                    as usize,
+                                            ),
+                                            b,
+                                            t,
+                                        )
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect();
+            match compile_fused(&comps) {
+                Ok(addrs) => {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!("trs jit: fused {} compositions", addrs.len());
+                    }
+                    addrs
+                }
+                Err(e) => {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!("trs jit: fusion off ({e})");
+                    }
+                    vec![0; self.comp_nodes.len()]
+                }
+            }
+        });
+    }
 }
 
 impl JitPlans {
@@ -1722,6 +1786,7 @@ impl Interp {
             now_slot,
             lazy,
             exec_fallback,
+            fused: std::sync::OnceLock::new(),
         })
     }
 }

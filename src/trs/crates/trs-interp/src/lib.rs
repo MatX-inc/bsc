@@ -3476,6 +3476,25 @@ impl Interp {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
                             let ap = j.arena_ptr();
+                            // fused fast path (task #17): the whole
+                            // edge as one compiled call — the schedule
+                            // promoted from data to code.  The node
+                            // walk remains for warm-up and fallback.
+                            if j.fused.get().is_none() && !j.lazy.any_cold() {
+                                j.try_fuse();
+                            }
+                            let fp = j.fused.get().map(|fs| fs[rci]).unwrap_or(0);
+                            if fp != 0 {
+                                let f: unsafe extern "C" fn(
+                                    *mut u64,
+                                    *mut core::ffi::c_void,
+                                    u64,
+                                ) -> i32 = unsafe { std::mem::transmute(fp) };
+                                let envp =
+                                    self as *mut Interp as *mut core::ffi::c_void;
+                                unsafe { f(ap, envp, t) };
+                                true
+                            } else {
                             // ConfigReg reads compare written_at to now
                             unsafe { *ap.add(j.now_slot as usize) = t };
                             let warming = j.lazy.any_cold();
@@ -3539,6 +3558,7 @@ impl Interp {
                                 jit::prof::add(&jit::prof::DISPATCH_NS, t0);
                             }
                             true
+                            }
                         }
                         None => false,
                     },
