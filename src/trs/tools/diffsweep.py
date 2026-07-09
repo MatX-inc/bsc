@@ -198,18 +198,25 @@ def one_test(job):
     # the limit at the reference's own build+run wall so no mode is
     # asked to beat a budget Bluesim itself did not meet.
     limit = max(limit, ref_build_secs + ref_secs)
+    b3_link_secs = 0.0
     if AOT:
         cexe = os.path.join(wk, top + ".aot.cexe")
+        tl0 = _time.monotonic()
         lk = run([TRS, "link", bir, "-o", cexe], cwd=wk, timeout=300)
+        b3_link_secs = _time.monotonic() - tl0
         if lk is None or lk.returncode != 0:
             msg = "" if lk is None else (lk.stderr + lk.stdout)
             return (rel, top, "AOT_LINK_FAIL",
                     "timeout" if lk is None else first_error(msg))
         env = dict(ENV)
         env["PATH"] = os.path.dirname(TRS) + os.pathsep + env.get("PATH", "")
+        tr0 = _time.monotonic()
         inp = run([cexe, "-m", MAX_CYCLES], cwd=wk, timeout=limit, env=env)
+        b3_run_secs = _time.monotonic() - tr0
     else:
+        tr0 = _time.monotonic()
         inp = run([TRS, "run", bir, "-m", MAX_CYCLES], cwd=wk, timeout=limit)
+        b3_run_secs = _time.monotonic() - tr0
     if inp is None:
         return (rel, top, "TIMEOUT", f"limit {limit:.0f}s (ref {ref_secs:.2f}s)")
     if inp.returncode != 0 and "panicked" in inp.stderr:
@@ -221,7 +228,13 @@ def one_test(job):
         if ref.returncode != inp.returncode:
             return (rel, top, "DIFF",
                     f"exit codes differ: ref={ref.returncode} int={inp.returncode}")
-        return (rel, top, "PASS", "")
+        # timing columns (5th field): the corpus slowdown table —
+        # ratios rank the next optimization targets.  ref_build is the
+        # bsc -sim link phase (C++ codegen + cc), the fair comparand
+        # for b3_link.
+        timing = (f"t ref_build={ref_build_secs:.2f} ref_run={ref_secs:.3f}"
+                  f" b3_link={b3_link_secs:.2f} b3_run={b3_run_secs:.3f}")
+        return (rel, top, "PASS", timing)
     return (rel, top, "DIFF", diff_summary(ref.stdout, inp.stdout))
 
 

@@ -1383,7 +1383,16 @@ impl Interp {
                         None => {}
                     }
                 }
-                E::Prim { args, .. } => {
+                E::Prim { op, args, .. } => {
+                    // review-fleet finding: Quot/Rem lower with an
+                    // unconditional zero-divisor SIGFPE trap — a
+                    // hoisted cone would evaluate it on edges where
+                    // the guarding rules are disabled.  Trapping ops
+                    // poison hoistability.
+                    if matches!(op, trs_ir::PrimOp::Quot | trs_ir::PrimOp::Rem)
+                    {
+                        out.poison |= 2;
+                    }
                     for a in args {
                         walk_expr(cx, inst, a, out);
                     }

@@ -1311,6 +1311,20 @@ fn lower_edge_ssa<'ctx>(
                 depth: 0,
             };
             if is_exec {
+                // PRE-evict (review-fleet critical finding): a rule
+                // whose own actions invalidate a shared def must not
+                // consume the pre-body value — tsort body-position
+                // semantics.  The plan already refuses to HOIST at
+                // self-killing sections; this refuses CONSUMPTION of
+                // earlier anchors too.
+                {
+                    let ws = &writes[o];
+                    lc.edge.as_mut().unwrap().shared.retain(|key, _| {
+                        plan.def_reads
+                            .get(key)
+                            .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
+                    });
+                }
                 if plan.outlined_execs.contains(&o) {
                     // outline dial: call the standalone class body (it
                     // gates itself on the stored WF slot; stores are
