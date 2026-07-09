@@ -3141,6 +3141,19 @@ impl Interp {
                         let pname = self.d.strings[tk.port as usize].clone();
                         (ii, pname, tk.reset, owner, tk.gate.clone())
                     })
+                    // no-op ticks (Reg/ConfigReg/FIFO clock ticks) cost a
+                    // dynamic dispatch per prim per edge to do nothing;
+                    // drop them unless the entry has side duties (reset
+                    // ticks, reset generators, clock drivers)
+                    .filter(|&(ii, _, is_rst, _, _)| {
+                        if is_rst || self.rstgen_out.contains_key(&ii) {
+                            return true;
+                        }
+                        match &self.insts[ii].kind {
+                            InstKind::Prim(p) => !p.tick_is_noop(),
+                            _ => true,
+                        }
+                    })
                     .collect();
 
                 let early: HashSet<(usize, StrId)> = comp

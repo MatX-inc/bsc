@@ -24,6 +24,14 @@ pub trait Prim {
     /// `clk_val` is the clock level after the edge (true on posedge) —
     /// Both-edge ticks (ClockInverter, GatedClock) depend on it.
     fn tick(&mut self, port: &str, now: u64, clk_val: bool, gate: bool);
+
+    /// True when tick() does nothing (arena-friendly state prims):
+    /// the per-edge tick walk skips such entries entirely — on
+    /// register-heavy designs the no-op walk was ~1/3 of the per-edge
+    /// fixed cost.  Reset ticks are separate and always run.
+    fn tick_is_noop(&self) -> bool {
+        false
+    }
     /// Live clock-level update, delivered BEFORE the edge's rules run:
     /// the kernel flips a clock's value before executing its schedule
     /// (bk_clock_val), so a method called from a rule at this edge — or
@@ -1484,6 +1492,9 @@ impl Prim for Reg {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    fn tick_is_noop(&self) -> bool {
+        true
+    }
     fn rst_tick(&mut self, _now: u64) {
         // rst_tick__clk__1
         if self.in_reset {
@@ -1731,6 +1742,9 @@ impl Prim for ConfigReg {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    fn tick_is_noop(&self) -> bool {
+        true
+    }
     fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
             self.value = self.reset_value.clone();
@@ -2558,6 +2572,9 @@ impl Prim for Fifo {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    fn tick_is_noop(&self) -> bool {
+        true
+    }
     fn rst_tick(&mut self, now: u64) {
         // rst_tick_clk calls METH_clear (bs_prim_mod_fifo.h:227-233), so
         // clear_at is stamped — the VCD shows CLR=1 on the reset edge
