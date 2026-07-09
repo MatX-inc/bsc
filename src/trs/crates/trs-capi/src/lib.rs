@@ -434,3 +434,120 @@ pub extern "C" fn bk_set_timescale(
     st.timescale = Some((unit, scale_factor));
     BK_SUCCESS
 }
+
+// =================================================================
+// Symbol tree — NOT YET BUILT (docs/TCL-CAPI.md rung 2).  The
+// loader dlsyms every name up front, so these must exist; they
+// answer in the reference API's absence vocabulary (NULL root,
+// empty modules) until the tree lands.
+
+#[no_mangle]
+pub extern "C" fn bk_top_symbol(_hdl: *mut c_void) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_lookup_symbol(
+    _root: *mut c_void,
+    _name: *const c_char,
+) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_key(_sym: *mut c_void) -> *const c_char {
+    std::ptr::null()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_size(_sym: *mut c_void) -> u32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_module(_sym: *mut c_void) -> u8 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_rule(_sym: *mut c_void) -> u8 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_single_value(_sym: *mut c_void) -> u8 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_value_range(_sym: *mut c_void) -> u8 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_peek_symbol_value(_sym: *mut c_void) -> *const u32 {
+    std::ptr::null()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_range_min_addr(_sym: *mut c_void) -> u64 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_range_max_addr(_sym: *mut c_void) -> u64 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_peek_range_value(
+    _sym: *mut c_void,
+    _addr: u64,
+) -> *const u32 {
+    std::ptr::null()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_num_symbols(_sym: *mut c_void) -> u32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_nth_symbol(_sym: *mut c_void, _n: u32) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+// =================================================================
+// VCD control — wiring to the interp's writer lands with rung 4;
+// stubs keep the dlsym set complete.
+
+#[no_mangle]
+pub extern "C" fn bk_set_VCD_file(_hdl: *mut c_void, _f: *const c_char) -> i32 {
+    BK_ERROR
+}
+
+#[no_mangle]
+pub extern "C" fn bk_enable_VCD_dumping(_hdl: *mut c_void) -> u8 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_disable_VCD_dumping(_hdl: *mut c_void) {}
+
+/// External clock definition: master-mode models (bluetcl always
+/// passes master=True) own their clocks; the loader dlsyms this
+/// regardless.  Answer with the existing handle if the name is
+/// known, else BAD_CLOCK (we do not create externally-driven
+/// clocks yet).
+#[no_mangle]
+pub extern "C" fn bk_define_clock(
+    hdl: *mut c_void,
+    name: *const c_char,
+    _initial_value: u32,
+    _has_initial_value: u8,
+    _first_edge: u64,
+    _low_duration: u64,
+    _high_duration: u64,
+) -> u32 {
+    bk_get_clock_by_name(hdl, name)
+}
