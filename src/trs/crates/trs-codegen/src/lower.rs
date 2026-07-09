@@ -259,6 +259,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             cbs,
             spec,
             token_kind: 0,
+            outlined: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -367,6 +368,7 @@ pub fn compile_scheds(
             cbs,
             spec,
             token_kind: 0,
+            outlined: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -411,6 +413,7 @@ pub fn compile_execs(
             cbs,
             spec,
             token_kind: TOKEN_KIND_EXEC,
+            outlined: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -488,6 +491,7 @@ pub fn compile_object_chunk(
             cbs,
             spec,
             token_kind: 0,
+            outlined: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -539,6 +543,17 @@ pub fn compile_meta_object(bir_hash: u64) -> Result<Vec<u8>, Ineligible> {
     Ok(buf.as_slice().to_vec())
 }
 
+/// How a caller reaches an outlined def-piece helper: a baked address
+/// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
+/// resolves it inside the artifact .so).
+pub enum HelperRef {
+    Addr(usize),
+    Sym(String),
+}
+
+/// Outlined pieces available to a lowering: (module ir, def) -> helper.
+pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32 /*width*/)>;
+
 struct Lower<'a, 'ctx> {
     env: &'a PlanEnv<'a>,
     ctx: &'ctx Context,
@@ -548,6 +563,9 @@ struct Lower<'a, 'ctx> {
     spec: &'a RuleSpec,
     /// OR'd into callback tokens (TOKEN_KIND_EXEC for body passes)
     token_kind: u64,
+    /// outlined def pieces callable from this lowering (None while the
+    /// helper set itself is being compiled bottom-up)
+    outlined: Option<&'a HelperMap>,
     /// exec dedup mode: (subtree region of spec.inst, base param,
     /// token-base param).  In-region slots address as base + (slot -
     /// region.0); call-site tokens OR the runtime token base.  None =
@@ -1272,6 +1290,57 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if f.is_exec || (!own_eager && self.spec.shared.contains(&n)) {
                     return Ok(self.load_val(f, base, w));
                 }
+            }
+        }
+        // outlined piece: call its helper — compiled once per module
+        // type, base-relative, with a per-instant memo inside when the
+        // piece is stable.  The callee's region base is the caller's
+        // base shifted by the (type-uniform) subtree offset.
+        if let Some(out) = self.outlined {
+            if let Some((href, w)) = out.get(&(ie.mir, n)) {
+                let w = *w;
+                let i64t = self.ctx.i64_type();
+                let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                let hty = self.ity(w).fn_type(
+                    &[ptrt.into(), ptrt.into(), i64t.into()],
+                    false,
+                );
+                let callee_base = self.slot_index(self.ie(f.inst)?.region.0);
+                let envp = f.envp.ok_or_else(|| Ineligible("helper needs env".into()))?;
+                let cs = match href {
+                    HelperRef::Addr(a) => {
+                        let fp = i64t
+                            .const_int(*a as u64, false)
+                            .const_to_pointer(ptrt);
+                        self.builder
+                            .build_indirect_call(
+                                hty,
+                                fp,
+                                &[f.arena.into(), envp.into(), callee_base.into()],
+                                "hlp",
+                            )
+                            .unwrap()
+                    }
+                    HelperRef::Sym(name) => {
+                        let hf = self
+                            .module
+                            .get_function(name)
+                            .unwrap_or_else(|| self.module.add_function(name, hty, None));
+                        self.builder
+                            .build_call(
+                                hf,
+                                &[f.arena.into(), envp.into(), callee_base.into()],
+                                "hlp",
+                            )
+                            .unwrap()
+                    }
+                };
+                let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                    return nope("helper returned void");
+                };
+                let v = rv.into_int_value();
+                f.ssa.insert(n, v);
+                return Ok(v);
             }
         }
         if f.expanding.contains(&n) {
