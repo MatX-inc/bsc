@@ -61,6 +61,35 @@ pub type PrimCb = unsafe extern "C" fn(
     out: *mut u64,
 );
 
+thread_local! {
+    /// Edge-SSA site census (task #24 M1): static counts of the slot
+    /// round-trips an SSA edge lowering would eliminate.  Indices:
+    /// [0] other-rule CF/WF slot loads (incl. exec WF gates and sched
+    /// inhibitor reads), [1] eager reloads in exec bodies, [2]
+    /// shared-eager reloads in sched fns, [3] eager owner stores (kept
+    /// as exports), [4] words moved by the promotable loads
+    /// (ceil(w/64) per site).  Thread-local like AOT_MODE: the
+    /// one-module link path lowers the whole design on one thread,
+    /// which is the path the census exists for.  Read via
+    /// edge_ssa_sites() under TRS_EDGE_SSA_STATS=1.
+    pub static EDGE_SSA_SITES: std::cell::Cell<[usize; 5]> =
+        const { std::cell::Cell::new([0; 5]) };
+}
+
+fn edge_ssa_count(idx: usize, words: usize) {
+    EDGE_SSA_SITES.with(|c| {
+        let mut v = c.get();
+        v[idx] += 1;
+        v[4] += words;
+        c.set(v);
+    });
+}
+
+/// Snapshot the census counters (this thread).
+pub fn edge_ssa_sites() -> [usize; 5] {
+    EDGE_SSA_SITES.with(|c| c.get())
+}
+
 /// One compiled prim call site (resolved by the trampoline).
 #[derive(Clone)]
 pub struct PrimCallSpec {
@@ -1994,6 +2023,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         };
         if !own {
             if let Some(&slot) = ie.cfwf_slot.get(&n) {
+                edge_ssa_count(0, 1);
                 let word = self.load_word(f, slot);
                 return Ok(self.to_w(word, 64, 1, false));
             }
@@ -2011,6 +2041,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             if let Some(&(base, w)) = ie.eager_slot.get(&n) {
                 let own_eager = self.spec.eager.contains(&n);
                 if f.is_exec || (!own_eager && self.spec.shared.contains(&n)) {
+                    edge_ssa_count(
+                        if f.is_exec { 1 } else { 2 },
+                        w.div_ceil(64) as usize,
+                    );
                     return Ok(self.load_val(f, base, w));
                 }
             }
@@ -2089,6 +2123,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // frame writing call-time values would corrupt them)
         if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
             if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
+                edge_ssa_count(3, 0);
                 self.store_val(f, base, w, v);
             }
         }
@@ -2386,6 +2421,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
         let mut cf = self.def(&mut f, r.can_fire)?; // i1
         for &slot in &self.spec.inhibit_slots {
+            edge_ssa_count(0, 1);
             let other = self.load_word(&f, slot);
             let nz = self.nonzero(other, 64);
             let zero = self.ctx.bool_type().const_zero();
@@ -2453,6 +2489,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             // WILL_FIRE == const true: no gate (Ravi's static case)
             self.builder.build_unconditional_branch(body_bb).unwrap();
         } else {
+            edge_ssa_count(0, 1);
             let wf = self.load_word(&f, self.spec.wf_slot);
             let fire = self.nonzero(wf, 64);
             self.builder.build_conditional_branch(fire, body_bb, done_bb).unwrap();

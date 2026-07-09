@@ -802,6 +802,14 @@ fn aot_emit(
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
         }
+        if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
+            let s = trs_codegen::lower::edge_ssa_sites();
+            eprintln!(
+                "trs edge-ssa census: fire-signal loads={} eager-reloads(exec)={} \
+                 shared-reloads(sched)={} eager-stores={} promotable-load-words={}",
+                s[0], s[1], s[2], s[3], s[4]
+            );
+        }
         let tmp =
             std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
@@ -1073,6 +1081,424 @@ fn jit_workers(n: usize) -> usize {
 }
 
 impl Interp {
+    /// Task #24 M1: gap-wise cross-rule def-sharing legality census.
+    /// For every def consumed by 2+ exec bodies of a composition,
+    /// decide per consumer-gap whether the anchor value survives —
+    /// i.e. no intervening exec writes state the def's cone reads
+    /// UNSTABLY (stable = begin-of-instant prim contracts only:
+    /// ConfigReg reads, FIFO i_* views).  Prints the shareable vs
+    /// must-recompute mass and a kill histogram; this table is what
+    /// the SSA edge emitter (M2) consumes as its legality oracle.
+    fn edge_ssa_analysis(
+        &self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        rcomps: &[RComp],
+    ) {
+        use trs_ir::{Action as A, Expr as E, InstanceKind, Primitive as P, Stmt};
+        use std::collections::HashSet;
+
+        #[derive(Default, Clone)]
+        struct Cone {
+            /// prim instances this cone reads with NO stability contract
+            reads: HashSet<usize>,
+            /// transitive def closure (inst, def), incl. the root
+            defs: HashSet<(usize, StrId)>,
+            /// root def's own expr node count (share-census units)
+            mass: u64,
+        }
+        impl Cone {
+            fn absorb(&mut self, o: &Cone) {
+                self.reads.extend(o.reads.iter().copied());
+                self.defs.extend(o.defs.iter().copied());
+            }
+        }
+
+        // the exporter ships prims as Other{name} (prim.rs classifies
+        // by the same strings); the enum variants are matched too in
+        // case the exporter ever starts using them
+        fn cat(p: &P, s: &dyn Fn(StrId) -> String) -> &'static str {
+            match p {
+                P::Reg { .. } => "reg",
+                P::ConfigReg { .. } => "configreg",
+                P::CReg { .. } => "creg",
+                P::Wire { .. } => "wire",
+                P::Fifo { .. } => "fifo",
+                P::RegFile { .. } => "regfile",
+                P::Bram { .. } => "bram",
+                P::Other { name } => {
+                    let n = s(*name);
+                    if n.starts_with("ConfigReg") {
+                        "configreg"
+                    } else if n.starts_with("CReg") {
+                        "creg"
+                    } else if n.starts_with("Reg") {
+                        "reg"
+                    } else if n.contains("FIFO") {
+                        "fifo"
+                    } else if n.contains("Wire") {
+                        "wire"
+                    } else if n.starts_with("RegFile") {
+                        "regfile"
+                    } else if n.starts_with("BRAM") {
+                        "bram"
+                    } else {
+                        "other"
+                    }
+                }
+                _ => "other",
+            }
+        }
+        fn stable_read(pc: &'static str, m: &str) -> bool {
+            pc == "configreg" || (pc == "fifo" && m.starts_with("i_"))
+        }
+        fn expr_mass(e: &E) -> u64 {
+            let mut n = 1u64;
+            match e {
+                E::MethCall { args, .. }
+                | E::Prim { args, .. }
+                | E::ForeignCall { args, .. } => {
+                    for a in args {
+                        n += expr_mass(a);
+                    }
+                }
+                E::If { cond, then_, else_, .. } => {
+                    n += expr_mass(cond) + expr_mass(then_) + expr_mass(else_);
+                }
+                E::Case { scrutinee, arms, default, .. } => {
+                    n += expr_mass(scrutinee) + expr_mass(default);
+                    for (_, a) in arms {
+                        n += expr_mass(a);
+                    }
+                }
+                _ => {}
+            }
+            n
+        }
+        fn child<'a>(
+            d: &'a trs_ir::Design,
+            inst_envs: &HashMap<usize, InstEnv>,
+            inst: usize,
+            name: StrId,
+        ) -> Option<(usize, &'a InstanceKind)> {
+            let ie = inst_envs.get(&inst)?;
+            let gi = *ie.children.get(&name)?;
+            let k = &d.modules[ie.mir]
+                .instances
+                .iter()
+                .find(|i| i.name == name)?
+                .kind;
+            Some((gi, k))
+        }
+
+        struct Ctx<'a> {
+            itp: &'a Interp,
+            inst_envs: &'a HashMap<usize, InstEnv>,
+            prim_cat: HashMap<usize, &'static str>,
+            cone_memo: HashMap<(usize, StrId), Cone>,
+            write_memo: HashMap<(usize, StrId), HashSet<usize>>,
+        }
+
+        fn walk_expr(cx: &mut Ctx, inst: usize, e: &E, out: &mut Cone) {
+            match e {
+                E::Def(n) => {
+                    let c = cone(cx, inst, *n);
+                    out.absorb(&c);
+                    out.defs.insert((inst, *n));
+                }
+                E::MethCall { instance, method, args, .. } => {
+                    for a in args {
+                        walk_expr(cx, inst, a, out);
+                    }
+                    match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
+                        Some((gi, InstanceKind::Prim(p))) => {
+                            let s = |n: StrId| cx.itp.s(n).to_string();
+                            let pc = cat(p, &s);
+                            cx.prim_cat.insert(gi, pc);
+                            if !stable_read(pc, cx.itp.s(*method)) {
+                                out.reads.insert(gi);
+                            }
+                        }
+                        Some((gi, InstanceKind::Module(_))) => {
+                            let cmir = cx.inst_envs[&gi].mir;
+                            let mm = cx.itp.d.modules[cmir]
+                                .methods
+                                .iter()
+                                .find(|m| m.name == *method)
+                                .cloned();
+                            if let Some(mm) = mm {
+                                for st in &mm.body {
+                                    walk_stmt_defs(cx, gi, st, out);
+                                }
+                                if let Some(res) = &mm.result {
+                                    walk_expr(cx, gi, res, out);
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                E::Prim { args, .. } | E::ForeignCall { args, .. } => {
+                    for a in args {
+                        walk_expr(cx, inst, a, out);
+                    }
+                }
+                E::If { cond, then_, else_, .. } => {
+                    walk_expr(cx, inst, cond, out);
+                    walk_expr(cx, inst, then_, out);
+                    walk_expr(cx, inst, else_, out);
+                }
+                E::Case { scrutinee, arms, default, .. } => {
+                    walk_expr(cx, inst, scrutinee, out);
+                    for (_, a) in arms {
+                        walk_expr(cx, inst, a, out);
+                    }
+                    walk_expr(cx, inst, default, out);
+                }
+                _ => {}
+            }
+        }
+        // defs (and their cones) referenced by a body statement,
+        // EXPRESSION side only — actions' state effects live in
+        // stmt_writes
+        fn walk_stmt_defs(cx: &mut Ctx, inst: usize, st: &Stmt, out: &mut Cone) {
+            match st {
+                Stmt::Def { expr, .. } => walk_expr(cx, inst, expr, out),
+                Stmt::Action(a) | Stmt::AvAction { action: a, .. } => match a {
+                    A::MethCall { cond, args, instance, method, .. } => {
+                        walk_expr(cx, inst, cond, out);
+                        for x in args {
+                            walk_expr(cx, inst, x, out);
+                        }
+                        // a child ACTION method's body may read further
+                        // defs (in the child's frame)
+                        if let Some((gi, InstanceKind::Module(_))) =
+                            child(&cx.itp.d, cx.inst_envs, inst, *instance)
+                        {
+                            let cmir = cx.inst_envs[&gi].mir;
+                            let mm = cx.itp.d.modules[cmir]
+                                .methods
+                                .iter()
+                                .find(|m| m.name == *method)
+                                .cloned();
+                            if let Some(mm) = mm {
+                                for st2 in &mm.body {
+                                    walk_stmt_defs(cx, gi, st2, out);
+                                }
+                            }
+                        }
+                    }
+                    A::Foreign { cond, args, .. } | A::Task { cond, args, .. } => {
+                        walk_expr(cx, inst, cond, out);
+                        for x in args {
+                            walk_expr(cx, inst, x, out);
+                        }
+                    }
+                },
+                Stmt::Cond { cond, then_, else_ } => {
+                    walk_expr(cx, inst, cond, out);
+                    for s in then_ {
+                        walk_stmt_defs(cx, inst, s, out);
+                    }
+                    for s in else_ {
+                        walk_stmt_defs(cx, inst, s, out);
+                    }
+                }
+            }
+        }
+        fn cone(cx: &mut Ctx, inst: usize, n: StrId) -> Cone {
+            if let Some(c) = cx.cone_memo.get(&(inst, n)) {
+                return c.clone();
+            }
+            // defs are a DAG; placeholder guards pathological input
+            cx.cone_memo.insert((inst, n), Cone::default());
+            let mir = cx.inst_envs[&inst].mir;
+            let mut c = Cone::default();
+            c.defs.insert((inst, n));
+            let dd = cx.itp.d.modules[mir]
+                .defs
+                .iter()
+                .find(|d| d.name == n)
+                .cloned();
+            if let Some(dd) = dd {
+                c.mass = expr_mass(&dd.expr);
+                walk_expr(cx, inst, &dd.expr, &mut c);
+            }
+            cx.cone_memo.insert((inst, n), c.clone());
+            c
+        }
+        // prim instances an action body (rule or action method) writes
+        fn stmt_writes(
+            cx: &mut Ctx,
+            inst: usize,
+            stmts: &[Stmt],
+            out: &mut HashSet<usize>,
+        ) {
+            for st in stmts {
+                match st {
+                    Stmt::Action(a) | Stmt::AvAction { action: a, .. } => {
+                        if let A::MethCall { instance, method, .. } = a {
+                            match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
+                                Some((gi, InstanceKind::Prim(p))) => {
+                                    let s = |n: StrId| cx.itp.s(n).to_string();
+                                    cx.prim_cat.insert(gi, cat(p, &s));
+                                    out.insert(gi);
+                                }
+                                Some((gi, InstanceKind::Module(_))) => {
+                                    let key = (gi, *method);
+                                    if let Some(w) = cx.write_memo.get(&key) {
+                                        out.extend(w.iter().copied());
+                                    } else {
+                                        cx.write_memo.insert(key, HashSet::new());
+                                        let cmir = cx.inst_envs[&gi].mir;
+                                        let mm = cx.itp.d.modules[cmir]
+                                            .methods
+                                            .iter()
+                                            .find(|m| m.name == *method)
+                                            .cloned();
+                                        let mut w = HashSet::new();
+                                        if let Some(mm) = mm {
+                                            stmt_writes(cx, gi, &mm.body, &mut w);
+                                        }
+                                        out.extend(w.iter().copied());
+                                        cx.write_memo.insert(key, w);
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    Stmt::Cond { then_, else_, .. } => {
+                        stmt_writes(cx, inst, then_, out);
+                        stmt_writes(cx, inst, else_, out);
+                    }
+                    Stmt::Def { .. } => {}
+                }
+            }
+        }
+
+        let mut cx = Ctx {
+            itp: self,
+            inst_envs,
+            prim_cat: HashMap::new(),
+            cone_memo: HashMap::new(),
+            write_memo: HashMap::new(),
+        };
+
+        let mut tot_recompute = 0u64;
+        let mut tot_saved = 0u64;
+        let mut tot_gaps = 0usize;
+        let mut tot_legal = 0usize;
+        let mut kills: HashMap<&'static str, usize> = HashMap::new();
+        for (k, rc) in rcomps.iter().enumerate() {
+            // linear exec order with per-node body cones + write sets
+            let mut execs: Vec<(Cone, HashSet<usize>)> = Vec::new();
+            for en in &rc.entries {
+                for &node in &en.nodes {
+                    let SchedNode::Exec(r) = node else { continue };
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue;
+                    }
+                    let mir = inst_envs[&en.inst].mir;
+                    let Some(rr) = self.d.modules[mir]
+                        .rules
+                        .iter()
+                        .find(|x| x.name == r)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let mut c = Cone::default();
+                    for st in &rr.body {
+                        walk_stmt_defs(&mut cx, en.inst, st, &mut c);
+                    }
+                    let mut w = HashSet::new();
+                    stmt_writes(&mut cx, en.inst, &rr.body, &mut w);
+                    execs.push((c, w));
+                }
+            }
+            // consumers per (inst, def), positions in schedule order
+            let mut consumers: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
+            for (p, (c, _)) in execs.iter().enumerate() {
+                for &d0 in &c.defs {
+                    consumers.entry(d0).or_default().push(p);
+                }
+            }
+            let mut comp_saved = 0u64;
+            let mut comp_recompute = 0u64;
+            let mut shared_defs = 0usize;
+            for (&(di, dn), ps) in &consumers {
+                if ps.len() < 2 {
+                    continue;
+                }
+                let dc = cone(&mut cx, di, dn);
+                if dc.mass == 0 {
+                    continue; // body-local temp, not in the def table
+                }
+                shared_defs += 1;
+                comp_recompute += dc.mass * (ps.len() as u64 - 1);
+                let mut anchor = ps[0];
+                for &pj in &ps[1..] {
+                    tot_gaps += 1;
+                    let killer = (anchor..pj).find_map(|q| {
+                        execs[q].1.intersection(&dc.reads).next().copied()
+                    });
+                    match killer {
+                        None => {
+                            tot_legal += 1;
+                            comp_saved += dc.mass;
+                        }
+                        Some(gi) => {
+                            *kills
+                                .entry(cx.prim_cat.get(&gi).copied().unwrap_or("?"))
+                                .or_insert(0) += 1;
+                            anchor = pj;
+                        }
+                    }
+                }
+            }
+            tot_recompute += comp_recompute;
+            tot_saved += comp_saved;
+            if shared_defs > 0 {
+                eprintln!(
+                    "trs edge-ssa: comp {k}: execs={} shared-defs={shared_defs} \
+                     mass shareable={comp_saved}/{comp_recompute}",
+                    execs.len()
+                );
+                // arg-budget feasibility for the call-boundary variant
+                // (bodies stay per-module-type fns, shared values passed
+                // as args): how many shared defs does each body consume?
+                let mut per_body: Vec<usize> = execs
+                    .iter()
+                    .map(|(c, _)| {
+                        c.defs
+                            .iter()
+                            .filter(|d0| {
+                                consumers.get(d0).is_some_and(|ps| ps.len() >= 2)
+                            })
+                            .count()
+                    })
+                    .collect();
+                per_body.sort_unstable();
+                let n = per_body.len();
+                eprintln!(
+                    "trs edge-ssa: comp {k}: shared-def args/body \
+                     p50={} p90={} max={}",
+                    per_body[n / 2],
+                    per_body[n * 9 / 10],
+                    per_body[n - 1]
+                );
+            }
+        }
+        let mut ks: Vec<_> = kills.iter().collect();
+        ks.sort_by(|a, b| b.1.cmp(a.1));
+        let ks: Vec<String> = ks.iter().map(|(c, n)| format!("{c}={n}")).collect();
+        eprintln!(
+            "trs edge-ssa: TOTAL gaps legal={tot_legal}/{tot_gaps} \
+             mass shareable={tot_saved}/{tot_recompute} kills: {}",
+            ks.join(" ")
+        );
+    }
+
     /// Build the JIT plan for the resolved compositions, or None to run
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
@@ -1598,6 +2024,22 @@ impl Interp {
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
                 token_base: (ri.ordinal as u64) << 17,
             });
+        }
+        // edge-SSA shareability analysis (task #24 M1,
+        // TRS_EDGE_SSA_STATS=1): for every def consumed by 2+ exec
+        // bodies in a composition, decide gap-wise whether the value
+        // computed at the first consumer's position is still valid at
+        // each later consumer — i.e. no intervening exec writes state
+        // the def's cone reads UNSTABLY.  Stability is value-level prim
+        // contract only (doctrine d97b7e4a): ConfigReg reads and FIFO
+        // i_* views see begin-of-instant state, so intervening writes
+        // to them cannot kill; everything else (plain Reg, wires,
+        // immediate FIFO views, RegFile/BRAM/unknown prims) kills on
+        // any intervening action.  Output sizes the cross-rule sharing
+        // an SSA edge lowering may legally perform — the emitter's
+        // classification table.
+        if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
+            self.edge_ssa_analysis(&inst_envs, rcomps);
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
