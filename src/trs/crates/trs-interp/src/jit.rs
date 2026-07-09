@@ -727,6 +727,8 @@ fn aot_emit(
     refs_sym: &HelperMap,
     split_thresh: u32,
     protos: &[FnProtos],
+    comp_nodes: &[Option<Vec<JitNode>>],
+    en_slots: &[u32],
     so: &std::path::Path,
     bir_hash: u64,
 ) -> Result<(), String> {
@@ -794,6 +796,56 @@ fn aot_emit(
         std::fs::write(&f, o).map_err(|e| e.to_string())?;
         files.push(f);
     }
+    // fused per-composition edge fns (task #17): symbol callees, ld
+    // resolves inside the .so; exec callees use the dedup class rep
+    {
+        let mut rep_of: Vec<usize> = vec![0; specs.len()];
+        for (rep, members) in classes {
+            for &m in members {
+                rep_of[m] = *rep;
+            }
+        }
+        let comps: Vec<trs_codegen::lower::FusedComp> = comp_nodes
+            .iter()
+            .map(|nodes| trs_codegen::lower::FusedComp {
+                en_slots: en_slots.to_vec(),
+                now_slot,
+                nodes: nodes
+                    .as_ref()
+                    .map(|ns| {
+                        ns.iter()
+                            .map(|n| match *n {
+                                JitNode::Sched(o) => {
+                                    trs_codegen::lower::FusedNode::Sched(
+                                        HelperRef::Sym(format!(
+                                            "sched_{}",
+                                            specs[o as usize].label
+                                        )),
+                                    )
+                                }
+                                JitNode::Exec(o) => {
+                                    let sp = &specs[o as usize];
+                                    trs_codegen::lower::FusedNode::Exec(
+                                        HelperRef::Sym(format!(
+                                            "exec_{}",
+                                            specs[rep_of[o as usize]].label
+                                        )),
+                                        inst_envs[&sp.inst].region.0 as u64,
+                                        sp.token_base,
+                                    )
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let o = trs_codegen::lower::compile_fused_object(&comps)
+            .map_err(|e| format!("fused object: {e}"))?;
+        let f = tmp.join("fused.o");
+        std::fs::write(&f, o).map_err(|e| e.to_string())?;
+        files.push(f);
+    }
     let meta =
         compile_meta_object(bir_hash, split_thresh as u64, &encode_protos(protos))
             .map_err(|e| format!("meta object: {e}"))?;
@@ -819,13 +871,16 @@ fn aot_emit(
 /// trs run --code: dlopen the artifact, verify its fingerprint, fill
 /// the callback pointer-globals, and resolve every rule's sched/exec
 /// function.  Any failure falls back to in-process compilation.
+#[allow(clippy::type_complexity)]
 fn aot_load(
     so: &std::path::Path,
     bir_hash: u64,
     specs: &[RuleSpec],
     classes: &[(usize, Vec<usize>)],
     split_thresh: u32,
-) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>), String> {
+    ncomps: usize,
+) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>, Vec<usize>), String>
+{
     unsafe {
         let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
         let h: libloading::Symbol<*const u64> =
@@ -903,9 +958,19 @@ fn aot_load(
             .into_iter()
             .map(|o| o.expect("every ordinal belongs to a class"))
             .collect();
+        // fused edge fns (absent in pre-fusion artifacts: rev-gated)
+        let mut fused = Vec::with_capacity(ncomps);
+        for k in 0..ncomps {
+            let ef: libloading::Symbol<
+                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32,
+            > = lib
+                .get(format!("edge_c{k}\0").as_bytes())
+                .map_err(|e| e.to_string())?;
+            fused.push(*ef as usize);
+        }
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);
-        Ok((scheds, execs, protos))
+        Ok((scheds, execs, protos, fused))
     }
 }
 
@@ -1443,6 +1508,31 @@ impl Interp {
             );
         }
 
+        let comp_nodes: Vec<Option<Vec<JitNode>>> = rcomps
+            .iter()
+            .map(|rc| {
+                let mut nodes = Vec::new();
+                for en in &rc.entries {
+                    for &node in &en.nodes {
+                        let (r, is_sched) = match node {
+                            SchedNode::Sched(r) => (r, true),
+                            SchedNode::Exec(r) => (r, false),
+                        };
+                        let ord = rule_ord[&(en.inst, r)] as u32;
+                        nodes.push(if is_sched {
+                            JitNode::Sched(ord)
+                        } else {
+                            JitNode::Exec(ord)
+                        });
+                    }
+                }
+                Some(nodes)
+            })
+            .collect();
+        let en_slots: Vec<u32> =
+            inst_envs.values().flat_map(|e| e.en_slot.values().copied()).collect();
+
+
         // ---- helper fns for outlined pieces (split opt-in) ----
         // v1: only module types whose instances all share one subtree
         // sig (helper symbols are sig-keyed); shared JIT/AOT lowering,
@@ -1555,12 +1645,20 @@ impl Interp {
         // falls back to in-process compilation (which trials below)
         let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
+        let mut fused_opt: Option<Vec<usize>> = None;
         if let JitRequest::Load { so } = &request {
-            match aot_load(so, self.bir_hash, &specs, &classes, split_thresh.unwrap_or(0))
-            {
-                Ok((sch, exe, pr)) => {
+            match aot_load(
+                so,
+                self.bir_hash,
+                &specs,
+                &classes,
+                split_thresh.unwrap_or(0),
+                comp_nodes.len(),
+            ) {
+                Ok((sch, exe, pr, fu)) => {
                     preloaded = Some((sch, exe));
                     protos_opt = Some(pr);
+                    fused_opt = Some(fu);
                 }
                 Err(e) => {
                     eprintln!(
@@ -1611,6 +1709,8 @@ impl Interp {
                     &refs_sym,
                     split_thresh.unwrap_or(0),
                     &protos,
+                    &comp_nodes,
+                    &en_slots,
                     so,
                     self.bir_hash,
                 ) {
@@ -1702,30 +1802,6 @@ impl Interp {
             }
         }
 
-        let comp_nodes: Vec<Option<Vec<JitNode>>> = rcomps
-            .iter()
-            .map(|rc| {
-                let mut nodes = Vec::new();
-                for en in &rc.entries {
-                    for &node in &en.nodes {
-                        let (r, is_sched) = match node {
-                            SchedNode::Sched(r) => (r, true),
-                            SchedNode::Exec(r) => (r, false),
-                        };
-                        let ord = rule_ord[&(en.inst, r)] as u32;
-                        nodes.push(if is_sched {
-                            JitNode::Sched(ord)
-                        } else {
-                            JitNode::Exec(ord)
-                        });
-                    }
-                }
-                Some(nodes)
-            })
-            .collect();
-        let en_slots: Vec<u32> =
-            lazy.insts.values().flat_map(|e| e.en_slot.values().copied()).collect();
-
         // allocate + wire the arena
         let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
         let arena_ptr = arena.as_mut_ptr();
@@ -1786,7 +1862,13 @@ impl Interp {
             now_slot,
             lazy,
             exec_fallback,
-            fused: std::sync::OnceLock::new(),
+            fused: {
+                let cell = std::sync::OnceLock::new();
+                if let Some(fu) = fused_opt {
+                    let _ = cell.set(fu);
+                }
+                cell
+            },
         })
     }
 }
