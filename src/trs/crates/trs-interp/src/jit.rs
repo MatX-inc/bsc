@@ -335,184 +335,194 @@ pub(crate) enum ChildClass {
     Other,
 }
 
-/// Per-def piece statistics: bottom-up selection marks a def OUTLINED
-/// when the DAG size of its piece (own nodes + each transitive
-/// non-outlined def counted ONCE — matching the SSA-memoized lowering
-/// cost) crosses the threshold.  Outlined children become unit-cost
-/// calls, cutting monster cones into balanced pieces.
+/// Child resolution for the cone analyzer: an arena-backed prim, a
+/// user submodule (recurse into its method cones), or opaque.
+pub(crate) enum ChildRef {
+    Prim(ChildClass),
+    User(usize),
+    Opaque,
+}
+
+/// Per-def piece statistics (see select_outlined).
 #[derive(Clone)]
 pub(crate) struct PieceInfo {
-    /// DAG node count of the piece rooted here
     pub eff: u32,
-    /// piece is inline-lowerable and callback-free
     pub outlinable: bool,
-    /// every read in the piece is schedule-confined to one value per
-    /// instant (Reg read SB write; ConfigReg contract; RWire wset SB
-    /// wget; FIFO i_* snapshots) — memoizable once per instant
     pub stable: bool,
-    /// selected for outlining
     pub outlined: bool,
 }
 
-/// Analyze one module type and select the outlined def set.
-pub(crate) fn select_outlined(
-    d: &Design,
-    mir: usize,
-    child_kind: &dyn Fn(StrId) -> ChildClass,
-    thresh: u32,
-) -> HashMap<StrId, PieceInfo> {
-    use trs_ir::Expr;
-    let m = &d.modules[mir];
-    let n = m.defs.len();
-    let by_name: HashMap<StrId, usize> =
-        m.defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect();
-    let words = n.div_ceil(64).max(1);
+/// Bottom-up outline selection over a module's def DAG, recursing
+/// through user-child value-method cones (callee Method.result/ready;
+/// callee Port reads must be bound method args).  eff counts each
+/// transitive non-outlined def once (SSA-memoized lowering cost);
+/// outlined children are unit-cost calls.
+pub(crate) struct ConeAnalyzer<'a> {
+    pub d: &'a Design,
+    /// (mir, child instance name) -> resolution via exemplar instances
+    pub kind: &'a dyn Fn(usize, StrId) -> ChildRef,
+    pub thresh: u32,
+    memo: HashMap<(usize, StrId), PieceInfo>,
+    reach: HashMap<(usize, StrId), std::collections::HashSet<(usize, StrId)>>,
+    own: HashMap<(usize, StrId), u32>,
+    seen: Vec<(usize, StrId)>,
+}
 
-    // own expression stats per def: node count (Def refs cost 1),
-    // direct def refs, leaf-driven outlinability
-    struct Own {
-        nodes: u32,
-        refs: Vec<usize>,
-        outl: bool,
-        stab: bool,
+impl<'a> ConeAnalyzer<'a> {
+    pub fn new(d: &'a Design, kind: &'a dyn Fn(usize, StrId) -> ChildRef, thresh: u32) -> Self {
+        ConeAnalyzer { d, kind, thresh, memo: HashMap::new(), reach: HashMap::new(), own: HashMap::new(), seen: Vec::new() }
     }
-    fn scan(
-        e: &Expr,
-        d: &Design,
-        by_name: &HashMap<StrId, usize>,
-        child_kind: &dyn Fn(StrId) -> ChildClass,
-        o: &mut Own,
-    ) {
+
+    pub fn module(&mut self, mir: usize) -> HashMap<StrId, PieceInfo> {
+        let names: Vec<StrId> = self.d.modules[mir].defs.iter().map(|dd| dd.name).collect();
+        names.iter().map(|&n| (n, self.def_piece(mir, n))).collect()
+    }
+
+    fn def_piece(&mut self, mir: usize, n: StrId) -> PieceInfo {
+        if let Some(r) = self.memo.get(&(mir, n)) {
+            return r.clone();
+        }
+        if self.seen.contains(&(mir, n)) {
+            return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false };
+        }
+        let Some(di) = self.d.modules[mir].defs.iter().position(|dd| dd.name == n) else {
+            return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false };
+        };
+        self.seen.push((mir, n));
+        let e = self.d.modules[mir].defs[di].expr.clone();
+        let mut rs = std::collections::HashSet::new();
+        let (nodes, outl, stab) = self.walk(mir, &e, None, &mut rs);
+        self.seen.pop();
+        let mut eff = nodes;
+        for k in &rs {
+            eff = eff.saturating_add(*self.own.get(k).unwrap_or(&0));
+        }
+        self.own.insert((mir, n), nodes);
+        let outlined = outl && eff >= self.thresh;
+        if !outlined {
+            rs.insert((mir, n));
+            self.reach.insert((mir, n), rs);
+        }
+        let r = PieceInfo { eff, outlinable: outl, stable: stab, outlined };
+        self.memo.insert((mir, n), r.clone());
+        r
+    }
+
+    /// returns (own nodes, outlinable, stable); accumulates reached
+    /// non-outlined defs into rs
+    fn walk(
+        &mut self,
+        mir: usize,
+        e: &trs_ir::Expr,
+        margs: Option<&std::collections::HashSet<StrId>>,
+        rs: &mut std::collections::HashSet<(usize, StrId)>,
+    ) -> (u32, bool, bool) {
         use trs_ir::Expr as E;
-        o.nodes = o.nodes.saturating_add(1);
+        let (mut nodes, mut outl, mut stab) = (1u32, true, true);
+        macro_rules! sub {
+            ($x:expr) => {{
+                let (c, o, sb) = self.walk(mir, $x, margs, rs);
+                nodes = nodes.saturating_add(c);
+                outl &= o;
+                stab &= sb;
+            }};
+        }
         match e {
             E::Const { .. } | E::Str(_) | E::Real(_) => {}
-            E::Def(dn) => match by_name.get(dn) {
-                Some(&i) => o.refs.push(i),
-                None => o.outl = false,
-            },
+            E::Port(pn) => {
+                let ok = margs.map(|a| a.contains(pn)).unwrap_or(false);
+                outl &= ok;
+                stab &= ok;
+            }
+            E::Def(dn) => {
+                let r = self.def_piece(mir, *dn);
+                outl &= r.outlinable || r.outlined;
+                stab &= r.stable;
+                if r.outlined {
+                    nodes = nodes.saturating_add(1);
+                } else {
+                    if let Some(rr) = self.reach.get(&(mir, *dn)) {
+                        rs.extend(rr.iter().cloned());
+                    }
+                    outl &= r.outlinable;
+                }
+            }
             E::MethCall { instance, method, args, .. } => {
                 for a in args {
-                    scan(a, d, by_name, child_kind, o);
+                    sub!(a);
                 }
-                let mname = &d.strings[*method as usize];
-                let (ok, st) = match child_kind(*instance) {
-                    ChildClass::Reg | ChildClass::CfgReg => {
-                        (matches!(mname.as_str(), "read" | "get" | "_read"), true)
+                let mname = self.d.strings[*method as usize].clone();
+                match (self.kind)(mir, *instance) {
+                    ChildRef::Prim(c) => {
+                        let (ok, st) = match c {
+                            ChildClass::Reg | ChildClass::CfgReg => {
+                                (matches!(mname.as_str(), "read" | "get" | "_read"), true)
+                            }
+                            ChildClass::Wire => {
+                                // schedule certification pending: not stable
+                                (matches!(mname.as_str(), "whas" | "wget"), false)
+                            }
+                            ChildClass::Fifo => match mname.as_str() {
+                                "i_notFull" | "i_notEmpty" => (true, true),
+                                "first" | "notFull" | "notEmpty" => (true, false),
+                                _ => (false, false),
+                            },
+                            ChildClass::Other => (false, false),
+                        };
+                        outl &= ok;
+                        stab &= st;
                     }
-                    // WIRES ARE NOT STABLE: mkUnsafeRWire relaxes the
-                    // scheduling annotations while reusing the same
-                    // runtime prim, so prim identity cannot prove
-                    // wset-before-wget confinement.  Stability may rely
-                    // only on VALUE-LEVEL prim contracts (ConfigReg
-                    // written_at, FIFO i_* saved_elems) or on schedule
-                    // confinement of prims with no unsafe wrapper
-                    // (plain Reg).
-                    ChildClass::Wire => {
-                        (matches!(mname.as_str(), "whas" | "wget"), false)
+                    ChildRef::User(cmir) => {
+                        let mm = self.d.modules[cmir]
+                            .methods
+                            .iter()
+                            .find(|m| m.name == *method);
+                        match mm {
+                            Some(m) if m.body.is_empty() && m.result.is_some() => {
+                                let aset: std::collections::HashSet<StrId> =
+                                    m.args.iter().map(|p| p.name).collect();
+                                let res = m.result.clone().unwrap();
+                                let (c, o, sb) = self.walk(cmir, &res, Some(&aset), rs);
+                                nodes = nodes.saturating_add(c);
+                                outl &= o;
+                                stab &= sb;
+                            }
+                            _ => {
+                                outl = false;
+                                stab = false;
+                            }
+                        }
                     }
-                    ChildClass::Fifo => match mname.as_str() {
-                        "i_notFull" | "i_notEmpty" => (true, true),
-                        "first" | "notFull" | "notEmpty" => (true, false),
-                        _ => (false, false),
-                    },
-                    ChildClass::Other => (false, false),
-                };
-                o.outl &= ok;
-                o.stab &= st;
+                    ChildRef::Opaque => {
+                        outl = false;
+                        stab = false;
+                    }
+                }
             }
             E::Prim { args, .. } => {
                 for a in args {
-                    scan(a, d, by_name, child_kind, o);
+                    sub!(a);
                 }
             }
             E::If { cond, then_, else_, .. } => {
-                scan(cond, d, by_name, child_kind, o);
-                scan(then_, d, by_name, child_kind, o);
-                scan(else_, d, by_name, child_kind, o);
+                sub!(cond);
+                sub!(then_);
+                sub!(else_);
             }
             E::Case { scrutinee, arms, default, .. } => {
-                scan(scrutinee, d, by_name, child_kind, o);
+                sub!(scrutinee);
                 for (_, a) in arms {
-                    scan(a, d, by_name, child_kind, o);
+                    sub!(a);
                 }
-                scan(default, d, by_name, child_kind, o);
+                sub!(default);
             }
             _ => {
-                o.outl = false;
-                o.stab = false;
+                outl = false;
+                stab = false;
             }
         }
+        (nodes, outl, stab)
     }
-    let owns: Vec<Own> = m
-        .defs
-        .iter()
-        .map(|dd| {
-            let mut o = Own { nodes: 0, refs: Vec::new(), outl: true, stab: true };
-            scan(&dd.expr, d, &by_name, child_kind, &mut o);
-            o
-        })
-        .collect();
-
-    // bottom-up over the DAG (iterative post-order): reach bitset of
-    // non-outlined transitive defs; outlined refs stop propagation
-    let mut reach: Vec<Option<Vec<u64>>> = (0..n).map(|_| None).collect();
-    let mut info: Vec<Option<PieceInfo>> = (0..n).map(|_| None).collect();
-    for root in 0..n {
-        if info[root].is_some() {
-            continue;
-        }
-        let mut stack: Vec<(usize, bool)> = vec![(root, false)];
-        while let Some((i, ready)) = stack.pop() {
-            if info[i].is_some() {
-                continue;
-            }
-            if !ready {
-                stack.push((i, true));
-                for &r in &owns[i].refs {
-                    if info[r].is_none() {
-                        stack.push((r, false));
-                    }
-                }
-                continue;
-            }
-            let mut bs = vec![0u64; words];
-            let mut outl = owns[i].outl;
-            let mut stab = owns[i].stab;
-            for &r in &owns[i].refs {
-                let ri = info[r].as_ref().expect("post-order");
-                outl &= ri.outlinable;
-                stab &= ri.stable;
-                if !ri.outlined {
-                    bs[r / 64] |= 1 << (r % 64);
-                    if let Some(rb) = &reach[r] {
-                        for (a, b) in bs.iter_mut().zip(rb) {
-                            *a |= b;
-                        }
-                    }
-                }
-            }
-            let mut eff = owns[i].nodes;
-            for (w, &bw) in bs.iter().enumerate() {
-                let mut bits = bw;
-                while bits != 0 {
-                    let j = w * 64 + bits.trailing_zeros() as usize;
-                    eff = eff.saturating_add(owns[j].nodes);
-                    bits &= bits - 1;
-                }
-            }
-            let outlined = outl && eff >= thresh;
-            if !outlined {
-                reach[i] = Some(bs);
-            }
-            info[i] = Some(PieceInfo { eff, outlinable: outl, stable: stab, outlined });
-        }
-    }
-    m.defs
-        .iter()
-        .enumerate()
-        .map(|(i, dd)| (dd.name, info[i].clone().expect("all visited")))
-        .collect()
 }
 
 /// Eager parallel sched compile (in-process JIT path).
@@ -1167,17 +1177,49 @@ impl Interp {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(1000);
-                let stats = select_outlined(&self.d, mir, &ck, thresh);
-                let ndefs = stats.len();
-                let outlined: Vec<_> =
-                    stats.iter().filter(|(_, st)| st.outlined).collect();
-                let stable = outlined.iter().filter(|(_, st)| st.stable).count();
-                let mass: u64 = outlined.iter().map(|(_, st)| st.eff as u64).sum();
-                let maxeff = stats.values().map(|st| st.eff).max().unwrap_or(0);
-                eprintln!(
-                    "trs split: mir={mir} defs={ndefs} outlined={} stable={stable} piece-mass={mass} max-piece={maxeff}",
-                    outlined.len()
-                );
+                let exemplar = seen_mir.clone();
+                let insts = &self.insts;
+                let kind = move |m: usize, name: StrId| -> ChildRef {
+                    let Some(&ex) = exemplar.get(&m) else { return ChildRef::Opaque };
+                    let InstKind::User { children, .. } = &insts[ex].kind else {
+                        return ChildRef::Opaque;
+                    };
+                    let Some(&ci) = children.iter().find(|(k, _)| **k == name).map(|(_, v)| v)
+                    else {
+                        return ChildRef::Opaque;
+                    };
+                    match &insts[ci].kind {
+                        InstKind::Prim(p) => ChildRef::Prim(match p.arena_kind() {
+                            Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
+                            Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
+                            Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
+                            Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
+                            None => ChildClass::Other,
+                        }),
+                        InstKind::User { module, .. } => {
+                            ChildRef::User(self_mods_ir(insts, *module))
+                        }
+                    }
+                };
+                fn self_mods_ir(_i: &[Inst], m: usize) -> usize {
+                    m
+                }
+                let mut an = ConeAnalyzer::new(&self.d, &kind, thresh);
+                let mut mirs2: Vec<usize> = seen_mir.keys().copied().collect();
+                mirs2.sort_unstable();
+                for mir in mirs2 {
+                    let stats = an.module(mir);
+                    let outlined: Vec<_> =
+                        stats.values().filter(|st| st.outlined).collect();
+                    let stable = outlined.iter().filter(|st| st.stable).count();
+                    let mass: u64 = outlined.iter().map(|st| st.eff as u64).sum();
+                    let maxeff = stats.values().map(|st| st.eff).max().unwrap_or(0);
+                    eprintln!(
+                        "trs split: mir={mir} defs={} outlined={} stable={stable} piece-mass={mass} max-piece={maxeff}",
+                        stats.len(),
+                        outlined.len()
+                    );
+                }
             }
         }
 
