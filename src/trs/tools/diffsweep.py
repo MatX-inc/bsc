@@ -343,6 +343,45 @@ def main():
         json.dump([list(r) for r in results], f, indent=1)
     print(f"\nfull results: {args.out}")
 
+    # ---- performance fence ----
+    # Ratios vs the reference measured in the SAME run self-normalize
+    # against machine load; the baseline pins them per design (above a
+    # wall-clock floor).  Regressions print PERF_REGRESS lines — treat
+    # them with the same discipline as DIFFs.
+    fence_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "perf-fence.json")
+    timings = {}
+    for (rel, top, status, note) in results:
+        if status == "PASS" and note.startswith("t "):
+            fv = dict(kv.split("=") for kv in note[2:].split())
+            timings[f"{rel}:{top}"] = {k: float(v) for k, v in fv.items()}
+    def _ratios(t):
+        out = {}
+        if t["ref_run"] >= 0.10:
+            out["run"] = t["b3_run"] / t["ref_run"]
+        if t["ref_build"] >= 2.0:
+            out["link"] = t["b3_link"] / t["ref_build"]
+        return out
+    if args.fence_baseline:
+        base = {k: r for k, t in sorted(timings.items()) if (r := _ratios(t))}
+        with open(fence_path, "w") as f:
+            json.dump(base, f, indent=1, sort_keys=True)
+        print(f"perf fence baseline written: {fence_path} ({len(base)} designs)")
+    elif os.path.exists(fence_path) and timings:
+        base = json.load(open(fence_path))
+        perf_regress = 0
+        for k, expect in sorted(base.items()):
+            got = _ratios(timings[k]) if k in timings else {}
+            for dim, exp in expect.items():
+                if dim in got and got[dim] > exp * 1.3 + 0.05:
+                    print(f"PERF_REGRESS {k} {dim}: {got[dim]:.2f} "
+                          f"(baseline {exp:.2f})")
+                    perf_regress += 1
+        if perf_regress:
+            print(f"PERF_REGRESS total: {perf_regress}")
+        else:
+            print(f"perf fence: clean ({len(base)} designs)")
+
 
 if __name__ == "__main__":
     main()
