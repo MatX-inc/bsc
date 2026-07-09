@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-14f011fa, O3 run parity on sudoku — ALWAYS `git push personal`, never bare `git push origin`:
+0cdd785a, sudoku FASTER than reference — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -117,16 +117,30 @@ silently dropping every exec symbol) made O3 affordable; monsters
 leaving the mega-fn is runtime-POSITIVE (L1-misses 6.5x down).
 Full numbers in docs/PERF-BASELINE.md post-edge-SSA section.
 
-NEXT: (1) flip the AOT default: edge-SSA + cost model + O3 (code
-change in the link path defaults, then the definitive default-path
-sweep + battery); (2) wire-clear + __me_check tick compilation into
-the edge fn — the last ~0.09s interp residual AND central-loop
-bail #9: the projected BELOW-reference crossing for sudoku-class
-designs; (3) JIT-sync/lazy legs re-run (belt-and-braces post tick
-skip); (4) compute-parity call -> testsuite AOT comparison
-(fullparallel, held for this); (5) backlog: #15 arm outlining, #22
-foreign fast path, Tcl surface, VCD parity classes, seam-inventory
-export elision.
+THE CROSSING (0cdd785a): wire ticks compiled into the edge fn
+(coverage derived deterministically both sides via the
+trs_edge_wire_ticks meta flag; interp skips covered entries only
+when the fused fn ran; central #9 ignores covered ticks, #10 admits
+rule-less negedge comps with only covered clears).  Sudoku enters
+the CENTRAL LOOP and runs 0.25-0.28s vs reference 0.29-0.32s —
+trs is FASTER THAN REFERENCE BLUESIM, byte-identical, from 0.48s
+(1.55x behind) the same morning.  Link 10.7s vs 13.9s.  O3 verdict
+(Ravi asked): pre-edge-SSA it bought ~0.05s (per-body scraps);
+post-edge-SSA it buys ~22% run for +1s link — the transformation
+made the middle-end's scope real.  __me_check entries are RULES
+(already compiled), not ticks; remaining interp ticks are MCD prims
+in central-ineligible designs.
+
+NEXT: (1) ninth sweep IN FLIGHT (wt-o3.json): the full proposed
+default stack (edge-SSA + outline cost model + O3 + wire ticks) —
+if green, flip the AOT link default to exactly that; (2) ultracode
+adversarial review workflow over the session's commits IN FLIGHT —
+addres confirmed findings before defaulting; (3) JIT-sync/lazy legs
+re-run (belt-and-braces post tick skip); (4) compute-parity call is
+arguably MADE (run + link both ahead on sudoku; LongCnt 5x) ->
+testsuite AOT comparison (fullparallel) once the default flips;
+(5) backlog: #15 arm outlining, #22 foreign fast path, Tcl surface,
+VCD parity classes, seam-inventory export elision, MCD tick classes.
 
 ## Current state
 
