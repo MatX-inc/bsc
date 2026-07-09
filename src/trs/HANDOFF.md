@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`a9fc0204` — ALWAYS `git push personal`, never bare `git push origin`:
+`d97b7e4a` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -243,12 +243,18 @@ TRS_JIT_SPLIT_STATS=1 prints recon).  KEY FINDINGS: (1) sudoku's
 def DAGs are small (max 2.6k nodes) — the 52k-insn bodies are
 If/Case ARM-SCOPED SSA re-expansion (~20x), so splitting RESTORES
 sharing the lowering loses (reference C++ has the same pathology);
-(2) STABILITY IS FREE (Ravi): the scheduler confines every legal
-read — Reg read SB write, RWire wset SB wget, ConfigReg contract,
-FIFO i_* snapshots — so every read site in an instant sees one
-value; recon: 38/38 outlined pieces memo-eligible.  Exceptions:
-FIFO immediate views, mkCReg ports (window-stable per port, future),
-eager-set defs (their discipline is the eager-slot mechanism).
+(2) STABILITY IS FREE for solid prims (Ravi): the scheduler confines
+every legal read — Reg read SB write, ConfigReg contract, FIFO i_*
+snapshots — so every read site in an instant sees one value; recon:
+38/38 outlined pieces memo-eligible.  DOCTRINE (d97b7e4a): stability
+may rely only on VALUE-LEVEL prim contracts (ConfigReg written_at,
+FIFO i_* saved_elems) or schedule confinement of prims with NO
+unsafe wrapper (plain Reg) — mkUnsafeRWire reuses the RWire runtime
+prim with relaxed annotations, so WIRES ARE NOT STABLE; loopy FIFOs
+already excluded via the FifoType::Simple arena gate.  Also
+unstable: FIFO immediate views, mkCReg ports (window-stable per
+port, future), eager-set defs (their discipline is the eager-slot
+mechanism).
 REMAINING WORK: (a) classifier must recurse through user-child
 method cones (mir=3, the biggest type, outlines 0 — tainted by
 inlined submodule calls); (b) helper lowering: Expr::Def hook emits
