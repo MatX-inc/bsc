@@ -16,8 +16,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use trs_codegen::lower::{
-    compile_execs, compile_fused, compile_helpers, compile_helpers_object,
-    compile_scheds, decode_protos, encode_protos, trial_lower, FusedComp, FusedNode,
+    compile_design_object, compile_execs, compile_fused, compile_helpers,
+    compile_helpers_object, compile_scheds, decode_protos, encode_protos, trial_lower,
+    FusedComp, FusedNode,
     CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
     HelperSpec, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
@@ -741,6 +742,88 @@ fn aot_emit(
     let reps: Vec<RuleSpec> =
         classes.iter().map(|(rep, _)| specs[*rep].clone()).collect();
     let rchunk = reps.len().div_ceil(nworkers).max(1);
+    // whole-edge inlining (task #18): one module, one pipeline run —
+    // the inliner flattens cheap scheds/helpers into the fused edges.
+    // TRS_AOT_ONE_MODULE=0 restores parallel chunked emission.
+    let one_module = std::env::var("TRS_AOT_ONE_MODULE").as_deref() != Ok("0");
+    if one_module {
+        let mut rep_of: Vec<usize> = vec![0; specs.len()];
+        for (rep, members) in classes {
+            for &m in members {
+                rep_of[m] = *rep;
+            }
+        }
+        let rep_ords: Vec<usize> = classes.iter().map(|(r, _)| *r).collect();
+        let comps: Vec<FusedComp> = comp_nodes
+            .iter()
+            .map(|nodes| FusedComp {
+                en_slots: en_slots.to_vec(),
+                now_slot,
+                nodes: nodes
+                    .as_ref()
+                    .map(|ns| {
+                        ns.iter()
+                            .map(|n| match *n {
+                                JitNode::Sched(o) => FusedNode::Sched(HelperRef::Sym(
+                                    format!("sched_{}", specs[o as usize].label),
+                                )),
+                                JitNode::Exec(o) => {
+                                    let sp = &specs[o as usize];
+                                    FusedNode::Exec(
+                                        HelperRef::Sym(format!(
+                                            "exec_{}",
+                                            specs[rep_of[o as usize]].label
+                                        )),
+                                        inst_envs[&sp.inst].region.0 as u64,
+                                        sp.token_base,
+                                    )
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let env = PlanEnv { d, insts: inst_envs, now_slot };
+        let _g = trs_codegen::lower::AotModeGuard::set();
+        let t1 = std::time::Instant::now();
+        let obj = compile_design_object(
+            &env,
+            specs,
+            &rep_ords,
+            helper_specs,
+            refs_sym,
+            &comps,
+        )
+        .map_err(|e| format!("design object: {e}"))?;
+        if std::env::var_os("TRS_JIT_TIME").is_some() {
+            eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
+        }
+        let tmp =
+            std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        let f = tmp.join("design.o");
+        std::fs::write(&f, obj).map_err(|e| e.to_string())?;
+        let meta =
+            compile_meta_object(bir_hash, split_thresh as u64, &encode_protos(protos))
+                .map_err(|e| format!("meta object: {e}"))?;
+        let mf = tmp.join("meta.o");
+        std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
+        let st = std::process::Command::new("cc")
+            .args(["-shared", "-o"])
+            .arg(so)
+            .args([&f, &mf])
+            .status()
+            .map_err(|e| format!("cc: {e}"))?;
+        std::fs::remove_dir_all(&tmp).ok();
+        if !st.success() {
+            return Err("cc -shared failed".into());
+        }
+        if std::env::var_os("TRS_JIT_TIME").is_some() {
+            eprintln!("trs aot: emit + link {:?}", t0.elapsed());
+        }
+        return Ok(());
+    }
     // helpers are best-effort in AOT exactly as in JIT: if their
     // object fails to compile, drop them and link the design unsplit
     // rather than failing the artifact

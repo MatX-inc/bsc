@@ -457,11 +457,16 @@ fn make_module<'ctx>(
 /// codegen opts; without this the IR pass pipeline (GVN, instcombine,
 /// SimplifyCFG, jump threading) never runs at all.
 fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
+    // mirror opt_level(): the AOT default is O1 even when the env var
+    // is unset (this silently skipping was why one-module emission
+    // showed zero inlining)
     let lvl = match std::env::var("TRS_JIT_OPT").as_deref() {
         Ok("1") => 1,
         Ok("2") => 2,
         Ok("3") => 3,
-        _ => return Ok(()),
+        Ok(_) => return Ok(()),
+        Err(_) if AOT_MODE.with(|m| m.get()) => 1,
+        Err(_) => return Ok(()),
     };
     let tm = aot_target_machine()?;
     let opts = inkwell::passes::PassBuilderOptions::create();
@@ -796,6 +801,71 @@ fn lower_helpers<'ctx>(
         }
     }
     Ok(())
+}
+
+/// AOT single-module emission (whole-edge inlining): lower the whole
+/// design — helpers, scheds, exec class reps, fused edges — into ONE
+/// module and run the pipeline, so the inliner can flatten cheap
+/// calls into the fused edge (what g++'s single TU gives the C++
+/// backend).  Larger bodies stay as calls by the inliner's own cost
+/// model.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_design_object(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    rep_ords: &[usize],
+    helper_specs: &[HelperSpec],
+    refs: &HelperMap,
+    fused: &[FusedComp],
+) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    if !helper_specs.is_empty() {
+        lower_helpers(env, &ctx, &module, cbs, helper_specs, refs, &specs[0])?;
+    }
+    let refs_opt = (!refs.is_empty()).then_some(refs);
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            token_kind: 0,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+        };
+        lc.lower_sched()?;
+    }
+    for &o in rep_ords {
+        let spec = &specs[o];
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            token_kind: TOKEN_KIND_EXEC,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+        };
+        lc.lower_exec()?;
+    }
+    let _ = lower_fused(&ctx, &module, fused);
+    run_ir_passes(&module)?;
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("design object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
 }
 
 /// JIT: compile a helper batch into one engine; returns (sym, addr).
