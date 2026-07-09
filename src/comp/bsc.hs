@@ -2077,18 +2077,31 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
                    (map show (cofs ++ user_ofiles))
         unless (quiet flags) $
             putStrLnF ("BDPI shared library created: " ++ soFile)
-    -- the executable: a wrapper running the trs runtime on the .bir
-    writeFileCatch errh outFile $
-        unlines [ "#!/bin/sh"
-                , ""
-                , "TRS=${TRS:-trs}"
-                , "exec \"$TRS\" run \"$0.bir\" \"$@\""
-                ]
-    stat <- getFileStatus outFile
-    let mode = fileMode stat
-        mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
-    setFileMode outFile mode'
-    unless (quiet flags) $ putStrLnF ("TRS simulation created: " ++ outFile)
+    -- AOT: let the trs driver compile the design and write the
+    -- artifact (wrapper script + model .so + pinned options) — the
+    -- same amortization as the C++ backend's g++ link, at a fraction
+    -- of the cost.  Any failure (trs not on PATH, built without the
+    -- jit feature, infra error) falls back to the interpreter wrapper.
+    let linkCmd = "\"${TRS:-trs}\" link \"" ++ outFile ++ ".bir\" -o \""
+                  ++ outFile ++ "\""
+    rc <- system linkCmd
+    case rc of
+      ExitSuccess ->
+        unless (quiet flags) $
+            putStrLnF ("TRS simulation created (compiled): " ++ outFile)
+      _ -> do
+        writeFileCatch errh outFile $
+            unlines [ "#!/bin/sh"
+                    , ""
+                    , "TRS=${TRS:-trs}"
+                    , "exec \"$TRS\" run \"$0.bir\" \"$@\""
+                    ]
+        stat <- getFileStatus outFile
+        let mode = fileMode stat
+            mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
+        setFileMode outFile mode'
+        unless (quiet flags) $
+            putStrLnF ("TRS simulation created: " ++ outFile)
 
 -- ===============
 -- vLink

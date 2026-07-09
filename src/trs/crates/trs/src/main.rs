@@ -121,15 +121,17 @@ fn main() -> ExitCode {
             } else {
                 format!(" --split {split}")
             };
+            // honor $TRS like bsc's interp wrapper (the testsuite
+            // points it at a specific build)
             let script = if compiled {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec trs run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-trs}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} ${{1+\"$@\"}}\n"
                 )
             } else {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec trs run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-trs}}\" run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
                 )
             };
             if let Err(e) = std::fs::write(&base, script) {
