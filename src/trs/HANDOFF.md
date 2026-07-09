@@ -1,58 +1,60 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`ACTIVE REGRESSION HUNT — see top section` (pushed through the debug-aids commit) — ALWAYS `git push personal`, never bare `git push origin`:
+decc231e, the regression-hunt resolution — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
 
-## ACTIVE: correctness regression, bisect mid-flight (RESUME HERE)
+## RESOLVED: the g2 regression was ONE bug — always-fire (task #23)
 
-The g2 gate (five legs on 447c1a0d) caught 2 DIFFs + 1 timeout in the
-default-AOT leg (g2-2, 963 PASS):
-- sysEspositoPreempt (bsc.verilog/schedule): compiled path fires rule
-  'a' where semantics demand 'b' (preemption violated)
-- sysRegFileVector (bsc.verilog/astate): first pass at idx 1 not 0
-  (rule fires one edge late/early)
-- sysInit65536Bit (bsc.evaluator/reginit): AOT link TIMEOUT — the O1
-  pipeline chokes on i65536 values; needs a width cap on run_ir_passes
-  (separate, mechanical fix)
+Bisect finished as predicted: 7694c351 (fusion-JIT) walk-CLEAN,
+447c1a0d (one-module) walk-CLEAN, 668303f1 (always-fire) fails both
+repros on BOTH paths (JIT-sync walk and AOT artifact).  The "two
+bugs" theory is dead: the g2-2/g2-4 sweep binaries were built from
+the WORKING TREE that already carried the uncommitted always-fire
+code (committed 23:16, mid-gate) — the reverse stale-binary trap:
+record the binary's commit+dirty state in every gate log.
 
-FACTS ESTABLISHED (repro: TRS_JIT=1 TRS_JIT_SYNC=1 trs run
-<bir> -m 4000 | head -1; expected 'b' / 'Pass at idx 0'):
-- JIT-lazy "passes" are a mirage: these tests $finish before bodies
-  warm, so lazy = interpreted.  SYNC forces the compiled path.
-- Fusion EXONERATED for the walk: TRS_NO_FUSION=1 (escape added in
-  the debug-aids commit) still fails on the current tip.
-- Both designs are PLAIN RegN (+ trampoline RegFile) — no ConfigReg,
-  no FIFO — so the prim-inline commits can only be COLLATERAL.
-- BISECT (worktree $SCRATCH/wt-bisect, CARGO_TARGET_DIR
-  $SCRATCH/cargo-bisect): 5564a86a GOOD (both correct, sync-compiled);
-  c73bb09c GOOD (ConfigReg+FIFO inline commits are CLEAN).
-  Remaining window: 7694c351 (fusion-JIT — RESTRUCTURED THE WALK in
-  lib.rs dispatch: prime suspect for walk-visible failure), 82df91c4
-  (trsLink, bsc-side, unlikely), c14fcfdb (fusion-AOT), 447c1a0d
-  (one-module + run_ir_passes fix), 668303f1 (always-fire — IN the
-  local repro binary but NOT in the swept 447c1a0d binary, so the
-  sweep's artifact failure does not need it; the local sync+walk
-  failure MIGHT — possibly TWO bugs).
-- NEXT BISECT STEPS: build 7694c351 in the worktree -> sync+walk test;
-  then 447c1a0d.  If both walk-clean -> walk failure is 668303f1
-  (always-fire: check Esposito's preempted-rule inhibitors — does the
-  preempting rule's WF stay gated? my detection uses inhibit_slots;
-  verify preempts flow into me_inhibits/cross in the BIR) and the
-  artifact failure lives in c14fcfdb/447c1a0d separately.
-- Esposito fused-IR dump looked structurally correct (order preserved,
-  stop-chain right); TRS_JIT_DUMP now also dumps fused modules.
+ROOT CAUSE: detection accepted const-true CAN_FIRE + empty
+inhibit_slots as "provably always fires".  False theorem: bsc bakes
+preemption/urgency into the WILL_FIRE def EXPRESSION
+(WF_a = CF_a && !WF_b) and NEVER into me_inhibits/cross_inhibits
+(both empty for every victim).  Misclassified rules compiled with no
+WF gate and fired unconditionally.  ALL EIGHT g2-4 AOT DIFFs were
+this one bug (Esposito preemption, RegFileVector off-by-one-edge,
+memq DQueueTb, IfNested, 3x interra SRAM truncations, sudoku
+emitting nothing) — every one verified PASS vs reference post-fix.
 
-HOLDS until fixed: parity measurements queue (O-ladder, profile,
-alias experiment, #24), testsuite comparison.  The always-fire commit
-(668303f1) and one-module (447c1a0d) stay in-tree but are the prime
-suspects — if fingered, gate behind env or fix forward.  g2 legs 3-5
-may still be running — collect tallies (g2-3 JIT+split was clean 966
-at last check... verify 4/5).
+FIXES LANDED (all pushed to personal):
+- 2f01bd68 always-fire detection resolves the WF def itself through
+  Def-alias chains to a constant; CAN_FIRE arm removed.  WF=Def(CF),
+  CF=const still qualifies: Esposito's RL_b/RL_set_done verified
+  gate-free in the IR dump, victims verified gated.
+- 982afcd8 sysInit65536Bit AOT link timeout: LLVM known-bits is
+  quadratic in width; i65536 wedged default<O1> >90s (O0: 1.9s).
+  run_ir_passes skips the DEFAULT pipeline when any instruction type
+  exceeds 4096 bits (module_max_int_width walk); explicit
+  TRS_JIT_OPT still forces it.  Links 2.2s, byte-identical.
+- decc231e central loop now engages in AOT artifacts: fused edges
+  exist at t=0, so the first slice-boundary probe ran during the
+  initial reset pulse and bail #4 permanently burned the attempt —
+  streaming JIT only reached the 0.09s floor because fusion compiles
+  after reset by accident.  Transient reset (rst_asserted/
+  rst_pending) now bails WITHOUT burning (#15); static disqualifiers
+  (VCD, driver clocks, rstgen_out) still burn.  LongCnt artifact
+  0.51s -> 0.11s (loaded machine), central engaged.
+
+GATE STATE: AOT sweep on the always-fire fix alone: 965 PASS /
+0 DIFF (+ the expected pre-width-cap sysInit65536Bit link timeout).
+Definitive 3-leg gate (AOT / JIT-sync / JIT-lazy) on decc231e was
+IN FLIGHT at handoff-write time — tallies land in f2-{aot,jitsync,
+jit}.json in the session scratchpad; battery 9/9 on decc231e; both
+repros green both paths.  Once green: measurement queue UNBLOCKS
+(O-ladder post-inlining, fresh profile, alias experiment, #24
+edge-SSA if needed) -> compute parity -> testsuite AOT comparison.
 
 ## Current state
 
