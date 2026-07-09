@@ -8,6 +8,43 @@ branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
 
+## SESSION 2026-07-09 EVENING: battery 22/22, \$finish semantics,
+## ultracode review — pushed through 4e5df577 (sweep sealing)
+
+- INTERACTIVE BATTERY 22/22 byte-identical (from 14 at first
+  contact).  Final fixes: async driver thread (StopCond abort/
+  progress; bk_now answers LIVE from the worker's published slice
+  time); JIT ENGINE wired (arm_jit bypasses the env gate; default
+  engine = jit when the lib carries it; battery pins engines=interp
+  for peek tests, jit for async — the capability tiers in action);
+  \$FINISH COMPLETES THE IN-FLIGHT EDGE (unanimous 4-agent hunt:
+  kernel bk_finish_now only marks + yields; the edge schedule runs
+  to completion; Ravi's VCD-coherence framing — instants must be
+  fixed points).  Suppression = the WHOLE dollar_display.cxx output
+  family (29 gates: console+file+severity), NOT just console — and
+  the yield preempts the PG_FINAL after-edge pass (sysFWrite3
+  caught the overshoot).  Compiled paths still mid-edge-abort on
+  finish: NEXT ITEM (callback stops signaling abort; edge fn runs
+  to completion; add the trailing-state-rule regress witness).
+- ULTRACODE REVIEW (7 finders, 72/72 verdicts upheld): 10 findings
+  FIXED in 4e5df577 (def_thunk ssa dominance leak; effectful
+  ForeignCall; 3 async-window process aborts; bk_shutdown joins the
+  worker before dlclose; bk_sync raw time + panicked-worker
+  survival; mid-sim timescale reject; tier-honest NoValue; AV
+  result recording; ConfigReg raw member; const-ready RDY interim).
+  REVIEW BACKLOG (confirmed, queued): \$stop-vs-\$finish resume
+  semantics (bk_finished must not latch on \$stop; interp needs
+  resume-past-\$stop); multi-clock EN latch clearing (latched.clear
+  per ANY edge); central-loop negedge overcount-by-one; exporter
+  round 2 — SimCOpt-surviving methodPorts set (kills the RDY
+  interim); symOrd char-wise compare; Fifo/RWire arena-attached
+  peek staleness (jit-engine tier); link_interactive should PROBE
+  the staticlib for LLVM refs instead of trusting its own cfg;
+  fence mode-awareness (AOT baseline vs non-AOT sweeps); prime()'s
+  detached compile workers vs dlclose.
+- Interactive .so link: -u keep-list (48 syms) + shared libLLVM +
+  ffi/tinfo/zstd + --no-undefined; 166MB (gc-sections/strip TODO).
+
 ## IN FLIGHT: trs-capi (task #10) — the bluetcl surface
 
 Landed (7a0cd508..38293521): crate scaffold (staticlib, jit feature
