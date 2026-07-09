@@ -431,6 +431,9 @@ impl<'a> ConeAnalyzer<'a> {
             E::Const { .. } | E::Str(_) | E::Real(_) => {}
             E::Port(pn) => {
                 let ok = margs.map(|a| a.contains(pn)).unwrap_or(false);
+                if !ok && std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                    eprintln!("why: unbound-port {}", self.d.strings[*pn as usize]);
+                }
                 outl &= ok;
                 stab &= ok;
             }
@@ -487,13 +490,26 @@ impl<'a> ConeAnalyzer<'a> {
                                 outl &= o;
                                 stab &= sb;
                             }
-                            _ => {
+                            Some(m) => {
+                                if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                                    eprintln!("why: method-with-body args={} res={}", m.body.len(), m.result.is_some());
+                                }
+                                outl = false;
+                                stab = false;
+                            }
+                            None => {
+                                if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                                    eprintln!("why: method-not-found {}", self.d.strings[*method as usize]);
+                                }
                                 outl = false;
                                 stab = false;
                             }
                         }
                     }
                     ChildRef::Opaque => {
+                        if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                            eprintln!("why: opaque-child {}", self.d.strings[*instance as usize]);
+                        }
                         outl = false;
                         stab = false;
                     }
@@ -516,7 +532,10 @@ impl<'a> ConeAnalyzer<'a> {
                 }
                 sub!(default);
             }
-            _ => {
+            other => {
+                if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                    eprintln!("why: expr-kind {:?}", std::mem::discriminant(other));
+                }
                 outl = false;
                 stab = false;
             }
