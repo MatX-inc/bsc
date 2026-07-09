@@ -91,3 +91,35 @@ is the slot-scatter side effect (absorbed at same IPC today, but
 free to remove).  Ticks (0.137s) are the post-edge-SSA residue to
 attack next.  O-ladder: PARKED until full-edge composition (O3 today
 buys only ~0.05s for +3s link on pre-SSA IR).
+
+# Post-edge-SSA (2026-07-09, task #24 complete)
+
+Binary 1b323b3d (edge-SSA + symbol elision + outline cost model +
+reset-tick skip), opt-in TRS_EDGE_SSA=1.  Eight perfect sweep legs
+this session; byte-identical everywhere.
+
+## Sudoku vs the frozen pre-edge-SSA baseline
+
+| metric            | baseline | edge-SSA+model | reference |
+|-------------------|----------|----------------|-----------|
+| run (O1)          | 0.48 s   | 0.36-0.44 s    | 0.31 s    |
+| run (O3)          | —        | 0.32-0.34 s    | 0.29-0.32 |
+| link (O1)         | 8.1 s    | 9.3 s          | 13.9 s    |
+| link (O3)         | —        | 10.7 s         | (they ARE -O3) |
+| instructions      | 2.78 B (1.59x) | 2.10 B (1.28x) | 1.65 B |
+| L1d loads         | 1.13 B (2.59x) | 0.82 B (2.0x)  | 0.41 B |
+| L1d load misses   | 17.2 M   | 2.6 M          | 1.1 M     |
+
+O-LADDER VERDICT: pre-edge-SSA O3 bought ~0.05s (nothing for the
+middle-end to see through per-body call boundaries); post-edge-SSA
+O3 buys ~0.09s and lands AT REFERENCE PARITY (0.32-0.34 vs
+0.29-0.32) while linking 25% faster than the reference's -O3.  The
+outline cost model (outline iff body_mass > max(800, 2 x consumed-
+sharable-mass)) is what makes O3 affordable: monsters (shared/mass
+~0.28) leave the mega-function — runtime-POSITIVE (L1-miss count
+6.5x down) — while the sharing band (~1.0) stays inline.
+
+Remaining interp-side residual: ~0.09s of real ticks (wire valid-bit
+clears + __me_check R0001 checkers), untouched by opt level and also
+the central-loop #9 blocker — compiling them into the edge fn is the
+projected below-reference crossing.
