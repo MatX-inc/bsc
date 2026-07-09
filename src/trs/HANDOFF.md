@@ -315,12 +315,14 @@ transformation); #22 foreign marshaling fast path (MatX priority:
 allocation-free callbacks, then DIRECT BDPI calls); #23 always-fire
 short circuit (WILL_FIRE==const-true rules: no sched/WF, defs
 always-compute-always-share — the static p=1 case, no PGO).
-MEASUREMENT QUEUE (Ravi's ordering): five-leg gate on 447c1a0d tip
-(in flight) -> quiet baseline freeze -> TESTSUITE AOT COMPARISON
-(suite wall vs C++ backend; trsLink integration ready) -> N-TILE
-GRID BENCHMARK (compile+run vs N: trs / C++ / Verilator — the
-headline artifact; also measures bsc frontend scaling) -> O-ladder
-re-run (post-inlining, O2/O3 finally have scope).
+MEASUREMENT QUEUE (Ravi's ordering, revised): five-leg gate (leg 1
+green) -> QUIET PARITY WORK: O-ladder re-run (post-inlining, O2/O3
+finally have scope), fresh profile on optimized code, alias-metadata
+experiment, #24 edge-SSA if the cheap rungs don't close the ~1.3x ->
+COMPUTE PARITY -> testsuite AOT comparison (HELD until parity).
+N-tile grid benchmark: PARKED (bigger step — needs a representative
+design, bsc frontend scaling data, and #20's pools/batching to be
+meaningful); it is #20's demonstration, not a near-term measurement.
 
 SCOREBOARD (sudoku, quiet machine, evening):
 build 8.0s one-module-O1 (2.2s chunked-O0) vs reference 13.94s at
