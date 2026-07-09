@@ -191,6 +191,8 @@ struct VcdClock {
     has_init: bool,
     /// posedge count (bk_clock_cycle_count)
     pos_count: u64,
+    /// negedge count (bk_clock_edge_count's other direction)
+    neg_count: u64,
     pos_at: u64,
     neg_at: u64,
     /// value before the first edge (bk_clock_initial_value)
@@ -379,6 +381,38 @@ fn collect_def_refs(e: &Expr, out: &mut Vec<StrId>) {
 /// Resumable event-loop state.  Everything run() used to build locally
 /// lives on the Interp so a driver (`sim step N`) or the JIT harness
 /// (run-to-cycle, compare, continue) can advance in bounded steps.
+/// Where `advance_until` stops, beyond $finish — the kernel's stop
+/// machinery behind bk_advance (bk_quit_after_edge / bk_quit_at /
+/// UI events).  Targets are ABSOLUTE (bluetcl passes current
+/// count + N).
+#[derive(Clone, Debug)]
+pub struct StopCond {
+    /// default-clock posedge budget (advance(max_cycles) legacy)
+    pub max_cycles: u64,
+    /// stop at the end of the timeslice in which edge #count of
+    /// (kernel clock index, posedge?) completes
+    pub edge_limits: Vec<(usize, bool, u64)>,
+    /// stop at the end of timeslice t; time advances to t even when
+    /// no design event lands there
+    pub at_times: Vec<u64>,
+}
+
+impl Default for StopCond {
+    fn default() -> Self {
+        StopCond {
+            max_cycles: u64::MAX,
+            edge_limits: Vec::new(),
+            at_times: Vec::new(),
+        }
+    }
+}
+
+impl StopCond {
+    fn trivial(&self) -> bool {
+        self.edge_limits.is_empty() && self.at_times.is_empty()
+    }
+}
+
 struct Stepper {
     /// distinct clocks in first-appearance order, default clock first
     clocks: Vec<StrId>,
@@ -3287,6 +3321,7 @@ impl Interp {
                         _ => 0,
                     },
                     pos_count: 0,
+                    neg_count: 0,
                     pos_at: 0,
                     neg_at: 0,
                 })
@@ -3431,6 +3466,14 @@ impl Interp {
     /// index).  max_cycles counts default-clock posedges, including the
     /// in-reset edge at t=0.  Returns the exit code so far (1 iff $fatal).
     pub fn advance(&mut self, max_cycles: u64) -> i32 {
+        self.advance_until(&StopCond { max_cycles, ..Default::default() })
+    }
+
+    /// advance() with the kernel's full stop machinery — the capi's
+    /// bk_advance (docs/TCL-CAPI.md).  bluetcl computes ABSOLUTE
+    /// targets (bk_clock_edge_count + N) for edge limits.
+    pub fn advance_until(&mut self, cond: &StopCond) -> i32 {
+        let max_cycles = cond.max_cycles;
         self.prime();
         let Stepper {
             clocks,
@@ -3456,6 +3499,12 @@ impl Interp {
                 'central: {
                     // hot path: no diagnostics on the already-tried check
                     if central_tried {
+                        break 'central;
+                    }
+                    // interactive stop machinery is heap-loop-only:
+                    // the central player has no per-edge bookkeeping
+                    if !cond.trivial() {
+                        central_tried = true;
                         break 'central;
                     }
 
@@ -3567,6 +3616,7 @@ impl Interp {
             let period = hi + lo;
             let ap = j.arena_ptr();
             let envp = self as *mut Interp as *mut core::ffi::c_void;
+            let cycles0 = self.cycle;
             while self.finished.is_none() && self.cycle < max_cycles {
                 self.cycle += 1;
                 self.now = tp;
@@ -3591,10 +3641,18 @@ impl Interp {
             // clock bookkeeping for queries + re-arm the heap so the
             // general loop (and later advance() calls) resume cleanly
             {
+                let k = self.cycle - cycles0;
                 let c = &mut self.vcd_clocks[wci];
                 c.pos_at = self.now;
                 c.pos_count = self.cycle;
                 c.cur = true;
+                // negedges pass silently inside the central player
+                // (no negedge comps by precondition); keep the counts
+                // coherent for later bk queries
+                if k > 0 {
+                    c.neg_count += k;
+                    c.neg_at = tn - period;
+                }
             }
             heap.push(Reverse((tp, 1, wci, true)));
             heap.push(Reverse((tn, 1, wci, false)));
@@ -3614,6 +3672,31 @@ impl Interp {
                 heap.push(Reverse((t, prio, ci, pos)));
                 try_central!();
                 continue;
+            }
+            // bk_quit_at / UI events: every timeslice <= tq is done
+            // once the next event lies beyond tq; the kernel's UI
+            // callback is an event AT tq, so time advances to tq
+            if let Some(&tq) = cond.at_times.iter().filter(|&&tq| t > tq).min()
+            {
+                self.now = self.now.max(tq);
+                final_now = final_now.max(tq);
+                heap.push(Reverse((t, prio, ci, pos)));
+                break;
+            }
+            // bk_quit_after_edge: a reached limit refuses the next
+            // same-direction edge (resume-safe, like the cycle limit)
+            if cond.edge_limits.iter().any(|&(lci, ldir, lim)| {
+                lci == ci
+                    && ldir == pos
+                    && (if pos {
+                        self.vcd_clocks[ci].pos_count
+                    } else {
+                        self.vcd_clocks[ci].neg_count
+                    }) >= lim
+            }) {
+                final_now = t;
+                heap.push(Reverse((t, prio, ci, pos)));
+                break;
             }
             if pos && Some(clocks[ci]) == self.d.default_clock {
                 if self.cycle >= max_cycles {
@@ -3638,6 +3721,7 @@ impl Interp {
                 } else {
                     self.vcd.clk_combinational[ci] = c.neg_at;
                     c.neg_at = t;
+                    c.neg_count += 1;
                 }
                 if c.first_edge.is_none() {
                     c.first_edge = Some(t);
@@ -3940,7 +4024,14 @@ impl Interp {
             // posedge, but the kernel finishes the current timeslice
             // first — same-instant edges of other clocks still run;
             // events at later times do not
-            if self.cycle >= max_cycles && !same_time {
+            let edge_hit = cond.edge_limits.iter().any(|&(lci, ldir, lim)| {
+                (if ldir {
+                    self.vcd_clocks[lci].pos_count
+                } else {
+                    self.vcd_clocks[lci].neg_count
+                }) >= lim
+            });
+            if (self.cycle >= max_cycles || edge_hit) && !same_time {
                 break;
             }
         }
