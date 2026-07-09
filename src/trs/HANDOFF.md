@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-fc3251b2, edge-SSA landed + tick skip — ALWAYS `git push personal`, never bare `git push origin`:
+14f011fa, O3 run parity on sudoku — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -107,16 +107,26 @@ fn is the next increment — it also clears central-loop bail #9, so
 sudoku-class designs enter the central loop (LongCnt is 0.05s vs ref
 0.27s there).
 
-NEXT: (1) final double gate (default-AOT + edge-SSA-AOT sweeps on
-fc3251b2) was IN FLIGHT at write time — results land in
-final-{aot,ssa}.json in the session scratchpad; (2) wire-clear +
-me-check tick compilation into the edge fn (central unlock for
-sudoku); (3) O-ladder on edge-SSA artifacts — UNPARKED (the full-
-edge composition exists now; Ravi's condition); (4) per-body outline
-dial if link time matters after the ladder (bound the mega-fn:
-monsters as calls with their few ACTUAL hoisted values as args);
-(5) edge-SSA default-on for AOT once gates stay green -> compute
-parity -> testsuite AOT comparison.
+TASK #24 COMPLETE — EIGHT perfect sweep legs (966/0 each), and the
+O-ladder verdict: O3 on the SSA+outlined IR lands AT REFERENCE RUN
+PARITY (0.32-0.34s vs 0.29-0.32s) while linking 10.7s vs their
+13.9s.  The outline COST MODEL (1b323b3d: outline iff body_mass >
+max(800, 2 x consumed-sharable-mass), self-calibrating; d92ef566
+carried the dial + the sched/exec coverage-split bugfix that was
+silently dropping every exec symbol) made O3 affordable; monsters
+leaving the mega-fn is runtime-POSITIVE (L1-misses 6.5x down).
+Full numbers in docs/PERF-BASELINE.md post-edge-SSA section.
+
+NEXT: (1) flip the AOT default: edge-SSA + cost model + O3 (code
+change in the link path defaults, then the definitive default-path
+sweep + battery); (2) wire-clear + __me_check tick compilation into
+the edge fn — the last ~0.09s interp residual AND central-loop
+bail #9: the projected BELOW-reference crossing for sudoku-class
+designs; (3) JIT-sync/lazy legs re-run (belt-and-braces post tick
+skip); (4) compute-parity call -> testsuite AOT comparison
+(fullparallel, held for this); (5) backlog: #15 arm outlining, #22
+foreign fast path, Tcl surface, VCD parity classes, seam-inventory
+export elision.
 
 ## Current state
 
