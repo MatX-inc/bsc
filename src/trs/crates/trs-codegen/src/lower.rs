@@ -245,6 +245,120 @@ pub struct FnProtos {
     pub exec_prims: Vec<PrimCallSpec>,
 }
 
+/// Wire format for per-ordinal call-site tables baked into artifacts
+/// (trs_protos global): little-endian u32 stream.  Loading decoded
+/// protos skips trial_lower entirely (0.32s of sudoku's startup);
+/// validity is guaranteed by the bir_hash/layout/threshold checks.
+pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
+    let mut o: Vec<u8> = Vec::new();
+    let w = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
+    let wf = |o: &mut Vec<u8>, v: &[ForeignSpec]| {
+        w(o, v.len() as u32);
+        for f in v {
+            w(o, f.inst as u32);
+            w(o, f.func);
+            w(o, f.ret_width);
+            w(o, f.args.len() as u32);
+            for a in &f.args {
+                match a {
+                    FArgSpec::Str(sid) => {
+                        w(o, 0);
+                        w(o, *sid);
+                        w(o, 0);
+                    }
+                    FArgSpec::Num { width, signed } => {
+                        w(o, 1);
+                        w(o, *width);
+                        w(o, *signed as u32);
+                    }
+                }
+            }
+        }
+    };
+    let wp = |o: &mut Vec<u8>, v: &[PrimCallSpec]| {
+        w(o, v.len() as u32);
+        for pc in v {
+            w(o, pc.inst as u32);
+            w(o, pc.method);
+            w(o, pc.ret_width);
+            w(o, pc.is_action as u32);
+            w(o, pc.arg_widths.len() as u32);
+            for &aw in &pc.arg_widths {
+                w(o, aw);
+            }
+        }
+    };
+    w(&mut o, protos.len() as u32);
+    for p in protos {
+        wf(&mut o, &p.sched_foreign);
+        wp(&mut o, &p.sched_prims);
+        wf(&mut o, &p.exec_foreign);
+        wp(&mut o, &p.exec_prims);
+    }
+    o
+}
+
+/// Inverse of encode_protos; None on truncation/garbage.
+pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
+    let mut i = 0usize;
+    fn r(b: &[u8], i: &mut usize) -> Option<u32> {
+        let v = u32::from_le_bytes(b.get(*i..*i + 4)?.try_into().ok()?);
+        *i += 4;
+        Some(v)
+    }
+    fn rf(b: &[u8], i: &mut usize) -> Option<Vec<ForeignSpec>> {
+        let n = r(b, i)?;
+        let mut v = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let inst = r(b, i)? as usize;
+            let func = r(b, i)?;
+            let ret_width = r(b, i)?;
+            let argc = r(b, i)?;
+            let mut args = Vec::with_capacity(argc as usize);
+            for _ in 0..argc {
+                let tag = r(b, i)?;
+                let a = r(b, i)?;
+                let sg = r(b, i)?;
+                args.push(if tag == 0 {
+                    FArgSpec::Str(a)
+                } else {
+                    FArgSpec::Num { width: a, signed: sg != 0 }
+                });
+            }
+            v.push(ForeignSpec { inst, func, ret_width, args });
+        }
+        Some(v)
+    }
+    fn rp(b: &[u8], i: &mut usize) -> Option<Vec<PrimCallSpec>> {
+        let n = r(b, i)?;
+        let mut v = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let inst = r(b, i)? as usize;
+            let method = r(b, i)?;
+            let ret_width = r(b, i)?;
+            let is_action = r(b, i)? != 0;
+            let argc = r(b, i)?;
+            let mut arg_widths = Vec::with_capacity(argc as usize);
+            for _ in 0..argc {
+                arg_widths.push(r(b, i)?);
+            }
+            v.push(PrimCallSpec { inst, method, arg_widths, ret_width, is_action });
+        }
+        Some(v)
+    }
+    let n = r(b, &mut i)?;
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        out.push(FnProtos {
+            sched_foreign: rf(b, &mut i)?,
+            sched_prims: rp(b, &mut i)?,
+            exec_foreign: rf(b, &mut i)?,
+            exec_prims: rp(b, &mut i)?,
+        });
+    }
+    (i == b.len()).then_some(out)
+}
+
 /// Eligibility check: run the full lowering into a throwaway context
 /// (no engine, no LLVM codegen — ~ms per rule) so ineligibility is
 /// decided synchronously before any compiled dispatch is planned.
