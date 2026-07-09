@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`6fc102de` — ALWAYS `git push personal`, never bare `git push origin`:
+`447c1a0d` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -279,7 +279,55 @@ is now lazy (link/plain-JIT/fallback only).  AOT_LAYOUT_REV=4.
 Startup -m 1: 0.64s -> 0.08s interleaved-under-load; byte-identical
 x3; rev-3 artifacts refuse + fall back cleanly.
 
-SCOREBOARD (sudoku, quiet machine): build 2.2s (O0) / 4.1s (O1) vs
+STRUCTURAL PARITY ACHIEVED, THEN PASSED (evening arc, ~12 commits):
+- TIER B2 COMPLETE (b95b2742/1f64fb07/c73bb09c): ConfigReg writes +
+  FIFO enq/deq inline (arena-authoritative refresh()/mirror; inline
+  UNDER the action-condition branch — branchless everywhere was a
+  measured 19% regression, write sites are arm-multiplied); prim
+  trampoline census on sudoku: 0 calls.
+- DISPATCH FUSION (7694c351/c14fcfdb): one compiled edge fn per
+  composition (JitPlans::try_fuse when warm / edge_c<k> symbols in
+  artifacts, AOT_LAYOUT_REV=5) — the schedule promoted from data to
+  code; killed ~77M per-node walk visits on sudoku.
+- CENTRAL LOOP (b8429625): steady-state player for single-Wave-clock
+  designs (t += period; fused_edge; repeat) with heap kept for
+  aperiodic events; three over-strict preconditions found by STATIC
+  bail counters (env-var probes measure themselves at 10M slices!):
+  retry-after-fusion-exists, skip one-shot foreign-clock comps,
+  accept all-rst tick lists.  sysLongCnt 5M cycles: 0.56s -> 0.09s —
+  3x FASTER THAN REFERENCE (0.27s).  Plan-player generalization (the
+  EdgePlan hyperperiod design for gated/MCD) recorded in task #21
+  history.
+- WHOLE-EDGE INLINING (447c1a0d): one-module AOT emission (helpers +
+  scheds + exec reps + fused edges), pipeline flattens 306/552 edge
+  call sites; ALSO fixed run_ir_passes ignoring the AOT O1 default
+  ("O1 artifacts" had never run the inliner unless the env var was
+  typed).  Sudoku 0.625 -> 0.472s; link 8.0s single-module (
+  per-composition module parallelism = obvious follow-up).
+- trsLink INTEGRATION (82df91c4): bsc -trs links via `trs link`
+  (interp-wrapper fallback); wrappers honor $TRS.  bsc REBUILT.
+- FnProtos in artifacts + O1 default recorded above (task #16).
+
+TASK BOARD (see task list; all designs recorded in task metadata):
+#15 action dedup; #19 waves (needs conflict-DAG export from bsc);
+#20 pools/batching/lanes (Ravi's grid design — the tile-grid
+transformation); #22 foreign marshaling fast path (MatX priority:
+allocation-free callbacks, then DIRECT BDPI calls); #23 always-fire
+short circuit (WILL_FIRE==const-true rules: no sched/WF, defs
+always-compute-always-share — the static p=1 case, no PGO).
+MEASUREMENT QUEUE (Ravi's ordering): five-leg gate on 447c1a0d tip
+(in flight) -> quiet baseline freeze -> TESTSUITE AOT COMPARISON
+(suite wall vs C++ backend; trsLink integration ready) -> N-TILE
+GRID BENCHMARK (compile+run vs N: trs / C++ / Verilator — the
+headline artifact; also measures bsc frontend scaling) -> O-ladder
+re-run (post-inlining, O2/O3 finally have scope).
+
+SCOREBOARD (sudoku, quiet machine, evening):
+build 8.0s one-module-O1 (2.2s chunked-O0) vs reference 13.94s at
+-O3; run 0.472s vs 0.36s (1.3x, was 16x this morning); startup
+0.05s; LongCnt floor 0.09s vs 0.27s (trs 3x AHEAD).
+
+PREVIOUS SCOREBOARD (sudoku, quiet machine): build 2.2s (O0) / 4.1s (O1) vs
 reference 13.94s at their -O3; run ~1.0s vs 0.36s with startup now
 ~0.08s — residual gap is ~2x sim-only, concentrated in the (halved)
 decision trees: task #15 arm outlining/dedup + taken-path tightness.
