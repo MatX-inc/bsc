@@ -1328,6 +1328,7 @@ fn lower_edge_ssa<'ctx>(
                     args: HashMap::new(),
                     ssa: HashMap::new(),
                     expanding: Vec::new(),
+            dead_defs: Default::default(),
                     tasks: HashMap::new(),
                     is_exec: true,
                     depth: 0,
@@ -1343,6 +1344,7 @@ fn lower_edge_ssa<'ctx>(
                 args: HashMap::new(),
                 ssa: HashMap::new(),
                 expanding: Vec::new(),
+            dead_defs: Default::default(),
                 tasks: HashMap::new(),
                 is_exec,
                 depth: 0,
@@ -1563,6 +1565,11 @@ struct Frame<'ctx> {
     ssa: HashMap<StrId, IntValue<'ctx>>,
     /// defs currently being expanded (cycle guard)
     expanding: Vec<StrId>,
+    /// defs whose positioned binding lived inside a conditional arm
+    /// and died at the join: post-arm references must NOT re-expand
+    /// the def table (the stmt's positioned expr may differ) — they
+    /// make the design ineligible instead
+    dead_defs: std::collections::HashSet<StrId>,
     /// ActionValue task results by cookie (Expr::TaskValue reads):
     /// (value, width)
     tasks: HashMap<u32, (IntValue<'ctx>, u32)>,
@@ -1972,17 +1979,29 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         func: StrId,
         args: &[Expr],
     ) -> Result<IntValue<'ctx>, Ineligible> {
-        use trs_ir::ForeignType as FT;
-        let Some(ff) = self
-            .env
-            .d
-            .foreign_funcs
-            .iter()
-            .find(|ff| ff.name == func)
-            .cloned()
-        else {
+        let Some(ff) = self.bdpi_import(func) else {
             return nope("foreign value call without BDPI import");
         };
+        self.bdpi_emit(f, width, &ff, args)
+    }
+
+    /// The design's BDPI import for `func`, if any (system tasks and
+    /// unknown names return None).
+    fn bdpi_import(&self, func: StrId) -> Option<trs_ir::ForeignFunc> {
+        self.env.d.foreign_funcs.iter().find(|ff| ff.name == func).cloned()
+    }
+
+    /// Direct BDPI call at the current insertion point (no condition
+    /// handling here — callers gate action calls themselves).
+    fn bdpi_emit(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        ff: &trs_ir::ForeignFunc,
+        args: &[Expr],
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        use trs_ir::ForeignType as FT;
+        let ff = ff.clone();
         let c_name = self.env.d.strings[ff.c_name as usize].clone();
         let i64t = self.ctx.i64_type();
         let i32t = self.ctx.i32_type();
@@ -2650,6 +2669,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args: HashMap::new(),
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: f.is_exec,
             depth: f.depth + 1,
@@ -2687,6 +2707,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
         if let Some(v) = f.ssa.get(&n) {
             return Ok(*v);
+        }
+        if f.dead_defs.contains(&n) {
+            return Err(Ineligible(format!(
+                "def escaped conditional arm: {}",
+                self.env.d.strings[n as usize]
+            )));
         }
         // whole-edge SSA cache: a value latched (CF/WF/eager at its
         // schedule position) or legally shared by an earlier section of
@@ -3112,6 +3138,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args: HashMap::new(),
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: false,
             depth: 0,
@@ -3207,6 +3234,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args: HashMap::new(),
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: true,
             depth: 0,
@@ -3309,6 +3337,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             args,
             ssa: HashMap::new(),
             expanding: Vec::new(),
+            dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: true,
             depth: 0,
@@ -3475,10 +3504,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         list: &[Stmt],
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<(), Ineligible> {
-        for st in list.iter() {
+        let mut it = list.iter().peekable();
+        while let Some(st) = it.next() {
             match st {
                 Stmt::Def { name, expr } => {
                     let v = self.expr(f, expr)?;
+                    f.dead_defs.remove(name);
                     f.ssa.insert(*name, v);
                 }
                 Stmt::Action(a) => self.action(f, func, a, stop_bb)?,
@@ -3488,6 +3519,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             f, func, *tf, *cookie, *temp, *width, cond, args, signed,
                             stop_bb,
                         )?;
+                        f.dead_defs.remove(def);
                         f.ssa.insert(*def, v);
                     }
                     Action::MethCall { instance, method, cond, args, .. } => {
@@ -3523,11 +3555,69 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         self.builder.position_at_end(jn_bb);
                         let phi = self.builder.build_phi(self.ity(wd), "avphi").unwrap();
                         phi.add_incoming(&[(&v, g_end), (&undet, s_end)]);
+                        f.dead_defs.remove(def);
+                        f.ssa.insert(*def, phi.as_basic_value().into_int_value());
+                    }
+                    Action::Foreign { func: ffn, cond, args, .. } => {
+                        // BDPI ActionValue import: direct call under
+                        // the condition, result phi-bound to the def
+                        let Some(imp) = self.bdpi_import(*ffn) else {
+                            return nope("foreign actionvalue without BDPI import");
+                        };
+                        let wd = self.def_width(f.inst, *def).unwrap_or(1);
+                        let wc = self.expr_width(f, cond)?;
+                        let c = self.expr(f, cond)?;
+                        let cz = self.nonzero(c, wc);
+                        let go_bb = self.ctx.append_basic_block(func, "bvgo");
+                        let sk_bb = self.ctx.append_basic_block(func, "bvsk");
+                        let jn_bb = self.ctx.append_basic_block(func, "bvjn");
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, sk_bb)
+                            .unwrap();
+                        self.builder.position_at_end(go_bb);
+                        let v = self.bdpi_emit(f, wd, &imp, args)?;
+                        let g_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(jn_bb).unwrap();
+                        self.builder.position_at_end(sk_bb);
+                        let z = self.ity(wd).const_zero();
+                        let s_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(jn_bb).unwrap();
+                        self.builder.position_at_end(jn_bb);
+                        let phi =
+                            self.builder.build_phi(self.ity(wd), "bvphi").unwrap();
+                        phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
+                        f.dead_defs.remove(def);
                         f.ssa.insert(*def, phi.as_basic_value().into_int_value());
                     }
                     _ => return nope("actionvalue kind in body"),
                 },
                 Stmt::Cond { cond, then_, else_ } => {
+                    // MERGE a run of consecutive Conds with the
+                    // IDENTICAL port-pure condition: bsc emits one
+                    // reset-guard Cond per task group, and defs bound
+                    // in one arm are used by later same-guard arms —
+                    // the interpreter executes them as one guarded
+                    // sequence, so the lowering must too (otherwise
+                    // the defs "escape" and the design stays
+                    // interpreted)
+                    let mut then_run: Vec<&[Stmt]> = vec![then_];
+                    let mut else_run: Vec<&[Stmt]> = vec![else_];
+                    if Self::port_pure(cond) {
+                        while let Some(Stmt::Cond {
+                            cond: c2,
+                            then_: t2,
+                            else_: e2,
+                        }) = it.peek()
+                        {
+                            if c2 == cond {
+                                then_run.push(t2);
+                                else_run.push(e2);
+                                it.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
                     let wc = self.expr_width(f, cond)?;
                     let c = self.expr(f, cond)?;
                     let cz = self.nonzero(c, wc);
@@ -3536,12 +3626,46 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let join_bb = self.ctx.append_basic_block(func, "join");
                     self.builder.build_conditional_branch(cz, then_bb, else_bb).unwrap();
                     self.builder.position_at_end(then_bb);
-                    self.cond_arm(f, func, then_, stop_bb)?;
+                    let st_t = self.cond_arm_run(f, func, &then_run, stop_bb)?;
                     self.builder.build_unconditional_branch(join_bb).unwrap();
                     self.builder.position_at_end(else_bb);
-                    self.cond_arm(f, func, else_, stop_bb)?;
+                    let st_e = self.cond_arm_run(f, func, &else_run, stop_bb)?;
                     self.builder.build_unconditional_branch(join_bb).unwrap();
                     self.builder.position_at_end(join_bb);
+                    // idempotent-task arm bindings: re-materialize at
+                    // the join (dominates all later uses)
+                    let truth = Expr::Const { width: 1, limbs: vec![1] };
+                    for (d, a) in st_t.into_iter().chain(st_e) {
+                        let Action::Task {
+                            func: tf5,
+                            cookie,
+                            temp,
+                            width,
+                            args,
+                            signed,
+                            ..
+                        } = a
+                        else {
+                            continue;
+                        };
+                        let name = self.env.d.strings[tf5 as usize].clone();
+                        let v = if matches!(name.as_str(), "$time" | "$stime") {
+                            let now = self.load_word(f, self.env.now_slot);
+                            self.to_w(now, 64, width.max(1), false)
+                        } else {
+                            // run-constant, side-effect-free: re-call
+                            self.task_call(
+                                f, func, tf5, cookie, temp, width, &truth,
+                                &args, &signed, stop_bb,
+                            )?
+                        };
+                        if let Some(t) = temp {
+                            f.dead_defs.remove(&t);
+                            f.ssa.insert(t, v);
+                        }
+                        f.dead_defs.remove(&d);
+                        f.ssa.insert(d, v);
+                    }
                 }
             }
         }
@@ -3593,25 +3717,101 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         Ok(out)
     }
 
-    /// A Cond arm: defs inside arms would leak SSA across basic blocks
-    /// where the interpreter would not have computed them — reject (v1).
+    /// Conditions safe to evaluate ONCE for a run of merged Conds:
+    /// ports/consts/prims only — no Def refs, no method calls, so the
+    /// value cannot change between the original per-Cond evaluations.
+    fn port_pure(e: &Expr) -> bool {
+        match e {
+            Expr::Const { .. } | Expr::Port(_) => true,
+            Expr::Prim { args, .. } => args.iter().all(Self::port_pure),
+            Expr::If { cond, then_, else_, .. } => {
+                Self::port_pure(cond) && Self::port_pure(then_) && Self::port_pure(else_)
+            }
+            _ => false,
+        }
+    }
+
+    /// One merged arm region over a run of same-condition Conds.
+    /// Returns the arm's instant-stable ($time-class) bindings for
+    /// re-materialization at the caller's join block.
+    fn cond_arm_run(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        lists: &[&[Stmt]],
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<Vec<(StrId, Action)>, Ineligible> {
+        let merged: Vec<Stmt> =
+            lists.iter().flat_map(|l| l.iter().cloned()).collect();
+        self.cond_arm(f, func, &merged, stop_bb)
+    }
+
+    /// A Cond arm: positioned defs (Stmt::Def / AvAction) bind INSIDE
+    /// the arm and die at the join (dominance).  bsc's tsort scoping
+    /// keeps their uses arm-local in practice; a post-arm reference
+    /// would silently re-expand the def TABLE, whose expr may differ
+    /// from the positioned stmt — so dead bindings are tracked and
+    /// referencing one makes the design ineligible (loud, not wrong).
     fn cond_arm(
         &mut self,
         f: &mut Frame<'ctx>,
         func: FunctionValue<'ctx>,
         list: &[Stmt],
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
-    ) -> Result<(), Ineligible> {
-        for st in list {
-            if matches!(st, Stmt::Def { .. } | Stmt::AvAction { .. }) {
-                return nope("def inside conditional arm");
+    ) -> Result<Vec<(StrId, Action)>, Ineligible> {
+        // arm bindings split two ways.  IDEMPOTENT tasks ($time-class:
+        // instant-stable; plusargs-class: run-constant, side-effect-
+        // free) are RE-MATERIALIZED by the caller at the JOIN block
+        // (dominates all later uses — cross-arm dataflow of these is
+        // the common reset-guard shape).  Everything else dies at the
+        // join and post-arm references make the design ineligible.
+        fn idempotent(name: &str) -> bool {
+            matches!(
+                name,
+                "$time" | "$stime" | "$test$plusargs" | "$value$plusargs"
+            )
+        }
+        fn bound(
+            strings: &[String],
+            list: &[Stmt],
+            dead: &mut Vec<StrId>,
+            stable: &mut Vec<(StrId, Action)>,
+        ) {
+            for st in list {
+                match st {
+                    Stmt::Def { name, .. } => dead.push(*name),
+                    Stmt::AvAction { def, action } => match action {
+                        Action::Task { func, .. }
+                            if idempotent(strings[*func as usize].as_str()) =>
+                        {
+                            stable.push((*def, action.clone()));
+                        }
+                        Action::Task { temp: Some(t), .. } => {
+                            dead.push(*def);
+                            dead.push(*t);
+                        }
+                        _ => dead.push(*def),
+                    },
+                    Stmt::Cond { then_, else_, .. } => {
+                        bound(strings, then_, dead, stable);
+                        bound(strings, else_, dead, stable);
+                    }
+                    _ => {}
+                }
             }
         }
-        // table defs expanded inside the arm must not leak (dominance)
+        // arm-local bindings + table defs expanded inside the arm must
+        // not leak (dominance)
         let saved = f.ssa.clone();
         let r = self.stmts(f, func, list, stop_bb);
         f.ssa = saved;
-        r
+        let mut dead = Vec::new();
+        let mut stable = Vec::new();
+        bound(&self.env.d.strings, list, &mut dead, &mut stable);
+        for n in dead {
+            f.dead_defs.insert(n);
+        }
+        r.map(|_| stable)
     }
 
     fn action(
@@ -4034,7 +4234,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let sk_bb = self.ctx.append_basic_block(func, "fsk");
                 self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                 self.builder.position_at_end(go_bb);
-                self.emit_foreign(f, *ff, args, signed, 0, stop_bb)?;
+                if let Some(imp) = self.bdpi_import(*ff) {
+                    // user BDPI action: direct call (task #22)
+                    self.bdpi_emit(f, 1, &imp, args)?;
+                } else {
+                    self.emit_foreign(f, *ff, args, signed, 0, stop_bb)?;
+                }
                 self.builder.build_unconditional_branch(sk_bb).unwrap();
                 self.builder.position_at_end(sk_bb);
                 Ok(())
