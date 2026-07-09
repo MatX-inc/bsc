@@ -154,3 +154,28 @@ VERDICTS:
    (plan walk / per-instance analysis) — TYPE-KEYED ANALYSIS is
    hereby promoted from link-time nicety to the run-time scaling
    fix.  Startup decomposition (-m 1) at N=32 pending a quiet slot.
+
+## Grid v2 amendments (rich tiles, packed link rules; binary bceb3f30)
+
+v2 ladder (see results.csv gen=v2): byte-identical at every N; at
+N=32 b3 link 45.7s vs ref build 129s (2.8x ahead).
+
+CONTROLLED EXPERIMENT — Ravi's O(rules^2) packing hypothesis, same
+v2 tiles, only link packing varied, back-to-back on one machine:
+1024 link rules 151.9s frontend vs 4 packed rules 142.4s (~6%,
+within the box's ±30% bsc run-to-run wobble).  REFUTED for this
+shape: the benchmark's link rules are PAIRWISE DISJOINT, and bsc
+disposes of disjoint pairs cheaply — the quadratic bites when rule
+pairs share state.  The packing stays (right shape for interacting
+rules); the v1->v2 frontend growth is tile RICHNESS, and the true
+attribution inside bsc (elaboration vs top-level compose vs .ba
+emission) needs bsc phase timing (no public flag; upstream
+question).
+
+STARTUP DECOMPOSITION, N=32 quiet (-m 1 vs full):
+  b3  startup 0.18-0.19s, sim ~0.04s
+  ref startup 0.08s,      sim ~0.10s
+Our SIMULATION is 2.5x FASTER than reference at 1024 tiles; the
+entire run-time deficit is O(instances) STARTUP (plan walk +
+analysis + load).  TYPE-KEYED ANALYSIS is confirmed as the scale
+fix — promoted to the first rung of the scale arc.
