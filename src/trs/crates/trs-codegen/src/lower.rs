@@ -98,6 +98,9 @@ pub struct InstEnv {
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
     pub reset_slot: HashMap<StrId, u32>,
+    /// outlined stable def -> (memo slot base: stamp word then value
+    /// words, width); type-uniform offsets (part of the dedup sig)
+    pub memo_slot: HashMap<StrId, (u32, u32)>,
     /// subtree arena region [start, end): every slot this instance's
     /// compiled code can touch (own state + descendants); the basis
     /// for per-module-type code dedup (base-relative addressing)
@@ -353,6 +356,7 @@ fn finish_engine(
 pub fn compile_scheds(
     env: &PlanEnv,
     specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
     foreign_cb: ForeignCb,
     sigfpe_cb: SigfpeCb,
     prim_cb: PrimCb,
@@ -399,6 +403,7 @@ pub fn compile_scheds(
 pub fn compile_execs(
     env: &PlanEnv,
     specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
     foreign_cb: ForeignCb,
     sigfpe_cb: SigfpeCb,
     prim_cb: PrimCb,
@@ -480,6 +485,7 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
 pub fn compile_object_chunk(
     env: &PlanEnv,
     specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
     do_sched: bool,
     do_exec: bool,
 ) -> Result<Vec<u8>, Ineligible> {
@@ -525,7 +531,7 @@ pub fn compile_object_chunk(
 
 /// AOT: the fingerprint object.  The loader checks these globals before
 /// trusting the artifact's baked slot numbers.
-pub fn compile_meta_object(bir_hash: u64) -> Result<Vec<u8>, Ineligible> {
+pub fn compile_meta_object(bir_hash: u64, split_thresh: u64) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
     let i64t = ctx.i64_type();
@@ -534,6 +540,10 @@ pub fn compile_meta_object(bir_hash: u64) -> Result<Vec<u8>, Ineligible> {
     h.set_initializer(&i64t.const_int(bir_hash, false));
     let r = module.add_global(i64t, None, "trs_layout_rev");
     r.set_initializer(&i64t.const_int(AOT_LAYOUT_REV, false));
+    // split threshold changes the arena layout (memo slots): the
+    // loader must plan with the SAME value or refuse the artifact
+    let t = module.add_global(i64t, None, "trs_split_thresh");
+    t.set_initializer(&i64t.const_int(split_thresh, false));
     // single definition of the callback pointer-globals every chunk
     // object references; the loader fills them after dlopen
     for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim"] {
@@ -611,6 +621,50 @@ fn lower_helpers<'ctx>(
         }
     }
     Ok(())
+}
+
+/// JIT: compile a helper batch into one engine; returns (sym, addr).
+/// Same-batch helpers call each other by module-local symbol.
+pub fn compile_helpers(
+    env: &PlanEnv,
+    specs: &[HelperSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+) -> Result<Vec<(String, usize)>, Ineligible> {
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let (module, cbs) = make_module(ctx, None);
+    lower_helpers(env, ctx, &module, cbs, specs, refs, pseudo)?;
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    let ee = finish_engine(module)?;
+    let mut out = Vec::with_capacity(specs.len());
+    for hs in specs {
+        let addr = ee
+            .get_function_address(&hs.sym)
+            .map_err(|e| Ineligible(format!("helper fn address: {e}")))?;
+        out.push((hs.sym.clone(), addr as usize));
+    }
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// AOT: emit the helper batch as one PIC object (symbols resolve at
+/// artifact link time).
+pub fn compile_helpers_object(
+    env: &PlanEnv,
+    specs: &[HelperSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    lower_helpers(env, &ctx, &module, cbs, specs, refs, pseudo)?;
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("helper object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
 }
 
 struct Lower<'a, 'ctx> {

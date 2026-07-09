@@ -16,8 +16,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use trs_codegen::lower::{
-    compile_execs, compile_scheds, trial_lower, CompiledExec, CompiledSched, FArgSpec,
-    FnProtos, ForeignCb, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
+    compile_execs, compile_helpers, compile_helpers_object, compile_scheds, trial_lower,
+    CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
+    HelperSpec, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
 };
 use prim::ArenaKind;
@@ -174,6 +175,9 @@ pub(crate) struct LazyJit {
     protos: Vec<FnProtos>,
     /// exec dedup classes: (representative ordinal, member ordinals)
     classes: Vec<(usize, Vec<usize>)>,
+    /// outlined def-piece helpers (baked addresses; shared JIT/AOT
+    /// lowering — AOT uses symbol refs at emit time instead)
+    helpers: Arc<HelperMap>,
     /// eagerly compiled sched fns, one per rule ordinal
     pub(crate) scheds: Vec<CompiledSched>,
     /// batch index counter for body workers
@@ -215,6 +219,7 @@ impl LazyJit {
             let compiled = compile_execs(
                 &env,
                 &reps,
+                Some(&self.helpers),
                 jit_foreign_cb,
                 jit_sigfpe_cb,
                 jit_prim_cb,
@@ -550,6 +555,7 @@ fn aot_or_jit_scheds(
     inst_envs: &HashMap<usize, InstEnv>,
     specs: &[RuleSpec],
     now_slot: u32,
+    helpers: Option<&HelperMap>,
     nworkers: usize,
     trace: bool,
 ) -> Option<Vec<CompiledSched>> {
@@ -564,7 +570,7 @@ fn aot_or_jit_scheds(
             .map(|c| {
                 sc.spawn(move || {
                     let env = PlanEnv { d, insts: inst_envs, now_slot };
-                    compile_scheds(&env, c, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
+                    compile_scheds(&env, c, helpers, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
                 })
             })
             .collect::<Vec<_>>()
@@ -593,12 +599,16 @@ fn aot_or_jit_scheds(
 /// trs link: compile every rule (sched + exec) into PIC objects in
 /// parallel, add the fingerprint object, and cc -shared them into the
 /// artifact .so.
+#[allow(clippy::too_many_arguments)]
 fn aot_emit(
     d: &Design,
     inst_envs: &HashMap<usize, InstEnv>,
     specs: &[RuleSpec],
     now_slot: u32,
     classes: &[(usize, Vec<usize>)],
+    helper_specs: &[HelperSpec],
+    refs_sym: &HelperMap,
+    split_thresh: u32,
     so: &std::path::Path,
     bir_hash: u64,
 ) -> Result<(), String> {
@@ -611,18 +621,26 @@ fn aot_emit(
     let reps: Vec<RuleSpec> =
         classes.iter().map(|(rep, _)| specs[*rep].clone()).collect();
     let rchunk = reps.len().div_ceil(nworkers).max(1);
+    let helpers_on = !helper_specs.is_empty();
     let objs: Vec<Result<Vec<u8>, _>> = std::thread::scope(|sc| {
         let mut handles = Vec::new();
         for c in specs.chunks(chunk) {
             handles.push(sc.spawn(move || {
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
-                compile_object_chunk(&env, c, true, false)
+                compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
             }));
         }
         for c in reps.chunks(rchunk) {
             handles.push(sc.spawn(move || {
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
-                compile_object_chunk(&env, c, false, true)
+                compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
+            }));
+        }
+        if helpers_on {
+            handles.push(sc.spawn(move || {
+                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                let pseudo = specs[0].clone();
+                compile_helpers_object(&env, helper_specs, refs_sym, &pseudo)
             }));
         }
         handles
@@ -639,7 +657,8 @@ fn aot_emit(
         std::fs::write(&f, bytes).map_err(|e| e.to_string())?;
         files.push(f);
     }
-    let meta = compile_meta_object(bir_hash).map_err(|e| format!("meta object: {e}"))?;
+    let meta = compile_meta_object(bir_hash, split_thresh as u64)
+        .map_err(|e| format!("meta object: {e}"))?;
     let mf = tmp.join("meta.o");
     std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
     files.push(mf);
@@ -668,6 +687,7 @@ fn aot_load(
     specs: &[RuleSpec],
     protos: &[FnProtos],
     classes: &[(usize, Vec<usize>)],
+    split_thresh: u32,
 ) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>), String> {
     unsafe {
         let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
@@ -682,6 +702,15 @@ fn aot_load(
             return Err(format!(
                 "layout revision {} (this trs expects {AOT_LAYOUT_REV})",
                 **r
+            ));
+        }
+        let t: libloading::Symbol<*const u64> =
+            lib.get(b"trs_split_thresh").map_err(|e| e.to_string())?;
+        if **t != split_thresh as u64 {
+            return Err(format!(
+                "split threshold {} but this run plans with {split_thresh} \
+                 (arena layouts differ)",
+                **t
             ));
         }
         for (name, addr) in [
@@ -839,6 +868,85 @@ impl Interp {
             v.sort_by_key(|&k| rules[k].rule_idx);
         }
 
+        // ---- outline selection (TRS_JIT_SPLIT=<thresh> opt-in) ----
+        // per module type: which def pieces become helper fns, and
+        // which of those are per-instant memoizable.  Eager-set defs
+        // are excluded: a helper body hitting the eager-slot fast path
+        // could read slots whose owners have not run yet.
+        let split_thresh: Option<u32> = std::env::var("TRS_JIT_SPLIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&t| t > 0);
+        let outlined_sel: HashMap<(usize, StrId), (u32, bool)> = if let Some(th) =
+            split_thresh
+        {
+            let mut exemplar: HashMap<usize, usize> = HashMap::new();
+            for i in 0..self.insts.len() {
+                if let InstKind::User { module, .. } = &self.insts[i].kind {
+                    exemplar.entry(self.mods[*module].ir).or_insert(i);
+                }
+            }
+            let mut eager_excl: std::collections::HashSet<(usize, StrId)> =
+                Default::default();
+            for ri in &rules {
+                let mir = self.mods[self.module_of(ri.inst)].ir;
+                for &e in &ri.eager {
+                    eager_excl.insert((mir, e));
+                }
+            }
+            let insts = &self.insts;
+            let mods = &self.mods;
+            let ex2 = exemplar.clone();
+            let kind = move |m: usize, name: StrId| -> ChildRef {
+                let Some(&ex) = ex2.get(&m) else { return ChildRef::Opaque };
+                let InstKind::User { children, .. } = &insts[ex].kind else {
+                    return ChildRef::Opaque;
+                };
+                let Some(&ci) =
+                    children.iter().find(|(k, _)| **k == name).map(|(_, v)| v)
+                else {
+                    return ChildRef::Opaque;
+                };
+                match &insts[ci].kind {
+                    InstKind::Prim(p) => ChildRef::Prim(match p.arena_kind() {
+                        Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
+                        Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
+                        Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
+                        Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
+                        None => ChildClass::Other,
+                    }),
+                    InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
+                }
+            };
+            let mut an = ConeAnalyzer::new(&self.d, &kind, th);
+            let mut sel = HashMap::new();
+            let mut mirs: Vec<usize> = exemplar.keys().copied().collect();
+            mirs.sort_unstable();
+            for mir in mirs {
+                for (name, pi) in an.module(mir) {
+                    if pi.outlined && !eager_excl.contains(&(mir, name)) {
+                        let w = self.d.modules[mir]
+                            .defs
+                            .iter()
+                            .find(|dd| dd.name == name)
+                            .map(|dd| dd.width.max(1))
+                            .unwrap_or(1);
+                        sel.insert((mir, name), (w, pi.stable));
+                    }
+                }
+            }
+            if trace {
+                eprintln!(
+                    "trs jit: split thresh={th}: {} pieces ({} memoized)",
+                    sel.len(),
+                    sel.values().filter(|(_, st)| *st).count()
+                );
+            }
+            sel
+        } else {
+            HashMap::new()
+        };
+
         // ---- pass B: DFS subtree-contiguous allocation ----
         // Every slot an instance's compiled code touches (its prims,
         // ENs, rule cf/wf/eager, and everything in its submodule
@@ -850,6 +958,8 @@ impl Interp {
             (0..self.rst_asserted.len()).map(|_| alloc(&mut nslots, 1)).collect();
         // the dispatcher stamps the current instant here at every edge
         let now_slot = alloc(&mut nslots, 1);
+        // memo stamp slots initialize to u64::MAX (0 == instant 0)
+        let mut memo_stamp_slots: Vec<u32> = Vec::new();
         let mut is_child = vec![false; self.insts.len()];
         for i in 0..self.insts.len() {
             if let InstKind::User { children, .. } = &self.insts[i].kind {
@@ -984,6 +1094,22 @@ impl Interp {
                     eager_slot.insert(e, (base, ew));
                 }
             }
+            // memo slots for outlined stable defs of this module type
+            // (sorted: type-uniform offsets, part of the dedup sig)
+            let mut memo_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
+            {
+                let mut ms: Vec<(StrId, u32)> = outlined_sel
+                    .iter()
+                    .filter(|((m, _), (_, st))| *m == mir && *st)
+                    .map(|((_, dn), (w, _))| (*dn, *w))
+                    .collect();
+                ms.sort_unstable();
+                for (dn, w) in ms {
+                    let base = alloc(&mut nslots, 1 + w.div_ceil(64));
+                    memo_slot.insert(dn, (base, w));
+                    memo_stamp_slots.push(base);
+                }
+            }
             subtree.insert(i, (region_start, 0));
             stack.push(Walk::Exit(i));
             for &(_, c) in kids.iter().rev() {
@@ -1004,6 +1130,7 @@ impl Interp {
                     en_slot,
                     cfwf_slot,
                     eager_slot,
+                    memo_slot,
                     region: (region_start, 0),
                 },
             );
@@ -1067,6 +1194,10 @@ impl Interp {
                     e.reset_slot.iter().map(|(&k, &b)| (k, b)).collect();
                 m8.sort_unstable();
                 m8.hash(&mut h);
+                let mut m9: Vec<_> =
+                    e.memo_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
+                m9.sort_unstable();
+                m9.hash(&mut h);
                 let mut kids: Vec<_> = e
                     .children
                     .iter()
@@ -1263,6 +1394,85 @@ impl Interp {
             );
         }
 
+        // ---- helper fns for outlined pieces (split opt-in) ----
+        // v1: only module types whose instances all share one subtree
+        // sig (helper symbols are sig-keyed); shared JIT/AOT lowering,
+        // resolution differs (baked addresses vs .so symbols)
+        let mut helper_specs: Vec<HelperSpec> = Vec::new();
+        if !outlined_sel.is_empty() && !specs.is_empty() {
+            let mut mir_sigs: HashMap<usize, std::collections::HashSet<u64>> =
+                HashMap::new();
+            let mut exemplar: HashMap<usize, usize> = HashMap::new();
+            let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+            iis.sort_unstable();
+            for i in iis {
+                let e = &inst_envs[&i];
+                mir_sigs.entry(e.mir).or_default().insert(inst_sig[&i]);
+                exemplar.entry(e.mir).or_insert(i);
+            }
+            let mut keys: Vec<(usize, StrId)> = outlined_sel.keys().copied().collect();
+            keys.sort_unstable();
+            for (mir, dn) in keys {
+                if mir_sigs.get(&mir).map(|x| x.len()) != Some(1) {
+                    continue;
+                }
+                let ex = exemplar[&mir];
+                let (w, st) = outlined_sel[&(mir, dn)];
+                helper_specs.push(HelperSpec {
+                    mir,
+                    def: dn,
+                    width: w,
+                    sym: format!("hlp_{:016x}_{}", inst_sig[&ex], dn),
+                    inst: ex,
+                    memo_slot: if st {
+                        Some(inst_envs[&ex].memo_slot[&dn].0)
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+        let refs_sym: HelperMap = helper_specs
+            .iter()
+            .map(|h| ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width)))
+            .collect();
+        // deferred: Load requests only need addresses if the artifact
+        // fails to load (in-process fallback) — never compile helpers
+        // just to throw them away at every artifact startup
+        let compile_helpers_now = |inst_envs: &HashMap<usize, InstEnv>| -> HelperMap {
+            if helper_specs.is_empty() {
+                return HelperMap::new();
+            }
+            trs_codegen::lower::llvm_init_once();
+            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+            let pseudo = specs[0].clone();
+            let t0 = std::time::Instant::now();
+            match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
+                Ok(addrs) => {
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!(
+                            "trs jit: {} helpers compiled {:?}",
+                            helper_specs.len(),
+                            t0.elapsed()
+                        );
+                    }
+                    let am: HashMap<String, usize> = addrs.into_iter().collect();
+                    helper_specs
+                        .iter()
+                        .map(|h| {
+                            ((h.mir, h.def), (HelperRef::Addr(am[&h.sym]), h.width))
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    if trace {
+                        eprintln!("trs jit: helpers off ({e})");
+                    }
+                    HelperMap::new()
+                }
+            }
+        };
+
         // trs link: emit the artifact .so and stop (nothing runs)
         if let JitRequest::Emit { so } = &request {
             self.jit_emit_result = Some(
@@ -1272,6 +1482,9 @@ impl Interp {
                     &specs,
                     now_slot,
                     &classes,
+                    &helper_specs,
+                    &refs_sym,
+                    split_thresh.unwrap_or(0),
                     so,
                     self.bir_hash,
                 ) {
@@ -1286,7 +1499,14 @@ impl Interp {
         // artifact instead of compiling; fall back to in-process JIT
         // if the artifact is missing or stale
         let preloaded = if let JitRequest::Load { so } = &request {
-            match aot_load(so, self.bir_hash, &specs, &protos, &classes) {
+            match aot_load(
+                so,
+                self.bir_hash,
+                &specs,
+                &protos,
+                &classes,
+                split_thresh.unwrap_or(0),
+            ) {
                 Ok(l) => Some(l),
                 Err(e) => {
                     eprintln!(
@@ -1306,11 +1526,20 @@ impl Interp {
         // SCHED functions compile eagerly (blocking, parallel): they
         // run on every edge and the cone-sharing keeps them small
         let chunk = n.div_ceil(nworkers).max(1);
+        let helpers_addr: HelperMap = if preloaded.is_some() {
+            HelperMap::new()
+        } else {
+            compile_helpers_now(&inst_envs)
+        };
+        let jit_helpers: Option<&HelperMap> =
+            (!helpers_addr.is_empty()).then_some(&helpers_addr);
         let (scheds, preexecs) = if let Some((s, e)) = preloaded {
             (s, Some(e))
         } else {
             (
-                aot_or_jit_scheds(self, &inst_envs, &specs, now_slot, nworkers, trace)?,
+                aot_or_jit_scheds(
+                    self, &inst_envs, &specs, now_slot, jit_helpers, nworkers, trace,
+                )?,
                 None,
             )
         };
@@ -1332,6 +1561,7 @@ impl Interp {
             exec_args,
             protos,
             classes,
+            helpers: Arc::new(helpers_addr),
             scheds,
             next_batch: std::sync::atomic::AtomicUsize::new(0),
             batch_size: cchunk,
@@ -1403,6 +1633,9 @@ impl Interp {
         }
         for (node, &slot) in reset_node_slot.iter().enumerate() {
             unsafe { *arena_ptr.add(slot as usize) = (!self.rst_asserted[node]) as u64 };
+        }
+        for &slot in &memo_stamp_slots {
+            unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
         }
         self.jit_arena_ptr = arena_ptr;
         self.jit_reset_slots = reset_node_slot;

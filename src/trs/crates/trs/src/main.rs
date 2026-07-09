@@ -115,10 +115,16 @@ fn main() -> ExitCode {
             }
             // wrapper script (trs must be on PATH, like bluetcl for
             // reference Bluesim executables)
+            let split = std::env::var("TRS_JIT_SPLIT").unwrap_or_default();
+            let split_arg = if split.is_empty() {
+                String::new()
+            } else {
+                format!(" --split {split}")
+            };
             let script = if compiled {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec trs run \"$d/$b.bir\" --code \"$d/$b.so\" ${{1+\"$@\"}}\n"
+                     exec trs run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} ${{1+\"$@\"}}\n"
                 )
             } else {
                 format!(
@@ -199,6 +205,12 @@ fn main() -> ExitCode {
                     }
                     "--code" => {
                         code_so = it.next().map(|s| s.to_string());
+                    }
+                    // artifacts pin their split threshold (arena layout)
+                    "--split" => {
+                        if let Some(n) = it.next() {
+                            std::env::set_var("TRS_JIT_SPLIT", n);
+                        }
                     }
                     "--creation_time" => {
                         let _ = it.next();
