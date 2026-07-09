@@ -346,6 +346,10 @@ pub(crate) struct PieceInfo {
     pub eff: u32,
     /// piece is inline-lowerable and callback-free
     pub outlinable: bool,
+    /// every read in the piece is schedule-confined to one value per
+    /// instant (Reg read SB write; ConfigReg contract; RWire wset SB
+    /// wget; FIFO i_* snapshots) — memoizable once per instant
+    pub stable: bool,
     /// selected for outlining
     pub outlined: bool,
 }
@@ -370,6 +374,7 @@ pub(crate) fn select_outlined(
         nodes: u32,
         refs: Vec<usize>,
         outl: bool,
+        stab: bool,
     }
     fn scan(
         e: &Expr,
@@ -391,18 +396,22 @@ pub(crate) fn select_outlined(
                     scan(a, d, by_name, child_kind, o);
                 }
                 let mname = &d.strings[*method as usize];
-                let ok = match child_kind(*instance) {
+                let (ok, st) = match child_kind(*instance) {
                     ChildClass::Reg | ChildClass::CfgReg => {
-                        matches!(mname.as_str(), "read" | "get" | "_read")
+                        (matches!(mname.as_str(), "read" | "get" | "_read"), true)
                     }
-                    ChildClass::Wire => matches!(mname.as_str(), "whas" | "wget"),
-                    ChildClass::Fifo => matches!(
-                        mname.as_str(),
-                        "i_notFull" | "i_notEmpty" | "first" | "notFull" | "notEmpty"
-                    ),
-                    ChildClass::Other => false,
+                    ChildClass::Wire => {
+                        (matches!(mname.as_str(), "whas" | "wget"), true)
+                    }
+                    ChildClass::Fifo => match mname.as_str() {
+                        "i_notFull" | "i_notEmpty" => (true, true),
+                        "first" | "notFull" | "notEmpty" => (true, false),
+                        _ => (false, false),
+                    },
+                    ChildClass::Other => (false, false),
                 };
                 o.outl &= ok;
+                o.stab &= st;
             }
             E::Prim { args, .. } => {
                 for a in args {
@@ -421,14 +430,17 @@ pub(crate) fn select_outlined(
                 }
                 scan(default, d, by_name, child_kind, o);
             }
-            _ => o.outl = false,
+            _ => {
+                o.outl = false;
+                o.stab = false;
+            }
         }
     }
     let owns: Vec<Own> = m
         .defs
         .iter()
         .map(|dd| {
-            let mut o = Own { nodes: 0, refs: Vec::new(), outl: true };
+            let mut o = Own { nodes: 0, refs: Vec::new(), outl: true, stab: true };
             scan(&dd.expr, d, &by_name, child_kind, &mut o);
             o
         })
@@ -458,9 +470,11 @@ pub(crate) fn select_outlined(
             }
             let mut bs = vec![0u64; words];
             let mut outl = owns[i].outl;
+            let mut stab = owns[i].stab;
             for &r in &owns[i].refs {
                 let ri = info[r].as_ref().expect("post-order");
                 outl &= ri.outlinable;
+                stab &= ri.stable;
                 if !ri.outlined {
                     bs[r / 64] |= 1 << (r % 64);
                     if let Some(rb) = &reach[r] {
@@ -483,7 +497,7 @@ pub(crate) fn select_outlined(
             if !outlined {
                 reach[i] = Some(bs);
             }
-            info[i] = Some(PieceInfo { eff, outlinable: outl, outlined });
+            info[i] = Some(PieceInfo { eff, outlinable: outl, stable: stab, outlined });
         }
     }
     m.defs
@@ -1149,10 +1163,11 @@ impl Interp {
                 let ndefs = stats.len();
                 let outlined: Vec<_> =
                     stats.iter().filter(|(_, st)| st.outlined).collect();
+                let stable = outlined.iter().filter(|(_, st)| st.stable).count();
                 let mass: u64 = outlined.iter().map(|(_, st)| st.eff as u64).sum();
                 let maxeff = stats.values().map(|st| st.eff).max().unwrap_or(0);
                 eprintln!(
-                    "trs split: mir={mir} defs={ndefs} outlined={} piece-mass={mass} max-piece={maxeff}",
+                    "trs split: mir={mir} defs={ndefs} outlined={} stable={stable} piece-mass={mass} max-piece={maxeff}",
                     outlined.len()
                 );
             }
