@@ -400,8 +400,16 @@ pub(crate) fn select_outlined(
                     ChildClass::Reg | ChildClass::CfgReg => {
                         (matches!(mname.as_str(), "read" | "get" | "_read"), true)
                     }
+                    // WIRES ARE NOT STABLE: mkUnsafeRWire relaxes the
+                    // scheduling annotations while reusing the same
+                    // runtime prim, so prim identity cannot prove
+                    // wset-before-wget confinement.  Stability may rely
+                    // only on VALUE-LEVEL prim contracts (ConfigReg
+                    // written_at, FIFO i_* saved_elems) or on schedule
+                    // confinement of prims with no unsafe wrapper
+                    // (plain Reg).
                     ChildClass::Wire => {
-                        (matches!(mname.as_str(), "whas" | "wget"), true)
+                        (matches!(mname.as_str(), "whas" | "wget"), false)
                     }
                     ChildClass::Fifo => match mname.as_str() {
                         "i_notFull" | "i_notEmpty" => (true, true),
