@@ -264,6 +264,12 @@ pub(crate) struct JitPlans {
     /// rule ordinal -> (instance, rule name, WF slot) for the
     /// interpreted-body fallback while its cell is cold
     pub(crate) exec_fallback: Vec<(usize, StrId, u32)>,
+    /// per composition: rc.ticks indices whose work is compiled INTO
+    /// the loaded edge fns (wire valid-bit clears) — the interp tick
+    /// loop skips them when the fused fn ran, and the central-loop
+    /// preconditions ignore them.  Empty unless an artifact with
+    /// trs_edge_wire_ticks=1 loaded.
+    pub(crate) covered_ticks: Vec<std::collections::HashSet<usize>>,
     /// fused per-composition edge fns (task #17): compiled once all
     /// bodies are warm; 0 = composition not fused (fall back to the
     /// node walk).  fn(arena, env, now) -> i32 (nonzero = $finish).
@@ -844,9 +850,13 @@ fn aot_emit(
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let f = tmp.join("design.o");
         std::fs::write(&f, obj).map_err(|e| e.to_string())?;
-        let meta =
-            compile_meta_object(bir_hash, split_thresh as u64, &encode_protos(protos))
-                .map_err(|e| format!("meta object: {e}"))?;
+        let meta = compile_meta_object(
+            bir_hash,
+            split_thresh as u64,
+            &encode_protos(protos),
+            edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
+        )
+        .map_err(|e| format!("meta object: {e}"))?;
         let mf = tmp.join("meta.o");
         std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
         let st = std::process::Command::new("cc")
@@ -969,9 +979,13 @@ fn aot_emit(
         std::fs::write(&f, o).map_err(|e| e.to_string())?;
         files.push(f);
     }
-    let meta =
-        compile_meta_object(bir_hash, split_thresh as u64, &encode_protos(protos))
-            .map_err(|e| format!("meta object: {e}"))?;
+    let meta = compile_meta_object(
+        bir_hash,
+        split_thresh as u64,
+        &encode_protos(protos),
+        false, // chunked path never carries edge-SSA wire ticks
+    )
+    .map_err(|e| format!("meta object: {e}"))?;
     let mf = tmp.join("meta.o");
     std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
     files.push(mf);
@@ -1002,8 +1016,10 @@ fn aot_load(
     classes: &[(usize, Vec<usize>)],
     split_thresh: u32,
     ncomps: usize,
-) -> Result<(Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>, Vec<usize>), String>
-{
+) -> Result<
+    (Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>, Vec<usize>, bool),
+    String,
+> {
     unsafe {
         let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
         let h: libloading::Symbol<*const u64> =
@@ -1113,9 +1129,15 @@ fn aot_load(
                 .map_err(|e| e.to_string())?;
             fused.push(*ef as usize);
         }
+        // edge fns carry compiled wire ticks (absent symbol = old
+        // artifact = 0)
+        let wire_ticks = lib
+            .get::<*const u64>(b"trs_edge_wire_ticks")
+            .map(|g| unsafe { **g } != 0)
+            .unwrap_or(false);
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);
-        Ok((scheds, execs, protos, fused))
+        Ok((scheds, execs, protos, fused, wire_ticks))
     }
 }
 
@@ -1132,6 +1154,49 @@ fn jit_workers(n: usize) -> usize {
 }
 
 impl Interp {
+    /// Ticks the edge fns compile: ungated, non-reset ticks of
+    /// arena-backed wires (RWire/PulseWire valid-bit clears).  Returns
+    /// per composition the valid-slot list (emitter) and the covered
+    /// rc.ticks indices (runtime skip + central preconditions).  Must
+    /// stay deterministic across processes: the linker bakes the
+    /// clears, the loader re-derives the covered set.
+    fn wire_tick_coverage(
+        &self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        rcomps: &[RComp],
+    ) -> (Vec<Vec<u32>>, Vec<std::collections::HashSet<usize>>) {
+        let mut wire_of: HashMap<usize, u32> = HashMap::new();
+        for ie in inst_envs.values() {
+            for (name, &(base, _w)) in &ie.wire_slot {
+                if let Some(&gi) = ie.children.get(name) {
+                    wire_of.insert(gi, base);
+                }
+            }
+        }
+        let mut clears = Vec::with_capacity(rcomps.len());
+        let mut covered = Vec::with_capacity(rcomps.len());
+        for rc in rcomps {
+            let mut cl: Vec<u32> = Vec::new();
+            let mut cov = std::collections::HashSet::new();
+            for (ti, (inst, _pname, is_rst, _owner, gexpr)) in
+                rc.ticks.iter().enumerate()
+            {
+                if *is_rst || gexpr.is_some() || self.rstgen_out.contains_key(inst)
+                {
+                    continue;
+                }
+                if let Some(&slot) = wire_of.get(inst) {
+                    cl.push(slot);
+                    cov.insert(ti);
+                }
+            }
+            cl.sort_unstable();
+            clears.push(cl);
+            covered.push(cov);
+        }
+        (clears, covered)
+    }
+
     /// Task #24 M1: gap-wise cross-rule def-sharing legality census.
     /// For every def consumed by 2+ exec bodies of a composition,
     /// decide per consumer-gap whether the anchor value survives —
@@ -1751,6 +1816,7 @@ impl Interp {
             def_reads,
             hoists,
             outlined_execs,
+            wire_clears: Vec::new(),
         }
     }
 
@@ -2605,6 +2671,7 @@ impl Interp {
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
         let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
+        let mut wire_ticks_flag = false;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
         let mut fused_opt: Option<Vec<usize>> = None;
         if let JitRequest::Load { so } = &request {
@@ -2616,10 +2683,11 @@ impl Interp {
                 split_thresh.unwrap_or(0),
                 comp_nodes.len(),
             ) {
-                Ok((sch, exe, pr, fu)) => {
+                Ok((sch, exe, pr, fu, wt)) => {
                     preloaded = Some((sch, exe));
                     protos_opt = Some(pr);
                     fused_opt = Some(fu);
+                    wire_ticks_flag = wt;
                 }
                 Err(e) => {
                     eprintln!(
@@ -2682,7 +2750,11 @@ impl Interp {
                         .collect();
                     let specs_lite: Vec<(usize, usize)> =
                         specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
-                    self.edge_ssa_plan(&inst_envs, &nodes, &specs_lite, false)
+                    let mut plan =
+                        self.edge_ssa_plan(&inst_envs, &nodes, &specs_lite, false);
+                    plan.wire_clears =
+                        self.wire_tick_coverage(&inst_envs, rcomps).0;
+                    plan
                 });
             self.jit_emit_result = Some(
                 match aot_emit(
@@ -2841,6 +2913,11 @@ impl Interp {
             .iter()
             .flat_map(|(&i, e)| e.en_slot.iter().map(move |(&p, &s)| ((i, p), s)))
             .collect();
+        let covered_ticks = if wire_ticks_flag {
+            self.wire_tick_coverage(&lazy.insts, rcomps).1
+        } else {
+            vec![Default::default(); rcomps.len()]
+        };
         Some(JitPlans {
             _arena: arena,
             arena_ptr,
@@ -2849,6 +2926,7 @@ impl Interp {
             now_slot,
             lazy,
             exec_fallback,
+            covered_ticks,
             fused: {
                 let cell = std::sync::OnceLock::new();
                 if let Some(fu) = fused_opt {

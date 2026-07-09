@@ -772,6 +772,7 @@ pub fn compile_meta_object(
     bir_hash: u64,
     split_thresh: u64,
     protos: &[u8],
+    edge_wire_ticks: bool,
 ) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
@@ -785,6 +786,11 @@ pub fn compile_meta_object(
     // loader must plan with the SAME value or refuse the artifact
     let t = module.add_global(i64t, None, "trs_split_thresh");
     t.set_initializer(&i64t.const_int(split_thresh, false));
+    // edge fns contain the compiled wire ticks: the loader skips the
+    // interp tick loop's covered entries iff this is set (absent in
+    // old artifacts -> loader reads 0)
+    let wt = module.add_global(i64t, None, "trs_edge_wire_ticks");
+    wt.set_initializer(&i64t.const_int(edge_wire_ticks as u64, false));
     // single definition of the callback pointer-globals every chunk
     // object references; the loader fills them after dlopen
     for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim"] {
@@ -1057,6 +1063,11 @@ pub struct EdgeSsaPlan {
     /// position; pure = no warning-emitting or callback reads, so the
     /// unconditional evaluation is output-invisible)
     pub hoists: Vec<Vec<Vec<(usize, StrId)>>>,
+    /// per composition: arena valid-slot numbers of ungated wire ticks
+    /// to clear (store 0) at the END of the edge fn — the compiled form
+    /// of RWire/PulseWire::tick (the boxed `written` latch only feeds
+    /// VCD, where the interpreter runs ticks itself)
+    pub wire_clears: Vec<Vec<u32>>,
 }
 
 /// One node of a fused per-composition edge function.
@@ -1365,6 +1376,21 @@ fn lower_edge_ssa<'ctx>(
         }
         let bend = ctx.create_builder();
         bend.position_at_end(cur);
+        // compiled wire ticks: end-of-edge valid-bit clears
+        if let Some(clears) = plan.wire_clears.get(k) {
+            for &slot in clears {
+                let gepw = unsafe {
+                    bend.build_gep(
+                        i64t,
+                        arena,
+                        &[i64t.const_int(slot as u64, false)],
+                        "wc",
+                    )
+                    .unwrap()
+                };
+                bend.build_store(gepw, i64t.const_zero()).unwrap();
+            }
+        }
         bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
         bend.position_at_end(stop_bb);
         bend.build_return(Some(&i32t.const_int(1, false))).unwrap();

@@ -3505,18 +3505,34 @@ impl Interp {
                 if rc.clk != wci {
                     { CENTRAL_BAIL[8].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
                 }
+                // a non-rst tick disqualifies unless its work is
+                // compiled into the loaded edge fns (wire clears);
+                // reset ticks are no-ops here: the preconditions
+                // guarantee reset stays deasserted (no generators,
+                // no drivers), and rst_tick acts only in_reset
+                let uncovered_tick = |rci: usize| {
+                    rc.ticks.iter().enumerate().any(|(ti, (_, _, is_rst, _, _))| {
+                        !*is_rst
+                            && !j.covered_ticks
+                                .get(rci)
+                                .is_some_and(|c| c.contains(&ti))
+                    })
+                };
                 if rc.posedge {
-                    // reset ticks are no-ops here: the preconditions
-                    // guarantee reset stays deasserted (no generators,
-                    // no drivers), and rst_tick acts only in_reset
                     if !rc.early.is_empty()
-                        || rc.ticks.iter().any(|(_, _, is_rst, _, _)| !*is_rst)
+                        || uncovered_tick(rci)
                         || fused[rci] == 0
                     {
                         { CENTRAL_BAIL[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
                     }
                     pos_rcis.push(rci);
-                } else if rc.entries.iter().any(|e| !e.nodes.is_empty()) {
+                } else if rc.entries.iter().any(|e| !e.nodes.is_empty())
+                    || uncovered_tick(rci)
+                {
+                    // rule-less negedge comps with only covered wire
+                    // clears are safe to skip entirely: wire ticks are
+                    // edge-duplicated (Both ports) and nothing reads
+                    // during a rule-less instant
                     { CENTRAL_BAIL[10].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
                 }
             }
@@ -3652,6 +3668,7 @@ impl Interp {
                 // Sched/Exec functions over the arena (no latch space —
                 // fire signals and schedule-position defs live in slots)
                 #[cfg(feature = "jit")]
+                let mut _ran_fused = false;
                 let ran_jit = match &jit {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
@@ -3673,6 +3690,7 @@ impl Interp {
                                 let envp =
                                     self as *mut Interp as *mut core::ffi::c_void;
                                 unsafe { f(ap, envp, t) };
+                                _ran_fused = true;
                                 true
                             } else {
                             // ConfigReg reads compare written_at to now
@@ -3791,7 +3809,9 @@ impl Interp {
                 // prim itself checks its reset line)
                 #[cfg(feature = "jit")]
                 let _tt0 = jit::prof::on().then(std::time::Instant::now);
-                for (inst, pname, is_rst, owner, gexpr) in &rc.ticks {
+                for (_ti, (inst, pname, is_rst, owner, gexpr)) in
+                    rc.ticks.iter().enumerate()
+                {
                     let inst = *inst;
                     // steady state: a reset tick is a no-op unless some
                     // reset node is asserted (rst_tick acts only
@@ -3802,6 +3822,19 @@ impl Interp {
                         && !driver_clock.contains_key(&inst)
                     {
                         continue;
+                    }
+                    // wire ticks compiled INTO the fused edge fn that
+                    // just ran (edge-SSA artifacts): already done
+                    #[cfg(feature = "jit")]
+                    if _ran_fused {
+                        if let Some(j) = jit.as_ref() {
+                            if j.covered_ticks
+                                .get(rci)
+                                .is_some_and(|c| c.contains(&_ti))
+                            {
+                                continue;
+                            }
+                        }
                     }
                     let gate = match gexpr {
                         None => true,
