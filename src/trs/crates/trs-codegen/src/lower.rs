@@ -338,12 +338,31 @@ fn make_module<'ctx>(
     (module, Callbacks { cb_ty, fpe_ty, prim_ty, cb, fpe, prim })
 }
 
+/// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
+/// asks for optimization.  The engine/object paths only apply BACKEND
+/// codegen opts; without this the IR pass pipeline (GVN, instcombine,
+/// SimplifyCFG, jump threading) never runs at all.
+fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
+    let lvl = match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok("1") => 1,
+        Ok("2") => 2,
+        Ok("3") => 3,
+        _ => return Ok(()),
+    };
+    let tm = aot_target_machine()?;
+    let opts = inkwell::passes::PassBuilderOptions::create();
+    module
+        .run_passes(&format!("default<O{lvl}>"), &tm, opts)
+        .map_err(|e| Ineligible(format!("IR passes: {e}")))
+}
+
 fn finish_engine(
     module: Module<'static>,
 ) -> Result<inkwell::execution_engine::ExecutionEngine<'static>, Ineligible> {
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
+    run_ir_passes(&module)?;
     let opt = opt_level();
     let ee = module
         .create_jit_execution_engine(opt)
@@ -522,6 +541,7 @@ pub fn compile_object_chunk(
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
+    run_ir_passes(&module)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -663,6 +683,7 @@ pub fn compile_helpers_object(
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     lower_helpers(env, &ctx, &module, cbs, specs, refs, pseudo)?;
+    run_ir_passes(&module)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -985,37 +1006,54 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.lazy_mux(f, *width, cz, then_, else_)
             }
             Expr::Case { width, scrutinee, arms, default } => {
+                // one LLVM switch (backend lowers dense arms to a jump
+                // table — the compare ladder was O(arms) per eval and
+                // dominated the big decision-tree bodies); arms keep
+                // the lazy_mux_fn discipline: scoped SSA, own blocks,
+                // phi at the merge
+                let w = (*width).max(1);
                 let ws = self.expr_width(f, scrutinee)?;
                 let sv = self.expr(f, scrutinee)?;
-                // right-fold into nested lazy muxes: eq(k) ? arm : rest
-                fn build<'a, 'ctx>(
-                    lc: &mut Lower<'a, 'ctx>,
-                    f: &mut Frame<'ctx>,
-                    width: u32,
-                    ws: u32,
-                    sv: IntValue<'ctx>,
-                    arms: &[(u64, Expr)],
-                    default: &Expr,
-                ) -> Result<IntValue<'ctx>, Ineligible> {
-                    match arms.split_first() {
-                        None => {
-                            let wd = lc.expr_width(f, default)?;
-                            let v = lc.expr(f, default)?;
-                            Ok(lc.to_w(v, wd, width, false))
-                        }
-                        Some(((k, arm), rest)) => {
-                            let kc = lc.ity(ws).const_int_arbitrary_precision(&[*k]);
-                            let hit = lc
-                                .builder
-                                .build_int_compare(IntPredicate::EQ, sv, kc, "k")
-                                .unwrap();
-                            lc.lazy_mux_fn(f, width, hit, arm, &|lc, f| {
-                                build(lc, f, width, ws, sv, rest, default)
-                            })
-                        }
-                    }
+                let func =
+                    self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let def_bb = self.ctx.append_basic_block(func, "cd");
+                let merge_bb = self.ctx.append_basic_block(func, "cj");
+                let arm_bbs: Vec<_> = arms
+                    .iter()
+                    .map(|_| self.ctx.append_basic_block(func, "ca"))
+                    .collect();
+                let cases: Vec<_> = arms
+                    .iter()
+                    .zip(&arm_bbs)
+                    .map(|((k, _), &bb)| {
+                        (self.ity(ws).const_int_arbitrary_precision(&[*k]), bb)
+                    })
+                    .collect();
+                self.builder.build_switch(sv, def_bb, &cases).unwrap();
+                let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                let mut incoming: Vec<(IntValue<'ctx>, _)> = Vec::new();
+                for ((_, arm), &bb) in arms.iter().zip(&arm_bbs) {
+                    self.builder.position_at_end(bb);
+                    let wa = self.expr_width(f, arm)?;
+                    let av0 = self.expr(f, arm)?;
+                    let av = self.to_w(av0, wa, w, false);
+                    f.ssa = saved.clone();
+                    incoming.push((av, self.builder.get_insert_block().unwrap()));
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
                 }
-                build(self, f, *width, ws, sv, arms, default)
+                self.builder.position_at_end(def_bb);
+                let wd = self.expr_width(f, default)?;
+                let dv0 = self.expr(f, default)?;
+                let dv = self.to_w(dv0, wd, w, false);
+                f.ssa = saved;
+                incoming.push((dv, self.builder.get_insert_block().unwrap()));
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(merge_bb);
+                let phi = self.builder.build_phi(self.ity(w), "cv").unwrap();
+                for (v, bb) in &incoming {
+                    phi.add_incoming(&[(v, *bb)]);
+                }
+                Ok(phi.as_basic_value().into_int_value())
             }
             Expr::TaskValue { width, cookie } => match f.tasks.get(cookie) {
                 Some(&(v, vw)) => Ok(self.to_w(v, vw, (*width).max(1), false)),
