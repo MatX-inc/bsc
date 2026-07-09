@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-7fa5f46e, gate green + leash fairness — ALWAYS `git push personal`, never bare `git push origin`:
+fc3251b2, edge-SSA landed + tick skip — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -68,30 +68,55 @@ takes minutes).  Both conflict_free_large designs TIMEOUT->PASS
 under JIT-sync; the leash stays tight for the interpreter-blowup
 class.
 
-NEXT (revised with Ravi, this session): edge-SSA (#24) PROMOTED from
-fallback to primary parity lever — DOUBLE WIN: (1) eager defs stop
-round-tripping through arena slots (no alias proof needed — the
-value never touches memory); (2) cross-rule sharing comes free and
-sound (a def computed once per edge IS the shared SSA value;
-intervening writes are handled by construction) — this SUBSUMES the
-per-instant memo machinery AND the stability doctrine/certification
-workstream (both parked; memo returns only for cross-edge-fn residue:
-coincident multi-clock edges, early/clock-crossing rules — MCD-only,
-not on the parity path; note cross_inhibits are cross-MODULE ME
-pairs, same composition, SSA-friendly).  Milestone 1 = the LINK-TIME
-INTROSPECTION pass (Ravi: "turn the knob on introspection at
-compile/link time" — link already re-runs the plan walk, budget is
-fine): a def-position dataflow map (producer entry + every
-consumer's (composition, schedule position) via the cross-module
-use-walk) driving (a) SSA-vs-slot-export classification, (b) wire-
-instance certification (Ravi's third proof route) nearly free, (c)
-schedule-grounded WF constant proofs (deeper always-fire).  Also a
-seam inventory: which entries can run interpreted -> which exports
-the debug contract needs per design.  BEFORE building: share-stats
-census (TRS_JIT_SHARE_STATS exists) + one alias-metadata probe to
-SIZE both wins; then O-ladder re-run AFTER edge-SSA lands (SSA-form
-edges are what O2/O3 optimize best) -> compute parity -> testsuite
-AOT comparison.
+EDGE-SSA (#24) LANDED, opt-in TRS_EDGE_SSA=1 (d00f8954 emitter,
+28686b02 symbol elision, 1124fe23 M1 analysis; fc3251b2 tick skip
+rode along).  Whole-edge inline emission: one edge_c<k> per comp,
+every sched/exec section lowered INLINE sharing an EdgeCtx cache —
+LATCHED values (CF/WF/eager at compute position, never evicted =
+slot semantics) + HOISTED pure shared defs (first-consumer section
+start, spine dominance, evicted on write-set intersection; self-
+killing consumers never hoist: tsort body-position semantics).
+Insertions ONLY from driver/section-top (dominance by construction).
+Purity: arena-inline prim reads only, no foreign/ports (ports:
+method args are call-site-specific, EN mutates mid-edge).  Elision:
+covered rules emit no standalone sched_/exec_ symbols (loader panic-
+stubs them; token tables always built from protos).
+
+MEASURED (sudoku, quiet): run 0.48 -> 0.41s (gap 1.55x -> 1.32x vs
+ref 0.31s), insns -7%, L1d loads -8%, .so -40%, link 8.1 -> 17.1s
+(residual = O1+regalloc on the mega-fn).  BYTE-IDENTICAL everywhere;
+battery 9/9 both modes; TWO perfect full-corpus AOT sweeps (966/0/0,
+pre-elision + elision builds).  KEY FINDINGS: (1) exec bodies make
+ZERO eager-slot reloads — slot promotion was ~2% of load mass; the
+win is unslotted cross-rule sharing; (2) the sound sharing ceiling
+IS ~v1's 539 hoists: all 1501 remaining shared defs are MethodArg-
+dependent through the RESULT cone, and per Ravi single-caller-per-
+(method,port) makes their census sharing ME-moot at runtime; the M1
+"73.7% shareable" overcounted by treating (inst,def) as one value;
+(3) call-boundary variant (bodies as fns + shared args) is dead for
+sudoku-class designs (p90=285 args/body) — whole-design link-time
+codegen is the price of sharing, per-type calls stay the dial for
+replicated designs.
+
+TICKS: the surviving per-edge tick entries on reg/creg/fifo designs
+are RESET ticks (real ticks are noop-filtered) — fc3251b2 skips them
+in steady state via an asserted-reset counter (sudoku PROF ticks
+0.137 -> 0.092s).  RESIDUAL = wire valid-bit clears + __me_check
+R0001 checkers (both arena-friendly): compiling THOSE into the edge
+fn is the next increment — it also clears central-loop bail #9, so
+sudoku-class designs enter the central loop (LongCnt is 0.05s vs ref
+0.27s there).
+
+NEXT: (1) final double gate (default-AOT + edge-SSA-AOT sweeps on
+fc3251b2) was IN FLIGHT at write time — results land in
+final-{aot,ssa}.json in the session scratchpad; (2) wire-clear +
+me-check tick compilation into the edge fn (central unlock for
+sudoku); (3) O-ladder on edge-SSA artifacts — UNPARKED (the full-
+edge composition exists now; Ravi's condition); (4) per-body outline
+dial if link time matters after the ladder (bound the mega-fn:
+monsters as calls with their few ACTUAL hoisted values as args);
+(5) edge-SSA default-on for AOT once gates stay green -> compute
+parity -> testsuite AOT comparison.
 
 ## Current state
 
