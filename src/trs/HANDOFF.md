@@ -48,6 +48,35 @@ PROGRESS (this session, all pushed):
   full bsc rebuild + testsuite, then drop the interim ___d<N>
   filter in Interp::def_symbols.
 
+INTERACTIVE BATTERY, FIRST CONTACT (frozen 5baca7b9 + capi):
+14/22 PASS (mkTest all 6, mkTop all 3, aperiodic both, TbGCD
+debug3/4/5).  The 8 failures, root causes PINNED:
+1. mkMCDTest clock.cmd — derived clock (clk2$CLK_OUT) tuple: our
+   first_edge=0 vs ref 2.  Ref knows waveforms of ClockGen-derived
+   clocks STATICALLY (prim params); our VcdClock only observes.
+   Fix: populate first_edge/durations from ClockGen prim params at
+   prime().
+2. mkLong async.cmd — bk_advance ignores the async flag (sim run
+   async blocks; sim stop starves; 9-minute hang, killed).  Fix:
+   the driver thread (bk_is_running/bk_sync/bk_abort_now real).
+3. mkPrims prims.cmd — 'No match for isValid' + a stray '{} signal'
+   in our ls (empty-key child leaking where ref hides it).  RWire-
+   class prims expose named sub-signals; inspect prims.bsv shapes.
+4. mkTbGCD gcd/debug/debug2 — 'No match for EN_start': METHOD PORT
+   symbols (SYM_PORT: EN_/arg/ret ports of module instances) not in
+   our tree.  Ports are in the BIR (module inputs/method args); the
+   peek side needs last-driven port value recording (like the def
+   recording).
+5. mkTimescaleTest both — %t values unscaled: bk_set_timescale is
+   stored but must plumb into the interp's %t/$time display scaling
+   (ref prints time x timescale factor).
+ALSO: the machine hosted ANOTHER session's full testsuite during
+today's sweeps (claude3/prim-fixes worktree) — the repeat fence
+flags (sysRegSelect run, sysCRCTest1 link, SpecialSyncReg) are
+suspect-environmental; re-verify with --filter on a TRULY idle box
+before touching code.  diffsweep now LPT-schedules from
+tools/sweep-costs.json (d2ad4ccd) — the straggler tail collapses.
+
 NEXT BLOCK (original plan, stop conditions DONE):
 - VcdClock is already the tClockInfo mirror (bk_clock_* fields
   labeled in comments); it lacks a NEG_COUNT (bk_clock_edge_count
