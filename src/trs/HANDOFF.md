@@ -1,14 +1,27 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-19110cdc, AvAction-on-module-children + AV-cone poison, 973/0
-SEALED (971 sweep + 2 verified timeout-flappers; RadixSort newly
-compiled) — ALWAYS `git push personal`, never bare `git push origin`:
+99f167a9, replication-aware outline dial, 975/0 SEALED — new high — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
+
+## SEALED (2026-07-09 latest): replication-aware outline dial
+
+99f167a9: OUTLINE_FLOOR / k (k = module-type replication in the
+composition; k=1 keeps every prior decision).  Grid v3 link 202 ->
+27s at N=32 (ahead of ref build at every N again), run 0.320 ->
+0.079s at N=16 (the unroll was an I-cache run cost too).  Sweep 975
+PASS / 0 DIFF (420s ref-build ceiling recovered 2 misfiled
+LINK_FAILs); fence rebaselined (925).  All 10 flags benign (new
+coverage + dial redistribution, all still ahead of ref).  NEXT ON
+THIS ARC: loop-rolled spine (planner run-detection + affine base/
+token strides + loop emission around the existing outlined-body
+call ABI; groups bail unless provably affine; roll exec call sites
+first, sched sections later), then type-keyed analysis for the
+O(instances) startup (N=32 run 0.262 vs ref 0.157 is ALL startup).
 
 ## SEALED (2026-07-09 later): ActionValue methods on module children
 

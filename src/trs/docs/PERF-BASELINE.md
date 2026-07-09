@@ -219,3 +219,31 @@ VERDICTS (they invert v2's happy link story):
    reference run DROPPED from N=16's 0.343 s — Bluesim's per-type
    compilation keeps its startup flat while ours grows with
    instances.
+
+## Grid v3 + replication-aware outline dial (binary 99f167a9)
+
+The outline floor now amortizes over the module type's replication
+count in the composition (OUTLINE_FLOOR / k; k=1 designs keep every
+prior decision bit-for-bit).  Same v3 artifacts, byte-identical at
+every N (results.csv gen=v3d; frontend/ref columns carried from the
+v3 rows — same builds):
+
+| N  | b3 link (was) | b3 link | b3 run (was) | b3 run | vs ref build | vs ref run |
+|----|---------------|---------|--------------|--------|--------------|------------|
+| 2  | 0.21 s        | 0.14 s  | 0.036 s      | 0.030  | 20x ahead    | 3.4x ahead |
+| 4  | 0.78 s        | 0.30 s  | 0.036 s      | 0.038  | 13x ahead    | 2.6x ahead |
+| 8  | 6.97 s        | 0.94 s  | 0.111 s      | 0.042  | 5.6x ahead   | 6.5x ahead |
+| 16 | 91.0 s        | 5.11 s  | 0.320 s      | 0.079  | 14x ahead    | 4.3x ahead |
+| 32 | 202.2 s       | 27.4 s  | 0.387 s      | 0.262  | 5.5x ahead   | 1.7x BEHIND|
+
+(link split at N=32: ir-passes 15.9 s, backend 10.0 s — down from
+166/34.)  The link story is fully restored (ahead at every N) and
+the mega-edge unroll turns out to have been a RUN-time cost too
+(N=16 run 0.320 -> 0.079: one per-type body stays hot in I-cache
+across 256 instances).  Remaining N=32 deficits: run is O(instances)
+STARTUP (type-keyed analysis, scale-arc rung 1) and the residual
+link is 1024 sched sections + call sites in the mega-edge
+(loop-rolled spine).  Sealing sweep on 99f167a9: 975 PASS / 0 DIFF
+(new high — the 420s ref-build ceiling also recovered two designs
+misfiled as permanent LINK_FAILs); fence rebaselined (925 designs
+above the timing floors).
