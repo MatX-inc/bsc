@@ -1,12 +1,58 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`447c1a0d` — ALWAYS `git push personal`, never bare `git push origin`:
+`ACTIVE REGRESSION HUNT — see top section` (pushed through the debug-aids commit) — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
 (byte-level VCD semantics), and `docs/PERF-BASELINE.md` (measured
 numbers) alongside this.
+
+## ACTIVE: correctness regression, bisect mid-flight (RESUME HERE)
+
+The g2 gate (five legs on 447c1a0d) caught 2 DIFFs + 1 timeout in the
+default-AOT leg (g2-2, 963 PASS):
+- sysEspositoPreempt (bsc.verilog/schedule): compiled path fires rule
+  'a' where semantics demand 'b' (preemption violated)
+- sysRegFileVector (bsc.verilog/astate): first pass at idx 1 not 0
+  (rule fires one edge late/early)
+- sysInit65536Bit (bsc.evaluator/reginit): AOT link TIMEOUT — the O1
+  pipeline chokes on i65536 values; needs a width cap on run_ir_passes
+  (separate, mechanical fix)
+
+FACTS ESTABLISHED (repro: TRS_JIT=1 TRS_JIT_SYNC=1 trs run
+<bir> -m 4000 | head -1; expected 'b' / 'Pass at idx 0'):
+- JIT-lazy "passes" are a mirage: these tests $finish before bodies
+  warm, so lazy = interpreted.  SYNC forces the compiled path.
+- Fusion EXONERATED for the walk: TRS_NO_FUSION=1 (escape added in
+  the debug-aids commit) still fails on the current tip.
+- Both designs are PLAIN RegN (+ trampoline RegFile) — no ConfigReg,
+  no FIFO — so the prim-inline commits can only be COLLATERAL.
+- BISECT (worktree $SCRATCH/wt-bisect, CARGO_TARGET_DIR
+  $SCRATCH/cargo-bisect): 5564a86a GOOD (both correct, sync-compiled);
+  c73bb09c GOOD (ConfigReg+FIFO inline commits are CLEAN).
+  Remaining window: 7694c351 (fusion-JIT — RESTRUCTURED THE WALK in
+  lib.rs dispatch: prime suspect for walk-visible failure), 82df91c4
+  (trsLink, bsc-side, unlikely), c14fcfdb (fusion-AOT), 447c1a0d
+  (one-module + run_ir_passes fix), 668303f1 (always-fire — IN the
+  local repro binary but NOT in the swept 447c1a0d binary, so the
+  sweep's artifact failure does not need it; the local sync+walk
+  failure MIGHT — possibly TWO bugs).
+- NEXT BISECT STEPS: build 7694c351 in the worktree -> sync+walk test;
+  then 447c1a0d.  If both walk-clean -> walk failure is 668303f1
+  (always-fire: check Esposito's preempted-rule inhibitors — does the
+  preempting rule's WF stay gated? my detection uses inhibit_slots;
+  verify preempts flow into me_inhibits/cross in the BIR) and the
+  artifact failure lives in c14fcfdb/447c1a0d separately.
+- Esposito fused-IR dump looked structurally correct (order preserved,
+  stop-chain right); TRS_JIT_DUMP now also dumps fused modules.
+
+HOLDS until fixed: parity measurements queue (O-ladder, profile,
+alias experiment, #24), testsuite comparison.  The always-fire commit
+(668303f1) and one-module (447c1a0d) stay in-tree but are the prime
+suspects — if fingered, gate behind env or fix forward.  g2 legs 3-5
+may still be running — collect tallies (g2-3 JIT+split was clean 966
+at last check... verify 4/5).
 
 ## Current state
 
