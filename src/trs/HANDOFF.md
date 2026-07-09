@@ -1,7 +1,7 @@
 # TRS — session handoff
 
 Branch: `claude/trs` (all work committed and pushed through
-`7fd231db` — ALWAYS `git push personal`, never bare `git push origin`:
+`6fc102de` — ALWAYS `git push personal`, never bare `git push origin`:
 origin is the B-lang-org repo; a bare push once created a stray public
 branch there, since deleted with Ravi's approval).  Read `DESIGN.md`
 (goals/architecture), `BIR.md` (export format), `docs/VCD-CONTRACT.md`
@@ -255,6 +255,34 @@ any threshold) — reducing them needs ARM OUTLINING (outline/dedup
 If-Case ACTION arms as parameterized action-helpers; needs action
 lowering + token plumbing; the dedup-within-a-rule analog).  Split
 stays opt-in until that lands.  Split-forced JIT sweep: 966/0.
+
+SELECT LOWERING (dfb486ed) — the big one, Ravi's insight: bsc LIFTS
+shared updates into mux dataflow (If EXPRESSIONS); lazy_mux was
+re-branching them into diamond forests LLVM's capped speculation
+could not undo.  Pure small arms (pure_size probe, cap 64) now lower
+as ONE select.  Monster bodies HALVED (54.9k->25.8k insns; 17k
+selects); quiet-machine link O0 5.9->2.2s, O1 7.6->4.1s; run 1.01s
+at O1 (ref 0.36).  v2 helper fixes rode along: method-arg ports
+parameterize (Method.args, not Module.inputs — the unknown-port arm
+must TAINT), phantom 112 pieces -> 63 real; AOT helpers best-effort
+like JIT; lower_helper defines into existing DECLARATIONS (forward
+call sites declare; add_function silently renames to sym.1 leaving a
+bodyless decl -> FunctionLookupError / undefined .so symbol).
+
+ARTIFACT DEFAULTS + STARTUP (beaeb3c4, 6fc102de): artifacts default
+to O1 via thread-local AotModeGuard (measured ladder: O1 captures
+the whole win; O2/O3 add only link time; reference ships -O3), JIT
+stays O0; TRS_JIT_OPT=0..3 overrides.  Artifacts bake
+trs_protos/_len (encode/decode_protos LE-u32 wire format):
+loading DECODES call-site tables instead of trial-lowering — trial
+is now lazy (link/plain-JIT/fallback only).  AOT_LAYOUT_REV=4.
+Startup -m 1: 0.64s -> 0.08s interleaved-under-load; byte-identical
+x3; rev-3 artifacts refuse + fall back cleanly.
+
+SCOREBOARD (sudoku, quiet machine): build 2.2s (O0) / 4.1s (O1) vs
+reference 13.94s at their -O3; run ~1.0s vs 0.36s with startup now
+~0.08s — residual gap is ~2x sim-only, concentrated in the (halved)
+decision trees: task #15 arm outlining/dedup + taken-path tightness.
 
 CODEGEN QUALITY (7fd231db): TRS_JIT_OPT only ever set the BACKEND
 level — the middle-end pipeline (GVN/instcombine/SimplifyCFG) NEVER
