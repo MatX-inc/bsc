@@ -902,8 +902,18 @@ pub fn compile_design_object(
     // rules covered by an SSA edge function need no standalone
     // sched/exec symbols (the loader stubs them): emitting them only
     // duplicated every body and doubled the LLVM mass
+    // sched coverage: a rule whose SCHED node lowers inline in an edge
+    // fn needs no standalone sched symbol (outlining is exec-only —
+    // outlined rules' scheds still inline)
     let covered: std::collections::HashSet<usize> = edge_plan
-        .map(|p| p.nodes.iter().flatten().map(|&(_, o)| o).collect())
+        .map(|p| {
+            p.nodes
+                .iter()
+                .flatten()
+                .filter(|&&(is_exec, _)| !is_exec)
+                .map(|&(_, o)| o)
+                .collect()
+        })
         .unwrap_or_default();
     for (o, spec) in specs.iter().enumerate() {
         if covered.contains(&o) {
@@ -1029,6 +1039,13 @@ pub fn compile_helpers_object(
 pub struct EdgeSsaPlan {
     /// per composition: (is_exec, spec ordinal) in schedule order
     pub nodes: Vec<Vec<(bool, usize)>>,
+    /// exec ordinals whose bodies stay OUTLINED (called as the
+    /// standalone exec_<class> symbol from the edge fn instead of
+    /// inlining): the link-time dial — monster bodies bound the
+    /// mega-function while small bodies keep full SSA sharing.
+    /// Outlined ordinals keep their symbols (excluded from elision)
+    /// and their class dedup.
+    pub outlined_execs: std::collections::HashSet<usize>,
     /// per spec ordinal: prim instances its exec body writes
     pub exec_writes: Vec<Vec<usize>>,
     /// per (instance, def): prim instances its cone reads with NO
@@ -1276,7 +1293,63 @@ fn lower_edge_ssa<'ctx>(
                 depth: 0,
             };
             if is_exec {
-                lc.exec_section(&mut f, func, stop_bb)?;
+                if plan.outlined_execs.contains(&o) {
+                    // outline dial: call the standalone class body (it
+                    // gates itself on the stored WF slot; stores are
+                    // all kept) — bounds the mega-function while the
+                    // body keeps its per-module-type dedup
+                    let FusedNode::Exec(href, base, tok) = &fused[k].nodes[s] else {
+                        return Err(Ineligible(
+                            "outlined exec node mismatch".into(),
+                        ));
+                    };
+                    let exec_ty = i32t.fn_type(
+                        &[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()],
+                        false,
+                    );
+                    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        arena.into(),
+                        envp.into(),
+                        i64t.const_int(*base, false).into(),
+                        i64t.const_int(*tok, false).into(),
+                    ];
+                    let cs = match href {
+                        HelperRef::Sym(name) => {
+                            let cf = module.get_function(name).unwrap_or_else(|| {
+                                module.add_function(name, exec_ty, None)
+                            });
+                            lc.builder.build_call(cf, &args, "oe").unwrap()
+                        }
+                        HelperRef::Addr(a) => {
+                            let fp = i64t
+                                .const_int(*a as u64, false)
+                                .const_to_pointer(ptrt);
+                            lc.builder
+                                .build_indirect_call(exec_ty, fp, &args, "oe")
+                                .unwrap()
+                        }
+                    };
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value()
+                    else {
+                        return Err(Ineligible("outlined exec returned void".into()));
+                    };
+                    let stop = lc
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            rv.into_int_value(),
+                            i32t.const_zero(),
+                            "st",
+                        )
+                        .unwrap();
+                    let cont = ctx.append_basic_block(func, "oc");
+                    lc.builder
+                        .build_conditional_branch(stop, stop_bb, cont)
+                        .unwrap();
+                    lc.builder.position_at_end(cont);
+                } else {
+                    lc.exec_section(&mut f, func, stop_bb)?;
+                }
                 // evict shares whose cone the body may have invalidated
                 let ws = &writes[o];
                 lc.edge.as_mut().unwrap().shared.retain(|key, _| {

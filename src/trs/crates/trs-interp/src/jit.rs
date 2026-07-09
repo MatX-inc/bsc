@@ -761,8 +761,22 @@ fn aot_emit(
         // not covered by an SSA edge fn (covered rules run inline in
         // the edge; their standalone symbols would double the LLVM
         // mass — the loader stubs the elided ones)
+        // EXEC coverage only: an ordinal is exec-covered iff its body
+        // lowers INLINE in an edge fn (sched nodes don't count — that
+        // was the bug that dropped every rep once outlined calls
+        // started referencing them; pre-dial artifacts were fully
+        // inlined so nothing noticed)
         let covered: std::collections::HashSet<usize> = edge_plan
-            .map(|p| p.nodes.iter().flatten().map(|&(_, o)| o).collect())
+            .map(|p| {
+                p.nodes
+                    .iter()
+                    .flatten()
+                    .filter(|&&(is_exec, o)| {
+                        is_exec && !p.outlined_execs.contains(&o)
+                    })
+                    .map(|&(_, o)| o)
+                    .collect()
+            })
             .unwrap_or_default();
         let rep_ords: Vec<usize> = classes
             .iter()
@@ -1498,6 +1512,15 @@ impl Interp {
 
         let mut def_reads: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
         let mut hoists: Vec<Vec<Vec<(usize, StrId)>>> = Vec::with_capacity(nodes.len());
+        // outline dial (link time): bodies whose def-cone mass exceeds
+        // the threshold stay standalone.  Default off until the knee
+        // is measured; TRS_EDGE_SSA_OUTLINE=<mass> engages.
+        let outline_thresh: u64 = std::env::var("TRS_EDGE_SSA_OUTLINE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(u64::MAX);
+        let mut outlined_execs: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
         let mut tot_recompute = 0u64;
         let mut tot_saved = 0u64;
         let mut tot_gaps = 0usize;
@@ -1524,9 +1547,31 @@ impl Interp {
                     Some((c, o))
                 })
                 .collect();
+            // link-time outline dial: bodies over the threshold stay
+            // standalone (called from the edge fn, class-deduped) —
+            // they bound the mega-function; their cones never consult
+            // the cache, so they are not consumers (writes still count
+            // for eviction)
+            for (sec, &(_, o)) in sections.iter().zip(comp_nodes.iter()) {
+                if let Some((c, _)) = sec {
+                    let body_mass: u64 = c
+                        .defs
+                        .iter()
+                        .map(|&(di, dn)| cone(&mut cx, di, dn).mass)
+                        .sum();
+                    if body_mass > outline_thresh {
+                        outlined_execs.insert(o);
+                    }
+                }
+            }
             // consumers per (inst, def), section indices in order
             let mut consumers: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
-            for (p, sec) in sections.iter().enumerate() {
+            for (p, (sec, &(_, o))) in
+                sections.iter().zip(comp_nodes.iter()).enumerate()
+            {
+                if outlined_execs.contains(&o) {
+                    continue;
+                }
                 if let Some((c, _)) = sec {
                     for &d0 in &c.defs {
                         consumers.entry(d0).or_default().push(p);
@@ -1658,6 +1703,7 @@ impl Interp {
             exec_writes,
             def_reads,
             hoists,
+            outlined_execs,
         }
     }
 
