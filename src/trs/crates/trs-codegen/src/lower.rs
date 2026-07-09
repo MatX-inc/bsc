@@ -2530,6 +2530,50 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.store_val(f, base, rw, sel);
                     return Ok(());
                 }
+                if let Some(&(base, rw)) = ie.creg_slot.get(instance) {
+                    if !matches!(mname.as_str(), "write" | "set" | "put" | "_write")
+                        || args.len() != 1
+                    {
+                        return nope("non-write ConfigReg action");
+                    }
+                    // branchless inline write, exactly the boxed
+                    // semantics: on the instant's FIRST write the old
+                    // value snapshots; the current value and stamp
+                    // update under the action condition.  Layout:
+                    // [old (w), cur (w), written_at].
+                    let words = rw.max(1).div_ceil(64);
+                    let wv = self.expr_width(f, &args[0])?;
+                    let v0 = self.expr(f, &args[0])?;
+                    let v = self.to_w(v0, wv, rw, false);
+                    let old = self.load_val(f, base, rw);
+                    let cur = self.load_val(f, base + words, rw);
+                    let wat = self.load_word(f, base + 2 * words);
+                    let now = self.load_word(f, self.env.now_slot);
+                    let first = self
+                        .builder
+                        .build_int_compare(IntPredicate::NE, wat, now, "cwf")
+                        .unwrap();
+                    let snap = self.builder.build_and(cz, first, "cws").unwrap();
+                    let old2 = self
+                        .builder
+                        .build_select(snap, cur, old, "cwo")
+                        .unwrap()
+                        .into_int_value();
+                    let cur2 = self
+                        .builder
+                        .build_select(cz, v, cur, "cwc")
+                        .unwrap()
+                        .into_int_value();
+                    let wat2 = self
+                        .builder
+                        .build_select(cz, now, wat, "cww")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base, rw, old2);
+                    self.store_val(f, base + words, rw, cur2);
+                    self.store_word(f, base + 2 * words, wat2);
+                    return Ok(());
+                }
                 if let Some(&(base, ww)) = ie.wire_slot.get(instance) {
                     if !matches!(mname.as_str(), "wset" | "send") {
                         return nope("non-wset wire action");

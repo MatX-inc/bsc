@@ -1667,6 +1667,19 @@ impl ConfigReg {
         }
         dst[2 * w] = self.written_at;
     }
+
+    /// Arena-authoritative refresh: compiled INLINE writes update the
+    /// slots directly, so when attached the boxed state re-reads them
+    /// before any interp-side use (reads, writes, resets).
+    fn refresh(&mut self) {
+        let Some(slot) = self.slot else { return };
+        let w = self.words();
+        let src = unsafe { std::slice::from_raw_parts(slot, 2 * w + 1) };
+        let width = self.value.width;
+        self.old_value = Value::from_limbs64(width.max(1), src[..w].to_vec());
+        self.value = Value::from_limbs64(width.max(1), src[w..2 * w].to_vec());
+        self.written_at = src[2 * w];
+    }
 }
 
 impl ConfigReg {
@@ -1714,6 +1727,7 @@ impl Prim for ConfigReg {
     }
 
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+        self.refresh();
         match method {
             "read" | "get" => {
                 if self.written_at == now {
@@ -1731,6 +1745,7 @@ impl Prim for ConfigReg {
                 if self.async_rst && self.suppress {
                     return;
                 }
+                self.refresh();
                 if self.written_at != now {
                     self.old_value = self.value.clone();
                     self.written_at = now;
