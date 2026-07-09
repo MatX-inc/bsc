@@ -47,6 +47,18 @@ Anything superlinear in `tiles` in the link or run columns is a
 scaling bug (or the motivation for #20's pooling: collapse N*N
 identical tile bodies into one compiled body dispatched N*N times).
 
+## Tile flavors
+
+`gen_grid.py --tile v3` (default) emits PROGRAM tiles: a 12-entry
+case-ROM of `{op,rs,rd}` micro-instructions, a PC, an 8-entry
+full-range architectural RegFile, opcode case-dispatch with
+conditional writeback/send — and the packed link rules drain tiles
+through an ActionValue `oTake` bound inside the conditional arm.
+`--tile v2` keeps the previous 4-stage mixing-pipeline tile.  v3 is
+deliberately compile-heavy: it measures how both toolchains scale
+with per-instance body mass (see docs/PERF-BASELINE.md grid v3 —
+the mega-edge's replication-blind cost model is the finding).
+
 ## How to run
 
     BSC=/path/to/inst/bin/bsc \

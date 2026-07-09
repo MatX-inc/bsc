@@ -179,3 +179,43 @@ Our SIMULATION is 2.5x FASTER than reference at 1024 tiles; the
 entire run-time deficit is O(instances) STARTUP (plan walk +
 analysis + load).  TYPE-KEYED ANALYSIS is confirmed as the scale
 fix — promoted to the first rung of the scale arc.
+
+## Grid v3: PROGRAM tiles + ActionValue drains (binary 19110cdc)
+
+v3 tiles each run a small program (12-entry case-ROM {op,rs,rd},
+PC, 8-entry full-range RegFile, opcode case-dispatch, conditional
+writeback/send) and the packed link rules drain tiles through an
+ActionValue oTake bound inside the conditional arm — the arm-def +
+AvAction-inline classes (21bacd87..19110cdc) in the hot path.
+Byte-identical at every N (results.csv gen=v3):
+
+| N  | tiles | bsc frontend | ref build | b3 link | ref run | b3 run |
+|----|-------|--------------|-----------|---------|---------|--------|
+| 2  | 4     | 0.99 s       | 2.85 s    | 0.21 s  | 0.101 s | 0.036 s |
+| 4  | 16    | 1.15 s       | 3.91 s    | 0.78 s  | 0.097 s | 0.036 s |
+| 8  | 64    | 2.21 s       | 5.23 s    | 6.97 s  | 0.274 s | 0.111 s |
+| 16 | 256   | 47.5 s       | 71.6 s    | 91.0 s  | 0.343 s | 0.320 s |
+| 32 | 1024  | 511.7 s      | 150.1 s   | 202.2 s | 0.157 s | 0.387 s |
+
+(b3 link split at N=32: ir-passes 166.0 s, backend 34.3 s.)
+
+VERDICTS (they invert v2's happy link story):
+1. bsc frontend is still everyone's wall — 8.5 MINUTES at N=32,
+   2.5x our link and 3.4x the reference's whole C++ build.
+2. Tile richness FLIPS our link advantage: 7.0 vs 5.2 s already at
+   N=8, 202 vs 150 s at N=32 (1.35x behind; v2 was 2.8x AHEAD).
+   The mega-edge inlines every instance's sections, so LLVM input
+   is O(instances x body mass); Bluesim's O(instances) part is a
+   thin call sequence into per-TYPE class methods.  The outline
+   cost model is REPLICATION-BLIND (body_mass > max(800, 2 x
+   shared_mass) has no term for how many times the module type
+   repeats) — the fix is a replication-aware dial (amortize
+   outline cost by the type's instance count), then the
+   loop-rolled spine (one loop over stride-regular instance
+   regions, intra-tile fusion preserved).
+3. Run at N=32: 0.387 vs 0.157 s (2.5x behind).  Same O(instances)
+   startup attribution as v2 (sim-only was 2.5x FASTER there);
+   type-keyed analysis remains the scale-arc rung 1.  Note the
+   reference run DROPPED from N=16's 0.343 s — Bluesim's per-type
+   compilation keeps its startup flat while ours grows with
+   instances.
