@@ -99,15 +99,22 @@ pub struct Sym {
 enum SymKind {
     /// user module or prim container ("module with value")
     Module,
-    /// a value prim's "" child (module -> "" redirect target)
-    PrimValue { inst: usize },
+    /// a value prim's sub-signal (module -> "" redirect target,
+    /// isValid/value/level/... — the reference's per-prim tables)
+    PrimValue { inst: usize, key: &'static str },
     /// a def signal; peeks read the LAST-COMPUTED value
     Def { inst: usize, id: trs_ir::StrId },
     /// an instantiation parameter (value bound at elaboration)
     Param { inst: usize, name: String },
+    /// a method port (EN_/arg/RDY_/result — SYM_PORT semantics)
+    MethPort {
+        inst: usize,
+        method: trs_ir::StrId,
+        kind: trs_interp::MethPortKind,
+    },
     Rule,
-    /// an addressable range's "" child (RegFile)
-    Range { inst: usize, lo: u64, hi: u64 },
+    /// an addressable range sub-symbol (RegFile/FIFO storage)
+    Range { inst: usize, key: &'static str, lo: u64, hi: u64 },
 }
 
 impl SimState {
@@ -210,6 +217,14 @@ unsafe fn build_symbols(stp: *mut SimState) {
             syms[mod_sym[*p]].children.push(child);
         }
         if *is_user {
+            let mut taken: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for (pn, w, method, kind) in st.primary().method_port_symbols(i) {
+                taken.insert(pn.clone());
+                let k = syms.len();
+                syms.push(sym(&pn, w, SymKind::MethPort { inst: i, method, kind }));
+                syms[mod_sym[i]].children.push(k);
+            }
             for (pn, pv) in st.primary().inst_params(i) {
                 let k = syms.len();
                 syms.push(sym(
@@ -225,18 +240,28 @@ unsafe fn build_symbols(stp: *mut SimState) {
                 syms[mod_sym[i]].children.push(k);
             }
             for (name, width, id) in st.primary().def_symbols(i) {
+                // method ports shadow same-named defs (RDY_<m> is
+                // often both; the port evaluates FRESH like the
+                // reference's per-pass member update)
+                if taken.contains(&name) {
+                    continue;
+                }
                 let k = syms.len();
                 syms.push(sym(&name, width, SymKind::Def { inst: i, id }));
                 syms[mod_sym[i]].children.push(k);
             }
-        } else if let Some((lo, hi, w)) = st.primary().prim_range_info(i) {
-            let k = syms.len();
-            syms.push(sym("", w, SymKind::Range { inst: i, lo, hi }));
-            syms[mod_sym[i]].children.push(k);
-        } else if let Some(v) = st.primary().prim_peek(i) {
-            let k = syms.len();
-            syms.push(sym("", v.width, SymKind::PrimValue { inst: i }));
-            syms[mod_sym[i]].children.push(k);
+        } else {
+            for ps in st.primary().prim_sym_children(i) {
+                let k = syms.len();
+                let kind = match ps.range {
+                    Some((lo, hi)) => {
+                        SymKind::Range { inst: i, key: ps.key, lo, hi }
+                    }
+                    None => SymKind::PrimValue { inst: i, key: ps.key },
+                };
+                syms.push(sym(ps.key, ps.width, kind));
+                syms[mod_sym[i]].children.push(k);
+            }
         }
     }
     // symOrd: case-insensitive, ties case-sensitive
@@ -319,7 +344,12 @@ pub extern "C" fn bk_is_rule(p: *mut c_void) -> u8 {
 pub extern "C" fn bk_is_single_value(p: *mut c_void) -> u8 {
     matches!(
         sym(p).map(|s| &s.kind),
-        Some(SymKind::Def { .. } | SymKind::PrimValue { .. } | SymKind::Param { .. })
+        Some(
+            SymKind::Def { .. }
+                | SymKind::PrimValue { .. }
+                | SymKind::Param { .. }
+                | SymKind::MethPort { .. }
+        )
     ) as u8
 }
 
@@ -346,6 +376,13 @@ fn peek_words(st: &mut SimState, v: &trs_interp::value::Value) -> *const u32 {
 
 #[no_mangle]
 pub extern "C" fn bk_peek_symbol_value(p: *mut c_void) -> *const u32 {
+    // a peek must NEVER abort the session: resolution failures on
+    // exotic shapes answer NoValue (the reference's own vocabulary)
+    std::panic::catch_unwind(|| peek_symbol_value_inner(p))
+        .unwrap_or(std::ptr::null())
+}
+
+fn peek_symbol_value_inner(p: *mut c_void) -> *const u32 {
     let Some(s) = sym(p) else {
         return std::ptr::null();
     };
@@ -360,10 +397,17 @@ pub extern "C" fn bk_peek_symbol_value(p: *mut c_void) -> *const u32 {
                 .unwrap_or_else(|| trs_interp::value::Value::zero(s.width));
             peek_words(st, &v)
         }
-        SymKind::PrimValue { inst } => match st.primary().prim_peek(inst) {
-            Some(v) => peek_words(st, &v),
-            None => std::ptr::null(),
-        },
+        SymKind::PrimValue { inst, key } => {
+            match st.primary().prim_sym_read(inst, key) {
+                Some(v) => peek_words(st, &v),
+                None => std::ptr::null(),
+            }
+        }
+        SymKind::MethPort { inst, method, kind } => {
+            let w = s.width;
+            let v = st.primary().method_port_peek(inst, method, kind, w);
+            peek_words(st, &v)
+        }
         SymKind::Param { inst, ref name } => {
             let v = st
                 .primary()
@@ -403,8 +447,8 @@ pub extern "C" fn bk_peek_range_value(p: *mut c_void, addr: u64) -> *const u32 {
     };
     let st = unsafe { &mut *s.st };
     match s.kind {
-        SymKind::Range { inst, lo, hi } if addr >= lo && addr <= hi => {
-            match st.primary().prim_range_peek(inst, addr) {
+        SymKind::Range { inst, key, lo, hi } if addr >= lo && addr <= hi => {
+            match st.primary().prim_sym_read_range(inst, key, addr) {
                 Some(v) => peek_words(st, &v),
                 None => std::ptr::null(),
             }
@@ -440,10 +484,13 @@ pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
     }
 }
 
-/// `bk_now`: current simulation time.
+/// `bk_now`: current simulation time, SCALED by the timescale
+/// factor (kernel.cxx: sim_timescale * sim_time).
 #[no_mangle]
 pub extern "C" fn bk_now(hdl: *mut c_void) -> u64 {
-    state(hdl).primary().now()
+    let st = state(hdl);
+    let f = st.timescale.as_ref().map(|(_, f)| *f).unwrap_or(1);
+    st.primary().now().wrapping_mul(f)
 }
 
 /// `bk_append_argument`: stage a plusarg.
@@ -674,7 +721,7 @@ pub extern "C" fn bk_is_running(_hdl: *mut c_void) -> u8 {
 
 #[no_mangle]
 pub extern "C" fn bk_sync(hdl: *mut c_void) -> u64 {
-    state(hdl).primary().now()
+    bk_now(hdl)
 }
 
 #[no_mangle]
@@ -720,6 +767,9 @@ pub extern "C" fn bk_set_timescale(
         .into_owned();
     let st = state(hdl);
     st.timescale = Some((unit, scale_factor));
+    for e in &mut st.engines {
+        e.interp.set_timescale(scale_factor);
+    }
     BK_SUCCESS
 }
 

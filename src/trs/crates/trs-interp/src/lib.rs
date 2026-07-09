@@ -88,6 +88,12 @@ pub struct Interp {
     bdpi: Option<bdpi::Bdpi>,
     /// command-line +args (without the '+'), for $test$plusargs
     plusargs: Vec<String>,
+    /// bk_set_timescale factor: $time/%t display = now * timescale
+    /// (kernel bk_now semantics).  CAVEAT: the edge-SSA join
+    /// re-materialization of $time loads the raw now slot — the
+    /// interp engine (which the capi debug tier uses) is exact;
+    /// compiled engines assume timescale == 1.
+    timescale: u64,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
@@ -202,6 +208,15 @@ struct VcdClock {
     /// waveform durations (bk_clock_duration; 0 for derived clocks)
     low_dur: u64,
     high_dur: u64,
+}
+
+/// Method-port flavors for the debug-tier symbol tree (SYM_PORT).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MethPortKind {
+    En,
+    Arg(usize),
+    Rdy,
+    Result,
 }
 
 /// One kernel clock's state for the driver's `sim clock` (the
@@ -539,6 +554,7 @@ impl Interp {
             dyn_strs: Vec::new(),
             bdpi: None,
             plusargs: Vec::new(),
+            timescale: 1,
             finished: None,
             fataled: false,
             cycle: 0,
@@ -1965,7 +1981,11 @@ impl Interp {
 
     fn foreign_value(&mut self, name: &str, args: &[Arg], w: u32, loc: &str) -> Value {
         match name {
-            "$time" | "$stime" => Value::from_u64(w.max(1), self.now),
+            "$time" | "$stime" => {
+                // the reference's $time goes through bk_now =
+                // sim_timescale * sim_time (dollar_time.cxx)
+                Value::from_u64(w.max(1), self.now.wrapping_mul(self.timescale))
+            }
             "$fopen" => {
                 let path = match args.first() {
                     Some(Arg::Str(s)) => s.clone(),
@@ -3313,7 +3333,14 @@ impl Interp {
                         ClockSource::Triggered { init_high, .. } => *init_high,
                         ClockSource::Never => false,
                     },
-                    first_edge: None,
+                    // waveform clocks know their first edge STATICALLY
+                    // (bk_clock_first_edge answers before any edge runs;
+                    // the ClockGen initial one-shot at t=0 does NOT
+                    // count).  Triggered clocks stay observational.
+                    first_edge: match &sources[ci] {
+                        ClockSource::Wave(w) => Some(w.delay),
+                        _ => None,
+                    },
                     low_dur: match &sources[ci] {
                         ClockSource::Wave(w) => w.lo,
                         _ => 0,
@@ -4215,6 +4242,135 @@ impl Interp {
         }
     }
 
+    /// Method-port symbols of a user-module instance (SYM_PORT):
+    /// EN_<m> for action-kind methods, argument ports, RDY_<m>, and
+    /// the result port named after value/AV methods.
+    pub fn method_port_symbols(
+        &self,
+        i: usize,
+    ) -> Vec<(String, u32, StrId, MethPortKind)> {
+        let InstKind::User { module, .. } = &self.insts[i].kind else {
+            return Vec::new();
+        };
+        let mir = self.mods[*module].ir;
+        let mut out = Vec::new();
+        for m in &self.d.modules[mir].methods {
+            let mname = self.s(m.name).to_string();
+            if m.kind != trs_ir::MethodKind::Value {
+                out.push((
+                    format!("EN_{mname}"),
+                    1,
+                    m.name,
+                    MethPortKind::En,
+                ));
+            }
+            for (k, a) in m.args.iter().enumerate() {
+                out.push((
+                    self.s(a.name).to_string(),
+                    a.width.max(1),
+                    m.name,
+                    MethPortKind::Arg(k),
+                ));
+            }
+            out.push((format!("RDY_{mname}"), 1, m.name, MethPortKind::Rdy));
+            if m.result.is_some() {
+                let w = match m.result.as_ref().unwrap() {
+                    Expr::Def(dn) => self.d.modules[mir]
+                        .defs
+                        .iter()
+                        .find(|d| d.name == *dn)
+                        .map(|d| d.width)
+                        .unwrap_or(1),
+                    e => e.width().max(1),
+                };
+                out.push((mname, w.max(1), m.name, MethPortKind::Result));
+            }
+        }
+        out
+    }
+
+    /// Peek a method port (member semantics: EN latched per pass,
+    /// args persist from the last call, RDY/result evaluate against
+    /// the settled state at the stop).
+    pub fn method_port_peek(
+        &mut self,
+        i: usize,
+        method: StrId,
+        kind: MethPortKind,
+        width: u32,
+    ) -> Value {
+        let InstKind::User { module, .. } = &self.insts[i].kind else {
+            return Value::zero(width.max(1));
+        };
+        let module = *module;
+        let mir = self.mods[module].ir;
+        match kind {
+            MethPortKind::En => {
+                let en = format!("EN_{}", self.s(method));
+                let id = self.d.strings.iter().position(|x| x == &en);
+                let set = match (&self.insts[i].kind, id) {
+                    (InstKind::User { latched, .. }, Some(id)) => {
+                        latched.contains_key(&(id as StrId))
+                    }
+                    _ => false,
+                };
+                Value::from_u64(1, set as u64)
+            }
+            MethPortKind::Arg(k) => self
+                .vcd_meth_calls
+                .get(&(i, method))
+                .and_then(|(_, argv)| argv.get(k).cloned())
+                .map(|mut v| {
+                    v.width = v.width.max(1);
+                    v
+                })
+                .unwrap_or_else(|| Value::zero(width.max(1))),
+            MethPortKind::Result => {
+                // PORT_<result> is a MEMBER: zero until the method's
+                // first invocation, then the last returned value
+                // (METH_result writes the port on call) — the
+                // vcd_meth_results recording is exactly that
+                self.vcd_meth_results
+                    .get(&(i, method))
+                    .cloned()
+                    .unwrap_or_else(|| Value::zero(width.max(1)))
+            }
+            MethPortKind::Rdy => {
+                let mi = match self.mods[module].methods.get(&method) {
+                    Some(&mi) => mi,
+                    None => return Value::zero(width.max(1)),
+                };
+                let m = &self.d.modules[mir].methods[mi];
+                let mut e = m.ready.clone();
+                // the exported ready pred can reference the
+                // PRE-block-conversion name (Def(RDY_<m>)) that no
+                // def table carries; the reference resolves it to
+                // the method's CAN_FIRE def (mkGCD.cxx:
+                // PORT_RDY_result = DEF_CAN_FIRE_result)
+                if let Some(Expr::Def(dn)) = &e {
+                    if !self.mods[module].defs.contains_key(dn) {
+                        let cf = format!("CAN_FIRE_{}", self.s(method));
+                        if let Some(id) =
+                            self.d.strings.iter().position(|x| x == &cf)
+                        {
+                            if self.mods[module].defs.contains_key(&(id as StrId))
+                            {
+                                e = Some(Expr::Def(id as StrId));
+                            }
+                        }
+                    }
+                }
+                match e {
+                    Some(e) => {
+                        let mut ctx = Ctx::default();
+                        self.eval(i, &mut ctx, &e)
+                    }
+                    None => Value::from_u64(1, 1),
+                }
+            }
+        }
+    }
+
     /// Rule names of a user-module instance (SYM_RULE symbols).
     pub fn inst_rules(&self, i: usize) -> Vec<String> {
         match &self.insts[i].kind {
@@ -4252,25 +4408,32 @@ impl Interp {
         self.vcd_def_vals.get(&(i, d)).cloned()
     }
 
-    pub fn prim_peek(&mut self, i: usize) -> Option<Value> {
-        let now = self.now;
-        match &mut self.insts[i].kind {
-            InstKind::Prim(p) => p.sym_peek(now),
-            _ => None,
-        }
-    }
-
-    pub fn prim_range_info(&self, i: usize) -> Option<(u64, u64, u32)> {
+    /// Debug-tier prim sub-symbols (the reference's per-prim
+    /// init_symbols tables).
+    pub fn prim_sym_children(&self, i: usize) -> Vec<prim::PrimSym> {
         match &self.insts[i].kind {
-            InstKind::Prim(p) => p.sym_range(),
+            InstKind::Prim(p) => p.sym_children(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn prim_sym_read(&mut self, i: usize, key: &str) -> Option<Value> {
+        let now = self.now;
+        match &mut self.insts[i].kind {
+            InstKind::Prim(p) => p.sym_read(key, now),
             _ => None,
         }
     }
 
-    pub fn prim_range_peek(&mut self, i: usize, addr: u64) -> Option<Value> {
+    pub fn prim_sym_read_range(
+        &mut self,
+        i: usize,
+        key: &str,
+        addr: u64,
+    ) -> Option<Value> {
         let now = self.now;
         match &mut self.insts[i].kind {
-            InstKind::Prim(p) => p.sym_range_peek(addr, now),
+            InstKind::Prim(p) => p.sym_read_range(key, addr, now),
             _ => None,
         }
     }
@@ -4282,6 +4445,11 @@ impl Interp {
         let mut interp = Interp::new(design);
         interp.bir_hash = bir_fingerprint(bytes);
         Ok(interp)
+    }
+
+    /// bk_set_timescale: scale factor applied to $time/%t values.
+    pub fn set_timescale(&mut self, f: u64) {
+        self.timescale = f.max(1);
     }
 
     /// Top module name (the new_MODEL_<top> shim symbol).

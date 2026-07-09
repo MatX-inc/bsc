@@ -9,17 +9,27 @@
 
 use crate::value::Value;
 
+/// One debug-tier sub-symbol of a primitive (the reference's
+/// per-prim init_symbols tables in bs_prim_mod_*.h).
+pub struct PrimSym {
+    pub key: &'static str,
+    pub width: u32,
+    /// Some(lo, hi) = SYM_RANGE (addressable); None = single value
+    pub range: Option<(u64, u64)>,
+}
+
 pub trait Prim {
-    /// Debug-tier symbol peeks (trs-capi): the prim's current value
-    /// for the module -> "" redirect.  Default: no value symbol.
-    fn sym_peek(&mut self, _now: u64) -> Option<Value> {
+    /// Debug-tier symbols (trs-capi): mirror the reference prim's
+    /// init_symbols table.  Default: none.
+    fn sym_children(&self) -> Vec<PrimSym> {
+        Vec::new()
+    }
+    /// Read a sub-symbol's current value by key.
+    fn sym_read(&mut self, _key: &str, _now: u64) -> Option<Value> {
         None
     }
-    /// Addressable range (RegFile/BRAM): (lo, hi, data width).
-    fn sym_range(&self) -> Option<(u64, u64, u32)> {
-        None
-    }
-    fn sym_range_peek(&mut self, _addr: u64, _now: u64) -> Option<Value> {
+    /// Read one element of a SYM_RANGE sub-symbol.
+    fn sym_read_range(&mut self, _key: &str, _addr: u64, _now: u64) -> Option<Value> {
         None
     }
     /// Value-method call (pure read).
@@ -338,6 +348,12 @@ impl Probe {
 }
 
 impl Prim for Probe {
+    fn sym_children(&self) -> Vec<PrimSym> {
+        vec![PrimSym { key: "", width: self.value.width, range: None }]
+    }
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        key.is_empty().then(|| self.value.clone())
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,
@@ -1126,11 +1142,37 @@ thread_local! {
 }
 
 impl Prim for RegFile {
-    fn sym_range(&self) -> Option<(u64, u64, u32)> {
-        Some((self.lo, self.hi, self.width))
+    fn sym_children(&self) -> Vec<PrimSym> {
+        // bs_prim_mod_regfile.h: "" SYM_RANGE, high_addr/low_addr params
+        vec![
+            PrimSym { key: "", width: self.width, range: Some((self.lo, self.hi)) },
+            PrimSym { key: "high_addr", width: self.addr_bits, range: None },
+            PrimSym { key: "low_addr", width: self.addr_bits, range: None },
+        ]
     }
-    fn sym_range_peek(&mut self, addr: u64, now: u64) -> Option<Value> {
-        Some(self.value_method("sub", &[Value::from_u64(64, addr)], now))
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        match key {
+            "high_addr" => Some(Value::from_u64(self.addr_bits.max(1), self.hi)),
+            "low_addr" => Some(Value::from_u64(self.addr_bits.max(1), self.lo)),
+            _ => None,
+        }
+    }
+    fn sym_read_range(&mut self, key: &str, addr: u64, _now: u64) -> Option<Value> {
+        if !key.is_empty() || addr < self.lo || addr > self.hi {
+            return None;
+        }
+        // the reference's index_rf_fn reads the BACKING ARRAY raw —
+        // no same-instant one-deep bypass (that bug-compat quirk is
+        // for rule-visible sub() reads only)
+        if self.slot.is_some() {
+            return Some(self.arena_read(self.data_off(addr)));
+        }
+        Some(
+            self.data
+                .get(&addr)
+                .cloned()
+                .unwrap_or_else(|| Value::undet(self.width.max(1))),
+        )
     }
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
@@ -1565,8 +1607,11 @@ impl Reg {
 }
 
 impl Prim for Reg {
-    fn sym_peek(&mut self, now: u64) -> Option<Value> {
-        Some(self.value_method("read", &[], now))
+    fn sym_children(&self) -> Vec<PrimSym> {
+        vec![PrimSym { key: "", width: self.width, range: None }]
+    }
+    fn sym_read(&mut self, key: &str, now: u64) -> Option<Value> {
+        (key.is_empty()).then(|| self.value_method("read", &[], now))
     }
     fn vcd_defs(
         &mut self,
@@ -1842,8 +1887,11 @@ impl ConfigReg {
 }
 
 impl Prim for ConfigReg {
-    fn sym_peek(&mut self, now: u64) -> Option<Value> {
-        Some(self.value_method("read", &[], now))
+    fn sym_children(&self) -> Vec<PrimSym> {
+        vec![PrimSym { key: "", width: self.value.width, range: None }]
+    }
+    fn sym_read(&mut self, key: &str, now: u64) -> Option<Value> {
+        (key.is_empty()).then(|| self.value_method("read", &[], now))
     }
     fn vcd_defs(
         &mut self,
@@ -2010,6 +2058,22 @@ impl RWire {
 }
 
 impl Prim for RWire {
+    fn sym_children(&self) -> Vec<PrimSym> {
+        // bs_prim_mod_wire.h: "" and "value" share the data member;
+        // isValid is the 1-bit valid member
+        vec![
+            PrimSym { key: "", width: self.width, range: None },
+            PrimSym { key: "isValid", width: 1, range: None },
+            PrimSym { key: "value", width: self.width, range: None },
+        ]
+    }
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        match key {
+            "" | "value" => Some(self.value.clone()),
+            "isValid" => Some(Value::from_u64(1, self.valid as u64)),
+            _ => None,
+        }
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,
@@ -2464,6 +2528,42 @@ impl Fifo {
 }
 
 impl Prim for Fifo {
+    fn sym_children(&self) -> Vec<PrimSym> {
+        // bs_prim_mod_fifo.h: "" SYM_RANGE over the storage, depth
+        // (u32 param), level (u32, current element count)
+        vec![
+            PrimSym {
+                key: "",
+                width: self.width,
+                range: Some((0, self.size.saturating_sub(1) as u64)),
+            },
+            PrimSym { key: "depth", width: 32, range: None },
+            PrimSym { key: "level", width: 32, range: None },
+        ]
+    }
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        match key {
+            "depth" => Some(Value::from_u64(32, self.size as u64)),
+            // the reference registers `level` pointing at the SIZE
+            // member (bs_prim_mod_fifo.h init_symbols) — reproduce
+            // the contract, not the name
+            "level" => Some(Value::from_u64(32, self.size as u64)),
+            _ => None,
+        }
+    }
+    fn sym_read_range(&mut self, key: &str, addr: u64, _now: u64) -> Option<Value> {
+        if !key.is_empty() || addr as usize >= self.size {
+            return None;
+        }
+        // the reference's data_index reads the RAW ring slot (no
+        // head adjustment): post-deq stale slots are visible
+        Some(
+            self.data
+                .get(addr as usize)
+                .cloned()
+                .unwrap_or_else(|| Value::zero(self.width.max(1))),
+        )
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,

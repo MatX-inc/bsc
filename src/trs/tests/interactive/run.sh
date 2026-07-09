@@ -38,9 +38,9 @@ build() { # src top extra-link-flags...
 }
 check() { # top cmd [expected-status]
     top=$1; cmd=$2; want=${3:-0}
-    ./"ref_$top" -f "$cmd" > "ref_${top}_${cmd%.cmd}.out" 2>&1
+    timeout 120 ./"ref_$top" -f "$cmd" > "ref_${top}_${cmd%.cmd}.out" 2>&1
     ref_rc=$?
-    ./"b3_$top" -f "$cmd" > "b3_${top}_${cmd%.cmd}.out" 2>&1
+    timeout 120 ./"b3_$top" -f "$cmd" > "b3_${top}_${cmd%.cmd}.out" 2>&1
     b3_rc=$?
     [ "$ref_rc" = "$want" ] \
         || echo "WARN $top $cmd: reference exit $ref_rc (expected $want)"
