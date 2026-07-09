@@ -123,3 +123,34 @@ Remaining interp-side residual: ~0.09s of real ticks (wire valid-bit
 clears + __me_check R0001 checkers), untouched by opt level and also
 the central-loop #9 blocker — compiling them into the edge fn is the
 projected below-reference crossing.
+
+# Grid benchmark: replicated-design scaling (2026-07-09, N capped at 32)
+
+bench/grid: N x N always-fire tile ring, ONE synthesized module type
+(pure replication), byte-identical at every point.  Binary 4693cd04
+(edge-SSA defaults + outline model + RegFile inline).
+
+| N  | tiles | bsc frontend | ref build | b3 link | ref run | b3 run |
+|----|-------|--------------|-----------|---------|---------|--------|
+| 2  | 4     | 0.96 s       | 2.65 s    | 0.12 s  | 0.101 s | 0.034 s |
+| 4  | 16    | 1.11 s       | 2.98 s    | 0.42 s  | 0.110 s | 0.036 s |
+| 8  | 64    | 2.00 s       | 4.84 s    | 1.99 s  | 0.116 s | 0.059 s |
+| 16 | 256   | 7.5 s        | 12.0 s    | 8.3 s   | 0.180 s | 0.118 s |
+| 32 | 1024  | 71.1 s       | 59.8 s    | 36.5 s  | 0.191 s | 0.298 s |
+
+(b3 link phase split at N=32: ir-passes 29.7 s, backend 5.9 s;
+b3 RSS 68 MB vs ref 37 MB.)
+
+VERDICTS:
+1. The true scale wall is BSC'S FRONTEND: 71 s at 1024 tiles,
+   ~9.4x growth per 4x tiles — elaboration, upstream of any backend.
+2. NO spine explosion: b3 link grows ~4.4x per 4x tiles (ref 5.0x),
+   still 1.6x ahead at N=32.  The outline cost model + call-based
+   spine keep LLVM near-linear; loop-rolled spine is a want, not an
+   emergency.
+3. WE LOSE THE RUN AT N=32 (0.298 vs 0.191 s) after winning every
+   smaller N; reference run is startup-flat while ours grew 2.5x
+   from N=16 and RSS doubled.  Prime suspect: O(instances) startup
+   (plan walk / per-instance analysis) — TYPE-KEYED ANALYSIS is
+   hereby promoted from link-time nicety to the run-time scaling
+   fix.  Startup decomposition (-m 1) at N=32 pending a quiet slot.
