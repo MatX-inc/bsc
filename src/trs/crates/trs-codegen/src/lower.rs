@@ -1329,6 +1329,7 @@ fn lower_edge_ssa<'ctx>(
                     ssa: HashMap::new(),
                     expanding: Vec::new(),
                     thunks: HashMap::new(),
+                    av_widths: HashMap::new(),
             dead_defs: Default::default(),
                     tasks: HashMap::new(),
                     is_exec: true,
@@ -1346,6 +1347,7 @@ fn lower_edge_ssa<'ctx>(
                 ssa: HashMap::new(),
                 expanding: Vec::new(),
                 thunks: HashMap::new(),
+                av_widths: HashMap::new(),
             dead_defs: Default::default(),
                 tasks: HashMap::new(),
                 is_exec,
@@ -1579,6 +1581,9 @@ struct Frame<'ctx> {
     /// evaluate at FIRST dynamic reference this invocation, reuse
     /// after — even across Cond joins where the ssa binding dies
     thunks: HashMap<StrId, (PointerValue<'ctx>, PointerValue<'ctx>)>,
+    /// widths of SYNTHETIC ActionValue result defs (in no def table
+    /// — expr_width would otherwise fail on a direct reference)
+    av_widths: HashMap<StrId, u32>,
     /// exec-body scope (reloads eager slots) vs sched scope (stores them)
     is_exec: bool,
     /// inline depth (method-call recursion guard)
@@ -1631,13 +1636,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         match m.defs.iter().find(|d| d.name == name) {
             Some(d) if d.width >= 1 => Ok(d.width),
             Some(_) => nope("zero-width def"),
-            None => nope("unknown def"),
+            None => Err(Ineligible(format!(
+                "unknown def (width): {}",
+                self.env.d.strings[name as usize]
+            ))),
         }
     }
 
     fn expr_width(&self, f: &Frame<'ctx>, e: &Expr) -> Result<u32, Ineligible> {
         match e {
-            Expr::Def(n) => self.def_width(f.inst, *n),
+            Expr::Def(n) => match f.av_widths.get(n) {
+                Some(&w) => Ok(w),
+                None => self.def_width(f.inst, *n),
+            },
             Expr::Port(p) => match f.args.get(p) {
                 Some(&(_, w)) => Ok(w),
                 None => Ok(1), // reset/EN ports
@@ -2676,6 +2687,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ssa: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
+            av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: f.is_exec,
@@ -3032,7 +3044,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let m = &self.env.d.modules[ie.mir];
         let Some(d) = m.defs.iter().find(|d| d.name == n) else {
-            return nope("unknown def");
+            let chain: Vec<&str> = f
+                .expanding
+                .iter()
+                .map(|&x| self.env.d.strings[x as usize].as_str())
+                .collect();
+            return Err(Ineligible(format!(
+                "unknown def (expand): {} in {} (exec={} args={} chain={})",
+                self.env.d.strings[n as usize],
+                self.spec.label,
+                f.is_exec,
+                f.args.len(),
+                chain.join(" <- "),
+            )));
         };
         let dex = d.expr.clone();
         {
@@ -3347,6 +3371,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ssa: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
+            av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: false,
@@ -3461,6 +3486,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ssa: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
+            av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: true,
@@ -3565,6 +3591,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ssa: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
+            av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             is_exec: true,
@@ -3747,6 +3774,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             f, func, *tf, *cookie, *temp, *width, cond, args, signed,
                             stop_bb,
                         )?;
+                        f.av_widths.insert(*def, (*width).max(1));
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, v);
                     }
@@ -3842,6 +3870,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             let phi =
                                 self.builder.build_phi(self.ity(wd), "avmphi").unwrap();
                             phi.add_incoming(&[(&rv, g_end), (&undet, s_end)]);
+                            f.av_widths.insert(*def, wd);
                             f.dead_defs.remove(def);
                             f.ssa.insert(*def, phi.as_basic_value().into_int_value());
                             continue;
@@ -3867,6 +3896,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         self.builder.position_at_end(jn_bb);
                         let phi = self.builder.build_phi(self.ity(wd), "avphi").unwrap();
                         phi.add_incoming(&[(&v, g_end), (&undet, s_end)]);
+                        f.av_widths.insert(*def, wd);
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, phi.as_basic_value().into_int_value());
                     }
@@ -3898,6 +3928,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let phi =
                             self.builder.build_phi(self.ity(wd), "bvphi").unwrap();
                         phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
+                        f.av_widths.insert(*def, wd);
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, phi.as_basic_value().into_int_value());
                     }

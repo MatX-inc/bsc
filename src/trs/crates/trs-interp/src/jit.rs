@@ -1539,6 +1539,13 @@ impl Interp {
             if let Some(dd) = dd {
                 c.mass = expr_mass(&dd.expr);
                 walk_expr(cx, inst, &dd.expr, &mut c);
+            } else {
+                // not in any def table: a SYNTHETIC ActionValue result,
+                // bound only inside the rule performing the call —
+                // context-bound like an arg port, never hoist/share
+                // (RadixSort: hoisting a slice of AVMeth_dut_response_get
+                // into another rule's section has no binding to read)
+                c.poison |= 1;
             }
             cx.cone_memo.insert((inst, n), c.clone());
             c
