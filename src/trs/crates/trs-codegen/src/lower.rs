@@ -120,6 +120,10 @@ pub struct InstEnv {
     /// local ConfigReg instance name -> (base slot, width): old value,
     /// current value, written_at instant (see ArenaKind::CReg)
     pub creg_slot: HashMap<StrId, (u32, u32)>,
+    /// local RegFile instance name -> (base slot, width, lo, hi):
+    /// header [upd_at, upd_addr, upd_prev(w)] then dense data
+    /// (see ArenaKind::RegFile)
+    pub regfile_slot: HashMap<StrId, (u32, u32, u64, u64)>,
     /// local FIFO instance name -> (base slot, width, size, guarded):
     /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
     /// data (see ArenaKind::Fifo)
@@ -697,7 +701,7 @@ impl Drop for AotModeGuard {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 5;
+pub const AOT_LAYOUT_REV: u64 = 6;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};

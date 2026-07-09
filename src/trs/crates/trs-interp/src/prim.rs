@@ -141,6 +141,14 @@ pub enum ArenaKind {
     /// clear_at (1 word each), then size * ceil(max(width,1)/64) data
     /// words.
     Fifo { width: u32, size: u32, guard: bool },
+    /// RegFile/RegFileLoad small enough for a dense image.  Layout:
+    /// upd_at, upd_addr (1 word each), upd_prev (w words), then
+    /// (hi-lo+1) * w data words (w = ceil(max(width,1)/64)),
+    /// initialized to the undet pattern.  In-range sub/upd compile
+    /// inline reproducing the ONE-DEEP same-instant bypass exactly
+    /// (sub of the most-recently-updated address returns upd_prev);
+    /// out-of-range accesses stay on the trampoline (warnings).
+    RegFile { width: u32, lo: u64, hi: u64 },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -669,6 +677,10 @@ impl Prim for Counter {
 /// digits, range-tracker gap/duplicate warnings).
 struct RegFile {
     data: std::collections::HashMap<u64, Value>,
+    /// arena base when attached (see ArenaKind::RegFile): the slots
+    /// are then the single source of truth; `data` holds only the
+    /// pre-attach (construction/load-file) image
+    slot: Option<*mut u64>,
     /// leaf instance name (mem-file warnings)
     mem_name: String,
     /// hierarchical name rooted at "top" (out-of-bounds warnings)
@@ -830,6 +842,7 @@ impl RegFile {
             format!("top.{path}")
         };
         let mut rf = RegFile {
+            slot: None,
             data: Default::default(),
             mem_name: leaf,
             full_name,
@@ -1069,6 +1082,30 @@ fn load_mem_file(
         rt.check_range(path, mem_name, lo, hi);
 }
 
+impl RegFile {
+    fn words(&self) -> usize {
+        (self.width.max(1) as usize).div_ceil(64)
+    }
+    /// arena entries: sub returns a Value read from the slots
+    fn arena_read(&self, off: usize) -> Value {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let src = unsafe { std::slice::from_raw_parts(slot.add(off), w) };
+        Value::from_limbs64(self.width.max(1), src.to_vec())
+    }
+    fn arena_write(&self, off: usize, v: &Value) {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(off), w) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+    fn data_off(&self, a: u64) -> usize {
+        2 + self.words() * (1 + (a - self.lo) as usize)
+    }
+}
+
 impl Prim for RegFile {
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
@@ -1081,6 +1118,16 @@ impl Prim for RegFile {
                         self.addr_hex(a)
                     );
                     return Value::undet(self.width);
+                }
+                if let Some(slot) = self.slot {
+                    // arena-authoritative (compiled writes go directly
+                    // to the slots): reproduce the one-deep bypass
+                    let (upd_at, upd_addr) =
+                        unsafe { (*slot, *slot.add(1)) };
+                    if upd_at == now && upd_addr == a {
+                        return self.arena_read(2);
+                    }
+                    return self.arena_read(self.data_off(a));
                 }
                 if self.upd_at == now && self.upd_addr == a {
                     return self.upd_prev.clone();
@@ -1105,6 +1152,20 @@ impl Prim for RegFile {
                     );
                     return;
                 }
+                if let Some(slot) = self.slot {
+                    let (upd_at, upd_addr) =
+                        unsafe { (*slot, *slot.add(1)) };
+                    if upd_at != now || upd_addr != a {
+                        let prev = self.arena_read(self.data_off(a));
+                        self.arena_write(2, &prev);
+                        unsafe {
+                            *slot = now;
+                            *slot.add(1) = a;
+                        }
+                    }
+                    self.arena_write(self.data_off(a), &args[1]);
+                    return;
+                }
                 if self.upd_at != now || self.upd_addr != a {
                     self.upd_prev = self
                         .data
@@ -1120,6 +1181,32 @@ impl Prim for RegFile {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // dense image: gate the slot budget — huge memories stay boxed
+        let entries = self.hi.checked_sub(self.lo)?.checked_add(1)?;
+        let slots = 2u64
+            + (self.words() as u64) * (1 + entries);
+        (slots <= 1 << 16).then_some(ArenaKind::RegFile {
+            width: self.width,
+            lo: self.lo,
+            hi: self.hi,
+        })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        unsafe {
+            *slot = self.upd_at;
+            *slot.add(1) = self.upd_addr;
+        }
+        let prev = self.upd_prev.clone();
+        self.arena_write(2, &prev);
+        let undet = Value::undet(self.width);
+        for a in self.lo..=self.hi {
+            let v = self.data.get(&a).cloned();
+            self.arena_write(self.data_off(a), v.as_ref().unwrap_or(&undet));
+        }
+    }
 }
 
 /// MOD_LatchCrossingReg (bs_prim_mod_synchronizers.h): a register written

@@ -2000,6 +2000,10 @@ impl Interp {
                         Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
                         Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
                         Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
+                        // arena-backed but NO stability contract and
+                        // reads can WARN (bounds): the split analyzer
+                        // treats it like an opaque prim
+                        Some(ArenaKind::RegFile { .. }) => ChildClass::Other,
                         None => ChildClass::Other,
                     }),
                     InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
@@ -2091,6 +2095,7 @@ impl Interp {
             let mut wire_slot = HashMap::new();
             let mut creg_slot = HashMap::new();
             let mut fifo_slot = HashMap::new();
+            let mut regfile_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -2120,6 +2125,14 @@ impl Interp {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 6 + size * words);
                         fifo_slot.insert(name, (base, width, size, guard));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::RegFile { width, lo, hi }) => {
+                        let words = width.max(1).div_ceil(64);
+                        let entries = (hi - lo + 1) as u32;
+                        let base =
+                            alloc(&mut nslots, 2 + words * (1 + entries));
+                        regfile_slot.insert(name, (base, width, lo, hi));
                         attach.push((ci, base));
                     }
                     None => {}
@@ -2214,6 +2227,7 @@ impl Interp {
                     wire_slot,
                     creg_slot,
                     fifo_slot,
+                    regfile_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot,
@@ -2286,6 +2300,15 @@ impl Interp {
                     e.memo_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
                 m9.sort_unstable();
                 m9.hash(&mut h);
+                // the sig must cover every input the exec lowering
+                // reads (handoff rule): regfile regions included
+                let mut m10: Vec<_> = e
+                    .regfile_slot
+                    .iter()
+                    .map(|(&k, &(b, w, lo, hi))| (k, b - r0, w, lo, hi))
+                    .collect();
+                m10.sort_unstable();
+                m10.hash(&mut h);
                 let mut kids: Vec<_> = e
                     .children
                     .iter()
