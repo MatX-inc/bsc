@@ -1558,7 +1558,23 @@ impl Interp {
                     }
                 }
             }
+            // always-fire detection (task #23): WILL_FIRE (or CAN_FIRE
+            // with no inhibitors) is a constant-true def
+            let const_true = |name: StrId| -> bool {
+                self.d.modules[mir]
+                    .defs
+                    .iter()
+                    .find(|dd| dd.name == name)
+                    .map(|dd| {
+                        matches!(&dd.expr, trs_ir::Expr::Const { limbs, .. }
+                            if limbs.iter().any(|&l| l != 0))
+                    })
+                    .unwrap_or(false)
+            };
+            let always_fire = inhibit_slots.is_empty()
+                && (const_true(rr.will_fire) || const_true(rr.can_fire));
             specs.push(RuleSpec {
+                always_fire,
                 inst: ri.inst,
                 rule_idx: ri.rule_idx,
                 inhibit_slots,

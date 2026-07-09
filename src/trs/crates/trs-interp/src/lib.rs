@@ -3444,8 +3444,9 @@ impl Interp {
             () => {
                 #[cfg(feature = "jit")]
                 'central: {
+                    // hot path: no diagnostics on the already-tried check
                     if central_tried {
-                        { CENTRAL_BAIL[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                        break 'central;
                     }
 
             let Some(j) = jit.as_ref() else {

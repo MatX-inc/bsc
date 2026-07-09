@@ -140,6 +140,10 @@ pub struct RuleSpec {
     pub wf_slot: u32,
     /// defs this rule's Sched entry evaluates at its schedule position
     /// (REntry::eager); each must have an `eager_slot`
+    /// WILL_FIRE is provably constant-true (fire_when_enabled +
+    /// no-conflict rules — the MatX static case): the exec body skips
+    /// its WF gate entirely
+    pub always_fire: bool,
     pub eager: Vec<StrId>,
     /// eager defs of the SAME instance owned by entries that run
     /// strictly earlier in this rule's composition: the sched fn may
@@ -2393,6 +2397,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             func.get_nth_param(2).unwrap().into_int_value(),
             func.get_nth_param(3).unwrap().into_int_value(),
         ));
+        let always = self.spec.always_fire;
         let mut f = Frame {
             arena: func.get_nth_param(0).unwrap().into_pointer_value(),
             envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
@@ -2405,9 +2410,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             is_exec: true,
             depth: 0,
         };
-        let wf = self.load_word(&f, self.spec.wf_slot);
-        let fire = self.nonzero(wf, 64);
-        self.builder.build_conditional_branch(fire, body_bb, done_bb).unwrap();
+        if always {
+            // WILL_FIRE == const true: no gate (Ravi's static case)
+            self.builder.build_unconditional_branch(body_bb).unwrap();
+        } else {
+            let wf = self.load_word(&f, self.spec.wf_slot);
+            let fire = self.nonzero(wf, 64);
+            self.builder.build_conditional_branch(fire, body_bb, done_bb).unwrap();
+        }
 
         self.builder.position_at_end(body_bb);
         self.stmts(&mut f, func, &r.body, stop_bb)?;
