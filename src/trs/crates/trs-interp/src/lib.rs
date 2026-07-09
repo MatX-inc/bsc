@@ -1834,11 +1834,27 @@ impl Interp {
                     | "$writeb"
                     | "$writeo"
                     | "$writeh"
+                    | "$fdisplay"
+                    | "$fdisplayb"
+                    | "$fdisplayo"
+                    | "$fdisplayh"
+                    | "$fwrite"
+                    | "$fwriteb"
+                    | "$fwriteo"
+                    | "$fwriteh"
+                    | "$error"
+                    | "$warning"
+                    | "$info"
+                    | "$fatal"
             )
         {
-            // post-$finish console output is suppressed in the
-            // reference (dollar_display.cxx: if (!bk_finished));
-            // the rules themselves still run
+            // post-$finish OUTPUT tasks are suppressed in the
+            // reference — the whole dollar_display.cxx family (29
+            // bk_finished gates: console, file, and severity tasks);
+            // the rules themselves still run.  The value-bearing
+            // $swrite/$sformat AV tasks are also gated there but
+            // their post-finish return is unwitnessed — left live
+            // until a test pins the contract.
             return;
         }
         match name {
@@ -4062,6 +4078,15 @@ impl Interp {
                     for en in &rc.entries {
                         let inst = en.inst;
                         for &node in &en.nodes {
+                            // $finish completes the EDGE SCHEDULE but
+                            // the kernel's yield preempts the LATER
+                            // same-instant events — the PG_FINAL
+                            // early-rule pass does not run post-finish
+                            // (sysFWrite3: 4 extra $fwrite lines when
+                            // it did)
+                            if self.finished.is_some() {
+                                break;
+                            }
                             let r0 = match node {
                                 SchedNode::Sched(r) | SchedNode::Exec(r) => r,
                             };
