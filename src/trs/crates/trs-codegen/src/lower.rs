@@ -260,6 +260,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             spec,
             token_kind: 0,
             outlined: None,
+            helper_self: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -369,6 +370,7 @@ pub fn compile_scheds(
             spec,
             token_kind: 0,
             outlined: None,
+            helper_self: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -414,6 +416,7 @@ pub fn compile_execs(
             spec,
             token_kind: TOKEN_KIND_EXEC,
             outlined: None,
+            helper_self: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -492,6 +495,7 @@ pub fn compile_object_chunk(
             spec,
             token_kind: 0,
             outlined: None,
+            helper_self: None,
             dedup: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
@@ -554,6 +558,61 @@ pub enum HelperRef {
 /// Outlined pieces available to a lowering: (module ir, def) -> helper.
 pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32 /*width*/)>;
 
+/// One outlined def piece to compile as a helper function.
+pub struct HelperSpec {
+    /// module ir + def being outlined
+    pub mir: usize,
+    pub def: StrId,
+    pub width: u32,
+    /// symbol: hlp_<inst-sig hex>_<def id> (class-unique)
+    pub sym: String,
+    /// exemplar instance (frames, region context); the fn is shared by
+    /// every instance whose subtree sig matches
+    pub inst: usize,
+    /// per-instant memo: region slot base (stamp word, then value
+    /// words) — None for unstable pieces
+    pub memo_slot: Option<u32>,
+}
+
+/// Lower a batch of helper functions into one module.  Same-batch
+/// helpers call each other by symbol (module-local); the HelperMap may
+/// also carry cross-references.  Returns nothing extra: callers either
+/// finish a JIT engine or emit an object from the module.
+fn lower_helpers<'ctx>(
+    env: &PlanEnv,
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    cbs: Callbacks<'ctx>,
+    specs: &[HelperSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+) -> Result<(), Ineligible> {
+    for hs in specs {
+        let mut lc = Lower {
+            env,
+            ctx,
+            module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec: pseudo,
+            token_kind: TOKEN_KIND_EXEC,
+            outlined: Some(refs),
+            helper_self: Some((hs.mir, hs.def)),
+            dedup: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+        };
+        lc.lower_helper(hs)?;
+        if !lc.foreign_stmts.is_empty() || !lc.prim_calls.is_empty() {
+            return Err(Ineligible(format!(
+                "helper piece has callback sites (analysis bug): {}",
+                hs.sym
+            )));
+        }
+    }
+    Ok(())
+}
+
 struct Lower<'a, 'ctx> {
     env: &'a PlanEnv<'a>,
     ctx: &'ctx Context,
@@ -566,6 +625,9 @@ struct Lower<'a, 'ctx> {
     /// outlined def pieces callable from this lowering (None while the
     /// helper set itself is being compiled bottom-up)
     outlined: Option<&'a HelperMap>,
+    /// the piece being lowered right now (its own def must expand
+    /// inline, not self-call)
+    helper_self: Option<(usize, StrId)>,
     /// exec dedup mode: (subtree region of spec.inst, base param,
     /// token-base param).  In-region slots address as base + (slot -
     /// region.0); call-site tokens OR the runtime token base.  None =
@@ -1297,7 +1359,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // piece is stable.  The callee's region base is the caller's
         // base shifted by the (type-uniform) subtree offset.
         if let Some(out) = self.outlined {
-            if let Some((href, w)) = out.get(&(ie.mir, n)) {
+            if self.helper_self == Some((ie.mir, n)) {
+                // lowering this piece's own body: fall through to expand
+            } else if let Some((href, w)) = out.get(&(ie.mir, n)) {
                 let w = *w;
                 let i64t = self.ctx.i64_type();
                 let ptrt = self.ctx.ptr_type(AddressSpace::default());
@@ -1731,6 +1795,69 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.builder.build_return(Some(&i32t.const_int(0, false))).unwrap();
         self.builder.position_at_end(stop_bb);
         self.builder.build_return(Some(&i32t.const_int(1, false))).unwrap();
+        Ok(())
+    }
+
+    /// One outlined def piece: iN hlp(arena, env, base).  Base-relative
+    /// addressing throughout (shared across instances of the type);
+    /// stable pieces get a per-instant memo prologue over [stamp,
+    /// value] slots in the instance region.
+    fn lower_helper(&mut self, hs: &HelperSpec) -> Result<(), Ineligible> {
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let i64t = self.ctx.i64_type();
+        let w = hs.width.max(1);
+        let fnty = self.ity(w).fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+        let func = self.module.add_function(&hs.sym, fnty, None);
+        let entry = self.ctx.append_basic_block(func, "entry");
+        self.builder.position_at_end(entry);
+        let region = self.ie(hs.inst)?.region;
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            // helpers carry no callback sites (v1): token base unused
+            i64t.const_zero(),
+        ));
+        let mut f = Frame {
+            arena: func.get_nth_param(0).unwrap().into_pointer_value(),
+            envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
+            inst: hs.inst,
+            method_idx: None,
+            args: HashMap::new(),
+            ssa: HashMap::new(),
+            expanding: Vec::new(),
+            tasks: HashMap::new(),
+            is_exec: true,
+            depth: 0,
+        };
+        let (hit_bb, miss_bb) = if hs.memo_slot.is_some() {
+            (
+                Some(self.ctx.append_basic_block(func, "hit")),
+                Some(self.ctx.append_basic_block(func, "miss")),
+            )
+        } else {
+            (None, None)
+        };
+        if let (Some(ms), Some(hit), Some(miss)) = (hs.memo_slot, hit_bb, miss_bb) {
+            let stamp = self.load_word(&f, ms);
+            let now = self.load_word(&f, self.env.now_slot);
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, stamp, now, "mhit")
+                .unwrap();
+            self.builder.build_conditional_branch(eq, hit, miss).unwrap();
+            self.builder.position_at_end(hit);
+            let cached = self.load_val(&f, ms + 1, w);
+            self.builder.build_return(Some(&cached)).unwrap();
+            self.builder.position_at_end(miss);
+        }
+        let v = self.def(&mut f, hs.def)?;
+        if let Some(ms) = hs.memo_slot {
+            self.store_val(&f, ms + 1, w, v);
+            let now = self.load_word(&f, self.env.now_slot);
+            self.store_word(&f, ms, now);
+        }
+        self.builder.build_return(Some(&v)).unwrap();
         Ok(())
     }
 
