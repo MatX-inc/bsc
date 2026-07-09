@@ -13,6 +13,7 @@
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
 NS=${NS:-"2 4 8"}
+TILE=${TILE:-v3}
 CYCLES=${CYCLES:-1000}
 SRC=$(cd "$(dirname "$0")" && pwd)
 RESULTS=${RESULTS:-$PWD/results.csv}
@@ -62,7 +63,7 @@ bench() { # n
     mkdir -p "$d"
     cd "$d" || exit 2
 
-    python3 "$SRC/gen_grid.py" "$n" --cycles "$CYCLES" -o "Grid$n.bsv" \
+    python3 "$SRC/gen_grid.py" "$n" --tile "$TILE" --cycles "$CYCLES" -o "Grid$n.bsv" \
         || { echo "FAIL N=$n (gen_grid.py)"; fail=1; return; }
 
     # bsc frontend: parse/typecheck/elaborate to .bo/.ba
@@ -113,7 +114,7 @@ bench() { # n
 
     ref_rss=$(rss ref.time)
     b3_rss=$(rss b3.time)
-    row="v2,$n,$m,$fe_s,$rb_s,$lk_s,$rr_s,$br_s,$ref_rss,$b3_rss,$ir_s,$be_s"
+    row="$TILE,$n,$m,$fe_s,$rb_s,$lk_s,$rr_s,$br_s,$ref_rss,$b3_rss,$ir_s,$be_s"
     echo "$row" >> "$RESULTS"
     [ "$ok" = 1 ] && echo "PASS N=$n  $row"
 }

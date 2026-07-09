@@ -3750,17 +3750,101 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, v);
                     }
-                    Action::MethCall { instance, method, cond, args, .. } => {
+                    Action::MethCall { instance, method, port, cond, args } => {
                         // ActionValue method on a prim child (trampoline)
+                        // or a user-module child (inline)
                         let ie = self.ie(f.inst)?;
                         let Some(&child) = ie.children.get(instance) else {
                             return nope("avaction on unknown child");
                         };
-                        if self.env.insts.contains_key(&child)
-                            || ie.reg_slot.contains_key(instance)
+                        if ie.reg_slot.contains_key(instance)
                             || ie.wire_slot.contains_key(instance)
                         {
-                            return nope("avaction on non-trampoline instance");
+                            return nope("avaction on reg/wire instance");
+                        }
+                        if self.env.insts.contains_key(&child) {
+                            // user-module child: inline the ActionValue
+                            // method body under the call condition
+                            // (action protocol: EN stored first), then
+                            // evaluate the result expr in the child
+                            // frame; the skip path binds undet zeros
+                            // exactly like the interpreter
+                            if *port != 0 {
+                                return nope("multi-ported user actionvalue method");
+                            }
+                            let cie = self.ie(child)?;
+                            let cmod = &self.env.d.modules[cie.mir];
+                            let Some((mi, m)) = cmod
+                                .methods
+                                .iter()
+                                .enumerate()
+                                .find(|(_, m)| m.name == *method)
+                            else {
+                                return nope("unknown actionvalue method on child");
+                            };
+                            if m.kind != trs_ir::MethodKind::ActionValue {
+                                return nope("non-actionvalue avaction method");
+                            }
+                            if m.always_enabled {
+                                return nope("always_enabled method (RDY-gated body)");
+                            }
+                            if args.len() != m.args.len() {
+                                return nope("method arg count mismatch");
+                            }
+                            let Some(result) = m.result.clone() else {
+                                return nope("actionvalue method without result");
+                            };
+                            let margs = m.args.clone();
+                            let body = m.body.clone();
+                            let en_name =
+                                format!("EN_{}", self.env.d.strings[*method as usize]);
+                            let en_slot = self
+                                .env
+                                .d
+                                .strings
+                                .iter()
+                                .position(|x| x == &en_name)
+                                .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
+                            let mut cf = self.child_frame(f, child, Some(mi))?;
+                            for (a, pa) in args.iter().zip(&margs) {
+                                let wa = self.expr_width(f, a)?;
+                                let v0 = self.expr(f, a)?;
+                                let v = self.to_w(v0, wa, pa.width, false);
+                                cf.args.insert(pa.name, (v, pa.width));
+                            }
+                            let wc = self.expr_width(f, cond)?;
+                            let c = self.expr(f, cond)?;
+                            let cz = self.nonzero(c, wc);
+                            let go_bb = self.ctx.append_basic_block(func, "avmgo");
+                            let sk_bb = self.ctx.append_basic_block(func, "avmsk");
+                            let jn_bb = self.ctx.append_basic_block(func, "avmjn");
+                            self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                            self.builder.position_at_end(go_bb);
+                            if let Some(slot) = en_slot {
+                                let one = self.ctx.i64_type().const_int(1, false);
+                                self.store_word(&cf, slot, one);
+                            }
+                            self.stmts(&mut cf, func, &body, stop_bb)?;
+                            // the AvAction def is a SYNTHETIC temp — it
+                            // is in no def table (def_width fails), so
+                            // the binding width is the RESULT's width,
+                            // like the interpreter ("the callee's result
+                            // already has the declared width")
+                            let rv = self.expr(&mut cf, &result)?;
+                            let wd = rv.get_type().get_bit_width();
+                            let g_end = self.builder.get_insert_block().unwrap();
+                            self.builder.build_unconditional_branch(jn_bb).unwrap();
+                            self.builder.position_at_end(sk_bb);
+                            let undet = self.ity(wd).const_zero();
+                            let s_end = self.builder.get_insert_block().unwrap();
+                            self.builder.build_unconditional_branch(jn_bb).unwrap();
+                            self.builder.position_at_end(jn_bb);
+                            let phi =
+                                self.builder.build_phi(self.ity(wd), "avmphi").unwrap();
+                            phi.add_incoming(&[(&rv, g_end), (&undet, s_end)]);
+                            f.dead_defs.remove(def);
+                            f.ssa.insert(*def, phi.as_basic_value().into_int_value());
+                            continue;
                         }
                         let wd = self.def_width(f.inst, *def).unwrap_or(1);
                         let wc = self.expr_width(f, cond)?;

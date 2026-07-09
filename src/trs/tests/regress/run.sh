@@ -30,6 +30,9 @@ check HoistDivTrap sysHoistDivTrap
 # sched-cone RegFile warnings: evaluation count (proven: pre-fix
 # doubled 2 -> 4) and eager-list order are part of byte parity
 check RegFileWarnCone sysRegFileWarnCone
+# ActionValue method on a user-module child, inlined; result width
+# comes from the result (synthetic AV temps are in no def table)
+check AvMethInline sysAvMethInline
 # direct-BDPI (task #22): narrow + wide value imports must run
 # COMPILED (a fallback-to-interp regression still passes stdout —
 # the artifact note is the tell, but byte-parity is the contract)
