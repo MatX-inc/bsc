@@ -64,6 +64,18 @@ pub struct SimState {
     names: Vec<CString>,
     /// exit protocol mirror (bk_finished / bk_exit_status / bk_fataled)
     exit_status: i32,
+    /// bk_quit_after_edge limit slots: ABSOLUTE target per
+    /// (clock handle, posedge?); overwrite on set, disarmed when at
+    /// or below the current count
+    edge_limits: std::collections::HashMap<(u32, bool), u64>,
+    /// bk_schedule_ui_event times, consumed when reached
+    ui_events: Vec<u64>,
+    /// sim config interactive (edges with no logic still stop cleanly)
+    interactive: bool,
+    /// bk_abort_now (async sessions; sync records it only)
+    aborted: bool,
+    /// bk_set_timescale (VCD header)
+    timescale: Option<(String, u64)>,
 }
 
 impl SimState {
@@ -113,12 +125,22 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
             }
         }
     }
-    let st = Box::new(SimState {
+    let mut st = Box::new(SimState {
         engines,
         args: Vec::new(),
         names: Vec::new(),
         exit_status: 0,
+        edge_limits: std::collections::HashMap::new(),
+        ui_events: Vec::new(),
+        interactive: false,
+        aborted: false,
+        timescale: None,
     });
+    // one-time event-loop setup: clocks resolved, kernel reset
+    // protocol seeded — `sim clock` works right after `sim load`
+    for e in &mut st.engines {
+        e.interp.prime();
+    }
     Box::into_raw(st) as *mut c_void
 }
 
@@ -173,3 +195,242 @@ pub extern "C" fn bk_exit_status(hdl: *mut c_void) -> i32 {
 //             bk_disable_VCD_dumping
 //   misc:     bk_version / bk_set_timescale
 // ---------------------------------------------------------------
+
+// =================================================================
+// Clock surface (bk_clock_*): reads over the interp's kernel clock
+// list (VcdClock is the tClockInfo mirror; handles are indices).
+// tClock = u32, BAD_CLOCK_HANDLE = !0u32, tEdgeDirection POSEDGE=1.
+
+const BAD_CLOCK: u32 = !0u32;
+const BK_SUCCESS: i32 = 0;
+const BK_ERROR: i32 = -1;
+
+impl SimState {
+    fn cstr(&mut self, s: &str) -> *const c_char {
+        let c = CString::new(s).unwrap_or_default();
+        let p = c.as_ptr();
+        self.names.push(c);
+        p
+    }
+    fn clock(&mut self, h: u32) -> Option<trs_interp::ClockInfo> {
+        self.primary().clock_info().into_iter().nth(h as usize)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_num_clocks(hdl: *mut c_void) -> u32 {
+    state(hdl).primary().clock_info().len() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_nth_clock(hdl: *mut c_void, n: u32) -> u32 {
+    if (n as usize) < state(hdl).primary().clock_info().len() {
+        n
+    } else {
+        BAD_CLOCK
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_get_clock_by_name(
+    hdl: *mut c_void,
+    name: *const c_char,
+) -> u32 {
+    let want = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
+    state(hdl)
+        .primary()
+        .clock_info()
+        .iter()
+        .position(|c| c.name == want)
+        .map(|i| i as u32)
+        .unwrap_or(BAD_CLOCK)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_clock_name(hdl: *mut c_void, h: u32) -> *const c_char {
+    let st = state(hdl);
+    match st.clock(h) {
+        Some(c) => {
+            let name = c.name.clone();
+            st.cstr(&name)
+        }
+        None => std::ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_clock_initial_value(hdl: *mut c_void, h: u32) -> u32 {
+    state(hdl).clock(h).map(|c| c.initial_val as u32).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_clock_first_edge(hdl: *mut c_void, h: u32) -> u64 {
+    state(hdl).clock(h).map(|c| c.first_edge).unwrap_or(0)
+}
+
+/// duration of the LOW (value=0) or HIGH (value=1) phase
+#[no_mangle]
+pub extern "C" fn bk_clock_duration(hdl: *mut c_void, h: u32, value: u32) -> u64 {
+    state(hdl)
+        .clock(h)
+        .map(|c| if value != 0 { c.high_dur } else { c.low_dur })
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_clock_val(hdl: *mut c_void, h: u32) -> u32 {
+    state(hdl).clock(h).map(|c| c.cur_val as u32).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_clock_cycle_count(hdl: *mut c_void, h: u32) -> u64 {
+    state(hdl).clock(h).map(|c| c.cycles).unwrap_or(0)
+}
+
+/// tEdgeDirection: NEGEDGE=0, POSEDGE=1
+#[no_mangle]
+pub extern "C" fn bk_clock_edge_count(hdl: *mut c_void, h: u32, dir: u32) -> u64 {
+    state(hdl)
+        .clock(h)
+        .map(|c| if dir != 0 { c.cycles } else { c.neg_edges })
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn bk_clock_last_edge(hdl: *mut c_void, h: u32) -> u64 {
+    state(hdl).clock(h).map(|c| c.last_edge).unwrap_or(0)
+}
+
+// =================================================================
+// Run control: the bk stop machinery over advance_until(StopCond).
+// Limit slots are ABSOLUTE per (clock, dir) and overwrite; a limit
+// at or below the current count is DISARMED (this is how bluetcl's
+// step "restores" a limit that was not reached).  Sync only for
+// now: async lands with the driver thread (async.cmd).
+
+#[no_mangle]
+pub extern "C" fn bk_quit_after_edge(
+    hdl: *mut c_void,
+    h: u32,
+    dir: u32,
+    count: u64,
+) -> i32 {
+    let st = state(hdl);
+    if st.clock(h).is_none() {
+        return BK_ERROR;
+    }
+    st.edge_limits.insert((h, dir != 0), count);
+    BK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn bk_schedule_ui_event(hdl: *mut c_void, at: u64) -> i32 {
+    let st = state(hdl);
+    if !st.ui_events.contains(&at) {
+        st.ui_events.push(at);
+    }
+    BK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn bk_remove_ui_event(hdl: *mut c_void, at: u64) -> i32 {
+    state(hdl).ui_events.retain(|&t| t != at);
+    BK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn bk_set_interactive(hdl: *mut c_void) {
+    state(hdl).interactive = true;
+}
+
+#[no_mangle]
+pub extern "C" fn bk_advance(hdl: *mut c_void, _async: u8) -> i32 {
+    let st = state(hdl);
+    // effective stop condition: armed limits only (above the current
+    // per-clock count), plus outstanding UI events
+    let clocks = st.primary().clock_info();
+    let edge_limits: Vec<(usize, bool, u64)> = st
+        .edge_limits
+        .iter()
+        .filter_map(|(&(h, dir), &lim)| {
+            let c = clocks.get(h as usize)?;
+            let count = if dir { c.cycles } else { c.neg_edges };
+            (lim > count).then_some((h as usize, dir, lim))
+        })
+        .collect();
+    let cond = trs_interp::StopCond {
+        max_cycles: u64::MAX,
+        edge_limits,
+        at_times: st.ui_events.clone(),
+    };
+    let mut rc = BK_SUCCESS;
+    // primary first (owns stdout); oracle comparison lands with the
+    // quiet flag for secondaries
+    for e in &mut st.engines {
+        let r = e.interp.advance_until(&cond);
+        if r != 0 {
+            rc = r;
+        }
+    }
+    st.exit_status = rc;
+    // UI events at or before the stop time have fired
+    let now = st.primary().now();
+    st.ui_events.retain(|&t| t > now);
+    BK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn bk_is_running(_hdl: *mut c_void) -> u8 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn bk_sync(hdl: *mut c_void) -> u64 {
+    state(hdl).primary().now()
+}
+
+#[no_mangle]
+pub extern "C" fn bk_abort_now(hdl: *mut c_void) {
+    state(hdl).aborted = true;
+}
+
+#[no_mangle]
+pub extern "C" fn bk_fataled(hdl: *mut c_void) -> u8 {
+    (state(hdl).exit_status == 1) as u8
+}
+
+// =================================================================
+// Misc
+
+#[repr(C)]
+pub struct BkVersionInfo {
+    pub name: *const c_char,
+    pub build: *const c_char,
+    pub creation_time: i64,
+}
+
+#[no_mangle]
+pub extern "C" fn bk_version(hdl: *mut c_void, out: *mut BkVersionInfo) {
+    let st = state(hdl);
+    let name = st.cstr("trs");
+    let build = st.cstr(env!("CARGO_PKG_VERSION"));
+    unsafe {
+        (*out).name = name;
+        (*out).build = build;
+        (*out).creation_time = 0;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bk_set_timescale(
+    hdl: *mut c_void,
+    scale_unit: *const c_char,
+    scale_factor: u64,
+) -> i32 {
+    let unit = unsafe { CStr::from_ptr(scale_unit) }
+        .to_string_lossy()
+        .into_owned();
+    let st = state(hdl);
+    st.timescale = Some((unit, scale_factor));
+    BK_SUCCESS
+}

@@ -213,6 +213,7 @@ pub struct ClockInfo {
     pub low_dur: u64,
     pub high_dur: u64,
     pub cycles: u64,
+    pub neg_edges: u64,
     pub cur_val: bool,
     pub last_edge: u64,
 }
@@ -3019,6 +3020,7 @@ impl Interp {
                 low_dur: c.low_dur,
                 high_dur: c.high_dur,
                 cycles: c.pos_count,
+                neg_edges: c.neg_count,
                 cur_val: c.cur,
                 last_edge: c.pos_at.max(c.neg_at),
             })
