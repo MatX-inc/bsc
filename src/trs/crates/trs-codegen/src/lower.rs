@@ -558,8 +558,16 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
     };
     let tm = aot_target_machine()?;
     let opts = inkwell::passes::PassBuilderOptions::create();
+    if std::env::var_os("TRS_JIT_NOVEC").is_some() {
+        opts.set_loop_vectorization(false);
+        opts.set_loop_slp_vectorization(false);
+    }
+    // debugging escape: run an arbitrary pipeline string instead
+    // (miscompile bisection — e.g. "default<O1>,gvn")
+    let pipeline = std::env::var("TRS_JIT_PIPELINE")
+        .unwrap_or_else(|_| format!("default<O{lvl}>"));
     module
-        .run_passes(&format!("default<O{lvl}>"), &tm, opts)
+        .run_passes(&pipeline, &tm, opts)
         .map_err(|e| Ineligible(format!("IR passes: {e}")))
 }
 
@@ -1002,7 +1010,13 @@ pub fn compile_design_object(
     if timing {
         eprintln!("trs aot: one-module lowering done");
     }
+    if std::env::var_os("TRS_JIT_DUMP_PRE").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
     run_ir_passes(&module)?;
+    if std::env::var_os("TRS_JIT_DUMP_POST").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
     let t1 = std::time::Instant::now();
     if timing {
         eprintln!("trs aot: ir passes {:?}", t1 - t0);
@@ -2023,10 +2037,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let mut slots: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
         let store_limbs = |lc: &Self, v: IntValue<'ctx>, w: u32| {
             let n32 = (w.max(1) as u64 + 31) / 32;
-            let buf = lc
-                .builder
-                .build_array_alloca(i32t, i32t.const_int(n32, false), "bb")
-                .unwrap();
+            let buf = lc.entry_alloca(i32t, n32, "bb");
             for k in 0..n32 {
                 let piece = if k == 0 {
                     v
@@ -2040,7 +2051,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         .build_gep(i32t, buf, &[i64t.const_int(k, false)], "bi")
                         .unwrap()
                 };
-                lc.builder.build_store(ip, word).unwrap();
+                // volatile: external C code reads this memory; an
+                // in-process default<O2> deleted the (correct) buffer
+                // traffic around the opaque call — repro preserved,
+                // system opt on identical IR does NOT reproduce
+                let st = lc.builder.build_store(ip, word).unwrap();
+                st.set_volatile(true).unwrap();
             }
             buf
         };
@@ -2051,10 +2067,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             _ => None,
         }
         .map(|n32| {
-            let buf = self
-                .builder
-                .build_array_alloca(i32t, i32t.const_int(n32, false), "bo")
-                .unwrap();
+            let buf = self.entry_alloca(i32t, n32, "bo");
             ptys.push(ptrt.into());
             slots.push(buf.into());
             (buf, n32)
@@ -2135,6 +2148,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         .build_load(i32t, ip, "brl")
                         .unwrap()
                         .into_int_value();
+                    w32.as_instruction()
+                        .unwrap()
+                        .set_volatile(true)
+                        .unwrap();
                     let ext = self.to_w(w32, 32, width, false);
                     let sh = self.ity(width).const_int(32 * k, false);
                     let shifted =
@@ -2642,6 +2659,31 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Lower a def reference: body locals / cone memo, then this
     /// instance's fire-signal slots, then eager-def slots (exec bodies
     /// reload the schedule-time value), then table expansion.
+    /// Static entry-block alloca: non-entry array allocas are DYNAMIC
+    /// to LLVM (per-execution stack bumps, SROA-hostile — and the O2+
+    /// pipeline miscompiled the BDPI buffer pattern built that way).
+    fn entry_alloca(
+        &self,
+        elem: inkwell::types::IntType<'ctx>,
+        count: u64,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let entry = func.get_first_basic_block().unwrap();
+        let b = self.ctx.create_builder();
+        match entry.get_first_instruction() {
+            Some(i) => b.position_before(&i),
+            None => b.position_at_end(entry),
+        }
+        b.build_array_alloca(elem, elem.const_int(count, false), name)
+            .unwrap()
+    }
+
     fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
         if let Some(v) = f.ssa.get(&n) {
             return Ok(*v);
