@@ -440,6 +440,10 @@ void* new_MODEL_{top}(void) {{
         cc.arg(format!("-Wl,-u,{sym}"));
     }
     cc.arg(&lib)
+        // rust emits function sections: dead-strip everything the
+        // -u keep-list doesn't reach, and drop symbols (166MB -> )
+        .arg("-Wl,--gc-sections")
+        .arg("-Wl,-s")
         .arg("-Wl,-Bsymbolic")
         .arg(format!("-Wl,--version-script={}", map.display()))
         .arg("-lpthread")
