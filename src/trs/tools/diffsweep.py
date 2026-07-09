@@ -153,6 +153,12 @@ def one_test(job):
             elif f.endswith(".c.keep"):
                 shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
                 cfiles.append(f[:-5])
+            elif f.endswith(".h"):
+                # C sources #include local headers (the foreign battery
+                # was LINK_FAIL-invisible for want of common.h)
+                shutil.copy(os.path.join(testdir, f), wk)
+            elif f.endswith(".h.keep"):
+                shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
     r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk, timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
