@@ -310,7 +310,11 @@ renameBinds m sbs = SolvedBinds {
     recursiveBinds = map renB (recursiveBinds sbs),
     nonRecursiveBinds = map renB (nonRecursiveBinds sbs),
     recursiveIds = S.map ren (recursiveIds sbs),
-    nonRecursiveIds = S.map ren (nonRecursiveIds sbs)
+    nonRecursiveIds = S.map ren (nonRecursiveIds sbs),
+    incoherentIds = S.map ren (incoherentIds sbs),
+    bindClasses = M.mapKeys ren (bindClasses sbs),
+    bindTypes = M.mapKeys ren (bindTypes sbs),
+    directIncoherences = M.mapKeys ren (directIncoherences sbs)
   }
   where
     ren i = M.findWithDefault i i m
@@ -358,11 +362,18 @@ extractClosures forbidden roots sbs = (closure_sbs, S.fromList ok_roots)
             Just x@(_, fv, _) ->
                 collect (S.insert i seen) (S.toList fv ++ is) (x : acc)
     collected = collect S.empty ok_roots []
+    collected_ids = S.fromList [ i | ((i, _, _), _, _) <- collected ]
     closure_sbs = SolvedBinds {
         recursiveBinds = [ (b, fv) | (b, fv, True) <- collected ],
         nonRecursiveBinds = [ (b, fv) | (b, fv, False) <- collected ],
         recursiveIds = S.fromList [ i | ((i, _, _), _, True) <- collected ],
-        nonRecursiveIds = S.fromList [ i | ((i, _, _), _, False) <- collected ]
+        nonRecursiveIds = S.fromList [ i | ((i, _, _), _, False) <- collected ],
+        -- the closure walk refuses incoherent-marked bindings, so the
+        -- extracted set is coherent by construction
+        incoherentIds = S.empty,
+        bindClasses = M.restrictKeys (bindClasses sbs) collected_ids,
+        bindTypes = M.restrictKeys (bindTypes sbs) collected_ids,
+        directIncoherences = M.empty
       }
 
 instance PPrint SolvedBinds where
