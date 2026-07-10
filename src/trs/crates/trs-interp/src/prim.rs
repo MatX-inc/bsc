@@ -52,6 +52,15 @@ pub trait Prim {
     fn sym_transient(&self) -> bool {
         false
     }
+    /// Architectural state for the ORACLE compare — a superset of
+    /// sym_children.  The bk symbol tree must MIRROR the reference's
+    /// registrations exactly (extra nodes would break `sim ls` byte
+    /// parity), but the state compare wants every register-like
+    /// value: prims the reference leaves symbol-less (Counter, CReg)
+    /// expose their state here only.  Keys resolve via sym_read.
+    fn state_children(&self) -> Vec<PrimSym> {
+        self.sym_children()
+    }
     /// Read a sub-symbol's current value by key.
     fn sym_read(&mut self, _key: &str, _now: u64) -> Option<Value> {
         None
@@ -517,6 +526,16 @@ impl Counter {
 }
 
 impl Prim for Counter {
+    // no sym_children: the reference registers NO symbols for
+    // Counter (`sim ls` parity); the oracle still compares its
+    // architectural value via state_children
+    fn state_children(&self) -> Vec<PrimSym> {
+        vec![PrimSym { key: "", width: self.width, range: None }]
+    }
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        // the registered value (ticks have run at any stop boundary)
+        (key.is_empty()).then(|| self.val.clone())
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,
@@ -2281,6 +2300,16 @@ impl CReg {
 }
 
 impl Prim for CReg {
+    // no sym_children: the reference registers NO symbols for CReg
+    // (`sim ls` parity); the oracle compares the registered value
+    fn state_children(&self) -> Vec<PrimSym> {
+        vec![PrimSym { key: "", width: self.value.width, range: None }]
+    }
+    fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        // live value == registered value at any stop boundary (the
+        // edge tick latched it); mid-cycle it is the port-write chain
+        (key.is_empty()).then(|| self.value.clone())
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,

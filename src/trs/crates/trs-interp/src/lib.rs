@@ -4716,6 +4716,17 @@ impl Interp {
         }
     }
 
+    /// Oracle-compare state surface: a SUPERSET of prim_sym_children
+    /// (prims the reference leaves symbol-less — Counter, CReg —
+    /// expose their architectural value here without touching the
+    /// `sim ls`-parity bk tree).
+    pub fn prim_state_children(&self, i: usize) -> Vec<prim::PrimSym> {
+        match &self.insts[i].kind {
+            InstKind::Prim(p) => p.state_children(),
+            _ => Vec::new(),
+        }
+    }
+
     /// ORACLE architectural-state compare (trs-capi): walk every
     /// prim sub-symbol — scalars and range entries — and report
     /// values where `self` (the primary) and `other` (a secondary)
@@ -4744,7 +4755,7 @@ impl Interp {
                 }
             }
             let path = self.insts[i].path.clone();
-            for ps in self.prim_sym_children(i) {
+            for ps in self.prim_state_children(i) {
                 if out.len() >= max {
                     break;
                 }

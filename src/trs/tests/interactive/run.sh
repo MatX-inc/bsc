@@ -10,7 +10,7 @@
 # interactive.exp — keep in sync (22 sim_output assertions), plus
 # local witnesses (FinishPeek, bdpi, oracle, oracleaot,
 # finishpeekaot, oracleprims, quietwarn, stopres x2,
-# capi_witness, vcdtcl, fsttcl: 34 total).
+# capi_witness, vcdtcl, fsttcl, oraclecnt: 35 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -174,6 +174,14 @@ if build StopRes.bsv sysStopRes; then
     check sysStopRes stopres.cmd
     export TRS_CAPI_ENGINES=interp,jit
     check sysStopRes stopresoracle.cmd
+    export TRS_CAPI_ENGINES=interp
+fi
+# Counter/CReg oracle state surface: symbol-less in the reference's
+# bk tree (`sim ls` parity) but compared via state_children at
+# every dual-engine stop
+if build CRegCnt.bsv sysCRegCnt; then
+    export TRS_CAPI_ENGINES=interp,jit
+    check sysCRegCnt oraclecnt.cmd
     export TRS_CAPI_ENGINES=interp
 fi
 # trs_* namespace (task #10): direct C-API witness — dlopen the
