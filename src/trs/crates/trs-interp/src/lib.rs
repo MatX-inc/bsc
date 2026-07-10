@@ -146,6 +146,10 @@ pub struct Interp {
     /// VCD — while all STATE effects (including $finish/$fatal flags
     /// and file reads) run normally so lockstep compare is meaningful
     quiet: bool,
+    /// $stop yield: ends the current advance at the slice boundary
+    /// but does NOT finish the sim — cleared at the next advance so
+    /// the session resumes (the reference's resumable-$stop contract)
+    stop_request: bool,
     /// VCD file requested on the command line (-V), consumed at run()
     vcd_file_pending: Option<String>,
     /// last computed value of each def, per instance — the C++ member
@@ -594,6 +598,7 @@ impl Interp {
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
             quiet: false,
+            stop_request: false,
             vcd_file_pending: None,
             vcd_def_vals: HashMap::new(),
             vcd_meth_calls: HashMap::new(),
@@ -2056,7 +2061,11 @@ impl Interp {
                 };
                 self.finished = Some(code);
             }
-            "$stop" => self.finished = Some(0),
+            // $stop PAUSES (resumable yield: bk_finished stays false,
+            // `sim step`/`sim run` resume); $finish TERMINATES.  The
+            // batch driver observes the yield, reaches script end, and
+            // exits 0 — byte-identical to the reference's batch $stop.
+            "$stop" => self.stop_request = true,
             // waves: dollar_dumpvars.cxx semantics
             "$dumpfile" => {
                 let name = match args.first() {
@@ -3641,6 +3650,12 @@ impl Interp {
     /// targets (bk_clock_edge_count + N) for edge limits.
     pub fn advance_until(&mut self, cond: &StopCond) -> i32 {
         let max_cycles = cond.max_cycles;
+        // prim-level diagnostics (fifo guard warnings, readmem
+        // errors) check this thread-local — engines run sequentially
+        // on one thread, so stamping per advance scopes it correctly
+        prim::QUIET_ENGINE.with(|c| c.set(self.quiet));
+        // a $stop yield is one-shot: the next advance resumes
+        self.stop_request = false;
         self.prime();
         let Stepper {
             clocks,
@@ -3785,7 +3800,10 @@ impl Interp {
             let envp = self as *mut Interp as *mut core::ffi::c_void;
             let cycles0 = self.cycle;
             let mut fin_break = false;
-            while self.finished.is_none() && self.cycle < max_cycles {
+            while self.finished.is_none()
+                && !self.stop_request
+                && self.cycle < max_cycles
+            {
                 self.cycle += 1;
                 self.now = tp;
                 final_now = tp;
@@ -3799,12 +3817,13 @@ impl Interp {
                     // NO finished break here: $finish completes the
                     // instant's edge schedules
                 }
-                // $finish stops ON this posedge: break BEFORE tp/tn
-                // advance so the exit bookkeeping and re-armed heap
-                // see the companion negedge as PENDING, exactly like
-                // the general loop's state at a $finish (the fleet:
-                // crediting it made oracle edge compares diverge)
-                if self.finished.is_some() {
+                // $finish/$stop stop ON this posedge: break BEFORE
+                // tp/tn advance so the exit bookkeeping and re-armed
+                // heap see the companion negedge as PENDING, exactly
+                // like the general loop's state at a yield (the
+                // fleet: crediting it made oracle edge compares
+                // diverge)
+                if self.finished.is_some() || self.stop_request {
                     fin_break = true;
                     break;
                 }
@@ -3836,14 +3855,18 @@ impl Interp {
                     c.neg_at = tn - period;
                 }
             }
-            heap.push(Reverse((tp, 1, wci, true)));
+            // on a yield exit tp still names the EXECUTED posedge —
+            // re-arming it verbatim would re-run that edge on a
+            // $stop resume; its successor is the pending one
+            let tp_pend = if fin_break { tp + period } else { tp };
+            heap.push(Reverse((tp_pend, 1, wci, true)));
             heap.push(Reverse((tn, 1, wci, false)));
         
                 }
             };
         }
 
-        while self.finished.is_none() {
+        while self.finished.is_none() && !self.stop_request {
             let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
             // top reset deasserts at t=2 after that instant's logic
             if t > 2 && self.rst_asserted[0] {
@@ -4219,7 +4242,11 @@ impl Interp {
 
             // steady state may only begin here (fusion compiles after
             // warm-up): retry the central player at slice boundaries
-            if !same_time && self.finished.is_none() && self.cycle < max_cycles {
+            if !same_time
+                && self.finished.is_none()
+                && !self.stop_request
+                && self.cycle < max_cycles
+            {
                 try_central!();
             }
             // the cycle limit stops the simulation at the Nth default
@@ -4296,6 +4323,11 @@ impl Interp {
 /// dollar_display's Target collects errors with push_front and prints
 /// them after the task output: "Output error: <msg>", newest first.
 fn emit_output_errors(errs: &[String]) {
+    // quiet oracle engines suppress these like every output sink
+    // ($fdisplay-family arms reach here even when write_fd is gated)
+    if prim::quiet_engine() {
+        return;
+    }
     for e in errs.iter().rev() {
         print!("Output error: {e}");
     }

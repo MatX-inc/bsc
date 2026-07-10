@@ -37,10 +37,11 @@ products, like VCS:
   (N=32: 27.4s vs 150.1s); run ahead except N=32 where the deficit
   is O(instances) STARTUP (type-keyed analysis is the queued fix).
   bsc's own frontend is everyone's wall (511s at N=32).
-- INTERACTIVE: battery 29/29 BYTE-IDENTICAL vs reference Bluesim
+- INTERACTIVE: battery 33/33 BYTE-IDENTICAL vs reference Bluesim
   (tests/interactive/run.sh mirrors testsuite/bsc.bluesim/
   interactive + local FinishPeek, bdpi, oracle, oracleaot,
-  finishpeekaot, oracleprims, vcdtcl witnesses).
+  finishpeekaot, oracleprims, quietwarn, stopres x2,
+  capi_witness, vcdtcl witnesses).
   Async runs on the jit engine (capability tiers: peek tests pin
   engines=interp).  Model .so is 49MB after gc-sections/strip.
 - PACKAGING (task #10): `make install` in src/trs builds+
@@ -101,6 +102,17 @@ products, like VCS:
   pure aot (register peeks from the warm arena + $finish edge
   completion on the aot tier) and gcd.cmd on interp,aot.  Witnesses:
   oracleaot.cmd, finishpeekaot.cmd.
+- $STOP RESUME (review backlog closed): $stop now PAUSES — a one-
+  shot stop_request yield (cleared per advance) separate from
+  finished, so bk_finished stays false and `sim run`/`sim step`
+  resume; $finish stays terminal.  Batch stays byte-identical (the
+  yield reaches script end and exits 0, matching the reference's
+  terminal batch $stop).  Central player yields resume-correct
+  (fin_break re-arms the SUCCESSOR posedge; the executed one must
+  not re-pop).  MEASURED first (stopres probe): reference stops AT
+  the $stop with the edge complete, resumes to $finish, refuses
+  post-$finish steps.  Witnesses: stopres.cmd (interp) +
+  stopresoracle.cmd (interp,jit), batch + artifact probes identical.
 - COMPILE-WORKER JOIN (review backlog closed): short jit-engine
   interactive sessions segfaulted 5/5 at teardown — detached body-
   compile workers still executing model-.so code when bluetcl
@@ -160,7 +172,7 @@ products, like VCS:
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
 - Local ladders: tests/regress/run.sh (6), tests/vcd/run.sh (10),
-  tests/interactive/run.sh (29; needs TRS_CAPI_LIB=<libtrs_capi.a>),
+  tests/interactive/run.sh (33; needs TRS_CAPI_LIB=<libtrs_capi.a>),
   plus sudoku + sysMips byte-parity from kept .bir (copy designs to a
   STABLE dir — sweeps rm -rf their work dirs).
 - Traps: TRS_JIT env is is_none()-tested — ANY value (even 0)
@@ -177,7 +189,7 @@ products, like VCS:
    engine construction, quiet flag + time/edge/finish lockstep,
    VCD-under-Tcl, and packaging DONE — see current state.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
-   message): $stop-vs-$finish resume; multi-clock EN latch clearing;
+   message): multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
    const-ready RDY interim; same pattern as the def `sym` flag in
    SimExportIR.hs); symOrd char-wise compare; link feature-probe
@@ -189,10 +201,11 @@ products, like VCS:
    namespaces for user BDPI; the bk_init note is the interim);
    $finish may skip same-instant OTHER-CLOCK PG_LOGIC edges the
    reference still runs (needs an MCD witness measured vs
-   reference); quiet flag misses prim-level println! (fifo guard
-   warnings), $fgetc double-consumes shared stdin, and format
-   'Output error:' lines leak from quiet engines (thread-local
-   quiet, like FROM_COMPILED, is the likely shape); state compare
+   reference); $fgetc double-consumes shared stdin under the oracle
+   (needs a primary-writes/secondary-replays tee in FSlot::Stdin)
+   [the other quiet leaks — prim println! guard warnings and
+   'Output error:' lines — FIXED same night: thread-local
+   QUIET_ENGINE + qprintln!, quietwarn battery witness]; state compare
    blind to CReg/BRAM/DualPortRam/synchronizers (no sym_children);
    VCD-under-Tcl dead on the shipped default jit engine and bluetcl
    can't see bk_enable's 0 (auto-downgrade at -V or a loader note);

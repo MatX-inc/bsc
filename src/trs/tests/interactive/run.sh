@@ -9,7 +9,8 @@
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
 # local witnesses (FinishPeek, bdpi, oracle, oracleaot,
-# finishpeekaot, oracleprims, capi_witness, vcdtcl: 30 total).
+# finishpeekaot, oracleprims, quietwarn, stopres x2,
+# capi_witness, vcdtcl: 33 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -156,6 +157,23 @@ fi
 if [ -x ./ref_sysFinishPeek ]; then
     export TRS_CAPI_ENGINES=aot
     check sysFinishPeek finishpeekaot.cmd
+    export TRS_CAPI_ENGINES=interp
+fi
+# quiet-engine diagnostics: prim-level guard warnings must appear
+# exactly once (the fleet: quiet secondaries duplicated every
+# "Enqueuing to a full fifo" line pre-fix)
+if build QuietWarn.bsv sysQuietWarn; then
+    export TRS_CAPI_ENGINES=interp,jit
+    check sysQuietWarn quietwarn.cmd
+    export TRS_CAPI_ENGINES=interp
+fi
+# $stop pauses, $finish terminates (review backlog): run to the
+# $stop, peek, RESUME to the $finish, then stepping must refuse —
+# byte-identical to the reference through the whole session
+if build StopRes.bsv sysStopRes; then
+    check sysStopRes stopres.cmd
+    export TRS_CAPI_ENGINES=interp,jit
+    check sysStopRes stopresoracle.cmd
     export TRS_CAPI_ENGINES=interp
 fi
 # trs_* namespace (task #10): direct C-API witness — dlopen the

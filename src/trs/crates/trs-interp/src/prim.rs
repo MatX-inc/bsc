@@ -9,6 +9,26 @@
 
 use crate::value::Value;
 
+thread_local! {
+    /// Quiet oracle engine (docs/TCL-CAPI.md): the owning Interp
+    /// stamps this around advances (engines run sequentially on one
+    /// thread), so reference-mirroring prim diagnostics — fifo guard
+    /// warnings, readmem errors, RegFile bounds warnings — suppress
+    /// on secondaries like every other output sink.
+    pub(crate) static QUIET_ENGINE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn quiet_engine() -> bool {
+    QUIET_ENGINE.with(|c| c.get())
+}
+
+/// qprintln! that a QUIET oracle engine suppresses (the primary's
+/// print is the byte-parity one; a secondary's would duplicate it).
+macro_rules! qprintln {
+    ($($t:tt)*) => { if !crate::prim::quiet_engine() { println!($($t)*) } };
+}
+
 /// One debug-tier sub-symbol of a primitive (the reference's
 /// per-prim init_symbols tables in bs_prim_mod_*.h).
 pub struct PrimSym {
@@ -766,11 +786,11 @@ impl RangeTracker {
                         overlap_low = next_overlap_addr;
                     }
                     if overlap_low == overlap_high {
-                        println!(
+                        qprintln!(
                             "Warning: file '{filename}' for memory '{memname}' has duplicate values for address {overlap_low}."
                         );
                     } else {
-                        println!(
+                        qprintln!(
                             "Warning: file '{filename}' for memory '{memname}' has duplicate values for addresses {overlap_low} to {overlap_high}."
                         );
                     }
@@ -782,11 +802,11 @@ impl RangeTracker {
             } else if lo > next_addr {
                 // gap
                 if next_addr == lo - 1 {
-                    println!(
+                    qprintln!(
                         "Warning: file '{filename}' for memory '{memname}' has a gap at address {next_addr}."
                     );
                 } else {
-                    println!(
+                    qprintln!(
                         "Warning: file '{filename}' for memory '{memname}' has a gap at addresses {next_addr} to {}.",
                         lo - 1
                     );
@@ -801,11 +821,11 @@ impl RangeTracker {
         }
         if !full {
             if next_addr == end {
-                println!(
+                qprintln!(
                     "Warning: file '{filename}' for memory '{memname}' has a gap at address {next_addr}."
                 );
             } else {
-                println!(
+                qprintln!(
                     "Warning: file '{filename}' for memory '{memname}' has a gap at addresses {next_addr} to {end}."
                 );
             }
@@ -949,7 +969,7 @@ fn load_mem_file(
                 if let Some(i) = msg.find(" (os error") {
                     msg.truncate(i);
                 }
-                println!("Error: failed to open file '{path}' because {msg}");
+                qprintln!("Error: failed to open file '{path}' because {msg}");
                 return;
             }
         };
@@ -1015,8 +1035,8 @@ fn load_mem_file(
                     '\n' => line += 1,
                     '\r' | ' ' | '\t' => {}
                     _ => {
-                        println!("Error: syntax error at line {line} of file '{path}'");
-                        println!("       Encountered '{c}' when expecting '/', '@', hex digit, end-of-line or whitespace.");
+                        qprintln!("Error: syntax error at line {line} of file '{path}'");
+                        qprintln!("       Encountered '{c}' when expecting '/', '@', hex digit, end-of-line or whitespace.");
                         return;
                     }
                 },
@@ -1027,8 +1047,8 @@ fn load_mem_file(
                         comment_start_line = line;
                     }
                     _ => {
-                        println!("Error: syntax error at line {line} of file '{path}'");
-                        println!("       Malformed comment start sequence.");
+                        qprintln!("Error: syntax error at line {line} of file '{path}'");
+                        qprintln!("       Malformed comment start sequence.");
                         return;
                     }
                 },
@@ -1064,8 +1084,8 @@ fn load_mem_file(
                             }
                         };
                         if let Some(e) = err {
-                            println!("Error: address processing error at line {start_line} of file '{path}'");
-                            println!("       {e}.");
+                            qprintln!("Error: address processing error at line {start_line} of file '{path}'");
+                            qprintln!("       {e}.");
                             return;
                         }
                         if c == '\n' {
@@ -1075,8 +1095,8 @@ fn load_mem_file(
                     } else if c.is_ascii_hexdigit() || matches!(c, '_' | 'x' | 'X' | 'z' | 'Z') {
                         tok.push(c);
                     } else {
-                        println!("Error: address processing error at line {start_line} of file '{path}'");
-                        println!("       Encountered '{c}' when expecting '/', hex digit, end-of-line or whitespace.");
+                        qprintln!("Error: address processing error at line {start_line} of file '{path}'");
+                        qprintln!("       Encountered '{c}' when expecting '/', hex digit, end-of-line or whitespace.");
                         return;
                     }
                 }
@@ -1084,8 +1104,8 @@ fn load_mem_file(
                     let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
                     if done {
                         if !set_entry(&mut rt, &tok, &mut addr, sink) {
-                            println!("Error: value processing error at line {start_line} of file '{path}'");
-                            println!("       Malformed value.");
+                            qprintln!("Error: value processing error at line {start_line} of file '{path}'");
+                            qprintln!("       Malformed value.");
                             return;
                         }
                         if c == '\n' {
@@ -1095,8 +1115,8 @@ fn load_mem_file(
                     } else if c.is_ascii_hexdigit() || matches!(c, '_' | 'x' | 'X' | 'z' | 'Z') {
                         tok.push(c);
                     } else {
-                        println!("Error: value processing error at line {start_line} of file '{path}'");
-                        println!("       Encountered '{c}' when expecting '/', digit, end-of-line or whitespace.");
+                        qprintln!("Error: value processing error at line {start_line} of file '{path}'");
+                        qprintln!("       Encountered '{c}' when expecting '/', digit, end-of-line or whitespace.");
                         return;
                     }
                 }
@@ -1104,13 +1124,13 @@ fn load_mem_file(
         }
         match state {
             St::CComment | St::EndCComment => {
-                println!("Error: syntax error at line {comment_start_line} of file '{path}'");
-                println!("       Unterminated C-style comment.");
+                qprintln!("Error: syntax error at line {comment_start_line} of file '{path}'");
+                qprintln!("       Unterminated C-style comment.");
             }
             St::InValue => {
                 if !set_entry(&mut rt, &tok, &mut addr, sink) {
-                    println!("Error: value processing error at line {line} of file '{path}'");
-                    println!("       Malformed value.");
+                    qprintln!("Error: value processing error at line {line} of file '{path}'");
+                    qprintln!("       Malformed value.");
                 }
             }
             _ => {}
@@ -1199,7 +1219,7 @@ impl Prim for RegFile {
                                 tok & 0xffff
                             )
                         };
-                        println!(
+                        qprintln!(
                             "Warning: RegFile '{}' -- Read address is out of bounds: {} [now={} src={}]",
                             self.full_name,
                             self.addr_hex(a),
@@ -1208,7 +1228,7 @@ impl Prim for RegFile {
                         );
                         return Value::undet(self.width);
                     }
-                    println!(
+                    qprintln!(
                         "Warning: RegFile '{}' -- Read address is out of bounds: {}",
                         self.full_name,
                         self.addr_hex(a)
@@ -1241,7 +1261,7 @@ impl Prim for RegFile {
             "upd" => {
                 let a = args[0].as_u64();
                 if !self.in_range(a) {
-                    println!(
+                    qprintln!(
                         "Warning: RegFile '{}' -- Write address is out of bounds: {}",
                         self.full_name,
                         self.addr_hex(a)
@@ -2825,7 +2845,7 @@ impl Prim for Fifo {
                         && self.deq_at == now
                         && self.saved_elems == self.size)
                 {
-                    println!("Warning: {} -- Enqueuing to a full fifo", self.full_name);
+                    qprintln!("Warning: {} -- Enqueuing to a full fifo", self.full_name);
                 } else if self.elems < self.size {
                     let v = if self.zero_width {
                         Value::zero(1)
@@ -2850,7 +2870,7 @@ impl Prim for Fifo {
                         && self.enq_at == now
                         && self.saved_elems == 0)
                 {
-                    println!("Warning: {} -- Dequeuing from empty fifo", self.full_name);
+                    qprintln!("Warning: {} -- Dequeuing from empty fifo", self.full_name);
                 } else if self.elems != 0 {
                     self.fst = (self.fst + 1) % self.size;
                     self.elems -= 1;
@@ -4818,7 +4838,7 @@ impl Bram {
 
     fn put(&mut self, port_b: bool, wens: u64, addr: u64, val: Value, now: u64, pname: &str) {
         if addr > self.hi_addr {
-            println!(
+            qprintln!(
                 "Warning: BRAM '{}' -- {} address on port {} is out of bounds: {}",
                 self.full_name,
                 if wens != 0 { "Write" } else { "Read" },
