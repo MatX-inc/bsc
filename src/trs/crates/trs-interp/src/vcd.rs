@@ -201,6 +201,11 @@ impl Vcd {
         }
     }
 
+    /// bk_get_VCD_file_name's source: "" when unset (C++ c_str()).
+    pub fn file_name(&self) -> &str {
+        self.filename.as_deref().unwrap_or("")
+    }
+
     pub fn set_limit(&mut self, l: u64) {
         self.limit = l;
     }

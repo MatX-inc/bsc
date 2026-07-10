@@ -4449,6 +4449,12 @@ impl Interp {
         self.vcd.disable()
     }
 
+    /// bk_get_VCD_file_name: the reference returns the C++ string's
+    /// c_str() — "" when no file has been set, never NULL.
+    pub fn vcd_file_name(&self) -> &str {
+        self.vcd.file_name()
+    }
+
     /// Symbol-tree seed (trs-capi): per instance, (parent instance,
     /// local name, is-user-module).  Parents derive from paths; the
     /// root's local name is "" (the kernel top_symbol key).
