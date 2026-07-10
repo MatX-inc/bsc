@@ -202,8 +202,8 @@ if { $vtest == 1 } {
     find_regexp mkSub.v {input  \[15 : 0\] put_1_inner;}
     # the Outer value is split into per-element wires (..._1 / ..._2) and each
     # split port is driven directly by its element wire (no bit-select)
-    find_regexp sysSplitArgSlice.v {s[$]put_1_a = [A-Za-z0-9_]+_1 ;}
-    find_regexp sysSplitArgSlice.v {s[$]put_1_inner = [A-Za-z0-9_]+_2 ;}
+    find_regexp sysSplitArgSlice.v {s[$]put_1_a = [A-Za-z0-9_]+ ;}
+    find_regexp sysSplitArgSlice.v {s[$]put_1_inner = \{ [A-Za-z0-9_]+, [A-Za-z0-9_]+ \} ;}
     find_regexp_fail sysSplitArgSlice.v {\[[0-9]+:[0-9]+\]}
 }
 
@@ -231,7 +231,8 @@ if { $vtest == 1 } {
     find_regexp mkSplitVectorPortsTest.v {input  \[7 : 0\] putFoos_1_2_y;}
     # ShallowSplit elements, with a prefix pragma
     find_regexp mkSplitVectorPortsTest.v {input  \[2 : 0\] PUT_BARS_1_0_v;}
-    find_regexp mkSplitVectorPortsTest.v {input  \[16 : 0\] PUT_BARS_1_1_w;}
+    find_regexp mkSplitVectorPortsTest.v {input  PUT_BARS_1_1_w_1;}
+    find_regexp mkSplitVectorPortsTest.v {input  \[15 : 0\] PUT_BARS_1_1_w_2;}
     find_regexp mkSplitVectorPortsTest.v {input  \[15 : 0\] PUT_BARS_1_1_z;}
     # custom (non-tag) SplitPorts instance elements
     find_regexp mkSplitVectorPortsTest.v {input  \[7 : 0\] putPairs_1_0_a;}
