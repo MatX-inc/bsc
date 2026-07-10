@@ -87,8 +87,8 @@ aVerilog errh flags pps aspack ffmap =
        -- G0131 despite never being printed.)
        let suspect_str s = isVReservedWord s || isSVStdPackageIdent s
            suspect_vid (VId s _ _) = suspect_str s
-           dpi_name_vids = [ n | VDPI n _ _ <- dpi_decls ] ++
-                           [ a | VDPI _ _ args <- dpi_decls,
+           dpi_name_vids = [ n | VDPI n _ _ _ _ <- dpi_decls ] ++
+                           [ a | VDPI _ _ _ _ args <- dpi_decls,
                                  (a, _, _) <- args ]
            has_suspects = any suspect_vid dpi_name_vids ||
                           any (suspect_str . fst) foreign_func_names ||
@@ -2056,15 +2056,15 @@ instance VUse VExpr where
 renameSVStdIdents :: [(String, Position)] -> VProgram
                   -> (VProgram, [(String, String, Position)], [(String, Position)])
 renameSVStdIdents foreign_funcs (VProgram vmods dpis comments) =
-    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ <- dpis ] ++
-                                [ s | VDPI _ _ args <- dpis,
+    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ _ _ <- dpis ] ++
+                                [ s | VDPI _ _ _ _ args <- dpis,
                                       (VId s _ _, _, _) <- args ])
         -- foreign Verilog function/task calls name a definition in the
         -- user's own Verilog code, so, like DPI names, they must never
         -- be renamed (the call would no longer match its definition)
         extern_names = dpi_names `S.union` S.fromList (map fst foreign_funcs)
         dpi_clashes = [ (s, getPosition i)
-                      | VDPI (VId s i _) _ _ <- dpis,
+                      | VDPI (VId s i _) _ _ _ _ <- dpis,
                         isSVStdPackageIdent s ]
         foreign_clashes = [ (s, pos) | (s, pos) <- foreign_funcs,
                                        isSVStdPackageIdent s ]
@@ -2159,7 +2159,7 @@ vargVIds :: VArg -> [VId]
 vargVIds (VAInput i _)       = [i]
 vargVIds (VAInout i mi _)    = i : maybe [] (:[]) mi
 vargVIds (VAOutput i _)      = [i]
-vargVIds (VAParameter i _ _) = [i]
+vargVIds (VAParameter i _ _ _) = [i]
 
 -- Every declaration-position identifier of a module: the module's own
 -- name, its port and parameter names, and, per body item, the names it
@@ -2203,7 +2203,7 @@ vModuleDeclVIds vmod =
     go (VMDecl d)            = declVIds d
     go (VMInst { vi_module_name = mn, vi_inst_name = inm,
                  vi_inst_params = iparams, vi_inst_ports = iports }) =
-        mn : inm : either (const []) (map fst) iparams ++ map fst iports
+        mn : inm : map fst iparams ++ map fst iports
     go (VMAssign _ _)        = []
     go (VMStmt {})           = []
     go (VMComment _ it)      = go it
@@ -2225,10 +2225,7 @@ mapRenameableVIds f items = map go items
     go inst@(VMInst { vi_inst_name = inm, vi_inst_params = iparams,
                       vi_inst_ports = iports }) =
         inst { vi_inst_name = f inm,
-               vi_inst_params =
-                   either (Left . map (\(ms, e) -> (ms, gen e)))
-                          (Right . map (\(pn, me) -> (pn, fmap gen me)))
-                          iparams,
+               vi_inst_params = [ (pn, fmap gen me) | (pn, me) <- iparams ],
                vi_inst_ports = [ (pn, fmap gen me) | (pn, me) <- iports ] }
     go (VMComment c it)      = VMComment c (go it)
     go (VMRegGroup a b c it) = VMRegGroup (f a) b c (go it)
@@ -2245,9 +2242,7 @@ collectRenameableVIds items = concatMap go items
   where
     go (VMInst { vi_inst_name = inm, vi_inst_params = iparams,
                  vi_inst_ports = iports }) =
-        inm : either (concatMap (vids . snd))
-                     (concatMap (maybe [] vids . snd))
-                     iparams
+        inm : concatMap (maybe [] vids . snd) iparams
             ++ concatMap (maybe [] vids . snd) iports
     go (VMComment _ it)      = go it
     go (VMRegGroup a _ _ it) = a : go it
