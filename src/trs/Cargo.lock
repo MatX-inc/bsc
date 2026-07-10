@@ -21,75 +21,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
-name = "trs"
-version = "0.0.1"
-dependencies = [
- "trs-codegen",
- "trs-interp",
- "trs-ir",
- "trs-kernel",
- "trs-rt",
- "trs-wave",
- "libc",
-]
-
-[[package]]
-name = "trs-capi"
-version = "0.0.1"
-dependencies = [
- "trs-interp",
- "trs-ir",
- "libc",
-]
-
-[[package]]
-name = "trs-codegen"
-version = "0.0.1"
-dependencies = [
- "trs-ir",
- "inkwell",
- "libc",
-]
-
-[[package]]
-name = "trs-interp"
-version = "0.0.1"
-dependencies = [
- "trs-codegen",
- "trs-ir",
- "cc",
- "libc",
- "libloading",
-]
-
-[[package]]
-name = "trs-ir"
-version = "0.0.1"
-dependencies = [
- "ciborium",
- "serde",
-]
-
-[[package]]
-name = "trs-kernel"
-version = "0.0.1"
-
-[[package]]
-name = "trs-rt"
-version = "0.0.1"
-dependencies = [
- "trs-kernel",
-]
-
-[[package]]
-name = "trs-wave"
-version = "0.0.1"
-dependencies = [
- "trs-kernel",
- "fst-writer",
-]
-
-[[package]]
 name = "cc"
 version = "1.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -339,6 +270,75 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "trs"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "trs-codegen",
+ "trs-interp",
+ "trs-ir",
+ "trs-kernel",
+ "trs-rt",
+ "trs-wave",
+]
+
+[[package]]
+name = "trs-capi"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "trs-interp",
+ "trs-ir",
+]
+
+[[package]]
+name = "trs-codegen"
+version = "0.0.1"
+dependencies = [
+ "inkwell",
+ "libc",
+ "trs-ir",
+]
+
+[[package]]
+name = "trs-interp"
+version = "0.0.1"
+dependencies = [
+ "cc",
+ "libc",
+ "libloading",
+ "trs-codegen",
+ "trs-ir",
+]
+
+[[package]]
+name = "trs-ir"
+version = "0.0.1"
+dependencies = [
+ "ciborium",
+ "serde",
+]
+
+[[package]]
+name = "trs-kernel"
+version = "0.0.1"
+
+[[package]]
+name = "trs-rt"
+version = "0.0.1"
+dependencies = [
+ "trs-kernel",
+]
+
+[[package]]
+name = "trs-wave"
+version = "0.0.1"
+dependencies = [
+ "fst-writer",
+ "trs-kernel",
 ]
 
 [[package]]

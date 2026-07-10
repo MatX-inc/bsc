@@ -1,4 +1,4 @@
-gen,N,tiles,bsc_frontend_s,ref_build_s,b3_link_s,ref_run_s,b3_run_s,ref_rss_kb,b3_rss_kb,ir_passes_s,backend_s
+gen,N,tiles,bsc_frontend_s,ref_build_s,trs_link_s,ref_run_s,trs_run_s,ref_rss_kb,trs_rss_kb,ir_passes_s,backend_s
 v1,2,4,0.958,2.645,0.123,0.101,0.034,36924,30800,0.046,0.031
 v1,4,16,1.114,2.980,0.416,0.110,0.036,37200,31784,0.232,0.110
 v1,8,64,2.002,4.840,1.992,0.116,0.059,37180,33300,1.499,0.384

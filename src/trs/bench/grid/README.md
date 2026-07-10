@@ -38,10 +38,10 @@ The CSV separates *where* time goes as N grows:
 | `N`, `tiles` | grid edge, N*N instance count |
 | `bsc_frontend_s` | `bsc -sim -bir -u -g sysGrid<N>` (parse/typecheck/elaborate) |
 | `ref_build_s` | reference Bluesim link (`bsc -sim -bir -e ... -o sim.exe`; also exports the `.bir`) |
-| `b3_link_s` | `trs link <top>.bir -o b3sim` wall time |
-| `ref_run_s`, `b3_run_s` | wall time of the two simulations |
-| `ref_rss_kb`, `b3_rss_kb` | peak RSS (`/usr/bin/time -v`) |
-| `ir_passes_s`, `backend_s` | `TRS_JIT_TIME=1` phase lines from the link ("ir passes" / "backend emit"; full log in `<work>/N<n>/b3link.log`) |
+| `trs_link_s` | `trs link <top>.bir -o trssim` wall time |
+| `ref_run_s`, `trs_run_s` | wall time of the two simulations |
+| `ref_rss_kb`, `trs_rss_kb` | peak RSS (`/usr/bin/time -v`) |
+| `ir_passes_s`, `backend_s` | `TRS_JIT_TIME=1` phase lines from the link ("ir passes" / "backend emit"; full log in `<work>/N<n>/trslink.log`) |
 
 Anything superlinear in `tiles` in the link or run columns is a
 scaling bug (or the motivation for #20's pooling: collapse N*N

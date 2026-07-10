@@ -1,7 +1,7 @@
 # TRS: a Rust/LLVM simulation backend for BSC
 
-Status: design proposal (working name "TRS"; user-facing name stays
-"Bluesim").  This document is grounded in the current implementation — file
+Status: design proposal (drafted under the working name "Bluesim 3",
+since renamed to "TRS").  This document is grounded in the current implementation — file
 references point at the code on the `vlink-regen` branch (PR #2), which this
 work builds on.
 

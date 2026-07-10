@@ -130,7 +130,7 @@ bench/grid: N x N always-fire tile ring, ONE synthesized module type
 (pure replication), byte-identical at every point.  Binary 4693cd04
 (edge-SSA defaults + outline model + RegFile inline).
 
-| N  | tiles | bsc frontend | ref build | b3 link | ref run | b3 run |
+| N  | tiles | bsc frontend | ref build | trs link | ref run | trs run |
 |----|-------|--------------|-----------|---------|---------|--------|
 | 2  | 4     | 0.96 s       | 2.65 s    | 0.12 s  | 0.101 s | 0.034 s |
 | 4  | 16    | 1.11 s       | 2.98 s    | 0.42 s  | 0.110 s | 0.036 s |
@@ -138,13 +138,13 @@ bench/grid: N x N always-fire tile ring, ONE synthesized module type
 | 16 | 256   | 7.5 s        | 12.0 s    | 8.3 s   | 0.180 s | 0.118 s |
 | 32 | 1024  | 71.1 s       | 59.8 s    | 36.5 s  | 0.191 s | 0.298 s |
 
-(b3 link phase split at N=32: ir-passes 29.7 s, backend 5.9 s;
-b3 RSS 68 MB vs ref 37 MB.)
+(trs link phase split at N=32: ir-passes 29.7 s, backend 5.9 s;
+trs RSS 68 MB vs ref 37 MB.)
 
 VERDICTS:
 1. The true scale wall is BSC'S FRONTEND: 71 s at 1024 tiles,
    ~9.4x growth per 4x tiles — elaboration, upstream of any backend.
-2. NO spine explosion: b3 link grows ~4.4x per 4x tiles (ref 5.0x),
+2. NO spine explosion: trs link grows ~4.4x per 4x tiles (ref 5.0x),
    still 1.6x ahead at N=32.  The outline cost model + call-based
    spine keep LLVM near-linear; loop-rolled spine is a want, not an
    emergency.
@@ -158,7 +158,7 @@ VERDICTS:
 ## Grid v2 amendments (rich tiles, packed link rules; binary bceb3f30)
 
 v2 ladder (see results.csv gen=v2): byte-identical at every N; at
-N=32 b3 link 45.7s vs ref build 129s (2.8x ahead).
+N=32 trs link 45.7s vs ref build 129s (2.8x ahead).
 
 CONTROLLED EXPERIMENT — Ravi's O(rules^2) packing hypothesis, same
 v2 tiles, only link packing varied, back-to-back on one machine:
@@ -173,7 +173,7 @@ emission) needs bsc phase timing (no public flag; upstream
 question).
 
 STARTUP DECOMPOSITION, N=32 quiet (-m 1 vs full):
-  b3  startup 0.18-0.19s, sim ~0.04s
+  trs  startup 0.18-0.19s, sim ~0.04s
   ref startup 0.08s,      sim ~0.10s
 Our SIMULATION is 2.5x FASTER than reference at 1024 tiles; the
 entire run-time deficit is O(instances) STARTUP (plan walk +
@@ -189,7 +189,7 @@ ActionValue oTake bound inside the conditional arm — the arm-def +
 AvAction-inline classes (21bacd87..19110cdc) in the hot path.
 Byte-identical at every N (results.csv gen=v3):
 
-| N  | tiles | bsc frontend | ref build | b3 link | ref run | b3 run |
+| N  | tiles | bsc frontend | ref build | trs link | ref run | trs run |
 |----|-------|--------------|-----------|---------|---------|--------|
 | 2  | 4     | 0.99 s       | 2.85 s    | 0.21 s  | 0.101 s | 0.036 s |
 | 4  | 16    | 1.15 s       | 3.91 s    | 0.78 s  | 0.097 s | 0.036 s |
@@ -197,7 +197,7 @@ Byte-identical at every N (results.csv gen=v3):
 | 16 | 256   | 47.5 s       | 71.6 s    | 91.0 s  | 0.343 s | 0.320 s |
 | 32 | 1024  | 511.7 s      | 150.1 s   | 202.2 s | 0.157 s | 0.387 s |
 
-(b3 link split at N=32: ir-passes 166.0 s, backend 34.3 s.)
+(trs link split at N=32: ir-passes 166.0 s, backend 34.3 s.)
 
 VERDICTS (they invert v2's happy link story):
 1. bsc frontend is still everyone's wall — 8.5 MINUTES at N=32,
@@ -228,7 +228,7 @@ prior decision bit-for-bit).  Same v3 artifacts, byte-identical at
 every N (results.csv gen=v3d; frontend/ref columns carried from the
 v3 rows — same builds):
 
-| N  | b3 link (was) | b3 link | b3 run (was) | b3 run | vs ref build | vs ref run |
+| N  | trs link (was) | trs link | trs run (was) | trs run | vs ref build | vs ref run |
 |----|---------------|---------|--------------|--------|--------------|------------|
 | 2  | 0.21 s        | 0.14 s  | 0.036 s      | 0.030  | 20x ahead    | 3.4x ahead |
 | 4  | 0.78 s        | 0.30 s  | 0.036 s      | 0.038  | 13x ahead    | 2.6x ahead |

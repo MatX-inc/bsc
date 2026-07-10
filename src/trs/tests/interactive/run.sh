@@ -50,24 +50,24 @@ build() { # src top [flags and/or C link files]...
         || { echo "FAIL $top (bsc compile)"; fail=1; return 1; }
     $BSC -sim -bir $flags -e "$top" -o "ref_$top" $cfiles >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc link)"; fail=1; return 1; }
-    "$TRS" link "$top.bir" --interactive -o "b3_$top" \
-        > "$top.b3.log" 2>&1 \
+    "$TRS" link "$top.bir" --interactive -o "trs_$top" \
+        > "$top.trs.log" 2>&1 \
         || { echo "FAIL $top (trs link --interactive)"; fail=1; return 1; }
 }
 check() { # top cmd [expected-status]
     top=$1; cmd=$2; want=${3:-0}
     timeout 120 ./"ref_$top" -f "$cmd" > "ref_${top}_${cmd%.cmd}.out" 2>&1
     ref_rc=$?
-    timeout 120 ./"b3_$top" -f "$cmd" > "b3_${top}_${cmd%.cmd}.out" 2>&1
-    b3_rc=$?
+    timeout 120 ./"trs_$top" -f "$cmd" > "trs_${top}_${cmd%.cmd}.out" 2>&1
+    trs_rc=$?
     [ "$ref_rc" = "$want" ] \
         || echo "WARN $top $cmd: reference exit $ref_rc (expected $want)"
-    if [ "$ref_rc" != "$b3_rc" ]; then
-        echo "FAIL $top $cmd (exit $ref_rc vs $b3_rc)"; fail=1; return
+    if [ "$ref_rc" != "$trs_rc" ]; then
+        echo "FAIL $top $cmd (exit $ref_rc vs $trs_rc)"; fail=1; return
     fi
-    if ! cmp -s "ref_${top}_${cmd%.cmd}.out" "b3_${top}_${cmd%.cmd}.out"; then
+    if ! cmp -s "ref_${top}_${cmd%.cmd}.out" "trs_${top}_${cmd%.cmd}.out"; then
         echo "FAIL $top $cmd (output)"
-        diff "ref_${top}_${cmd%.cmd}.out" "b3_${top}_${cmd%.cmd}.out" | head -5
+        diff "ref_${top}_${cmd%.cmd}.out" "trs_${top}_${cmd%.cmd}.out" | head -5
         fail=1; return
     fi
     echo "PASS $top $cmd"
@@ -180,8 +180,8 @@ fi
 # model without bluetcl, drive the bk_ lifecycle, exercise engine
 # queries + the on-demand oracle checkpoint.  Assertions are ours
 # (no reference to mirror): compare against a literal expectation
-if [ -f ./b3_sysFinishPeek.so ] && cc -o capi_witness capi_witness.c -ldl 2>cc.log; then
-    TRS_CAPI_ENGINES=interp,aot ./capi_witness ./b3_sysFinishPeek.so \
+if [ -f ./trs_sysFinishPeek.so ] && cc -o capi_witness capi_witness.c -ldl 2>cc.log; then
+    TRS_CAPI_ENGINES=interp,aot ./capi_witness ./trs_sysFinishPeek.so \
         sysFinishPeek > capi_witness.out 2>capi_witness.err
     rc=$?
     printf 'engines 2: interp aot\nkind-oob null\nfinishing at 1000000 mark 0\noracle 0\nfinished 1 status 0\nshutdown ok\n' \
@@ -211,11 +211,11 @@ if [ -x ./ref_mkTbGCD ]; then
     ref_rc=$?
     mv waves.vcd ref_waves.vcd 2>/dev/null
     rm -f waves.vcd
-    timeout 120 ./b3_mkTbGCD -f vcdtcl.cmd > b3_mkTbGCD_vcdtcl.out 2>&1
-    b3_rc=$?
+    timeout 120 ./trs_mkTbGCD -f vcdtcl.cmd > trs_mkTbGCD_vcdtcl.out 2>&1
+    trs_rc=$?
     ok=1
-    [ "$ref_rc" = "$b3_rc" ] || ok=0
-    cmp -s ref_mkTbGCD_vcdtcl.out b3_mkTbGCD_vcdtcl.out || ok=0
+    [ "$ref_rc" = "$trs_rc" ] || ok=0
+    cmp -s ref_mkTbGCD_vcdtcl.out trs_mkTbGCD_vcdtcl.out || ok=0
     vcdtcldiff ref_waves.vcd waves.vcd || ok=0
     if [ "$ok" = 1 ]; then echo "PASS mkTbGCD vcdtcl.cmd"
     else echo "FAIL mkTbGCD vcdtcl.cmd"; fail=1; fi
@@ -229,11 +229,11 @@ if [ -x ./ref_mkTbGCD ] && command -v fst2vcd > /dev/null 2>&1; then
     ref_rc=$?
     mv waves.fst ref_waves.fst 2>/dev/null
     rm -f waves.fst
-    timeout 120 ./b3_mkTbGCD -f fsttcl.cmd > b3_mkTbGCD_fsttcl.out 2>&1
-    b3_rc=$?
+    timeout 120 ./trs_mkTbGCD -f fsttcl.cmd > trs_mkTbGCD_fsttcl.out 2>&1
+    trs_rc=$?
     ok=1
-    [ "$ref_rc" = "$b3_rc" ] || ok=0
-    cmp -s ref_mkTbGCD_fsttcl.out b3_mkTbGCD_fsttcl.out || ok=0
+    [ "$ref_rc" = "$trs_rc" ] || ok=0
+    cmp -s ref_mkTbGCD_fsttcl.out trs_mkTbGCD_fsttcl.out || ok=0
     fst2vcd ref_waves.fst > .rf.$$ 2>/dev/null || ok=0
     fst2vcd waves.fst > .bf.$$ 2>/dev/null || ok=0
     python3 "$SRC/../vcd/fstcmp.py" .rf.$$ .bf.$$ > /dev/null || ok=0

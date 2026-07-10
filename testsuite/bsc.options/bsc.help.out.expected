@@ -70,7 +70,6 @@ Compiler flags:
 -show-version           include compiler version in generated files
 -sim                    compile BSV generating Bluesim object
 -sim-codegen-only       generate Bluesim C++ files but do not compile or link them
--trs                   compile BSV generating a TRS (trs) simulation
 -simdir dir             output directory for Bluesim intermediate files
 -split-if               split "if" in actions
 -steps n                terminate elaboration after this many function unfolding steps
@@ -78,6 +77,7 @@ Compiler flags:
 -steps-warn-interval n  issue a warning each time this many unfolding steps are executed
 -suppress-warnings list ignore a list of warnings (``:'' sep list of tags)
 -systemc                generate a SystemC model
+-trs                    compile BSV generating a TRS simulation
 -u                      check and recompile packages that are not up to date
 -unspecified-to val     remaining unspecified values are set to: 'X', '0', '1', 'Z', or 'A'
 -use-dpi                use DPI instead of VPI in generated Verilog

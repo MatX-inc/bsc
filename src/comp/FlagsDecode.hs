@@ -1621,15 +1621,6 @@ externalFlags = [
          in  (NoArg setFn (Just getFn),
               "compile BSV generating Bluesim object", Visible)),
 
-        ("trs",
-         let setFn f = case setBackend f Bluesim of
-                         Left f' -> Left f' { genABin = True, genBir = True,
-                                              genTrs = True }
-                         Right e -> Right e
-             getFn f = genTrs f
-         in  (NoArg setFn (Just getFn),
-              "compile BSV generating a TRS (trs) simulation", Visible)),
-
         ("simdir",
          (Arg "dir" (\f s -> Left (f {cdir = Just s})) (Just (FRTMaybeString cdir)),
           "output directory for Bluesim intermediate files", Visible)),
@@ -1707,6 +1698,15 @@ externalFlags = [
         ("tcl-show-hidden",
          (Toggle (\f x -> f {tclShowHidden=x}) (showIfTrue tclShowHidden),
           "show hidden levels of instance hierarchy in bluetcl", Hidden)),
+
+        ("trs",
+         let setFn f = case setBackend f Bluesim of
+                         Left f' -> Left f' { genABin = True, genBir = True,
+                                              genTrs = True }
+                         Right e -> Right e
+             getFn f = genTrs f
+         in  (NoArg setFn (Just getFn),
+              "compile BSV generating a TRS simulation", Visible)),
 
         ("u",
          (Toggle (\f x -> f {updCheck=x}) (showIfTrue updCheck),

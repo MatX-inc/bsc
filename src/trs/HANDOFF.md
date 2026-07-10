@@ -239,7 +239,7 @@ products, like VCS:
    (prime()'s compile workers vs dlclose: FIXED; Fifo/RWire peek
    staleness: FIXED; central-loop negedge overcount: FIXED.)
 3. Hygiene: sysCRCTest1's link fence flag now REPRODUCES on an idle
-   box (0.40-0.45 vs baseline 0.22, b3_link ~1.3-1.5s) on BOTH the
+   box (0.40-0.45 vs baseline 0.22, trs_link ~1.3-1.5s) on BOTH the
    b8691ab4 and pre-fix binaries — binary-independent drift, so the
    0.22 baseline is stale; rebaseline it at the next accepted
    equilibrium (memq flagged once under sweep load, idle-clean;

@@ -31,7 +31,7 @@ WK=${1:-$(mktemp -d)}
 mkdir -p "$WK" || exit 2
 WK=$(cd "$WK" && pwd)
 
-[ -f "$RESULTS" ] || echo "gen,N,tiles,bsc_frontend_s,ref_build_s,b3_link_s,ref_run_s,b3_run_s,ref_rss_kb,b3_rss_kb,ir_passes_s,backend_s" > "$RESULTS"
+[ -f "$RESULTS" ] || echo "gen,N,tiles,bsc_frontend_s,ref_build_s,trs_link_s,ref_run_s,trs_run_s,ref_rss_kb,trs_rss_kb,ir_passes_s,backend_s" > "$RESULTS"
 
 now() { date +%s.%N; }
 dur() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.3f", b - a }'; }
@@ -80,18 +80,18 @@ bench() { # n
     [ -f "$top.bir" ] \
         || { echo "FAIL N=$n (no $top.bir exported)"; fail=1; return; }
 
-    # trs AOT link; TRS_JIT_TIME phase lines land in b3link.log
+    # trs AOT link; TRS_JIT_TIME phase lines land in trslink.log
     t0=$(now)
-    TRS_JIT_TIME=1 "$TRS" link "$top.bir" -o b3sim > b3link.log 2>&1 \
-        || { echo "FAIL N=$n (trs link, see $d/b3link.log)"; fail=1; return; }
+    TRS_JIT_TIME=1 "$TRS" link "$top.bir" -o trssim > trslink.log 2>&1 \
+        || { echo "FAIL N=$n (trs link, see $d/trslink.log)"; fail=1; return; }
     t1=$(now); lk_s=$(dur "$t0" "$t1")
-    grep -q "compiled mode unavailable" b3link.log \
-        && echo "WARN N=$n: artifact is interpreted, not compiled (see $d/b3link.log)"
+    grep -q "compiled mode unavailable" trslink.log \
+        && echo "WARN N=$n: artifact is interpreted, not compiled (see $d/trslink.log)"
     # phase lines: "trs aot: ir passes 38.4ms", "trs aot: backend
     # emit 25.9ms" (older builds only print "one-module compile")
-    ir_s=$(phase b3link.log "ir passes")
-    be_s=$(phase b3link.log "backend emit")
-    [ -n "$be_s" ] || be_s=$(phase b3link.log "one-module compile")
+    ir_s=$(phase trslink.log "ir passes")
+    be_s=$(phase trslink.log "backend emit")
+    [ -n "$be_s" ] || be_s=$(phase trslink.log "one-module compile")
 
     # run both (the design $finishes itself at cycle $CYCLES; -m is a
     # safety bound only), /usr/bin/time -v for peak RSS
@@ -101,20 +101,20 @@ bench() { # n
     rc_ref=$?
     t1=$(now); rr_s=$(dur "$t0" "$t1")
     t0=$(now)
-    /usr/bin/time -v -o b3.time ./b3sim -m "$mx" > b3.out 2> b3.err
+    /usr/bin/time -v -o trs.time ./trssim -m "$mx" > trs.out 2> trs.err
     rc_b3=$?
     t1=$(now); br_s=$(dur "$t0" "$t1")
 
     ok=1
     [ "$rc_ref" = 0 ] || { echo "FAIL N=$n (reference exit $rc_ref)"; ok=0; }
     [ "$rc_b3" = 0 ]  || { echo "FAIL N=$n (trs exit $rc_b3)"; ok=0; }
-    diff ref.out b3.out > /dev/null \
-        || { echo "FAIL N=$n (stdout differs: diff $d/ref.out $d/b3.out)"; ok=0; }
+    diff ref.out trs.out > /dev/null \
+        || { echo "FAIL N=$n (stdout differs: diff $d/ref.out $d/trs.out)"; ok=0; }
     [ "$ok" = 1 ] || fail=1
 
     ref_rss=$(rss ref.time)
-    b3_rss=$(rss b3.time)
-    row="$TILE,$n,$m,$fe_s,$rb_s,$lk_s,$rr_s,$br_s,$ref_rss,$b3_rss,$ir_s,$be_s"
+    trs_rss=$(rss trs.time)
+    row="$TILE,$n,$m,$fe_s,$rb_s,$lk_s,$rr_s,$br_s,$ref_rss,$trs_rss,$ir_s,$be_s"
     echo "$row" >> "$RESULTS"
     [ "$ok" = 1 ] && echo "PASS N=$n  $row"
 }

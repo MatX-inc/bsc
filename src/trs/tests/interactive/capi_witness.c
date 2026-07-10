@@ -5,7 +5,7 @@
  * expectation (trs_* has no reference implementation to mirror).
  *
  *   cc -o capi_witness capi_witness.c -ldl
- *   TRS_CAPI_ENGINES=interp,aot ./capi_witness b3_top.so top
+ *   TRS_CAPI_ENGINES=interp,aot ./capi_witness trs_top.so top
  */
 #include <dlfcn.h>
 #include <stdio.h>
