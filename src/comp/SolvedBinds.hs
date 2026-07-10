@@ -232,7 +232,6 @@ orderBinds bs =
                             (M.findWithDefault [] k dependents)
               in  go ready'' indeg' (bind_at M.! k : acc)
     in  go ready0 indeg0 []
->>>>>>> 1cfc8a59 (Order SolvedBinds at emission; share solved dictionaries within satisfy)
 
 -- Compute the transitive closure of incoherence across all bindings: any
 -- binding whose free variables reference an incoherent Id is itself incoherent.

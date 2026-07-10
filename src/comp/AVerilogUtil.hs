@@ -225,7 +225,7 @@ vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =
     retW = case ids of
              (w:_) -> M.lookup w (vco_def_widths vco)
              []    -> Nothing
-    vtaskid = VId (vCommentTaskName vco dpiName) aid Nothing
+    vtaskid = VId dpiName aid Nothing
     (ids',es') = let lv = headOrErr "vForeignCall: missing return value" ids
                  in case isAForeignCallWithRetAsArg vco ffmap f of
                      (Just ty) -> ([], (ASDef ty lv) : es)
@@ -557,10 +557,7 @@ vDefMpd vco (ADef i t
                   -- (These are size params, so default width of 32 is fine.)
                   vi_inst_params = [ (mkVId nm, Just (VEConst v))
                                    | (nm, v) <- is ],
-                  vi_inst_ports  = (zip
-                                    (map (mkVId . fst) ips')
-                                    (map (Just . (vExpr vco)) es')
-                                    ++ oports)
+                  vi_inst_ports  = iports ++ oports
                  }
             ]
   where
@@ -611,7 +608,7 @@ vDefMpd vco (ADef i_t t_t@(ATBit _) fn@(AFunCall {}) _) ffmap
     [ VMDecl $ VVDecl VDReg (vSize t_t) [VVar (vId i_t)]
     , VMStmt { vi_translate_off = True, vi_body = body }
     ]
-  where name = vCommentTaskName vco foreignNm
+  where name = foreignNm
         foreignNm = if vco_use_dpi vco
                     then dpiMonoCallName vco (ae_funname fn)
                                          (Just (aSize t_t))
@@ -793,7 +790,7 @@ vExpr vco e@(AFunCall t _ n isC es) =
   let foreignName = if vco_use_dpi vco
                     then dpiMonoCallName vco n (Just (aSize t)) (map (aSize . aType) es)
                     else vNameToTask False n
-      name = vCommentTaskName vco (if isC then foreignName else n)
+      name = if isC then foreignName else n
   in VEFctCall (mkVId name) (map (vExpr vco) es)
 vExpr vco (ASInt idt (ATBit w) (IntLit _ b i))  = VEWConst (idToVId idt) w b i
 vExpr vco (ASReal _ _ r)                        = VEReal r
