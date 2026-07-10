@@ -55,4 +55,4 @@ files_dont_exist { simfiles/mkCodegenOnly.o \
 # The flag is rejected when linking with a non-Bluesim backend
 
 compile_no_source_fail_error "verilog_codegen_only" \
-    {-verilog -sim-codegen-only -e mkCodegenOnly mkCodegenOnly.ba} S0096
+    {-verilog -sim-codegen-only -e mkCodegenOnly mkCodegenOnly.ba} S0100
