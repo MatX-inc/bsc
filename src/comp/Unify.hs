@@ -19,38 +19,64 @@ rtrace :: String -> a -> a
 rtrace s x = if doRTrace then traces s x else x
 
 class Unify t where
-    mgu :: [TyVar] {- bound type vars: don't substitute with other tyvars -}
+    mgu :: [TyVar] {- bound type vars: don't substitute -}
         -- result: list of substitutions and required type equalities
         -> t -> t -> Maybe (Subst, [(Type, Type)])
+    -- Modal variant, for checks that ask "could these ever be equal
+    -- under some instantiation?" rather than "unify these now": bound
+    -- variables are treated as substitutable structure (the bound set
+    -- only steers which of two variables gets bound, so callers that
+    -- inspect the result's domain -- e.g. the instance-overlap check's
+    -- specificity attribution -- still see boundness).  Producing a
+    -- substitution that is APPLIED from mguModal is always a bug.
+    mguModal :: [TyVar] -> t -> t -> Maybe (Subst, [(Type, Type)])
 
 instance Unify Type where
-    -- an unreducable ATF application: identical types unify cleanly (reflexivity);
-    -- different types generate a deferred equality constraint.
-    -- A type synonym is expanded when (and only when) that exposes an ATF
-    -- application, so that a synonym-hidden ATF unifies exactly like the
-    -- direct ATF application, instead of a variable being structurally
-    -- bound to the unexpanded synonym (which pins a fundep-determined
-    -- variable and makes derived-instance schemes spuriously mismatch).
-    mgu bound_tyvars t1 t2
-        | isJust m1 || isJust m2 =
-            atfUnify bound_tyvars (fromMaybe t1 m1) (fromMaybe t2 m2)
-      where m1 = asATFAp t1
-            m2 = asATFAp t2
-    mgu bound_tyvars t1 t2
-        | kind t1 == KNum =
-      case kind t2 of
-        KNum -> numUnify bound_tyvars t1 t2
-        _ -> internalError("unify kind mismatch: " ++ ppReadable(t1, kind t1, t2, kind t2))
-    mgu bound_tyvars t1@(TAp l r) t2@(TAp l' r') = do
-        (s1, eqs1) <- mgu bound_tyvars l l'
-        (s2, eqs2) <- mgu bound_tyvars (apSub s1 r) (apSub s1 r')
-        Just (s2 @@ s1, fastNub (eqs1 ++ eqs2))
-    -- don't substitute a variable for itself
-    mgu bound_tyvars tu@(TVar u) tv@(TVar v) = varUnify bound_tyvars u v tu tv
-    mgu bound_tyvars (TVar u) t        = varBindWithEqs u t
-    mgu bound_tyvars t (TVar u)        = varBindWithEqs u t
-    mgu bound_tyvars (TCon tc1) (TCon tc2) | tc1==tc2 = Just (nullSubst, [])
-    mgu bound_tyvars _ _ = Nothing
+    mgu      = mguWork True
+    mguModal = mguWork False
+
+mguWork :: Bool -> [TyVar] -> Type -> Type -> Maybe (Subst, [(Type, Type)])
+-- an unreducable ATF application: identical types unify cleanly (reflexivity);
+-- different types generate a deferred equality constraint.
+-- A type synonym is expanded when (and only when) that exposes an ATF
+-- application, so that a synonym-hidden ATF unifies exactly like the
+-- direct ATF application, instead of a variable being structurally
+-- bound to the unexpanded synonym (which pins a fundep-determined
+-- variable and makes derived-instance schemes spuriously mismatch).
+mguWork strict bound_tyvars t1 t2
+    | isJust m1 || isJust m2 =
+        atfUnify bound_tyvars (fromMaybe t1 m1) (fromMaybe t2 m2)
+  where m1 = asATFAp t1
+        m2 = asATFAp t2
+mguWork strict bound_tyvars t1 t2
+    | kind t1 == KNum =
+  case kind t2 of
+    KNum -> numUnify bound_tyvars t1 t2
+    _ -> internalError("unify kind mismatch: " ++ ppReadable(t1, kind t1, t2, kind t2))
+mguWork strict bound_tyvars t1@(TAp l r) t2@(TAp l' r') = do
+    (s1, eqs1) <- mguWork strict bound_tyvars l l'
+    (s2, eqs2) <- mguWork strict bound_tyvars (apSub s1 r) (apSub s1 r')
+    Just (s2 @@ s1, fastNub (eqs1 ++ eqs2))
+-- don't substitute a variable for itself
+mguWork strict bound_tyvars tu@(TVar u) tv@(TVar v) = varUnify bound_tyvars u v tu tv
+-- A bound (rigid, signature-quantified) variable is never
+-- substituted during typechecking: it is pinned by its binder.
+-- At value kinds a rigid variable cannot equal any non-variable
+-- structure -- the function-headed forms that could still compute
+-- to it are routed to atfUnify/numUnify above -- so this is a
+-- unification failure outright: a type mismatch at the expression
+-- unifier, a fundep conflict (T0159) at instance matching.  (In
+-- CtxRed the signature's own variables are not yet in the bound
+-- set while it is being reduced, so they remain substitutable
+-- there, by design.)
+mguWork strict bound_tyvars (TVar u) t
+    | not strict || u `notElem` bound_tyvars = varBindWithEqs u t
+    | otherwise                              = Nothing
+mguWork strict bound_tyvars t (TVar u)
+    | not strict || u `notElem` bound_tyvars = varBindWithEqs u t
+    | otherwise                              = Nothing
+mguWork strict bound_tyvars (TCon tc1) (TCon tc2) | tc1==tc2 = Just (nullSubst, [])
+mguWork strict bound_tyvars _ _ = Nothing
 
 -- Return the type as a fully applied type-function (ATF) application,
 -- if it is one -- either directly, or behind a saturated type synonym.
@@ -137,6 +163,12 @@ instance (Types t, Unify t) => Unify [t] where
         return (s2 @@ s1, fastNub (eqs1 ++ eqs2))
     mgu bound_tyvars []     []     = return (nullSubst, [])
     mgu bound_tyvars _      _      = Nothing
+    mguModal bound_tyvars (x:xs) (y:ys) = do
+        (s1,eqs1) <- mguModal bound_tyvars x y
+        (s2,eqs2) <- mguModal bound_tyvars (apSub s1 xs) (apSub s1 ys)
+        return (s2 @@ s1, fastNub (eqs1 ++ eqs2))
+    mguModal bound_tyvars []     []     = return (nullSubst, [])
+    mguModal bound_tyvars _      _      = Nothing
 
 varBindWithEqs :: TyVar -> Type -> Maybe (Subst, [(Type, Type)])
 varBindWithEqs u t = fmap no_eqs $ varBind u t
