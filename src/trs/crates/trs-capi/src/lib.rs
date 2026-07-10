@@ -179,25 +179,31 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     } else {
         kinds
     };
-    // user BDPI code travels as <model>.bdpi.so beside the model .so
-    // (trs link --interactive copies it there); the Model statics
-    // live in the model's data segment, so dladdr locates the .so
-    let bdpi_so = {
+    // companions travel beside the model .so (trs link --interactive
+    // puts them there); the Model statics live in the model's data
+    // segment, so dladdr locates the .so.  <base>.bdpi.so = user BDPI
+    // code; <base>.aot.so = the fast-artifact design .so the aot
+    // engine loads (warm bodies from t=0).
+    let model_base = {
         let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
         let found =
             unsafe { libc::dladdr(model as *const c_void, &mut info) } != 0
                 && !info.dli_fname.is_null();
-        found
-            .then(|| {
-                unsafe { CStr::from_ptr(info.dli_fname) }
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .map(|p| {
-                format!("{}.bdpi.so", p.strip_suffix(".so").unwrap_or(&p))
-            })
+        found.then(|| {
+            let p = unsafe { CStr::from_ptr(info.dli_fname) }
+                .to_string_lossy()
+                .into_owned();
+            p.strip_suffix(".so").map(String::from).unwrap_or(p)
+        })
+    };
+    let companion = |ext: &str| {
+        model_base
+            .as_ref()
+            .map(|b| format!("{b}.{ext}"))
             .filter(|p| std::path::Path::new(p).exists())
     };
+    let bdpi_so = companion("bdpi.so");
+    let aot_so = companion("aot.so");
     let mut engines = Vec::new();
     for kind in kinds {
         match Interp::from_bir_bytes(bir) {
@@ -210,6 +216,20 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
                 }
                 if kind == EngineKind::Jit {
                     interp.arm_jit();
+                }
+                if kind == EngineKind::Aot {
+                    // artifact-pair construction: the design .so beside
+                    // the model, hash-checked at prime (a stale or
+                    // missing artifact falls back with a stderr note —
+                    // the degradation policy's downgrade)
+                    match &aot_so {
+                        Some(so) => interp.aot_request_code(so.into()),
+                        None => eprintln!(
+                            "trs capi: aot engine requested but no \
+                             .aot.so beside the model (relink with a \
+                             current trs); running interpreted"
+                        ),
+                    }
                 }
                 if !engines.is_empty() {
                     // secondary oracle engines: output suppressed,

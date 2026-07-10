@@ -8,8 +8,8 @@
 #
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
-# local witnesses at the end (FinishPeek, bdpi, oracle, vcdtcl:
-# 26 total).
+# local witnesses at the end (FinishPeek, bdpi, oracle, oracleaot,
+# finishpeekaot, vcdtcl: 28 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -137,6 +137,16 @@ fi
 if [ -x ./ref_mkTbGCD ]; then
     export TRS_CAPI_ENGINES=interp,jit
     check mkTbGCD oracle.cmd
+    # flagship debug config: interp + aot from the artifact pair
+    export TRS_CAPI_ENGINES=interp,aot
+    check mkTbGCD oracleaot.cmd
+    export TRS_CAPI_ENGINES=interp
+fi
+# pure AOT engine: artifact-warm compiled bodies from t=0, register
+# peeks from the arena, $finish edge completion on the aot tier
+if [ -x ./ref_sysFinishPeek ]; then
+    export TRS_CAPI_ENGINES=aot
+    check sysFinishPeek finishpeekaot.cmd
     export TRS_CAPI_ENGINES=interp
 fi
 # VCD-under-Tcl (task #10): `sim vcd <file>`/off/on -> the three

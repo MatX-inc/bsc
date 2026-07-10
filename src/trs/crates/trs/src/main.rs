@@ -67,7 +67,25 @@ fn main() -> ExitCode {
             if interactive {
                 // DEBUG/interactive product: a bluetcl-loadable model
                 // .so (docs/TCL-CAPI.md) + the reference's bluesim.tcl
-                // wrapper — a different artifact from the fast one
+                // wrapper — a different artifact from the fast one.
+                // The fast-artifact design .so ships BESIDE the model
+                // as <base>.aot.so: the capi's aot engine loads it
+                // (warm bodies from t=0); designs the compiler cannot
+                // take stay interp/jit with a note, like plain link.
+                interp.aot_request_emit(format!("{base}.aot.so").into());
+                interp.prime();
+                match interp.aot_take_emit_result() {
+                    Some(trs_interp::AotEmit::Compiled) => {}
+                    Some(trs_interp::AotEmit::Failed(e)) => {
+                        eprintln!("trs link: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    _ => eprintln!(
+                        "trs link: note: aot engine unavailable for \
+                         this design; the model's aot selection will \
+                         run interpreted"
+                    ),
+                }
                 return link_interactive(path, &base, interp.top_name());
             }
             interp.aot_request_emit(format!("{base}.so").into());
