@@ -8,7 +8,7 @@
 #
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
-# local witnesses at the end (FinishPeek: 23 total).
+# local witnesses at the end (FinishPeek, vcdtcl: 24 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -112,5 +112,29 @@ if build FinishPeek.bsv sysFinishPeek; then
     export TRS_CAPI_ENGINES=jit
     check sysFinishPeek finishpeek.cmd
     export TRS_CAPI_ENGINES=interp
+fi
+# VCD-under-Tcl (task #10): `sim vcd <file>`/off/on -> the three
+# bk_* VCD controls, served by the interp engine's writer.  stdout
+# AND the VCD bytes must match (modulo the $date line), including
+# the yield-boundary flush (bk_shutdown mirrors kernel vcd_reset)
+vcdtcldiff() { # ref got
+    sed 2d "$1" > .vr.$$ && sed 2d "$2" > .vg.$$
+    diff .vr.$$ .vg.$$ > /dev/null; r=$?
+    rm -f .vr.$$ .vg.$$; return $r
+}
+if [ -x ./ref_mkTbGCD ]; then
+    rm -f waves.vcd
+    timeout 120 ./ref_mkTbGCD -f vcdtcl.cmd > ref_mkTbGCD_vcdtcl.out 2>&1
+    ref_rc=$?
+    mv waves.vcd ref_waves.vcd 2>/dev/null
+    rm -f waves.vcd
+    timeout 120 ./b3_mkTbGCD -f vcdtcl.cmd > b3_mkTbGCD_vcdtcl.out 2>&1
+    b3_rc=$?
+    ok=1
+    [ "$ref_rc" = "$b3_rc" ] || ok=0
+    cmp -s ref_mkTbGCD_vcdtcl.out b3_mkTbGCD_vcdtcl.out || ok=0
+    vcdtcldiff ref_waves.vcd waves.vcd || ok=0
+    if [ "$ok" = 1 ]; then echo "PASS mkTbGCD vcdtcl.cmd"
+    else echo "FAIL mkTbGCD vcdtcl.cmd"; fail=1; fi
 fi
 exit $fail

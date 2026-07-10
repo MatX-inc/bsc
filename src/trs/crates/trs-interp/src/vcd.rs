@@ -156,6 +156,45 @@ impl Vcd {
         self.enabled = on;
     }
 
+    /// bk_set_VCD_file(NULL) (vcd.cxx:36): close the file, clear the
+    /// name, dumping off — success.  (The reference's previous-file
+    /// append branch is DEAD CODE: previous_files is never populated
+    /// in vcd.cxx, so set_file's plain create mirrors re-opens
+    /// bug-for-bug.)
+    pub fn close_file(&mut self) {
+        if self.file.is_some() {
+            self.flush_all_pending();
+            self.file = None;
+        }
+        self.filename = None;
+        self.state = VcdState::Off;
+    }
+
+    /// bk_enable_VCD_dumping (kernel.cxx:1521): idempotent; opening
+    /// the default dump.vcd can fail -> false, NOT enabled (unlike
+    /// set_state, which enables unconditionally for the $dumpon task).
+    pub fn enable(&mut self) -> bool {
+        if self.enabled {
+            return true;
+        }
+        if self.file.is_none() && self.set_file("dump.vcd").is_err() {
+            return false;
+        }
+        self.enabled = true;
+        true
+    }
+
+    /// bk_disable_VCD_dumping (kernel.cxx:1534): no-op when off; the
+    /// Xs section is deferred to the next VCD event exactly like the
+    /// reference (vcd_dump_xs just sets go_xs).
+    pub fn disable(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.enabled = false;
+        self.go_xs = true;
+    }
+
     pub fn set_depth(&mut self, d: u32) {
         if self.state == VcdState::Off {
             self.depth = d;

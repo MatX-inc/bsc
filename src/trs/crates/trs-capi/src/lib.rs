@@ -543,7 +543,16 @@ pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
         // would be executing unmapped code
         if let Some(r) = st.runner.take() {
             r.abort.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = r.join.join();
+            if let Ok((engines, _)) = r.join.join() {
+                st.engines = engines.0;
+            }
+        }
+        // kernel.cxx:767 vcd_reset at shutdown: finish an interrupted
+        // timeslice's VCD dump, then flush buffered changes strictly
+        // before the stop time — without this, the final stanzas of a
+        // Tcl-driven VCD (`sim vcd` + steps, then exit) never land
+        if let Some(e) = st.engines.first_mut() {
+            let _ = e.interp.finish();
         }
         drop(st);
     }
@@ -927,21 +936,68 @@ pub extern "C" fn bk_set_timescale(
 }
 
 // =================================================================
-// VCD control — wiring to the interp's writer lands with rung 4;
-// stubs keep the dlsym set complete.
+// VCD control (`sim vcd [on|off|<file>]` -> these three): routed to
+// the PRIMARY engine's writer — the same one the $dump* tasks drive.
+// Secondary engines stay quiet (they'd clobber the same file).
+// Capability tier: VCD needs the interp engine's def recording; a
+// non-interp primary degrades honestly (stderr note + failure) —
+// compiled bodies do not record the def values the dump walks read.
 
-#[no_mangle]
-pub extern "C" fn bk_set_VCD_file(_hdl: *mut c_void, _f: *const c_char) -> i32 {
-    BK_ERROR
+/// True iff the primary engine can serve VCD (interp tier); prints
+/// the remedy note once per call site otherwise.
+fn vcd_capable(st: &mut SimState) -> bool {
+    match st.engines.first() {
+        Some(e) if e.kind == EngineKind::Interp => true,
+        Some(_) => {
+            eprintln!(
+                "trs: VCD dumping needs the interp engine \
+                 (TRS_CAPI_ENGINES=interp); the current primary \
+                 engine does not record signal values"
+            );
+            false
+        }
+        None => false, // async run in flight
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn bk_enable_VCD_dumping(_hdl: *mut c_void) -> u8 {
-    0
+pub extern "C" fn bk_set_VCD_file(hdl: *mut c_void, f: *const c_char) -> i32 {
+    let st = state(hdl);
+    if !vcd_capable(st) {
+        return BK_ERROR;
+    }
+    let name = if f.is_null() {
+        None
+    } else {
+        match unsafe { CStr::from_ptr(f) }.to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(_) => return BK_ERROR,
+        }
+    };
+    match st.primary().vcd_set_file(name.as_deref()) {
+        Ok(()) => BK_SUCCESS,
+        Err(()) => BK_ERROR,
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn bk_disable_VCD_dumping(_hdl: *mut c_void) {}
+pub extern "C" fn bk_enable_VCD_dumping(hdl: *mut c_void) -> u8 {
+    let st = state(hdl);
+    if !vcd_capable(st) {
+        return 0;
+    }
+    st.primary().vcd_enable() as u8
+}
+
+#[no_mangle]
+pub extern "C" fn bk_disable_VCD_dumping(hdl: *mut c_void) {
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return; // async run in flight
+    }
+    // disable is a no-op when dumping never started — no tier note
+    st.primary().vcd_disable();
+}
 
 /// External clock definition: master-mode models (bluetcl always
 /// passes master=True) own their clocks; the loader dlsyms this

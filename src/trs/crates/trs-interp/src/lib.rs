@@ -2467,7 +2467,23 @@ impl Interp {
             }
             if let Some(res) = &me.result {
                 let n_fns = usage.get(&me.name).map(|s| s.len()).unwrap_or(0);
-                let w = res.width();
+                // Def/Port result exprs carry no intrinsic width
+                // (expr.rs width() = 0) — resolve through the
+                // declaration tables (TbGCD's 51-bit `result` port
+                // was declared as 1 bit)
+                let w = match res {
+                    Expr::Def(n) => defs_by_name
+                        .get(n)
+                        .map(|&di| m.defs[di].width)
+                        .unwrap_or(0),
+                    Expr::Port(n) => m
+                        .inputs
+                        .iter()
+                        .find(|p| p.name == *n)
+                        .map(|p| p.width)
+                        .unwrap_or(0),
+                    e => e.width(),
+                };
                 if n_fns >= 2 || w > 64 || (self.d.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(me.name).to_string(),
@@ -4268,6 +4284,33 @@ impl Interp {
     /// simulation computed, not a fresh re-evaluation.
     pub fn set_sym_trace(&mut self) {
         self.vcd_trace = true;
+    }
+
+    // ===============
+    // VCD-under-Tcl (trs-capi): the bk_* VCD controls route to the
+    // same writer the $dump* tasks use.  Recording (vcd_trace) is
+    // already on for capi interp engines (set_sym_trace at bk_init),
+    // so mid-session enables see live values, like the reference.
+
+    /// bk_set_VCD_file (vcd.cxx:36): None closes the file (success).
+    pub fn vcd_set_file(&mut self, name: Option<&str>) -> Result<(), ()> {
+        match name {
+            Some(n) => self.vcd.set_file(n),
+            None => {
+                self.vcd.close_file();
+                Ok(())
+            }
+        }
+    }
+
+    /// bk_enable_VCD_dumping: true iff dumping is now enabled.
+    pub fn vcd_enable(&mut self) -> bool {
+        self.vcd.enable()
+    }
+
+    /// bk_disable_VCD_dumping.
+    pub fn vcd_disable(&mut self) {
+        self.vcd.disable()
     }
 
     /// Symbol-tree seed (trs-capi): per instance, (parent instance,

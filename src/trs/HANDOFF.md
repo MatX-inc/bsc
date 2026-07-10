@@ -35,11 +35,20 @@ products, like VCS:
   (N=32: 27.4s vs 150.1s); run ahead except N=32 where the deficit
   is O(instances) STARTUP (type-keyed analysis is the queued fix).
   bsc's own frontend is everyone's wall (511s at N=32).
-- INTERACTIVE: battery 23/23 BYTE-IDENTICAL vs reference Bluesim
+- INTERACTIVE: battery 24/24 BYTE-IDENTICAL vs reference Bluesim
   (tests/interactive/run.sh mirrors testsuite/bsc.bluesim/
-  interactive + local FinishPeek witness).  Async runs on the jit
-  engine (capability tiers: peek tests pin engines=interp).  Model
-  .so is 49MB after gc-sections/strip.
+  interactive + local FinishPeek and vcdtcl witnesses).  Async runs
+  on the jit engine (capability tiers: peek tests pin
+  engines=interp).  Model .so is 49MB after gc-sections/strip.
+- VCD-UNDER-TCL (task #10 rung 1): bk_set_VCD_file/enable/disable
+  wired to the interp writer (non-interp primaries degrade with a
+  stderr note); bk_shutdown mirrors kernel vcd_reset via
+  Interp::finish().  Two parity bugs found+fixed by measurement:
+  value-method result ports declared width 1 in VCD (Expr::Def
+  carries no width — resolve via def table; TbGCD result is 51-bit),
+  and the yield-boundary flush (final stanzas of a stepped session
+  never landed).  `sim vcd`, step/off/on, and -V run-to-$finish all
+  byte-identical incl. VCD bytes (vcdtcl.cmd witness).
 - $FINISH SEMANTICS (all engines): completes the in-flight edge
   schedule (kernel contract), suppresses the whole dollar_display.cxx
   output family post-finish, and the yield preempts the PG_FINAL
@@ -74,7 +83,7 @@ products, like VCS:
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
 - Local ladders: tests/regress/run.sh (6), tests/vcd/run.sh (10),
-  tests/interactive/run.sh (23; needs TRS_CAPI_LIB=<libtrs_capi.a>),
+  tests/interactive/run.sh (24; needs TRS_CAPI_LIB=<libtrs_capi.a>),
   plus sudoku + sysMips byte-parity from kept .bir (copy designs to a
   STABLE dir — sweeps rm -rf their work dirs).
 - Traps: TRS_JIT env is is_none()-tested — ANY value (even 0)
@@ -86,13 +95,12 @@ products, like VCS:
 
 ## NEXT UP (in order)
 
-1. Finish task #10 (capi): VCD-under-Tcl (bk_set_VCD_file/enable/
-   disable -> the interp's vcd_file_pending machinery); ORACLE mode
-   (secondary-engine quiet flag, lockstep compare at stops, AOT
-   engine construction from the artifact pair, trs_* control entry
-   points); packaging (install libtrs_capi.a next to the binary;
-   add the interactive battery to the standing gates; BDPI companion
-   loading for from_bir_bytes).
+1. Finish task #10 (capi): ORACLE mode (secondary-engine quiet
+   flag, lockstep compare at stops, AOT engine construction from the
+   artifact pair, trs_* control entry points); packaging (install
+   libtrs_capi.a next to the binary; add the interactive battery
+   to the standing gates; BDPI companion loading for
+   from_bir_bytes).  VCD-under-Tcl DONE (see current state).
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
    message): $stop-vs-$finish resume; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the

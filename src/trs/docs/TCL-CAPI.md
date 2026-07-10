@@ -179,8 +179,16 @@ embedded BIR bytes}, and links it with the capi staticlib into
   export needed — this is the INTERPRETED debug mode).  Ranges:
   RegFile/BRAM expose lo/hi + fetch.  The module `""` sub-symbol
   redirect must exist for `sim get` on modules.
-- VCD: bk_set_VCD_file/enable/disable map onto the existing VCD
-  writer (vcd_file_pending machinery).
+- VCD: bk_set_VCD_file/enable/disable route DIRECTLY to the primary
+  engine's writer (IMPLEMENTED) — recording (vcd_trace) is already
+  on for interp engines, so no re-prime is needed; non-interp
+  primaries degrade honestly (stderr note + failure).  bk_shutdown
+  mirrors kernel vcd_reset via Interp::finish(): the interrupted
+  timeslice's VCD event runs, then buffered changes flush strictly
+  before the stop time — without it the final stanzas of a stepped
+  session never land.  (The reference's previous-files append branch
+  in bk_set_VCD_file is dead code — never populated — so plain
+  create-on-set mirrors it bug-for-bug.)
 - $finish/$stop/abort: map onto finished/exit-status state; verify
   post-$finish `sim step` errors match ("cannot step" contract of
   the -c driver).
