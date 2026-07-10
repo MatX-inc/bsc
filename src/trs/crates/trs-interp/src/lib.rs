@@ -4610,6 +4610,74 @@ impl Interp {
         }
     }
 
+    /// ORACLE architectural-state compare (trs-capi): walk every
+    /// prim sub-symbol — scalars and range entries — and report
+    /// values where `self` (the primary) and `other` (a secondary)
+    /// disagree, at most `max` findings.  Engines share instance
+    /// indexing (same BIR).  Prim state is live on every tier
+    /// (arena-attached or boxed), unlike def recordings.
+    pub fn state_divergence(
+        &mut self,
+        other: &mut Interp,
+        max: usize,
+    ) -> Vec<String> {
+        let fmt = |v: &Option<Value>| match v {
+            Some(v) => v.to_hex_string(),
+            None => "NoValue".into(),
+        };
+        let mut out = Vec::new();
+        for i in 0..self.insts.len() {
+            if out.len() >= max {
+                break;
+            }
+            // edge-transient prims (wires): stop-time value is a
+            // clear-placement artifact, not architectural state
+            if let InstKind::Prim(p) = &self.insts[i].kind {
+                if p.sym_transient() {
+                    continue;
+                }
+            }
+            let path = self.insts[i].path.clone();
+            for ps in self.prim_sym_children(i) {
+                if out.len() >= max {
+                    break;
+                }
+                match ps.range {
+                    None => {
+                        let a = self.prim_sym_read(i, ps.key);
+                        let b = other.prim_sym_read(i, ps.key);
+                        if a != b {
+                            out.push(format!(
+                                "{path}.{}: {} vs primary {}",
+                                ps.key,
+                                fmt(&b),
+                                fmt(&a)
+                            ));
+                        }
+                    }
+                    Some((lo, hi)) => {
+                        for addr in lo..=hi {
+                            let a = self.prim_sym_read_range(i, ps.key, addr);
+                            let b = other.prim_sym_read_range(i, ps.key, addr);
+                            if a != b {
+                                out.push(format!(
+                                    "{path}.{}[{addr}]: {} vs primary {}",
+                                    ps.key,
+                                    fmt(&b),
+                                    fmt(&a)
+                                ));
+                                if out.len() >= max {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn prim_sym_read(&mut self, i: usize, key: &str) -> Option<Value> {
         let now = self.now;
         match &mut self.insts[i].kind {

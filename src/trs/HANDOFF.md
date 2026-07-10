@@ -37,10 +37,10 @@ products, like VCS:
   (N=32: 27.4s vs 150.1s); run ahead except N=32 where the deficit
   is O(instances) STARTUP (type-keyed analysis is the queued fix).
   bsc's own frontend is everyone's wall (511s at N=32).
-- INTERACTIVE: battery 28/28 BYTE-IDENTICAL vs reference Bluesim
+- INTERACTIVE: battery 29/29 BYTE-IDENTICAL vs reference Bluesim
   (tests/interactive/run.sh mirrors testsuite/bsc.bluesim/
   interactive + local FinishPeek, bdpi, oracle, oracleaot,
-  finishpeekaot, vcdtcl witnesses).
+  finishpeekaot, oracleprims, vcdtcl witnesses).
   Async runs on the jit engine (capability tiers: peek tests pin
   engines=interp).  Model .so is 49MB after gc-sections/strip.
 - PACKAGING (task #10): `make install` in src/trs builds+
@@ -62,9 +62,27 @@ products, like VCS:
   limit).  Probes: gcd/vcdtcl/bdpi dual-engine byte-identical;
   async stop+resume 5/5 divergence-free.  Witness: oracle.cmd
   (battery, engines=interp,jit).  STILL QUEUED from the oracle list:
-  architectural-state compare at stops (needs per-engine symbol
-  peeks), trs_* control entry points; a deterministic ASYNC
-  battery witness needs a tunable-wall design.
+  trs_* control entry points; a deterministic ASYNC battery
+  witness needs a tunable-wall design.
+- STATE COMPARE (oracle, final rung): at every stop the compare now
+  also walks ARCHITECTURAL STATE — every prim sub-symbol, scalars
+  and range entries, read per engine via prim_sym_read[_range]
+  (engines share inst indexing; no Sym tree needed, so the async
+  worker can run it).  First probe caught BOTH halves of the queued
+  "Fifo/RWire arena-attached peek staleness" item: (1) FIFO sym
+  reads ignored the arena mirror — compiled engines answered the
+  0xAA init pattern forever; sym_read_range now refresh()es from
+  the arena first (FIXED, closes the fifo half).  (2) RWire stop-
+  time values are CLEAR-PLACEMENT artifacts (compiled clears at
+  edge end, reference at next-edge top) — wires are edge-transient,
+  not architectural state: Prim::sym_transient() excludes them from
+  the compare.  Residue: pure jit/aot-tier wire PEEKS still answer
+  the cleared value where the reference shows the held one — the
+  doctrine answer is NoValue degradation, queued.  Witness:
+  oracleprims.cmd (fifo state through the mirror, interp,aot).
+  TRAP for future probes: `grep -cE` exits 1 on zero matches — a
+  `build | grep -c error && link && run` chain SKIPS the relink,
+  and you measure a stale model (two false observations today).
 - AOT ENGINE (task #10 rung 3): `trs link --interactive` now ALSO
   emits the fast-artifact design .so as <base>.aot.so beside the
   model (ineligible designs: note + interp/jit, like plain link);
@@ -124,7 +142,7 @@ products, like VCS:
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
 - Local ladders: tests/regress/run.sh (6), tests/vcd/run.sh (10),
-  tests/interactive/run.sh (28; needs TRS_CAPI_LIB=<libtrs_capi.a>),
+  tests/interactive/run.sh (29; needs TRS_CAPI_LIB=<libtrs_capi.a>),
   plus sudoku + sysMips byte-parity from kept .bir (copy designs to a
   STABLE dir — sweeps rm -rf their work dirs).
 - Traps: TRS_JIT env is is_none()-tested — ANY value (even 0)
@@ -144,12 +162,13 @@ products, like VCS:
    message): $stop-vs-$finish resume; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
    const-ready RDY interim; same pattern as the def `sym` flag in
-   SimExportIR.hs); symOrd char-wise compare; Fifo/RWire arena-
-   attached peek staleness; central-loop negedge overcount; link
-   feature-probe (nm the staticlib for LLVM refs); fence mode-
-   awareness; add module.verify() in debug codegen builds.
-   (prime()'s detached compile workers vs dlclose: FIXED — see
-   COMPILE-WORKER JOIN above.)
+   SimExportIR.hs); symOrd char-wise compare; central-loop negedge
+   overcount; link feature-probe (nm the staticlib for LLVM refs);
+   fence mode-awareness; add module.verify() in debug codegen
+   builds; compiled-tier wire PEEKS answer the cleared value
+   (NoValue degradation per doctrine — the STATE COMPARE residue).
+   (prime()'s compile workers vs dlclose: FIXED, COMPILE-WORKER
+   JOIN; Fifo/RWire peek staleness: FIXED, STATE COMPARE.)
 3. Hygiene: sysCRCTest1's link fence flag now REPRODUCES on an idle
    box (0.40-0.45 vs baseline 0.22, b3_link ~1.3-1.5s) on BOTH the
    b8691ab4 and pre-fix binaries — binary-independent drift, so the

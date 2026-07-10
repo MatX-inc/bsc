@@ -8,8 +8,8 @@
 #
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
-# local witnesses at the end (FinishPeek, bdpi, oracle, oracleaot,
-# finishpeekaot, vcdtcl: 28 total).
+# local witnesses (FinishPeek, bdpi, oracle, oracleaot,
+# finishpeekaot, oracleprims, vcdtcl: 29 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -99,6 +99,10 @@ if build hier.bsv mkTop -keep-fires; then
 fi
 if build prims.bsv mkPrims; then
     check mkPrims prims.cmd
+    # fifo state through the arena mirror, oracle-compared per stop
+    export TRS_CAPI_ENGINES=interp,aot
+    check mkPrims oracleprims.cmd
+    export TRS_CAPI_ENGINES=interp
 fi
 if build TbGCD.bsv mkTbGCD -keep-fires; then
     check mkTbGCD gcd.cmd

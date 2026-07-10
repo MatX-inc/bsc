@@ -24,6 +24,14 @@ pub trait Prim {
     fn sym_children(&self) -> Vec<PrimSym> {
         Vec::new()
     }
+    /// Edge-transient state (wires): the stop-time value depends on
+    /// WHERE the clear is placed (the compiled path clears at edge
+    /// end, the reference at the top of the next edge — invisible
+    /// during execution, visible to stop-time reads).  The oracle
+    /// state compare skips these; they are not architectural state.
+    fn sym_transient(&self) -> bool {
+        false
+    }
     /// Read a sub-symbol's current value by key.
     fn sym_read(&mut self, _key: &str, _now: u64) -> Option<Value> {
         None
@@ -2069,6 +2077,9 @@ impl Prim for RWire {
             PrimSym { key: "value", width: self.width, range: None },
         ]
     }
+    fn sym_transient(&self) -> bool {
+        true // wire clear placement differs by engine (see trait doc)
+    }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         match key {
             "" | "value" => Some(self.value.clone()),
@@ -2557,6 +2568,11 @@ impl Prim for Fifo {
         if !key.is_empty() || addr as usize >= self.size {
             return None;
         }
+        // arena-attached engines (JIT/AOT) write the mirror slots
+        // inline — pull them back before answering (the review-fleet
+        // "arena-attached peek staleness": AOT fifos answered the
+        // 0xAA init pattern forever)
+        self.refresh();
         // the reference's data_index reads the RAW ring slot (no
         // head adjustment): post-deq stale slots are visible
         Some(

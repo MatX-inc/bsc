@@ -829,11 +829,11 @@ pub extern "C" fn bk_set_interactive(hdl: *mut c_void) {
 
 /// Oracle lockstep compare at a stop (docs/TCL-CAPI.md): every
 /// secondary must agree with the primary on time, per-clock edge
-/// counts, and finish state.  A divergence reports the instant and
-/// the mismatching quantity to stderr, then flips the primary's
-/// fatal flag so scripts stop AT the divergence.  Returns true iff
-/// divergent.  (Architectural-state compare rides the symbol-tree
-/// work queued with AOT engine construction.)
+/// counts, finish state, and ARCHITECTURAL STATE (every prim
+/// sub-symbol, scalars and range entries — live on all tiers).  A
+/// divergence reports the instant and the mismatching quantity to
+/// stderr, then flips the primary's fatal flag so scripts stop AT
+/// the divergence.  Returns true iff divergent.
 fn oracle_check(engines: &mut [Engine]) -> bool {
     if engines.len() < 2 {
         return false;
@@ -862,6 +862,13 @@ fn oracle_check(engines: &mut [Engine]) -> bool {
         let f = e.interp.is_finished();
         if f != pf {
             msgs.push(format!("engine {n}: finished {f} vs primary {pf}"));
+        }
+        // state compare only when the shape agrees (a time-diverged
+        // pair would drown the report in downstream value noise)
+        if msgs.is_empty() {
+            for d in p.interp.state_divergence(&mut e.interp, 5) {
+                msgs.push(format!("engine {n}: state {d}"));
+            }
         }
     }
     if msgs.is_empty() {
