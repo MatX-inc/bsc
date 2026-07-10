@@ -1,7 +1,7 @@
 # TRS — handoff (rewritten 2026-07-09, start here)
 
 Branch `claude/trs`, all work committed and pushed through
-76a1cc36.  ALWAYS `git push personal` — NEVER bare `git push origin`
+96e29cf7.  ALWAYS `git push personal` — NEVER bare `git push origin`
 (origin is B-Lang-org; a stray push once created a public branch).
 Standing OK to commit/push small commits on this branch.
 
@@ -25,8 +25,8 @@ products, like VCS:
 
 - CORPUS: 975 PASS / 0 DIFF / 0 anything-ours (1037 designs; the 62
   non-PASS are all upstream: bsc COMPILE_FAIL 25, NO_SOURCE 20,
-  NOT_SUPPORTED/BVI 14, bsc-side LINK_FAIL 3).  Sealed 11x on frozen
-  binaries 2026-07-09 (latest: 76a1cc36, oracle mode;
+  NOT_SUPPORTED/BVI 14, bsc-side LINK_FAIL 3).  Sealed 12x on frozen
+  binaries 2026-07-09 (latest: 96e29cf7, aot engine;
   the only fence flag each time is the dispositioned sysCRCTest1
   stale baseline, 0.39-0.45 band).  ~825 of the 975 run COMPILED;
   ~120 interp fallback (MCD/Sync, module input ports, VCD tests by
