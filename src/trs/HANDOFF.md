@@ -25,10 +25,12 @@ products, like VCS:
 
 - CORPUS: 975 PASS / 0 DIFF / 0 anything-ours (1037 designs; the 62
   non-PASS are all upstream: bsc COMPILE_FAIL 25, NO_SOURCE 20,
-  NOT_SUPPORTED/BVI 14, bsc-side LINK_FAIL 3).  Sealed 8x on frozen
-  binaries 2026-07-09 (latest: b8691ab4, compiled-path $finish).  ~825 of the 975 run COMPILED; ~120 interp
-  fallback (MCD/Sync, module input ports, VCD tests by design,
-  exotic prims).
+  NOT_SUPPORTED/BVI 14, bsc-side LINK_FAIL 3).  Sealed 10x on frozen
+  binaries 2026-07-09 (latest: 2898d22e, packaging + worker join;
+  the only fence flag each time is the dispositioned sysCRCTest1
+  stale baseline, 0.39-0.45 band).  ~825 of the 975 run COMPILED;
+  ~120 interp fallback (MCD/Sync, module input ports, VCD tests by
+  design, exotic prims).
 - PERF: sudoku ~1.35x ahead (0.27s); LongCnt ~5x; corpus link ratio
   median 0.03.  Grid v3 (bench/grid, program tiles): link ahead of
   ref build at EVERY N after the replication-aware outline dial
