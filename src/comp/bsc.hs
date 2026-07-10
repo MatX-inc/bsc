@@ -80,14 +80,9 @@ import Pragma
 import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
-<<<<<<< HEAD
-import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
-=======
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck)
->>>>>>> 4b25d3c0 (Warn on instances that do not cover their class's functional dependencies)
+import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
