@@ -3018,7 +3018,11 @@ impl Interp {
             })
             .collect();
         let nclasses = classes.len();
-        let cchunk = nclasses.div_ceil(nworkers).max(1);
+        // batches are the stop-flag granularity: one whole share per
+        // worker made JitPlans::drop join wait for the FULL body
+        // compile (the fleet) — cap so teardown latency is bounded
+        // by a few class compiles, not the design size
+        let cchunk = nclasses.div_ceil(nworkers).clamp(1, 8);
         let lazy = Arc::new(LazyJit {
             design: self.d.clone(),
             insts: inst_envs,

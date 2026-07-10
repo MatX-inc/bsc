@@ -38,6 +38,9 @@ install: build
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 target/release/trs $(BINDIR)/trs
 	$(INSTALL) -m 644 target/release/libtrs_capi.a $(BINDIR)/libtrs_capi.a
+	# debuginfo in the staticlib is dead weight at .so link time
+	# (~420MB -> tens of MB); the interactive link strips the model
+	strip --strip-debug $(BINDIR)/libtrs_capi.a
 
 .PHONY: clean full_clean
 clean full_clean:

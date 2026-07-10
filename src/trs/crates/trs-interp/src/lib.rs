@@ -1792,6 +1792,17 @@ impl Interp {
         Ok(())
     }
 
+    /// True iff the design imports user BDPI functions (library-
+    /// provided imports like rand32 excluded) — i.e. a companion
+    /// .bdpi.so is REQUIRED, and running without it panics at the
+    /// first call (across extern "C" in the capi = process abort).
+    pub fn needs_user_bdpi(&self) -> bool {
+        self.d
+            .foreign_funcs
+            .iter()
+            .any(|f| !is_lib_bdpi(self.s(f.c_name)))
+    }
+
     /// Dispatch a non-builtin task name as a BDPI import, if the design
     /// declares one.
     fn bdpi_call(&mut self, name: &str, args: &[Arg], w: u32) -> Option<Value> {
@@ -3773,6 +3784,7 @@ impl Interp {
             let ap = j.arena_ptr();
             let envp = self as *mut Interp as *mut core::ffi::c_void;
             let cycles0 = self.cycle;
+            let mut fin_break = false;
             while self.finished.is_none() && self.cycle < max_cycles {
                 self.cycle += 1;
                 self.now = tp;
@@ -3784,10 +3796,17 @@ impl Interp {
                         u64,
                     ) -> i32 = unsafe { std::mem::transmute(fused[rci]) };
                     unsafe { f(ap, envp, tp) };
-                    // NO finished break: $finish completes the
-                    // instant's edge schedules; the while condition
-                    // stops at the slice boundary (exit bookkeeping
-                    // identical to the pre-fix path)
+                    // NO finished break here: $finish completes the
+                    // instant's edge schedules
+                }
+                // $finish stops ON this posedge: break BEFORE tp/tn
+                // advance so the exit bookkeeping and re-armed heap
+                // see the companion negedge as PENDING, exactly like
+                // the general loop's state at a $finish (the fleet:
+                // crediting it made oracle edge compares diverge)
+                if self.finished.is_some() {
+                    fin_break = true;
+                    break;
                 }
                 if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
                     break;
@@ -3805,9 +3824,15 @@ impl Interp {
                 c.cur = true;
                 // negedges pass silently inside the central player
                 // (no negedge comps by precondition); keep the counts
-                // coherent for later bk queries
-                if k > 0 {
-                    c.neg_count += k;
+                // coherent for later bk queries.  On a $finish exit
+                // the finish posedge's companion negedge has NOT
+                // retired — the general loop leaves it pending —
+                // and on both exit shapes the last RETIRED negedge
+                // is tn - period (tp/tn advance only on completed
+                // iterations).
+                let done = if fin_break { k.saturating_sub(1) } else { k };
+                if done > 0 {
+                    c.neg_count += done;
                     c.neg_at = tn - period;
                 }
             }
@@ -4331,7 +4356,11 @@ impl Interp {
         );
     }
     pub fn aot_take_emit_result(&mut self) -> Option<AotEmit> {
-        Some(AotEmit::Failed(
+        // Ineligible, NOT Failed: a lean binary legitimately produces
+        // interpreted artifacts ("only infrastructure failures fail
+        // the link") — Failed hard-failed both `link` and
+        // `link --interactive` on the lean product (review fleet)
+        Some(AotEmit::Ineligible(
             "this trs was built without JIT/AOT support (feature `jit`)".into(),
         ))
     }
@@ -4353,9 +4382,12 @@ impl Interp {
 
     /// Oracle divergence protocol (docs/TCL-CAPI.md): flip the fatal
     /// flag so scripts stop AT the divergence (bluesim.tcl exits 1
-    /// via `sim isfatal`).
+    /// via `sim isfatal`).  fatal implies finished in the reference
+    /// ($fatal = message + bk_fatal_now), so latch both — a later
+    /// `sim step` must refuse like any post-$finish step.
     pub fn mark_fatal(&mut self) {
         self.fataled = true;
+        self.finished = Some(1);
     }
 
     // ===============

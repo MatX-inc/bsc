@@ -129,8 +129,19 @@ products, like VCS:
   instant's buffered VCD changes at shutdown (vcd.cxx flush_changes
   early-return at t==now), so post-finish writes never appear in any
   VCD — peeks are the only state witness.
-- ULTRACODE REVIEW (7 finders, 72/72 verdicts upheld): 10 findings
-  fixed+sealed (4e5df577), 9 queued below.
+- ULTRACODE REVIEW round 1 (7 finders, 72/72 verdicts upheld): 10
+  findings fixed+sealed (4e5df577).  ROUND 2 (2026-07-09 night, 109
+  agents over the day's 6 increments): 29 confirmed / 5 rejected;
+  10 mechanical fixes landed same-night (ConfigReg sym_read refresh;
+  lean-build link hard-fail -> Ineligible stub; central-loop $finish
+  negedge credit — closes the old backlog item; per-engine oracle
+  shape gate; worker batch cap 8 = bounded teardown join;
+  mark_fatal latches finished; missing-.bdpi.so fails bk_init loudly
+  + shared-globals note for multi-engine BDPI; interruptible async
+  catch-up (Runner.catch_abort, compare skipped w/ note if
+  incomplete); sync-path secondaries bounded by the primary's stop
+  (diverged-secondary hang); JIT_SYNC-pinned finishpeek witness +
+  stripped installed staticlib).  STRUCTURAL findings queued below.
 
 ## Build / gate discipline (non-negotiable)
 
@@ -169,13 +180,28 @@ products, like VCS:
    message): $stop-vs-$finish resume; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
    const-ready RDY interim; same pattern as the def `sym` flag in
-   SimExportIR.hs); symOrd char-wise compare; central-loop negedge
-   overcount; link feature-probe (nm the staticlib for LLVM refs);
-   fence mode-awareness; add module.verify() in debug codegen
-   builds; compiled-tier wire PEEKS answer the cleared value
-   (NoValue degradation per doctrine — the STATE COMPARE residue).
-   (prime()'s compile workers vs dlclose: FIXED, COMPILE-WORKER
-   JOIN; Fifo/RWire peek staleness: FIXED, STATE COMPARE.)
+   SimExportIR.hs); symOrd char-wise compare; link feature-probe
+   (nm the staticlib for LLVM refs); fence mode-awareness; add
+   module.verify() in debug codegen builds; compiled-tier wire
+   PEEKS answer the cleared value (NoValue degradation per doctrine).
+   FROM FLEET ROUND 2 (failure scenarios in docs/review-round2.json): oracle engines share process-global BDPI/libc-RNG state
+   (real fix = per-engine RNG reproducing glibc random(), dlmopen
+   namespaces for user BDPI; the bk_init note is the interim);
+   $finish may skip same-instant OTHER-CLOCK PG_LOGIC edges the
+   reference still runs (needs an MCD witness measured vs
+   reference); quiet flag misses prim-level println! (fifo guard
+   warnings), $fgetc double-consumes shared stdin, and format
+   'Output error:' lines leak from quiet engines (thread-local
+   quiet, like FROM_COMPILED, is the likely shape); state compare
+   blind to CReg/BRAM/DualPortRam/synchronizers (no sym_children);
+   VCD-under-Tcl dead on the shipped default jit engine and bluetcl
+   can't see bk_enable's 0 (auto-downgrade at -V or a loader note);
+   quiet $fopen(w) Sink cannot mirror a primary open FAILURE (fd
+   key skew — document or probe-open); async catch-up on a slow
+   secondary still blocks bk_sync for its serial replay (lockstep
+   slice advancing is the real fix).
+   (prime()'s compile workers vs dlclose: FIXED; Fifo/RWire peek
+   staleness: FIXED; central-loop negedge overcount: FIXED.)
 3. Hygiene: sysCRCTest1's link fence flag now REPRODUCES on an idle
    box (0.40-0.45 vs baseline 0.22, b3_link ~1.3-1.5s) on BOTH the
    b8691ab4 and pre-fix binaries — binary-independent drift, so the

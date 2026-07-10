@@ -97,6 +97,10 @@ unsafe impl Send for EngineBox {}
 struct Runner {
     join: std::thread::JoinHandle<(EngineBox, i32)>,
     abort: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// interrupts the oracle secondaries' post-abort catch-up (a slow
+    /// secondary replays the whole segment serially); bk_shutdown
+    /// sets it so teardown never blocks on the replay
+    catch_abort: std::sync::Arc<std::sync::atomic::AtomicBool>,
     running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     progress: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -205,7 +209,7 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     let bdpi_so = companion("bdpi.so");
     let aot_so = companion("aot.so");
     let mut engines = Vec::new();
-    for kind in kinds {
+    for kind in kinds.iter().copied() {
         match Interp::from_bir_bytes(bir) {
             Ok(mut interp) => {
                 if let Some(so) = &bdpi_so {
@@ -213,6 +217,32 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
                         eprintln!("trs capi: bk_init: {e}");
                         return std::ptr::null_mut();
                     }
+                } else if interp.needs_user_bdpi() {
+                    // fail HERE, not at the first BDPI call — that
+                    // panic would cross extern "C" and abort bluetcl
+                    eprintln!(
+                        "trs capi: bk_init: design imports BDPI \
+                         functions but no .bdpi.so companion sits \
+                         beside the model .so (relink with a current \
+                         trs, or restore the companion)"
+                    );
+                    return std::ptr::null_mut();
+                }
+                if engines.is_empty()
+                    && kinds.len() > 1
+                    && (bdpi_so.is_some() || interp.needs_user_bdpi())
+                {
+                    // oracle isolation caveat: dlopen of one path is
+                    // one refcounted image — C globals in user BDPI
+                    // code are SHARED across engines, and each engine
+                    // consumes its own slice of any stateful sequence
+                    eprintln!(
+                        "trs capi: note: multi-engine oracle with \
+                         BDPI — user C state is process-global, so \
+                         stateful foreign functions can produce \
+                         phantom divergences (engines are not \
+                         isolated)"
+                    );
                 }
                 if kind == EngineKind::Jit {
                     interp.arm_jit();
@@ -593,8 +623,14 @@ pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
         // would be executing unmapped code
         if let Some(r) = st.runner.take() {
             r.abort.store(true, std::sync::atomic::Ordering::SeqCst);
-            if let Ok((engines, _)) = r.join.join() {
-                st.engines = engines.0;
+            // don't block teardown on a slow secondary's catch-up
+            r.catch_abort.store(true, std::sync::atomic::Ordering::SeqCst);
+            match r.join.join() {
+                Ok((engines, _)) => st.engines = engines.0,
+                Err(_) => eprintln!(
+                    "trs capi: bk_shutdown: async worker panicked — \
+                     engines lost, VCD epilogue skipped"
+                ),
             }
         }
         // kernel.cxx:767 vcd_reset at shutdown: finish an interrupted
@@ -845,15 +881,18 @@ fn oracle_check(engines: &mut [Engine]) -> bool {
     let mut msgs: Vec<String> = Vec::new();
     for (i, e) in rest.iter_mut().enumerate() {
         let n = i + 1;
+        // per-engine shape gate (the fleet: a global gate let one
+        // engine's shape mismatch suppress another's state compare)
+        let mut shape: Vec<String> = Vec::new();
         let t = e.interp.now();
         if t != pt {
-            msgs.push(format!("engine {n}: time {t} vs primary {pt}"));
+            shape.push(format!("engine {n}: time {t} vs primary {pt}"));
         }
         for (ci, (a, b)) in
             pc.iter().zip(e.interp.clock_info().iter()).enumerate()
         {
             if (a.cycles, a.neg_edges) != (b.cycles, b.neg_edges) {
-                msgs.push(format!(
+                shape.push(format!(
                     "engine {n}: clock {ci} edges {}+{} vs primary {}+{}",
                     b.cycles, b.neg_edges, a.cycles, a.neg_edges
                 ));
@@ -861,15 +900,16 @@ fn oracle_check(engines: &mut [Engine]) -> bool {
         }
         let f = e.interp.is_finished();
         if f != pf {
-            msgs.push(format!("engine {n}: finished {f} vs primary {pf}"));
+            shape.push(format!("engine {n}: finished {f} vs primary {pf}"));
         }
         // state compare only when the shape agrees (a time-diverged
         // pair would drown the report in downstream value noise)
-        if msgs.is_empty() {
+        if shape.is_empty() {
             for d in p.interp.state_divergence(&mut e.interp, 5) {
-                msgs.push(format!("engine {n}: state {d}"));
+                shape.push(format!("engine {n}: state {d}"));
             }
         }
+        msgs.extend(shape);
     }
     if msgs.is_empty() {
         return false;
@@ -915,9 +955,12 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
         cond.progress = Some(progress.clone());
         let mut engines = EngineBox(std::mem::take(&mut st.engines));
         let running2 = running.clone();
+        let catch_abort = Arc::new(AtomicBool::new(false));
+        let catch_abort2 = catch_abort.clone();
         let join = std::thread::spawn(move || {
             let mut rc = BK_SUCCESS;
             let mut it = engines.0.iter_mut();
+            let mut caught_up = true;
             if let Some(p) = it.next() {
                 let r = p.interp.advance_until(&cond);
                 if r != 0 {
@@ -932,10 +975,14 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
                 // (Edge-count targets are wrong here: the loop's
                 // slice-end check breaks on ANY reached limit, and the
                 // trailing direction's count is reached one slice
-                // before the leading one's.)
+                // before the leading one's.)  catch_abort keeps
+                // bk_shutdown from blocking on a slow secondary's
+                // serial replay.
+                let pt = p.interp.now();
                 let target = trs_interp::StopCond {
                     max_cycles: u64::MAX,
-                    at_times: vec![p.interp.now()],
+                    at_times: vec![pt],
+                    abort: Some(catch_abort2.clone()),
                     ..Default::default()
                 };
                 for e in it {
@@ -943,24 +990,48 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
                     if r != 0 {
                         rc = r;
                     }
+                    if e.interp.now() < pt {
+                        caught_up = false;
+                    }
                 }
             }
-            if oracle_check(&mut engines.0) {
-                rc = 1;
+            if caught_up {
+                if oracle_check(&mut engines.0) {
+                    rc = 1;
+                }
+            } else {
+                eprintln!(
+                    "trs oracle: catch-up interrupted — lockstep \
+                     compare skipped at this stop"
+                );
             }
             running2.store(false, Ordering::SeqCst);
             (engines, rc)
         });
-        st.runner = Some(Runner { join, abort, running, progress });
+        st.runner = Some(Runner { join, abort, catch_abort, running, progress });
         return BK_SUCCESS;
     }
     let mut rc = BK_SUCCESS;
-    // primary first (owns stdout); quiet secondaries follow, then the
-    // lockstep compare
-    for e in &mut st.engines {
-        let r = e.interp.advance_until(&cond);
+    // primary first (owns stdout); secondaries are then BOUNDED by
+    // the primary's actual stop (the fleet: a genuinely diverged
+    // secondary running the original unbounded cond — e.g. `sim run`
+    // waiting on a $finish it never reaches — hangs bluetcl forever)
+    let mut it = st.engines.iter_mut();
+    if let Some(p) = it.next() {
+        let r = p.interp.advance_until(&cond);
         if r != 0 {
             rc = r;
+        }
+        let target = trs_interp::StopCond {
+            max_cycles: u64::MAX,
+            at_times: vec![p.interp.now()],
+            ..cond.clone()
+        };
+        for e in it {
+            let r = e.interp.advance_until(&target);
+            if r != 0 {
+                rc = r;
+            }
         }
     }
     if oracle_check(&mut st.engines) {

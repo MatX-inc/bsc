@@ -1899,8 +1899,12 @@ impl Prim for ConfigReg {
         vec![PrimSym { key: "", width: self.value.width, range: None }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
-        // the reference symbol points at the raw CURRENT member; the
-        // read METHOD's boxed old-value view is rule-visible only
+        // arena-attached engines write INLINE — re-read first (the
+        // review fleet: the one member of the staleness class the
+        // Fifo fix missed).  The reference symbol points at the raw
+        // CURRENT member; the read METHOD's boxed old-value view is
+        // rule-visible only.
+        self.refresh();
         (key.is_empty()).then(|| self.value.clone())
     }
     fn vcd_defs(
