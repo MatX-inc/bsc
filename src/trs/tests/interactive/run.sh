@@ -10,7 +10,7 @@
 # interactive.exp — keep in sync (22 sim_output assertions), plus
 # local witnesses (FinishPeek, bdpi, oracle, oracleaot,
 # finishpeekaot, oracleprims, quietwarn, stopres x2,
-# capi_witness, vcdtcl: 33 total).
+# capi_witness, vcdtcl, fsttcl: 34 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -105,7 +105,7 @@ if build prims.bsv mkPrims; then
     check mkPrims oracleprims.cmd
     export TRS_CAPI_ENGINES=interp
 fi
-if build TbGCD.bsv mkTbGCD -keep-fires; then
+if build TbGCD.bsv mkTbGCD -keep-fires -dump-formats vcd,fst; then
     check mkTbGCD gcd.cmd
     check mkTbGCD debug.cmd
     check mkTbGCD debug2.cmd
@@ -219,5 +219,26 @@ if [ -x ./ref_mkTbGCD ]; then
     vcdtcldiff ref_waves.vcd waves.vcd || ok=0
     if [ "$ok" = 1 ]; then echo "PASS mkTbGCD vcdtcl.cmd"
     else echo "FAIL mkTbGCD vcdtcl.cmd"; fail=1; fi
+fi
+# FST-under-Tcl (fst rebase): `sim fst` through the shared engine;
+# stdout AND the FST files must match semantically (fst2vcd +
+# fstcmp.py: FST bytes embed timestamps, so no byte compare)
+if [ -x ./ref_mkTbGCD ] && command -v fst2vcd > /dev/null 2>&1; then
+    rm -f waves.fst
+    timeout 120 ./ref_mkTbGCD -f fsttcl.cmd > ref_mkTbGCD_fsttcl.out 2>&1
+    ref_rc=$?
+    mv waves.fst ref_waves.fst 2>/dev/null
+    rm -f waves.fst
+    timeout 120 ./b3_mkTbGCD -f fsttcl.cmd > b3_mkTbGCD_fsttcl.out 2>&1
+    b3_rc=$?
+    ok=1
+    [ "$ref_rc" = "$b3_rc" ] || ok=0
+    cmp -s ref_mkTbGCD_fsttcl.out b3_mkTbGCD_fsttcl.out || ok=0
+    fst2vcd ref_waves.fst > .rf.$$ 2>/dev/null || ok=0
+    fst2vcd waves.fst > .bf.$$ 2>/dev/null || ok=0
+    python3 "$SRC/../vcd/fstcmp.py" .rf.$$ .bf.$$ > /dev/null || ok=0
+    rm -f .rf.$$ .bf.$$
+    if [ "$ok" = 1 ]; then echo "PASS mkTbGCD fsttcl.cmd"
+    else echo "FAIL mkTbGCD fsttcl.cmd"; fail=1; fi
 fi
 exit $fail
