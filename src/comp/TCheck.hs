@@ -2223,13 +2223,20 @@ tiQuals as ps r (q:quals) = do
     (rs, as',q') <- tiQual as q
     tiQuals (as' ++ as) (rs++ps) (q':r) quals
 
+-- Qualifier code is emitted outside the enclosing group's dictionary
+-- letseq (IConv evaluates it in the scope where the definition is
+-- bound), so its predicates must defer upward rather than being solved
+-- into the current pool frame; hence withoutPoolDeposits.
 tiQual :: [Assump] -> CQual -> TI ([VPred], [Assump], CQual)
-tiQual as (CQGen _ p e) = do
+tiQual as q = withoutPoolDeposits (tiQual' as q)
+
+tiQual' :: [Assump] -> CQual -> TI ([VPred], [Assump], CQual)
+tiQual' as (CQGen _ p e) = do
     t             <- newTVar "tiQual" KStar p
     (qs, e')      <- tiExpr as t e
     (ps, as', p') <- tiPat t p
     return (ps++qs, as', CQGen t p' e')
-tiQual as (CQFilter e) = do
+tiQual' as (CQFilter e) = do
     (ps, e') <- tiExpr as tBool e
     return (ps, [], CQFilter e')
 
@@ -2396,6 +2403,12 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
 
     etrace ("tiExpl: " ++ ppReadable (i, getIdPosition i, length as0, sc)) $
         return ()
+
+    -- Dictionaries pooled while checking this definition's body (see
+    -- propagateFunDeps) are emitted with this definition's letseq;
+    -- open their frame.  (Error paths need no cleanup: thrown errors
+    -- restore the monad state at the recovery point.)
+    pool_frame <- pushSolvedPool
 
     -- Typecheck the implicit condition (only for interfaces)
     -- mps = introduced predicates (VPred)
@@ -2641,10 +2654,14 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
         -- The intermediate type is ambiguous.
         (rs_amb, rs_unamb) = partition (any (`elem` amb_vars) . tv) rs
 
+    -- Close the pool frame: the dictionaries deposited while checking
+    -- this definition join its letseq
+    pool_sbs <- popSolvedPool pool_frame
+
     -- Apply the substitution to the code fragments
     let alts'' = apSub s alts'                  -- new alternatives
         me''   = apSub s me'                    -- update guards
-    asbs <- warnTransitiveIncoherent (apSub s sbs1)  -- new dict bindings
+    asbs <- warnTransitiveIncoherent (apSub s (pool_sbs <++ sbs1))  -- new dict bindings
 
     -- Determine the generic variables and produce the inferred type scheme
     let
@@ -2917,6 +2934,11 @@ tiImpls recursive as ibs = do
         as_initial | recursive = zipWith (:>:) is scs ++ as
                    | otherwise = as
 
+    -- Dictionaries pooled while checking this group's bodies (see
+    -- propagateFunDeps) are emitted with this group's letseq; open
+    -- their frame
+    pool_frame <- pushSolvedPool
+
     -- typecheck all the defs
     pscs <- sequence (zipWith (tiImpl as_initial) ts ibs)
 
@@ -2999,9 +3021,13 @@ tiImpls recursive as ibs = do
         let pos = getPosition (fst (headOrErr "tiImpls: pos" ibs))
         in  handleAmbiguousContext pos amb_vars rs2
 
+    -- Close the pool frame: the dictionaries deposited while checking
+    -- this group join its letseq
+    pool_sbs <- popSolvedPool pool_frame
+
     -- update the info we computed above
     s <- getSubst
-    sbs_final <- warnTransitiveIncoherent (apSub s (sbs3 <++ sbs2 <++ sbs1))
+    sbs_final <- warnTransitiveIncoherent (apSub s (pool_sbs <++ sbs3 <++ sbs2 <++ sbs1))
     let ts_final = apSub s ts'
         fs_final = tv (apSub s as) `union` bvs
         vss_final = map tv ts_final
