@@ -220,9 +220,10 @@ products, like VCS:
    b8691ab4 and pre-fix binaries — binary-independent drift, so the
    0.22 baseline is stale; rebaseline it at the next accepted
    equilibrium (memq flagged once under sweep load, idle-clean;
-   sysTrafficBRAM did not flag).  Full `make -j128 -C testsuite
-   fullparallel` to re-certify zero-fail after the exporter changes
-   (TEST_SYSTEMC_* env per global CLAUDE.md).
+   sysTrafficBRAM did not flag).  Full testsuite RE-CERTIFIED
+   2026-07-09 night: 18865 PASS / 0 FAIL / 129 XFAIL (fullparallel,
+   SystemC enabled) — the exporter changes hold the zero-fail
+   baseline.
 4. Scale arc: loop-rolled spine (planner run-detection over
    comp_nodes + affine base/token strides + counted-loop emission
    around the EXISTING outlined-body call ABI; bail unless provably
