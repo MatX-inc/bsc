@@ -179,10 +179,35 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     } else {
         kinds
     };
+    // user BDPI code travels as <model>.bdpi.so beside the model .so
+    // (trs link --interactive copies it there); the Model statics
+    // live in the model's data segment, so dladdr locates the .so
+    let bdpi_so = {
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        let found =
+            unsafe { libc::dladdr(model as *const c_void, &mut info) } != 0
+                && !info.dli_fname.is_null();
+        found
+            .then(|| {
+                unsafe { CStr::from_ptr(info.dli_fname) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .map(|p| {
+                format!("{}.bdpi.so", p.strip_suffix(".so").unwrap_or(&p))
+            })
+            .filter(|p| std::path::Path::new(p).exists())
+    };
     let mut engines = Vec::new();
     for kind in kinds {
         match Interp::from_bir_bytes(bir) {
             Ok(mut interp) => {
+                if let Some(so) = &bdpi_so {
+                    if let Err(e) = interp.load_bdpi(so) {
+                        eprintln!("trs capi: bk_init: {e}");
+                        return std::ptr::null_mut();
+                    }
+                }
                 if kind == EngineKind::Jit {
                     interp.arm_jit();
                 }

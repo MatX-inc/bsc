@@ -8,7 +8,7 @@
 #
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
-# local witnesses at the end (FinishPeek, vcdtcl: 24 total).
+# local witnesses at the end (FinishPeek, bdpi, vcdtcl: 25 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -31,14 +31,22 @@ export TRS_CAPI_ENGINES=interp
 cp "$TSRC"/*.bsv "$TSRC"/*.bs "$TSRC"/*.cmd . 2>/dev/null
 # local witnesses (not in the reference testsuite) live beside this
 # script
-cp "$SRC"/*.bsv "$SRC"/*.cmd . 2>/dev/null
+cp "$SRC"/*.bsv "$SRC"/*.cmd "$SRC"/*.c . 2>/dev/null
 
 fail=0
-build() { # src top extra-link-flags...
+build() { # src top [flags and/or C link files]...
     src=$1; top=$2; shift 2
+    # bsc grammar: flags before -e, source/link files after -o
+    flags=""; cfiles=""
+    for a in "$@"; do
+        case "$a" in
+            *.c|*.cxx|*.cpp|*.o) cfiles="$cfiles $a";;
+            *) flags="$flags $a";;
+        esac
+    done
     $BSC -sim -bir -u -g "$top" "$src" > "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc compile)"; fail=1; return 1; }
-    $BSC -sim -bir "$@" -e "$top" -o "ref_$top" >> "$top.bsc.log" 2>&1 \
+    $BSC -sim -bir $flags -e "$top" -o "ref_$top" $cfiles >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc link)"; fail=1; return 1; }
     "$TRS" link "$top.bir" --interactive -o "b3_$top" \
         > "$top.b3.log" 2>&1 \
@@ -111,6 +119,15 @@ fi
 if build FinishPeek.bsv sysFinishPeek; then
     export TRS_CAPI_ENGINES=jit
     check sysFinishPeek finishpeek.cmd
+    export TRS_CAPI_ENGINES=interp
+fi
+# BDPI-under-Tcl (task #10 packaging): the companion .bdpi.so travels
+# with the model (link copies it; bk_init dladdr-loads it).  jit
+# engine: also a SHORT session, witnessing the compile-worker join at
+# teardown (pre-fix: 5/5 segfault after correct output)
+if build BdpiMin.bsv sysBdpiMin ops.c; then
+    export TRS_CAPI_ENGINES=jit
+    check sysBdpiMin bdpi.cmd
     export TRS_CAPI_ENGINES=interp
 fi
 # VCD-under-Tcl (task #10): `sim vcd <file>`/off/on -> the three

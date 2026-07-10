@@ -190,6 +190,9 @@ pub(crate) struct LazyJit {
     /// bodies not yet compiled (0 = fully warm: dispatch skips the
     /// latch/bridge machinery entirely)
     cold: std::sync::atomic::AtomicUsize,
+    /// teardown flag: workers stop claiming batches so JitPlans::drop
+    /// can join them before the model .so is dlclosed
+    stop: std::sync::atomic::AtomicBool,
     cells: Vec<OnceLock<CompiledExec>>,
 }
 
@@ -207,6 +210,9 @@ impl LazyJit {
     /// its own call-site tables.
     fn work(&self) {
         loop {
+            if self.stop.load(Ordering::Acquire) {
+                return;
+            }
             let b = self.next_batch.fetch_add(1, Ordering::AcqRel);
             let lo = b * self.batch_size;
             if lo >= self.classes.len() {
@@ -263,6 +269,11 @@ pub(crate) struct JitPlans {
     /// lazy compile cells (also reachable from Interp::jit_shared for
     /// the callbacks)
     pub(crate) lazy: Arc<LazyJit>,
+    /// background body-compile workers: joined on drop (they execute
+    /// code linked into the interactive model .so, which bluetcl
+    /// dlcloses right after bk_shutdown — a still-running worker then
+    /// executes unmapped code; short jit sessions crashed 5/5)
+    workers: Vec<std::thread::JoinHandle<()>>,
     /// rule ordinal -> (instance, rule name, WF slot) for the
     /// interpreted-body fallback while its cell is cold
     pub(crate) exec_fallback: Vec<(usize, StrId, u32)>,
@@ -277,6 +288,17 @@ pub(crate) struct JitPlans {
     /// node walk).  fn(arena, env, now) -> i32 (nonzero = abort;
     /// $finish/$stop complete the edge and return 0).
     pub(crate) fused: std::sync::OnceLock<Vec<usize>>,
+}
+
+impl Drop for JitPlans {
+    fn drop(&mut self) {
+        // stop is per-BATCH: at most one in-flight class compile per
+        // worker delays the join (ms-scale)
+        self.lazy.stop.store(true, Ordering::Release);
+        for h in self.workers.drain(..) {
+            let _ = h.join();
+        }
+    }
 }
 
 impl JitPlans {
@@ -3014,10 +3036,12 @@ impl Interp {
             } else {
                 nclasses
             }),
+            stop: std::sync::atomic::AtomicBool::new(false),
             cells: (0..n).map(|_| OnceLock::new()).collect(),
         });
         self.jit_shared = Some(lazy.clone());
 
+        let mut workers = Vec::new();
         match preexecs {
             Some(execs) => {
                 // artifact bodies: every cell warm from the start
@@ -3029,7 +3053,7 @@ impl Interp {
                 // bodies compile in the background; cold bodies interpret
                 for _ in 0..nworkers {
                     let lz = lazy.clone();
-                    std::thread::spawn(move || lz.work());
+                    workers.push(std::thread::spawn(move || lz.work()));
                 }
                 if std::env::var_os("TRS_JIT_SYNC").is_some() {
                     let t0 = std::time::Instant::now();
@@ -3107,6 +3131,7 @@ impl Interp {
             en_slots,
             now_slot,
             lazy,
+            workers,
             exec_fallback,
             covered_ticks,
             fused: {

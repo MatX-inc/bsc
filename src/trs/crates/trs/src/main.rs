@@ -480,6 +480,21 @@ void* new_MODEL_{top}(void) {{
         Err(e) => return fail(format!("cc: {e}")),
     }
     let _ = std::fs::remove_dir_all(&tmp);
+    // user BDPI code travels with the model: bk_init dladdr's its own
+    // .so and loads <model>.bdpi.so from beside it
+    let bdpi_src = format!(
+        "{}.bdpi.so",
+        bir_path.strip_suffix(".bir").unwrap_or(bir_path)
+    );
+    let bdpi_dst = format!("{base}.bdpi.so");
+    if std::path::Path::new(&bdpi_src).exists()
+        && std::path::Path::new(&bdpi_src).canonicalize().ok()
+            != std::path::Path::new(&bdpi_dst).canonicalize().ok()
+    {
+        if let Err(e) = std::fs::copy(&bdpi_src, &bdpi_dst) {
+            return fail(format!("copy {bdpi_src} -> {bdpi_dst}: {e}"));
+        }
+    }
     // the reference's wrapper, verbatim shape (bsc.hs writeBluesimWrapper)
     let wrapper = format!(
         r##"#!/bin/sh

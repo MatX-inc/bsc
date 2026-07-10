@@ -35,11 +35,22 @@ products, like VCS:
   (N=32: 27.4s vs 150.1s); run ahead except N=32 where the deficit
   is O(instances) STARTUP (type-keyed analysis is the queued fix).
   bsc's own frontend is everyone's wall (511s at N=32).
-- INTERACTIVE: battery 24/24 BYTE-IDENTICAL vs reference Bluesim
+- INTERACTIVE: battery 25/25 BYTE-IDENTICAL vs reference Bluesim
   (tests/interactive/run.sh mirrors testsuite/bsc.bluesim/
-  interactive + local FinishPeek and vcdtcl witnesses).  Async runs
-  on the jit engine (capability tiers: peek tests pin
+  interactive + local FinishPeek, bdpi, vcdtcl witnesses).  Async
+  runs on the jit engine (capability tiers: peek tests pin
   engines=interp).  Model .so is 49MB after gc-sections/strip.
+- PACKAGING (task #10): `make install` in src/trs builds+
+  installs libtrs_capi.a next to the binary (jit iff
+  LLVM_SYS_181_PREFIX set, so the top-level install-src stays lean-
+  buildable).  BDPI companions travel with interactive models:
+  link --interactive copies <model>.bdpi.so; bk_init dladdr-locates
+  its own .so and loads the companion into every engine.
+- COMPILE-WORKER JOIN (review backlog closed): short jit-engine
+  interactive sessions segfaulted 5/5 at teardown — detached body-
+  compile workers still executing model-.so code when bluetcl
+  dlcloses it.  JitPlans now owns the JoinHandles; Drop sets
+  lazy.stop (checked per batch) and joins.  8/8 clean after.
 - VCD-UNDER-TCL (task #10 rung 1): bk_set_VCD_file/enable/disable
   wired to the interp writer (non-interp primaries degrade with a
   stderr note); bk_shutdown mirrors kernel vcd_reset via
@@ -83,7 +94,7 @@ products, like VCS:
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
 - Local ladders: tests/regress/run.sh (6), tests/vcd/run.sh (10),
-  tests/interactive/run.sh (24; needs TRS_CAPI_LIB=<libtrs_capi.a>),
+  tests/interactive/run.sh (25; needs TRS_CAPI_LIB=<libtrs_capi.a>),
   plus sudoku + sysMips byte-parity from kept .bir (copy designs to a
   STABLE dir — sweeps rm -rf their work dirs).
 - Traps: TRS_JIT env is is_none()-tested — ANY value (even 0)
@@ -97,10 +108,9 @@ products, like VCS:
 
 1. Finish task #10 (capi): ORACLE mode (secondary-engine quiet
    flag, lockstep compare at stops, AOT engine construction from the
-   artifact pair, trs_* control entry points); packaging (install
-   libtrs_capi.a next to the binary; add the interactive battery
-   to the standing gates; BDPI companion loading for
-   from_bir_bytes).  VCD-under-Tcl DONE (see current state).
+   artifact pair, trs_* control entry points).  VCD-under-Tcl and
+   packaging (capi lib install, BDPI companions; the battery is a
+   standing ladder) DONE — see current state.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
    message): $stop-vs-$finish resume; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
@@ -108,8 +118,9 @@ products, like VCS:
    SimExportIR.hs); symOrd char-wise compare; Fifo/RWire arena-
    attached peek staleness; central-loop negedge overcount; link
    feature-probe (nm the staticlib for LLVM refs); fence mode-
-   awareness; prime()'s detached compile workers vs dlclose; add
-   module.verify() in debug codegen builds.
+   awareness; add module.verify() in debug codegen builds.
+   (prime()'s detached compile workers vs dlclose: FIXED — see
+   COMPILE-WORKER JOIN above.)
 3. Hygiene: sysCRCTest1's link fence flag now REPRODUCES on an idle
    box (0.40-0.45 vs baseline 0.22, b3_link ~1.3-1.5s) on BOTH the
    b8691ab4 and pre-fix binaries — binary-independent drift, so the
