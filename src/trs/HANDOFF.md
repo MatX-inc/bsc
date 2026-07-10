@@ -62,8 +62,15 @@ products, like VCS:
   limit).  Probes: gcd/vcdtcl/bdpi dual-engine byte-identical;
   async stop+resume 5/5 divergence-free.  Witness: oracle.cmd
   (battery, engines=interp,jit).  STILL QUEUED from the oracle list:
-  trs_* control entry points; a deterministic ASYNC battery
-  witness needs a tunable-wall design.
+  a deterministic ASYNC battery witness needs a tunable-wall design.
+- TRS_* NAMESPACE (task #10, last rung): trs_engine_count /
+  trs_engine_kind / trs_oracle_check (on-demand lockstep+state
+  checkpoint) live beside the frozen bk_* surface (the export map
+  already whitelisted the prefix).  Witness: capi_witness.c — the
+  battery's first DIRECT C-API test (dlopens the model, no bluetcl;
+  line-buffered C stdio so lines interleave with Rust's design
+  output deterministically).  trs_advance-with-rich-StopCond is
+  deferred until a consumer exists (speculative ABI otherwise).
 - STATE COMPARE (oracle, final rung): at every stop the compare now
   also walks ARCHITECTURAL STATE — every prim sub-symbol, scalars
   and range entries, read per engine via prim_sym_read[_range]

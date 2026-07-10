@@ -9,7 +9,7 @@
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
 # local witnesses (FinishPeek, bdpi, oracle, oracleaot,
-# finishpeekaot, oracleprims, vcdtcl: 29 total).
+# finishpeekaot, oracleprims, capi_witness, vcdtcl: 30 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -152,6 +152,26 @@ if [ -x ./ref_sysFinishPeek ]; then
     export TRS_CAPI_ENGINES=aot
     check sysFinishPeek finishpeekaot.cmd
     export TRS_CAPI_ENGINES=interp
+fi
+# trs_* namespace (task #10): direct C-API witness — dlopen the
+# model without bluetcl, drive the bk_ lifecycle, exercise engine
+# queries + the on-demand oracle checkpoint.  Assertions are ours
+# (no reference to mirror): compare against a literal expectation
+if [ -f ./b3_sysFinishPeek.so ] && cc -o capi_witness capi_witness.c -ldl 2>cc.log; then
+    TRS_CAPI_ENGINES=interp,aot ./capi_witness ./b3_sysFinishPeek.so \
+        sysFinishPeek > capi_witness.out 2>capi_witness.err
+    rc=$?
+    printf 'engines 2: interp aot\nkind-oob null\nfinishing at 1000000 mark 0\noracle 0\nfinished 1 status 0\nshutdown ok\n' \
+        > capi_witness.want
+    if [ "$rc" = 0 ] && cmp -s capi_witness.out capi_witness.want; then
+        echo "PASS capi_witness (trs_* namespace)"
+    else
+        echo "FAIL capi_witness (rc=$rc)"
+        diff capi_witness.want capi_witness.out | head -5
+        fail=1
+    fi
+else
+    echo "FAIL capi_witness (cc)"; fail=1
 fi
 # VCD-under-Tcl (task #10): `sim vcd <file>`/off/on -> the three
 # bk_* VCD controls, served by the interp engine's writer.  stdout

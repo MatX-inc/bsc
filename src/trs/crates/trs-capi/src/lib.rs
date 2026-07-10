@@ -1025,6 +1025,50 @@ pub extern "C" fn bk_fataled(hdl: *mut c_void) -> u8 {
 }
 
 // =================================================================
+// trs_* namespace (docs/TCL-CAPI.md): our capabilities beside the
+// FROZEN bk_* surface — engine queries and oracle control.  The
+// interactive link's export map whitelists both prefixes.
+
+/// `trs_engine_count`: engines in this session; 0 while an async
+/// run holds them (bk_sync first).
+#[no_mangle]
+pub extern "C" fn trs_engine_count(hdl: *mut c_void) -> u32 {
+    state(hdl).engines.len() as u32
+}
+
+/// `trs_engine_kind`: engine i's kind as a static NUL-terminated
+/// string ("interp" | "jit" | "aot"); NULL out of range or while an
+/// async run holds the engines.
+#[no_mangle]
+pub extern "C" fn trs_engine_kind(hdl: *mut c_void, i: u32) -> *const c_char {
+    match state(hdl).engines.get(i as usize).map(|e| e.kind) {
+        Some(EngineKind::Interp) => b"interp\0".as_ptr() as *const c_char,
+        Some(EngineKind::Jit) => b"jit\0".as_ptr() as *const c_char,
+        Some(EngineKind::Aot) => b"aot\0".as_ptr() as *const c_char,
+        None => std::ptr::null(),
+    }
+}
+
+/// `trs_oracle_check`: run the lockstep + architectural-state
+/// compare NOW, at any stop point (bk_advance already runs it at
+/// every stop; this is for scripts that want an explicit checkpoint).
+/// 0 = agree (or single engine), 1 = divergence (reported on stderr,
+/// fatal flag flipped), 2 = engines unavailable (async run in
+/// flight — bk_sync first).
+#[no_mangle]
+pub extern "C" fn trs_oracle_check(hdl: *mut c_void) -> u8 {
+    let st = state(hdl);
+    if st.engines.is_empty() {
+        return 2;
+    }
+    if oracle_check(&mut st.engines) {
+        st.exit_status = 1;
+        return 1;
+    }
+    0
+}
+
+// =================================================================
 // Misc
 
 #[repr(C)]
