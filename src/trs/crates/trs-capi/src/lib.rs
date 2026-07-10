@@ -211,6 +211,11 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
                 if kind == EngineKind::Jit {
                     interp.arm_jit();
                 }
+                if !engines.is_empty() {
+                    // secondary oracle engines: output suppressed,
+                    // state runs — lockstep-compared at every stop
+                    interp.set_quiet();
+                }
                 engines.push(Engine { interp, kind });
             }
             Err(e) => {
@@ -802,6 +807,53 @@ pub extern "C" fn bk_set_interactive(hdl: *mut c_void) {
     state(hdl).interactive = true;
 }
 
+/// Oracle lockstep compare at a stop (docs/TCL-CAPI.md): every
+/// secondary must agree with the primary on time, per-clock edge
+/// counts, and finish state.  A divergence reports the instant and
+/// the mismatching quantity to stderr, then flips the primary's
+/// fatal flag so scripts stop AT the divergence.  Returns true iff
+/// divergent.  (Architectural-state compare rides the symbol-tree
+/// work queued with AOT engine construction.)
+fn oracle_check(engines: &mut [Engine]) -> bool {
+    if engines.len() < 2 {
+        return false;
+    }
+    let (p, rest) = engines.split_first_mut().unwrap();
+    let pt = p.interp.now();
+    let pc = p.interp.clock_info();
+    let pf = p.interp.is_finished();
+    let mut msgs: Vec<String> = Vec::new();
+    for (i, e) in rest.iter_mut().enumerate() {
+        let n = i + 1;
+        let t = e.interp.now();
+        if t != pt {
+            msgs.push(format!("engine {n}: time {t} vs primary {pt}"));
+        }
+        for (ci, (a, b)) in
+            pc.iter().zip(e.interp.clock_info().iter()).enumerate()
+        {
+            if (a.cycles, a.neg_edges) != (b.cycles, b.neg_edges) {
+                msgs.push(format!(
+                    "engine {n}: clock {ci} edges {}+{} vs primary {}+{}",
+                    b.cycles, b.neg_edges, a.cycles, a.neg_edges
+                ));
+            }
+        }
+        let f = e.interp.is_finished();
+        if f != pf {
+            msgs.push(format!("engine {n}: finished {f} vs primary {pf}"));
+        }
+    }
+    if msgs.is_empty() {
+        return false;
+    }
+    for m in &msgs {
+        eprintln!("trs oracle: divergence at t={pt}: {m}");
+    }
+    p.interp.mark_fatal();
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
     let st = state(hdl);
@@ -838,11 +890,36 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
         let running2 = running.clone();
         let join = std::thread::spawn(move || {
             let mut rc = BK_SUCCESS;
-            for e in &mut engines.0 {
-                let r = e.interp.advance_until(&cond);
+            let mut it = engines.0.iter_mut();
+            if let Some(p) = it.next() {
+                let r = p.interp.advance_until(&cond);
                 if r != 0 {
                     rc = r;
                 }
+                // secondaries catch up to the primary's ACTUAL stop:
+                // bk_abort_now may have fired mid-run, and the shared
+                // flag would otherwise halt them at a random earlier
+                // instant (false divergence).  Aborts are slice-
+                // aligned, so "every timeslice <= primary.now" is
+                // exactly the primary's state — the at_times contract.
+                // (Edge-count targets are wrong here: the loop's
+                // slice-end check breaks on ANY reached limit, and the
+                // trailing direction's count is reached one slice
+                // before the leading one's.)
+                let target = trs_interp::StopCond {
+                    max_cycles: u64::MAX,
+                    at_times: vec![p.interp.now()],
+                    ..Default::default()
+                };
+                for e in it {
+                    let r = e.interp.advance_until(&target);
+                    if r != 0 {
+                        rc = r;
+                    }
+                }
+            }
+            if oracle_check(&mut engines.0) {
+                rc = 1;
             }
             running2.store(false, Ordering::SeqCst);
             (engines, rc)
@@ -851,13 +928,16 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
         return BK_SUCCESS;
     }
     let mut rc = BK_SUCCESS;
-    // primary first (owns stdout); oracle comparison lands with the
-    // quiet flag for secondaries
+    // primary first (owns stdout); quiet secondaries follow, then the
+    // lockstep compare
     for e in &mut st.engines {
         let r = e.interp.advance_until(&cond);
         if r != 0 {
             rc = r;
         }
+    }
+    if oracle_check(&mut st.engines) {
+        rc = 1;
     }
     st.exit_status = rc;
     // UI events at or before the stop time have fired

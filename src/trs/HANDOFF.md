@@ -37,10 +37,10 @@ products, like VCS:
   (N=32: 27.4s vs 150.1s); run ahead except N=32 where the deficit
   is O(instances) STARTUP (type-keyed analysis is the queued fix).
   bsc's own frontend is everyone's wall (511s at N=32).
-- INTERACTIVE: battery 25/25 BYTE-IDENTICAL vs reference Bluesim
+- INTERACTIVE: battery 26/26 BYTE-IDENTICAL vs reference Bluesim
   (tests/interactive/run.sh mirrors testsuite/bsc.bluesim/
-  interactive + local FinishPeek, bdpi, vcdtcl witnesses).  Async
-  runs on the jit engine (capability tiers: peek tests pin
+  interactive + local FinishPeek, bdpi, oracle, vcdtcl witnesses).
+  Async runs on the jit engine (capability tiers: peek tests pin
   engines=interp).  Model .so is 49MB after gc-sections/strip.
 - PACKAGING (task #10): `make install` in src/trs builds+
   installs libtrs_capi.a next to the binary (jit iff
@@ -48,6 +48,23 @@ products, like VCS:
   buildable).  BDPI companions travel with interactive models:
   link --interactive copies <model>.bdpi.so; bk_init dladdr-locates
   its own .so and loads the companion into every engine.
+- ORACLE MODE (task #10 rung 2): secondary engines run QUIET —
+  console/file/VCD sinks suppressed ($fopen(w) allocates an FSlot::
+  Sink so design-visible fd keys match; read-mode opens stay real;
+  $fatal still latches state), lockstep-compared against the primary
+  at every stop (time, per-clock edge counts, finished) — divergence
+  reports on stderr and flips the fatal flag.  bk_abort_now is now
+  SLICE-ALIGNED (the code allowed mid-instant stops; the contract
+  and the oracle catch-up need whole slices), and async secondaries
+  catch up to the primary's stop via at_times=[primary.now] (edge-
+  count targets are wrong: the slice-end check fires on ANY reached
+  limit).  Probes: gcd/vcdtcl/bdpi dual-engine byte-identical;
+  async stop+resume 5/5 divergence-free.  Witness: oracle.cmd
+  (battery, engines=interp,jit).  STILL QUEUED from the oracle list:
+  architectural-state compare at stops (needs per-engine symbol
+  peeks), AOT engine construction from the artifact pair, trs_*
+  control entry points; a deterministic ASYNC battery witness needs
+  a tunable-wall design.
 - COMPILE-WORKER JOIN (review backlog closed): short jit-engine
   interactive sessions segfaulted 5/5 at teardown — detached body-
   compile workers still executing model-.so code when bluetcl
@@ -96,7 +113,7 @@ products, like VCS:
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
 - Local ladders: tests/regress/run.sh (6), tests/vcd/run.sh (10),
-  tests/interactive/run.sh (25; needs TRS_CAPI_LIB=<libtrs_capi.a>),
+  tests/interactive/run.sh (26; needs TRS_CAPI_LIB=<libtrs_capi.a>),
   plus sudoku + sysMips byte-parity from kept .bir (copy designs to a
   STABLE dir — sweeps rm -rf their work dirs).
 - Traps: TRS_JIT env is is_none()-tested — ANY value (even 0)
@@ -108,11 +125,11 @@ products, like VCS:
 
 ## NEXT UP (in order)
 
-1. Finish task #10 (capi): ORACLE mode (secondary-engine quiet
-   flag, lockstep compare at stops, AOT engine construction from the
-   artifact pair, trs_* control entry points).  VCD-under-Tcl and
-   packaging (capi lib install, BDPI companions; the battery is a
-   standing ladder) DONE — see current state.
+1. Finish task #10 (capi): AOT engine construction from the
+   artifact pair; architectural-state lockstep compare (per-engine
+   symbol peeks); trs_* control entry points.  Quiet flag +
+   time/edge/finish lockstep, VCD-under-Tcl, and packaging DONE —
+   see current state.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
    message): $stop-vs-$finish resume; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the

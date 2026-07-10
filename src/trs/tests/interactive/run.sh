@@ -8,7 +8,8 @@
 #
 # Matrix mirrored from testsuite/bsc.bluesim/interactive/
 # interactive.exp — keep in sync (22 sim_output assertions), plus
-# local witnesses at the end (FinishPeek, bdpi, vcdtcl: 25 total).
+# local witnesses at the end (FinishPeek, bdpi, oracle, vcdtcl:
+# 26 total).
 #
 #   BSC=/path/bsc TRS=/path/trs TRS_CAPI_LIB=/path/libtrs_capi.a \
 #       sh run.sh [workdir]
@@ -128,6 +129,14 @@ fi
 if build BdpiMin.bsv sysBdpiMin ops.c; then
     export TRS_CAPI_ENGINES=jit
     check sysBdpiMin bdpi.cmd
+    export TRS_CAPI_ENGINES=interp
+fi
+# ORACLE mode (task #10): interp primary + QUIET jit secondary,
+# lockstep-compared at every stop — the full gcd session must stay
+# byte-identical to the single-engine reference
+if [ -x ./ref_mkTbGCD ]; then
+    export TRS_CAPI_ENGINES=interp,jit
+    check mkTbGCD oracle.cmd
     export TRS_CAPI_ENGINES=interp
 fi
 # VCD-under-Tcl (task #10): `sim vcd <file>`/off/on -> the three

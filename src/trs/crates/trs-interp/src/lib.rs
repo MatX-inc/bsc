@@ -141,6 +141,11 @@ pub struct Interp {
     /// record last-computed def values / method calls for VCD dumps (set
     /// when -V is given or the design contains a $dump* task)
     vcd_trace: bool,
+    /// secondary oracle engine (docs/TCL-CAPI.md): every output sink
+    /// is suppressed — console, design files ($fopen(w) -> Sink), and
+    /// VCD — while all STATE effects (including $finish/$fatal flags
+    /// and file reads) run normally so lockstep compare is meaningful
+    quiet: bool,
     /// VCD file requested on the command line (-V), consumed at run()
     vcd_file_pending: Option<String>,
     /// last computed value of each def, per instance — the C++ member
@@ -282,6 +287,10 @@ enum FSlot {
     Stdout,
     Stderr,
     File(std::fs::File),
+    /// quiet-engine write-mode $fopen: the slot (and its design-
+    /// visible key) exists so fd values match the primary engine
+    /// exactly, but nothing touches the filesystem
+    Sink,
     Closed,
 }
 
@@ -584,6 +593,7 @@ impl Interp {
             initial_asserts: Vec::new(),
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
+            quiet: false,
             vcd_file_pending: None,
             vcd_def_vals: HashMap::new(),
             vcd_meth_calls: HashMap::new(),
@@ -1708,6 +1718,9 @@ impl Interp {
     /// fanning out to each set bit (bit 0 = stdout).
     fn write_fd(&mut self, key: u64, text: &str) {
         use std::io::Write;
+        if self.quiet {
+            return; // oracle secondary: every write sink suppressed
+        }
         let write_slot = |s: &mut FSlot| match s {
             FSlot::Stdout => print!("{text}"),
             FSlot::Stderr => eprint!("{text}"),
@@ -1742,7 +1755,7 @@ impl Interp {
         if key > 0x8000_0002 {
             let idx = (key - 0x8000_0000) as usize;
             if let Some(s) = self.fd_files.get_mut(idx) {
-                if matches!(s, FSlot::File(_)) {
+                if matches!(s, FSlot::File(_) | FSlot::Sink) {
                     *s = FSlot::Closed;
                 }
             }
@@ -1752,7 +1765,7 @@ impl Interp {
             while k != 0 {
                 if k & 1 == 1 {
                     if let Some(s) = self.mcd_files.get_mut(i) {
-                        if matches!(s, FSlot::File(_)) {
+                        if matches!(s, FSlot::File(_) | FSlot::Sink) {
                             *s = FSlot::Closed;
                         }
                     }
@@ -1830,6 +1843,36 @@ impl Interp {
     }
 
     fn foreign_action(&mut self, name: &str, args: &[Arg], loc: &str) {
+        // oracle secondary: console output and the VCD task family are
+        // suppressed wholesale ($f* writes die in write_fd; Sink slots
+        // cover the files).  $fatal is NOT in this list — its finished/
+        // fataled state must still latch (print gated in its arm).
+        if self.quiet
+            && matches!(
+                name,
+                "$display"
+                    | "$displayb"
+                    | "$displayo"
+                    | "$displayh"
+                    | "$write"
+                    | "$writeb"
+                    | "$writeo"
+                    | "$writeh"
+                    | "$error"
+                    | "$warning"
+                    | "$info"
+                    | "$fflush"
+                    | "$dumpfile"
+                    | "$dumpvars"
+                    | "$dumpon"
+                    | "$dumpoff"
+                    | "$dumpall"
+                    | "$dumplimit"
+                    | "$dumpflush"
+            )
+        {
+            return;
+        }
         if self.finished.is_some()
             && matches!(
                 name,
@@ -1984,9 +2027,14 @@ impl Interp {
                     Some((Arg::Val(_, _), rest)) => rest,
                     _ => args,
                 };
-                let mut errs = Vec::new();
-                println!("{}", format::format_args(rest, 10, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
+                if !self.quiet {
+                    let mut errs = Vec::new();
+                    println!(
+                        "{}",
+                        format::format_args(rest, 10, self.now, loc, &mut errs)
+                    );
+                    emit_output_errors(&errs);
+                }
                 self.fataled = true;
                 self.finished = Some(1);
             }
@@ -2050,10 +2098,17 @@ impl Interp {
                 // one-arg form = MCD (always write mode); two-arg = fd
                 let mcd = !matches!(args.get(1), Some(Arg::Str(_)));
                 let write_mode = !matches!(args.get(1), Some(Arg::Str(m)) if m.starts_with('r'));
-                let f = if write_mode {
-                    std::fs::File::create(&path)
+                // oracle secondary: a write-mode open would truncate the
+                // file the primary just wrote — allocate a Sink slot so
+                // the design-visible key matches without touching the
+                // filesystem.  Read-mode opens stay real (reads feed
+                // design state, which must track the primary).
+                let f = if self.quiet && write_mode {
+                    Ok(FSlot::Sink)
+                } else if write_mode {
+                    std::fs::File::create(&path).map(FSlot::File)
                 } else {
-                    std::fs::File::open(&path)
+                    std::fs::File::open(&path).map(FSlot::File)
                 };
                 match f {
                     Ok(f) => {
@@ -2061,20 +2116,20 @@ impl Interp {
                             // registerFile(true,..): append below 31 bits,
                             // else reuse a closed slot
                             if self.mcd_files.len() < 31 {
-                                self.mcd_files.push(FSlot::File(f));
+                                self.mcd_files.push(f);
                                 1u64 << (self.mcd_files.len() - 1)
                             } else if let Some(i) = self
                                 .mcd_files
                                 .iter()
                                 .position(|s| matches!(s, FSlot::Closed))
                             {
-                                self.mcd_files[i] = FSlot::File(f);
+                                self.mcd_files[i] = f;
                                 1u64 << i
                             } else {
                                 return Value::zero(w.max(1));
                             }
                         } else {
-                            self.fd_files.push(FSlot::File(f));
+                            self.fd_files.push(f);
                             0x8000_0000 + (self.fd_files.len() as u64 - 1)
                         };
                         Value::from_u64(w.max(32), key)
@@ -3779,11 +3834,15 @@ impl Interp {
                 p.store(t, std::sync::atomic::Ordering::Relaxed);
             }
             // bk_abort_now: end-of-cycle stop — the finished slice is
-            // complete, the popped edge waits for the next advance
-            if cond
-                .abort
-                .as_ref()
-                .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+            // complete, the popped edge waits for the next advance.
+            // Same-instant events still run (t == now): stopping mid-
+            // instant would leave a state no deterministic re-run can
+            // reach (the oracle catch-up replays whole slices)
+            if t != self.now
+                && cond
+                    .abort
+                    .as_ref()
+                    .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed))
             {
                 heap.push(Reverse((t, prio, ci, pos)));
                 break;
@@ -4284,6 +4343,19 @@ impl Interp {
     /// simulation computed, not a fresh re-evaluation.
     pub fn set_sym_trace(&mut self) {
         self.vcd_trace = true;
+    }
+
+    /// Secondary oracle engine: suppress every output sink (console,
+    /// design files, VCD) while state effects run normally.
+    pub fn set_quiet(&mut self) {
+        self.quiet = true;
+    }
+
+    /// Oracle divergence protocol (docs/TCL-CAPI.md): flip the fatal
+    /// flag so scripts stop AT the divergence (bluesim.tcl exits 1
+    /// via `sim isfatal`).
+    pub fn mark_fatal(&mut self) {
+        self.fataled = true;
     }
 
     // ===============
