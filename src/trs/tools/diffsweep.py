@@ -147,6 +147,12 @@ def one_test(job):
     )
     if has_bdpi:
         for f in os.listdir(testdir):
+            # Verilog-VPI wrapper residue (vpi_wrapper_*.c,
+            # vpi_startup_array.c) is generated IN-TREE by testsuite
+            # Verilog runs and needs vpi_user.h — never a BDPI link
+            # input (40 phantom LINK_FAILs after a fullparallel run)
+            if f.startswith("vpi_"):
+                continue
             if f.endswith(".c"):
                 shutil.copy(os.path.join(testdir, f), wk)
                 cfiles.append(f)
