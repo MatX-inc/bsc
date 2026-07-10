@@ -1,5 +1,12 @@
 # TRS — handoff (rewritten 2026-07-09, start here)
 
+NOTE 2026-07-10: the live branch is claude/trs-fst — the whole
+history REBASED onto personal/bluesim-fst (PR #1027, FST support)
+plus the trs FST implementation.  claude/trs fast-forwards
+to it once the rebase gates finish (sweep parity DONE 2x0-DIFF;
+pending: idle re-verify of 7 load-victim heavies, full testsuite,
+fence rebaseline at the new-bsc equilibrium).
+
 Branch `claude/trs`, all work committed and pushed through
 cdfd7611.  ALWAYS `git push personal` — NEVER bare `git push origin`
 (origin is B-Lang-org; a stray push once created a public branch).
@@ -184,10 +191,26 @@ products, like VCS:
 
 ## NEXT UP (in order)
 
-1. Finish task #10 (capi): architectural-state lockstep compare
-   (per-engine symbol peeks); trs_* control entry points.  AOT
-   engine construction, quiet flag + time/edge/finish lockstep,
-   VCD-under-Tcl, and packaging DONE — see current state.
+1. FST REBASE (task #7, IN FLIGHT 2026-07-10): claude/trs-fst
+   = all 264 commits rebased onto personal/bluesim-fst + the trs
+   FST feature.  DONE: GenABin 139th Flags binder (the one semantic
+   rebase conflict — both parents grew the record); FST-era loader
+   compat (bk_get_VCD_file_name hard-required, bk_set/get_waveform_
+   format); COMMON WAVE ENGINE in vcd.rs (format-agnostic buffering/
+   state machine/limits; Text sink = frozen VCD bytes, Fst sink =
+   fst.rs over the vendored libfst built with the reference's exact
+   config — scopes carry MODULE TYPE, prims pass NULL like the
+   reference); format-dependent default dump file; +bscvcd/+bscfst
+   batch plusargs; `sim fst` witness (fsttcl.cmd) + FST twin in the
+   vcd ladder (fstcmp.py semantic compare — FST bytes embed
+   timestamps).  Reference-vs-trs FST: SEMANTIC MATCH (batch +
+   interactive).  diffsweep hardened against in-tree VPI wrapper
+   residue (fullparallel leaves it; 40 phantom LINK_FAILs).
+   PENDING: fstscopes module-type cross-check vs reference FST
+   (needs make install-extra), -dump-formats availability gating
+   for our models (we carry both writers unconditionally — decide
+   whether to mirror the compiled-in restriction), $dumplimit FST
+   estimate witness.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
    message): multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
