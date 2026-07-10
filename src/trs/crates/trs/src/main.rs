@@ -188,6 +188,8 @@ fn main() -> ExitCode {
             // anything else is an error
             let mut max_cycles = u64::MAX;
             let mut plusargs: Vec<String> = Vec::new();
+            let mut wave: Option<(trs_interp::WaveFormat, Option<String>)> =
+                None;
             let mut vcd_file: Option<String> = None;
             let mut code_so: Option<String> = None;
             let mut script_cmds = String::new();
@@ -297,7 +299,28 @@ fn main() -> ExitCode {
                             "dump.vcd".to_string()
                         });
                     }
-                    p if p.starts_with('+') => plusargs.push(p[1..].to_string()),
+                    p if p.starts_with('+') => {
+                        // +bscvcd / +bscfst select waveform dumping
+                        // like bluesim.tcl (and stay design-visible
+                        // plusargs, as in Verilog); a named file
+                        // rides after '='
+                        if p == "+bscvcd" {
+                            wave = Some((trs_interp::WaveFormat::Vcd, None));
+                        } else if let Some(f) = p.strip_prefix("+bscvcd=") {
+                            wave = Some((
+                                trs_interp::WaveFormat::Vcd,
+                                (!f.is_empty()).then(|| f.to_string()),
+                            ));
+                        } else if p == "+bscfst" {
+                            wave = Some((trs_interp::WaveFormat::Fst, None));
+                        } else if let Some(f) = p.strip_prefix("+bscfst=") {
+                            wave = Some((
+                                trs_interp::WaveFormat::Fst,
+                                (!f.is_empty()).then(|| f.to_string()),
+                            ));
+                        }
+                        plusargs.push(p[1..].to_string());
+                    }
                     other => {
                         eprintln!("Error: invalid option '{other}'");
                         return ExitCode::from(2);
@@ -310,6 +333,7 @@ fn main() -> ExitCode {
                     max_cycles,
                     &plusargs,
                     vcd_file.as_deref(),
+                    wave.clone(),
                     code_so.as_deref(),
                     &script_cmds,
                 );
@@ -319,6 +343,7 @@ fn main() -> ExitCode {
                 max_cycles,
                 &plusargs,
                 vcd_file.as_deref(),
+                wave,
                 code_so.as_deref(),
             ) {
                 Ok(code) => {
@@ -546,6 +571,7 @@ fn run_script(
     max_cycles: u64,
     plusargs: &[String],
     vcd: Option<&str>,
+    wave: Option<(trs_interp::WaveFormat, Option<String>)>,
     code: Option<&str>,
     script: &str,
 ) -> ExitCode {
@@ -556,6 +582,9 @@ fn run_script(
             return ExitCode::FAILURE;
         }
     };
+    if let Some((f, file)) = wave {
+        interp.wave_request(f, file);
+    }
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }

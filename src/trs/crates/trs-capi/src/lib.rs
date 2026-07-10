@@ -1266,41 +1266,51 @@ pub extern "C" fn bk_get_VCD_file_name(hdl: *mut c_void) -> *const c_char {
 }
 
 /// `bk_set_waveform_format` (bluesim_kernel_api.h, FST era): select
-/// "vcd" or "fst"; fails with a stderr message when the model lacks
-/// support for the format.  The trs debug tier ships VCD; FST is
-/// queued — until then "fst" answers in the reference's
-/// not-built-with-support vocabulary.  The loader tolerates this
-/// symbol being absent but we mirror the current contract.
+/// "vcd" or "fst" — the trs interp tier carries BOTH writers (the
+/// reference's -dump-formats gates which writers a C++ model was
+/// COMPILED with; an interpreter has no codegen to elide).  Unknown
+/// formats answer in the reference's exact vocabulary.  Waveforms
+/// need the interp tier like every other VCD control.
 #[no_mangle]
 pub extern "C" fn bk_set_waveform_format(
     hdl: *mut c_void,
     format: *const c_char,
 ) -> i32 {
-    let _ = state(hdl);
-    if format.is_null() {
+    let st = state(hdl);
+    let name = if format.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(format) }.to_str().unwrap_or("")
+    };
+    let fmt = match name {
+        "vcd" => trs_interp::WaveFormat::Vcd,
+        "fst" => trs_interp::WaveFormat::Fst,
+        other => {
+            eprintln!(
+                "Error: unknown waveform format '{other}' \
+                 (supported: vcd, fst)"
+            );
+            return BK_ERROR;
+        }
+    };
+    if !vcd_capable(st) {
         return BK_ERROR;
     }
-    match unsafe { CStr::from_ptr(format) }.to_str() {
-        Ok("vcd") => BK_SUCCESS,
-        Ok("fst") => {
-            eprintln!(
-                "Error: this model was not built with support for \
-                 the 'fst' waveform format"
-            );
-            BK_ERROR
-        }
-        _ => {
-            eprintln!("Error: unknown waveform format");
-            BK_ERROR
-        }
-    }
+    st.primary().wave_set_format(fmt);
+    BK_SUCCESS
 }
 
-/// `bk_get_waveform_format`: the active format ("vcd" until the FST
-/// writer lands).
+/// `bk_get_waveform_format`: the active format.
 #[no_mangle]
-pub extern "C" fn bk_get_waveform_format(_hdl: *mut c_void) -> *const c_char {
-    b"vcd\0".as_ptr() as *const c_char
+pub extern "C" fn bk_get_waveform_format(hdl: *mut c_void) -> *const c_char {
+    let st = state(hdl);
+    let fst = !st.engines.is_empty()
+        && st.primary().wave_format() == trs_interp::WaveFormat::Fst;
+    if fst {
+        b"fst\0".as_ptr() as *const c_char
+    } else {
+        b"vcd\0".as_ptr() as *const c_char
+    }
 }
 
 /// External clock definition: master-mode models (bluetcl always

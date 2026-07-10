@@ -1983,7 +1983,7 @@ impl Interp {
             return None;
         }
         let trace = std::env::var_os("TRS_JIT_TRACE").is_some();
-        if self.vcd_trace || self.vcd_file_pending.is_some() {
+        if self.vcd_trace || self.wave_pending.is_some() {
             if trace {
                 eprintln!("trs jit: off (VCD tracing)");
             }

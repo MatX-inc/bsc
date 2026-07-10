@@ -54,4 +54,21 @@ check CDiv sysCDiv -m 25
 # buffered changes at shutdown (vcd.cxx flush_changes early-return
 # at t==now) — the post-finish state writes must NOT appear
 check FinishEdge sysFinishEdge -m 20
+# FST twin (common wave engine): the FST dump decoded via fst2vcd
+# must carry the same scope tree, vars (incl. alias groups), and
+# per-time change sets as the VCD from the same engine.  FST bytes
+# embed a timestamp, so parity is semantic (fstcmp.py).
+if command -v fst2vcd > /dev/null 2>&1; then
+    rm -f fe.fst fe.vcd
+    $TRS run sysFinishEdge.bir +bscfst=fe.fst > /dev/null 2>&1
+    $TRS run sysFinishEdge.bir -V fe.vcd > /dev/null 2>&1
+    if fst2vcd fe.fst > fe_dec.vcd 2>/dev/null \
+       && python3 "$SRC/fstcmp.py" fe_dec.vcd fe.vcd > /dev/null; then
+        echo "PASS FinishEdge (fst twin)"
+    else
+        echo "FAIL FinishEdge (fst twin)"; fail=1
+    fi
+else
+    echo "SKIP fst twin (no fst2vcd)"
+fi
 exit $fail

@@ -1,18 +1,20 @@
-//! VCD dumping, mirroring Bluesim's `vcd.cxx` byte-for-byte (see
-//! docs/VCD-CONTRACT.md):
+//! Waveform dump ENGINE, mirroring Bluesim's `vcd.cxx` (see
+//! docs/VCD-CONTRACT.md): change buffering with combinational
+//! back-dating (`time_of_change`/`min_pending`), the dump-type state
+//! machine, task bracketing, id allocation, and the file/limit
+//! policy.  The engine is FORMAT-AGNOSTIC (the reference's WaveWriter
+//! split): bytes are produced by one of two sinks —
 //!
-//! - header: `$date` (ctime text) / `$version` ("Bluespec VCD dumper
-//!   2.1") / `$timescale` (default "1 us");
-//! - `$scope module NAME $end` scopes, `$var reg W <id> <name> $end`
-//!   definitions (every var is type `reg`), base-94 printable ids
-//!   starting at '!';
-//! - `#<time>` markers, 1-bit changes as `0<id>`/`1<id>`/`x<id>`,
-//!   multi-bit as `b<binary-no-leading-zeros> <id>` / `bx <id>`;
-//! - `$dumpvars`/`$dumpoff`/`$dumpall`/`$dumpon` task sections closed
-//!   with `$end` just before the next time marker;
-//! - change buffering: combinational signals are back-dated to their
-//!   clock's previous edge (`time_of_change`) and flushed only once
-//!   every clock's combinational window has passed (`min_pending`).
+//! - Text: VCD byte-for-byte ($date/$version/$timescale header,
+//!   `$scope module NAME $end`, `$var reg W <id> <name> $end` with
+//!   base-94 printable ids, `#<time>` markers, `0<id>`/`1<id>`/
+//!   `x<id>`/`b<bits> <id>` changes, `$dump*` task sections);
+//! - Fst: the vendored libfst via crate::fst, one-to-one with the
+//!   reference's fst.cxx — including each scope's MODULE TYPE
+//!   (component field), which FST records and VCD has no place for.
+//!
+//! Formats gate at bk_set_waveform_format; the default dump file is
+//! format-dependent (dump.vcd / dump.fst).
 
 use crate::value::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -24,6 +26,12 @@ pub enum VcdState {
     Header,
     Enabled,
     Disabled,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WaveFormat {
+    Vcd,
+    Fst,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,8 +49,19 @@ enum Change {
     X(u32),
 }
 
+/// The format-specific byte producer (the reference's WaveWriter).
+enum Sink {
+    Text(std::fs::File),
+    Fst(crate::fst::Fst),
+}
+
 pub struct Vcd {
-    file: Option<std::fs::File>,
+    sink: Option<Sink>,
+    /// the active format (bk_set_waveform_format); the trs debug
+    /// tier carries both writers unconditionally (the reference's
+    /// -dump-formats gates which writers are COMPILED INTO a C++
+    /// model — an interpreter has no codegen to elide)
+    format: WaveFormat,
     filename: Option<String>,
     pub state: VcdState,
     pub enabled: bool,
@@ -70,7 +89,8 @@ pub struct Vcd {
 impl Vcd {
     pub fn new() -> Vcd {
         Vcd {
-            file: None,
+            sink: None,
+            format: WaveFormat::Vcd,
             filename: None,
             state: VcdState::Off,
             enabled: false,
@@ -123,17 +143,67 @@ impl Vcd {
     }
 
     // ===============
-    // file control (bk_set_VCD_file / vcd_set_state)
+    // file control (bk_set_VCD_file / vcd_set_state /
+    // bk_set_waveform_format)
+
+    /// default_file_name (vcd.cxx:312): format-dependent.
+    pub fn default_file_name(&self) -> &'static str {
+        match self.format {
+            WaveFormat::Vcd => "dump.vcd",
+            WaveFormat::Fst => "dump.fst",
+        }
+    }
+
+    pub fn format(&self) -> WaveFormat {
+        self.format
+    }
+
+    /// bk_set_waveform_format's switch half (vcd.cxx:352-375): a
+    /// same-format set is a no-op; otherwise any dump in progress
+    /// ENDS — dumping disabled (with the closing file's pending
+    /// changes flushed, no final all-X or checkpoint) and the file
+    /// closed; re-enabling writes a file in the new format.  Format
+    /// availability is the CALLER's check (capi): the interp engine
+    /// carries both writers.
+    pub fn set_format(&mut self, fmt: WaveFormat, now: u64) {
+        if fmt == self.format {
+            return;
+        }
+        self.enabled = false;
+        self.go_xs = false;
+        self.checkpoint = false;
+        if self.sink.is_some() {
+            // flush buffered changes to the closing file
+            self.changes_now = false;
+            self.min_pending = now;
+            self.flush_changes();
+            if self.need_end_task {
+                self.finish_task_block();
+            }
+        }
+        self.changes.clear();
+        self.tasks.clear();
+        self.sink = None;
+        self.filename = None;
+        self.state = VcdState::Off;
+        self.format = fmt;
+    }
 
     pub fn set_file(&mut self, name: &str) -> Result<(), ()> {
-        if self.file.is_some() {
+        if self.sink.is_some() {
             self.flush_all_pending();
-            self.file = None;
+            self.sink = None;
         }
         self.state = VcdState::Off;
-        match std::fs::File::create(name) {
-            Ok(f) => {
-                self.file = Some(f);
+        let sink = match self.format {
+            WaveFormat::Vcd => std::fs::File::create(name)
+                .map(Sink::Text)
+                .map_err(|e| eprintln!("{name}: {e}")),
+            WaveFormat::Fst => crate::fst::Fst::create(name).map(Sink::Fst),
+        };
+        match sink {
+            Ok(s) => {
+                self.sink = Some(s);
                 self.filename = Some(name.to_string());
                 // C++ zero-inits last_time_written, which suppresses the
                 // '#0' marker (and the task text) at the initial dump
@@ -141,8 +211,7 @@ impl Vcd {
                 self.need_end_task = false;
                 Ok(())
             }
-            Err(e) => {
-                eprintln!("{name}: {e}");
+            Err(()) => {
                 self.filename = None;
                 Err(())
             }
@@ -150,42 +219,43 @@ impl Vcd {
     }
 
     pub fn set_state(&mut self, on: bool) {
-        if on && self.file.is_none() {
-            let _ = self.set_file("dump.vcd");
+        if on && self.sink.is_none() {
+            let _ = self.set_file(self.default_file_name());
         }
         self.enabled = on;
     }
 
-    /// bk_set_VCD_file(NULL) (vcd.cxx:36): close the file, clear the
+    /// bk_set_VCD_file(NULL) (vcd.cxx): close the file, clear the
     /// name, dumping off — success.  (The reference's previous-file
     /// append branch is DEAD CODE: previous_files is never populated
     /// in vcd.cxx, so set_file's plain create mirrors re-opens
     /// bug-for-bug.)
     pub fn close_file(&mut self) {
-        if self.file.is_some() {
+        if self.sink.is_some() {
             self.flush_all_pending();
-            self.file = None;
+            self.sink = None;
         }
         self.filename = None;
         self.state = VcdState::Off;
     }
 
-    /// bk_enable_VCD_dumping (kernel.cxx:1521): idempotent; opening
-    /// the default dump.vcd can fail -> false, NOT enabled (unlike
+    /// bk_enable_VCD_dumping (kernel.cxx): idempotent; opening the
+    /// format's default file can fail -> false, NOT enabled (unlike
     /// set_state, which enables unconditionally for the $dumpon task).
     pub fn enable(&mut self) -> bool {
         if self.enabled {
             return true;
         }
-        if self.file.is_none() && self.set_file("dump.vcd").is_err() {
+        if self.sink.is_none() && self.set_file(self.default_file_name()).is_err()
+        {
             return false;
         }
         self.enabled = true;
         true
     }
 
-    /// bk_disable_VCD_dumping (kernel.cxx:1534): no-op when off; the
-    /// Xs section is deferred to the next VCD event exactly like the
+    /// bk_disable_VCD_dumping (kernel.cxx): no-op when off; the Xs
+    /// section is deferred to the next VCD event exactly like the
     /// reference (vcd_dump_xs just sets go_xs).
     pub fn disable(&mut self) {
         if !self.enabled {
@@ -211,8 +281,8 @@ impl Vcd {
     }
 
     pub fn request_checkpoint(&mut self) {
-        if self.file.is_none() {
-            let _ = self.set_file("dump.vcd");
+        if self.sink.is_none() {
+            let _ = self.set_file(self.default_file_name());
         }
         self.checkpoint = true;
     }
@@ -226,8 +296,12 @@ impl Vcd {
     }
 
     pub fn flush(&mut self) {
-        if let Some(f) = self.file.as_mut() {
-            let _ = f.flush();
+        match self.sink.as_mut() {
+            Some(Sink::Text(f)) => {
+                let _ = f.flush();
+            }
+            Some(Sink::Fst(f)) => f.flush(),
+            None => {}
         }
     }
 
@@ -258,10 +332,10 @@ impl Vcd {
     }
 
     // ===============
-    // writing
+    // writing (per-sink)
 
     fn out(&mut self, s: &str) {
-        if let Some(f) = self.file.as_mut() {
+        if let Some(Sink::Text(f)) = self.sink.as_mut() {
             let _ = f.write_all(s.as_bytes());
         }
     }
@@ -271,71 +345,118 @@ impl Vcd {
         if self.state != VcdState::Off {
             return false;
         }
-        let date = ctime_now();
-        self.out(&format!("$date\n\t{date}$end\n"));
-        self.out("$version\n\tBluespec VCD dumper 2.1\n$end\n");
         let ts = self.timescale.clone();
-        self.out(&format!("$timescale\n\t{ts}\n$end\n"));
+        match self.sink.as_mut() {
+            Some(Sink::Fst(f)) => f.write_header(&ts),
+            _ => {
+                let date = ctime_now();
+                self.out(&format!("$date\n\t{date}$end\n"));
+                self.out("$version\n\tBluespec VCD dumper 2.1\n$end\n");
+                self.out(&format!("$timescale\n\t{ts}\n$end\n"));
+            }
+        }
         self.next_seq = self.kept_seq;
         self.state = VcdState::Header;
         true
     }
 
-    pub fn scope_start(&mut self, name: &str) {
-        self.out(&format!("$scope module {name} $end\n"));
+    /// `module_type` is the name of the module the scope is an
+    /// instance of — FST records it as the scope component (the
+    /// fstscopes correlation surface); VCD has no place for it.
+    pub fn scope_start(&mut self, name: &str, module_type: Option<&str>) {
+        match self.sink.as_mut() {
+            Some(Sink::Fst(f)) => f.scope_start(name, module_type),
+            _ => self.out(&format!("$scope module {name} $end\n")),
+        }
     }
 
     pub fn scope_end(&mut self) {
-        self.out("$upscope $end\n");
+        match self.sink.as_mut() {
+            Some(Sink::Fst(f)) => f.scope_end(),
+            _ => self.out("$upscope $end\n"),
+        }
     }
 
     pub fn write_def(&mut self, id: u32, name: &str, width: u32) {
-        let ids = Self::id_str(id);
-        self.out(&format!("$var reg {width} {ids} {name} $end\n"));
+        match self.sink.as_mut() {
+            Some(Sink::Fst(f)) => f.write_def(id, name, width),
+            _ => {
+                let ids = Self::id_str(id);
+                self.out(&format!("$var reg {width} {ids} {name} $end\n"));
+            }
+        }
     }
 
     pub fn enddefinitions(&mut self) {
-        self.out("$enddefinitions $end\n");
+        match self.sink.as_mut() {
+            Some(Sink::Fst(_)) => {}
+            _ => self.out("$enddefinitions $end\n"),
+        }
     }
 
     pub fn task(&mut self, t: u64, name: &'static str) {
         self.tasks.insert(t, name);
     }
 
-    /// vcd_output_at_time: '#t' with task open/close bracketing.
+    fn finish_task_block(&mut self) {
+        match self.sink.as_mut() {
+            Some(Sink::Fst(_)) => {} // no task blocks in FST
+            _ => self.out("$end\n"),
+        }
+        self.need_end_task = false;
+    }
+
+    /// vcd_output_at_time: '#t' with task open/close bracketing
+    /// (engine policy shared by both sinks; FST maps $dumpoff/on to
+    /// blackout regions and drops the other task markers).
     fn output_at_time(&mut self, t: u64) {
         if self.last_time_written == Some(t) {
             return;
         }
         if self.need_end_task {
-            self.out("$end\n");
-            self.need_end_task = false;
+            self.finish_task_block();
         }
-        self.out(&format!("#{t}\n"));
+        match self.sink.as_mut() {
+            Some(Sink::Fst(f)) => f.write_time(t),
+            _ => self.out(&format!("#{t}\n")),
+        }
         self.last_time_written = Some(t);
         if let Some(task) = self.tasks.remove(&t) {
-            self.out(&format!("{task}\n"));
-            self.need_end_task = true;
+            match self.sink.as_mut() {
+                Some(Sink::Fst(f)) => f.task(task),
+                _ => {
+                    self.out(&format!("{task}\n"));
+                    self.need_end_task = true;
+                }
+            }
         }
     }
 
     fn print_change(&mut self, id: u32, c: &Change) {
-        let ids = Self::id_str(id);
-        match c {
-            Change::X(w) => {
-                if *w == 1 {
-                    self.out(&format!("x{ids}\n"));
-                } else {
-                    self.out(&format!("bx {ids}\n"));
-                }
-            }
-            Change::Val(v) => {
-                if v.width == 1 {
-                    let b = if v.as_u64() & 1 == 1 { '1' } else { '0' };
-                    self.out(&format!("{b}{ids}\n"));
-                } else {
-                    let s = bin_no_leading_zeros(v);
-                    self.out(&format!("b{s} {ids}\n"));
+        match self.sink.as_mut() {
+            Some(Sink::Fst(f)) => match c {
+                Change::X(_) => f.write_x(id),
+                Change::Val(v) => f.write_val(id, v),
+            },
+            _ => {
+                let ids = Self::id_str(id);
+                match c {
+                    Change::X(w) => {
+                        if *w == 1 {
+                            self.out(&format!("x{ids}\n"));
+                        } else {
+                            self.out(&format!("bx {ids}\n"));
+                        }
+                    }
+                    Change::Val(v) => {
+                        if v.width == 1 {
+                            let b = if v.as_u64() & 1 == 1 { '1' } else { '0' };
+                            self.out(&format!("{b}{ids}\n"));
+                        } else {
+                            let s = bin_no_leading_zeros(v);
+                            self.out(&format!("b{s} {ids}\n"));
+                        }
+                    }
                 }
             }
         }
@@ -409,22 +530,31 @@ impl Vcd {
         self.min_pending = now;
     }
 
-    /// vcd_check_file_size after each event.
+    /// vcd_check_file_size after each event.  Text sinks measure the
+    /// real file; FST uses fst.cxx's VCD-equivalent estimate (fstapi
+    /// only checks its own limit per ~128MB section) so a $dumplimit
+    /// stops an FST dump at the same simulation point.  On a tripped
+    /// limit the reference vcd_reset()s (the comment is written by
+    /// the VCD writer only; FST files just end at the limit).
     pub fn check_file_size(&mut self, now: u64) {
         if self.limit == 0 {
             return;
         }
-        let too_big = self
-            .file
-            .as_ref()
-            .and_then(|f| f.metadata().ok())
-            .map(|m| m.len() > self.limit)
-            .unwrap_or(false);
+        let too_big = match self.sink.as_ref() {
+            Some(Sink::Text(f)) => f
+                .metadata()
+                .map(|m| m.len() > self.limit)
+                .unwrap_or(false),
+            Some(Sink::Fst(f)) => f.limit_exceeded(self.limit),
+            None => false,
+        };
         if too_big {
-            self.out("$comment\nVCD file size limit exceeded\n$end\n");
+            if matches!(self.sink, Some(Sink::Text(_))) {
+                self.out("$comment\nVCD file size limit exceeded\n$end\n");
+            }
             self.set_final_min_pending(now);
             self.flush_all_pending();
-            self.file = None;
+            self.sink = None;
             self.filename = None;
             self.enabled = false;
             self.state = VcdState::Off;

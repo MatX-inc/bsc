@@ -10,7 +10,9 @@
 pub mod format;
 pub mod prim;
 pub mod value;
-pub mod vcd;
+pub mod fst;
+mod vcd;
+pub use vcd::WaveFormat;
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -150,8 +152,9 @@ pub struct Interp {
     /// but does NOT finish the sim — cleared at the next advance so
     /// the session resumes (the reference's resumable-$stop contract)
     stop_request: bool,
-    /// VCD file requested on the command line (-V), consumed at run()
-    vcd_file_pending: Option<String>,
+    /// batch waveform request (-V / +bscvcd / +bscfst), consumed at
+    /// the stepper build: format + file (None = the format's default)
+    wave_pending: Option<(WaveFormat, Option<String>)>,
     /// last computed value of each def, per instance — the C++ member
     /// fields persist between edges, so dumps show the value from the
     /// last time the def was computed (write_undet pattern before that)
@@ -599,7 +602,7 @@ impl Interp {
             vcd_trace: false,
             quiet: false,
             stop_request: false,
-            vcd_file_pending: None,
+            wave_pending: None,
             vcd_def_vals: HashMap::new(),
             vcd_meth_calls: HashMap::new(),
             vcd_meth_results: HashMap::new(),
@@ -2606,7 +2609,10 @@ impl Interp {
         let prims: Vec<_> = kids.iter().filter(|k| k.2).cloned().collect();
         let subs: Vec<_> = kids.iter().filter(|k| !k.2).cloned().collect();
 
-        w.scope_start(name);
+        // FST records the scope's MODULE TYPE as its component field
+        // (the fstscopes correlation surface); VCD ignores it
+        let mtype = self.s(self.d.modules[mir].name).to_string();
+        w.scope_start(name, Some(&mtype));
         let base = w.reserve_ids((mv.members.len() + mv.ports.len() + prims.len()) as u32);
 
         // clock-def loop (vcd_add_clock_def + match_hierarchy): an
@@ -2846,7 +2852,7 @@ impl Interp {
         let top = *self.inst_by_path.get("").unwrap_or(&0);
         if w.write_header() {
             self.vcd_layouts.clear();
-            w.scope_start("main");
+            w.scope_start("main", None);
             let levels = w.depth;
             self.vcd_scope_walk(&mut w, top, "top", levels);
             w.scope_end();
@@ -3560,10 +3566,19 @@ impl Interp {
                 }
             }
         }
-        // -V file from the command line
-        if let Some(f) = self.vcd_file_pending.take() {
-            if self.vcd.set_file(&f).is_ok() {
-                self.vcd.set_state(true);
+        // batch waveform selection (-V / +bscvcd / +bscfst): format
+        // first, then the named file, or the format's default via
+        // set_state (mirroring bluesim.tcl's `sim <fmt> on|<file>`)
+        if let Some((fmt, file)) = self.wave_pending.take() {
+            let now = self.now;
+            self.vcd.set_format(fmt, now);
+            match file {
+                Some(f) => {
+                    if self.vcd.set_file(&f).is_ok() {
+                        self.vcd.set_state(true);
+                    }
+                }
+                None => self.vcd.set_state(true),
             }
             self.vcd_trace = true;
         }
@@ -4455,6 +4470,27 @@ impl Interp {
         self.vcd.file_name()
     }
 
+    /// bk_set_waveform_format's engine half (the capi validates the
+    /// string): a same-format set is a no-op, otherwise any dump in
+    /// progress ends and the file closes.
+    pub fn wave_set_format(&mut self, fmt: WaveFormat) {
+        let now = self.now;
+        self.vcd.set_format(fmt, now);
+        // FST recording needs the same def/method traces as VCD
+        self.vcd_trace = true;
+    }
+
+    /// bk_get_waveform_format.
+    pub fn wave_format(&self) -> WaveFormat {
+        self.vcd.format()
+    }
+
+    /// Batch driver (+bscvcd / +bscfst): stage a waveform request
+    /// consumed at the stepper build; file None = format default.
+    pub fn wave_request(&mut self, fmt: WaveFormat, file: Option<String>) {
+        self.wave_pending = Some((fmt, file));
+    }
+
     /// Symbol-tree seed (trs-capi): per instance, (parent instance,
     /// local name, is-user-module).  Parents derive from paths; the
     /// root's local name is "" (the kernel top_symbol key).
@@ -4813,7 +4849,8 @@ pub fn load_file(
     let mut interp = Interp::new(design);
     interp.bir_hash = bir_fingerprint(&bytes);
     interp.plusargs = plusargs.to_vec();
-    interp.vcd_file_pending = vcd_file.map(str::to_string);
+    interp.wave_pending =
+        vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
     // user BDPI code lives in a companion shared object next to the .bir
     let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
     if std::path::Path::new(&so).exists() {
@@ -4830,9 +4867,13 @@ pub fn run_file(
     max_cycles: u64,
     plusargs: &[String],
     vcd_file: Option<&str>,
+    wave: Option<(WaveFormat, Option<String>)>,
     code: Option<&str>,
 ) -> Result<i32, String> {
     let mut interp = load_file(path, plusargs, vcd_file)?;
+    if let Some((f, file)) = wave {
+        interp.wave_request(f, file);
+    }
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }

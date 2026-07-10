@@ -530,7 +530,7 @@ impl Prim for Counter {
         self.vcd_base = n0;
         let bits = self.width;
         w.write_def(n0, name, bits);
-        w.scope_start(name);
+        w.scope_start(name, None);
         let mut n = n0 + 1;
         for (pname, pw) in [
             ("ADDA", 1),
@@ -2294,7 +2294,7 @@ impl Prim for CReg {
         let mut n = w.reserve_ids(3 * 5);
         self.vcd_base = n;
         w.write_def(n, name, bits);
-        w.scope_start(name);
+        w.scope_start(name, None);
         for i in 0..5 {
             w.set_clock(n, clk);
             w.write_def(n, &format!("Q_OUT_{i}"), bits);
@@ -2618,7 +2618,7 @@ impl Prim for Fifo {
         let extra = if bits > 0 { 1 } else { 0 };
         let mut n = w.reserve_ids(self.size as u32 + 6 + extra);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(clk_vcd_id, "CLK", 1);
         w.write_def(n, "RST", 1);
         n += 1;
@@ -2950,7 +2950,7 @@ impl Prim for ClockGen {
     ) {
         // bs_prim_mod_clockgen.h:40-46: single CLK_OUT var aliasing the
         // kernel-owned clock id; no ids reserved, no value dumping
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(clk_vcd_id, "CLK_OUT", 1);
         w.scope_end();
     }
@@ -3037,7 +3037,7 @@ impl Prim for SyncBit {
         // MOD_Sync1: dSyncReg1/sSyncReg
         let n = w.reserve_ids(if self.two_stage { 3 } else { 2 });
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(n, "dSyncReg1", 1);
         if self.two_stage {
             w.write_def(n + 1, "dSyncReg2", 1);
@@ -3179,7 +3179,7 @@ impl Prim for SyncPulse {
     ) {
         let n = w.reserve_ids(4);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(n, "dSyncReg1", 1);
         w.write_def(n + 1, "dSyncReg2", 1);
         w.write_def(n + 2, "dSyncPulse", 1);
@@ -3372,7 +3372,7 @@ impl Handshake {
         // backdating) and the sCLK/dCLK aliases use kernel clock 0's id
         let mut n = w.reserve_ids(12);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         for v in ["dSyncReg1", "dSyncReg2", "dLastState", "sToggleReg", "sSyncReg1",
                   "sSyncReg2", "sRDY"] {
             w.write_def(n, v, 1);
@@ -3576,7 +3576,7 @@ impl Prim for SyncReg {
         let bits = self.d_out.width;
         let n = w.reserve_ids(2);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(n, "dD_OUT", bits);
         w.write_def(n + 1, "sDataSyncIn", bits);
         let src = self.src_clk;
@@ -3734,7 +3734,7 @@ impl Prim for SyncReset {
         let _ = clk_vcd_id;
         let n = w.reserve_ids(2);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(0, "CLK", 1);
         w.write_def(n, "IN_RST", 1);
         w.write_def(n + 1, "OUT_RST", 1);
@@ -3844,7 +3844,7 @@ impl Prim for InitialReset {
         // bs_prim_mod_resets.h: InitialReset writes an empty scope yet
         // reserves 3 ids that are never used
         let _ = w.reserve_ids(3);
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.scope_end();
     }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
@@ -3934,7 +3934,7 @@ impl Prim for MakeReset {
         // bs_prim_mod_resets.h:340-347: one scope with a single 1-bit
         // "rst" var (the internal rstSync synchronizer dumps nothing)
         self.vcd_id = w.reserve_ids(1);
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(self.vcd_id, "rst", 1);
         w.scope_end();
     }
@@ -4065,7 +4065,7 @@ impl Prim for MakeClock {
         // CLK_VAL_OUT are the gate/value registers
         let n = w.reserve_ids(2);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(clk_vcd_id, "CLK_OUT", 1);
         w.write_def(n, "CLK_GATE_OUT", 1);
         w.write_def(n + 1, "CLK_VAL_OUT", 1);
@@ -4212,7 +4212,7 @@ impl Prim for ClockDivider {
     ) {
         let n = w.reserve_ids(2);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(self.vcd_in_clk_id, "CLK_IN", 1);
         w.write_def(clk_vcd_id, "CLK_OUT", 1);
         w.write_def(n, "RST", 1);
@@ -4347,7 +4347,7 @@ impl Prim for ClockInverter {
     ) {
         let n = w.reserve_ids(4);
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(n, "CLK_IN", 1);
         w.write_def(n + 1, "CLK_GATE_IN", 1);
         w.write_def(n + 2, "PREEDGE", 1);
@@ -4929,7 +4929,7 @@ impl Prim for Bram {
         // bs_prim_mod_bram.h:756-797: ports only, never memory contents
         let mut n = w.reserve_ids(if self.dual { 10 } else { 5 });
         self.vcd_base = n;
-        w.scope_start(name);
+        w.scope_start(name, None);
         let ports: &[(&str, &str, &str, &str, &str, &str)] = if self.dual {
             &[
                 ("CLKA", "ENA", "WEA", "ADDRA", "DIA", "DOA"),
@@ -5310,7 +5310,7 @@ impl Prim for GatedClock {
     ) {
         // bs_prim_mod_gatedclock.h: one "new_gate" var = CLK_GATE_OUT
         self.vcd_id = w.reserve_ids(1);
-        w.scope_start(name);
+        w.scope_start(name, None);
         w.write_def(self.vcd_id, "new_gate", 1);
         w.scope_end();
     }
