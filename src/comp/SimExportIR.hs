@@ -874,7 +874,14 @@ encInstance pkgNames mom avi = do
                 return $ encVariant "Prim"
                            (encVariant "Other" (encStruct [("name", mEnc)]))
     argsEnc <- mapM encExpr (avi_iargs avi)
-    let morder = S.toList (M.findWithDefault S.empty (avi_vname avi) mom)
+    -- name-sorted: the set is (AId, AId) pairs and AId's Ord follows
+    -- run/context-dependent interned-FString order — the encoded list
+    -- is a constraint RELATION, so canonical order is free (and .bir
+    -- bytes must not shift when batch vs -c/-e compilation changes
+    -- interning order)
+    let morder = sortBy (\(a, b) (c, d) ->
+                           (a `cmpIdByName` c) <> (b `cmpIdByName` d))
+                        (S.toList (M.findWithDefault S.empty (avi_vname avi) mom))
     morderEnc <- mapM (\(a, b) -> encPair <$> idE a <*> idE b) morder
     portsEnc <- mapM (\(m, n) -> encPair <$> idE m
                                          <*> pure (encW32 (fromIntegral n)))
