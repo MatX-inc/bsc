@@ -639,6 +639,7 @@ defaultFlags bluespecdir = Flags {
         keepInlined = False,
         kill = Nothing,
         ifLift = True,
+        liftDicts = True,
         letGen = False,
         maxTIStackDepth = 1000,
         methodBVI = False,
@@ -1330,6 +1331,10 @@ externalFlags = [
          (Arg "library" (\f s -> Left (f {cLibs = cLibs f ++ [s]})) (Just (FRTListString cLibs)),
           "library to use when linking foreign C/C++ objects", Visible)),
 
+        ("lift-dicts",
+         (Toggle (\f x -> f {liftDicts=x}) (showIfTrue liftDicts),
+          "lift and deduplicate typeclass dictionaries", Hidden)),
+
         ("lift",
          (Toggle (\f x -> f {ifLift=x}) (showIfTrue ifLift),
           "lift method calls in \"if\" actions", Visible)),
@@ -1991,6 +1996,7 @@ showFlagsRaw flags =
           ("keepInlined", show (keepInlined flags)),
           ("kill", show (kill flags)),
           ("letGen", show (letGen flags)),
+          ("liftDicts", show (liftDicts flags)),
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
           ("methodBVI", show (methodBVI flags)),

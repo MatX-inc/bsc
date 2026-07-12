@@ -466,7 +466,7 @@ compilePackage
     stats flags DFsimplified mod'
 
     start flags DFliftdicts
-    let mod_lifted = liftDictsPkg symt mod'
+    let mod_lifted = if liftDicts flags then liftDictsPkg symt mod' else mod'
     t <- dump errh flags t DFliftdicts dumpnames mod_lifted
     stats flags DFliftdicts mod_lifted
 
