@@ -337,7 +337,11 @@ products, like VCS:
    residue can never substitute .exp-flag elaborations for
    sweep-flag ones; validated under fresh residue (post-fullparallel
    tree): 1008/0, class distribution identical, traffic_light
-   compiles fresh.  memq DISPOSITIONED
+   compiles fresh.  Fence REBASELINED at the accepted hardened-sweep
+   equilibrium (2026-07-12, Ravi-accepted): 987 designs pinned (was
+   930 — the tuple-fix converts and witness designs enter fence
+   coverage; traffic_light now 0.07, its flag CLOSED).  memq
+   DISPOSITIONED
    2026-07-10: its link is BIMODAL — modal 0.39-0.55s (= the 0.12
    baseline) with a 2.4-9.9s tail at ~13% (2/15 idle runs, same
    binary/.bir); TRS_JIT_TIME isolates the tail to "trs aot: ir
