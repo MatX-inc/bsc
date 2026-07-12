@@ -8,6 +8,7 @@ import ISyntaxUtil
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
 import Id
+import FStringCompat(FString)
 import ISyntax
 import ISyntaxXRef(updateIExprPosition)
 import Util(tracep)
@@ -24,21 +25,38 @@ itIsDictType t
     ITCon _ _ (TIstruct SClass _) <- leftmost t = True
 itIsDictType _ = False
 
--- Map from the type of a coherent dictionary to the (unique) top-level
--- def of that dictionary in the imported packages.  This map depends only
--- on the imported packages, which are fixed for the entire compilation of
--- a package; so it can be built once (in "compilePackage" in bsc.hs) and
--- passed to every call of "fixupDefs" and "updDef" (which is called once
--- per synthesized module), rather than rebuilt on each call.
-mkCoherentDictMap :: [(IPackage a, String)] -> M.Map IType Id
+-- Map from the type of a coherent dictionary to the imported top-level
+-- dictionaries of that type, keyed by their evidence fingerprints.  A
+-- local dictionary may be replaced by an imported one only when their
+-- fingerprints are EQUAL: type equality alone is not sound, because
+-- packages with different visible instance sets (orphan instances) can
+-- each coherently resolve the same predicate to different instances
+-- (see the evidence-fingerprint note in LiftDicts).  Dictionaries
+-- without a fingerprint (older .bo files, unfingerprintable evidence
+-- shapes) are never deduplication targets.
+--
+-- This map depends only on the imported packages, which are fixed for
+-- the entire compilation of a package; so it can be built once (in
+-- "compilePackage" in bsc.hs) and passed to every call of "fixupDefs"
+-- and "updDef" (which is called once per synthesized module), rather
+-- than rebuilt on each call.  Within one fingerprint the first def in
+-- import order wins; any same-fingerprint candidate is semantically
+-- interchangeable, and import order is fixed by the source, so the
+-- choice is deterministic.
+mkCoherentDictMap :: [(IPackage a, String)] -> M.Map IType (M.Map FString Id)
 mkCoherentDictMap ipkgs =
     let
         -- Get all the defs from the imported packages
         ams = concatMap (ipkg_defs . fst) ipkgs
 
-        coherent_dicts = [ d | d@(IDef i t _ _) <- ams, itIsDictType t, isDictId i, not $ isIncoherentDict i ]
+        coherent_dicts = [ (t, (fp, i))
+                         | IDef i t _ _ <- ams,
+                           itIsDictType t, isDictId i,
+                           not (isIncoherentDict i),
+                           Just fp <- [getEvidenceFP i] ]
     in
-        M.fromList [ (t,i) | IDef i t _ _ <- coherent_dicts ]
+        M.fromListWith (M.unionWith (\_new old -> old))
+            [ (t, M.singleton fp i) | (t, (fp, i)) <- coherent_dicts ]
 
 -- This does two things:
 -- (1) Insert imported packages into the current package (including their
@@ -49,7 +67,7 @@ mkCoherentDictMap ipkgs =
 --
 -- The first argument must be "mkCoherentDictMap" applied to the same
 -- imported packages that are passed as the third argument.
-fixupDefs :: M.Map IType Id -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs :: M.Map IType (M.Map FString Id) -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
 fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
     let
         (ms, _) = unzip ipkgs
@@ -72,7 +90,9 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = iDefsMap (fixUp coherent_dict_map m) ds
         dropDict i t = tracep (trace_drop_dicts && result) ("dropDict: " ++ ppReadable (i,t)) result
-          where result = itIsDictType t && isDictId i && t `M.member` coherent_dict_map && not (isIncoherentDict i)
+          where result = case coherentTarget coherent_dict_map i t of
+                           Just i' -> i' /= i
+                           Nothing -> False
         ds'' = [ d' | d'@(IDef i t _ _) <- ds', not (dropDict i t) ]
         -- Note that the package keeps only its own ATF cache entries, so
         -- that .bo files stay proportional to their own package.  The union
@@ -93,7 +113,7 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
 -- the post-synthesis definition.)
 -- The first argument must be "mkCoherentDictMap" applied to the same
 -- imported packages that are passed as the fourth argument.
-updDef :: M.Map IType Id -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef :: M.Map IType (M.Map FString Id) -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
 updDef coherent_dict_map d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list
@@ -117,15 +137,24 @@ updDef coherent_dict_map d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips
 
 -- ===============
 
-fixUp :: M.Map IType Id -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp :: M.Map IType (M.Map FString Id) -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
 fixUp cm m (ILam i t e) = ILam i t (fixUp cm m e)
 fixUp cm m (ILAM i k e) = ILAM i k (fixUp cm m e)
 fixUp cm m (IAps f ts es) = IAps (fixUp cm m f) ts (map (fixUp cm m) es)
 fixUp cm m (ICon i (ICDef t _))
-  | isDictId i && itIsDictType t && not (isIncoherentDict i),
-    Just i' <- M.lookup t cm = ICon i' (ICDef t (get m i'))
+  | Just i' <- coherentTarget cm i t = ICon i' (ICDef t (get m i'))
 fixUp cm m (ICon i (ICDef t _)) = ICon i (ICDef t (get m i))
 fixUp _ _ e = e
+
+-- The canonical imported def a coherent dictionary may be replaced by:
+-- one of the same type AND the same evidence fingerprint.  Fingerprint
+-- equality is what makes the replacement sound; see mkCoherentDictMap.
+coherentTarget :: M.Map IType (M.Map FString Id) -> Id -> IType -> Maybe Id
+coherentTarget cm i t
+  | isDictId i, not (isIncoherentDict i), itIsDictType t,
+    Just fp <- getEvidenceFP i,
+    Just fpm <- M.lookup t cm = M.lookup fp fpm
+  | otherwise = Nothing
 
 get :: M.Map Id (IExpr a) -> Id -> IExpr a
 get m i = let value = get2 m i
