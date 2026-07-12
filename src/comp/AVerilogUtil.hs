@@ -557,10 +557,7 @@ vDefMpd vco (ADef i t
                   -- (These are size params, so default width of 32 is fine.)
                   vi_inst_params = [ (mkVId nm, Just (VEConst v))
                                    | (nm, v) <- is ],
-                  vi_inst_ports  = (zip
-                                    (map (mkVId . fst) ips')
-                                    (map (Just . (vExpr vco)) es')
-                                    ++ oports)
+                  vi_inst_ports  = iports ++ oports
                  }
             ]
   where

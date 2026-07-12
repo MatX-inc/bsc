@@ -645,7 +645,14 @@ sat dvs ps solved pool p =
                   SolveResult [] sbs s_final solved' -> do
                     recordPackageUse mpkg
                     recordATFs s_final
-                    return (SatResult [] sbs s_final Provisional solved')
+                    let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
+                    let pos = getPosition $ getVPredPositions p
+                    let VPred dictId _ = p
+                        di = DirectIncoherence (apSub s_final (toPred p)) (apSub s_final h) pos
+                        sbs' = addDirectIncoherence dictId di sbs
+                    when (allowIncoherent c /= Just True) $
+                      twarn (pos, WIncoherentMatch (pfpString vp_pred) (pfpString inst_pred))
+                    return (SatResult [] sbs' s_final Provisional solved')
                   SolveResult needed sbs s_final solved' -> do
                     -- A coherent match whose context is not yet satisfied:
                     -- under ordered-clause fundep semantics no other
@@ -678,34 +685,7 @@ sat dvs ps solved pool p =
                                 then Provisional else Committable)
                     when (commitment == Committable) $ recordPackageUse mpkg
                     return (SatResult needed sbs s_final commitment solved')
-            Just (Reduction qs sb us (Just (h@(IsIn c _))) mpkg) | fromMaybe ai (allowIncoherent c) ->
-              satTrace ("sat calls satMany (incoherent) ") $ do
-              result0 <- satMany (dvsSub us dvs) (apSub us ps) (apSub us solved) [] (fromSB sb) us qs
-              -- An incoherent match is deliberately revocable until its
-              -- context is fully discharged (it must never adopt on
-              -- numeric debt), so render the verdict here: settle its
-              -- numeric residuals in a local batch before deciding
-              -- full-vs-partial.
-              result <- case result0 of
-                SolveResult needed0@(_:_) sbs s_final solved0 -> do
-                    (needed, nsbs) <- batchSolveNumericPreds
-                                          (apSub s_final ps) needed0
-                    return (SolveResult needed (nsbs <++ sbs) s_final solved0)
-                r -> return r
-              case result of
-                SolveResult ps@(_:_) sbs s_final solved' -> return (SatResult ps sbs s_final Provisional solved')
-                SolveResult [] sbs s_final solved' -> do
-                  recordPackageUse mpkg
-                  recordATFs s_final
-                  let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
-                  let pos = getPosition $ getVPredPositions p
-                  let VPred dictId _ = p
-                      di = DirectIncoherence (apSub s_final (toPred p)) (apSub s_final h) pos
-                      sbs' = addDirectIncoherence dictId di sbs
-                  when (allowIncoherent c /= Just True) $
-                    twarn (pos, WIncoherentMatch (pfpString vp_pred) (pfpString inst_pred))
-                  return (SatResult [] sbs' s_final Provisional solved')
-            bad_match -> fail ("sat incoherent disallowed: " ++ ppReadable bad_match)
+              bad_match -> fail ("sat incoherent disallowed: " ++ ppReadable bad_match)
        decrementSatStack
        return return_val
 
