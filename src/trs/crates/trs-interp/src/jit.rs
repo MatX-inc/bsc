@@ -167,7 +167,10 @@ pub(crate) enum JitRequest {
 pub(crate) struct LazyJit {
     /// owned snapshot the compile threads read (decouples lifetimes
     /// from the Interp)
-    design: Design,
+    /// None when every body came preloaded from the artifact (the
+    /// design is only read to compile cold cells) — skipping the
+    /// O(design) clone on the pure-Load startup path.
+    design: Option<Design>,
     insts: HashMap<usize, InstEnv>,
     specs: Vec<RuleSpec>,
     now_slot: u32,
@@ -220,7 +223,10 @@ impl LazyJit {
             }
             let hi = (lo + self.batch_size).min(self.classes.len());
             let env = PlanEnv {
-                d: &self.design,
+                d: self
+                    .design
+                    .as_ref()
+                    .expect("cold compile cell without a stashed design"),
                 insts: &self.insts,
                 now_slot: self.now_slot,
             };
@@ -1990,6 +1996,7 @@ impl Interp {
             return None;
         }
 
+        let mut sl = crate::startup::StartupLap::new();
         let mut nslots: u32 = 0;
         let alloc = |n: &mut u32, words: u32| {
             let s = *n;
@@ -2150,6 +2157,7 @@ impl Interp {
             HashMap::new()
         };
 
+        sl.lap("plan passA (rule collect)");
         // ---- pass B: DFS subtree-contiguous allocation ----
         // Every slot an instance's compiled code touches (its prims,
         // ENs, rule cf/wf/eager, and everything in its submodule
@@ -2355,6 +2363,7 @@ impl Interp {
             }
         }
 
+        sl.lap("plan passB (slot alloc + inst envs)");
         // ---- per-instance subtree signatures (exec dedup classes) ----
         // Two instances share compiled exec bodies iff their signatures
         // match.  The sig must cover EVERY input the exec lowering
@@ -2447,6 +2456,7 @@ impl Interp {
             }
         }
 
+        sl.lap("plan sigs (inst_sig hashing)");
         // one design-wide spec list (ordinal order)
         let mut specs = Vec::new();
         for ri in &rules {
@@ -2688,6 +2698,7 @@ impl Interp {
             }
         }
 
+        sl.lap("plan specs");
         // ---- exec dedup classes: one compiled body per class ----
         let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
         {
@@ -2844,6 +2855,7 @@ impl Interp {
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
+        sl.lap("plan classes+nodes");
         let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
         let mut wire_ticks_flag = false;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
@@ -2891,6 +2903,7 @@ impl Interp {
                 }
             }
         }
+        sl.lap("aot load (dlopen+gates+dlsym)");
         // eligibility + call-site tables via trial lowering (link, run,
         // and artifact-fallback paths; skipped on successful loads)
         let protos: Vec<FnProtos> = match protos_opt {
@@ -3023,8 +3036,13 @@ impl Interp {
         // compile (the fleet) — cap so teardown latency is bounded
         // by a few class compiles, not the design size
         let cchunk = nclasses.div_ceil(nworkers).clamp(1, 8);
+        sl.lap("plan tail (protos/scheds)");
         let lazy = Arc::new(LazyJit {
-            design: self.d.clone(),
+            design: if preexecs.is_some() {
+                None
+            } else {
+                Some(self.d.clone())
+            },
             insts: inst_envs,
             specs,
             now_slot,
@@ -3044,6 +3062,7 @@ impl Interp {
             cells: (0..n).map(|_| OnceLock::new()).collect(),
         });
         self.jit_shared = Some(lazy.clone());
+        sl.lap("lazyjit build");
 
         let mut workers = Vec::new();
         match preexecs {
@@ -3123,6 +3142,7 @@ impl Interp {
             .iter()
             .flat_map(|(&i, e)| e.en_slot.iter().map(move |(&p, &s)| ((i, p), s)))
             .collect();
+        sl.lap("arena+flatmaps+workers");
         let covered_ticks = if wire_ticks_flag {
             self.wire_tick_coverage(&lazy.insts, rcomps).1
         } else {

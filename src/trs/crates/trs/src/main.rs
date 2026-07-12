@@ -57,7 +57,9 @@ fn main() -> ExitCode {
             let base = out.unwrap_or_else(|| {
                 format!("{}.cexe", path.strip_suffix(".bir").unwrap_or(path))
             });
-            let mut interp = match trs_interp::load_file(path, &[], None) {
+            // _fresh: link WRITES the snapshot, so it decodes the .bir
+            // source of truth, never a prior sidecar (see startup.rs)
+            let mut interp = match trs_interp::startup::load_file_fresh(path, &[], None) {
                 Ok(i) => i,
                 Err(e) => {
                     eprintln!("trs: {e}");
@@ -124,6 +126,12 @@ fn main() -> ExitCode {
                     eprintln!("trs link: copy {path} -> {bir_dst}: {e}");
                     return ExitCode::FAILURE;
                 }
+            }
+            // decoded-design snapshot: run startup skips the CBOR parse
+            // when its fingerprint gate matches (a cache, never a source
+            // of truth; stale/missing -> normal decode)
+            if let Err(e) = interp.write_snapshot(&format!("{base}.birsnap")) {
+                eprintln!("trs link: note: snapshot not written ({e})");
             }
             // user BDPI code travels with the artifact: load_file looks
             // for <base>.bdpi.so next to the (renamed) .bir

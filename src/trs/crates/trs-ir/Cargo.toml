@@ -9,3 +9,4 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 ciborium = { workspace = true }
+bincode = { workspace = true }

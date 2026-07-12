@@ -30,6 +30,7 @@ repository = "https://github.com/B-Lang-org/bsc"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 ciborium = "0.2"
+bincode = "1"
 fst-writer = "0.3"
 
 [profile.release]

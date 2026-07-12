@@ -3,9 +3,12 @@
 NOTE 2026-07-10: the live branch is claude/trs-fst — the whole
 history REBASED onto personal/bluesim-fst (PR #1027, FST support)
 plus the trs FST implementation.  claude/trs fast-forwards
-to it once the rebase gates finish (sweep parity DONE 2x0-DIFF;
-pending: idle re-verify of 7 load-victim heavies, full testsuite,
-fence rebaseline at the new-bsc equilibrium).
+to it once the rebase gates finish (sweep parity DONE 2x0-DIFF,
+plus 2 more idle 992/0 sweeps 2026-07-10 with HEAD's bsc — the
+load-victim heavies re-verify is covered; full testsuite DONE
+2026-07-10: 23473 PASS / 0 FAIL / 134 XFAIL, fullparallel+SystemC,
+tree incl. the startup-snapshot change; still pending: fence
+rebaseline once the new-bsc equilibrium is ACCEPTED).
 
 Branch `claude/trs`, all work committed and pushed through
 cdfd7611.  ALWAYS `git push personal` — NEVER bare `git push origin`
@@ -148,6 +151,20 @@ products, like VCS:
   instant's buffered VCD changes at shutdown (vcd.cxx flush_changes
   early-return at t==now), so post-finish writes never appear in any
   VCD — peeks are the only state witness.
+- STARTUP SNAPSHOT (2026-07-10): `<base>.birsnap` decoded-design
+  sidecar written by trs link, loaded by run when EVERY header gate
+  passes (magic | BIR_VERSION | SNAP_LAYOUT_REV | .bir fingerprint |
+  payload fnv1a — all pre-deserialize, then structural verify()).
+  Grid N=32 startup 0.138s -> ~0.083s (the CBOR decode was the real
+  cost, 80.3ms; plan-walk attribution was wrong).  DISCIPLINE: bincode
+  is positional — BUMP SNAP_LAYOUT_REV (trs-ir/lib.rs) with any
+  serde-visible trs-ir change, the AOT_LAYOUT_REV twin rule.  link
+  loads via load_file_fresh (writer reads the .bir source of truth,
+  never a prior sidecar).  10-case hostile-snap battery + poison-at-
+  link probe all fall back byte-identically; 48-agent review fleet's
+  2 confirmed roots (layout drift, payload integrity) closed by the
+  v2 header.  Chapter + dead ends (rkyv, helper thread): PERF-
+  BASELINE.md.
 - ULTRACODE REVIEW round 1 (7 finders, 72/72 verdicts upheld): 10
   findings fixed+sealed (4e5df577).  ROUND 2 (2026-07-09 night, 109
   agents over the day's 6 increments): 29 confirmed / 5 rejected;
@@ -174,7 +191,11 @@ products, like VCS:
   — the file MUST be named trs), then
   `python3 tools/diffsweep.py --aot --trs $M/frozen-<sha>/trs
   --out $M/<name>.json` from src/trs with inst/bin on PATH.
-  Expect 975/0.  LPT scheduling reads tools/sweep-costs.json.
+  Expect 992 PASS / 0 DIFF at the new-bsc equilibrium (1073
+  enumerated on the rebased base; the delta vs the old 975/1037 is
+  upstream-class: EXPORT_FAIL 14 = the SimExportIR.encExpr split-port
+  gap below, COMPILE_FAIL 30, NO_SOURCE 20, NOT_SUPPORTED 14,
+  LINK_FAIL 3).  LPT scheduling reads tools/sweep-costs.json.
   Perf fence flags = treat like DIFFs (ratios vs tools/perf-fence.json;
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
@@ -187,7 +208,14 @@ products, like VCS:
   linker path but honor $TRS.  Bash tool cwd persists — cd to the
   crate root before heredoc patches and check the ok-sentinel.
   Another checkout (claude3/prim-fixes) sometimes runs testsuites on
-  this box — check ps before trusting timing.
+  this box — check ps before trusting timing.  A `make -C src/trs
+  install` WITHOUT LLVM_SYS_181_PREFIX silently rebuilds trs LEAN (no
+  JIT/AOT): sweeps still PASS byte-identical but every design runs
+  interpreted (~50 false fence flags, instant trs_link) — PROBE the
+  frozen binary before any sweep (`trs link <small>.bir` must
+  produce a .so).  NO THREADS on the run startup path — one
+  short-lived thread permanently drops glibc malloc's single-thread
+  fast path and interp-fallback runs pay ~50% (startup.rs doctrine).
 
 ## NEXT UP (in order)
 
@@ -206,13 +234,26 @@ products, like VCS:
    timestamps).  Reference-vs-trs FST: SEMANTIC MATCH (batch +
    interactive).  diffsweep hardened against in-tree VPI wrapper
    residue (fullparallel leaves it; 40 phantom LINK_FAILs).
-   PENDING: fstscopes module-type cross-check vs reference FST
-   (needs make install-extra), -dump-formats availability gating
-   for our models (we carry both writers unconditionally — decide
-   whether to mirror the compiled-in restriction), $dumplimit FST
-   estimate witness.
+   fstscopes module-type cross-check DONE 2026-07-10 (install-extra
+   built; ref exes relinked -dump-formats vcd,fst; scope dumps
+   BYTE-IDENTICAL on sysVCDTest2 115-line two-level hierarchy,
+   sysCDiv, sysSyncB).  -dump-formats gating: reference semantics
+   MEASURED — +bscfst on a vcd-only exe is a SILENT no-op (rc=0, no
+   file, no warning), and -V ignores the extension (writes the
+   compiled-in format into file.fst).  DECISION still open: mirror
+   the restriction (strict parity; needs the .bir to carry
+   dumpFormats) vs deliberately diverge (trs artifacts carry both
+   writers = capability superset; stdout/exit oracle unaffected —
+   the divergence is only that trs honors +bscfst where a default
+   reference exe silently drops it).  Recommend DIVERGE + document.
+   PENDING: that decision, and the $dumplimit FST estimate witness.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
-   message): multi-clock EN latch clearing;
+   message): SimExportIR.encExpr can't encode split-port method-arg
+   selections ("(s.getBar TUPLE_...)[3]", repro: splitports
+   sysInstanceSplit at -e) — 14 designs EXPORT_FAIL on the rebased
+   base (12 splitports + sysFloatTest + sysTestMesa), identical set
+   pre/post the rc3 concat fix, counted in the sweep equilibrium
+   above; multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
    const-ready RDY interim; same pattern as the def `sym` flag in
    SimExportIR.hs); symOrd char-wise compare; link feature-probe
@@ -242,11 +283,19 @@ products, like VCS:
    box (0.40-0.45 vs baseline 0.22, trs_link ~1.3-1.5s) on BOTH the
    b8691ab4 and pre-fix binaries — binary-independent drift, so the
    0.22 baseline is stale; rebaseline it at the next accepted
-   equilibrium (memq flagged once under sweep load, idle-clean;
-   sysTrafficBRAM did not flag).  Full testsuite RE-CERTIFIED
-   2026-07-09 night: 18865 PASS / 0 FAIL / 129 XFAIL (fullparallel,
-   SystemC enabled) — the exporter changes hold the zero-fail
-   baseline.
+   equilibrium (sysTrafficBRAM did not flag).  memq DISPOSITIONED
+   2026-07-10: its link is BIMODAL — modal 0.39-0.55s (= the 0.12
+   baseline) with a 2.4-9.9s tail at ~13% (2/15 idle runs, same
+   binary/.bir); TRS_JIT_TIME isolates the tail to "trs aot: ir
+   passes" (245ms modal -> 2.4-9.5s), i.e. LLVM O3 time varies with
+   the RUN-TO-RUN IR shape (HashMap iteration order in lowering) —
+   sim output stays byte-identical.  Not fixable by rebaseline; the
+   real fix is DETERMINISTIC IR EMISSION (stable iteration order in
+   lower.rs/planner), queued with the review backlog.  Full testsuite
+   RE-CERTIFIED 2026-07-10 at the rebased tree + startup-snapshot
+   change: 23473 PASS / 0 FAIL / 134 XFAIL (fullparallel, SystemC
+   enabled; was 18865/0/129 pre-rebase — the new base's tests account
+   for the growth).
 4. Scale arc: loop-rolled spine (planner run-detection over
    comp_nodes + affine base/token strides + counted-loop emission
    around the EXISTING outlined-body call ABI; bail unless provably

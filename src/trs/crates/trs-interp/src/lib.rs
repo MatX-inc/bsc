@@ -12,6 +12,7 @@ pub mod prim;
 pub mod value;
 pub mod fst;
 mod vcd;
+pub mod startup;
 pub use vcd::WaveFormat;
 
 use std::cmp::Reverse;
@@ -73,6 +74,9 @@ struct ModIx {
 }
 
 pub struct Interp {
+    // owned, not Arc: the eval loop touches this on every expression,
+    // and LazyJit's need for a copy is served by a one-shot clone only
+    // when cold compilation is possible (jit.rs LazyJit.design)
     d: Design,
     /// Verilog file handles, mirroring VLFiles (dollar_display.cxx):
     /// one-arg $fopen returns a one-hot MCD key (slot 0 = stdout, first
@@ -4365,14 +4369,10 @@ pub enum AotEmit {
 }
 
 /// FNV-1a over the .bir bytes: the fingerprint baked into AOT
-/// artifacts and checked at load.
+/// artifacts and checked at load (the impl lives in trs-ir so
+/// snapshots can checksum their payload with the same function).
 pub fn bir_fingerprint(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h
+    ir::fnv1a(bytes)
 }
 
 #[cfg(feature = "jit")]
@@ -4850,28 +4850,7 @@ impl Interp {
 
 /// Load a .bir (and its companion .bdpi.so, if any) into an Interp ready
 /// to run — the driver's -c/-f scripting needs the handle between steps.
-pub fn load_file(
-    path: &str,
-    plusargs: &[String],
-    vcd_file: Option<&str>,
-) -> Result<Interp, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let design = Design::decode(&bytes).map_err(|e| e.to_string())?;
-    let mut interp = Interp::new(design);
-    interp.bir_hash = bir_fingerprint(&bytes);
-    interp.plusargs = plusargs.to_vec();
-    interp.wave_pending =
-        vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
-    // user BDPI code lives in a companion shared object next to the .bir
-    let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
-    if std::path::Path::new(&so).exists() {
-        // dlopen treats a bare filename as a library-search-path lookup;
-        // make the sibling path explicit
-        let so = if so.contains('/') { so } else { format!("./{so}") };
-        interp.load_bdpi(&so)?;
-    }
-    Ok(interp)
-}
+pub use startup::load_file;
 
 pub fn run_file(
     path: &str,

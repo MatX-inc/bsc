@@ -24,6 +24,37 @@ pub use schedule::{Composition, ModuleSchedule, SchedNode, Schedule, Segment};
 /// writes it, `Design::decode` rejects mismatches.
 pub const BIR_VERSION: u32 = 1;
 
+/// Snapshot sidecar magic (`<base>.birsnap`, see `Design::snap_encode`).
+/// The trailing byte is the HEADER format; \x02 added the layout rev
+/// and the payload checksum.  (bincode over a probed rkyv variant:
+/// rkyv was 2x the bytes and slower overall once integrity-checked.)
+const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
+
+/// bincode is POSITIONAL: unlike the name-keyed CBOR .bir (which
+/// tolerates `#[serde(default)]` growth without a BIR_VERSION bump —
+/// five such fields exist), ANY serde-visible change to the types
+/// reachable from `Design` — added/reordered fields, enum variant
+/// insertion — silently changes the snapshot payload layout.  Bump
+/// this with every such change (the AOT twin of this rule is
+/// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
+/// back to the .bir instead of misdecoding.
+const SNAP_LAYOUT_REV: u32 = 1;
+
+/// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
+/// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
+const SNAP_HEADER: usize = 32;
+
+/// FNV-1a: the project-wide fingerprint (AOT artifacts fingerprint
+/// their source .bir with it; snapshots checksum their payload).
+pub fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
 /// Identifier interned per design; display names live in `Design::strings`.
 pub type StrId = u32;
 
@@ -285,6 +316,62 @@ impl std::fmt::Display for DecodeError {
 impl std::error::Error for DecodeError {}
 
 impl Design {
+    /// Decoded-design snapshot sidecar (`<base>.birsnap`): the
+    /// `SNAP_HEADER` fields, then a bincode image of the decoded
+    /// Design.  It is a CACHE, never a source of truth — `snap_decode`
+    /// gates on EVERY header field before touching the payload, and
+    /// callers fall back to `Design::decode` of the .bir on any
+    /// mismatch.  Startup skips the CBOR parse when the gates hold.
+    /// NOTE: runs on the caller's thread — spawning even a short-lived
+    /// helper thread permanently drops glibc malloc's single-threaded
+    /// fast path (measured ~50% on interp-heavy runs).  Recursion depth
+    /// matches what `Design::decode` already does on this stack.
+    pub fn snap_encode(&self, bir_hash: u64) -> Result<Vec<u8>, String> {
+        let mut out = vec![0u8; SNAP_HEADER];
+        bincode::serialize_into(&mut out, self).map_err(|e| e.to_string())?;
+        let sum = fnv1a(&out[SNAP_HEADER..]);
+        out[..8].copy_from_slice(SNAP_MAGIC);
+        out[8..12].copy_from_slice(&BIR_VERSION.to_le_bytes());
+        out[12..16].copy_from_slice(&SNAP_LAYOUT_REV.to_le_bytes());
+        out[16..24].copy_from_slice(&bir_hash.to_le_bytes());
+        out[24..32].copy_from_slice(&sum.to_le_bytes());
+        Ok(out)
+    }
+
+    /// Header-gated parse: `None` (= fall back to the .bir) unless
+    /// EVERY gate passes, all checked BEFORE the payload deserialize:
+    /// magic (embeds the header format), BIR_VERSION, SNAP_LAYOUT_REV
+    /// (bincode is positional — see the const), the expected .bir
+    /// fingerprint, and the payload checksum (fs::write is not atomic,
+    /// and the fingerprint covers the .bir, not this payload — a
+    /// corrupt-but-parseable payload would otherwise load as a WRONG
+    /// design, the one failure class byte parity cannot tolerate).
+    /// The decoded design passes the same structural `verify` that
+    /// guards `Design::decode`, so residual misdecode degrades to the
+    /// fallback, never a panic.
+    pub fn snap_decode(bytes: &[u8], bir_hash: u64) -> Option<Design> {
+        if bytes.len() < SNAP_HEADER || &bytes[..8] != SNAP_MAGIC {
+            return None;
+        }
+        if u32::from_le_bytes(bytes[8..12].try_into().ok()?) != BIR_VERSION {
+            return None;
+        }
+        if u32::from_le_bytes(bytes[12..16].try_into().ok()?) != SNAP_LAYOUT_REV {
+            return None;
+        }
+        if u64::from_le_bytes(bytes[16..24].try_into().ok()?) != bir_hash {
+            return None;
+        }
+        let payload = &bytes[SNAP_HEADER..];
+        if u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload) {
+            return None;
+        }
+        // caller's thread on purpose — see snap_encode's NOTE
+        let d: Design = bincode::deserialize(payload).ok()?;
+        verify::verify(&d).ok()?;
+        Some(d)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Design, DecodeError> {
         // deep expression trees (long fold chains) exceed ciborium's
         // default recursion limit of 128

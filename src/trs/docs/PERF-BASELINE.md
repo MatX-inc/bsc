@@ -247,3 +247,90 @@ link is 1024 sched sections + call sites in the mega-edge
 (new high — the 420s ref-build ceiling also recovered two designs
 misfiled as permanent LINK_FAILs); fence rebaselined (925 designs
 above the timing floors).
+
+# Startup attack: snapshot sidecar (2026-07-10)
+
+MEASURED FIRST (new TRS_STARTUP_TIME laps, grid v3 N=32, quiet box):
+the doc's standing "plan walk / per-instance analysis" attribution was
+WRONG at this scale — the plan phases total ~4 ms.  The real cost was
+the 4.8 MB BIR CBOR decode (80.3 ms of the 138 ms total).
+
+| phase (final v2-header binary) | before   | after    |
+|--------------------------------|----------|----------|
+| BIR decode (+fps, +integrity)  | 88.1 ms  | 36.1 ms (read + .bir fnv + snap gates+fnv+decode) |
+| instantiate (instance tree)    | 11.5 ms  | 12.9 ms  |
+| LazyJit build (Design clone)   |  8.8 ms  | 0.03 ms (no clone on Load) |
+| prime cones + all plan passes  |  ~7 ms   | ~5.6 ms  |
+| process init (incl. libLLVM)   | ~20 ms   | ~20 ms   |
+| **total (-m 1, min of 5)**     | **0.138 s** | **0.08-0.09 s** |
+
+Reference startup 0.08 s (same box/method): trs lands AT reference at
+1024 tiles (was 55% above).  The v2 integrity header (fnv1a over the
+3.49 MB payload + the pre-decode gates) costs ~4 ms of the 36.1 —
+the win survives it.  Full N=32 run (startup+sim), re-measured at the
+final binary: trs 0.115 s vs reference 0.143 s (grid CSV; parity
+PASS) — the v3d table's last BEHIND cell stays flipped to ahead.
+
+The shipped change: `<base>.birsnap` decoded-design snapshot, written
+by `trs link` next to the .bir.  Header v2 (32 bytes): magic (embeds
+the header format) | BIR_VERSION | SNAP_LAYOUT_REV | .bir fingerprint
+| payload fnv1a — every gate checked BEFORE the payload deserialize,
+and the decoded design passes the same structural verify() as
+Design::decode.  A cache, never a source of truth: any mismatch falls
+back to the CBOR decode.  `trs link` itself loads via
+load_file_fresh (snapshot-blind) — the WRITER always decodes the .bir
+source of truth, so a gate-passing-but-wrong sidecar can never be
+laundered into a fresh artifact.  LazyJit stashes a design clone only
+when cold compilation is possible (None on the pure-Load path).
+
+## Review fleet + the integrity header (2026-07-10, same day)
+
+A 48-agent review fleet (6 lenses, 3 adversarial verifiers per
+finding) confirmed two real defects in the first-cut 20-byte header,
+both fixed by header v2:
+
+1. NO LAYOUT REVISION: bincode is positional, so any serde-visible
+   trs-ir change (five `#[serde(default)]` fields were added
+   historically without a BIR_VERSION bump — that is the point of the
+   name-keyed CBOR pattern) silently changes the snapshot layout; a
+   stale snap under a newer binary MISDECODES instead of falling
+   back.  SNAP_LAYOUT_REV now mirrors the AOT_LAYOUT_REV discipline
+   (that gate was already at rev 6 — this staleness class is routine).
+   BUMP IT with every serde-visible trs-ir change.
+2. NO PAYLOAD INTEGRITY: the fingerprint covers the .bir, not the
+   payload; a verifier's harness showed a SINGLE flipped payload byte
+   decoding "successfully" into a wrong design ("mkTop" -> "okTop") —
+   the one failure class byte parity cannot tolerate.  The payload
+   fnv1a closes it (and trailing-garbage acceptance with it).
+
+Probed on the final binary, all byte-identical fallbacks: missing,
+corrupt payload byte, truncated, garbage, old-magic v1, wrong layout
+rev, wrong bir hash, header-only, trailing garbage, restored-good
+(loads via snapshot, verified by lap).  Poison-at-link probe: a
+forged sidecar (other design's valid-checksum payload under the
+target's bir_hash) is IGNORED by link, the artifact simulates the
+.bir, and the sidecar is rewritten byte-identical to the honest
+snapshot (snap_encode is deterministic).
+
+## The two dead ends (measured, reverted)
+
+1. rkyv "zero-copy" payload: 2x the bytes (6.7 vs 3.5 MB), and with
+   the integrity checksum unsafe access requires, the load phase cost
+   43 ms vs bincode's ~20.  True zero-copy needs the interp to consume
+   archived types — parked as not worth the refactor for ~15 ms.
+2. Fingerprint/snapshot overlap on a helper thread: saved 12 ms of
+   startup and cost interp-fallback designs ~50% OF THEIR WHOLE RUN
+   (dft64 22s -> 33-53s; the fence caught it).  One short-lived thread
+   permanently drops glibc malloc's single-threaded fast path, and the
+   interp's Value-clone eval loop lives on malloc.  DOCTRINE: no
+   threads on the run startup path (startup.rs header).  The chase
+   also falsified Arc<Design>-indirection and code-layout/CGU theories
+   (codegen-units=1 probed and reverted) — the discriminating
+   instrument was a frozen pre-change binary, 5 runs, idle box.
+
+Remaining startup headroom (queued): process init ~20 ms (libLLVM
+linkage on the run path), instantiate ~12 ms (path-String interning),
+snapshot decode ~20 ms (single-thread streaming format).  TYPE-KEYED
+ANALYSIS stays queued for the scale arc (loop-rolled spine wants its
+stride-regular regions) but is no longer the startup fix — at N=32 it
+buys ~3 ms.
