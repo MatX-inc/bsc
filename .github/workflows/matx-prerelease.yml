@@ -1,0 +1,87 @@
+name: matx-prerelease
+
+# Manually publish the build artifacts of a matx-release run as a GitHub
+# pre-release.  Takes the run ID of a completed (successful) matx-release
+# run, downloads its Ubuntu and macOS build artifacts, renames the
+# tarballs to the bsc-<platform>-YYYYMMDD_N.tar.gz convention, and
+# creates a pre-release tagged build-YYYYMMDD-N pointing at the commit
+# that the run built.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of the matx-release run to publish (from the run's URL)"
+        required: true
+      title:
+        description: "Release title (defaults to the tag name)"
+        required: false
+        default: ""
+
+jobs:
+  publish:
+    name: "Publish pre-release from run"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check the run built this repo and succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")
+          conclusion=$(jq -r .conclusion <<<"$run")
+          workflow=$(jq -r .name <<<"$run")
+          if [ "$workflow" != "matx-release" ]; then
+            echo "Run ${RUN_ID} is a '${workflow}' run, not matx-release" >&2
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "Run ${RUN_ID} concluded '${conclusion}'; only successful runs can be published" >&2
+            exit 1
+          fi
+          jq -r '"HEAD_SHA=\(.head_sha)\nHEAD_BRANCH=\(.head_branch)"' <<<"$run" >> "$GITHUB_ENV"
+
+      - name: Download Ubuntu build artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: "ubuntu-22.04 ghc-9.6.7 build"
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: linux-x86_64
+      - name: Download macOS build artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: "macos-15 ghc-9.6.7 build"
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: darwin-aarch64
+
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          TITLE: ${{ inputs.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          date=$(TZ=America/Los_Angeles date +%Y%m%d)
+          try=1
+          while gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/build-${date}-${try}" >/dev/null 2>&1; do
+            try=$((try + 1))
+          done
+          tag="build-${date}-${try}"
+          mv linux-x86_64/inst.tar.gz "bsc-linux-x86_64-${date}_${try}.tar.gz"
+          mv darwin-aarch64/inst.tar.gz "bsc-darwin-aarch64-${date}_${try}.tar.gz"
+          gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --target "$HEAD_SHA" \
+              --title "${TITLE:-$tag}" \
+              --notes "Pre-release of matx-release run [${RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}) (branch \`${HEAD_BRANCH}\`, commit ${HEAD_SHA})." \
+              "bsc-linux-x86_64-${date}_${try}.tar.gz" \
+              "bsc-darwin-aarch64-${date}_${try}.tar.gz"
+          echo "Published pre-release [\`${tag}\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}) from run ${RUN_ID} (branch \`${HEAD_BRANCH}\`)" >> "$GITHUB_STEP_SUMMARY"
