@@ -22,7 +22,7 @@ ContextOnClassSubset.ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prel
 next def..........................................................
 ContextOnClassSubset._lifted_dict0 :: Prelude.Literal (Prelude.Bit 16)
 ContextOnClassSubset._lifted_dict0 = Prelude.Prelude.Literal~Prelude.Bit~n= ·16
--- IdProp: ContextOnClassSubset::_lifted_dict0[IdP_bad_name,IdPDict,IdPCAF]
+-- IdProp: ContextOnClassSubset::_lifted_dict0[IdP_bad_name,IdPDict,IdPCAF,IdPEvidenceFP "T(V37:Prelude.Prelude.Literal~Prelude.Bit~n;N16;)"]
 next def..........................................................
 
 

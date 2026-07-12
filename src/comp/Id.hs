@@ -51,7 +51,7 @@ module Id(
         isFromRHSId, setFromRHSId,
         isSignedId, setSignedId,
         setInternal,
-        isDictId, isIncoherentDict,
+        isDictId, isIncoherentDict, getEvidenceFP,
         isInternal,
         isSplitRuleId,
         isRuleId,
@@ -167,6 +167,14 @@ data IdProp = IdPCanFire
                                         -- a top-level nullary binding, which is
                                         -- what lifted dictionaries become
                                         -- (introduced by LiftDicts)
+              | IdPEvidenceFP FString   -- canonical fingerprint of the evidence
+                                        -- a lifted coherent dictionary was built
+                                        -- from (introduced by LiftDicts); equal
+                                        -- fingerprints identify semantically
+                                        -- identical evidence across packages,
+                                        -- and only fingerprint-equal
+                                        -- dictionaries may be deduplicated
+                                        -- (see FixupDefs)
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
@@ -530,6 +538,13 @@ isDictId i = hasIdProp i IdPDict
 
 isIncoherentDict :: Id -> Bool
 isIncoherentDict i = isDictId i && hasIdProp i IdPIncoherent
+
+-- the evidence fingerprint of a lifted coherent dictionary, if it has one
+getEvidenceFP :: Id -> Maybe FString
+getEvidenceFP i =
+    case [ fp | IdPEvidenceFP fp <- getIdProps i ] of
+      (fp:_) -> Just fp
+      []     -> Nothing
 
 isRuleId :: Id -> Bool
 isRuleId idx = hasIdProp idx IdPRule

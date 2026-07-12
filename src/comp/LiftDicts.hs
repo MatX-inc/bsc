@@ -12,6 +12,8 @@ import IOUtil(progArgs)
 import Util(mapSndM, tracep)
 
 import CSyntax
+import FStringCompat(mkFString, getFString)
+import Literal
 import CFreeVars(getPV)
 import CType
 import Assump
@@ -101,6 +103,75 @@ newDictId pos = do
 
 type BoundDicts = S.Set Id
 
+-- =====
+-- Evidence fingerprints
+--
+-- A lifted coherent dictionary may be deduplicated against a
+-- dictionary of the same type from an imported package ONLY when both
+-- were built from the same evidence: the same instances, applied
+-- recursively to the same evidence (see FixupDefs.dropDict).  Type
+-- equality alone is not enough: packages with different visible
+-- instance sets (orphan instances, T0127) can each coherently resolve
+-- the same predicate to different instances, and deduplicating across
+-- that divergence silently swaps the selected methods.
+--
+-- The fingerprint is a canonical, injective rendering of the evidence
+-- structure, grounded only at globally-stable names: instance
+-- functions, field selectors, and the fingerprints -- never the
+-- package-local names -- of referenced dictionaries.  Nothing
+-- machine- or package-local is rendered (no positions, no lifted-name
+-- counters), so the same evidence yields the same fingerprint in
+-- every package.
+--
+-- Nothing means the expression has a shape we do not fingerprint; the
+-- dictionary is still lifted and shared within its package, but is
+-- not eligible for cross-package deduplication.
+
+evidenceFP :: CExpr -> Maybe String
+evidenceFP (CVar i) =
+    case getEvidenceFP i of
+      -- a dictionary with a fingerprint contributes its fingerprint,
+      -- not its (package-local) name
+      Just fp -> Just $ fpAtom "F" (getFString fp)
+      Nothing -> Just $ fpAtom "V" (qualIdFP i)
+evidenceFP (CApply f args) = do
+    fps <- mapM evidenceFP (f:args)
+    return $ "A(" ++ concat fps ++ ")"
+evidenceFP (CTApply f ts) = do
+    ffp <- evidenceFP f
+    tfps <- mapM typeFP ts
+    return $ "T(" ++ ffp ++ concat tfps ++ ")"
+evidenceFP (CSelectT ti i) =
+    Just $ "S(" ++ fpAtom "" (qualIdFP ti) ++ fpAtom "" (qualIdFP i) ++ ")"
+evidenceFP (CStructT t fs) = do
+    tfp <- typeFP t
+    ffps <- mapM fieldFP fs
+    return $ "R(" ++ tfp ++ concat ffps ++ ")"
+  where fieldFP (fi, e) = do efp <- evidenceFP e
+                             return $ fpAtom "" (qualIdFP fi) ++ efp
+evidenceFP (CLitT t (CLiteral _ l)) = do
+    tfp <- typeFP t
+    return $ "L(" ++ tfp ++ fpAtom "" (show l) ++ ")"
+evidenceFP _ = Nothing
+
+-- monomorphic types only; positions and kinds are not rendered
+typeFP :: CType -> Maybe String
+typeFP (TCon (TyCon i _ _)) = Just $ fpAtom "C" (qualIdFP i)
+typeFP (TCon (TyNum n _))   = Just $ "N" ++ show n ++ ";"
+typeFP (TCon (TyStr s _))   = Just $ fpAtom "Z" (getFString s)
+typeFP (TAp a b) = do
+    fa <- typeFP a
+    fb <- typeFP b
+    return $ "P(" ++ fa ++ fb ++ ")"
+typeFP _ = Nothing
+
+qualIdFP :: Id -> String
+qualIdFP i = getFString (getIdQual i) ++ "." ++ getFString (getIdBase i)
+
+-- injective length-prefixed atom
+fpAtom :: String -> String -> String
+fpAtom tag s = tag ++ show (length s) ++ ":" ++ s ++ ";"
+
 handleCoherentDict :: BoundDicts -> CType -> CExpr -> L (Either CExpr Id)
 handleCoherentDict p t e = do
   tdm <- gets typeDictMap
@@ -118,7 +189,11 @@ handleCoherentDict p t e = do
         i <- case e' of
                CVar i' -> return i'
                CApply (CVar i') [] -> return i'
-               _ -> do lift_i <- newDictId (getPosition e)
+               _ -> do lift_i0 <- newDictId (getPosition e)
+                       let lift_i = case evidenceFP e' of
+                                      Just fp -> addIdProp lift_i0
+                                          (IdPEvidenceFP (mkFString fp))
+                                      Nothing -> lift_i0
                        when trace_lift_dicts $ traceM $ "adding lifted dict (coherent): " ++ ppReadable (lift_i, e')
                        modify (\s -> s { liftedDictMap = M.insert lift_i (t, e') $ liftedDictMap s } )
                        return lift_i
