@@ -190,8 +190,8 @@ pub struct RuleSpec {
     /// defs this rule's Sched entry evaluates at its schedule position
     /// (REntry::eager); each must have an `eager_slot`
     /// WILL_FIRE is provably constant-true (fire_when_enabled +
-    /// no-conflict rules — the MatX static case): the exec body skips
-    /// its WF gate entirely
+    /// no-conflict rules — the fully-static-schedule case): the exec
+    /// body skips its WF gate entirely
     pub always_fire: bool,
     pub eager: Vec<StrId>,
     /// eager defs of the SAME instance owned by entries that run
