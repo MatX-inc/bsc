@@ -52,7 +52,7 @@ import Pragma (RulePragma(..), isAlwaysEn)
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
 import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..), VResetInfo(..))
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
-import ASyntaxUtil (aVars)
+import ASyntaxUtil (aVars, tupleElemRange, argInputPorts)
 import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg)
@@ -1115,6 +1115,8 @@ aTypeWidth :: AType -> Word32
 aTypeWidth (ATBit n) = fromIntegral n
 aTypeWidth (ATString _) = 0
 aTypeWidth ATReal = 64
+-- a tuple is a wide bit vector, first element in the MSBs
+aTypeWidth (ATTuple ts) = sum (map aTypeWidth ts)
 aTypeWidth t = internalError ("SimExportIR.aTypeWidth: " ++ ppReadable t)
 
 -- An Integer as little-endian 32-bit limbs (matching WideData layout).
@@ -1139,7 +1141,10 @@ encExpr (ASStr _ _ s) = encVariant "Str" <$> strE s
 encExpr (AMethCall t obj meth args) = do
     o <- idE obj
     m <- idE meth
-    argsEnc <- mapM encExpr args
+    -- one value PER PORT, matching the callee's flattened (concat
+    -- inputs) method-input defs: split-port args (ATuple / tuple-typed
+    -- exprs) expand exactly as the C++ backend's call sites do
+    argsEnc <- mapM encExpr (concatMap argInputPorts args)
     return $ encVariant "MethCall" $ encStruct
       [ ("width", encW32 (aTypeWidth t))
       , ("instance", o)
@@ -1220,6 +1225,33 @@ encExpr (APrim _ t op args) = do
       , ("width", encW32 (aTypeWidth t))
       , ("args", encList argsEnc)
       ]
+-- SplitPorts tuples (multi-output methods) are laid out as wide bit
+-- vectors with the first element in the most-significant bits
+-- (Verilog {e1,...,en}) — the identical lowering the C++ backend
+-- performs (SimCCBlock aExprToCExpr ATuple/ATupleSel), so exporting
+-- the lowered form is byte-parity-correct by construction.  Encoded
+-- as the existing Concat/Extract prims: no BIR change.
+encExpr (ATuple t es) = do
+    argsEnc <- mapM encExpr es
+    return $ encVariant "Prim" $ encStruct
+      [ ("op", encUnitVariant "Concat")
+      , ("width", encW32 (aTypeWidth t))
+      , ("args", encList argsEnc)
+      ]
+encExpr (ATupleSel t e idx) = do
+    -- idx is 1-based (see AConv/AState); tupleElemRange gives the
+    -- element's [hi:lo] over the concatenated layout
+    eEnc <- encExpr e
+    let (hi, lo) = tupleElemRange (ae_type e) idx
+        ixEnc v = encVariant "Const" $ encStruct
+          [ ("width", encW32 32)
+          , ("limbs", encList [encW32 (fromIntegral v)])
+          ]
+    return $ encVariant "Prim" $ encStruct
+      [ ("op", encUnitVariant "Extract")
+      , ("width", encW32 (aTypeWidth t))
+      , ("args", encList [eEnc, ixEnc hi, ixEnc lo])
+      ]
 encExpr e = internalError ("SimExportIR.encExpr: " ++ ppReadable e)
 
 encCaseArms :: [AExpr] -> EncM [C.Encoding]
@@ -1271,7 +1303,8 @@ encAction _ (ACall obj meth (cond : args)) = do
     o <- idE obj
     m <- idE meth
     condEnc <- encExpr cond
-    argsEnc <- mapM encExpr args
+    -- per-port arg expansion: see encExpr (AMethCall ...)
+    argsEnc <- mapM encExpr (concatMap argInputPorts args)
     return $ encVariant "MethCall" $ encStruct
       [ ("instance", o)
       , ("method", m)
