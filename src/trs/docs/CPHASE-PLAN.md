@@ -146,16 +146,26 @@ measured property — audit (freeze, N-emit, byte-diff, incl.
 sandbox-relocated paths) is a hard I3 prerequisite, promoted into
 I1's deliverables.  No bsc changes in I0 itself.
 
-INCREMENT 1 — step-split flags + hermeticity + Bazel graph at EXISTING
-granularity (~1 week; ships remote caching + CI no-op hits with zero
-format risk).  (a) bsc -trs-export-only (suppress the trsLink
-shell-out at bsc.hs:1662-1663; genTrs early-return already exists).
-(b) trs: --cc flag; TMPDIR-respecting scratch (jit.rs:887-908); every
-output-affecting env knob (TRS_EDGE_SSA, TRS_JIT_SPLIT,
-TRS_AOT_ONE_MODULE, width caps) mirrored as CLI flags so Bazel action
-keys capture them.  (c) new TRS_JIT_TIME lap BEFORE lowering (today
-t0 starts after) + per-function-group attribution (edge vs outlined
-vs helpers) — measures the Increment-3/4 ceiling, currently UNKNOWN.
+INCREMENT 1 — hermeticity flags + measurements at EXISTING
+granularity.  (a) SUPERSEDED by the sharpened constraint:
+-trs-export-only DROPPED; the bsc-side work is the -c/-e split
+(post-rebase, NEXT-UP task list).
+(b) DONE 2026-07-12: `trs link` grew the hermeticity flag surface —
+--cc (TRS_CC, reaches both cc -shared sites via cc_tool()),
+--edge-ssa/--aot-one-module/--jit-split/--jit-opt/--jit-pipeline/
+--jit-threads/--outline/--outline-factor/--capi-lib/--no-fusion/
+--jit-novec — flags win by writing the env spelling pre-planning
+(single-threaded); bsc passes these through, build systems key on
+argv.  Verified: flag==env .so bytes identical; no-flag baseline
+byte-stable; --cc /bin/false fails the link (override reaches the
+tool).  TMPDIR was ALREADY honored (std::env::temp_dir(),
+jit.rs:888/958 — the plan item was stale).
+(c) DONE 2026-07-12: TRS_JIT_TIME now prints `lowering <dur>` (t
+from function entry) + `ir census <group>=<insn>insn/<bb>bb` per
+function group (edge_/exec_/hlp_/sched_/other) + `ir top` (5 largest
+fns) BEFORE t0, so ir-passes stays unpolluted.  First data point:
+memq = ONE edge fn, 5,067 insns, lowering 5.2ms vs ir-passes 393ms —
+the I3/I4 ceiling instrument is live.
 (d) DROPPED (was: Bazel rules) — no rules in this repo; see the
 sharpened constraint: Bazel wraps bsc invocations only.
 (e) experiments that decide later increments — MEASURED 2026-07-12

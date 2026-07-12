@@ -48,6 +48,37 @@ fn main() -> ExitCode {
                 match *a {
                     "-o" => out = it.next().map(|s| s.to_string()),
                     "--interactive" => interactive = true,
+                    // hermeticity: every output-affecting knob is a
+                    // flag (bsc passes these through; build systems
+                    // key actions on argv, not env).  The env vars
+                    // stay as the internal spelling — a flag wins by
+                    // writing the env here, single-threaded, before
+                    // any planning or workers.
+                    "--cc" | "--edge-ssa" | "--aot-one-module" | "--jit-split"
+                    | "--jit-opt" | "--jit-pipeline" | "--jit-threads"
+                    | "--outline" | "--outline-factor" | "--capi-lib" => {
+                        let key = match *a {
+                            "--cc" => "TRS_CC",
+                            "--edge-ssa" => "TRS_EDGE_SSA",
+                            "--aot-one-module" => "TRS_AOT_ONE_MODULE",
+                            "--jit-split" => "TRS_JIT_SPLIT",
+                            "--jit-opt" => "TRS_JIT_OPT",
+                            "--jit-pipeline" => "TRS_JIT_PIPELINE",
+                            "--jit-threads" => "TRS_JIT_THREADS",
+                            "--outline" => "TRS_EDGE_SSA_OUTLINE",
+                            "--outline-factor" => "TRS_EDGE_SSA_OUTLINE_FACTOR",
+                            _ => "TRS_CAPI_LIB",
+                        };
+                        match it.next() {
+                            Some(v) => std::env::set_var(key, v),
+                            None => {
+                                eprintln!("Error: {a} requires a value");
+                                return ExitCode::from(2);
+                            }
+                        }
+                    }
+                    "--no-fusion" => std::env::set_var("TRS_NO_FUSION", "1"),
+                    "--jit-novec" => std::env::set_var("TRS_JIT_NOVEC", "1"),
                     other => {
                         eprintln!("Error: invalid link option '{other}'");
                         return ExitCode::from(2);

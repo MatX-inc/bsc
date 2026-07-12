@@ -763,6 +763,12 @@ fn aot_or_jit_scheds(
 /// trs link: compile every rule (sched + exec) into PIC objects in
 /// parallel, add the fingerprint object, and cc -shared them into the
 /// artifact .so.
+/// The shared-link driver: TRS_CC overrides (set by `trs link --cc`,
+/// so hermetic builds pin the exact tool instead of PATH's `cc`).
+fn cc_tool() -> String {
+    std::env::var("TRS_CC").unwrap_or_else(|_| "cc".into())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn aot_emit(
@@ -899,7 +905,7 @@ fn aot_emit(
         .map_err(|e| format!("meta object: {e}"))?;
         let mf = tmp.join("meta.o");
         std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
-        let st = std::process::Command::new("cc")
+        let st = std::process::Command::new(cc_tool())
             .args(["-shared", "-o"])
             .arg(so)
             .args([&f, &mf])

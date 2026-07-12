@@ -936,6 +936,7 @@ pub fn compile_design_object(
     fused: &[FusedComp],
     edge_plan: Option<&EdgeSsaPlan>,
 ) -> Result<Vec<u8>, Ineligible> {
+    let t_low = std::time::Instant::now();
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     if !helper_specs.is_empty() {
@@ -1010,10 +1011,62 @@ pub fn compile_design_object(
         }
     }
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
-    let t0 = std::time::Instant::now();
     if timing {
-        eprintln!("trs aot: one-module lowering done");
+        eprintln!("trs aot: lowering {:?}", t_low.elapsed());
+        // per-function-group IR census: emitted size is the
+        // load-immune proxy that predicts O3 cost; the exec/hlp vs
+        // edge split is the per-type-precompilation ceiling
+        let mut groups: [(&str, u64, u64); 5] = [
+            ("edge", 0, 0),
+            ("exec", 0, 0),
+            ("hlp", 0, 0),
+            ("sched", 0, 0),
+            ("other", 0, 0),
+        ];
+        let mut top: Vec<(u64, String)> = Vec::new();
+        let mut f = module.get_first_function();
+        while let Some(func) = f {
+            let name = func.get_name().to_string_lossy().into_owned();
+            let mut blocks = 0u64;
+            let mut insts = 0u64;
+            for bb in func.get_basic_blocks() {
+                blocks += 1;
+                let mut cur = bb.get_first_instruction();
+                while let Some(i) = cur {
+                    insts += 1;
+                    cur = i.get_next_instruction();
+                }
+            }
+            let gi = if name.starts_with("edge_") {
+                0
+            } else if name.starts_with("exec_") {
+                1
+            } else if name.starts_with("hlp_") {
+                2
+            } else if name.starts_with("sched_") {
+                3
+            } else {
+                4
+            };
+            groups[gi].1 += blocks;
+            groups[gi].2 += insts;
+            if insts > 0 {
+                top.push((insts, name));
+            }
+            f = func.get_next_function();
+        }
+        let census: Vec<String> = groups
+            .iter()
+            .filter(|g| g.2 > 0)
+            .map(|(n, b, i)| format!("{n}={i}insn/{b}bb"))
+            .collect();
+        eprintln!("trs aot: ir census {}", census.join(" "));
+        top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let tops: Vec<String> =
+            top.iter().take(5).map(|(i, n)| format!("{n}={i}")).collect();
+        eprintln!("trs aot: ir top {}", tops.join(" "));
     }
+    let t0 = std::time::Instant::now();
     if std::env::var_os("TRS_JIT_DUMP_PRE").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
