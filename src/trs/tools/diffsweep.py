@@ -135,8 +135,21 @@ def one_test(job):
             except OSError:
                 pass
 
+    # sources are COPIED into the work dir and testdir stays OFF the
+    # search path: fullparallel leaves version-matched .bo/.ba residue
+    # in-tree, and -u would silently reuse it — substituting the .exp
+    # recipes' flag flavor (e.g. -keep-fires) for the sweep's own
+    # elaboration (measured: traffic_light_controller_separate linked
+    # a stale-.ba design for two whole sweep generations)
+    for f in os.listdir(testdir):
+        if f.endswith((".bsv", ".bs")):
+            try:
+                shutil.copy(os.path.join(testdir, f), wk)
+            except OSError:
+                pass
+
     common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk,
-              "-p", wk + ":" + testdir + ":+"]
+              "-p", wk + ":+"]
 
     # BDPI designs need the user's C files at link (the .exp recipes pass
     # them; .c.keep is the testsuite convention for inactive copies)

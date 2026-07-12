@@ -331,10 +331,13 @@ products, like VCS:
    elaboration — the design now COMPILES, byte-parity, 0.19s idle on
    both binaries, and a full SimExportIR revert reproduces it (the
    tuple/morder changes are exonerated).  Rebaseline at the next
-   accepted equilibrium.  QUEUED: diffsweep hardening — keep
-   testsuite-resident .bo/.ba out of the sweep search path (version-
-   matched residue silently substitutes .exp-flag elaborations for
-   sweep-flag ones).  memq DISPOSITIONED
+   accepted equilibrium.  diffsweep hardening DONE 2026-07-12:
+   sources are copied into the work dir and testdir is OFF the
+   search path (was -p wk:testdir:+), so version-matched .bo/.ba
+   residue can never substitute .exp-flag elaborations for
+   sweep-flag ones; validated under fresh residue (post-fullparallel
+   tree): 1008/0, class distribution identical, traffic_light
+   compiles fresh.  memq DISPOSITIONED
    2026-07-10: its link is BIMODAL — modal 0.39-0.55s (= the 0.12
    baseline) with a 2.4-9.9s tail at ~13% (2/15 idle runs, same
    binary/.bir); TRS_JIT_TIME isolates the tail to "trs aot: ir
