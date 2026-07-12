@@ -1,3241 +1,3163 @@
 {
  "testsuite/bsc.arrays/bounds/select:sysArrayInBounds1": {
-  "link": 0.02678571428571428,
-  "run": 0.256198347107438
+  "run": 0.24137931034482757
  },
  "testsuite/bsc.arrays/bounds/select:sysArrayInBounds2": {
-  "run": 0.24761904761904763
+  "run": 0.2692307692307693
  },
  "testsuite/bsc.arrays/bounds/select:sysBitInBounds1": {
-  "run": 0.23584905660377362
+  "run": 0.2777777777777778
  },
  "testsuite/bsc.arrays/bounds/select:sysBitInBounds2": {
-  "run": 0.25217391304347825
+  "run": 0.2434782608695652
  },
  "testsuite/bsc.arrays/bounds/select:sysListInBounds1": {
-  "run": 0.22033898305084745
+  "run": 0.2710280373831776
  },
  "testsuite/bsc.arrays/bounds/select:sysListInBounds2": {
-  "run": 0.2857142857142857
+  "run": 0.24299065420560748
  },
  "testsuite/bsc.arrays/bounds/select:sysListNInBounds1": {
-  "run": 0.23809523809523808
+  "run": 0.24528301886792453
  },
  "testsuite/bsc.arrays/bounds/select:sysListNInBounds2": {
-  "run": 0.1864406779661017
+  "run": 0.25471698113207547
  },
  "testsuite/bsc.arrays/bounds/select:sysVectorInBounds1": {
-  "run": 0.2710280373831776
+  "run": 0.25217391304347825
  },
  "testsuite/bsc.arrays/bounds/select:sysVectorInBounds2": {
-  "run": 0.23255813953488372
+  "run": 0.22115384615384617
  },
  "testsuite/bsc.arrays/bounds/update:sysArrayInBounds1": {
-  "run": 0.24137931034482757
+  "run": 0.25233644859813087
  },
  "testsuite/bsc.arrays/bounds/update:sysArrayInBounds2": {
-  "run": 0.2654867256637168
+  "run": 0.2524271844660194
  },
  "testsuite/bsc.arrays/bounds/update:sysBitInBounds1": {
-  "run": 0.2288135593220339
+  "run": 0.24299065420560748
  },
  "testsuite/bsc.arrays/bounds/update:sysBitInBounds2": {
-  "run": 0.29523809523809524
+  "run": 0.25
  },
  "testsuite/bsc.arrays/bounds/update:sysListInBounds1": {
-  "run": 0.2248062015503876
+  "run": 0.2571428571428572
  },
  "testsuite/bsc.arrays/bounds/update:sysListInBounds2": {
-  "run": 0.2857142857142857
- },
- "testsuite/bsc.arrays/bounds/update:sysListNInBounds1": {
-  "run": 0.25
- },
- "testsuite/bsc.arrays/bounds/update:sysListNInBounds2": {
-  "run": 0.23529411764705885
- },
- "testsuite/bsc.arrays/bounds/update:sysVectorInBounds1": {
-  "run": 0.26956521739130435
- },
- "testsuite/bsc.arrays/bounds/update:sysVectorInBounds2": {
-  "run": 0.2459016393442623
- },
- "testsuite/bsc.arrays/dynamic:sysDynamicActionDynamicIndex": {
-  "run": 0.2300884955752212
- },
- "testsuite/bsc.arrays/dynamic:sysDynamicArrayDynamicUpdate": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.arrays/dynamic:sysDynamicListDynamicActionDynamicIndex": {
-  "run": 0.25
- },
- "testsuite/bsc.arrays/dynamic:sysDynamicListDynamicUpdate": {
-  "run": 0.2718446601941748
- },
- "testsuite/bsc.arrays/dynamic:sysDynamicSelectUpdateArray": {
-  "run": 0.226890756302521
- },
- "testsuite/bsc.arrays/dynamic:sysDynamicSelectUpdateList": {
-  "run": 0.23809523809523808
- },
- "testsuite/bsc.arrays/dynamic:sysSimpleDynamicAction": {
-  "run": 0.25
- },
- "testsuite/bsc.arrays/dynamic:sysSimpleDynamicList": {
-  "link": 0.02678571428571428,
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.arrays/dynamic:sysSimpleDynamicListAction": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.arrays/dynamic:sysSimpleDynamicTest": {
-  "run": 0.19469026548672563
- },
- "testsuite/bsc.arrays/dynamic:sysTwoLevelUpdate": {
-  "run": 0.20175438596491227
- },
- "testsuite/bsc.arrays/dynamic:sysTwoLevelUpdateList": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.arrays/undefined:sysSelectArrayUndefinedIndex": {
-  "run": 0.25
- },
- "testsuite/bsc.arrays/undefined:sysSelectListUndefinedIndex": {
-  "run": 0.23076923076923075
- },
- "testsuite/bsc.arrays/undefined:sysSelectUndefinedArray": {
-  "run": 0.23333333333333334
- },
- "testsuite/bsc.arrays/undefined:sysSelectUndefinedArrayStatic": {
-  "run": 0.25
- },
- "testsuite/bsc.arrays/undefined:sysSelectUndefinedList": {
-  "run": 0.25
- },
- "testsuite/bsc.arrays/undefined:sysSelectUndefinedListStatic": {
-  "run": 0.2711864406779661
- },
- "testsuite/bsc.arrays/undefined:sysSelectUndefinedVector": {
-  "run": 0.2416666666666667
- },
- "testsuite/bsc.arrays/undefined:sysSelectUndefinedVectorStatic": {
-  "run": 0.23333333333333334
- },
- "testsuite/bsc.arrays:sysLoopUpdate": {
-  "link": 0.27759197324414714,
-  "run": 0.3185840707964601
- },
- "testsuite/bsc.arrays:sysLoopUpdate2": {
-  "link": 0.2554517133956386,
-  "run": 0.3055555555555556
- },
- "testsuite/bsc.assertions/properties:sysSemanticsTest": {
-  "link": 0.08434596140100072
- },
- "testsuite/bsc.bluesim/block_codegen_sweep:sysSchedFixTb": {
-  "link": 0.005025125628140704,
-  "run": 0.26495726495726496
- },
- "testsuite/bsc.bluesim/debugging:mkMCDTest": {
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.bluesim/debugging:mkRF": {
-  "link": 0.034334763948497854,
-  "run": 0.23728813559322035
- },
- "testsuite/bsc.bluesim/debugging:mkTbGCD": {
-  "link": 0.02777777777777778
- },
- "testsuite/bsc.bluesim/interactive:mkLong": {
-  "run": 0.30841121495327106
- },
- "testsuite/bsc.bluesim/interactive:mkMCDTest": {
   "run": 0.27358490566037735
  },
- "testsuite/bsc.bluesim/interactive:mkPrims": {
-  "link": 0.03571428571428571,
-  "run": 0.256198347107438
- },
- "testsuite/bsc.bluesim/interactive:mkTbGCD": {
-  "link": 0.028225806451612906,
-  "run": 0.22413793103448273
- },
- "testsuite/bsc.bluesim/interactive:mkTest": {
-  "run": 0.2718446601941748
- },
- "testsuite/bsc.bluesim/interactive:mkTimescaleTest": {
-  "link": 0.027777777777777776
- },
- "testsuite/bsc.bluesim/interactive:mkTop": {
-  "link": 0.003115264797507788,
-  "run": 0.2807017543859649
- },
- "testsuite/bsc.bluesim/misc:sysArithShift": {
-  "link": 0.0330188679245283,
-  "run": 0.2782608695652174
- },
- "testsuite/bsc.bluesim/misc:sysClkTest": {
-  "run": 0.21052631578947367
- },
- "testsuite/bsc.bluesim/misc:sysEmptyModule": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.bluesim/misc:sysSameFamily": {
-  "link": 0.004,
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.bluesim/misc:sysSignedWideLiteral": {
-  "run": 0.24074074074074073
- },
- "testsuite/bsc.bluesim/misc:sysSparseRF": {
-  "link": 0.02845528455284553,
-  "run": 0.34146341463414637
- },
- "testsuite/bsc.bluesim/misc:sysWideModArgPortTest": {
-  "link": 0.004115226337448559,
-  "run": 0.19999999999999998
- },
- "testsuite/bsc.bluesim/misc:sysWideRF": {
-  "link": 0.026627218934911243,
-  "run": 0.2796610169491526
- },
- "testsuite/bsc.bluesim/misc:sysWindowsRF": {
-  "link": 0.027272727272727268,
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.bluesim/operators:sysExtractBounds": {
-  "link": 0.10294117647058824,
-  "run": 0.28155339805825247
- },
- "testsuite/bsc.bluesim/operators:sysExtractSizes": {
-  "link": 0.10676156583629892,
-  "run": 0.29411764705882354
- },
- "testsuite/bsc.bluesim/operators:sysShiftL": {
-  "link": 0.13551401869158877,
-  "run": 0.2956521739130435
- },
- "testsuite/bsc.bluesim/operators:sysShiftR": {
-  "link": 0.18699186991869918,
-  "run": 0.319327731092437
- },
- "testsuite/bsc.bluesim/operators:sysShiftRA": {
-  "link": 0.24847560975609756,
-  "run": 0.29914529914529914
- },
- "testsuite/bsc.bluesim/parallel:mkTbGCD": {
-  "link": 0.02575107296137339
- },
- "testsuite/bsc.bluesim/vcd:sysVCDTest1": {
-  "link": 0.0032154340836012866,
-  "run": 0.43965517241379304
- },
- "testsuite/bsc.bluesim/vcd:sysVCDTest2": {
-  "link": 0.006134969325153374,
-  "run": 0.5581395348837209
- },
- "testsuite/bsc.bsv_examples/AES:sysAes_TB": {
-  "link": 0.5316455696202531,
-  "run": 0.9051724137931033
- },
- "testsuite/bsc.bsv_examples/AmbaAdapters:sysDMA": {
-  "link": 0.05616740088105727,
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.bsv_examples/AmbaAdapters:sysM1_25": {
-  "link": 0.048165137614678895,
-  "run": 0.27586206896551724
- },
- "testsuite/bsc.bsv_examples/AmbaLoadDemo:sysM1_25": {
-  "link": 0.055374592833876225,
-  "run": 0.2884615384615385
- },
- "testsuite/bsc.bsv_examples/AmbaSynthesis:sysDMA": {
-  "link": 0.04271844660194175,
-  "run": 0.288135593220339
- },
- "testsuite/bsc.bsv_examples/AmbaTransModel:sysTB1m2s": {
-  "link": 0.002735978112175103,
-  "run": 0.396551724137931
- },
- "testsuite/bsc.bsv_examples/AssertionsDemo:sysAssertionWiresTest": {
-  "link": 0.02214022140221402,
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.bsv_examples/AssertionsDemo:sysTester": {
-  "link": 0.0048192771084337345,
-  "run": 0.5929203539823009
- },
- "testsuite/bsc.bsv_examples/AssertionsDemo:sysTesterBug": {
-  "link": 0.004728132387706856,
-  "run": 0.4523809523809524
- },
- "testsuite/bsc.bsv_examples/AssertionsDemo:sysTesterWires": {
-  "link": 0.003976143141153081,
-  "run": 0.6206896551724137
- },
- "testsuite/bsc.bsv_examples/AssertionsDemo:sysTesterWiresBug": {
-  "link": 0.003984063745019921,
-  "run": 0.5503875968992248
- },
- "testsuite/bsc.bsv_examples/FIRFilter:sysFIRTest": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterA": {
-  "link": 0.004842615012106538,
-  "run": 0.3913043478260869
- },
- "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterA64": {
-  "link": 0.004048582995951417,
-  "run": 0.5677966101694916
- },
- "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterM": {
-  "link": 0.005194805194805195,
-  "run": 0.37068965517241376
- },
- "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterM64": {
-  "link": 0.00447427293064877,
-  "run": 0.43965517241379304
- },
- "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterMac": {
-  "link": 0.005102040816326531,
-  "run": 0.3643410852713178
- },
- "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterMac64": {
-  "link": 0.005,
-  "run": 0.4645669291338582
- },
- "testsuite/bsc.bsv_examples/GlibcRandom:systbFast": {
-  "link": 0.22866894197952217,
-  "run": 0.29661016949152547
- },
- "testsuite/bsc.bsv_examples/GlibcRandom:systbSlow": {
-  "link": 0.1409090909090909,
-  "run": 0.2564102564102564
- },
- "testsuite/bsc.bsv_examples/Hamming:sysHamming": {
-  "link": 0.006944444444444445,
-  "run": 1.56640625
- },
- "testsuite/bsc.bsv_examples/Life:sysLife": {
-  "link": 0.06432748538011696,
-  "run": 0.26717557251908397
- },
- "testsuite/bsc.bsv_examples/Maxtree:sys_fifo": {
-  "link": 0.006825938566552901,
-  "run": 0.453125
- },
- "testsuite/bsc.bsv_examples/Maxtree:sys_fifo_loopy": {
-  "link": 0.004273504273504274,
-  "run": 0.39568345323741005
- },
- "testsuite/bsc.bsv_examples/Misc:sysTestShifter64": {
-  "link": 0.05947955390334573,
-  "run": 0.2711864406779661
- },
- "testsuite/bsc.bsv_examples/SHA1:sysKenSha1": {
-  "link": 0.0960960960960961,
-  "run": 0.2773109243697479
- },
- "testsuite/bsc.bsv_examples/SHA256:sysKenSha2": {
-  "link": 0.2280701754385965,
-  "run": 0.33333333333333337
- },
- "testsuite/bsc.bsv_examples/SHA512:sysKenSha2": {
-  "link": 0.33333333333333337,
-  "run": 0.2894736842105263
- },
- "testsuite/bsc.bsv_examples/bsvfifo:sysSizedFIFOTest": {
-  "link": 0.05782312925170068,
-  "run": 0.3238095238095238
- },
- "testsuite/bsc.bsv_examples/cpu:mkCPUTest": {
-  "link": 0.05569620253164557
- },
- "testsuite/bsc.bsv_examples/cpu:mkCPUTestBypass": {
-  "link": 0.06403940886699508,
-  "run": 0.2672413793103448
- },
- "testsuite/bsc.bsv_examples/cpu:mkCPUTestBypassPreFIFO": {
-  "link": 0.06944444444444443,
-  "run": 0.2920353982300885
- },
- "testsuite/bsc.bsv_examples/cpu:mkCPUTestV2": {
-  "link": 0.04884318766066838,
-  "run": 0.2631578947368421
- },
- "testsuite/bsc.bsv_examples/fifo/fifo_FixedPtrSize:mkSFIFOTest": {
-  "link": 0.03755868544600939,
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.bsv_examples/fifo/fifo_RAM:mkSFIFOTest": {
-  "link": 0.036885245901639344,
-  "run": 0.2647058823529412
- },
- "testsuite/bsc.bsv_examples/fifo/fifo_UBit1:mkSFIFOTest": {
-  "link": 0.03765690376569037,
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.bsv_examples/fifo/fifo_UBit2:mkSFIFOTest": {
-  "link": 0.05,
-  "run": 0.24271844660194178
- },
- "testsuite/bsc.bsv_examples/fifo_arb:mkTb1": {
-  "link": 0.007434944237918216,
-  "run": 0.2608695652173913
- },
- "testsuite/bsc.bsv_examples/fifo_arb:mkTb2": {
-  "link": 0.007380073800738008,
-  "run": 0.2672413793103448
- },
- "testsuite/bsc.bsv_examples/fifo_arb:mkTb2b": {
-  "link": 0.0035842293906810036,
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.bsv_examples/fifo_arb:mkTb3": {
-  "link": 0.0036101083032490976,
-  "run": 0.31034482758620685
- },
- "testsuite/bsc.bsv_examples/gcd:mkTbDIV3": {
-  "link": 0.02602230483271376,
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.bsv_examples/gcd:mkTbGCD": {
-  "link": 0.029288702928870293,
-  "run": 0.2710280373831776
- },
- "testsuite/bsc.bsv_examples/gcd:mkTbWideGCD": {
-  "link": 0.027667984189723323,
-  "run": 0.20512820512820512
- },
- "testsuite/bsc.bsv_examples/mcd_Rand:mkTop": {
-  "link": 0.0050890585241730275,
-  "run": 0.44537815126050423
- },
- "testsuite/bsc.bsv_examples/memq:sysDQueueTb": {
-  "link": 0.125
- },
- "testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv:sysTestMesa": {
-  "link": 0.05647840531561463,
-  "run": 1.7935483870967743
- },
- "testsuite/bsc.bsv_examples/mimo:sysTrafficBRAM": {
-  "link": 0.8423076923076923,
-  "run": 1.6122448979591837
- },
- "testsuite/bsc.bsv_examples/mimo:sysTrafficREG": {
-  "link": 0.20884955752212386,
-  "run": 0.6544117647058822
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb1": {
-  "run": 0.2897196261682243
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb2": {
-  "run": 0.23529411764705885
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb3": {
-  "run": 0.2288135593220339
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb4": {
-  "link": 0.07042253521126761,
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb5": {
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb6": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb7": {
-  "link": 0.0790513833992095,
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.bsv_examples/shifter:mkTb8": {
-  "link": 0.0392156862745098,
-  "run": 0.23076923076923075
- },
- "testsuite/bsc.bsv_examples/stepcounter:sysTestStepCounter": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.bsv_examples/sudoku:mkGenerateTest3": {
-  "link": 0.7498004788507582,
-  "run": 0.864
- },
- "testsuite/bsc.bsv_examples/vending:sysTestVending": {
-  "link": 0.04778156996587031,
-  "run": 0.23529411764705885
- },
- "testsuite/bsc.bsv_examples/xbar:sysTb": {
-  "link": 0.2111801242236025,
-  "run": 0.31034482758620685
- },
- "testsuite/bsc.bugs/bluespec_inc/b1037:sysFoo": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.bugs/bluespec_inc/b1045:sysDesign": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.bugs/bluespec_inc/b1302:sysRFile2": {
-  "link": 0.07947019867549668,
-  "run": 0.2608695652173913
- },
- "testsuite/bsc.bugs/bluespec_inc/b1314:sysTest": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.bugs/bluespec_inc/b1353:sysBug1353": {
-  "link": 0.06926406926406926,
-  "run": 0.2857142857142857
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysForLoop1": {
-  "run": 0.23076923076923075
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysFunctionLocation1": {
-  "run": 0.19130434782608693
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysFunctionLocation2": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysInstOrder1": {
-  "run": 0.23728813559322035
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysInstOrder2": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleNameClash1": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleNameClash2": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleOrder1": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleOrder2": {
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleOrder3": {
-  "run": 0.25
- },
- "testsuite/bsc.bugs/bluespec_inc/b1666:sysBug1666": {
-  "link": 0.01968503937007874,
-  "run": 0.20175438596491227
- },
- "testsuite/bsc.bugs/bluespec_inc/b1666:sysSignedTest": {
-  "link": 0.022421524663677132,
-  "run": 0.24038461538461542
- },
- "testsuite/bsc.bugs/bluespec_inc/b335:mkDesignE": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.bugs/bluespec_inc/b335:mkDesignI": {
-  "run": 0.22413793103448273
- },
- "testsuite/bsc.bugs/bluespec_inc/b402:sysTest": {
-  "link": 0.021818181818181816,
-  "run": 0.25
- },
- "testsuite/bsc.bugs/bluespec_inc/b431:sysBug431": {
-  "run": 0.2647058823529412
- },
- "testsuite/bsc.bugs/bluespec_inc/b535:sysUnsetRWire": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.bugs/bluespec_inc/b540:sysBug540_2": {
-  "run": 0.21568627450980393
- },
- "testsuite/bsc.bugs/bluespec_inc/b621:sysDynamicVectorIfc": {
-  "link": 0.02074688796680498,
-  "run": 0.21296296296296297
- },
- "testsuite/bsc.bugs/bluespec_inc/b621:sysStaticVectorIfc": {
-  "link": 0.026086956521739132,
-  "run": 0.1968503937007874
- },
- "testsuite/bsc.bugs/bluespec_inc/b791:sysBug791": {
-  "link": 0.022388059701492536,
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.bugs/bluespec_inc/b810:sysOpt_bug": {
-  "run": 0.24271844660194178
- },
- "testsuite/bsc.bugs/bluespec_inc/b898:sysBug898": {
-  "link": 0.03623188405797102,
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.bugs/bluespec_inc/b898:sysBug898_2": {
-  "link": 0.0404040404040404,
-  "run": 0.25
- },
- "testsuite/bsc.bugs/bluespec_inc/b925:sysTest1": {
-  "link": 0.03652968036529681,
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.bugs/bluespec_inc/b925:sysTest2": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.bugs/bluespec_inc/b925:sysTest3": {
-  "link": 0.04390243902439025,
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.bugs/bluespec_inc/b925:sysTest4": {
-  "link": 0.04326923076923077,
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.bugs/github/gh836:sysZeroSizeWires": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.bugs/github/gh836:sysZeroUndet": {
-  "run": 0.2192982456140351
- },
- "testsuite/bsc.bugs/pre_bluespec_inc:sysBug122": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.codegen/case:sysDupResult": {
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.codegen/case:sysIfElseCase_Func": {
-  "run": 0.2641509433962264
- },
- "testsuite/bsc.codegen/case:sysIfElseCase_Inline": {
-  "run": 0.23584905660377362
- },
- "testsuite/bsc.codegen/case:sysNoOp_LargerRes": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.codegen/case:sysNoOp_SameSize": {
-  "run": 0.21367521367521367
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestActionValues": {
-  "link": 0.008032128514056224,
-  "run": 0.2543859649122807
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestActionValuesUnusedValue": {
-  "link": 0.03,
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestActions": {
-  "link": 0.04651162790697675,
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestAggressiveConditions": {
-  "link": 0.006802721088435375,
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestMethodsTB": {
-  "link": 0.0056022408963585435,
-  "run": 0.2631578947368421
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestMultipleRules": {
-  "link": 0.008733624454148471,
-  "run": 0.2542372881355932
- },
- "testsuite/bsc.codegen/foreign/battery:mkTestValues": {
-  "link": 0.057522123893805316,
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.codegen/foreign:mkBDPIAction": {
-  "link": 0.02092050209205021,
-  "run": 0.21551724137931036
- },
- "testsuite/bsc.codegen/foreign:mkBDPIActionValue": {
-  "link": 0.02358490566037736,
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.codegen/foreign:mkBDPIActionValueIgnorePolyReturn": {
-  "link": 0.022421524663677132,
-  "run": 0.28155339805825247
- },
- "testsuite/bsc.codegen/foreign:mkBDPIActionValueIgnoreReturn": {
-  "link": 0.02439024390243903,
-  "run": 0.20869565217391303
- },
- "testsuite/bsc.codegen/foreign:mkBDPIActionValueIgnoreWideReturn": {
-  "link": 0.024509803921568627,
-  "run": 0.25
- },
- "testsuite/bsc.codegen/foreign:mkBDPIActionValueWithLogic": {
-  "link": 0.009009009009009009,
-  "run": 0.21739130434782608
- },
- "testsuite/bsc.codegen/foreign:mkBDPIActionValue_": {
-  "link": 0.02403846153846154,
-  "run": 0.23584905660377362
- },
- "testsuite/bsc.codegen/foreign:mkBDPIArg64": {
-  "link": 0.0047619047619047615,
-  "run": 0.2761904761904762
- },
- "testsuite/bsc.codegen/foreign:mkBDPIBit8": {
-  "link": 0.025104602510460247,
-  "run": 0.21739130434782608
- },
- "testsuite/bsc.codegen/foreign:mkBDPIBit97": {
-  "link": 0.027149321266968326,
-  "run": 0.24271844660194178
- },
- "testsuite/bsc.codegen/foreign:mkBDPIBitN": {
-  "link": 0.037209302325581395,
-  "run": 0.22413793103448273
- },
- "testsuite/bsc.codegen/foreign:mkBDPIDynamicStringArg": {
-  "link": 0.008771929824561405,
-  "run": 0.23684210526315788
- },
- "testsuite/bsc.codegen/foreign:mkBDPINonBit_Bool": {
-  "link": 0.03431372549019608,
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.codegen/foreign:mkBDPIPassingStruct": {
-  "link": 0.034334763948497854,
-  "run": 0.2772277227722772
- },
- "testsuite/bsc.codegen/foreign:mkBDPIPrimAction": {
-  "link": 0.023696682464454978,
-  "run": 0.24778761061946902
- },
- "testsuite/bsc.codegen/foreign:mkBDPIStringArg": {
-  "link": 0.028985507246376812,
-  "run": 0.24786324786324787
- },
- "testsuite/bsc.codegen/foreign:mkBDPIWideResult": {
-  "link": 0.027522935779816512,
+ "testsuite/bsc.arrays/bounds/update:sysListNInBounds1": {
   "run": 0.24576271186440682
  },
- "testsuite/bsc.codegen/foreign:mkBDPI_CapitalLinkName": {
-  "link": 0.028169014084507043,
-  "run": 0.25471698113207547
+ "testsuite/bsc.arrays/bounds/update:sysListNInBounds2": {
+  "run": 0.20930232558139533
  },
- "testsuite/bsc.codegen/foreign:mkBug": {
-  "link": 0.023728813559322035,
-  "run": 0.2380952380952381
- },
- "testsuite/bsc.codegen/strings:sysStringCharFunctions": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.codegen/vector_modargs:sysClockedByReset": {
-  "link": 0.026923076923076925,
-  "run": 0.226890756302521
- },
- "testsuite/bsc.codegen/vector_modargs:sysVecClockResetToRegIfc": {
-  "link": 0.03137254901960784,
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.codegen/vector_modargs:sysVecVecVecInt_Order": {
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.codegen:mkPrimPriMuxNSS": {
-  "run": 0.21238938053097345
- },
- "testsuite/bsc.compile/letrec:sysDerive1": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.compile/letrec:sysDerive2": {
-  "run": 0.2543859649122807
- },
- "testsuite/bsc.compile/letrec:sysLetrecbit": {
+ "testsuite/bsc.arrays/bounds/update:sysVectorInBounds1": {
   "run": 0.23076923076923075
  },
+ "testsuite/bsc.arrays/bounds/update:sysVectorInBounds2": {
+  "run": 0.2066115702479339
+ },
+ "testsuite/bsc.arrays/dynamic:sysDynamicActionDynamicIndex": {
+  "run": 0.21487603305785125
+ },
+ "testsuite/bsc.arrays/dynamic:sysDynamicArrayDynamicUpdate": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.arrays/dynamic:sysDynamicListDynamicActionDynamicIndex": {
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.arrays/dynamic:sysDynamicListDynamicUpdate": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.arrays/dynamic:sysDynamicSelectUpdateArray": {
+  "run": 0.2777777777777778
+ },
+ "testsuite/bsc.arrays/dynamic:sysDynamicSelectUpdateList": {
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.arrays/dynamic:sysSimpleDynamicAction": {
+  "run": 0.3055555555555556
+ },
+ "testsuite/bsc.arrays/dynamic:sysSimpleDynamicList": {
+  "link": 0.035,
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.arrays/dynamic:sysSimpleDynamicListAction": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.arrays/dynamic:sysSimpleDynamicTest": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.arrays/dynamic:sysTwoLevelUpdate": {
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.arrays/dynamic:sysTwoLevelUpdateList": {
+  "run": 0.2396694214876033
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectArrayUndefinedIndex": {
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectListUndefinedIndex": {
+  "run": 0.24793388429752067
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectUndefinedArray": {
+  "run": 0.22950819672131148
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectUndefinedArrayStatic": {
+  "run": 0.2543859649122807
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectUndefinedList": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectUndefinedListStatic": {
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectUndefinedVector": {
+  "run": 0.19166666666666668
+ },
+ "testsuite/bsc.arrays/undefined:sysSelectUndefinedVectorStatic": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.arrays:sysLoopUpdate": {
+  "link": 0.2604166666666667,
+  "run": 0.3047619047619048
+ },
+ "testsuite/bsc.arrays:sysLoopUpdate2": {
+  "link": 0.22670807453416147,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.assertions/properties:sysSemanticsTest": {
+  "link": 0.07667031763417305,
+  "run": 0.36363636363636365
+ },
+ "testsuite/bsc.bits_coercion:sysNormAdjacent": {
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.bits_coercion:sysNormEager": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.bits_coercion:sysNormMux": {
+  "run": 0.2549019607843137
+ },
+ "testsuite/bsc.bits_coercion:sysNormMuxMixed": {
+  "run": 0.21666666666666667
+ },
+ "testsuite/bsc.bits_coercion:sysNormMuxMixedEager": {
+  "run": 0.21666666666666667
+ },
+ "testsuite/bsc.bluesim/block_codegen_sweep:sysSchedFixTb": {
+  "link": 0.005323868677905945,
+  "run": 0.2916666666666667
+ },
+ "testsuite/bsc.bluesim/debugging:mkMCDTest": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.bluesim/debugging:mkRF": {
+  "link": 0.029787234042553193,
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.bluesim/debugging:mkTbGCD": {
+  "link": 0.0242914979757085,
+  "run": 0.21666666666666667
+ },
+ "testsuite/bsc.bluesim/fst:sysFstDump": {
+  "link": 0.02074688796680498,
+  "run": 0.2735042735042735
+ },
+ "testsuite/bsc.bluesim/fst:sysFstTasks": {
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.bluesim/interactive:mkLong": {
+  "run": 0.27450980392156865
+ },
+ "testsuite/bsc.bluesim/interactive:mkMCDTest": {
+  "run": 0.21641791044776118
+ },
+ "testsuite/bsc.bluesim/interactive:mkPrims": {
+  "link": 0.03139013452914798,
+  "run": 0.24137931034482757
+ },
+ "testsuite/bsc.bluesim/interactive:mkTbGCD": {
+  "link": 0.02214022140221402,
+  "run": 0.23333333333333334
+ },
+ "testsuite/bsc.bluesim/interactive:mkTest": {
+  "run": 0.24299065420560748
+ },
+ "testsuite/bsc.bluesim/interactive:mkTimescaleTest": {
+  "run": 0.2912621359223301
+ },
+ "testsuite/bsc.bluesim/interactive:mkTop": {
+  "link": 0.00664451827242525,
+  "run": 0.3333333333333333
+ },
+ "testsuite/bsc.bluesim/interactive:sysAPeriodicTest": {
+  "run": 0.2897196261682243
+ },
+ "testsuite/bsc.bluesim/misc:sysArithShift": {
+  "run": 0.2735042735042735
+ },
+ "testsuite/bsc.bluesim/misc:sysClkTest": {
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.bluesim/misc:sysEmptyModule": {
+  "run": 0.20491803278688525
+ },
+ "testsuite/bsc.bluesim/misc:sysMulTest": {
+  "run": 0.2285714285714286
+ },
+ "testsuite/bsc.bluesim/misc:sysSameFamily": {
+  "link": 0.007547169811320755,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.bluesim/misc:sysShowVersionTimestamps": {
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.bluesim/misc:sysSignedWideLiteral": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.bluesim/misc:sysSparseRF": {
+  "link": 0.027343750000000003,
+  "run": 0.3448275862068965
+ },
+ "testsuite/bsc.bluesim/misc:sysWideModArgPortTest": {
+  "link": 0.008264462809917356,
+  "run": 0.25217391304347825
+ },
+ "testsuite/bsc.bluesim/misc:sysWideRF": {
+  "link": 0.033962264150943396,
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.bluesim/misc:sysWideSched": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.bluesim/misc:sysWindowsRF": {
+  "link": 0.020080321285140562
+ },
+ "testsuite/bsc.bluesim/operators:sysExtractBounds": {
+  "link": 0.10661764705882351,
+  "run": 0.27358490566037735
+ },
+ "testsuite/bsc.bluesim/operators:sysExtractSizes": {
+  "link": 0.09634551495016612,
+  "run": 0.23684210526315788
+ },
+ "testsuite/bsc.bluesim/operators:sysShiftL": {
+  "link": 0.18965517241379312,
+  "run": 0.23140495867768596
+ },
+ "testsuite/bsc.bluesim/operators:sysShiftR": {
+  "link": 0.17277486910994766,
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.bluesim/operators:sysShiftRA": {
+  "link": 0.26251276813074564,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.bluesim/parallel:mkTbGCD": {
+  "link": 0.025210084033613446,
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.bluesim/vcd:sysVCDTest1": {
+  "link": 0.003257328990228013,
+  "run": 0.4488188976377953
+ },
+ "testsuite/bsc.bluesim/vcd:sysVCDTest2": {
+  "link": 0.0051813471502590676,
+  "run": 0.5426356589147288
+ },
+ "testsuite/bsc.bsv_examples/AES:sysAes_TB": {
+  "link": 0.5146726862302483,
+  "run": 0.8091603053435114
+ },
+ "testsuite/bsc.bsv_examples/AmbaAdapters:sysDMA": {
+  "link": 0.04565868263473054,
+  "run": 0.19333333333333336
+ },
+ "testsuite/bsc.bsv_examples/AmbaAdapters:sysM1_25": {
+  "link": 0.03710575139146568,
+  "run": 0.25984251968503935
+ },
+ "testsuite/bsc.bsv_examples/AmbaLoadDemo:sysM1_25": {
+  "link": 0.05431309904153355,
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.bsv_examples/AmbaSynthesis:sysDMA": {
+  "link": 0.047619047619047616,
+  "run": 0.2706766917293233
+ },
+ "testsuite/bsc.bsv_examples/AmbaTransModel:sysTB1m2s": {
+  "link": 0.0020554984583761563,
+  "run": 0.366412213740458
+ },
+ "testsuite/bsc.bsv_examples/AssertionsDemo:sysAssertionWiresTest": {
+  "link": 0.025423728813559324,
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.bsv_examples/AssertionsDemo:sysTester": {
+  "link": 0.0039447731755424065,
+  "run": 0.5488721804511277
+ },
+ "testsuite/bsc.bsv_examples/AssertionsDemo:sysTesterBug": {
+  "link": 0.003937007874015748,
+  "run": 0.4923076923076923
+ },
+ "testsuite/bsc.bsv_examples/AssertionsDemo:sysTesterWires": {
+  "link": 0.0028735632183908046,
+  "run": 0.5074626865671642
+ },
+ "testsuite/bsc.bsv_examples/AssertionsDemo:sysTesterWiresBug": {
+  "link": 0.0029542097488921715,
+  "run": 0.556390977443609
+ },
+ "testsuite/bsc.bsv_examples/FIRFilter:sysFIRTest": {
+  "link": 0.03255813953488373,
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterA": {
+  "link": 0.004694835680751174,
+  "run": 0.4015151515151515
+ },
+ "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterA64": {
+  "link": 0.003289473684210526,
+  "run": 0.5454545454545454
+ },
+ "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterM": {
+  "link": 0.005012531328320802,
+  "run": 0.39495798319327735
+ },
+ "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterM64": {
+  "link": 0.0042643923240938165,
+  "run": 0.3728813559322034
+ },
+ "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterMac": {
+  "link": 0.004842615012106538,
+  "run": 0.46551724137931033
+ },
+ "testsuite/bsc.bsv_examples/FloatingPoint:sysTesterMac64": {
+  "link": 0.0048543689320388345,
+  "run": 0.45299145299145294
+ },
+ "testsuite/bsc.bsv_examples/GlibcRandom:systbFast": {
+  "link": 0.24187725631768955,
+  "run": 0.20155038759689922
+ },
+ "testsuite/bsc.bsv_examples/GlibcRandom:systbSlow": {
+  "link": 0.14410480349344978,
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.bsv_examples/Hamming:sysHamming": {
+  "link": 0.00784313725490196,
+  "run": 2.052173913043478
+ },
+ "testsuite/bsc.bsv_examples/Life:sysLife": {
+  "link": 0.06172839506172839,
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.bsv_examples/Maxtree:sys_fifo": {
+  "link": 0.0037313432835820895,
+  "run": 0.416
+ },
+ "testsuite/bsc.bsv_examples/Maxtree:sys_fifo_loopy": {
+  "link": 0.00980392156862745,
+  "run": 0.46031746031746035
+ },
+ "testsuite/bsc.bsv_examples/Misc:sysTestShifter64": {
+  "link": 0.048192771084337345,
+  "run": 0.2109375
+ },
+ "testsuite/bsc.bsv_examples/SHA1:sysKenSha1": {
+  "link": 0.1305732484076433,
+  "run": 0.2434782608695652
+ },
+ "testsuite/bsc.bsv_examples/SHA256:sysKenSha2": {
+  "link": 0.2192307692307692,
+  "run": 0.2595419847328244
+ },
+ "testsuite/bsc.bsv_examples/SHA512:sysKenSha2": {
+  "link": 0.2686762778505898,
+  "run": 0.3076923076923077
+ },
+ "testsuite/bsc.bsv_examples/bsvfifo:sysSizedFIFOTest": {
+  "link": 0.05542168674698795,
+  "run": 0.3275862068965517
+ },
+ "testsuite/bsc.bsv_examples/cpu:mkCPUTest": {
+  "link": 0.07142857142857142,
+  "run": 0.2605042016806723
+ },
+ "testsuite/bsc.bsv_examples/cpu:mkCPUTestBypass": {
+  "link": 0.057870370370370364,
+  "run": 0.25688073394495414
+ },
+ "testsuite/bsc.bsv_examples/cpu:mkCPUTestBypassPreFIFO": {
+  "link": 0.0585197934595525,
+  "run": 0.2833333333333334
+ },
+ "testsuite/bsc.bsv_examples/cpu:mkCPUTestV2": {
+  "link": 0.052770448548812667,
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.bsv_examples/fifo/fifo_RAM:mkSFIFOTest": {
+  "link": 0.036,
+  "run": 0.2777777777777778
+ },
+ "testsuite/bsc.bsv_examples/fifo/fifo_UBit1:mkSFIFOTest": {
+  "link": 0.03980099502487563
+ },
+ "testsuite/bsc.bsv_examples/fifo/fifo_UBit2:mkSFIFOTest": {
+  "run": 0.22807017543859648
+ },
+ "testsuite/bsc.bsv_examples/fifo_arb:mkTb1": {
+  "link": 0.006666666666666667,
+  "run": 0.2773109243697479
+ },
+ "testsuite/bsc.bsv_examples/fifo_arb:mkTb2": {
+  "link": 0.0032258064516129032,
+  "run": 0.2884615384615385
+ },
+ "testsuite/bsc.bsv_examples/fifo_arb:mkTb2b": {
+  "link": 0.007326007326007326,
+  "run": 0.2627118644067797
+ },
+ "testsuite/bsc.bsv_examples/fifo_arb:mkTb3": {
+  "link": 0.006622516556291391,
+  "run": 0.3207547169811321
+ },
+ "testsuite/bsc.bsv_examples/gcd:mkTbDIV3": {
+  "link": 0.025104602510460247,
+  "run": 0.24778761061946902
+ },
+ "testsuite/bsc.bsv_examples/gcd:mkTbGCD": {
+  "link": 0.023622047244094488,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.bsv_examples/gcd:mkTbWideGCD": {
+  "link": 0.02755905511811024
+ },
+ "testsuite/bsc.bsv_examples/mcd_Rand:mkTop": {
+  "link": 0.004319654427645789,
+  "run": 0.4453125
+ },
+ "testsuite/bsc.bsv_examples/memq:sysDQueueTb": {
+  "link": 0.1034928848641656,
+  "run": 0.2975206611570248
+ },
+ "testsuite/bsc.bsv_examples/mimo:sysTrafficBRAM": {
+  "link": 0.9804367606915377,
+  "run": 2.1397849462365595
+ },
+ "testsuite/bsc.bsv_examples/mimo:sysTrafficREG": {
+  "link": 0.1733477789815818,
+  "run": 0.5284974093264249
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb1": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb2": {
+  "run": 0.24271844660194178
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb3": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb4": {
+  "link": 0.06269592476489029,
+  "run": 0.25210084033613445
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb5": {
+  "link": 0.04219409282700422,
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb6": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb7": {
+  "link": 0.060070671378091876,
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.bsv_examples/shifter:mkTb8": {
+  "link": 0.04205607476635514,
+  "run": 0.20155038759689922
+ },
+ "testsuite/bsc.bsv_examples/stepcounter:sysTestStepCounter": {
+  "run": 0.21428571428571427
+ },
+ "testsuite/bsc.bsv_examples/sudoku:mkGenerateTest3": {
+  "link": 0.6811457349700976,
+  "run": 0.47916666666666674
+ },
+ "testsuite/bsc.bsv_examples/vending:sysTestVending": {
+  "link": 0.05280528052805281,
+  "run": 0.2718446601941748
+ },
+ "testsuite/bsc.bsv_examples/xbar:sysTb": {
+  "link": 0.18854748603351956,
+  "run": 0.22727272727272727
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1037:sysFoo": {
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1045:sysDesign": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1302:sysRFile2": {
+  "link": 0.09262435677530018,
+  "run": 0.2595419847328244
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1314:sysTest": {
+  "link": 0.03365384615384616,
+  "run": 0.22123893805309736
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1353:sysBug1353": {
+  "link": 0.04797047970479705,
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysForLoop1": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysFunctionLocation1": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysFunctionLocation2": {
+  "run": 0.2605042016806723
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysInstOrder1": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysInstOrder2": {
+  "run": 0.25217391304347825
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleNameClash1": {
+  "run": 0.21551724137931036
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleNameClash2": {
+  "run": 0.2380952380952381
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleOrder1": {
+  "run": 0.23636363636363636
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleOrder2": {
+  "run": 0.2380952380952381
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1424:sysRuleOrder3": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1666:sysBug1666": {
+  "link": 0.02127659574468085,
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b1666:sysSignedTest": {
+  "link": 0.027027027027027025,
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b335:mkDesignE": {
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b335:mkDesignI": {
+  "run": 0.26851851851851855
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b402:sysTest": {
+  "link": 0.02390438247011952,
+  "run": 0.2434782608695652
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b431:sysBug431": {
+  "run": 0.24299065420560748
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b535:sysUnsetRWire": {
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b540:sysBug540_1": {
+  "run": 0.22641509433962265
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b540:sysBug540_2": {
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b621:sysDynamicVectorIfc": {
+  "link": 0.024691358024691357,
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b621:sysStaticVectorIfc": {
+  "link": 0.024489795918367346,
+  "run": 0.24107142857142858
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b810:sysBug810_1": {
+  "run": 0.2803738317757009
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b810:sysBug810_3": {
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b810:sysOpt_bug": {
+  "run": 0.2314814814814815
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b898:sysBug898": {
+  "link": 0.03202846975088968,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b898:sysBug898_2": {
+  "link": 0.03793103448275862
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b925:sysTest1": {
+  "link": 0.05392156862745098,
+  "run": 0.27522935779816515
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b925:sysTest2": {
+  "link": 0.05238095238095238,
+  "run": 0.2644628099173554
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b925:sysTest3": {
+  "link": 0.043478260869565216,
+  "run": 0.2710280373831776
+ },
+ "testsuite/bsc.bugs/bluespec_inc/b925:sysTest4": {
+  "link": 0.047619047619047616,
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.bugs/github/gh836:sysZeroSizeWires": {
+  "run": 0.24074074074074073
+ },
+ "testsuite/bsc.bugs/github/gh836:sysZeroUndet": {
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.bugs/pre_bluespec_inc:sysBug122": {
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.codegen/case:sysDupResult": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.codegen/case:sysIfElseCase_Func": {
+  "run": 0.21374045801526717
+ },
+ "testsuite/bsc.codegen/case:sysIfElseCase_Inline": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.codegen/case:sysNoOp_LargerRes": {
+  "run": 0.2196969696969697
+ },
+ "testsuite/bsc.codegen/case:sysNoOp_SameSize": {
+  "run": 0.26851851851851855
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestActionValues": {
+  "link": 0.007782101167315176,
+  "run": 0.2586206896551724
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestActionValuesUnusedValue": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestActions": {
+  "link": 0.03686635944700461,
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestAggressiveConditions": {
+  "link": 0.006756756756756757,
+  "run": 0.25
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestMethodsTB": {
+  "link": 0.005714285714285714,
+  "run": 0.28703703703703703
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestMultipleRules": {
+  "link": 0.007326007326007326,
+  "run": 0.23076923076923078
+ },
+ "testsuite/bsc.codegen/foreign/battery:mkTestValues": {
+  "link": 0.05607476635514018,
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIAction": {
+  "link": 0.022641509433962263,
+  "run": 0.23484848484848483
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIActionValue": {
+  "link": 0.027027027027027025,
+  "run": 0.27586206896551724
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIActionValueIgnorePolyReturn": {
+  "link": 0.022935779816513763,
+  "run": 0.23140495867768596
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIActionValueIgnoreReturn": {
+  "link": 0.02192982456140351,
+  "run": 0.2248062015503876
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIActionValueIgnoreWideReturn": {
+  "link": 0.027906976744186046,
+  "run": 0.2066115702479339
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIActionValueWithLogic": {
+  "link": 0.008298755186721992,
+  "run": 0.24271844660194178
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIActionValue_": {
+  "link": 0.022304832713754646,
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIArg64": {
+  "link": 0.004608294930875576,
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIBit8": {
+  "link": 0.02145922746781116,
+  "run": 0.21495327102803738
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIBit97": {
+  "link": 0.03139013452914798,
+  "run": 0.2434782608695652
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIBitN": {
+  "link": 0.03765690376569037,
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPICtx": {
+  "link": 0.02531645569620253,
+  "run": 0.2682926829268293
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIDynamicStringArg": {
+  "link": 0.004672897196261682,
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPINonBit_Bool": {
+  "link": 0.02916666666666667,
+  "run": 0.21367521367521367
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIPassingStruct": {
+  "link": 0.03225806451612904,
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIPrimAction": {
+  "link": 0.02415458937198068,
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIStringArg": {
+  "link": 0.026086956521739132,
+  "run": 0.27522935779816515
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPIWideResult": {
+  "link": 0.022727272727272724,
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.codegen/foreign:mkBDPI_CapitalLinkName": {
+  "link": 0.028436018957345974,
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.codegen/foreign:mkBug": {
+  "link": 0.02040816326530612,
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.codegen/strings:sysStringCharFunctions": {
+  "run": 0.20689655172413793
+ },
+ "testsuite/bsc.codegen/vector_modargs:sysClockedByReset": {
+  "link": 0.025000000000000005,
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.codegen/vector_modargs:sysVecClockResetToRegIfc": {
+  "link": 0.026402640264026406,
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.codegen/vector_modargs:sysVecVecVecInt_Order": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.codegen:mkPrimPriMuxNSS": {
+  "run": 0.24390243902439024
+ },
+ "testsuite/bsc.compile/letrec:sysDerive1": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.compile/letrec:sysDerive2": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.compile/letrec:sysLetrec3": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.compile/letrec:sysLetrecbit": {
+  "run": 0.20930232558139533
+ },
  "testsuite/bsc.compile/letrec:sysLetrecmod": {
-  "run": 0.2260869565217391
+  "run": 0.21666666666666667
  },
  "testsuite/bsc.compile/letrec:sysLetrecmodx": {
-  "run": 0.25961538461538464
+  "link": 0.022123893805309738,
+  "run": 0.21739130434782608
  },
  "testsuite/bsc.compile/letrec:sysList1": {
   "run": 0.2621359223300971
  },
  "testsuite/bsc.compile/letrec:sysList2": {
-  "run": 0.21186440677966104
+  "run": 0.2761904761904762
  },
  "testsuite/bsc.compile/letrec:sysList3": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.compile/letrec:sysList3b": {
-  "run": 0.21739130434782608
+  "run": 0.22033898305084745
  },
  "testsuite/bsc.compile/letrec:sysUndef": {
-  "run": 0.2434782608695652
+  "run": 0.23140495867768596
  },
  "testsuite/bsc.driver/cpp:sysCpreprocess_unusual_format": {
-  "run": 0.2641509433962264
+  "run": 0.23076923076923075
  },
  "testsuite/bsc.driver/gensign:sysTestReReExport": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.evaluator/dynamic/strings:sysDynamicFormatString": {
-  "run": 0.2248062015503876
+  "run": 0.25471698113207547
  },
  "testsuite/bsc.evaluator/dynamic/strings:sysStringConcat": {
-  "run": 0.24576271186440682
+  "run": 0.26168224299065423
  },
  "testsuite/bsc.evaluator/dynamic/strings:sysStringEQ": {
-  "run": 0.25
+  "run": 0.2641509433962264
  },
  "testsuite/bsc.evaluator/dynamic/strings:sysStringInteger": {
-  "run": 0.24786324786324787
+  "run": 0.24137931034482757
  },
  "testsuite/bsc.evaluator/dynamic/strings:sysStringIntegerWithNull": {
-  "run": 0.25217391304347825
+  "run": 0.2393162393162393
  },
  "testsuite/bsc.evaluator/dynamic/strings:sysStringLT": {
-  "run": 0.26605504587155965
+  "run": 0.19166666666666668
  },
  "testsuite/bsc.evaluator/dynamic/strings:sysStringMux": {
-  "run": 0.2288135593220339
+  "run": 0.256198347107438
  },
  "testsuite/bsc.evaluator/dynamic:sysDynamicAdd": {
-  "run": 0.25
+  "run": 0.2416666666666667
  },
  "testsuite/bsc.evaluator/dynamic:sysDynamicDiv": {
-  "run": 0.21238938053097345
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.evaluator/dynamic:sysDynamicInteger": {
+  "run": 0.28155339805825247
  },
  "testsuite/bsc.evaluator/dynamic:sysDynamicIntegerNested": {
-  "run": 0.2571428571428572
+  "run": 0.24074074074074073
  },
  "testsuite/bsc.evaluator/dynamic:sysDynamicLT": {
-  "run": 0.2857142857142857
+  "run": 0.25471698113207547
  },
  "testsuite/bsc.evaluator/dynamic:sysDynamicNeg": {
-  "run": 0.23333333333333334
- },
- "testsuite/bsc.evaluator/dynamic:sysDynamicNeg2": {
-  "run": 0.27522935779816515
- },
- "testsuite/bsc.evaluator/literal:sysNegativeIntOK": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.evaluator/literal:sysPositiveIntOK": {
   "run": 0.24761904761904763
  },
+ "testsuite/bsc.evaluator/dynamic:sysDynamicNeg2": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.evaluator/literal:sysNegativeIntOK": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.evaluator/literal:sysPositiveIntOK": {
+  "run": 0.23728813559322035
+ },
  "testsuite/bsc.evaluator/opt:sysConcatOpt": {
-  "run": 0.2710280373831776
+  "run": 0.2100840336134454
  },
  "testsuite/bsc.evaluator/opt:sysConcatOpt2": {
-  "run": 0.2621359223300971
+  "run": 0.28440366972477066
  },
  "testsuite/bsc.evaluator/opt:sysNegInvOpts": {
   "run": 0.22033898305084745
  },
  "testsuite/bsc.evaluator/prims/build_module:sysFShowFIFO": {
-  "run": 0.2288135593220339
+  "link": 0.04,
+  "run": 0.23529411764705885
  },
  "testsuite/bsc.evaluator/prims/build_module:sysRoseTest": {
-  "link": 0.035,
-  "run": 0.24561403508771928
+  "run": 0.2718446601941748
  },
  "testsuite/bsc.evaluator/prims/impcondof:sysAVCond": {
-  "run": 0.2631578947368421
+  "run": 0.22641509433962265
  },
  "testsuite/bsc.evaluator/prims/impcondof:sysArrayCond": {
-  "run": 0.24074074074074073
+  "run": 0.23529411764705885
  },
  "testsuite/bsc.evaluator/prims/impcondof:sysImpCondOf": {
-  "link": 0.05072463768115943,
-  "run": 0.25210084033613445
+  "link": 0.05777777777777778,
+  "run": 0.24752475247524752
  },
  "testsuite/bsc.evaluator/prims/impcondof:sysImpCondOf2": {
-  "run": 0.2692307692307693
+  "run": 0.22950819672131148
  },
  "testsuite/bsc.evaluator/prims/impcondof:sysListCond": {
-  "run": 0.21052631578947367
+  "run": 0.20689655172413793
  },
- "testsuite/bsc.evaluator/prims/impcondof:sysNoInlineCond": {
-  "run": 0.2184873949579832
- },
- "testsuite/bsc.evaluator/prims/impcondof:sysPolyFieldCond": {
-  "run": 0.2654867256637168
- },
- "testsuite/bsc.evaluator/prims/impcondof:sysPolyFunctionFieldCond": {
-  "run": 0.24299065420560748
- },
- "testsuite/bsc.evaluator/prims/impcondof:sysSimpleCond": {
-  "run": 0.26363636363636367
- },
- "testsuite/bsc.evaluator/prims/impcondof:sysTupleCond": {
-  "run": 0.26515151515151514
- },
- "testsuite/bsc.evaluator/prims/impcondof:sysWireCond": {
-  "run": 0.26229508196721313
- },
- "testsuite/bsc.evaluator/prims/isancestor:sysIsAncestor": {
-  "link": 0.027027027027027025,
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.evaluator/prims/module_fix:sysIncDecFix": {
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.evaluator/prims/module_fix:sysIncDecFixContext": {
-  "link": 0.027272727272727268,
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.evaluator/prims/module_fix:sysIncDecFixMC": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.evaluator/prims/type_of:sysIsIfcType": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.evaluator/prims/when:sysWhen": {
-  "run": 0.24778761061946902
- },
- "testsuite/bsc.evaluator/reginit:sysInit1024Bit": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.evaluator/reginit:sysInit128Bit": {
+ "testsuite/bsc.evaluator/prims/impcondof:sysMaybeCond": {
   "run": 0.24786324786324787
  },
- "testsuite/bsc.evaluator/reginit:sysInit16384Bit": {
-  "run": 0.22807017543859648
+ "testsuite/bsc.evaluator/prims/impcondof:sysNoInlineCond": {
+  "run": 0.26666666666666666
  },
- "testsuite/bsc.evaluator/reginit:sysInit2048Bit": {
-  "run": 0.23478260869565215
+ "testsuite/bsc.evaluator/prims/impcondof:sysPolyFieldCond": {
+  "run": 0.23076923076923075
  },
- "testsuite/bsc.evaluator/reginit:sysInit64Bit": {
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.evaluator/reginit:sysInit65536Bit": {
-  "link": 0.792,
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.evaluator/reginit:sysInitExp": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.evaluator/reginit:sysInitUndet": {
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.evaluator/undefined:sysArrayReg3D": {
-  "link": 0.08310249307479224,
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.evaluator/undefined:sysDataAction2": {
-  "run": 0.2314814814814815
- },
- "testsuite/bsc.evaluator/undefined:sysFIFOSelect": {
-  "link": 0.5916905444126074,
-  "run": 0.3739130434782608
- },
- "testsuite/bsc.evaluator/undefined:sysListN3D": {
-  "run": 0.24545454545454545
- },
- "testsuite/bsc.evaluator/undefined:sysListNReg3D": {
-  "link": 0.0708215297450425,
-  "run": 0.25
- },
- "testsuite/bsc.evaluator/undefined:sysListReg3D": {
-  "link": 0.07462686567164178,
-  "run": 0.3076923076923077
- },
- "testsuite/bsc.evaluator/undefined:sysNewtypeAction": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.evaluator/undefined:sysPackageTest": {
+ "testsuite/bsc.evaluator/prims/impcondof:sysPolyFunctionFieldCond": {
   "run": 0.2692307692307693
  },
- "testsuite/bsc.evaluator/undefined:sysPrimUndefined": {
-  "run": 0.20175438596491227
+ "testsuite/bsc.evaluator/prims/impcondof:sysSimpleCond": {
+  "run": 0.23529411764705885
  },
- "testsuite/bsc.evaluator/undefined:sysRegSelect": {
-  "link": 0.06930693069306931,
-  "run": 0.3275862068965517
+ "testsuite/bsc.evaluator/prims/impcondof:sysTupleCond": {
+  "run": 0.2761904761904762
  },
- "testsuite/bsc.evaluator/undefined:sysRegSelect2": {
-  "link": 0.05693493150684932
+ "testsuite/bsc.evaluator/prims/impcondof:sysWireCond": {
+  "run": 0.2545454545454546
  },
- "testsuite/bsc.evaluator/undefined:sysTaggedUnionDynamicAction": {
-  "run": 0.22413793103448273
+ "testsuite/bsc.evaluator/prims/isancestor:sysIsAncestor": {
+  "run": 0.23333333333333334
  },
- "testsuite/bsc.evaluator/undefined:sysUndefinedString": {
-  "run": 0.2300884955752212
+ "testsuite/bsc.evaluator/prims/module_fix:sysIncDecFix": {
+  "run": 0.2571428571428572
  },
- "testsuite/bsc.evaluator/undefined:sysVector3D": {
-  "link": 0.0784313725490196,
-  "run": 0.256198347107438
+ "testsuite/bsc.evaluator/prims/module_fix:sysIncDecFixContext": {
+  "run": 0.27522935779816515
  },
- "testsuite/bsc.evaluator/undefined:sysVectorReg3D": {
-  "link": 0.08379888268156424,
+ "testsuite/bsc.evaluator/prims/module_fix:sysIncDecFixMC": {
+  "run": 0.2265625
+ },
+ "testsuite/bsc.evaluator/prims/type_of:sysIsIfcType": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.evaluator/prims/when:sysWhen": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.evaluator/reginit:sysInit1024Bit": {
+  "run": 0.24137931034482757
+ },
+ "testsuite/bsc.evaluator/reginit:sysInit128Bit": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.evaluator/reginit:sysInit16384Bit": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.evaluator/reginit:sysInit2048Bit": {
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.evaluator/reginit:sysInit64Bit": {
+  "run": 0.24271844660194178
+ },
+ "testsuite/bsc.evaluator/reginit:sysInit65536Bit": {
+  "link": 0.7655786350148368,
+  "run": 0.2857142857142857
+ },
+ "testsuite/bsc.evaluator/reginit:sysInitExp": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.evaluator/reginit:sysInitUndet": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.evaluator/undefined:sysArrayReg3D": {
+  "link": 0.07635467980295567,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.evaluator/undefined:sysDataAction2": {
+  "run": 0.225
+ },
+ "testsuite/bsc.evaluator/undefined:sysFIFOSelect": {
+  "link": 0.6505747126436783,
+  "run": 0.2932330827067669
+ },
+ "testsuite/bsc.evaluator/undefined:sysListN3D": {
+  "run": 0.22950819672131148
+ },
+ "testsuite/bsc.evaluator/undefined:sysListNReg3D": {
+  "link": 0.06067961165048544,
   "run": 0.2711864406779661
  },
- "testsuite/bsc.evaluator/uninit:sysIfUninit": {
-  "run": 0.2549019607843137
+ "testsuite/bsc.evaluator/undefined:sysListReg3D": {
+  "link": 0.07458563535911603,
+  "run": 0.23076923076923075
  },
- "testsuite/bsc.evaluator/uninit:sysStructUninitOK1": {
-  "run": 0.2192982456140351
+ "testsuite/bsc.evaluator/undefined:sysNewtypeAction": {
+  "run": 0.28155339805825247
  },
- "testsuite/bsc.evaluator/uninit:sysStructUninitOK2": {
-  "run": 0.2564102564102564
+ "testsuite/bsc.evaluator/undefined:sysPackageTest": {
+  "run": 0.24752475247524752
  },
- "testsuite/bsc.evaluator/uninit:sysUninitBit1OK2": {
-  "run": 0.23308270676691728
- },
- "testsuite/bsc.evaluator/uninit:sysUninitBitOK1": {
-  "run": 0.2196969696969697
- },
- "testsuite/bsc.evaluator/uninit:sysUninitBitRangeUpdOK": {
-  "run": 0.21374045801526717
- },
- "testsuite/bsc.evaluator/uninit:sysUninitStructBitOK": {
-  "run": 0.24390243902439024
- },
- "testsuite/bsc.evaluator/uninit:sysVectorBitOK": {
-  "run": 0.22727272727272727
- },
- "testsuite/bsc.evaluator/uninit:sysVectorUninitOK1": {
-  "run": 0.25833333333333336
- },
- "testsuite/bsc.evaluator/uninit:sysVectorUninitOK2": {
-  "run": 0.22727272727272727
- },
- "testsuite/bsc.evaluator:sysBug45aTest": {
-  "link": 0.024096385542168672,
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.evaluator:sysFullMult": {
-  "run": 0.25
- },
- "testsuite/bsc.evaluator:sysNormalMult": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.evaluator:sysStaticIndex": {
-  "run": 0.2647058823529412
- },
- "testsuite/bsc.evaluator:sysStaticInteger": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.if/split-execution/2x2-switch-split:sysTestSwitch": {
-  "link": 0.04980842911877395,
-  "run": 0.25
- },
- "testsuite/bsc.if/split-execution/2x2-switch:sysTestSwitch": {
-  "link": 0.05468750000000001,
-  "run": 0.25210084033613445
- },
- "testsuite/bsc.if/split-execution/TurboFIFO/attribute:sysTurboFIFOTest": {
-  "link": 0.035,
-  "run": 0.2605042016806723
- },
- "testsuite/bsc.if/split-execution/TurboFIFO/original:sysTurboFIFOTest": {
-  "link": 0.0316205533596838,
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.if:sysBasicIf": {
-  "run": 0.23664122137404578
- },
- "testsuite/bsc.if:sysIfMultiActionTest": {
-  "link": 0.051643192488262914,
-  "run": 0.2777777777777778
- },
- "testsuite/bsc.if:sysIfNestedTest": {
-  "run": 0.21666666666666667
- },
- "testsuite/bsc.if:sysLiftOrder": {
-  "run": 0.2564102564102564
- },
- "testsuite/bsc.if:sysNoNosplitDeep": {
-  "run": 0.22556390977443608
- },
- "testsuite/bsc.if:sysOrderDisplayExit": {
-  "run": 0.23703703703703702
- },
- "testsuite/bsc.interra/Library_latency/BGetPut:mkTestbench_MkBClientServer": {
-  "link": 0.048458149779735685,
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.interra/Library_latency/BGetPut:mkTestbench_MkBGetPut": {
-  "run": 0.26168224299065423
- },
- "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_MkCClientServer": {
-  "link": 0.03773584905660377,
-  "run": 0.23214285714285712
- },
- "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_MkCGetCPut": {
-  "link": 0.0534351145038168,
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_MkCGetPut": {
-  "link": 0.054621848739495805,
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_Mk_extrabuffer": {
-  "link": 0.04938271604938271,
-  "run": 0.27358490566037735
- },
- "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_JoinServers": {
-  "link": 0.054455445544554455,
-  "run": 0.2647058823529412
- },
- "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkRequestBuffer": {
-  "link": 0.029661016949152547,
-  "run": 0.2549019607843137
- },
- "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkRequestResponseBuffer1": {
-  "run": 0.23423423423423423
- },
- "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkRequestResponseBuffer_1": {
-  "run": 0.25
- },
- "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkResponseBuffer": {
-  "link": 0.031674208144796386,
-  "run": 0.20952380952380953
- },
- "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_TwoJoinServers": {
-  "link": 0.045454545454545456,
+ "testsuite/bsc.evaluator/undefined:sysPrimUndefined": {
   "run": 0.2393162393162393
  },
- "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGPFIFO": {
+ "testsuite/bsc.evaluator/undefined:sysRegSelect": {
+  "link": 0.06507413509060955,
+  "run": 0.3412698412698412
+ },
+ "testsuite/bsc.evaluator/undefined:sysRegSelect2": {
+  "link": 0.07528818443804033,
+  "run": 0.33582089552238803
+ },
+ "testsuite/bsc.evaluator/undefined:sysTaggedUnionDynamicAction": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.evaluator/undefined:sysVector3D": {
+  "link": 0.0935960591133005,
+  "run": 0.2803738317757009
+ },
+ "testsuite/bsc.evaluator/undefined:sysVectorReg3D": {
+  "link": 0.06578947368421052,
+  "run": 0.2586206896551724
+ },
+ "testsuite/bsc.evaluator/uninit:sysIfUninit": {
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.evaluator/uninit:sysStructUninitOK1": {
+  "run": 0.24299065420560748
+ },
+ "testsuite/bsc.evaluator/uninit:sysUninitBit1OK2": {
   "run": 0.25961538461538464
  },
- "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGPFIFO_alt_rw": {
-  "run": 0.2285714285714286
+ "testsuite/bsc.evaluator/uninit:sysUninitBitOK1": {
+  "run": 0.26851851851851855
  },
- "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGPFIFO_non_alt_rw": {
+ "testsuite/bsc.evaluator/uninit:sysUninitBitRangeUpdOK": {
+  "run": 0.24074074074074073
+ },
+ "testsuite/bsc.evaluator/uninit:sysUninitStructBitOK": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.evaluator/uninit:sysVectorBitOK": {
+  "run": 0.25
+ },
+ "testsuite/bsc.evaluator/uninit:sysVectorUninitOK1": {
+  "run": 0.2830188679245283
+ },
+ "testsuite/bsc.evaluator/uninit:sysVectorUninitOK2": {
+  "run": 0.24137931034482757
+ },
+ "testsuite/bsc.evaluator:sysBug45aTest": {
+  "link": 0.029411764705882356,
+  "run": 0.2710280373831776
+ },
+ "testsuite/bsc.evaluator:sysNormalMult": {
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.evaluator:sysStaticIndex": {
+  "run": 0.2192982456140351
+ },
+ "testsuite/bsc.evaluator:sysStaticInteger": {
+  "run": 0.2380952380952381
+ },
+ "testsuite/bsc.if/split-execution/2x2-switch-split:sysTestSwitch": {
+  "link": 0.052631578947368425,
+  "run": 0.24299065420560748
+ },
+ "testsuite/bsc.if/split-execution/2x2-switch:sysTestSwitch": {
+  "link": 0.05106382978723404,
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.if/split-execution/TurboFIFO/attribute:sysTurboFIFOTest": {
+  "link": 0.04,
+  "run": 0.25217391304347825
+ },
+ "testsuite/bsc.if/split-execution/TurboFIFO/original:sysTurboFIFOTest": {
+  "run": 0.24793388429752067
+ },
+ "testsuite/bsc.if:sysBasicIf": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.if:sysIfMultiActionTest": {
+  "run": 0.2608695652173913
+ },
+ "testsuite/bsc.if:sysIfNestedTest": {
+  "run": 0.28703703703703703
+ },
+ "testsuite/bsc.if:sysLiftOrder": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.if:sysNoNosplitDeep": {
+  "run": 0.2033898305084746
+ },
+ "testsuite/bsc.if:sysOrderDisplayExit": {
+  "run": 0.20512820512820512
+ },
+ "testsuite/bsc.interra/Library_latency/BGetPut:mkTestbench_MkBClientServer": {
+  "link": 0.04694835680751174,
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.interra/Library_latency/BGetPut:mkTestbench_MkBGetPut": {
+  "link": 0.04,
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_MkCClientServer": {
+  "link": 0.0425531914893617,
+  "run": 0.26956521739130435
+ },
+ "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_MkCGetCPut": {
+  "link": 0.056179775280898875,
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_MkCGetPut": {
+  "link": 0.05158730158730159,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.interra/Library_latency/CGetPut:mkTestbench_Mk_extrabuffer": {
+  "link": 0.04868913857677903,
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_JoinServers": {
+  "link": 0.04888888888888889,
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkRequestBuffer": {
+  "link": 0.038461538461538464,
+  "run": 0.2884615384615385
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkRequestResponseBuffer1": {
+  "link": 0.04310344827586207,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkRequestResponseBuffer_1": {
+  "link": 0.05213270142180095,
+  "run": 0.26363636363636367
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkResponseBuffer": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_MkSizedRequestResponseBuffer": {
+  "link": 0.04368932038834951,
+  "run": 0.2672413793103448
+ },
+ "testsuite/bsc.interra/Library_latency/ClientServer:mkTestbench_TwoJoinServers": {
+  "link": 0.04888888888888889,
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGPFIFO": {
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGPFIFO_alt_rw": {
   "run": 0.25
  },
  "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGPSizedFIFO": {
-  "link": 0.05970149253731344,
-  "run": 0.2434782608695652
+  "link": 0.05429864253393665
  },
  "testsuite/bsc.interra/Library_latency/GetPut:mkTestbench_MkGetPut": {
-  "run": 0.2434782608695652
+  "link": 0.03773584905660377
  },
  "testsuite/bsc.interra/Library_latency/RAM:mkTestbench_Ram": {
-  "link": 0.027272727272727268,
-  "run": 0.2222222222222222
+  "link": 0.027906976744186046,
+  "run": 0.24761904761904763
  },
  "testsuite/bsc.interra/Library_latency/RAM:mkTestbench_TagRam": {
-  "link": 0.04385964912280702,
-  "run": 0.3652173913043478
+  "link": 0.03448275862068966,
+  "run": 0.326923076923077
  },
  "testsuite/bsc.interra/Library_latency/SRAM:mkTestbench_MkWrapSRAM": {
-  "link": 0.04263565891472868,
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.interra/Library_latency/SRAM:mkTestbench_MkWrapSTRAM": {
-  "link": 0.03914590747330961,
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.interra/Library_latency/SyncRAM:mkTestbench_SPSRam": {
-  "link": 0.03793103448275862,
-  "run": 0.25
- },
- "testsuite/bsc.interra/MCD_library/AsyncRAM:mkTestbench_same_with_phase_diff": {
-  "run": 0.28155339805825247
- },
- "testsuite/bsc.interra/MCD_library/AsyncRAM:mkTestbench_write_fast_read_slow": {
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.interra/MCD_library/AsyncRAM:mkTestbench_write_slow_read_fast": {
-  "run": 0.20689655172413793
- },
- "testsuite/bsc.interra/MCD_library/BitSync1:mkTestbench_fast_to_slow": {
-  "link": 0.02788844621513945,
-  "run": 0.23529411764705885
- },
- "testsuite/bsc.interra/MCD_library/BitSync1:mkTestbench_same_with_phase_diff": {
-  "link": 0.032,
-  "run": 0.2884615384615385
- },
- "testsuite/bsc.interra/MCD_library/BitSync1:mkTestbench_slow_to_fast": {
-  "link": 0.0321285140562249,
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.interra/MCD_library/BitSync:mkTestbench_fast_to_slow": {
-  "link": 0.027237354085603117,
-  "run": 0.2631578947368421
- },
- "testsuite/bsc.interra/MCD_library/BitSync:mkTestbench_same_with_phase_diff": {
-  "link": 0.03187250996015937,
-  "run": 0.31067961165048547
- },
- "testsuite/bsc.interra/MCD_library/BitSync:mkTestbench_slow_to_fast": {
-  "link": 0.022556390977443608,
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.interra/MCD_library/FIFOSync:mkTestbench_same_with_phase_diff": {
-  "link": 0.032,
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.interra/MCD_library/FIFOSync:mkTestbench_write_fast_read_slow": {
-  "link": 0.03347280334728033,
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/MCD_library/FIFOSync:mkTestbench_write_slow_read_fast": {
-  "link": 0.03278688524590164,
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.interra/MCD_library/PulseHandShakeSync:mkTestbench_fast_to_slow": {
-  "link": 0.028985507246376815,
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.interra/MCD_library/PulseHandShakeSync:mkTestbench_same_with_phase_diff": {
-  "link": 0.025723472668810293,
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.interra/MCD_library/PulseHandShakeSync:mkTestbench_slow_to_fast": {
-  "link": 0.03225806451612903
- },
- "testsuite/bsc.interra/MCD_library/RegSync:mkTestbench_fast_to_slow": {
-  "link": 0.024390243902439025
- },
- "testsuite/bsc.interra/MCD_library/RegSync:mkTestbench_same_with_phase_diff": {
-  "link": 0.025
- },
- "testsuite/bsc.interra/MCD_library/RegSync:mkTestbench_slow_to_fast": {
-  "link": 0.027667984189723323,
-  "run": 0.2956521739130435
- },
- "testsuite/bsc.interra/MCD_library/SpecialSyncFIFO:mkTestbench_write_slow_read_fast": {
-  "link": 0.03496503496503497,
-  "run": 0.3018867924528302
- },
- "testsuite/bsc.interra/MCD_library/SpecialSyncReg:mkTestbench_fast_to_slow": {
-  "link": 0.027131782945736437,
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.interra/MCD_library/SpecialSyncReg:mkTestbench_slow_to_fast": {
-  "link": 0.02845528455284553,
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.interra/StmtFSM/CycleTest:sysCycleTest": {
-  "link": 0.06451612903225806,
-  "run": 0.2542372881355932
- },
- "testsuite/bsc.interra/StmtFSM/ServerInServer:sysServerInServer": {
-  "link": 0.09356725146198831,
-  "run": 0.2564102564102564
- },
- "testsuite/bsc.interra/bluesim/interactive/handshake_protocol:mkTestbench": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.interra/bluesim/interactive/parity_checker:mkTestbench": {
-  "run": 0.2549019607843137
- },
- "testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_hierar:mkTestbench": {
-  "link": 0.07553956834532374
- },
- "testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_separate:mkTestbench": {
-  "link": 0.08135593220338982,
-  "run": 0.27358490566037735
- },
- "testsuite/bsc.interra/libraries/Assert:mkTestbench_ContinuousAssert": {
-  "link": 0.04368932038834951,
-  "run": 0.28155339805825247
- },
- "testsuite/bsc.interra/libraries/CGetPut:mkTestbench_MkCClientServer": {
-  "link": 0.038022813688212934,
-  "run": 0.2549019607843137
- },
- "testsuite/bsc.interra/libraries/CGetPut:mkTestbench_MkCGetCPut": {
-  "link": 0.04219409282700422
- },
- "testsuite/bsc.interra/libraries/CGetPut:mkTestbench_MkCGetPut": {
-  "link": 0.04583333333333334,
-  "run": 0.2285714285714286
- },
- "testsuite/bsc.interra/libraries/ConfigReg:mkTestbench_MkConfigReg": {
-  "link": 0.02531645569620253,
-  "run": 0.23300970873786409
- },
- "testsuite/bsc.interra/libraries/ConfigReg:mkTestbench_MkConfigRegU": {
-  "link": 0.026548672566371685,
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/FiFo:mkTestbench_MkLFifo": {
-  "link": 0.04296875,
-  "run": 0.2672413793103448
- },
- "testsuite/bsc.interra/libraries/FiFoF:mkTestbench_MkLFifof": {
-  "link": 0.030534351145038167,
-  "run": 0.2761904761904762
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_All": {
-  "run": 0.2192982456140351
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Any": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Append": {
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Concat": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Drop": {
-  "run": 0.23529411764705885
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_DropWhile": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Elem": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Equality": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Filter": {
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Fold": {
-  "run": 0.2380952380952381
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Foldl": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Foldn": {
-  "run": 0.23214285714285712
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Foldr": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Foldr1": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Head": {
-  "run": 0.22413793103448273
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Init": {
-  "run": 0.25
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_JoinActions": {
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_JoinRules": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Last": {
-  "run": 0.21153846153846154
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Length": {
-  "run": 0.2450980392156863
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Map": {
-  "run": 0.21052631578947367
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_MapAccumL": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_MapAccumR": {
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_MapPairs": {
-  "run": 0.2641509433962264
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Mapn": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_PrimSelectability": {
-  "link": 0.028301886792452827,
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Reverse": {
-  "run": 0.2718446601941748
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Rotate": {
-  "run": 0.23684210526315788
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_RotateR": {
-  "run": 0.2641509433962264
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Scanl": {
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Scanr": {
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Select": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Sscanl": {
-  "run": 0.25999999999999995
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Sscanr": {
-  "run": 0.23300970873786409
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Tail": {
-  "run": 0.23423423423423423
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Take": {
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_TakeWhile": {
-  "run": 0.22429906542056074
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_TakeWhileRev": {
-  "run": 0.20952380952380953
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Transpose": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Unzip": {
-  "run": 0.23076923076923075
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Update": {
-  "run": 0.24271844660194178
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Upto": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Zip1": {
-  "run": 0.23076923076923075
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Zip3": {
-  "run": 0.24299065420560748
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_Zip4": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_ZipWith": {
-  "run": 0.24038461538461542
- },
- "testsuite/bsc.interra/libraries/List:mkTestbench_ZipWith3": {
+  "link": 0.04545454545454545,
   "run": 0.2543859649122807
  },
- "testsuite/bsc.interra/libraries/List:mkTestbench_ZipWith4": {
-  "run": 0.21238938053097345
+ "testsuite/bsc.interra/Library_latency/SRAM:mkTestbench_MkWrapSTRAM": {
+  "link": 0.041666666666666664,
+  "run": 0.23140495867768596
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_All": {
-  "run": 0.2277227722772277
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Any": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Append": {
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Elem": {
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Equality": {
-  "run": 0.22413793103448273
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Fold": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_FoldM": {
-  "run": 0.21428571428571427
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldl": {
-  "run": 0.25999999999999995
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_FoldlM": {
-  "run": 0.21739130434782608
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldr": {
-  "run": 0.24786324786324787
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldr1": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_FoldrM": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_GenList": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_GenWith": {
-  "run": 0.22321428571428573
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_GenWithM": {
-  "run": 0.25
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Head": {
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Init": {
-  "run": 0.24778761061946902
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Last": {
-  "run": 0.2641509433962264
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Map": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapAccumL": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapAccumR": {
+ "testsuite/bsc.interra/Library_latency/SyncRAM:mkTestbench_SPSRam": {
+  "link": 0.03759398496240601,
   "run": 0.2260869565217391
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapM": {
-  "run": 0.2574257425742574
+ "testsuite/bsc.interra/MCD_library/AsyncRAM:mkTestbench_same_with_phase_diff": {
+  "run": 0.24786324786324787
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapM_": {
-  "run": 0.21367521367521367
+ "testsuite/bsc.interra/MCD_library/AsyncRAM:mkTestbench_write_fast_read_slow": {
+  "run": 0.22935779816513763
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapPairs": {
-  "run": 0.22123893805309736
+ "testsuite/bsc.interra/MCD_library/AsyncRAM:mkTestbench_write_slow_read_fast": {
+  "run": 0.23684210526315788
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Replicate": {
-  "run": 0.25217391304347825
+ "testsuite/bsc.interra/MCD_library/BitSync1:mkTestbench_fast_to_slow": {
+  "link": 0.024390243902439025
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_ReplicateM": {
-  "run": 0.225
+ "testsuite/bsc.interra/MCD_library/BitSync1:mkTestbench_same_with_phase_diff": {
+  "link": 0.026923076923076925,
+  "run": 0.2542372881355932
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Reverse": {
+ "testsuite/bsc.interra/MCD_library/BitSync1:mkTestbench_slow_to_fast": {
+  "link": 0.022727272727272724
+ },
+ "testsuite/bsc.interra/MCD_library/BitSync:mkTestbench_fast_to_slow": {
+  "link": 0.025925925925925925,
+  "run": 0.27358490566037735
+ },
+ "testsuite/bsc.interra/MCD_library/BitSync:mkTestbench_same_with_phase_diff": {
+  "link": 0.02788844621513945,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.interra/MCD_library/BitSync:mkTestbench_slow_to_fast": {
+  "link": 0.0267175572519084,
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.interra/MCD_library/FIFOSync:mkTestbench_same_with_phase_diff": {
+  "link": 0.0425531914893617,
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.interra/MCD_library/FIFOSync:mkTestbench_write_fast_read_slow": {
+  "link": 0.03557312252964427,
+  "run": 0.19083969465648856
+ },
+ "testsuite/bsc.interra/MCD_library/FIFOSync:mkTestbench_write_slow_read_fast": {
+  "link": 0.03305785123966942
+ },
+ "testsuite/bsc.interra/MCD_library/PulseHandShakeSync:mkTestbench_fast_to_slow": {
+  "link": 0.02768166089965398,
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/MCD_library/PulseHandShakeSync:mkTestbench_same_with_phase_diff": {
+  "link": 0.03296703296703297,
+  "run": 0.23333333333333334
+ },
+ "testsuite/bsc.interra/MCD_library/PulseHandShakeSync:mkTestbench_slow_to_fast": {
+  "link": 0.025454545454545455,
+  "run": 0.22641509433962265
+ },
+ "testsuite/bsc.interra/MCD_library/RegSync:mkTestbench_fast_to_slow": {
+  "link": 0.02661596958174905,
+  "run": 0.2777777777777778
+ },
+ "testsuite/bsc.interra/MCD_library/RegSync:mkTestbench_same_with_phase_diff": {
+  "link": 0.024390243902439025,
+  "run": 0.21238938053097345
+ },
+ "testsuite/bsc.interra/MCD_library/RegSync:mkTestbench_slow_to_fast": {
+  "link": 0.02661596958174905,
+  "run": 0.2608695652173913
+ },
+ "testsuite/bsc.interra/MCD_library/SpecialSyncFIFO:mkTestbench_write_slow_read_fast": {
+  "link": 0.032051282051282055,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.interra/MCD_library/SpecialSyncReg:mkTestbench_fast_to_slow": {
+  "link": 0.025270758122743684,
+  "run": 0.2857142857142857
+ },
+ "testsuite/bsc.interra/MCD_library/SpecialSyncReg:mkTestbench_slow_to_fast": {
+  "link": 0.032520325203252036,
+  "run": 0.24271844660194178
+ },
+ "testsuite/bsc.interra/StmtFSM/CycleTest:sysCycleTest": {
+  "link": 0.06122448979591836,
+  "run": 0.24793388429752067
+ },
+ "testsuite/bsc.interra/StmtFSM/ServerInServer:sysServerInServer": {
+  "link": 0.06804123711340207,
+  "run": 0.2416666666666667
+ },
+ "testsuite/bsc.interra/bluesim/interactive/handshake_protocol:mkTestbench": {
+  "link": 0.03663003663003663,
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.interra/bluesim/interactive/parity_checker:mkTestbench": {
+  "link": 0.059574468085106386,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_hierar:mkTestbench": {
+  "link": 0.09090909090909091,
+  "run": 0.21666666666666667
+ },
+ "testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_separate:mkTestbench": {
+  "link": 0.006097560975609756,
+  "run": 0.2796610169491526
+ },
+ "testsuite/bsc.interra/libraries/Assert:mkTestbench_ContinuousAssert": {
+  "link": 0.045,
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.interra/libraries/Assert:mkTestbench_DynamicAssert": {
+  "link": 0.0430622009569378,
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.interra/libraries/CGetPut:mkTestbench_MkCClientServer": {
+  "link": 0.04905660377358491,
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.interra/libraries/CGetPut:mkTestbench_MkCGetCPut": {
+  "link": 0.05063291139240506,
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/libraries/CGetPut:mkTestbench_MkCGetPut": {
+  "link": 0.05600000000000001,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.interra/libraries/ConfigReg:mkTestbench_MkConfigReg": {
+  "link": 0.021818181818181816,
+  "run": 0.2100840336134454
+ },
+ "testsuite/bsc.interra/libraries/ConfigReg:mkTestbench_MkConfigRegU": {
+  "link": 0.02788844621513945,
+  "run": 0.25
+ },
+ "testsuite/bsc.interra/libraries/FiFo:mkTestbench_MkLFifo": {
+  "link": 0.03787878787878788,
   "run": 0.24299065420560748
  },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_Rotate": {
+ "testsuite/bsc.interra/libraries/FiFoF:mkTestbench_MkLFifof": {
+  "link": 0.03308823529411764
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_All": {
+  "run": 0.24528301886792453
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Any": {
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Append": {
+  "run": 0.21296296296296297
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Concat": {
+  "run": 0.23076923076923078
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Drop": {
+  "run": 0.27358490566037735
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_DropWhile": {
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Elem": {
+  "run": 0.23255813953488372
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Equality": {
   "run": 0.25961538461538464
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Filter": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Foldl1": {
+  "run": 0.20869565217391303
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Foldn": {
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Foldr": {
+  "run": 0.25999999999999995
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Init": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_JoinActions": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_JoinRules": {
+  "run": 0.23636363636363636
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Last": {
+  "run": 0.23300970873786409
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Length": {
+  "run": 0.2260869565217391
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Map": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_MapAccumL": {
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_MapAccumR": {
+  "run": 0.25217391304347825
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Mapn": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_PrimSelectability": {
+  "run": 0.216
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Replicate": {
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Reverse": {
+  "run": 0.2673267326732673
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Rotate": {
+  "run": 0.23364485981308414
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_RotateR": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Scanl": {
+  "run": 0.21739130434782608
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Scanr": {
+  "run": 0.20175438596491227
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Sscanr": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Tail": {
+  "run": 0.2647058823529412
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Take": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_TakeWhileRev": {
+  "run": 0.23636363636363636
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Unzip": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Update": {
+  "run": 0.24299065420560748
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Upto": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Zip1": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Zip2": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Zip3": {
+  "run": 0.2545454545454546
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_Zip4": {
+  "link": 0.03271028037383178,
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_ZipWith": {
+  "run": 0.19696969696969696
+ },
+ "testsuite/bsc.interra/libraries/List:mkTestbench_ZipWith3": {
+  "run": 0.2608695652173913
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_All": {
+  "run": 0.23364485981308414
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Any": {
+  "run": 0.2192982456140351
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Append": {
+  "run": 0.23076923076923078
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Concat": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Elem": {
+  "run": 0.27358490566037735
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Equality": {
+  "run": 0.22330097087378642
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_FoldM": {
+  "run": 0.29245283018867924
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldl": {
+  "run": 0.2222222222222222
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldl1": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_FoldlM": {
+  "run": 0.225
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldr": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Foldr1": {
+  "run": 0.21739130434782608
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_FoldrM": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_GenList": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_GenWith": {
+  "run": 0.21904761904761905
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Head": {
+  "run": 0.21705426356589147
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Init": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Last": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Map": {
+  "run": 0.27358490566037735
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapAccumL": {
+  "run": 0.21739130434782608
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapAccumR": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapM": {
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapM_": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_MapPairs": {
+  "run": 0.24137931034482757
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Replicate": {
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_ReplicateM": {
+  "run": 0.23364485981308414
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Reverse": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Rotate": {
+  "run": 0.2571428571428572
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_RotateR": {
-  "run": 0.25961538461538464
+  "run": 0.23684210526315788
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_Scanl": {
+  "run": 0.25
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Scanr": {
-  "run": 0.20535714285714285
+  "run": 0.25210084033613445
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Select": {
-  "run": 0.19819819819819817
+  "run": 0.23893805309734512
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Sscanl": {
-  "run": 0.2608695652173913
+  "run": 0.2416666666666667
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Sscanr": {
   "run": 0.22033898305084745
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Tail": {
-  "run": 0.25961538461538464
+  "run": 0.24369747899159666
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Take": {
-  "run": 0.27358490566037735
+  "run": 0.2524271844660194
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ToList": {
-  "run": 0.2222222222222222
+  "run": 0.2574257425742574
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ToListN": {
-  "run": 0.21367521367521367
+  "run": 0.22641509433962265
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Transpose": {
-  "run": 0.20869565217391303
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_TransposeLN": {
+  "run": 0.24137931034482757
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_UnZip": {
-  "run": 0.24528301886792453
+  "run": 0.26605504587155965
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Update": {
-  "run": 0.2803738317757009
+  "run": 0.22413793103448273
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Zip": {
-  "run": 0.2380952380952381
+  "run": 0.2100840336134454
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Zip3": {
-  "run": 0.23529411764705885
+  "run": 0.2884615384615385
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_Zip4": {
-  "run": 0.23214285714285712
+  "run": 0.23140495867768596
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipAny": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWith": {
-  "run": 0.2192982456140351
+  "run": 0.2543859649122807
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWith3": {
-  "run": 0.25961538461538464
+  "run": 0.2380952380952381
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWith3M": {
   "run": 0.21551724137931036
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWithAny": {
-  "run": 0.26666666666666666
+  "run": 0.23728813559322035
  },
  "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWithAny3": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWithM": {
-  "run": 0.2654867256637168
- },
- "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWithM_": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Apply": {
-  "run": 0.2450980392156863
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Buffer": {
-  "run": 0.23893805309734512
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_FifoToPush": {
-  "link": 0.03448275862068966,
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Passed": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Pipe": {
-  "run": 0.26666666666666666
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Qbuffer": {
-  "link": 0.03448275862068966,
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Qbuffered": {
-  "run": 0.21904761904761905
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_RegToPush": {
-  "run": 0.2647058823529412
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Spew": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.interra/libraries/Push:mkTestbench_Tee": {
-  "link": 0.03381642512077295,
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_All": {
-  "run": 0.2524271844660194
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Any": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Append": {
-  "run": 0.26495726495726496
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Elem": {
-  "run": 0.22123893805309736
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Equality": {
-  "run": 0.2192982456140351
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Fold": {
-  "run": 0.23893805309734512
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldM": {
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldOrder": {
-  "run": 0.24107142857142858
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldl": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldl1": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldlM": {
-  "run": 0.2248062015503876
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldr1": {
-  "run": 0.2549019607843137
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldrM": {
-  "run": 0.2300884955752212
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_GenList": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_GenWith": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_GenWithM": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Head": {
-  "run": 0.26168224299065423
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Init": {
-  "run": 0.23584905660377362
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Last": {
-  "run": 0.2285714285714286
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Map": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapAccumL": {
-  "run": 0.24271844660194178
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapM": {
-  "run": 0.2718446601941748
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapM_": {
-  "run": 0.2719298245614035
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapPairs": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Replicate": {
-  "run": 0.21238938053097345
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ReplicateM": {
-  "run": 0.20689655172413793
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Reverse": {
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_RotateR": {
-  "run": 0.23364485981308414
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Scanl": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Scanr": {
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Select": {
-  "run": 0.24299065420560748
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Sscanl": {
-  "run": 0.20689655172413793
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Sscanr": {
-  "run": 0.2288135593220339
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Tail": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Take": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ToList": {
-  "run": 0.23584905660377362
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ToListN": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_TransposeLN": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_UnZip": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Update": {
-  "run": 0.2571428571428572
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Zip": {
-  "run": 0.2692307692307693
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Zip3": {
-  "run": 0.2772277227722772
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_Zip4": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipAny": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWith": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWith3": {
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWith3M": {
-  "run": 0.25471698113207547
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithAny": {
-  "run": 0.21551724137931036
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithAny3": {
-  "run": 0.2549019607843137
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithM": {
-  "run": 0.26851851851851855
- },
- "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithM_": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.interra/relax_method_urgency/LoopyFIFO:mkTestbench": {
-  "link": 0.03260869565217391,
-  "run": 0.2396694214876033
- },
- "testsuite/bsc.interra/relax_method_urgency/byte_en:mkTestbench": {
-  "link": 0.03319502074688797,
-  "run": 0.2564102564102564
- },
- "testsuite/bsc.lib/BRAM/BRAM0Test:sysBRAM0Test": {
-  "link": 0.0030589949016751636,
-  "run": 33.68461538461538
- },
- "testsuite/bsc.lib/BRAM/Lat:sysLat112": {
-  "link": 0.3975903614457832,
-  "run": 0.3333333333333333
- },
- "testsuite/bsc.lib/BRAM/Lat:sysLat122": {
-  "link": 0.39117647058823535,
-  "run": 0.3245614035087719
- },
- "testsuite/bsc.lib/BRAM/Lat:sysLat124": {
-  "link": 0.38450502152080346,
-  "run": 0.3333333333333333
- },
- "testsuite/bsc.lib/BRAM:sysGrayCounterTest": {
-  "link": 0.008064516129032258,
-  "run": 0.7523809523809524
- },
- "testsuite/bsc.lib/BRAM:sysSizedBRAMFIFOTest": {
-  "link": 0.18559556786703602,
-  "run": 0.2631578947368421
- },
- "testsuite/bsc.lib/BRAM:sysSyncBRAM2PortBETest": {
-  "link": 0.055865921787709494,
-  "run": 0.5565217391304348
- },
- "testsuite/bsc.lib/BuildList:sysTestBuildList": {
-  "link": 0.0297029702970297,
-  "run": 0.22807017543859648
- },
- "testsuite/bsc.lib/BuildVector:sysTestBuildVector": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.lib/CReg:sysTestCReg2": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.lib/CReg:sysTestCReg3": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.lib/CReg:sysTestCReg5": {
-  "run": 0.27450980392156865
- },
- "testsuite/bsc.lib/CReg:sysTestCRegA2": {
-  "run": 0.24038461538461542
- },
- "testsuite/bsc.lib/CReg:sysTestCRegA3": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.lib/CReg:sysTestCRegA4": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.lib/CReg:sysTestCRegA5": {
-  "run": 0.23478260869565215
- },
- "testsuite/bsc.lib/CReg:sysTestCRegA_ZeroWidth": {
-  "run": 0.2608695652173913
- },
- "testsuite/bsc.lib/CReg:sysTestCRegU2": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.lib/CReg:sysTestCRegU3": {
-  "run": 0.23076923076923078
- },
- "testsuite/bsc.lib/CReg:sysTestCRegU4": {
-  "run": 0.2621359223300971
- },
- "testsuite/bsc.lib/CReg:sysTestCRegU5": {
-  "link": 0.03980099502487563,
-  "run": 0.27884615384615385
- },
- "testsuite/bsc.lib/CReg:sysTestCRegU_ZeroWidth": {
-  "run": 0.21359223300970873
- },
- "testsuite/bsc.lib/CReg:sysTestCReg_ZeroWidth": {
   "run": 0.25
  },
- "testsuite/bsc.lib/CShow:sysTestCShow": {
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWithM": {
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.interra/libraries/ListN:mkTestbench_ZipWithM_": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Apply": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Buffer": {
+  "run": 0.22413793103448273
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Buffered": {
+  "link": 0.043478260869565216,
+  "run": 0.25190839694656486
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_FifoToPush": {
+  "run": 0.29523809523809524
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Pass": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Passed": {
+  "run": 0.2884615384615385
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Pipe": {
+  "run": 0.27450980392156865
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Qbuffer": {
+  "link": 0.041666666666666664,
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Qbuffered": {
+  "link": 0.03734439834024896,
+  "run": 0.2962962962962963
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_RegToPush": {
+  "run": 0.28703703703703703
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Spew": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/libraries/Push:mkTestbench_Tee": {
+  "run": 0.2627118644067797
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_All": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Any": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Append": {
+  "run": 0.2477064220183486
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Equality": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Fold": {
+  "link": 0.03,
+  "run": 0.23333333333333334
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldM": {
   "run": 0.2434782608695652
  },
- "testsuite/bsc.lib/ClientServer:sysTestToGPClientServer": {
-  "link": 0.036885245901639344,
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldOrder": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldl": {
+  "run": 0.21186440677966104
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldl1": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldlM": {
+  "run": 0.25
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldr": {
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Foldr1": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_FoldrM": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_GenList": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_GenWith": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_GenWithM": {
+  "run": 0.2100840336134454
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Head": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Init": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Last": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Map": {
+  "run": 0.2314814814814815
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapAccumR": {
+  "run": 0.22222222222222224
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapM": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapM_": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_MapPairs": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ReplicateM": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Reverse": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Rotate": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_RotateR": {
+  "run": 0.26363636363636367
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Scanl": {
+  "run": 0.28703703703703703
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Scanr": {
+  "run": 0.23333333333333334
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Select": {
+  "run": 0.2231404958677686
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Sscanl": {
+  "run": 0.23140495867768596
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Sscanr": {
+  "run": 0.2434782608695652
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Tail": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Take": {
+  "run": 0.2543859649122807
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ToList": {
+  "run": 0.24528301886792453
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ToListN": {
+  "run": 0.2543859649122807
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Transpose": {
+  "run": 0.24561403508771928
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_TransposeLN": {
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_UnZip": {
+  "run": 0.2380952380952381
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Update": {
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Zip": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Zip3": {
   "run": 0.2843137254901961
  },
- "testsuite/bsc.lib/Cntrs:sysCntrTest": {
-  "link": 0.15057915057915058,
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_Zip4": {
+  "run": 0.24299065420560748
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipAny": {
   "run": 0.2288135593220339
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWith": {
+  "run": 0.2761904761904762
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWith3": {
+  "run": 0.20168067226890757
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWith3M": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithAny": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithAny3": {
+  "run": 0.2416666666666667
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithM": {
+  "run": 0.2830188679245283
+ },
+ "testsuite/bsc.interra/libraries/Vector:mkTestbench_ZipWithM_": {
+  "run": 0.2416666666666667
+ },
+ "testsuite/bsc.interra/relax_method_urgency/LoopyFIFO:mkTestbench": {
+  "link": 0.032051282051282055,
+  "run": 0.25217391304347825
+ },
+ "testsuite/bsc.interra/relax_method_urgency/byte_en:mkTestbench": {
+  "link": 0.029045643153526972,
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.lib/BRAM/BRAM0Test:sysBRAM0Test": {
+  "link": 0.0027484608619173265,
+  "run": 26.37984496124031
+ },
+ "testsuite/bsc.lib/BRAM/Lat:sysLat112": {
+  "link": 0.378099173553719,
+  "run": 0.34848484848484845
+ },
+ "testsuite/bsc.lib/BRAM/Lat:sysLat122": {
+  "link": 0.3800259403372244,
+  "run": 0.3629032258064516
+ },
+ "testsuite/bsc.lib/BRAM/Lat:sysLat124": {
+  "link": 0.4783092324805339,
+  "run": 0.3211678832116788
+ },
+ "testsuite/bsc.lib/BRAM:sysGrayCounterTest": {
+  "link": 0.00819672131147541,
+  "run": 0.5961538461538461
+ },
+ "testsuite/bsc.lib/BRAM:sysSizedBRAMFIFOTest": {
+  "link": 0.2,
+  "run": 0.23333333333333334
+ },
+ "testsuite/bsc.lib/BRAM:sysSyncBRAM2PortBETest": {
+  "link": 0.04594594594594595,
+  "run": 0.6515151515151514
+ },
+ "testsuite/bsc.lib/BuildList:sysTestBuildList": {
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.lib/BuildVector:sysTestBuildVector": {
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.lib/CReg:sysTestCReg3": {
+  "link": 0.030701754385964918,
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.lib/CReg:sysTestCReg4": {
+  "link": 0.03474903474903475,
+  "run": 0.23664122137404578
+ },
+ "testsuite/bsc.lib/CReg:sysTestCReg5": {
+  "link": 0.03515625,
+  "run": 0.2248062015503876
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegA2": {
+  "link": 0.0392156862745098,
+  "run": 0.2518518518518518
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegA3": {
+  "link": 0.036585365853658534,
+  "run": 0.2462686567164179
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegA4": {
+  "run": 0.23684210526315788
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegA5": {
+  "run": 0.24137931034482757
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegA_ZeroWidth": {
+  "run": 0.25892857142857145
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegU2": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegU3": {
+  "run": 0.28703703703703703
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegU4": {
+  "run": 0.29245283018867924
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegU5": {
+  "run": 0.2283464566929134
+ },
+ "testsuite/bsc.lib/CReg:sysTestCRegU_ZeroWidth": {
+  "run": 0.25
+ },
+ "testsuite/bsc.lib/CReg:sysTestCReg_ZeroWidth": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.lib/CShow:sysTestCShow": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.lib/ClientServer:sysTestToGPClientServer": {
+  "link": 0.03643724696356275,
+  "run": 0.2300884955752212
+ },
+ "testsuite/bsc.lib/Cntrs:sysCntrTest": {
+  "link": 0.12121212121212122,
+  "run": 0.25
  },
  "testsuite/bsc.lib/Cntrs:sysCntrs0": {
   "link": 0.007662835249042146,
-  "run": 0.4571428571428572
+  "run": 0.42857142857142855
  },
  "testsuite/bsc.lib/Cntrs:sysUCntrTest": {
-  "link": 0.12406015037593984,
-  "run": 0.2586206896551724
+  "link": 0.13380281690140847,
+  "run": 0.2644628099173554
  },
  "testsuite/bsc.lib/CompletionBuffer:sysTestCompletionBuffer": {
-  "link": 0.0684931506849315
+  "link": 0.06413301662707839,
+  "run": 0.2777777777777778
  },
  "testsuite/bsc.lib/Complex:sysCmplxSatAdd": {
-  "link": 0.03864734299516909,
-  "run": 0.23478260869565215
+  "run": 0.2857142857142857
  },
  "testsuite/bsc.lib/Complex:sysCmplxTest": {
-  "link": 0.0912863070539419,
-  "run": 0.2735042735042735
+  "link": 0.07377049180327869,
+  "run": 0.2641509433962264
  },
  "testsuite/bsc.lib/DefaultValue:sysDefaultValueTest": {
-  "link": 0.08474576271186442,
-  "run": 0.2772277227722772
- },
- "testsuite/bsc.lib/Divide:sysTest_mkDivider": {
-  "link": 0.0055658627087198514,
-  "run": 1.1083333333333334
- },
- "testsuite/bsc.lib/Divide:sysTest_mkNonPipelinedDivider": {
-  "link": 0.007109004739336493,
-  "run": 2.628571428571429
- },
- "testsuite/bsc.lib/FShow:sysFShowTest": {
-  "run": 0.24561403508771928
- },
- "testsuite/bsc.lib/FixedPoint:sysFromReal_1_5": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.lib/FixedPoint:sysFromReal_1_500": {
-  "run": 0.2434782608695652
- },
- "testsuite/bsc.lib/FixedPoint:sysFromReal_500_1": {
-  "run": 0.25961538461538464
- },
- "testsuite/bsc.lib/FixedPoint:sysFromReal_5_1": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.lib/FixedPoint:sysFromReal_5_5": {
-  "run": 0.24271844660194178
- },
- "testsuite/bsc.lib/FixedPoint:sysFromReal_6_6": {
-  "run": 0.226890756302521
- },
- "testsuite/bsc.lib/FixedPoint:sysRound": {
-  "link": 0.2003853564547206,
-  "run": 0.5420560747663552
- },
- "testsuite/bsc.lib/FixedPoint:sysSaturateArith": {
-  "link": 0.08518518518518518,
-  "run": 0.2564102564102564
- },
- "testsuite/bsc.lib/FloatingPoint:sysFloatTest": {
-  "link": 0.0012145046556011798,
-  "run": 238.20731707317074
- },
- "testsuite/bsc.lib/FloatingPoint:sysFloat_Divide_TestConds": {
-  "link": 0.0029985007496251873
- },
- "testsuite/bsc.lib/FloatingPoint:sysFloat_SquareRoot_TestConds": {
-  "link": 0.0029296875,
-  "run": 0.8058252427184467
- },
- "testsuite/bsc.lib/Foldable:sysFoldableTest": {
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.lib/Memory:sysMemoryTest": {
-  "link": 0.19157088122605365,
-  "run": 0.3238095238095238
- },
- "testsuite/bsc.lib/PAClib/RadixSort/rev1:sysTb": {
-  "link": 0.22591943957968477,
-  "run": 0.3448275862068965
- },
- "testsuite/bsc.lib/PAClib/RadixSort/rev2:sysTb": {
-  "link": 0.22862129144851656,
-  "run": 0.39316239316239315
- },
- "testsuite/bsc.lib/PAClib/RadixSort/rev3:sysTb": {
-  "link": 0.1650793650793651,
-  "run": 0.3652173913043478
- },
- "testsuite/bsc.lib/PAClib/RadixSort/rev4:sysTb": {
-  "link": 0.1804812834224599,
-  "run": 0.4954128440366972
- },
- "testsuite/bsc.lib/PAClib/dft64/bsv:sysTb_v1": {
-  "link": 0.016488046166529265,
-  "run": 131.81102362204723
- },
- "testsuite/bsc.lib/PAClib/dft64/bsv:sysTb_v2": {
-  "link": 0.013651877133105802,
-  "run": 158.9626168224299
- },
- "testsuite/bsc.lib/PAClib/dft64/bsv:sysTb_v5": {
-  "link": 0.009320905459387484,
-  "run": 126.57936507936508
- },
- "testsuite/bsc.lib/PAClib/qsort/bsv:sysTb": {
-  "link": 0.17777777777777778,
-  "run": 0.33620689655172414
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysForFold_1": {
-  "link": 0.044247787610619475,
-  "run": 0.26851851851851855
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysForFold_2": {
-  "link": 0.041509433962264156,
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysForLoop": {
-  "link": 0.05098039215686275,
-  "run": 0.24786324786324787
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysIfThenElse": {
-  "link": 0.05327868852459017,
-  "run": 0.2586206896551724
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysMap": {
-  "link": 0.0456140350877193,
-  "run": 0.26851851851851855
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysMap_with_funnel_indexed": {
-  "link": 0.044117647058823525,
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysMap_with_funnel_indexed_2": {
-  "link": 0.052000000000000005
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysReorder": {
-  "link": 0.049645390070921995,
-  "run": 0.25
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysSynchPipe": {
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysWhileFold_1": {
-  "link": 0.052631578947368425,
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.lib/PAClib/unit_tests:sysWhileFold_2": {
-  "link": 0.053140096618357495,
+  "link": 0.08786610878661087,
   "run": 0.23076923076923075
  },
- "testsuite/bsc.lib/PAClib/unit_tests:sysWhileLoop": {
-  "link": 0.05474452554744525,
-  "run": 0.2586206896551724
+ "testsuite/bsc.lib/Divide:sysTest_mkDivider": {
+  "link": 0.004335260115606936,
+  "run": 1.2
  },
- "testsuite/bsc.lib/PAClib/unit_tests:sysfork_join": {
-  "link": 0.04405286343612335,
+ "testsuite/bsc.lib/Divide:sysTest_mkNonPipelinedDivider": {
+  "link": 0.0069284064665127015,
+  "run": 2.3025210084033616
+ },
+ "testsuite/bsc.lib/FShow:sysFShowTest": {
+  "run": 0.25892857142857145
+ },
+ "testsuite/bsc.lib/FixedPoint:sysFromReal_1_5": {
+  "run": 0.23255813953488372
+ },
+ "testsuite/bsc.lib/FixedPoint:sysFromReal_1_500": {
+  "run": 0.2549019607843137
+ },
+ "testsuite/bsc.lib/FixedPoint:sysFromReal_500_1": {
+  "run": 0.2857142857142857
+ },
+ "testsuite/bsc.lib/FixedPoint:sysFromReal_5_1": {
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.lib/FixedPoint:sysFromReal_5_5": {
+  "link": 0.097165991902834,
+  "run": 0.26126126126126126
+ },
+ "testsuite/bsc.lib/FixedPoint:sysFromReal_6_6": {
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.lib/FixedPoint:sysRound": {
+  "link": 0.17903930131004367,
+  "run": 0.3893129770992366
+ },
+ "testsuite/bsc.lib/FixedPoint:sysSaturateArith": {
+  "link": 0.08085106382978723
+ },
+ "testsuite/bsc.lib/FloatingPoint:sysFloatToFixed_RoundMode": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.lib/FloatingPoint:sysFloat_Divide_TestConds": {
+  "link": 0.0035128805620608904,
+  "run": 0.4568965517241379
+ },
+ "testsuite/bsc.lib/FloatingPoint:sysFloat_SquareRoot_TestConds": {
+  "link": 0.0030557677616501145,
+  "run": 0.6475409836065574
+ },
+ "testsuite/bsc.lib/Foldable:sysFoldable1Test": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.lib/Foldable:sysFoldableTest": {
   "run": 0.24545454545454545
  },
- "testsuite/bsc.lib/Prelude:sysAppendTuple": {
-  "run": 0.25
+ "testsuite/bsc.lib/Memory:sysMemoryTest": {
+  "link": 0.1839557399723375,
+  "run": 0.3
  },
- "testsuite/bsc.lib/Prelude:sysCurryTypeClass": {
-  "run": 0.23134328358208953
+ "testsuite/bsc.lib/PAClib/RadixSort/rev1:sysTb": {
+  "link": 0.16421291053227632,
+  "run": 0.3
  },
- "testsuite/bsc.lib/Prelude:sysEq0": {
-  "link": 0.07368421052631578,
-  "run": 0.27272727272727276
+ "testsuite/bsc.lib/PAClib/RadixSort/rev2:sysTb": {
+  "link": 0.14549402823018456,
+  "run": 0.28205128205128205
  },
- "testsuite/bsc.lib/Prelude:sysEq1": {
-  "link": 0.08333333333333334,
-  "run": 0.2542372881355932
+ "testsuite/bsc.lib/PAClib/RadixSort/rev3:sysTb": {
+  "link": 0.14133900106269925,
+  "run": 0.30656934306569344
  },
- "testsuite/bsc.lib/Prelude:sysEq2": {
-  "link": 0.07531380753138074,
-  "run": 0.27272727272727276
+ "testsuite/bsc.lib/PAClib/RadixSort/rev4:sysTb": {
+  "link": 0.17566137566137566,
+  "run": 0.42748091603053434
  },
- "testsuite/bsc.lib/Prelude:sysTuplePack": {
-  "run": 0.2377049180327869
+ "testsuite/bsc.lib/PAClib/dft64/bsv:sysTb_v1": {
+  "link": 0.014664804469273741,
+  "run": 137.94117647058823
  },
- "testsuite/bsc.lib/Prelude:sysTupleSize": {
-  "link": 0.03365384615384616,
-  "run": 0.26363636363636367
+ "testsuite/bsc.lib/PAClib/dft64/bsv:sysTb_v2": {
+  "link": 0.016578749058025623,
+  "run": 176.49253731343282
  },
- "testsuite/bsc.lib/PrintType:sysTestPrintType": {
-  "run": 0.2605042016806723
+ "testsuite/bsc.lib/PAClib/dft64/bsv:sysTb_v5": {
+  "link": 0.010559006211180125,
+  "run": 139.75362318840578
  },
- "testsuite/bsc.lib/Printf:sysPrintfTest": {
-  "link": 0.0782608695652174,
-  "run": 0.25190839694656486
+ "testsuite/bsc.lib/PAClib/qsort/bsv:sysTb": {
+  "link": 0.145320197044335,
+  "run": 0.3064516129032258
  },
- "testsuite/bsc.lib/RegA:sysTestRegA": {
-  "run": 0.25833333333333336
+ "testsuite/bsc.lib/PAClib/unit_tests:sysForFold_1": {
+  "link": 0.04784688995215312,
+  "run": 0.27450980392156865
  },
- "testsuite/bsc.lib/Reserved:sysReservedTest": {
-  "link": 0.09602649006622516,
-  "run": 0.2540983606557377
+ "testsuite/bsc.lib/PAClib/unit_tests:sysForFold_2": {
+  "link": 0.0430622009569378
  },
- "testsuite/bsc.lib/SShow:sysTestSShow": {
-  "run": 0.2542372881355932
+ "testsuite/bsc.lib/PAClib/unit_tests:sysForLoop": {
+  "link": 0.05726872246696035,
+  "run": 0.21904761904761905
  },
- "testsuite/bsc.lib/Stmt/FacTest:mkFacTest": {
-  "link": 0.05882352941176471,
-  "run": 0.2537313432835821
- },
- "testsuite/bsc.lib/Stmt/Modules:sysAlwaysFSM_OneAction": {
-  "link": 0.048458149779735685,
-  "run": 0.3035714285714286
- },
- "testsuite/bsc.lib/Stmt/RepeatTest:mkRepeatTest": {
-  "link": 0.05921052631578947,
-  "run": 0.29357798165137616
- },
- "testsuite/bsc.lib/Stmt/Server:sysServerTest": {
-  "link": 0.0756578947368421
- },
- "testsuite/bsc.lib/Stmt/Server:sysServerTestUpdate": {
-  "link": 0.08709677419354839,
-  "run": 0.33018867924528306
- },
- "testsuite/bsc.lib/Tieoff:sysTieOffTest": {
-  "link": 0.041800643086816726,
-  "run": 0.28440366972477066
- },
- "testsuite/bsc.lib/Traversable:sysTraversableTest": {
-  "run": 0.25833333333333336
- },
- "testsuite/bsc.lib/TreeMap:sysTreeMapInsertWith": {
-  "run": 0.26605504587155965
- },
- "testsuite/bsc.lib/TreeMap:sysTreeMapLookup": {
-  "run": 0.2586206896551724
- },
- "testsuite/bsc.lib/TreeMap:sysTreeMapMember": {
+ "testsuite/bsc.lib/PAClib/unit_tests:sysIfThenElse": {
+  "link": 0.044534412955465584,
   "run": 0.25471698113207547
  },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysMap": {
+  "link": 0.03819444444444445,
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysMap_with_funnel_indexed": {
+  "link": 0.05490196078431373,
+  "run": 0.2396694214876033
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysMap_with_funnel_indexed_2": {
+  "link": 0.05185185185185185,
+  "run": 0.2586206896551724
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysReorder": {
+  "link": 0.045936395759717315,
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysSynchPipe": {
+  "run": 0.2627118644067797
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysWhileFold_1": {
+  "link": 0.05286343612334801,
+  "run": 0.2421875
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysWhileFold_2": {
+  "link": 0.05936073059360731,
+  "run": 0.2260869565217391
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysWhileLoop": {
+  "link": 0.06172839506172839,
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.lib/PAClib/unit_tests:sysfork_join": {
+  "link": 0.046296296296296294
+ },
+ "testsuite/bsc.lib/Prelude:sysAppendTuple": {
+  "link": 0.05911330049261084,
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.lib/Prelude:sysCurryTypeClass": {
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.lib/Prelude:sysEq0": {
+  "link": 0.07053941908713693,
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.lib/Prelude:sysEq1": {
+  "link": 0.07391304347826089,
+  "run": 0.2711864406779661
+ },
+ "testsuite/bsc.lib/Prelude:sysEq2": {
+  "link": 0.07555555555555556,
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.lib/Prelude:sysTuplePack": {
+  "run": 0.2231404958677686
+ },
+ "testsuite/bsc.lib/Prelude:sysTupleSize": {
+  "run": 0.22413793103448273
+ },
+ "testsuite/bsc.lib/PrintType:sysTestPrintType": {
+  "run": 0.22413793103448273
+ },
+ "testsuite/bsc.lib/Printf:sysPrintfTest": {
+  "run": 0.21374045801526717
+ },
+ "testsuite/bsc.lib/RegA:sysTestRegA": {
+  "run": 0.2543859649122807
+ },
+ "testsuite/bsc.lib/Reserved:sysReservedTest": {
+  "link": 0.10181818181818182,
+  "run": 0.24074074074074073
+ },
+ "testsuite/bsc.lib/SShow:sysTestSShow": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.lib/Stmt/FacTest:mkFacTest": {
+  "link": 0.04878048780487806,
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.lib/Stmt/Modules:sysAlwaysFSM_OneAction": {
+  "link": 0.049261083743842374,
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.lib/Stmt/RepeatTest:mkRepeatTest": {
+  "link": 0.0782608695652174,
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.lib/Stmt/Server:sysServerTest": {
+  "link": 0.10283687943262411,
+  "run": 0.2222222222222222
+ },
+ "testsuite/bsc.lib/Stmt/Server:sysServerTestUpdate": {
+  "link": 0.08445945945945946,
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.lib/Tieoff:sysTieOffTest": {
+  "link": 0.04669260700389105,
+  "run": 0.25217391304347825
+ },
+ "testsuite/bsc.lib/Traversable:sysTraversableTest": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.lib/TreeMap:sysTreeMapInsertWith": {
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.lib/TreeMap:sysTreeMapLookup": {
+  "run": 0.21538461538461537
+ },
+ "testsuite/bsc.lib/TreeMap:sysTreeMapMember": {
+  "run": 0.2184873949579832
+ },
  "testsuite/bsc.lib/TreeMap:sysTreeMapOrder": {
-  "run": 0.2710280373831776
+  "run": 0.25233644859813087
+ },
+ "testsuite/bsc.lib/dreg:sysDRegTest0": {
+  "run": 0.20833333333333334
  },
  "testsuite/bsc.lib/dreg:sysDRegTest1": {
-  "link": 0.03755868544600939,
-  "run": 0.26890756302521013
- },
- "testsuite/bsc.lib/fifo/depth_param:sysFIFOParamTest": {
-  "link": 0.03125,
-  "run": 0.25833333333333336
- },
- "testsuite/bsc.lib/fifo/depth_param:sysLFIFOParamTest": {
-  "link": 0.02661596958174905,
+  "link": 0.03669724770642201,
   "run": 0.24576271186440682
  },
+ "testsuite/bsc.lib/fifo/depth_param:sysFIFOParamTest": {
+  "link": 0.024647887323943664,
+  "run": 0.22641509433962265
+ },
+ "testsuite/bsc.lib/fifo/depth_param:sysLFIFOParamTest": {
+  "link": 0.022556390977443608
+ },
  "testsuite/bsc.lib/fifo/depth_param:sysZeroFIFOParamTest": {
-  "link": 0.007547169811320755,
-  "run": 0.2627118644067797
+  "link": 0.007692307692307692,
+  "run": 0.2654867256637168
  },
  "testsuite/bsc.lib/fifo:mkTbBypassFIFO": {
   "link": 0.03272727272727272,
-  "run": 0.2542372881355932
+  "run": 0.26890756302521013
  },
  "testsuite/bsc.lib/fifo:sysFIFOErrors": {
-  "link": 0.0657439446366782,
-  "run": 0.26495726495726496
+  "link": 0.06802721088435375,
+  "run": 0.26168224299065423
  },
  "testsuite/bsc.lib/fifo:sysLFIFO2Test": {
-  "link": 0.04081632653061224,
-  "run": 0.2897196261682243
+  "link": 0.045801526717557245,
+  "run": 0.2718446601941748
  },
  "testsuite/bsc.lib/fifo:sysLSizedFIFOTest": {
-  "link": 0.04780876494023904,
-  "run": 0.2542372881355932
+  "link": 0.04838709677419355,
+  "run": 0.2843137254901961
  },
  "testsuite/bsc.lib/fifo:sysMoreFIFOTest": {
-  "link": 0.05084745762711865,
-  "run": 0.2605042016806723
+  "link": 0.042483660130718956,
+  "run": 0.23622047244094488
  },
  "testsuite/bsc.lib/fifo:sysSizedFIFOTest": {
-  "link": 0.23191489361702128,
-  "run": 0.34259259259259256
- },
- "testsuite/bsc.lib/getput:sysTestFIFO": {
-  "run": 0.2542372881355932
+  "link": 0.2161716171617162,
+  "run": 0.3050847457627119
  },
  "testsuite/bsc.lib/getput:sysTestFIFOCount": {
-  "link": 0.04,
-  "run": 0.25
+  "link": 0.03982300884955752,
+  "run": 0.2673267326732673
  },
  "testsuite/bsc.lib/getput:sysTestFIFOCount0": {
-  "link": 0.008928571428571428,
-  "run": 0.2796610169491526
+  "link": 0.008130081300813009,
+  "run": 0.29411764705882354
  },
  "testsuite/bsc.lib/getput:sysTestFIFOF": {
-  "run": 0.25
+  "link": 0.034653465346534656
  },
  "testsuite/bsc.lib/getput:sysTestFIFOF2": {
-  "run": 0.25
+  "run": 0.25471698113207547
  },
  "testsuite/bsc.lib/getput:sysTestFIFOFToFIFO": {
-  "run": 0.2586206896551724
+  "run": 0.25961538461538464
  },
  "testsuite/bsc.lib/getput:sysTestFIFOLevel": {
-  "link": 0.03797468354430379,
-  "run": 0.2605042016806723
+  "link": 0.03765690376569037,
+  "run": 0.23529411764705885
  },
  "testsuite/bsc.lib/getput:sysTestFIFOLevel0": {
-  "link": 0.008771929824561405,
-  "run": 0.27586206896551724
+  "link": 0.008968609865470852,
+  "run": 0.25
  },
  "testsuite/bsc.lib/getput:sysTestFIFOSync": {
-  "link": 0.028925619834710748,
-  "run": 0.23728813559322035
- },
- "testsuite/bsc.lib/getput:sysTestFIFOSync0": {
-  "link": 0.008403361344537816,
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.lib/getput:sysTestFIFOSync1": {
-  "link": 0.03404255319148936,
-  "run": 0.2586206896551724
- },
- "testsuite/bsc.lib/getput:sysTestFIFOSync10": {
-  "link": 0.008163265306122448,
-  "run": 0.27358490566037735
- },
- "testsuite/bsc.lib/getput:sysTestFIFOSyncCount": {
-  "link": 0.030837004405286347,
-  "run": 0.24369747899159666
- },
- "testsuite/bsc.lib/getput:sysTestFIFOSyncCount0": {
-  "link": 0.008333333333333333,
+  "link": 0.029045643153526972,
   "run": 0.24786324786324787
  },
+ "testsuite/bsc.lib/getput:sysTestFIFOSync0": {
+  "link": 0.008163265306122448,
+  "run": 0.27522935779816515
+ },
+ "testsuite/bsc.lib/getput:sysTestFIFOSync1": {
+  "link": 0.026905829596412554,
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.lib/getput:sysTestFIFOSync10": {
+  "link": 0.008368200836820083,
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.lib/getput:sysTestFIFOSyncCount": {
+  "link": 0.02857142857142857,
+  "run": 0.2718446601941748
+ },
+ "testsuite/bsc.lib/getput:sysTestFIFOSyncCount0": {
+  "link": 0.008968609865470852,
+  "run": 0.2672413793103448
+ },
  "testsuite/bsc.lib/getput:sysTestFIFOSyncLevel": {
-  "link": 0.033707865168539325,
-  "run": 0.2605042016806723
+  "link": 0.032,
+  "run": 0.24528301886792453
  },
  "testsuite/bsc.lib/getput:sysTestFIFOSyncLevel0": {
   "link": 0.007547169811320755,
-  "run": 0.2871287128712871
- },
- "testsuite/bsc.lib/getput:sysTestToGPFunc": {
-  "run": 0.22413793103448273
- },
- "testsuite/bsc.lib/getput:sysTestToGPRWire": {
-  "run": 0.2586206896551724
- },
- "testsuite/bsc.lib/getput:sysTestToGPReg": {
-  "run": 0.24369747899159666
- },
- "testsuite/bsc.lib/getput:sysTestToGPWire": {
-  "run": 0.2377049180327869
- },
- "testsuite/bsc.lib/list_ops:sysSortGroupTest": {
-  "link": 0.09223300970873786,
-  "run": 0.25
- },
- "testsuite/bsc.lib/listn:sysApplicativeListN": {
-  "run": 0.2393162393162393
- },
- "testsuite/bsc.lib/oint:sysOIntDynamic": {
-  "run": 0.24786324786324787
- },
- "testsuite/bsc.lib/regfile:sysArrayFileTest": {
-  "link": 0.02916666666666667,
-  "run": 0.23664122137404578
- },
- "testsuite/bsc.lib/regfile:sysParseTest": {
-  "link": 0.022421524663677132,
-  "run": 0.24761904761904763
- },
- "testsuite/bsc.lib/regfile:sysParseTest2": {
-  "link": 0.02661596958174905,
-  "run": 0.2644628099173554
- },
- "testsuite/bsc.lib/regfile:sysTestRegFileLoad": {
-  "link": 0.027237354085603117,
-  "run": 0.26666666666666666
- },
- "testsuite/bsc.lib/regfile:sysWarningTest": {
-  "link": 0.03139013452914798,
-  "run": 0.2396694214876033
- },
- "testsuite/bsc.lib/regfile:sysWarningTest2": {
-  "link": 0.026315789473684213,
-  "run": 0.22131147540983606
- },
- "testsuite/bsc.lib/regtwo:sysRegTwoTest": {
-  "link": 0.03365384615384616,
-  "run": 0.24793388429752067
- },
- "testsuite/bsc.lib/rwire:sysBigBypassWire": {
-  "run": 0.2377049180327869
- },
- "testsuite/bsc.lib/rwire:sysMethodPulse": {
-  "link": 0.02788844621513945,
-  "run": 0.2416666666666667
- },
- "testsuite/bsc.lib/rwire:sysPulseTest": {
-  "run": 0.27522935779816515
- },
- "testsuite/bsc.lib/rwire:sysPulseWireC": {
-  "run": 0.23577235772357724
- },
- "testsuite/bsc.lib/rwire:sysPulseWireSBR": {
-  "link": 0.039603960396039604,
-  "run": 0.275
- },
- "testsuite/bsc.lib/rwire:sysRWireBoundary": {
-  "link": 0.024193548387096774,
-  "run": 0.22580645161290322
- },
- "testsuite/bsc.lib/rwire:sysRWireNothing": {
-  "run": 0.2857142857142857
- },
- "testsuite/bsc.lib/rwire:sysTestBypassWire": {
-  "link": 0.007575757575757576,
-  "run": 0.25925925925925924
- },
- "testsuite/bsc.lib/rwire:sysTestRWire": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.lib/rwire:sysValidValue": {
-  "link": 0.04024767801857585,
-  "run": 0.23333333333333334
- },
- "testsuite/bsc.lib/rwire:sysWire": {
-  "run": 0.25210084033613445
- },
- "testsuite/bsc.lib/vector:sysApplicativeVector": {
-  "run": 0.2542372881355932
- },
- "testsuite/bsc.lib/vector:sysConcatTuple": {
-  "run": 0.2542372881355932
- },
- "testsuite/bsc.lib/vector:sysCountElem": {
-  "run": 0.26851851851851855
- },
- "testsuite/bsc.lib/vector:sysCountIf": {
-  "link": 0.0679611650485437,
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.lib/vector:sysFindElem": {
-  "link": 0.10126582278481013,
-  "run": 0.2540983606557377
- },
- "testsuite/bsc.lib/vector:sysFindIndex": {
-  "link": 0.08771929824561404,
-  "run": 0.26666666666666666
- },
- "testsuite/bsc.lib/vector:sysFromChunksTest": {
-  "link": 0.11450381679389313,
-  "run": 0.3055555555555556
- },
- "testsuite/bsc.lib/vector:sysRotateBy": {
-  "link": 0.10739436619718311,
-  "run": 0.33898305084745767
- },
- "testsuite/bsc.lib/vector:sysShiftOutTest": {
-  "link": 0.2144927536231884,
-  "run": 0.28205128205128205
- },
- "testsuite/bsc.lib/vector:sysShiftTest": {
-  "link": 0.11484593837535013,
-  "run": 0.2605042016806723
- },
- "testsuite/bsc.lib/vector:sysZeroVector": {
-  "link": 0.005,
-  "run": 0.22033898305084745
- },
- "testsuite/bsc.long_tests/conflict_free_large:sysConflictFreeNotOKLarge": {
-  "link": 0.091636197440585,
-  "run": 0.9158878504672898
- },
- "testsuite/bsc.long_tests/conflict_free_large:sysConflictFreeOKLarge": {
-  "link": 0.07612817200716696,
-  "run": 0.951219512195122
- },
- "testsuite/bsc.mcd/ClockDividers:sysClockDivOffset": {
-  "run": 0.24528301886792453
- },
- "testsuite/bsc.mcd/ClockDividers:sysClockInv": {
-  "link": 0.030837004405286347,
-  "run": 0.30769230769230765
- },
- "testsuite/bsc.mcd/ClockDividers:sysGatedClockInv": {
-  "link": 0.004672897196261682,
-  "run": 0.5206611570247934
- },
- "testsuite/bsc.mcd/ClockMux:sysClockMux": {
-  "link": 0.008771929824561405,
-  "run": 0.26666666666666666
- },
- "testsuite/bsc.mcd/ClockMux:sysClockSelect": {
-  "link": 0.009569377990430623,
-  "run": 0.3050847457627119
- },
- "testsuite/bsc.mcd/ClockMux:sysSlowSelectClock": {
-  "run": 0.25210084033613445
- },
- "testsuite/bsc.mcd/ClockMux:sysUngatedClockMux": {
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.mcd/ClockMux:sysUngatedClockSelect": {
-  "link": 0.03225806451612904,
-  "run": 0.2710280373831776
- },
- "testsuite/bsc.mcd/Gating:sysDefaultClockMethod": {
-  "link": 0.00784313725490196,
-  "run": 0.2477064220183486
- },
- "testsuite/bsc.mcd/Gating:sysGatedClockCycle": {
-  "run": 0.2396694214876033
- },
- "testsuite/bsc.mcd/Gating:sysGatedClock_OneMod": {
-  "run": 0.27272727272727276
- },
- "testsuite/bsc.mcd/Gating:sysInputClockMethod": {
-  "link": 0.008163265306122448,
-  "run": 0.2542372881355932
- },
- "testsuite/bsc.mcd/Gating:sysMethodFalse": {
-  "link": 0.02531645569620253,
-  "run": 0.25210084033613445
- },
- "testsuite/bsc.mcd/Gating:sysMethodTrue": {
-  "link": 0.007092198581560284,
-  "run": 0.24242424242424243
- },
- "testsuite/bsc.mcd/LevelFifo:sysFIFOCountTest": {
-  "link": 0.046218487394957986,
-  "run": 0.3953488372093023
- },
- "testsuite/bsc.mcd/LevelFifo:sysGFIFOCountTest": {
-  "link": 0.18971507991660874,
-  "run": 0.4220183486238532
- },
- "testsuite/bsc.mcd/LevelFifo:sysGFIFOLevelTest": {
-  "link": 0.21542130365659776,
-  "run": 0.35833333333333334
- },
- "testsuite/bsc.mcd/LevelFifo:sysLevelFIFOTest1": {
-  "link": 0.044897959183673466,
-  "run": 0.2578125
- },
- "testsuite/bsc.mcd/LevelFifo:sysLevelFIFOTest2": {
-  "link": 0.04867256637168142,
-  "run": 0.2230769230769231
- },
- "testsuite/bsc.mcd/LevelFifo:sysSyncFIFOCountTest": {
-  "link": 0.03831417624521073,
-  "run": 0.5230769230769231
- },
- "testsuite/bsc.mcd/LevelFifo:sysSyncLevelFIFOTest": {
-  "link": 0.04067796610169491,
-  "run": 0.3384615384615384
- },
- "testsuite/bsc.mcd/MakeClock:sysMakeClockTest": {
-  "link": 0.0071656050955414006,
-  "run": 1.8181818181818183
- },
- "testsuite/bsc.mcd/Misc:sysClockOf": {
-  "link": 0.02586206896551724,
-  "run": 0.25
- },
- "testsuite/bsc.mcd/Misc:sysClocksOf": {
-  "link": 0.02926829268292683,
-  "run": 0.25217391304347825
- },
- "testsuite/bsc.mcd/Misc:sysInvertAbsoluteClock": {
-  "link": 0.0297029702970297,
-  "run": 0.2260869565217391
- },
- "testsuite/bsc.mcd/Misc:sysLaunderClock": {
-  "link": 0.023076923076923075,
-  "run": 0.2396694214876033
- },
- "testsuite/bsc.mcd/Misc:sysResetOf": {
-  "run": 0.25
- },
- "testsuite/bsc.mcd/Misc:sysResetsOf": {
-  "run": 0.22950819672131148
- },
- "testsuite/bsc.mcd/NoClock:sysOutputNoClock": {
-  "link": 0.005,
-  "run": 0.2416666666666667
- },
- "testsuite/bsc.mcd/NoClock:sysUnclockedModule": {
-  "link": 0.0330188679245283,
-  "run": 0.23140495867768596
- },
- "testsuite/bsc.mcd/NullCrossing:sysNullCrossingReg": {
-  "run": 0.25210084033613445
- },
- "testsuite/bsc.mcd/NullCrossing:sysNullSyncTest": {
-  "run": 0.2803738317757009
- },
- "testsuite/bsc.mcd/NullCrossing:sysNullSyncTest2": {
-  "link": 0.007722007722007722,
-  "run": 0.24137931034482757
- },
- "testsuite/bsc.mcd/Reset:sysInitialResetTest": {
-  "run": 0.2586206896551724
- },
- "testsuite/bsc.mcd/Reset:sysMakeReset0": {
-  "run": 0.2416666666666667
- },
- "testsuite/bsc.mcd/Reset:sysMethodResetGuards": {
-  "link": 0.021660649819494584,
-  "run": 0.2459016393442623
- },
- "testsuite/bsc.mcd/Reset:sysMultipleResetsForRule": {
-  "run": 0.2608695652173913
- },
- "testsuite/bsc.mcd/Reset:sysResetEither": {
-  "link": 0.0330188679245283,
-  "run": 0.25
- },
- "testsuite/bsc.mcd/Reset:sysResetMux": {
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.mcd/SyncReset:sysRstTest": {
-  "link": 0.04950495049504951,
-  "run": 0.2916666666666667
- },
- "testsuite/bsc.mcd/SyncReset:sysRstTest_V1": {
-  "link": 0.03864734299516909,
-  "run": 0.2941176470588236
- },
- "testsuite/bsc.mcd/SyncReset:sysRstTest_V2": {
-  "link": 0.04385964912280702,
-  "run": 0.24369747899159666
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncBit05Test": {
-  "link": 0.030701754385964918,
-  "run": 0.23255813953488372
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncBit15Test": {
-  "run": 0.27522935779816515
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncBit1Test": {
-  "run": 0.24615384615384614
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncBitTest": {
-  "link": 0.030837004405286347,
-  "run": 0.24242424242424243
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest": {
-  "link": 0.038461538461538464,
-  "run": 0.26153846153846155
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest1": {
-  "link": 0.029498525073746312,
-  "run": 0.30841121495327106
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest1A": {
-  "link": 0.0829145728643216,
-  "run": 0.2627118644067797
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest2": {
-  "link": 0.03409090909090909,
-  "run": 0.34579439252336447
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncHandshakeTest": {
-  "link": 0.03809523809523809,
-  "run": 0.2897196261682243
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncHandshakeTest2": {
-  "link": 0.03081232492997199,
-  "run": 0.31092436974789917
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncPulseTest": {
-  "link": 0.027522935779816512,
-  "run": 0.2380952380952381
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncRegTest": {
-  "link": 0.0316205533596838,
-  "run": 0.2377049180327869
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncRegTest2": {
-  "link": 0.027972027972027975,
-  "run": 0.2586206896551724
- },
- "testsuite/bsc.mcd/Synchronizers:sysSyncRegTest3": {
-  "link": 0.028124999999999997,
-  "run": 0.33962264150943394
- },
- "testsuite/bsc.misc/bitextract:sysBitExtractInRange": {
-  "run": 0.2710280373831776
- },
- "testsuite/bsc.misc/bitextract:sysBitUpdateInRange": {
-  "run": 0.24369747899159666
- },
- "testsuite/bsc.misc/crc:sysCRCTest1": {
-  "link": 0.21891418563922943,
-  "run": 0.3178294573643411
- },
- "testsuite/bsc.misc/divmod:sysDivMod": {
-  "run": 0.25
- },
- "testsuite/bsc.misc/divmod:sysDivModWide": {
-  "link": 0.06382978723404255,
-  "run": 0.2578125
- },
- "testsuite/bsc.misc/divmod:sysSimpleTest": {
-  "link": 0.0625,
-  "run": 0.3055555555555556
- },
- "testsuite/bsc.misc/format:sysBug1572": {
-  "link": 0.03448275862068966,
-  "run": 0.23275862068965517
- },
- "testsuite/bsc.misc/format:sysFormat1": {
-  "run": 0.2288135593220339
- },
- "testsuite/bsc.misc/format:sysFormat2": {
-  "link": 0.008782936010037642,
-  "run": 0.2540983606557377
- },
- "testsuite/bsc.misc/format:sysFormat3": {
-  "link": 0.0023529411764705885,
-  "run": 0.3557692307692308
- },
- "testsuite/bsc.misc/fwrite:sysFCloseTypes": {
-  "link": 0.010101010101010102,
-  "run": 0.28703703703703703
- },
- "testsuite/bsc.misc/fwrite:sysFOpen": {
-  "link": 0.004587155963302752,
-  "run": 0.25
- },
- "testsuite/bsc.misc/fwrite:sysFOpen2": {
-  "run": 0.24038461538461542
- },
- "testsuite/bsc.misc/fwrite:sysFOpen_MCD": {
-  "run": 0.2710280373831776
- },
- "testsuite/bsc.misc/fwrite:sysFOpen_MCD2": {
-  "run": 0.2196969696969697
- },
- "testsuite/bsc.misc/fwrite:sysFWrite2": {
-  "link": 0.008771929824561405,
-  "run": 0.22556390977443608
- },
- "testsuite/bsc.misc/fwrite:sysFWrite3": {
-  "link": 0.00784313725490196,
-  "run": 0.3223140495867769
- },
- "testsuite/bsc.misc/fwrite:sysFWrites": {
-  "link": 0.008264462809917356,
-  "run": 0.275
- },
- "testsuite/bsc.misc/fwrite:sysGetC1": {
-  "link": 0.028985507246376812,
-  "run": 0.24812030075187969
- },
- "testsuite/bsc.misc/fwrite:sysGetC3": {
-  "link": 0.14720812182741116,
-  "run": 0.35593220338983056
- },
- "testsuite/bsc.misc/fwrite:sysMCD_ops": {
-  "link": 0.03278688524590164,
-  "run": 0.26666666666666666
- },
- "testsuite/bsc.misc/mul:sysComplex2": {
-  "link": 0.031111111111111114,
-  "run": 0.2767857142857143
- },
- "testsuite/bsc.misc/mul:sysSignedMul": {
-  "link": 0.44583333333333336,
-  "run": 0.3170731707317073
- },
- "testsuite/bsc.misc/mul:sysTest": {
-  "link": 0.02711864406779661,
-  "run": 0.2377049180327869
- },
- "testsuite/bsc.options/verilog-e:sysHello": {
-  "link": 0.03211009174311927,
-  "run": 0.24242424242424243
- },
- "testsuite/bsc.options:sysGCD": {
-  "link": 0.02077151335311573,
-  "run": 0.23484848484848483
- },
- "testsuite/bsc.real/evaluator/undef:sysDontCareDynSelectStaticArrayReal": {
-  "link": 0.008583690987124463,
-  "run": 0.24390243902439024
- },
- "testsuite/bsc.scheduler/conflict_free:sysCFExecOrder2": {
-  "link": 0.029045643153526972,
-  "run": 0.24390243902439024
- },
- "testsuite/bsc.scheduler/conflict_free:sysCFExecOrder3": {
-  "link": 0.03196347031963471,
-  "run": 0.2231404958677686
- },
- "testsuite/bsc.scheduler/conflict_free:sysConflictFreeOK": {
-  "link": 0.038461538461538464,
-  "run": 0.24369747899159666
- },
- "testsuite/bsc.scheduler/conflict_free:sysConflictFreeOK2": {
-  "link": 0.09280742459396753,
-  "run": 0.2459016393442623
- },
- "testsuite/bsc.scheduler/conflict_free:sysConflictFreeOK3": {
-  "link": 0.07263513513513513,
-  "run": 0.2706766917293233
- },
- "testsuite/bsc.scheduler/conflict_free:sysConflictFreeResource": {
-  "link": 0.03597122302158274,
-  "run": 0.23664122137404578
- },
- "testsuite/bsc.scheduler/mutually_exclusive:sysMEExecOrder2": {
-  "link": 0.031111111111111114,
-  "run": 0.2644628099173554
- },
- "testsuite/bsc.scheduler/mutually_exclusive:sysMutuallyExclusiveBug1327": {
-  "link": 0.027667984189723323,
-  "run": 0.2782608695652174
- },
- "testsuite/bsc.scheduler/mutually_exclusive:sysMutuallyExclusiveCheck": {
-  "link": 0.025,
-  "run": 0.25
- },
- "testsuite/bsc.scheduler/mutually_exclusive:sysMutuallyExclusiveCheckOK": {
-  "link": 0.03255813953488373,
-  "run": 0.23308270676691728
- },
- "testsuite/bsc.scheduler/rulesort:sysRuleSort": {
-  "link": 0.029739776951672865,
-  "run": 0.25
- },
- "testsuite/bsc.scheduler:sysBoundary": {
-  "link": 0.022435897435897436,
-  "run": 0.25384615384615383
- },
- "testsuite/bsc.syntax/bh/bh_pragmas:sysPragmas": {
-  "link": 0.01897018970189702,
-  "run": 0.3047619047619048
- },
- "testsuite/bsc.syntax/bh/bh_pragmas:sysProperties": {
-  "link": 0.02348993288590604,
-  "run": 0.23622047244094488
- },
- "testsuite/bsc.syntax/bh:sysLiteralTest": {
-  "link": 0.028436018957345974,
-  "run": 0.25
- },
- "testsuite/bsc.syntax/bh:sysSizedLiteralMono": {
-  "run": 0.2605042016806723
- },
- "testsuite/bsc.syntax/bh:sysSizedLiteralTest": {
-  "link": 0.027906976744186046,
-  "run": 0.24369747899159666
- },
- "testsuite/bsc.syntax/bsv05/case:sysCaseMatches_MixedLit": {
-  "run": 0.2459016393442623
- },
- "testsuite/bsc.syntax/bsv05/case:sysCaseMixedHex": {
-  "run": 0.22794117647058823
- },
- "testsuite/bsc.syntax/bsv05/case:sysCaseMixedOct": {
-  "link": 0.008658008658008658,
-  "run": 0.26666666666666666
- },
- "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor": {
-  "link": 0.03937007874015748,
-  "run": 0.26229508196721313
- },
- "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_ArrayUpd_Elem": {
-  "link": 0.04727272727272727,
-  "run": 0.2713178294573644
- },
- "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_ArrayUpd_Reg": {
-  "link": 0.04460966542750929,
-  "run": 0.2601626016260163
- },
- "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_FieldUpd_Field": {
-  "link": 0.040892193308550186,
-  "run": 0.23308270676691728
- },
- "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_FieldUpd_Reg": {
-  "link": 0.05158730158730159,
-  "run": 0.2916666666666667
- },
- "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_RangeUpd": {
-  "link": 0.03594771241830065,
-  "run": 0.24031007751937983
- },
- "testsuite/bsc.syntax/bsv05/strings:sysOctalCharsAsInteger": {
-  "link": 0.11522633744855967,
-  "run": 0.25806451612903225
- },
- "testsuite/bsc.syntax/bsv05:sysOpPrecedence": {
-  "link": 0.031674208144796386,
-  "run": 0.27272727272727276
- },
- "testsuite/bsc.typechecker/class_defaults:sysImportedInfixInDefaultImported": {
-  "link": 0.03225806451612904,
-  "run": 0.256198347107438
- },
- "testsuite/bsc.typechecker/constructors:sysIfcUpd": {
-  "link": 0.03809523809523809,
-  "run": 0.2540983606557377
- },
- "testsuite/bsc.typechecker/constructors:sysStructUpd_QualImp_QualField": {
-  "link": 0.0297029702970297,
-  "run": 0.25203252032520324
- },
- "testsuite/bsc.typechecker/deriving:sysDeriveDefaultValue": {
-  "link": 0.03181818181818182,
-  "run": 0.225
- },
- "testsuite/bsc.typechecker/deriving:sysDeriveFShow": {
-  "link": 0.06696428571428571,
-  "run": 0.21804511278195488
- },
- "testsuite/bsc.typechecker/deriving:sysDerivingMod": {
-  "link": 0.026819923371647514,
-  "run": 0.25
- },
- "testsuite/bsc.typechecker/deriving:sysIsoStruct": {
-  "link": 0.026431718061674006,
-  "run": 0.23529411764705882
- },
- "testsuite/bsc.typechecker/display:sysDisplayBits": {
-  "run": 0.23134328358208953
- },
- "testsuite/bsc.typechecker/display:sysDisplayLiteral": {
-  "link": 0.031674208144796386,
-  "run": 0.27027027027027023
- },
- "testsuite/bsc.typechecker/display:sysDisplayRealLiteral": {
-  "run": 0.23333333333333334
- },
- "testsuite/bsc.typechecker/display:sysDisplaySizedLiteral": {
-  "run": 0.2222222222222222
- },
- "testsuite/bsc.typechecker/generics:sysCPrintType": {
-  "link": 0.026666666666666665,
-  "run": 0.24060150375939848
- },
- "testsuite/bsc.typechecker/generics:sysCustomBits": {
-  "link": 0.07971014492753624,
-  "run": 0.25396825396825395
- },
- "testsuite/bsc.typechecker/generics:sysGenericTests": {
-  "link": 0.06382978723404255,
-  "run": 0.23809523809523808
- },
- "testsuite/bsc.typechecker/higherrank:sysDeepSeqCond": {
-  "link": 0.030303030303030304,
-  "run": 0.2459016393442623
- },
- "testsuite/bsc.typechecker/higherrank:sysHigherRank": {
-  "link": 0.024793388429752067,
-  "run": 0.24060150375939848
- },
- "testsuite/bsc.typechecker/higherrank:sysUndefined": {
-  "run": 0.25
- },
- "testsuite/bsc.typechecker/higherrank:sysUninitializedStructBSV": {
-  "run": 0.23577235772357724
- },
- "testsuite/bsc.typechecker/instances/incoherent:sysIncoherentOrder": {
-  "run": 0.2416666666666667
- },
- "testsuite/bsc.typechecker/instances/incoherent:sysIncoherentTwoLevel": {
-  "run": 0.19696969696969696
- },
- "testsuite/bsc.typechecker/instances:sysFundepSelect": {
-  "run": 0.23308270676691728
- },
- "testsuite/bsc.typechecker/instances:sysMutualFundep": {
-  "run": 0.2540983606557377
- },
- "testsuite/bsc.typechecker/instances:sysOverlapCtxReduce": {
-  "link": 0.02553191489361702,
-  "run": 0.21641791044776118
- },
- "testsuite/bsc.typechecker/instances:sysOverlapWithSyn": {
-  "link": 0.031111111111111114,
-  "run": 0.23703703703703702
- },
- "testsuite/bsc.typechecker/instances:sysTypeFunInst": {
-  "link": 0.029411764705882353,
-  "run": 0.2231404958677686
- },
- "testsuite/bsc.typechecker/instances:sysTypeSynInst": {
-  "link": 0.029411764705882353,
-  "run": 0.24793388429752067
- },
- "testsuite/bsc.typechecker/read_desugaring:sysListDesugar": {
-  "run": 0.2710280373831776
- },
- "testsuite/bsc.typechecker/read_desugaring:sysStructReg": {
-  "link": 0.03,
   "run": 0.2564102564102564
  },
- "testsuite/bsc.typechecker/read_desugaring:sysTwoDUpdateTest": {
-  "link": 0.08379272326350606,
-  "run": 0.344
+ "testsuite/bsc.lib/getput:sysTestToGPFunc": {
+  "run": 0.23529411764705885
  },
- "testsuite/bsc.typechecker/reflect:sysTypeEQ": {
-  "run": 0.23484848484848483
- },
- "testsuite/bsc.typechecker/reflect:sysTypeOf": {
-  "run": 0.22131147540983606
- },
- "testsuite/bsc.typechecker/string:sysStringOf": {
-  "run": 0.2204724409448819
- },
- "testsuite/bsc.typechecker/string:sysStringOfBSV": {
-  "link": 0.027649769585253454,
-  "run": 0.24576271186440682
- },
- "testsuite/bsc.typechecker/string:sysTNumToStr": {
-  "run": 0.27522935779816515
- },
- "testsuite/bsc.typechecker/string:sysTStrCat": {
-  "link": 0.022421524663677132,
-  "run": 0.21951219512195122
- },
- "testsuite/bsc.typechecker/string:sysTypeClassString": {
-  "run": 0.22900763358778625
- },
- "testsuite/bsc.typechecker/typeclasses:sysMutualRecContainer": {
-  "link": 0.025974025974025972,
-  "run": 0.24
- },
- "testsuite/bsc.verilog/astate:sysMuxTest": {
-  "link": 0.03139013452914798,
-  "run": 0.2248062015503876
- },
- "testsuite/bsc.verilog/astate:sysOneSetter": {
-  "run": 0.2605042016806723
- },
- "testsuite/bsc.verilog/astate:sysRegFileVector": {
-  "link": 0.0480225988700565,
-  "run": 0.2605042016806723
- },
- "testsuite/bsc.verilog/astate:sysUseCondMux": {
-  "link": 0.027397260273972605,
-  "run": 0.2767857142857143
- },
- "testsuite/bsc.verilog/gen_mode:sysGenModeTb": {
-  "link": 0.019736842105263157,
-  "run": 0.26890756302521013
- },
- "testsuite/bsc.verilog/noinline/divbug:sysDivTest": {
-  "link": 0.021352313167259784,
-  "run": 0.23333333333333334
- },
- "testsuite/bsc.verilog/noinline:sysNoInline": {
-  "link": 0.021052631578947368,
+ "testsuite/bsc.lib/getput:sysTestToGPRWire": {
   "run": 0.25210084033613445
  },
- "testsuite/bsc.verilog/noinline:sysNoInlineInSched": {
-  "link": 0.025270758122743684,
-  "run": 0.22950819672131148
+ "testsuite/bsc.lib/getput:sysTestToGPReg": {
+  "link": 0.029045643153526972,
+  "run": 0.2380952380952381
  },
- "testsuite/bsc.verilog/noinline:sysNoInline_LessPatternsThanArgs": {
-  "link": 0.025270758122743684,
-  "run": 0.25833333333333336
+ "testsuite/bsc.lib/getput:sysTestToGPWire": {
+  "run": 0.2396694214876033
  },
- "testsuite/bsc.verilog/noinline:sysNoInline_NoArgs": {
-  "link": 0.018518518518518517,
-  "run": 0.2909090909090909
+ "testsuite/bsc.lib/list_ops:sysSortGroupTest": {
+  "run": 0.25961538461538464
  },
- "testsuite/bsc.verilog/parameters/real:sysTwoLevelReal2": {
-  "link": 0.006172839506172839,
-  "run": 0.24369747899159666
+ "testsuite/bsc.lib/listn:sysApplicativeListN": {
+  "run": 0.24038461538461542
  },
- "testsuite/bsc.verilog/parameters/string:sysStringConcat1": {
-  "link": 0.007434944237918216,
-  "run": 0.21212121212121213
+ "testsuite/bsc.lib/oint:sysOIntDynamic": {
+  "run": 0.26605504587155965
  },
- "testsuite/bsc.verilog/parameters/string:sysStringConcat2": {
-  "link": 0.022408963585434174,
-  "run": 0.2540983606557377
+ "testsuite/bsc.lib/regfile:sysArrayFileTest": {
+  "link": 0.0273972602739726,
+  "run": 0.24761904761904763
  },
- "testsuite/bsc.verilog/parameters/string:sysStringParam": {
-  "link": 0.008,
-  "run": 0.2205882352941176
+ "testsuite/bsc.lib/regfile:sysParseTest": {
+  "link": 0.02857142857142857,
+  "run": 0.23275862068965517
  },
- "testsuite/bsc.verilog/parameters/string:sysStringParamCond": {
-  "link": 0.007042253521126761,
-  "run": 0.25203252032520324
+ "testsuite/bsc.lib/regfile:sysParseTest2": {
+  "link": 0.02158273381294964,
+  "run": 0.23076923076923075
  },
- "testsuite/bsc.verilog/parameters/string:sysTwoLevelString": {
-  "link": 0.00546448087431694,
-  "run": 0.21804511278195488
+ "testsuite/bsc.lib/regfile:sysTestRegFileLoad": {
+  "link": 0.029045643153526972,
+  "run": 0.25233644859813087
  },
- "testsuite/bsc.verilog/parameters:sysModulePort_WithStaticValue_TwoLevel": {
-  "link": 0.005128205128205128,
-  "run": 0.25210084033613445
+ "testsuite/bsc.lib/regfile:sysWarningTest": {
+  "link": 0.02803738317757009,
+  "run": 0.24528301886792453
  },
- "testsuite/bsc.verilog/parameters:sysParamExpr_Param": {
-  "link": 0.0056179775280898875,
-  "run": 0.22950819672131148
+ "testsuite/bsc.lib/regfile:sysWarningTest2": {
+  "link": 0.026548672566371685,
+  "run": 0.2641509433962264
  },
- "testsuite/bsc.verilog/parameters:sysParamSize": {
-  "link": 0.00784313725490196,
-  "run": 0.25
+ "testsuite/bsc.lib/regtwo:sysRegTwoTest": {
+  "run": 0.26126126126126126
  },
- "testsuite/bsc.verilog/parameters:sysParamTest": {
-  "link": 0.006825938566552901,
-  "run": 0.29245283018867924
+ "testsuite/bsc.lib/rwire:sysBigBypassWire": {
+  "run": 0.25925925925925924
  },
- "testsuite/bsc.verilog/positivereset/ClockDividers:sysClockDivOffset": {
-  "link": 0.03404255319148936,
+ "testsuite/bsc.lib/rwire:sysMethodPulse": {
+  "link": 0.023715415019762848,
+  "run": 0.24528301886792453
+ },
+ "testsuite/bsc.lib/rwire:sysPulseTest": {
   "run": 0.22137404580152673
  },
- "testsuite/bsc.verilog/positivereset/ClockDividers:sysClockInv": {
-  "link": 0.029520295202952032,
-  "run": 0.3153846153846154
+ "testsuite/bsc.lib/rwire:sysPulseWireC": {
+  "run": 0.33333333333333337
  },
- "testsuite/bsc.verilog/positivereset/ClockDividers:sysGatedClockInv": {
-  "link": 0.008438818565400843,
-  "run": 0.6564885496183205
+ "testsuite/bsc.lib/rwire:sysPulseWireSBR": {
+  "run": 0.23478260869565215
  },
- "testsuite/bsc.verilog/positivereset/Reset:sysInitialResetTest": {
-  "run": 0.2540983606557377
+ "testsuite/bsc.lib/rwire:sysRWireBoundary": {
+  "link": 0.022026431718061675,
+  "run": 0.24528301886792453
  },
- "testsuite/bsc.verilog/positivereset/Reset:sysMakeReset0": {
-  "run": 0.22900763358778625
+ "testsuite/bsc.lib/rwire:sysRWireNothing": {
+  "run": 0.28155339805825247
  },
- "testsuite/bsc.verilog/positivereset/Reset:sysMethodResetGuards": {
-  "link": 0.027450980392156866,
-  "run": 0.28703703703703703
+ "testsuite/bsc.lib/rwire:sysTestBypassWire": {
+  "link": 0.008583690987124463,
+  "run": 0.25
  },
- "testsuite/bsc.verilog/positivereset/Reset:sysMultipleResetsForRule": {
-  "link": 0.03211009174311927,
-  "run": 0.2803738317757009
+ "testsuite/bsc.lib/rwire:sysTestRWire": {
+  "run": 0.24576271186440682
  },
- "testsuite/bsc.verilog/positivereset/Reset:sysResetEither": {
-  "link": 0.039603960396039604,
-  "run": 0.2601626016260163
+ "testsuite/bsc.lib/rwire:sysValidValue": {
+  "link": 0.04081632653061224,
+  "run": 0.2710280373831776
  },
- "testsuite/bsc.verilog/positivereset/Reset:sysResetMux": {
-  "link": 0.0297029702970297,
-  "run": 0.2540983606557377
- },
- "testsuite/bsc.verilog/positivereset/SyncReset:sysRstTest": {
-  "link": 0.040178571428571425,
-  "run": 0.3240740740740741
- },
- "testsuite/bsc.verilog/positivereset/SyncReset:sysRstTest_V1": {
-  "link": 0.04782608695652174,
-  "run": 0.2537313432835821
- },
- "testsuite/bsc.verilog/positivereset/SyncReset:sysRstTest_V2": {
-  "link": 0.04225352112676056,
-  "run": 0.24793388429752067
- },
- "testsuite/bsc.verilog/positivereset/nameclash:sysTest3": {
-  "run": 0.2644628099173554
- },
- "testsuite/bsc.verilog/positivereset/nameclash:sysTest4": {
-  "link": 0.027149321266968326,
-  "run": 0.29245283018867924
- },
- "testsuite/bsc.verilog/positivereset/simulation:sysNoReset": {
-  "run": 0.2719298245614035
- },
- "testsuite/bsc.verilog/quirks:sysMulNegOperand": {
-  "run": 0.2605042016806723
- },
- "testsuite/bsc.verilog/quirks:sysNonConstantBitExtraction": {
-  "link": 0.034653465346534656,
-  "run": 0.25833333333333336
- },
- "testsuite/bsc.verilog/quirks:sysQuotNegOperand": {
-  "run": 0.2231404958677686
- },
- "testsuite/bsc.verilog/quirks:sysRemNegOperand": {
-  "link": 0.028985507246376812,
+ "testsuite/bsc.lib/rwire:sysWire": {
+  "link": 0.03317535545023697,
   "run": 0.24242424242424243
  },
- "testsuite/bsc.verilog/quirks:sysSRAConst": {
-  "link": 0.051094890510948905,
-  "run": 0.2677165354330709
+ "testsuite/bsc.lib/vector:sysApplicativeVector": {
+  "run": 0.2416666666666667
  },
- "testsuite/bsc.verilog/quirks:sysSRADynamic": {
-  "link": 0.08191126279863481,
-  "run": 0.29838709677419356
+ "testsuite/bsc.lib/vector:sysConcatTuple": {
+  "run": 0.23478260869565215
  },
- "testsuite/bsc.verilog/schedule:sysEspositoPreempt": {
-  "link": 0.027149321266968326,
-  "run": 0.2556390977443609
+ "testsuite/bsc.lib/vector:sysCountElem": {
+  "link": 0.05970149253731344,
+  "run": 0.2260869565217391
  },
- "testsuite/bsc.verilog/splitports:sysDeepSplit": {
-  "link": 0.12663755458515283
+ "testsuite/bsc.lib/vector:sysCountIf": {
+  "link": 0.08056872037914693,
+  "run": 0.2571428571428572
  },
- "testsuite/bsc.verilog/splitports:sysInstanceSplit": {
-  "link": 0.007075471698113207,
-  "run": 0.28888888888888886
+ "testsuite/bsc.lib/vector:sysFindElem": {
+  "link": 0.13333333333333336,
+  "run": 0.25217391304347825
  },
- "testsuite/bsc.verilog/splitports:sysShallowSplit": {
-  "link": 0.005333333333333333,
-  "run": 0.2601626016260163
+ "testsuite/bsc.lib/vector:sysFindIndex": {
+  "link": 0.0948905109489051,
+  "run": 0.27586206896551724
  },
- "testsuite/bsc.verilog/splitports:sysSomeArgNames": {
-  "link": 0.022727272727272728,
-  "run": 0.27205882352941174
+ "testsuite/bsc.lib/vector:sysFromChunksTest": {
+  "link": 0.11363636363636363,
+  "run": 0.24137931034482757
  },
- "testsuite/bsc.verilog/tasks/interfacecalls:sysInterfaceTaskCalls": {
-  "link": 0.03755868544600939,
-  "run": 0.27049180327868855
+ "testsuite/bsc.lib/vector:sysRotateBy": {
+  "link": 0.08333333333333333,
+  "run": 0.25190839694656486
  },
- "testsuite/bsc.verilog/tasks/interfacecalls:sysLiftedInterfaceTaskCalls": {
-  "link": 0.035,
-  "run": 0.27049180327868855
+ "testsuite/bsc.lib/vector:sysShiftOutTest": {
+  "link": 0.21943573667711597
  },
- "testsuite/bsc.verilog/tasks/plusargs:sysTestPlusargsSimple": {
-  "link": 0.035,
-  "run": 0.21804511278195488
- },
- "testsuite/bsc.verilog/tasks/plusargs:sysTestPlusargsTwoUseDiffArg": {
-  "link": 0.038461538461538464,
-  "run": 0.256
- },
- "testsuite/bsc.verilog/tasks/plusargs:sysTestPlusargsTwoUseSameArg": {
-  "link": 0.03153153153153153,
-  "run": 0.27868852459016397
- },
- "testsuite/bsc.verilog/tasks/real:sysRealDisplay": {
-  "run": 0.2518518518518518
- },
- "testsuite/bsc.verilog/tasks/real:sysRealDisplay2": {
-  "link": 0.009216589861751152,
-  "run": 0.22131147540983606
- },
- "testsuite/bsc.verilog/tasks/real:sysRealDisplayErr1": {
-  "link": 0.009661835748792272,
-  "run": 0.2892561983471075
- },
- "testsuite/bsc.verilog/tasks/real:sysRealDisplayErr2": {
-  "link": 0.00980392156862745,
+ "testsuite/bsc.lib/vector:sysShiftTest": {
+  "link": 0.12987012987012989,
   "run": 0.25
  },
- "testsuite/bsc.verilog/tasks/time:sysDisplayTime": {
-  "link": 0.024896265560165973,
-  "run": 0.2682926829268293
+ "testsuite/bsc.lib/vector:sysZeroVector": {
+  "run": 0.24761904761904763
  },
- "testsuite/bsc.verilog/tasks/time:sysPrintTime": {
-  "link": 0.03286384976525822,
-  "run": 0.27522935779816515
+ "testsuite/bsc.long_tests/conflict_free_large:sysConflictFreeNotOKLarge": {
+  "link": 0.10711758879298147,
+  "run": 0.6218487394957983
  },
- "testsuite/bsc.verilog/tasks/time:sysRegTime": {
-  "link": 0.03482587064676618,
-  "run": 0.23622047244094488
+ "testsuite/bsc.long_tests/conflict_free_large:sysConflictFreeOKLarge": {
+  "link": 0.09781335415853182,
+  "run": 0.5507246376811593
  },
- "testsuite/bsc.verilog/tasks:sysDynamicFormat": {
-  "link": 0.008888888888888889,
-  "run": 0.23484848484848483
+ "testsuite/bsc.mcd/ClockDividers:sysClockDivOffset": {
+  "link": 0.031496062992125984,
+  "run": 0.21666666666666667
  },
- "testsuite/bsc.verilog/tasks:sysDynamicFormat2": {
-  "link": 0.00904977375565611,
-  "run": 0.2408759124087591
+ "testsuite/bsc.mcd/ClockDividers:sysClockInv": {
+  "link": 0.04,
+  "run": 0.358974358974359
  },
- "testsuite/bsc.verilog/tasks:sysErrorTest": {
-  "link": 0.03196347031963471,
-  "run": 0.2627118644067797
+ "testsuite/bsc.mcd/ClockDividers:sysGatedClockInv": {
+  "link": 0.004587155963302752,
+  "run": 0.4921875
  },
- "testsuite/bsc.verilog/tasks:sysEvenMoreDisplay": {
-  "link": 0.044117647058823525,
-  "run": 0.22794117647058823
- },
- "testsuite/bsc.verilog/tasks:sysExitTest": {
-  "run": 0.22900763358778625
- },
- "testsuite/bsc.verilog/tasks:sysFFMuxTest": {
-  "link": 0.026515151515151516,
-  "run": 0.23484848484848483
- },
- "testsuite/bsc.verilog/tasks:sysFFReadTest": {
-  "link": 0.03398058252427185,
-  "run": 0.24060150375939848
- },
- "testsuite/bsc.verilog/tasks:sysFFReadTest2": {
-  "run": 0.2909090909090909
- },
- "testsuite/bsc.verilog/tasks:sysFourDisplay": {
-  "run": 0.23846153846153845
- },
- "testsuite/bsc.verilog/tasks:sysGetDisplay": {
-  "link": 0.038461538461538464,
-  "run": 0.23357664233576642
- },
- "testsuite/bsc.verilog/tasks:sysLineDisplay": {
-  "run": 0.23308270676691728
- },
- "testsuite/bsc.verilog/tasks:sysLogicBetweenTasks": {
-  "link": 0.03984063745019921,
-  "run": 0.23308270676691728
- },
- "testsuite/bsc.verilog/tasks:sysLogicBetweenTasks3": {
-  "link": 0.02447552447552448,
-  "run": 0.2682926829268293
- },
- "testsuite/bsc.verilog/tasks:sysLogicBetweenTasks4": {
-  "link": 0.020348837209302327,
-  "run": 0.24427480916030533
- },
- "testsuite/bsc.verilog/tasks:sysModuleDisplay": {
-  "link": 0.005952380952380953,
-  "run": 0.2926829268292683
- },
- "testsuite/bsc.verilog/tasks:sysMoreDisplay": {
-  "link": 0.03431372549019608,
-  "run": 0.23577235772357724
- },
- "testsuite/bsc.verilog/tasks:sysNegativeDisplay": {
-  "run": 0.23880597014925373
- },
- "testsuite/bsc.verilog/tasks:sysNegativeDisplay2": {
-  "link": 0.02857142857142857,
-  "run": 0.23134328358208953
- },
- "testsuite/bsc.verilog/tasks:sysRepeatedTask_OneRule": {
+ "testsuite/bsc.mcd/ClockMux:sysClockMux": {
   "run": 0.2857142857142857
  },
- "testsuite/bsc.verilog/tasks:sysRepeatedTask_OneRule2": {
-  "link": 0.008163265306122448,
-  "run": 0.2809917355371901
+ "testsuite/bsc.mcd/ClockMux:sysClockSelect": {
+  "link": 0.00980392156862745,
+  "run": 0.26605504587155965
  },
- "testsuite/bsc.verilog/tasks:sysRepeatedTask_OneRule3": {
-  "link": 0.009259259259259259,
-  "run": 0.2975206611570248
+ "testsuite/bsc.mcd/ClockMux:sysSlowSelectClock": {
+  "run": 0.20689655172413793
  },
- "testsuite/bsc.verilog/tasks:sysRepeatedTask_TwoRules": {
-  "run": 0.25210084033613445
+ "testsuite/bsc.mcd/ClockMux:sysUngatedClockSelect": {
+  "run": 0.23364485981308414
  },
- "testsuite/bsc.verilog/tasks:sysSWrite64": {
-  "run": 0.275
+ "testsuite/bsc.mcd/DefaultClockArg:sysDefaultClockArg": {
+  "link": 0.026086956521739132,
+  "run": 0.2184873949579832
  },
- "testsuite/bsc.verilog/tasks:sysSimpleTaskTest": {
-  "link": 0.02991452991452992,
-  "run": 0.264
+ "testsuite/bsc.mcd/Gating:sysDefaultClockMethod": {
+  "link": 0.007462686567164179,
+  "run": 0.26495726495726496
  },
- "testsuite/bsc.verilog/tasks:sysStringDisplay": {
-  "link": 0.030434782608695657,
-  "run": 0.24444444444444444
+ "testsuite/bsc.mcd/Gating:sysGatedClockCycle": {
+  "run": 0.26666666666666666
  },
- "testsuite/bsc.verilog/tasks:sysStringFormat": {
-  "link": 0.008733624454148471,
-  "run": 0.29838709677419356
+ "testsuite/bsc.mcd/Gating:sysGatedClock_OneMod": {
+  "run": 0.27358490566037735
  },
- "testsuite/bsc.verilog/tasks:sysStringFormat2": {
-  "link": 0.008733624454148471,
-  "run": 0.23880597014925373
+ "testsuite/bsc.mcd/Gating:sysInputClockMethod": {
+  "link": 0.008771929824561405,
+  "run": 0.2761904761904762
  },
- "testsuite/bsc.verilog/tasks:sysStringFormat3": {
-  "link": 0.03381642512077295,
-  "run": 0.272
- },
- "testsuite/bsc.verilog/tasks:sysWideDisplay": {
-  "link": 0.038461538461538464,
-  "run": 0.27868852459016397
- },
- "testsuite/bsc.verilog/tasks:sysZeroDisplay": {
-  "run": 0.25
- },
- "testsuite/bsc.verilog/tasks:sysZeroUnsignedDisplay": {
-  "link": 0.009216589861751152,
-  "run": 0.2682926829268293
- },
- "testsuite/bsc.verilog/undet:sysUndet1": {
-  "link": 0.03448275862068966,
-  "run": 0.256
- },
- "testsuite/bsc.verilog/undet:sysUndet2": {
-  "link": 0.02857142857142857,
-  "run": 0.25833333333333336
- },
- "testsuite/bsc.verilog/undet:sysUndet3": {
-  "run": 0.2719298245614035
- },
- "testsuite/bsc.verilog/v95:sysSigned": {
-  "link": 0.029126213592233007,
-  "run": 0.26168224299065423
- },
- "testsuite/bsc.verilog/vlink_regen:sysVRegenTb": {
+ "testsuite/bsc.mcd/Gating:sysMethodFalse": {
   "link": 0.024390243902439025,
   "run": 0.25
  },
- "testsuite/bsc.verilog:sysCase": {
-  "link": 0.0391304347826087,
-  "run": 0.2833333333333334
+ "testsuite/bsc.mcd/Gating:sysMethodTrue": {
+  "link": 0.0035335689045936395,
+  "run": 0.3240740740740741
  },
- "testsuite/bsc.verilog:sysExpectedExclusiveActions": {
-  "run": 0.26612903225806456
+ "testsuite/bsc.mcd/LevelFifo:sysFIFOCountTest": {
+  "link": 0.05022831050228311,
+  "run": 0.34883720930232553
  },
- "testsuite/bsc.verilog:sysMips": {
-  "link": 0.09317803660565725,
-  "run": 0.3088235294117647
+ "testsuite/bsc.mcd/LevelFifo:sysGFIFOCountTest": {
+  "link": 0.21543624161073824,
+  "run": 0.3208955223880597
  },
- "testsuite/bsc.verilog:sysMisc": {
-  "link": 0.04794520547945206,
+ "testsuite/bsc.mcd/LevelFifo:sysGFIFOLevelTest": {
+  "link": 0.24880095923261394,
+  "run": 0.4
+ },
+ "testsuite/bsc.mcd/LevelFifo:sysLevelFIFOTest1": {
+  "link": 0.049107142857142856,
+  "run": 0.2595419847328244
+ },
+ "testsuite/bsc.mcd/LevelFifo:sysLevelFIFOTest2": {
+  "link": 0.04564315352697095,
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.mcd/LevelFifo:sysSyncFIFOCountTest": {
+  "link": 0.03896103896103896,
+  "run": 0.47826086956521735
+ },
+ "testsuite/bsc.mcd/LevelFifo:sysSyncLevelFIFOTest": {
+  "link": 0.046610169491525424,
+  "run": 0.32038834951456313
+ },
+ "testsuite/bsc.mcd/MakeClock:sysMakeClockTest": {
+  "link": 0.0039954337899543385,
+  "run": 1.576271186440678
+ },
+ "testsuite/bsc.mcd/Misc:sysClockOf": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.mcd/Misc:sysClocksOf": {
+  "run": 0.2777777777777778
+ },
+ "testsuite/bsc.mcd/Misc:sysInvertAbsoluteClock": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.mcd/Misc:sysLaunderClock": {
+  "link": 0.027272727272727268,
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.mcd/Misc:sysResetOf": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.mcd/Misc:sysResetsOf": {
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.mcd/NoClock:sysOutputNoClock": {
+  "link": 0.006849315068493151,
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.mcd/NoClock:sysUnclockedModule": {
+  "run": 0.29411764705882354
+ },
+ "testsuite/bsc.mcd/NullCrossing:sysNullCrossingReg": {
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.mcd/NullCrossing:sysNullSyncTest": {
+  "run": 0.23893805309734512
+ },
+ "testsuite/bsc.mcd/NullCrossing:sysNullSyncTest2": {
+  "link": 0.004,
+  "run": 0.2761904761904762
+ },
+ "testsuite/bsc.mcd/Reset:sysInitialResetTest": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.mcd/Reset:sysMakeReset0": {
+  "run": 0.24324324324324323
+ },
+ "testsuite/bsc.mcd/Reset:sysMethodResetGuards": {
+  "link": 0.01945525291828794,
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.mcd/Reset:sysMultipleResetsForRule": {
+  "run": 0.2710280373831776
+ },
+ "testsuite/bsc.mcd/Reset:sysResetEither": {
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.mcd/Reset:sysResetMux": {
+  "link": 0.03652968036529681,
+  "run": 0.25833333333333336
+ },
+ "testsuite/bsc.mcd/SyncReset:sysRstTest": {
+  "link": 0.04807692307692308,
+  "run": 0.2809917355371901
+ },
+ "testsuite/bsc.mcd/SyncReset:sysRstTest_V1": {
+  "run": 0.2556390977443609
+ },
+ "testsuite/bsc.mcd/SyncReset:sysRstTest_V2": {
+  "link": 0.04477611940298508
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncBit15Test": {
+  "run": 0.28440366972477066
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncBit1Test": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncBitTest": {
+  "link": 0.03333333333333333,
+  "run": 0.28440366972477066
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest": {
+  "link": 0.028301886792452827,
+  "run": 0.2627118644067797
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest1": {
+  "link": 0.03418803418803419,
+  "run": 0.21739130434782608
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest1A": {
+  "link": 0.07777777777777778,
+  "run": 0.24793388429752067
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncFIFOTest2": {
+  "link": 0.030769230769230767,
+  "run": 0.3047619047619048
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncHandshakeTest": {
+  "run": 0.25
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncHandshakeTest2": {
+  "link": 0.03215434083601287,
+  "run": 0.3364485981308411
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncPulseTest": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncRegTest": {
+  "link": 0.037914691943127965,
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncRegTest2": {
+  "link": 0.029739776951672865,
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.mcd/Synchronizers:sysSyncRegTest3": {
+  "link": 0.035483870967741936,
+  "run": 0.31092436974789917
+ },
+ "testsuite/bsc.misc/bitextract:sysBitExtractInRange": {
+  "run": 0.21804511278195488
+ },
+ "testsuite/bsc.misc/bitextract:sysBitUpdateInRange": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.misc/crc:sysCRCTest1": {
+  "link": 0.5067567567567568,
+  "run": 0.35514018691588783
+ },
+ "testsuite/bsc.misc/divmod:sysDivMod": {
+  "link": 0.043478260869565216,
+  "run": 0.2809917355371901
+ },
+ "testsuite/bsc.misc/divmod:sysDivModWide": {
+  "link": 0.0551470588235294,
+  "run": 0.2719298245614035
+ },
+ "testsuite/bsc.misc/divmod:sysSimpleTest": {
+  "link": 0.056179775280898875,
+  "run": 0.2222222222222222
+ },
+ "testsuite/bsc.misc/format:sysBug1572": {
   "run": 0.256198347107438
  },
+ "testsuite/bsc.misc/format:sysFormat1": {
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.misc/format:sysFormat2": {
+  "run": 0.20300751879699247
+ },
+ "testsuite/bsc.misc/format:sysFormat3": {
+  "run": 0.29661016949152547
+ },
+ "testsuite/bsc.misc/fwrite:sysFCloseTypes": {
+  "run": 0.2222222222222222
+ },
+ "testsuite/bsc.misc/fwrite:sysFOpen": {
+  "run": 0.2260869565217391
+ },
+ "testsuite/bsc.misc/fwrite:sysFOpen2": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.misc/fwrite:sysFOpen_MCD": {
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.misc/fwrite:sysFOpen_MCD2": {
+  "run": 0.2434782608695652
+ },
+ "testsuite/bsc.misc/fwrite:sysFWrite2": {
+  "run": 0.26956521739130435
+ },
+ "testsuite/bsc.misc/fwrite:sysFWrite3": {
+  "link": 0.009661835748792272,
+  "run": 0.275
+ },
+ "testsuite/bsc.misc/fwrite:sysFWrites": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.misc/fwrite:sysGetC1": {
+  "run": 0.25688073394495414
+ },
+ "testsuite/bsc.misc/fwrite:sysGetC3": {
+  "link": 0.16013071895424835,
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.misc/fwrite:sysMCD_ops": {
+  "run": 0.23484848484848483
+ },
+ "testsuite/bsc.misc/mul:sysComplex2": {
+  "run": 0.2285714285714286
+ },
+ "testsuite/bsc.misc/mul:sysSignedMul": {
+  "run": 0.2884615384615385
+ },
+ "testsuite/bsc.options/verilog-e:sysHello": {
+  "run": 0.25
+ },
+ "testsuite/bsc.options:sysGCD": {
+  "link": 0.02788844621513945,
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.real/evaluator/undef:sysDontCareDynSelectStaticArrayReal": {
+  "run": 0.21186440677966104
+ },
+ "testsuite/bsc.scheduler/conflict_free:sysCFExecOrder2": {
+  "run": 0.23333333333333334
+ },
+ "testsuite/bsc.scheduler/conflict_free:sysCFExecOrder3": {
+  "run": 0.25
+ },
+ "testsuite/bsc.scheduler/conflict_free:sysConflictFreeOK": {
+  "link": 0.050335570469798654,
+  "run": 0.2396694214876033
+ },
+ "testsuite/bsc.scheduler/conflict_free:sysConflictFreeOK2": {
+  "link": 0.06925207756232687,
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.scheduler/conflict_free:sysConflictFreeOK3": {
+  "link": 0.1016042780748663,
+  "run": 0.23484848484848483
+ },
+ "testsuite/bsc.scheduler/conflict_free:sysConflictFreeResource": {
+  "link": 0.033613445378151266,
+  "run": 0.22807017543859648
+ },
+ "testsuite/bsc.scheduler/mutually_exclusive:sysMEExecOrder2": {
+  "run": 0.24576271186440682
+ },
+ "testsuite/bsc.scheduler/mutually_exclusive:sysMutuallyExclusiveBug1327": {
+  "run": 0.2434782608695652
+ },
+ "testsuite/bsc.scheduler/mutually_exclusive:sysMutuallyExclusiveCheck": {
+  "run": 0.23140495867768596
+ },
+ "testsuite/bsc.scheduler/mutually_exclusive:sysMutuallyExclusiveCheckOK": {
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.scheduler/rulesort:sysRuleSort": {
+  "run": 0.25
+ },
+ "testsuite/bsc.scheduler:sysBoundary": {
+  "link": 0.02,
+  "run": 0.21904761904761905
+ },
+ "testsuite/bsc.syntax/bh/bh_pragmas:sysDefaultClockArgs": {
+  "link": 0.026086956521739132,
+  "run": 0.26851851851851855
+ },
+ "testsuite/bsc.syntax/bh/bh_pragmas:sysPragmas": {
+  "link": 0.02140672782874618,
+  "run": 0.226890756302521
+ },
+ "testsuite/bsc.syntax/bh/bh_pragmas:sysProperties": {
+  "link": 0.026923076923076925,
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.syntax/bh:sysLiteralTest": {
+  "run": 0.23255813953488372
+ },
+ "testsuite/bsc.syntax/bh:sysSizedLiteralMono": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.syntax/bh:sysSizedLiteralTest": {
+  "run": 0.225
+ },
+ "testsuite/bsc.syntax/bh:sysUnaryMinusTest": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.syntax/bsv05/case:sysCaseMixedHex": {
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.syntax/bsv05/case:sysCaseMixedOct": {
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor": {
+  "link": 0.045,
+  "run": 0.2192982456140351
+ },
+ "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_ArrayUpd_Elem": {
+  "link": 0.04807692307692308,
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_ArrayUpd_Reg": {
+  "link": 0.04225352112676056,
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_FieldUpd_Field": {
+  "link": 0.05365853658536586,
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_FieldUpd_Reg": {
+  "link": 0.04918032786885246,
+  "run": 0.23140495867768596
+ },
+ "testsuite/bsc.syntax/bsv05/stmt:sysStmtFor_RangeUpd": {
+  "link": 0.04433497536945813,
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.syntax/bsv05:sysOpPrecedence": {
+  "run": 0.26851851851851855
+ },
+ "testsuite/bsc.typechecker/class_defaults:sysImportedInfixInDefaultImported": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.typechecker/constructors:sysIfcUpd": {
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.typechecker/constructors:sysStructUpd_QualImp_QualField": {
+  "run": 0.2803738317757009
+ },
+ "testsuite/bsc.typechecker/deriving:sysDeriveDefaultValue": {
+  "run": 0.23364485981308414
+ },
+ "testsuite/bsc.typechecker/deriving:sysDeriveFShow": {
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.typechecker/deriving:sysDerivingMod": {
+  "run": 0.2830188679245283
+ },
+ "testsuite/bsc.typechecker/display:sysDisplayBits": {
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.typechecker/display:sysDisplayLiteral": {
+  "run": 0.23300970873786409
+ },
+ "testsuite/bsc.typechecker/display:sysDisplayRealLiteral": {
+  "run": 0.2231404958677686
+ },
+ "testsuite/bsc.typechecker/display:sysDisplaySizedLiteral": {
+  "run": 0.26851851851851855
+ },
+ "testsuite/bsc.typechecker/generics:sysCPrintType": {
+  "run": 0.1982758620689655
+ },
+ "testsuite/bsc.typechecker/generics:sysCustomBits": {
+  "link": 0.08695652173913045,
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.typechecker/generics:sysGenericTests": {
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.typechecker/higherrank:sysDeepSeqCond": {
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.typechecker/higherrank:sysHigherRank": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.typechecker/higherrank:sysUndefined": {
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.typechecker/higherrank:sysUninitializedStructBSV": {
+  "run": 0.19999999999999998
+ },
+ "testsuite/bsc.typechecker/instances/incoherent:sysIncoherentKeywordBSV": {
+  "run": 0.25
+ },
+ "testsuite/bsc.typechecker/instances/incoherent:sysIncoherentOrder": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.typechecker/instances/incoherent:sysIncoherentTwoLevel": {
+  "run": 0.21551724137931036
+ },
+ "testsuite/bsc.typechecker/instances/order:sysLeafOrder": {
+  "run": 0.26605504587155965
+ },
+ "testsuite/bsc.typechecker/instances/order:sysLeafOrderChain": {
+  "run": 0.25688073394495414
+ },
+ "testsuite/bsc.typechecker/instances:sysFundepSelect": {
+  "run": 0.2761904761904762
+ },
+ "testsuite/bsc.typechecker/instances:sysMutualFundep": {
+  "run": 0.24761904761904763
+ },
+ "testsuite/bsc.typechecker/instances:sysOverlapCtxReduce": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.typechecker/instances:sysOverlapWithSyn": {
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.typechecker/instances:sysTypeFunInst": {
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.typechecker/instances:sysTypeSynInst": {
+  "run": 0.2377049180327869
+ },
+ "testsuite/bsc.typechecker/read_desugaring:sysStructReg": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.typechecker/read_desugaring:sysTwoDUpdateTest": {
+  "link": 0.09440559440559441,
+  "run": 0.26717557251908397
+ },
+ "testsuite/bsc.typechecker/reflect:sysTypeEQ": {
+  "run": 0.22033898305084745
+ },
+ "testsuite/bsc.typechecker/string:sysStringOf": {
+  "run": 0.23478260869565215
+ },
+ "testsuite/bsc.typechecker/string:sysStringOfBSV": {
+  "run": 0.20869565217391303
+ },
+ "testsuite/bsc.typechecker/string:sysTNumToStr": {
+  "run": 0.22950819672131148
+ },
+ "testsuite/bsc.typechecker/string:sysTStrCat": {
+  "run": 0.2450980392156863
+ },
+ "testsuite/bsc.typechecker/string:sysTypeClassString": {
+  "run": 0.2574257425742574
+ },
+ "testsuite/bsc.typechecker/typeclasses/coherence:sysInstance_Incoherent": {
+  "run": 0.23728813559322035
+ },
+ "testsuite/bsc.typechecker/typeclasses/coherence:sysSuper_Coherent": {
+  "run": 0.2288135593220339
+ },
+ "testsuite/bsc.typechecker/typeclasses/coherence:sysSuper_Default": {
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.typechecker/typeclasses/coherence:sysSuper_Incoherent": {
+  "run": 0.27450980392156865
+ },
+ "testsuite/bsc.typechecker/typeclasses:sysMutualRecContainer": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.verilog/astate:sysMuxTest": {
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.verilog/astate:sysOneSetter": {
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.verilog/astate:sysRegFileVector": {
+  "link": 0.0459016393442623,
+  "run": 0.27450980392156865
+ },
+ "testsuite/bsc.verilog/astate:sysUseCondMux": {
+  "link": 0.025423728813559324,
+  "run": 0.2718446601941748
+ },
+ "testsuite/bsc.verilog/gen_mode:sysGenModeTb": {
+  "link": 0.029535864978902954,
+  "run": 0.20769230769230768
+ },
+ "testsuite/bsc.verilog/noinline/divbug:sysDivTest": {
+  "link": 0.025210084033613446,
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.verilog/noinline:sysNoInline": {
+  "link": 0.02214022140221402,
+  "run": 0.22131147540983606
+ },
+ "testsuite/bsc.verilog/noinline:sysNoInlineInSched": {
+  "link": 0.02127659574468085,
+  "run": 0.2100840336134454
+ },
+ "testsuite/bsc.verilog/noinline:sysNoInline_LessPatternsThanArgs": {
+  "link": 0.02602230483271376,
+  "run": 0.2711864406779661
+ },
+ "testsuite/bsc.verilog/noinline:sysNoInline_NoArgs": {
+  "link": 0.024390243902439025,
+  "run": 0.23529411764705885
+ },
+ "testsuite/bsc.verilog/parameters/integer:sysIntParam": {
+  "link": 0.004385964912280702,
+  "run": 0.25471698113207547
+ },
+ "testsuite/bsc.verilog/parameters/real:sysTwoLevelReal2": {
+  "link": 0.003184713375796178,
+  "run": 0.23076923076923075
+ },
+ "testsuite/bsc.verilog/parameters/string:sysStringConcat1": {
+  "link": 0.003875968992248062,
+  "run": 0.25925925925925924
+ },
+ "testsuite/bsc.verilog/parameters/string:sysStringConcat2": {
+  "link": 0.01929260450160772,
+  "run": 0.2571428571428572
+ },
+ "testsuite/bsc.verilog/parameters/string:sysStringParam": {
+  "link": 0.004310344827586208,
+  "run": 0.2803738317757009
+ },
+ "testsuite/bsc.verilog/parameters/string:sysStringParamCond": {
+  "link": 0.007017543859649123,
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.verilog/parameters/string:sysTwoLevelString": {
+  "link": 0.0034246575342465756,
+  "run": 0.22413793103448273
+ },
+ "testsuite/bsc.verilog/parameters:sysModulePort_WithStaticValue_TwoLevel": {
+  "link": 0.006309148264984228,
+  "run": 0.2884615384615385
+ },
+ "testsuite/bsc.verilog/parameters:sysParamExpr_Param": {
+  "link": 0.00664451827242525,
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.verilog/parameters:sysParamSize": {
+  "link": 0.008438818565400843,
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.verilog/parameters:sysParamTest": {
+  "link": 0.007575757575757576,
+  "run": 0.26851851851851855
+ },
+ "testsuite/bsc.verilog/positivereset/ClockDividers:sysClockDivOffset": {
+  "link": 0.033492822966507185,
+  "run": 0.2416666666666667
+ },
+ "testsuite/bsc.verilog/positivereset/ClockDividers:sysClockInv": {
+  "link": 0.03139013452914798,
+  "run": 0.30158730158730157
+ },
+ "testsuite/bsc.verilog/positivereset/ClockDividers:sysGatedClockInv": {
+  "link": 0.009302325581395349,
+  "run": 0.504
+ },
+ "testsuite/bsc.verilog/positivereset/Reset:sysInitialResetTest": {
+  "run": 0.25961538461538464
+ },
+ "testsuite/bsc.verilog/positivereset/Reset:sysMakeReset0": {
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.verilog/positivereset/Reset:sysMethodResetGuards": {
+  "link": 0.024691358024691357,
+  "run": 0.21367521367521367
+ },
+ "testsuite/bsc.verilog/positivereset/Reset:sysMultipleResetsForRule": {
+  "run": 0.2830188679245283
+ },
+ "testsuite/bsc.verilog/positivereset/Reset:sysResetEither": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.verilog/positivereset/Reset:sysResetMux": {
+  "run": 0.2882882882882883
+ },
+ "testsuite/bsc.verilog/positivereset/SyncReset:sysRstTest": {
+  "link": 0.04950495049504951,
+  "run": 0.275
+ },
+ "testsuite/bsc.verilog/positivereset/SyncReset:sysRstTest_V1": {
+  "run": 0.27884615384615385
+ },
+ "testsuite/bsc.verilog/positivereset/SyncReset:sysRstTest_V2": {
+  "run": 0.2033898305084746
+ },
+ "testsuite/bsc.verilog/positivereset/nameclash:sysTest4": {
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.verilog/positivereset/simulation:sysNoReset": {
+  "run": 0.25
+ },
+ "testsuite/bsc.verilog/quirks:sysMulNegOperand": {
+  "run": 0.2393162393162393
+ },
+ "testsuite/bsc.verilog/quirks:sysNonConstantBitExtraction": {
+  "run": 0.25
+ },
+ "testsuite/bsc.verilog/quirks:sysQuotNegOperand": {
+  "run": 0.23364485981308414
+ },
+ "testsuite/bsc.verilog/quirks:sysRemNegOperand": {
+  "run": 0.2416666666666667
+ },
+ "testsuite/bsc.verilog/quirks:sysSRAConst": {
+  "link": 0.04672897196261682,
+  "run": 0.2477064220183486
+ },
+ "testsuite/bsc.verilog/quirks:sysSRADynamic": {
+  "link": 0.08171206225680934,
+  "run": 0.2711864406779661
+ },
+ "testsuite/bsc.verilog/schedule:sysEspositoPreempt": {
+  "run": 0.2184873949579832
+ },
+ "testsuite/bsc.verilog/splitports:sysSplitVectorOps": {
+  "run": 0.2380952380952381
+ },
+ "testsuite/bsc.verilog/svkeywords:sysSvKeywords": {
+  "run": 0.303921568627451
+ },
+ "testsuite/bsc.verilog/svkeywords:sysSvKeywordsBH": {
+  "run": 0.2285714285714286
+ },
+ "testsuite/bsc.verilog/tasks/interfacecalls:sysLiftedInterfaceTaskCalls": {
+  "run": 0.25
+ },
+ "testsuite/bsc.verilog/tasks/plusargs:sysTestPlusargsSimple": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.verilog/tasks/plusargs:sysTestPlusargsTwoUseDiffArg": {
+  "run": 0.23364485981308414
+ },
+ "testsuite/bsc.verilog/tasks/real:sysRealDisplay": {
+  "run": 0.22641509433962265
+ },
+ "testsuite/bsc.verilog/tasks/real:sysRealDisplay2": {
+  "run": 0.2222222222222222
+ },
+ "testsuite/bsc.verilog/tasks/real:sysRealDisplayErr1": {
+  "run": 0.25
+ },
+ "testsuite/bsc.verilog/tasks/real:sysRealDisplayErr2": {
+  "run": 0.2542372881355932
+ },
+ "testsuite/bsc.verilog/tasks/time:sysDisplayTime": {
+  "run": 0.2692307692307693
+ },
+ "testsuite/bsc.verilog/tasks/time:sysPrintTime": {
+  "run": 0.21804511278195488
+ },
+ "testsuite/bsc.verilog/tasks/time:sysRegTime": {
+  "run": 0.2761904761904762
+ },
+ "testsuite/bsc.verilog/tasks:sysDynamicFormat": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.verilog/tasks:sysDynamicFormat2": {
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.verilog/tasks:sysErrorTest": {
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.verilog/tasks:sysEvenMoreDisplay": {
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.verilog/tasks:sysExitTest": {
+  "run": 0.24107142857142858
+ },
+ "testsuite/bsc.verilog/tasks:sysFFMuxTest": {
+  "link": 0.019867549668874173,
+  "run": 0.2396694214876033
+ },
+ "testsuite/bsc.verilog/tasks:sysFFReadTest": {
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.verilog/tasks:sysFourDisplay": {
+  "run": 0.25
+ },
+ "testsuite/bsc.verilog/tasks:sysGetDisplay": {
+  "run": 0.2196969696969697
+ },
+ "testsuite/bsc.verilog/tasks:sysLineDisplay": {
+  "run": 0.23684210526315788
+ },
+ "testsuite/bsc.verilog/tasks:sysLogicBetweenTasks": {
+  "run": 0.20192307692307696
+ },
+ "testsuite/bsc.verilog/tasks:sysLogicBetweenTasks3": {
+  "link": 0.027237354085603117,
+  "run": 0.22018348623853212
+ },
+ "testsuite/bsc.verilog/tasks:sysLogicBetweenTasks4": {
+  "link": 0.023255813953488372,
+  "run": 0.225
+ },
+ "testsuite/bsc.verilog/tasks:sysModuleDisplay": {
+  "link": 0.007407407407407407,
+  "run": 0.2710280373831776
+ },
+ "testsuite/bsc.verilog/tasks:sysMoreDisplay": {
+  "run": 0.2204724409448819
+ },
+ "testsuite/bsc.verilog/tasks:sysNegativeDisplay": {
+  "run": 0.2376237623762376
+ },
+ "testsuite/bsc.verilog/tasks:sysNegativeDisplay2": {
+  "run": 0.2564102564102564
+ },
+ "testsuite/bsc.verilog/tasks:sysRepeatedTask_OneRule": {
+  "run": 0.24786324786324787
+ },
+ "testsuite/bsc.verilog/tasks:sysRepeatedTask_OneRule2": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.verilog/tasks:sysRepeatedTask_OneRule3": {
+  "run": 0.23275862068965517
+ },
+ "testsuite/bsc.verilog/tasks:sysRepeatedTask_TwoRules": {
+  "run": 0.26168224299065423
+ },
+ "testsuite/bsc.verilog/tasks:sysSWrite64": {
+  "run": 0.21186440677966104
+ },
+ "testsuite/bsc.verilog/tasks:sysStringDisplay": {
+  "run": 0.2641509433962264
+ },
+ "testsuite/bsc.verilog/tasks:sysStringFormat": {
+  "run": 0.23076923076923078
+ },
+ "testsuite/bsc.verilog/tasks:sysStringFormat2": {
+  "run": 0.24038461538461542
+ },
+ "testsuite/bsc.verilog/tasks:sysStringFormat3": {
+  "run": 0.24369747899159666
+ },
+ "testsuite/bsc.verilog/tasks:sysWideDisplay": {
+  "run": 0.2265625
+ },
+ "testsuite/bsc.verilog/tasks:sysZeroDisplay": {
+  "run": 0.2524271844660194
+ },
+ "testsuite/bsc.verilog/tasks:sysZeroUnsignedDisplay": {
+  "run": 0.23584905660377362
+ },
+ "testsuite/bsc.verilog/undet:sysUndet1": {
+  "run": 0.22807017543859648
+ },
+ "testsuite/bsc.verilog/undet:sysUndet2": {
+  "run": 0.22413793103448273
+ },
+ "testsuite/bsc.verilog/undet:sysUndet3": {
+  "run": 0.23300970873786409
+ },
+ "testsuite/bsc.verilog/vlink_regen:sysVRegenTb": {
+  "link": 0.025,
+  "run": 0.25
+ },
+ "testsuite/bsc.verilog:sysCase": {
+  "link": 0.039603960396039604,
+  "run": 0.26666666666666666
+ },
+ "testsuite/bsc.verilog:sysExpectedExclusiveActions": {
+  "run": 0.2621359223300971
+ },
+ "testsuite/bsc.verilog:sysMips": {
+  "link": 0.06946454413892908,
+  "run": 0.24444444444444444
+ },
+ "testsuite/bsc.verilog:sysMisc": {
+  "link": 0.06276150627615062,
+  "run": 0.2416666666666667
+ },
  "testsuite/bsc.verilog:sysOper": {
-  "link": 0.0827250608272506,
-  "run": 0.35877862595419846
+  "link": 0.07453416149068322,
+  "run": 0.3189655172413793
  },
  "testsuite/bsc.verilog:sysSimple": {
-  "run": 0.256
+  "run": 0.22727272727272727
  },
  "testsuite/bsc.verilog:sysSimpleFF": {
-  "run": 0.24390243902439024
+  "run": 0.25
  }
 }

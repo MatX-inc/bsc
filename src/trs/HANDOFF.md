@@ -306,11 +306,16 @@ products, like VCS:
    slice advancing is the real fix).
    (prime()'s compile workers vs dlclose: FIXED; Fifo/RWire peek
    staleness: FIXED; central-loop negedge overcount: FIXED.)
-3. Hygiene: sysCRCTest1's link fence flag now REPRODUCES on an idle
-   box (0.40-0.45 vs baseline 0.22, trs_link ~1.3-1.5s) on BOTH the
-   b8691ab4 and pre-fix binaries — binary-independent drift, so the
-   0.22 baseline is stale; rebaseline it at the next accepted
-   equilibrium (sysTrafficBRAM did not flag).  memq DISPOSITIONED
+3. Hygiene: sysCRCTest1 CLOSED 2026-07-11 — the fence was
+   REBASELINED at the accepted i0 equilibrium (the 992/0 sweep on
+   frozen-i0-v3; ACCEPTED by Ravi): tools/perf-fence.json now pins
+   930 designs from that run's ratios (sysCRCTest1 link 0.51 =
+   the measured binary-independent reality; memq link improved to
+   0.10 with the tail gone; corpus link median 0.032 -> 0.036).
+   History of the flag: reproduced on an idle box (0.40-0.45 vs the
+   stale 0.22, trs_link ~1.3-1.5s) on BOTH the b8691ab4 and pre-fix
+   binaries — binary-independent drift (sysTrafficBRAM did not
+   flag).  memq DISPOSITIONED
    2026-07-10: its link is BIMODAL — modal 0.39-0.55s (= the 0.12
    baseline) with a 2.4-9.9s tail at ~13% (2/15 idle runs, same
    binary/.bir); TRS_JIT_TIME isolates the tail to "trs aot: ir
@@ -369,7 +374,8 @@ products, like VCS:
    ISOLATED SWEEP on frozen-i0-v3: 992 PASS / 0 DIFF, sole fence
    flag = the standing dispositioned sysCRCTest1 stale baseline
    (re-confirmed binary-independent: IR byte-equal 11,036 lines and
-   1.35-1.5s links on BOTH binaries; rebaseline still queued).
+   1.35-1.5s links on BOTH binaries; rebaseline DONE — equilibrium
+   accepted, see hygiene item 3).
    AWAITING Ravi's commit sign-off.  Emitted-IR size =
    new load-immune fence metric; single-consumer 2^k cones remain a
    latent (pre-existing) class, emitter-side fix queued gate-
