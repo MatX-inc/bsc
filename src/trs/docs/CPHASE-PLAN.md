@@ -6,7 +6,7 @@ skeleton FRAG/PLAN with grafts from STRATA (opening sequence, fallback
 semantics) and Split-Spine (noinline A/B, plan-card stability rule,
 TYPE_ABI_REV).  Raw agent outputs: session workflow wf_25c7dd90-654.
 
-## The constraint (Ravi, 2026-07-11)
+## The constraint (Ravi, 2026-07-11; sharpened 2026-07-12)
 
 BOTH flows optimal.  (1) One-shot flow (bsc + trs direct; upstream
 stays make-based) is first-class and must not regress — .birsnap and
@@ -17,6 +17,27 @@ flags to expose finer-grained steps are fine and expected (that is
 where -c came from).  Steps must be hermetic actions with declared
 inputs/outputs and DETERMINISTIC outputs.  Do the right LOCAL work per
 step; don't defer to link what can be done earlier.
+
+SHARPENED (2026-07-12): NO Bazel rules in this repo — the deliverable
+is FLAGS that make bsc behave in the most Bazel-friendly way.  BSC
+ORCHESTRATES TRS, always: even under Bazel the actions are
+`bsc -trs -c` per package and `bsc -trs -e` for the link (bsc shells
+to trs, as trsLink already does).  The doctrine is therefore a
+-c/-e SPLIT RULE: ALL module-specific work goes behind -c (.bo/.ba,
+BIR fragment, per-module-type trs codegen via a bsc-invoked trs
+subcommand — gated-variant objects, closure-keyed); ONLY truly
+link-level work lives in -e (hierarchy/instance map, cross-module
+schedule merge, compositions + .bir splice, edge-fn codegen, final
+specialize+link, artifact packaging).  -trs-export-only is DROPPED
+(no build-system seam between export and link exists; the only seam
+is -c/-e).  trs subcommand CLIs are internal bsc<->trs plumbing;
+bsc's flag surface is the contract, and every output-affecting trs
+env knob must become a flag bsc can pass explicitly.  BAZEL DOES NOT
+KNOW TRS EXISTS beyond shipping the binary in the toolchain
+filegroup: actions invoke bsc only.  To make even that configuration-
+free, trsLink's tool lookup becomes $TRS (explicit override) -> trs
+NEXT TO THE RUNNING BSC EXECUTABLE -> PATH (the filegroup and
+inst/bin both keep them adjacent), so no -trs-path flag is needed.
 
 ## Measured facts (grid v3 N=8 split Tile/Grid8; medians of 3; quiet box)
 
@@ -135,16 +156,60 @@ TRS_AOT_ONE_MODULE, width caps) mirrored as CLI flags so Bazel action
 keys capture them.  (c) new TRS_JIT_TIME lap BEFORE lowering (today
 t0 starts after) + per-function-group attribution (edge vs outlined
 vs helpers) — measures the Increment-3/4 ceiling, currently UNKNOWN.
-(d) Bazel rules: per-package bsc actions, one export action, one link
-action, run target.  (e) experiments that decide later increments:
-.bo/.ba byte-determinism across repeated + sandbox-relocated builds
-(timestamps, createEncodedFullFilePath pwd, interned-Id order); and
-the CUTOFF experiment — leaf-constant edit, byte-compare parent
-Grid8.ba before/after; if byte-stable, Bazel early-cutoff prunes
-everything downstream of the parent package even though it
-recompiles (the main lever on the dominant frontend cost).
-Guidance: generators should emit one package per module type — the
-one-file spine defeats both cutoff and parallelism.
+(d) DROPPED (was: Bazel rules) — no rules in this repo; see the
+sharpened constraint: Bazel wraps bsc invocations only.
+(e) experiments that decide later increments — MEASURED 2026-07-12
+(grid8 split + memq, installed bsc):
+  1. SAME-DIR DETERMINISM: PASS — .bo/.ba byte-stable across
+     repeated in-place recompiles with -no-show-timestamps
+     -no-show-version (both flags LOAD-BEARING: raw runs differ).
+     No run-to-run nondeterminism to fix.
+  2. PATH SENSITIVITY: FAIL — absolute source paths embedded in the
+     .bo header (offset ~21), in .ba after the version string, and
+     as resolved dep paths in parent .bo dep records.  FIX EXISTS:
+     PR #1040 (-remap-path-prefix FROM=TO, repeatable; Ravi,
+     2026-07-12) remaps at serialization time — Positions at the
+     BinData share chokepoint (canonical stream), abmi_path/
+     abmi_src_name, and the .ba's stored Flags copy (bdir/search/
+     output paths normalized; remapPathPrefix itself cleared).
+     Pinned guarantees (testsuite/bsc.options/remap-path):
+     byte-identical .bo/.ba across build dirs with
+     -remap-path-prefix "$PWD=." incl. -u and -g; in-place
+     recompiles byte-identical; NO-FLAG bytes unchanged from the
+     previous compiler.  Its audit extends ours: the .bo cascade is
+     importee positions on imported Ids + ipkg_depends content
+     hash; the serialized Flags record also stores paths; NO
+     timestamps exist in either format.  Arrives with the new
+     release rebase (.ba tag advances for the new Flags field).
+     Bazel action flag set: -no-show-timestamps -no-show-version
+     -remap-path-prefix "$PWD=." (+ a toolchain-prefix mapping if
+     the toolchain lives in the sandbox) + explicit -bdir/-simdir/
+     -info-dir output placement.  (.bo format tag embeds the BSC
+     BUILD DATE; .ba embeds the version string — toolchain
+     identity, acceptable.)
+  3. CUTOFF: FAIL, and DEEPER than a dep stamp — a one-constant
+     LEAF BODY edit (same byte length) wholesale-renames and
+     reorders the PARENT's own defs in sysGrid8.ba (12.8k dumpba
+     diff lines; the __h<N>/__d<N> suffixes are elaboration heap
+     positions, and the parent's evaluator heap counter is
+     perturbed by walking the child's ISyntax even across the
+     synthesize boundary).  Parent .bo additionally embeds
+     impHashes = content hash over the import's ENTIRE .bo
+     (bi_sig, bo_sig, IPackage ISyntax — BinUtil.hs:184,
+     decodeWithHash), so parent .bo bytes change under any child
+     edit even where naming would survive.  FIX CLASSES (bsc-side,
+     post-rebase, deep): (a) boundary-stub elaboration — the
+     parent's evaluator consumes only a child interface stub
+     across synthesize boundaries (true separate elaboration);
+     and/or (b) position-independent canonical def naming
+     (upstream main's Bluesim-codegen canonicalization series is
+     the adjacent precedent); plus (c) interface-scoped impHashes
+     (hash bi_sig/bo_sig only) so .bo stamps stop propagating body
+     edits.  Until then, frontend early-cutoff under Bazel is
+     limited to skipping actions whose inputs are unchanged — body
+     edits invalidate the whole ancestor chain.
+Guidance stands: generators should emit one package per module
+type — the one-file spine defeats both cutoff and parallelism.
 
 INCREMENT 2 — decision-gate measurements + noinline A/B (days).
 Add noinline to outlined exec bodies in the CURRENT pipeline (none
