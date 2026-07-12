@@ -4748,7 +4748,7 @@ getBuriedPreds (ICon _ (ICLazyArray arr_ty arr u)) =
                       (ITAp c t) | (c == itPrimArray) -> t
                       _ -> internalError ("getBuriedPreds: array type: " ++
                                           ppReadable arr_ty)
-          mkRef (ArrayCell p r) = IRefT elem_ty p r
+          mkRef (ArrayCell p r) = IRefT elem_ty p S.empty r
       getBuriedPredsForced (map mkRef (Array.elems arr))
 getBuriedPreds e@(ICon _ _) = do
   --traceM("getBuriedPreds: con: e = " ++ ppReadable e ++ show e)
@@ -5428,7 +5428,7 @@ pushBNot' :: Position -> HExpr -> S.Set HeapPointer -> HExpr -> G PExpr
 pushBNot' pos fe visited e = do
     (ee, P pe ew) <- evalUHSqueezed e
     let mkey = case ee of
-                 IRefT _ ptr _ -> Just ptr
+                 IRefT _ ptr _ _ -> Just ptr
                  _ -> Nothing
     -- cycle guard (cf. extractWires' visited set): self-referential
     -- structures (e.g. guard logic) leave the negation unpushed
