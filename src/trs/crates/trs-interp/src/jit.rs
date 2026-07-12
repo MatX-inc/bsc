@@ -1783,8 +1783,17 @@ impl Interp {
                     }
                 }
             }
-            // consumers per (inst, def), section indices in order
+            // consumers per (inst, def), section indices in order.
+            // corder pins the def processing order deterministically
+            // (HashMap iteration is process-seeded, and c.defs is a
+            // HashSet, so both levels need pinning): first-consumer-
+            // section major, (di, dn) within a section.  The ORDER
+            // ITSELF is arbitrary — what matters is the topo pass
+            // below, which puts deps before users per prelude so arm
+            // expansion finds them in edge.shared instead of
+            // re-emitting cones exponentially.
             let mut consumers: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
+            let mut corder: Vec<(usize, StrId)> = Vec::new();
             for (p, (sec, &(_, o))) in
                 sections.iter().zip(comp_nodes.iter()).enumerate()
             {
@@ -1792,8 +1801,15 @@ impl Interp {
                     continue;
                 }
                 if let Some((c, _)) = sec {
-                    for &d0 in &c.defs {
-                        consumers.entry(d0).or_default().push(p);
+                    let mut ds: Vec<(usize, StrId)> =
+                        c.defs.iter().copied().collect();
+                    ds.sort_unstable();
+                    for d0 in ds {
+                        let e = consumers.entry(d0).or_default();
+                        if e.is_empty() {
+                            corder.push(d0);
+                        }
+                        e.push(p);
                     }
                 }
             }
@@ -1802,7 +1818,8 @@ impl Interp {
             let mut comp_saved = 0u64;
             let mut comp_recompute = 0u64;
             let mut shared_defs = 0usize;
-            for (&(di, dn), ps) in &consumers {
+            for (di, dn) in corder {
+                let ps = &consumers[&(di, dn)];
                 if ps.len() < 2 {
                     continue;
                 }
@@ -1887,6 +1904,77 @@ impl Interp {
                         cached = false; // post-evict
                     }
                 }
+            }
+            // topo-order each section's hoist prelude: deps before
+            // users (Kahn; the ready set pops in pinned-corder position,
+            // so the result is deterministic).  A dep materialized
+            // before its user is found in edge.shared when lazy_mux
+            // expands the user's arms — without that, BOTH arms of every
+            // bit-test diamond re-expand the dep's cone and chained
+            // folds (countOnes-style d_k = If(bit_k, d_k+1 +1, d_k+1))
+            // emit 2^k-1 copies: memq's pinned order drew k=16 (47MB IR,
+            // ir-passes 17s) where the old seed-random order drew k
+            // stochastically (the historical ~13% bimodal link tail).
+            for hq in comp_hoists.iter_mut() {
+                if hq.len() < 2 {
+                    continue;
+                }
+                let pos: HashMap<(usize, StrId), usize> = hq
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(i, d)| (d, i))
+                    .collect();
+                // dep edges restricted to this prelude (cross-section
+                // deps are already in edge.shared: a dep's consumer set
+                // is a superset of its user's, so it anchors no later)
+                let deps: Vec<Vec<usize>> = hq
+                    .iter()
+                    .map(|&(di, dn)| {
+                        let dc = cone(&mut cx, di, dn);
+                        let mut v: Vec<usize> = dc
+                            .defs
+                            .iter()
+                            .filter(|&&d| d != (di, dn))
+                            .filter_map(|d| pos.get(d).copied())
+                            .collect();
+                        v.sort_unstable();
+                        v
+                    })
+                    .collect();
+                let mut indeg: Vec<usize> = deps.iter().map(|v| v.len()).collect();
+                let mut users: Vec<Vec<usize>> = vec![Vec::new(); hq.len()];
+                for (u, ds) in deps.iter().enumerate() {
+                    for &d in ds {
+                        users[d].push(u);
+                    }
+                }
+                let mut ready: std::collections::BTreeSet<usize> = indeg
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &n)| n == 0)
+                    .map(|(i, _)| i)
+                    .collect();
+                let mut order: Vec<usize> = Vec::with_capacity(hq.len());
+                while let Some(&i) = ready.iter().next() {
+                    ready.remove(&i);
+                    order.push(i);
+                    for &u in &users[i] {
+                        indeg[u] -= 1;
+                        if indeg[u] == 0 {
+                            ready.insert(u);
+                        }
+                    }
+                }
+                if order.len() < hq.len() {
+                    // cycle residue (unexpected for pure defs): append
+                    // in pinned order — still deterministic
+                    let inorder: HashSet<usize> = order.iter().copied().collect();
+                    order.extend((0..hq.len()).filter(|i| !inorder.contains(i)));
+                }
+                let reordered: Vec<(usize, StrId)> =
+                    order.iter().map(|&i| hq[i]).collect();
+                *hq = reordered;
             }
             tot_recompute += comp_recompute;
             tot_saved += comp_saved;
@@ -2741,8 +2829,11 @@ impl Interp {
                 Some(nodes)
             })
             .collect();
-        let en_slots: Vec<u32> =
+        // sorted: HashMap order is process-seeded, and this order is baked
+        // into the edge fns' EN-zeroing store sequence (deterministic IR)
+        let mut en_slots: Vec<u32> =
             inst_envs.values().flat_map(|e| e.en_slot.values().copied()).collect();
+        en_slots.sort_unstable();
 
 
         // ---- helper fns for outlined pieces (split opt-in) ----
