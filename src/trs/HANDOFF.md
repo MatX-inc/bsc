@@ -238,15 +238,42 @@ products, like VCS:
    built; ref exes relinked -dump-formats vcd,fst; scope dumps
    BYTE-IDENTICAL on sysVCDTest2 115-line two-level hierarchy,
    sysCDiv, sysSyncB).  -dump-formats gating: reference semantics
-   MEASURED — +bscfst on a vcd-only exe is a SILENT no-op (rc=0, no
-   file, no warning), and -V ignores the extension (writes the
-   compiled-in format into file.fst).  DECISION still open: mirror
-   the restriction (strict parity; needs the .bir to carry
-   dumpFormats) vs deliberately diverge (trs artifacts carry both
-   writers = capability superset; stdout/exit oracle unaffected —
-   the divergence is only that trs honors +bscfst where a default
-   reference exe silently drops it).  Recommend DIVERGE + document.
-   PENDING: that decision, and the $dumplimit FST estimate witness.
+   RE-MEASURED 2026-07-11 (the earlier "silent no-op" note was a
+   stdout-only capture — WRONG) — +bscfst on a vcd-only exe is rc=0,
+   no file, but LOUD on stderr: "Error: this model was not built
+   with FST support (rebuild with -dump-formats fst)" (vcd.cxx
+   bk_set_waveform_format returns BK_ERROR; bluetcl's simWaveform
+   swallows the status ON PURPOSE, bluetcl.hs ~3082 — sim continues
+   without dumping).  -V ignores the extension and ALWAYS writes VCD
+   bytes (bluesim.tcl hardwires wave_fmt vcd for -V), even on a
+   vcd,fst exe.  FLOW FACT: the .bir export (bsc.hs writeBirFile,
+   in genModuleC just after simPackageOpt) is UPSTREAM of where
+   -dump-formats takes effect (SimBlocksToC set_wave_formats emits
+   vcd_set_allowed_formats(mask) + vcd_register_fst into the
+   generated create_model — that call is what links libfst+libz in).
+   The flag is in scope at export time but the .bir carries no trace
+   of it — it is an artifact/link policy, not design.  DECISION
+   still open: MIRROR the restriction (strict parity = reproduce the
+   stderr refusal; plumbing options: (a) .bir carries dumpFormats —
+   BIR_VERSION + SNAP_LAYOUT_REV bumps, bakes link policy into the
+   design IR; or (b) pass it through the trsLink command line +
+   fallback wrapper (bsc.hs trsLink linkCmd) — .bir stays pure, and
+   hand-linked artifacts default to vcd exactly like a default
+   reference build) vs DIVERGE (trs artifacts carry both writers =
+   capability superset; stdout/exit oracle unaffected, but trs would
+   dump where the reference prints the stderr error and refuses —
+   a visible stderr-parity divergence, NOT a silent-drop one) vs
+   FIX THE REFERENCE (bluesim-fst is NOT upstreamed — the gating
+   semantics are ours to change; e.g. default -dump-formats vcd,fst
+   would make every reference exe carry both writers and trs's
+   superset becomes exact parity for free.  Cost: libfst+libz link
+   into every Bluesim exe — defensible locally, may not survive
+   upstream review if #1027 is ever resubmitted).  The old DIVERGE
+   recommendation rested on the false silent-drop reading; with the
+   loud refusal measured, strict-parity doctrine favors MIRROR via
+   (b), or FIX-THE-REFERENCE if the both-writers default is
+   acceptable.  PENDING: that decision, and the $dumplimit FST
+   estimate witness.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
    message): SimExportIR.encExpr can't encode split-port method-arg
    selections ("(s.getBar TUPLE_...)[3]", repro: splitports
@@ -308,6 +335,57 @@ products, like VCS:
    quiet tree, full bsc rebuild, testsuite, fence re-baseline.
    -dump-formats is the link-time waveform contract the compile-mode
    split wants; libfst enables FST in the debug mode.
+6. -C-PHASE / BAZEL ARC (2026-07-11, full plan + measured dossier in
+   docs/CPHASE-PLAN.md).  DOCTRINE (Ravi): BOTH flows optimal — the
+   one-shot flow stays first-class; our downstream use runs entirely
+   under Bazel, where caching/incrementality belong to BAZEL, not
+   the tools (no tool-internal caches); extra flags exposing
+   finer-grained hermetic, DETERMINISTIC steps are fine (the -c
+   pattern).  MEASURED (grid8 leaf-edit loop 2.37s): bsc compile 66%,
+   .bir export 0.165s (cheap), trs link 0.65s (ir-passes 52% /
+   backend 24%); reference object reuse ~0% on leaf edits, ~25% best
+   case — trs full relink already beats it 3.3x.  KEY FACT: parent
+   exec bodies INLINE child method bodies (lower.rs:2405/3797), so
+   per-type cache keys are the fragment CLOSURE — leaf edits
+   invalidate ancestors; wins are sibling/top/cross-design/CI.
+   STAGED (gate between 2 and 3): I0 deterministic IR emission —
+   IN FLIGHT 2026-07-11, see docs/CPHASE-PLAN.md "AS BUILT": the
+   plain consumers sort was a TRAP (memq 0.79s -> 17.5s: emission
+   CONTENT was order-dependent — lazy_mux re-expands non-shared deps
+   in both arms, 2^k-1 copies; the old ~13% bimodal tail was random
+   orders losing the dep-before-user race).  Fix = en_slots sort +
+   pinned corder + Kahn topo of each hoist prelude (deps first);
+   memq now 6,242 IR lines vs 8.8K best-ever random draw, grid8
+   size-neutral, byte-identical IR+.so everywhere.  Witness: the
+   DejaGnu testsuite dir testsuite/bsc.trs/determinism (CountShare =
+   the chained-fold shape + HoistDivTrap; 3-link byte-compare of
+   pre-O3 IR + .so, golden stdout; UNSUPPORTED when trs is not
+   installed, and VERIFIED to FAIL against the pre-fix binary —
+   note it gates the INSTALLED trs, so refresh inst/bin after
+   changes).  ALL GATES GREEN 2026-07-11: memq
+   20-link wall UNIMODAL 0.40-0.54s (was bimodal 0.46-12.6s; median
+   0.79 -> 0.43); ladders on the final binary 6/6 + 11/11 + 35/35;
+   3-lens adversarial review + verify = ZERO confirmed defects;
+   ISOLATED SWEEP on frozen-i0-v3: 992 PASS / 0 DIFF, sole fence
+   flag = the standing dispositioned sysCRCTest1 stale baseline
+   (re-confirmed binary-independent: IR byte-equal 11,036 lines and
+   1.35-1.5s links on BOTH binaries; rebaseline still queued).
+   AWAITING Ravi's commit sign-off.  Emitted-IR size =
+   new load-immune fence metric; single-consumer 2^k cones remain a
+   latent (pre-existing) class, emitter-side fix queued gate-
+   triggered — CLOSES the review-backlog determinism item once the
+   sweep seals; I1 step-split flags +
+   hermeticity + Bazel graph at existing granularity
+   (-trs-export-only, --cc, TMPDIR, env-knobs->flags, pre-lowering
+   TRS_JIT_TIME lap, .ba byte-cutoff experiment); I2 noinline A/B +
+   gate measurements (proceed bar: >30% of relink wall reusable on
+   top/sibling edits at target size); I3 per-module .bfrag at -c
+   (content_hash fills SimExportIR.hs:733 TODO; golden splice
+   byte-identity vs monolithic .bir); I4 trs plan/modc/link --objs
+   per-type objects (manifest-verify -> full in-link fallback = the
+   certified path; TYPE_ABI_REV; no absolute slots in plan cards).
+   Judge dissent: only I0-2 have GUARANTEED measured payoff; do not
+   start I3 first.
 
 ## Key implementation landmarks
 
