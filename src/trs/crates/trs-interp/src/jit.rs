@@ -769,6 +769,18 @@ fn cc_tool() -> String {
     std::env::var("TRS_CC").unwrap_or_else(|_| "cc".into())
 }
 
+/// aot_emit's failure channel: LOWERING ineligibility degrades to the
+/// interp artifact (the reference always yields an executable; the
+/// link CLI prints the compiled-mode-unavailable note); only
+/// infrastructure failures (fs, cc, meta object) fail the link.
+/// Trial lower catches most ineligibility earlier — this covers
+/// shapes it does not walk (e.g. value-method reads reachable only
+/// through another module's cones).
+enum EmitFail {
+    Ineligible(String),
+    Infra(String),
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn aot_emit(
@@ -787,7 +799,7 @@ fn aot_emit(
     bir_hash: u64,
     edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
     bdpi_names: &[String],
-) -> Result<(), String> {
+) -> Result<(), EmitFail> {
     use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
     trs_codegen::lower::llvm_init_once();
     let t0 = std::time::Instant::now();
@@ -878,7 +890,7 @@ fn aot_emit(
             &comps,
             edge_plan,
         )
-        .map_err(|e| format!("design object: {e}"))?;
+        .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
         }
@@ -892,9 +904,9 @@ fn aot_emit(
         }
         let tmp =
             std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&tmp).map_err(|e| EmitFail::Infra(e.to_string()))?;
         let f = tmp.join("design.o");
-        std::fs::write(&f, obj).map_err(|e| e.to_string())?;
+        std::fs::write(&f, obj).map_err(|e| EmitFail::Infra(e.to_string()))?;
         let meta = compile_meta_object(
             bir_hash,
             split_thresh as u64,
@@ -902,18 +914,18 @@ fn aot_emit(
             edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
             bdpi_names,
         )
-        .map_err(|e| format!("meta object: {e}"))?;
+        .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
-        std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
+        std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
         let st = std::process::Command::new(cc_tool())
             .args(["-shared", "-o"])
             .arg(so)
             .args([&f, &mf])
             .status()
-            .map_err(|e| format!("cc: {e}"))?;
+            .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
         std::fs::remove_dir_all(&tmp).ok();
         if !st.success() {
-            return Err("cc -shared failed".into());
+            return Err(EmitFail::Infra("cc -shared failed".into()));
         }
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: emit + link {:?}", t0.elapsed());
@@ -962,17 +974,17 @@ fn aot_emit(
     });
     let helper_obj = helpers_on.then_some(helper_obj).flatten();
     let tmp = std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&tmp).map_err(|e| EmitFail::Infra(e.to_string()))?;
     let mut files = Vec::new();
     for (i, o) in objs.into_iter().enumerate() {
-        let bytes = o.map_err(|e| format!("object compile: {e}"))?;
+        let bytes = o.map_err(|e| EmitFail::Ineligible(format!("object compile: {e}")))?;
         let f = tmp.join(format!("chunk{i}.o"));
-        std::fs::write(&f, bytes).map_err(|e| e.to_string())?;
+        std::fs::write(&f, bytes).map_err(|e| EmitFail::Infra(e.to_string()))?;
         files.push(f);
     }
     if let Some(o) = helper_obj {
         let f = tmp.join("helpers.o");
-        std::fs::write(&f, o).map_err(|e| e.to_string())?;
+        std::fs::write(&f, o).map_err(|e| EmitFail::Infra(e.to_string()))?;
         files.push(f);
     }
     // fused per-composition edge fns (task #17): symbol callees, ld
@@ -1020,9 +1032,9 @@ fn aot_emit(
             })
             .collect();
         let o = trs_codegen::lower::compile_fused_object(&comps)
-            .map_err(|e| format!("fused object: {e}"))?;
+            .map_err(|e| EmitFail::Ineligible(format!("fused object: {e}")))?;
         let f = tmp.join("fused.o");
-        std::fs::write(&f, o).map_err(|e| e.to_string())?;
+        std::fs::write(&f, o).map_err(|e| EmitFail::Infra(e.to_string()))?;
         files.push(f);
     }
     let meta = compile_meta_object(
@@ -1032,19 +1044,19 @@ fn aot_emit(
         false, // chunked path never carries edge-SSA wire ticks
         bdpi_names,
     )
-    .map_err(|e| format!("meta object: {e}"))?;
+    .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
     let mf = tmp.join("meta.o");
-    std::fs::write(&mf, meta).map_err(|e| e.to_string())?;
+    std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
     let st = std::process::Command::new("cc")
         .args(["-shared", "-o"])
         .arg(so)
         .args(&files)
         .status()
-        .map_err(|e| format!("cc: {e}"))?;
+        .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
     std::fs::remove_dir_all(&tmp).ok();
     if !st.success() {
-        return Err("cc -shared failed".into());
+        return Err(EmitFail::Infra("cc -shared failed".into()));
     }
     if std::env::var_os("TRS_JIT_TIME").is_some() {
         eprintln!("trs aot: emit + link {:?}", t0.elapsed());
@@ -3088,7 +3100,10 @@ impl Interp {
                     },
                 ) {
                     Ok(()) => crate::AotEmit::Compiled,
-                    Err(e) => crate::AotEmit::Failed(e),
+                    Err(EmitFail::Ineligible(e)) => {
+                        crate::AotEmit::Ineligible(e)
+                    }
+                    Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
                 },
             );
             return None;
