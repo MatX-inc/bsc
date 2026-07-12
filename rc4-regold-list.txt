@@ -1,0 +1,5 @@
+b302/mkDesign.v.expected: 957-pick theirs; verify against combined-tree output at suite time (rc3 precedent)
+lc-sysTb.out.expected + CTX_sysTb.sal.expected: 925-pick theirs, then 1008-pick theirs (coercion def-naming drift); rc3 regolded to combined-tree output — expect same here [REGOLDED build3 output, class-1 naming drift, verified]
+mkTop_glob.out.expected: 1008-pick theirs; verify combined-tree output at suite time
+lc/CTX sysDynArrSelWithImplCond: 1008-pick theirs; combined-tree check at suite time
+NoInline_ResNotInBits: batch-6 pick rerere fill (likely rc3 combined-tree regold); verify at suite
