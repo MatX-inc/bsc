@@ -221,15 +221,30 @@ sharpened constraint: Bazel wraps bsc invocations only.
 Guidance stands: generators should emit one package per module
 type — the one-file spine defeats both cutoff and parallelism.
 
-INCREMENT 2 — decision-gate measurements + noinline A/B (days).
-Add noinline to outlined exec bodies in the CURRENT pipeline (none
-exists today), diffsweep + perf fences to lock the call-based form as
-semantic baseline; with the I1 lap, measure the edge-vs-per-type O3
-split on a >10-type real design.  GATE: proceed to 3-4 only if
-(per-type share) x (edit-profile hit rate under closure keying)
-clears >30% of relink wall reusable on top/sibling edits at target
-design size.  Otherwise STOP — I0-2 already banked the tail fix,
-remote caching, cutoff, and hermeticity.
+INCREMENT 2 — decision gate.  MEASURED 2026-07-12 (post-topo-fix IR
+census, 9 specimens = the corpus's largest links + grid8):
+  exec-share of emitted IR splits the corpus into TWO CLASSES —
+  OUTLINE-HEAVY: sudoku 66% (exec 100.9k vs edge 52.7k insn),
+    conflict_free_large 93% (107.6k vs 8.3k), grid8 94% (12.9k vs
+    0.9k — four class reps serving 64 tiles);
+  EDGE-DOMINATED: sysTrafficBRAM 5% (edge 72.1k), AES_TB 15%,
+    sysFIFOSelect/GFIFOLevel/Lat112/memq 0% (everything fused).
+  No hlp_ groups appear in default one-module links (split-mode
+  opt-in only).
+GATE VERDICT: CLEARS, CLASS-SCOPED.  For outline-heavy designs —
+the statically-scheduled replicated-tile shape that is the actual
+target — per-type share is 66-94%, far above the 30% bar, and
+top/sibling edits leave module types unchanged (closure-keyed cache
+hits; plus cross-design and cross-N sharing for replicated types).
+For edge-dominated designs per-type caching buys ~nothing — their
+cost lives in the always-rebuilt mega-edge (loop-rolled spine is
+that class's lever, not I3/I4).  CONSEQUENCE for I4: per-type
+precompilation activates exactly when the outline dial fires
+(rep_ords non-empty) — the plan already computes the discriminator;
+edge-dominated designs keep the monolithic path with zero overhead.
+Still to do from the original I2 list (pre-I4, post-rebase window):
+the noinline A/B on outlined exec bodies (lock the call-based form
+as the semantic baseline; diffsweep + perf fences).
 
 INCREMENT 3 — bsc per-module fragments + splice (flag-gated,
 ~1-2 weeks).  -bir-frag (NOT implied by -trs; one-shot compile stays

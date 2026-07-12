@@ -334,12 +334,13 @@ products, like VCS:
    affine; exec sites first, sched sections after) -> type-keyed
    analysis (startup) -> pools -> lanes.  Long-run grid measurement
    (1M cycles) still untaken.
-5. PR #1027 rebase (task #7): onto personal/bluesim-fst (superset of
-   -dump-formats).  merge-base 534241d5; conflicts concentrated in 9
-   files/18 commits (flag tables, bsc.hs Verilog link path).  Needs
-   quiet tree, full bsc rebuild, testsuite, fence re-baseline.
-   -dump-formats is the link-time waveform contract the compile-mode
-   split wants; libfst enables FST in the debug mode.
+5. RELEASE REBASE (waiting on the new downstream release; playbook =
+   docs/REBASE-PLAYBOOK.md, fleet-verified 2026-07-12): true
+   merge-base d2f996c0, upstream +38 of which ~30 are squashes of
+   OUR OWN work (resolve already-applied); conflict map, #1040-LAST
+   rule, and the narrow 6be62d63/71226f07 parity-audit targets are
+   in the playbook.  The old item-5 numbers (534241d5, 9 files/18
+   commits) are SUPERSEDED.
 6. -C-PHASE / BAZEL ARC (2026-07-11, full plan + measured dossier in
    docs/CPHASE-PLAN.md).  DOCTRINE (Ravi): BOTH flows optimal — the
    one-shot flow stays first-class; our downstream use runs entirely
