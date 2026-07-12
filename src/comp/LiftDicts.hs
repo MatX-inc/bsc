@@ -5,16 +5,16 @@ import Control.Monad(when, zipWithM)
 import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Debug.Trace({- trace, -} traceM)
+import Debug.Trace(traceM)
 
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
-import Util(mapSndM, tracep)
+import Util(mapSndM)
 
 import CSyntax
-import FStringCompat(mkFString, getFString)
+import FStringCompat(FString, mkFString, getFString)
 import Literal
-import CFreeVars(getPV)
+import CFreeVars(getPV, getFVE, fvSetToFreeVars)
 import CType
 import Assump
 import Pred
@@ -62,6 +62,10 @@ data LState = LState {
   -- These are converted instance definitions that were added by convinst
   -- but never incorporated into the symbol table.
   localInstInfo :: !(M.Map Id ([TyVar], CType)),
+  -- Base names of the package's top-level definitions, so lifted-dict
+  -- names never collide with a user definition (a user def named
+  -- _lifted_dictN is legal)
+  topLevelBases :: !(S.Set FString),
   -- Name of the package being compiled (for qualified lifted ids)
   packageName :: !Id,
   symt :: !SymTab
@@ -76,6 +80,7 @@ initLState symt (CPackage mi exps imps impsigs fixs ds includes) = LState {
   exprDictMap = M.empty,
   liftedDictMap = M.empty,
   localInstInfo = M.fromList [ (i, (vs, t)) | CValueSign (CDefT i vs (CQType [] t) _) <- ds, isDictFun t ],
+  topLevelBases = S.fromList [ getIdBase (getDName def) | CValueSign def <- ds ],
   packageName = mi,
   symt = symt
 }
@@ -98,8 +103,13 @@ newDictId :: Position -> L Id
 newDictId pos = do
   n <- gets dictNo
   mi <- gets packageName
-  modify (\s -> s { dictNo = n + 1 })
-  return $ qualId mi $ addIdProps (enumId "lifted_dict" pos n) [IdPDict, IdPCAF]
+  taken <- gets topLevelBases
+  -- skip any name a user definition already claims
+  let fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` taken = fresh (k + 1)
+              | otherwise = k
+      n' = fresh n
+  modify (\s -> s { dictNo = n' + 1 })
+  return $ qualId mi $ addIdProps (enumId "lifted_dict" pos n') [IdPDict, IdPCAF]
 
 type BoundDicts = S.Set Id
 
@@ -232,8 +242,21 @@ handleDictExpr _ t e
 handleDictExpr _ _ e
   | tvFree = return (e, False)
   where tvFree = not $ null $ tv e
-handleDictExpr p t e@(CAnyT {}) = internalError $ "Undefined dictionary value: " ++ ppReadable (p, t, e)
-handleDictExpr _ _ e@(CStructT _ _) = return (e, True)
+-- Invariant (typechecker): dictionary evidence is never an undefined
+-- value; TCheck constructs dictionaries only from instances, givens,
+-- superclass selection, and letrec-bound recursion.
+handleDictExpr p t e@(CAnyT {}) = internalError $ "LiftDicts: undefined dictionary value (typechecker invariant violated): " ++ ppReadable (p, t, e)
+-- A dictionary given as a struct literal is liftable only when its
+-- fields are closed: every free variable must be known at the top
+-- level (the free-tyvar guard above has already run).  A field
+-- capturing a local would otherwise be lifted into a top-level def
+-- with an unbound reference.
+handleDictExpr p _ e@(CStructT _ _) = do
+  let fvs = fvSetToFreeVars (getFVE e)
+  known <- mapM getTopNameInfo fvs
+  let closed = not (any (`S.member` p) fvs) &&
+               and [ maybe False (const True) k | k <- known ]
+  return (e, closed)
 handleDictExpr p t e@(CApply f []) = do
   when trace_lift_dicts $ traceM $ "Normalizing CApply f []: " ++ ppReadable e
   handleDictExpr p t f
@@ -244,7 +267,10 @@ handleDictExpr p _ e@(CVar i)
   | otherwise = do
       minfo <- getTopNameInfo i
       case minfo of
-        Nothing -> internalError $ "handleDictExpr dict variable not bound param or known at the top level: " ++ ppReadable i
+        -- Invariant (typechecker + processCDeflsSeq/Cletrec above): every
+        -- dictionary variable is lambda/pattern-bound (in BoundDicts),
+        -- letrec-bound (in BoundDicts), or a known top-level name.
+        Nothing -> internalError $ "LiftDicts: dict variable neither bound nor top-level (scoping invariant violated): " ++ ppReadable i
         Just (vs, t)
           | null vs -> return $ (e, True)
           | otherwise -> internalError $ "handleDictExpr found polymorphic variable where concrete dictionary was expected: " ++ ppReadable (i, vs, t)
@@ -252,6 +278,12 @@ handleDictExpr p t e@(CApply f args) = do
   fTy <- handleDictFun [] f
   -- Don't check the result type against dictType because we trust the typechecker
   let argTys = fst $ getArrows fTy
+  -- zipWithM would silently drop arguments if the function type showed
+  -- fewer arrows than there are arguments (e.g. an arrow hidden behind
+  -- an unexpanded synonym)
+  when (length argTys < length args) $ internalError $
+      "LiftDicts.handleDictExpr: fewer arrows than arguments: " ++
+      ppReadable (t, e, fTy)
   (args', liftables) <- fmap unzip $ zipWithM (handleDictExpr p) argTys args
   let e' = CApply f args'
   return (e', and liftables)
@@ -375,14 +407,6 @@ simpCExpr (CApply f []) = simpCExpr f
 simpCExpr (CTApply e []) = simpCExpr e
 simpCExpr e = e
 
-{-
-setPositionSimp :: Position -> CExpr -> CExpr
-setPositionSimp pos (CVar i) = CVar $ setIdPosition pos i
-setPositionSimp pos (CLitT t (CLiteral _ l)) = CLitT t (CLiteral pos l)
-setPositionSimp pos (CAnyT _ uk t) = CAnyT pos uk t
-setPositionSimp pos (CConT t c es) = CConT t (setIdPosition pos c) es
-setPositionSimp _ e = e -- not handling CStructT yet
--}
 
 data DeflAction = Inline Id CExpr | Keep CDefl
 
@@ -391,8 +415,12 @@ deflAction p (CLValueSign (CDefT i [] (CQType [] t) [CClause [] [] e]) [])
   | isSimple e && not (isKeepId i) = do
       when trace_lift_dicts $ traceM  $ "inlining simple: " ++ ppReadable (i, e)
       return $ Inline i $ simpCExpr e
-  | isSimple e && (tracep trace_lift_dicts ("simple not inlined: " ++ ppReadable (i, e)) False) = internalError "unpossible"
-  -- Dictionary variables are safe to inline because they are unique per top-level definition
+  -- keep-id simple definitions fall through: a keep-id dictionary
+  -- still participates in the dictionary handling below
+  -- Dictionary variables are safe to inline because the typechecker
+  -- mints them fresh per top-level definition (_tcdictN): shadowBindings
+  -- removes re-bound KEYS from the InlineMap, and this freshness is what
+  -- guarantees no surviving entry's VALUE mentions a re-bound id.
   | isDictId i, CVar _ <- e = do
       when trace_lift_dicts $ traceM  $ "inlining dict var: " ++ ppReadable (i, e)
       return $ Inline i e
@@ -432,12 +460,16 @@ instance LiftDicts CExpr where
     (ds', m') <- processCDeflsSeq p m ds
     e' <- liftDicts p m' e
     return $ cLetSeq ds' e'
-  -- We are not attempting to lift recursive dictionary bindings for now
+  -- We are not attempting to lift recursive dictionary bindings for now;
+  -- the letrec-bound dictionary ids join BoundDicts so that a nested
+  -- dictionary expression referencing one is (correctly) not lifted,
+  -- rather than tripping the top-level-known internalError below.
   liftDicts p m (Cletrec ds e) = do
     let vs = S.fromList [ getLName d | d <- ds ]
         m' = shadowBindings vs m
-    ds' <- liftDicts p m' ds
-    e'  <- liftDicts p m' e
+        p' = p `S.union` S.filter isDictId vs
+    ds' <- liftDicts p' m' ds
+    e'  <- liftDicts p' m' e
     return $ cLetRec ds' e'
   liftDicts p m (CApply f es) = do
     f'  <- liftDicts p m f
@@ -448,7 +480,12 @@ instance LiftDicts CExpr where
     return $ CTApply e' ts
   liftDicts p m e@(CVar i) = do
     case M.lookup i m of
-      Just e' -> return $ e' -- setPositionSimp (getPosition i) e'
+      -- The inlined expression keeps its definition-site position: use
+      -- sites of CSEd/lifted dictionaries and inlined constants report
+      -- (and name nets after) where the value was defined, not where it
+      -- was used.  This is a deliberate tradeoff; re-positioning the
+      -- expression per use site would defeat the sharing.
+      Just e' -> return e'
       Nothing -> return e
   liftDicts p m (CTaskApplyT task t es) = do
     es' <- liftDicts p m es
