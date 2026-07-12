@@ -31,7 +31,6 @@ import Assump
 import CSubst(cSubstN)
 import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
---import Debug.Trace(trace, traceM)
 
 cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
              IO (CPackage, Bool, S.Set Id, CATFCache)

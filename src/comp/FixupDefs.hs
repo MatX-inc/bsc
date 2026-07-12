@@ -19,11 +19,6 @@ trace_drop_dicts = "-trace-drop-dicts" `elem` progArgs
 -- ===============
 
 
-itIsDictType :: IType -> Bool
-itIsDictType t
-  | null $ fst $ itGetArrows t,
-    ITCon _ _ (TIstruct SClass _) <- leftmost t = True
-itIsDictType _ = False
 
 -- Map from the type of a coherent dictionary to the imported top-level
 -- dictionaries of that type, keyed by their evidence fingerprints.  A

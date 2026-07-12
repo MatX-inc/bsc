@@ -962,6 +962,13 @@ bitTupleSizes = map leafSize . itTupleElems
 -- #
 -- #############################################################################
 
+-- Is this the type of a (fully applied) typeclass dictionary?
+itIsDictType :: IType -> Bool
+itIsDictType t
+  | null $ fst $ itGetArrows t,
+    ITCon _ _ (TIstruct SClass _) <- leftmost t = True
+itIsDictType _ = False
+
 -- Apply an ISyntax substitution to the predicate and action of a set of rules
 irulesMap :: (IExpr a -> IExpr a) -> IRules a -> IRules a
 irulesMap f (IRules sps rs) = IRules sps (map (iruleMap f) rs)

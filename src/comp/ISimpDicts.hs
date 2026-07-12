@@ -18,11 +18,6 @@ trace_simp_dicts = "-trace-simp-dicts" `elem` progArgs
 -- Expand lifted dictionary CAFs to manifest ICTuple form
 -- This enables ISimplify to inline them efficiently
 
-itIsDictType :: IType -> Bool
-itIsDictType t
-  | null $ fst $ itGetArrows t,
-    ITCon _ _ (TIstruct SClass _) <- leftmost t = True
-itIsDictType _ = False
 
 iSimpDicts :: IPackage a -> IPackage a
 iSimpDicts pkg@(IPackage { ipkg_defs = ds }) = pkg { ipkg_defs = ds'' }
