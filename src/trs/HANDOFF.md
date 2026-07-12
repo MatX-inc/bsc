@@ -191,11 +191,11 @@ products, like VCS:
   — the file MUST be named trs), then
   `python3 tools/diffsweep.py --aot --trs $M/frozen-<sha>/trs
   --out $M/<name>.json` from src/trs with inst/bin on PATH.
-  Expect 992 PASS / 0 DIFF at the new-bsc equilibrium (1073
-  enumerated on the rebased base; the delta vs the old 975/1037 is
-  upstream-class: EXPORT_FAIL 14 = the SimExportIR.encExpr split-port
-  gap below, COMPILE_FAIL 30, NO_SOURCE 20, NOT_SUPPORTED 14,
-  LINK_FAIL 3).  LPT scheduling reads tools/sweep-costs.json.
+  Expect 1008 PASS / 0 DIFF at the tuple-fix equilibrium (1075
+  enumerated incl. the bsc.trs witness designs; non-PASS is all
+  upstream-class: COMPILE_FAIL 28, NO_SOURCE 20, NOT_SUPPORTED 16,
+  LINK_FAIL 3 — EXPORT_FAIL is 0 since the encExpr tuple fix).
+  LPT scheduling reads tools/sweep-costs.json.
   Perf fence flags = treat like DIFFs (ratios vs tools/perf-fence.json;
   rebaseline only on accepted equilibria).  NO other builds or heavy
   jobs during a sweep (timing noise -> false flags).
@@ -275,12 +275,19 @@ products, like VCS:
    acceptable.  PENDING: that decision, and the $dumplimit FST
    estimate witness.
 2. Review backlog (all confirmed, file:line in the 4e5df577 commit
-   message): SimExportIR.encExpr can't encode split-port method-arg
-   selections ("(s.getBar TUPLE_...)[3]", repro: splitports
-   sysInstanceSplit at -e) — 14 designs EXPORT_FAIL on the rebased
-   base (12 splitports + sysFloatTest + sysTestMesa), identical set
-   pre/post the rc3 concat fix, counted in the sweep equilibrium
-   above; multi-clock EN latch clearing;
+   message): SimExportIR.encExpr split-port tuples FIXED 2026-07-12
+   (all 14 EXPORT_FAILs converted to byte-parity PASS; three layers:
+   ATuple/ATupleSel -> Concat/Extract encodings mirroring
+   SimCCBlock's wide-bit lowering; argInputPorts per-PORT expansion
+   at ACall/AMethCall — callers sent one value per ARG while the rc3
+   adaptation flattened callee inputs per PORT, scrambling split-arg
+   bindings; and trs aot_emit EmitFail routing so post-trial-lower
+   ineligibility degrades to the interp artifact instead of hard-
+   failing the link).  NEW QUEUED: compiled-tier MethValue support
+   (no lowering exists — Extract(MethValue) shapes run interp:
+   sysInstanceSplit, sysShallowSplit, sysSplitVectorPorts,
+   sysFloatTest) + trial-lower coverage for cones it does not walk;
+   multi-clock EN latch clearing;
    exporter round 2 = SimCOpt-surviving methodPorts set (replaces the
    const-ready RDY interim; same pattern as the def `sym` flag in
    SimExportIR.hs); symOrd char-wise compare; link feature-probe
@@ -315,7 +322,19 @@ products, like VCS:
    History of the flag: reproduced on an idle box (0.40-0.45 vs the
    stale 0.22, trs_link ~1.3-1.5s) on BOTH the b8691ab4 and pre-fix
    binaries — binary-independent drift (sysTrafficBRAM did not
-   flag).  memq DISPOSITIONED
+   flag).  traffic_light_controller_separate link flag (tuplefix
+   sweep, 0.07 vs 0.01 baseline) DISPOSITIONED 2026-07-12: the old
+   0.02s "links" were interp-era artifacts of VERSION-MATCHED stale
+   .ba residue in the testsuite dir (left by the Jul-10 fullparallel,
+   admitted via diffsweep's -p wk:testdir:+ search path); the bsc
+   rebuild's version bump forced the first fresh sweep-flag
+   elaboration — the design now COMPILES, byte-parity, 0.19s idle on
+   both binaries, and a full SimExportIR revert reproduces it (the
+   tuple/morder changes are exonerated).  Rebaseline at the next
+   accepted equilibrium.  QUEUED: diffsweep hardening — keep
+   testsuite-resident .bo/.ba out of the sweep search path (version-
+   matched residue silently substitutes .exp-flag elaborations for
+   sweep-flag ones).  memq DISPOSITIONED
    2026-07-10: its link is BIMODAL — modal 0.39-0.55s (= the 0.12
    baseline) with a 2.4-9.9s tail at ~13% (2/15 idle runs, same
    binary/.bir); TRS_JIT_TIME isolates the tail to "trs aot: ir

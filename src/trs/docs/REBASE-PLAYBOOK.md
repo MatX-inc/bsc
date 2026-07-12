@@ -60,7 +60,14 @@ audit; canonicalization five expect ZERO golden churn.
 
 ## Two immediately-actionable discoveries (pre-rebase safe)
 
-1. encExpr BACKLOG IS UNBLOCKED AND EASY: the port model (ATuple/
+1. DONE 2026-07-12 (all 14 converted to byte-parity PASS; the fix
+   needed two MORE layers than predicted: argInputPorts per-port arg
+   expansion at ACall/AMethCall — the rc3 adaptation had flattened
+   callee inputs per PORT while callers sent per-ARG values — and
+   trs-side EmitFail routing so post-trial-lower ineligibility
+   degrades to interp instead of hard-failing; 4 designs run interp
+   pending compiled MethValue support).  Original analysis:
+   the port model (ATuple/
    ATupleSel/ATTuple, vf_outputs) is ALREADY in our tree.  The
    HANDOFF repro "(s.getBar TUPLE_...)[3]" is ATupleSel hitting the
    encExpr internalError fallthrough (SimExportIR.hs:1216).  Fix:
@@ -76,7 +83,10 @@ audit; canonicalization five expect ZERO golden churn.
    post-rebase parity baseline.  trs-only file = zero rebase risk.
    Upstream "part 4" (first-class Bluesim tuples) does not exist;
    keep the ("port", encW32 0) P0 TODO as the seed for later.
-2. BOOMERANG AUDIT (before the -c/-e split ships): our own
+2. DONE 2026-07-12 (audited: 4 of 5 sites already canonical —
+   string-keyed or absorbed by set semantics; the one real leak was
+   method_order (Set (AId, AId)), now cmpIdByName-sorted at
+   serialization).  Original analysis: our own
    SimExportIR.hs S.toList sites (395, 398, 500, 760, 877) — if any
    set is AId-keyed, .bir bytes inherit run-dependent
    interned-FString Ord (SpeedyString counter), the same class
