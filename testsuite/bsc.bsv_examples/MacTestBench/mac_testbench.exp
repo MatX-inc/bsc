@@ -1,14 +1,23 @@
 if { $vtest == 1 && [isPositiveReset] == 0} {
 
 compile_verilog_pass  TbEnv.bsv mkTbEnv -let-gen
+# The imported third-party ethernet IP (eth_wishbone.v, Verilog-2001)
+# uses the SystemVerilog keyword `do' as an identifier; Verilator parses
+# SV by default and fails at parse ("'do' is a SystemVerilog keyword
+# misused as an identifier"), so the design cannot be built.  The IP is
+# not ours to rename.
+verinorun verilator "imported Verilog-2001 IP eth_wishbone.v uses SV keyword 'do' as an identifier (parse error)"
 link_verilog_pass {mkTbEnv.v} mkTbEnv
 sim_verilog mkTbEnv "+receive +transmit"
 compare_file mkTbEnv.out mkTbEnv.out.expected
+verinorun_end
 
 compile_verilog_pass  SimpleSwitch.bsv
+verinorun verilator "imported Verilog-2001 IP eth_wishbone.v uses SV keyword 'do' as an identifier (parse error)"
 link_verilog_pass {mkSimpleSwitch.v} mkSimpleSwitch
 sim_verilog mkSimpleSwitch "+receive +transmit"
 compare_file mkSimpleSwitch.out mkSimpleSwitch.out.expected
+verinorun_end
 
 }
 
