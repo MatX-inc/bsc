@@ -294,3 +294,20 @@ commit 3 is MatX-specific except filter-testdirs/TESTDIRS (upstreamable separate
 - matx-release DISPATCHED on the branch ref with verilator_mode=observe (the shakedown):
   run 29269261906. Next: reconcile CI-vs-local manifest deltas from its ledger, commit,
   then the release dispatch at ratchet → matx-prerelease with the green run id.
+
+## DOWNSTREAM BRANCHES (shakedown finding, 2026-07-13 ~10:5x)
+Ravi flagged bsc-contrib/bdw failures in the observe run; investigation showed the branch
+match WORKED ("Checking out user's branch" at the recorded hashes d5b6a2c/1cff4e4) — the
+failures were CONTENT: goldens on the downstream release branches predate rc4's .ba-chatter
+changes (988 -g/-c/-e rework). Two regold classes, reproduced + fixed locally against the
+rc4 inst and pushed:
+- bsc-contrib @ f4dcea0: TestSched_VectorFIFOF sched-out golden minus the "Elaborated
+  module file created" line (full testing tree revalidated: 232 PASS / 0 FAIL).
+- bdw @ 3859991: link/simulate_via_verilog goldens minus the S0099 "No elaboration file"
+  4-line warning block ×2 (positive_tests revalidated green; the macos leg passed because
+  those tests don't run there).
+NOTE: these jobs GATE the run conclusion (no continue-on-error), so the observe run will
+conclude failure from the pre-fix jobs — expected; the release dispatch picks up the fixed
+branches. GOTCHA (contrib/bdw leaf Makefiles): leaf `make check` runs runtest twice; the
+second bare invocation overwrites testrun.sum with an empty one when the first was all
+green — judge leaf reruns by EXIT CODE, not the sum.
