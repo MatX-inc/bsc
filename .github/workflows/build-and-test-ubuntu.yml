@@ -23,6 +23,10 @@ on:
         required: false
         default: false
         type: boolean
+      matx_verilator_gating:
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build-ubuntu:
@@ -297,6 +301,80 @@ jobs:
           echo "::warning::Verilator testsuite failed on ${{ inputs.os }} (informational only)"
           echo "Verilator testsuite failed on ${{ inputs.os }} (informational only)" \
                >> "$GITHUB_STEP_SUMMARY"
+
+  # GATING (no continue-on-error): runs the Verilog testsuite under the
+  # exact Verilator build MatX deploys (the MatX-inc/verilator release),
+  # so a red job here means the release disagrees with the simulator we
+  # actually ship.  Distinct from the informational legs above, which
+  # bracket upstream/apt versions.  The release tag is pinned below;
+  # bump it when the deployed Verilator changes.
+  test-ubuntu-verilator-matx:
+    name: "Test MatX Verilator (gating) ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 360
+    needs: build-ubuntu
+    if: inputs.matx_verilator_gating
+    env:
+      MATX_VERILATOR_RELEASE: build-20260701_1
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+
+      - name: Install MatX Verilator (deploy build)
+        shell: bash
+        run: |
+          ASSET="verilator-linux-x86_64-${MATX_VERILATOR_RELEASE#build-}.tar.gz"
+          curl -sSfL "https://github.com/MatX-inc/verilator/releases/download/${MATX_VERILATOR_RELEASE}/${ASSET}" \
+               | tar xz -C "$HOME"
+          echo "$HOME/inst/bin" >> "$GITHUB_PATH"
+          # The release's verilated.mk bakes the build host's python
+          # (python3.11); shim it to whatever python3 the runner has
+          mkdir -p "$HOME/pyshim"
+          ln -sf "$(command -v python3)" "$HOME/pyshim/python3.11"
+          echo "$HOME/pyshim" >> "$GITHUB_PATH"
+
+      - name: Download bsc
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.os }} ghc-${{ inputs.ghc_version }} build
+      - name: Install bsc
+        run: "tar xzf inst.tar.gz"
+
+      - name: CCache cache files
+        uses: actions/cache@v5
+        with:
+          path: ${{ GITHUB.WORKSPACE }}/ccache
+          key: test-verilator-matx-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          restore-keys: |
+            test-verilator-matx-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
+
+      - name: Run testsuite with MatX Verilator
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+        run: |
+          ccache --zero-stats --max-size 500M
+          export PATH=/usr/lib/ccache:$PATH
+
+          export LINKER=lld
+          export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+          export CXXFLAGS="-O0"
+
+          trap ./testsuite/archive_logs.sh EXIT
+
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+          verilator --version
+
+          make -j ${CORES} -C testsuite checkparallel \
+               TEST_BSC_VERILOG_SIM=verilator CTEST=0 SYSTEMCTEST=0
+
+      - name: CCache stats
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+        run: ccache --show-stats
 
       # Save test logs on failure so we can diagnose
       # (also on a tolerated failure, where failure() stays false)
