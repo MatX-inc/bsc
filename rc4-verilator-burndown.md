@@ -276,3 +276,21 @@ commit 3 is MatX-specific except filter-testdirs/TESTDIRS (upstreamable separate
 - .vlt suppressions forbidden (reverted before; fatal lint is the enforcement).
 - grep -r --include misbehaves in this env; use find|xargs grep.
 - awk: `exp` is a reserved builtin — don't use it as a variable name.
+
+## SHIPPED (2026-07-13 ~10:0x local)
+- iverilog parity suite GREEN: **23,600 PASS / 0 FAIL / 0 UNSUPPORTED, make exit 0**
+  (+11 net additive checks vs the 23,589 pre-burn-down baseline; zero regressions).
+  NOTE: two earlier parity attempts died externally (Claude session restart killed the
+  first at 11,336/0/0; machine REBOOT killed the second at ~11,917/0/0 and wiped the
+  tmpfs verilator install — re-fetch from MatX-inc/verilator when next needed).
+- Golden legality audit (Ravi's ordering question): 64 goldens mechanically classified —
+  36 additions-only, 6 tail-truncations (cut-at-$finish; values verified by direct vexe
+  runs), 20 content-changes (X-init/$random-self-checking/display formatting/time-0
+  gating), 1 interior-line (Gating time-0 sample), 1 pure PERMUTATION (interfacecalls
+  bug-expected XFAIL variant — legal intra-timestep $display interleave). No unexplained
+  value difference goldened.
+- COMMITTED as 86c1a713 (machinery) / 4baa7b94 (triage) / fdd965e6 (CI) / 60a046f4 (docs);
+  branch at 227 commits; PUSHED to MatX-inc/bsc release-2026.07.rc4 (first push).
+- matx-release DISPATCHED on the branch ref with verilator_mode=observe (the shakedown):
+  run 29269261906. Next: reconcile CI-vs-local manifest deltas from its ledger, commit,
+  then the release dispatch at ratchet → matx-prerelease with the green run id.
