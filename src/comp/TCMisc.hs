@@ -590,6 +590,7 @@ sat dvs ps solved pool p =
                   case result of
                     SolveResult [] sbs s_final solved' -> do
                       recordPackageUse mpkg
+                      recordATFs s_final
                       return (SatResult [] sbs s_final Provisional solved')
                     SolveResult needed sbs s_final solved' -> do
                       -- A coherent match whose context is not yet satisfied:
@@ -653,38 +654,6 @@ sat dvs ps solved pool p =
                     when (allowIncoherent c /= Just True) $
                       twarn (pos, WIncoherentMatch (pfpString vp_pred) (pfpString inst_pred))
                     return (SatResult [] sbs' s_final Provisional solved')
-                  SolveResult needed sbs s_final solved' -> do
-                    -- A coherent match whose context is not yet satisfied:
-                    -- under ordered-clause fundep semantics no other
-                    -- instance can ever satisfy this predicate, so the
-                    -- choice is final and the caller may commit to it --
-                    -- unless an in-scope given (which is not an instance)
-                    -- could still discharge the predicate whole after
-                    -- refinement.  "solved" dictionaries are deliberately
-                    -- not consulted here: they are instance evidence, so
-                    -- they cannot contradict the instance choice.
-                    commitment <-
-                      if legacyDeferInstances
-                      then return Provisional
-                      else do
-                        stack_eps <- getExplPreds
-                        let p_pred = apSub s_final (toPred p)
-                            givens = concatMap bySuperE (ps ++ stack_eps)
-                            -- Modal check, so unify unguarded ([]): a
-                            -- given from an enclosing frame quantifies
-                            -- over its own rigid variables, which are
-                            -- distinct TyVars from (but instantiable
-                            -- to) this definition's; the bound-variable
-                            -- guards would hide such a given and let
-                            -- the commit freeze an instance reduction
-                            -- the outer given was meant to discharge
-                            -- whole.
-                            unifiable (EPred _ gp) =
-                                predUnify [] p_pred gp
-                        return (if any unifiable givens
-                                then Provisional else Committable)
-                    when (commitment == Committable) $ recordPackageUse mpkg
-                    return (SatResult needed sbs s_final commitment solved')
               bad_match -> fail ("sat incoherent disallowed: " ++ ppReadable bad_match)
        decrementSatStack
        return return_val
