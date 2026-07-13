@@ -31,9 +31,19 @@ mkdir vd
 compile_verilog_pass Top.bsv {} {-vdir vd}
 link_verilog_pass {} mkTop {-vsearch +:vlib -vdir vd}
 move mkTop.bsc-vcomp-out vlog_build.out
-compare_file vlog_build.out
+# Under verilator, bsc's link stage passes the verilator/make build
+# transcript through to stdout (walltime figures, a PID-suffixed
+# obj_dir_mkTop.vexe_<pid> path, and absolute include paths), so the
+# build log is unstable per-run and cannot be captured in a golden.
+# XFAIL keyed on verilator until bsc learns to quiet the vsim link.
+check_verilog_output vlog_build.out vlog_build.out.expected {verilator}
 sim_verilog mkTop {}
 move mkTop.out vlog_sim.out
-compare_file vlog_sim.out
+# Verilator orders same-timestamp $display blocks differently from
+# iverilog (sub1 before sub3 in each cycle) and executes $finish ahead
+# of the final sub3 display in the last cycle; per-instance display
+# value sequences are identical.  Validated exactly by the sim-keyed
+# golden vlog_sim.out.expected.verilator.
+check_verilog_output vlog_sim.out vlog_sim.out.expected ""
 
 }

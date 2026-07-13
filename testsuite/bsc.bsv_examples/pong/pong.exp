@@ -1,9 +1,22 @@
+# There is no module named `sysPong': the real top is the hand-written
+# FPGA module `pong' (pong.v).  iverilog tolerates that (it auto-roots
+# the hierarchy and uses the name only for the output binary), but
+# verilator cannot build this design: bsc_build_vsim_verilator must
+# name a real module for --top-module (it searches for <top>.v), and
+# its generic sim_main.cpp harness requires the BSC CLK/RST_N port
+# convention, which `pong' (internally generated reset, no RST_N port)
+# does not follow.  Verified 2026-07-13: verilation of the full design
+# with --top-module pong succeeds; the sim_main.cpp compile then fails
+# on the missing RST_N member.  Not a bsc bug.
+
 # version 0
 copy TopLevel0.bsv TopLevel.bsv
 copy Ball0.bsv Ball.bsv
 copy Island0.bsv Island.bsv
 compile_verilog_pass TopLevel.bsv mkTopLevel "+RTS -K10M -RTS"
+verinorun verilator "hand-written top `pong' (named sysPong by this test) lacks the CLK/RST_N convention required by verilator's sim_main.cpp link harness"
 link_verilog_no_main_pass {pong.v mkTopLevel.v kbscan.v reset.v} sysPong
+verinorun_end
 copy TopLevel.bsv.bsc-vcomp-out TopLevel0.bsv.bsc-vcomp-out 
 copy sysPong.bsc-vcomp-out sysPong0.bsc-vcomp-out 
 erase mkTopLevel.v
@@ -14,7 +27,10 @@ copy TopLevel1.bsv TopLevel.bsv
 copy Ball1.bsv Ball.bsv
 copy Island1.bsv Island.bsv
 compile_verilog_pass TopLevel.bsv mkTopLevel "+RTS -K10M -RTS"
+# see the comment above version 0
+verinorun verilator "hand-written top `pong' (named sysPong by this test) lacks the CLK/RST_N convention required by verilator's sim_main.cpp link harness"
 link_verilog_no_main_pass {pong.v mkTopLevel.v kbscan.v reset.v} sysPong
+verinorun_end
 copy TopLevel.bsv.bsc-vcomp-out TopLevel1.bsv.bsc-vcomp-out 
 copy sysPong.bsc-vcomp-out sysPong1.bsc-vcomp-out 
 erase mkTopLevel.v
@@ -25,7 +41,10 @@ copy TopLevel2.bsv TopLevel.bsv
 copy Ball2.bsv Ball.bsv
 copy Island2.bsv Island.bsv
 compile_verilog_pass TopLevel.bsv mkTopLevel "+RTS -K10M -RTS"
+# see the comment above version 0
+verinorun verilator "hand-written top `pong' (named sysPong by this test) lacks the CLK/RST_N convention required by verilator's sim_main.cpp link harness"
 link_verilog_no_main_pass {pong.v mkTopLevel.v kbscan.v reset.v} sysPong
+verinorun_end
 copy TopLevel.bsv.bsc-vcomp-out TopLevel2.bsv.bsc-vcomp-out 
 copy sysPong.bsc-vcomp-out sysPong2.bsc-vcomp-out 
 # testsuite clean should handle this
