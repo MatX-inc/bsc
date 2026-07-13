@@ -6,6 +6,23 @@
 
 if { $vtest == 1 } {
 
+# Under Verilator the Tb1/Tb2/Tb3 `link_verilog_no_main_pass' checks
+# cannot work: bsc_build_vsim_verilator has no link-without-main flow
+# (its own XXX comment says so) -- its sim_main.cpp driver
+# unconditionally drives CLK/RST_N on the top module, but these
+# self-contained `module TbN();' testbenches have no ports at all.
+# (Tb3 additionally trips fatal CASEOVERLAP: it ties every method
+# enable to constant 1, and Verilator constant-propagates that into
+# the scheduler-guaranteed `case (1'b1) // synopsys parallel_case'
+# method mux of mkSmallTest3.v -- a lint artifact of the port-name-
+# check stimulus, not a design bug.)  The renaming content is still
+# checked: Tb1/Tb2 verilate cleanly against their mkSmallTestN.v, and
+# the compile and string checks below still run.  The sysSmall5 link
+# below stays live: its top is BSC-generated (self-named .v file with
+# CLK/RST_N ports), which the no-main flow does handle.
+# iverilog links (and the rest of the suite) are unaffected.
+verinorun verilator "bsc_build_vsim_verilator has no link-without-main flow (port-less hand-written top: sim_main.cpp needs a CLK/RST_N-ported top module)"
+
 compile_object_pass Small1.bsv
 compile_verilog_pass Small1.bsv
 link_verilog_no_main_pass {Tb1.v mkSmallTest1.v} Tb1
@@ -19,6 +36,8 @@ compile_object_pass Small3.bsv
 compile_verilog_pass Small3.bsv
 link_verilog_no_main_pass {Tb3.v mkSmallTest3.v} Tb3
 string_does_not_occur  mkSmallTest3.v AR_RDYenq2
+
+verinorun_end
 
 compile_object_pass Small5.bsv
 compile_verilog_pass Small5.bsv

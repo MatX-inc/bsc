@@ -32,6 +32,15 @@ if {$ctest == 1} {
                                       -c "main.top.counter.SETF becomes 0 @610" }
 }
 
+# These designs call $dumpfile/$dumpvars themselves.  Verilator's runtime
+# requires Verilated::traceEverOn(true) before time 0 for that, but bsc's
+# sim_main.cpp only calls it when the harness requests a dump (+bscvcd /
+# +bscfst) -- so the plain simulation aborts at the $dumpvars.  (The
+# harness-driven VCD arm of these very tests passes under verilator,
+# which isolates the gap to the missing traceEverOn call.)  Remove these
+# spans when sim_main.cpp enables tracing unconditionally.
+verinorun verilator {design-initiated $dumpvars aborts: sim_main.cpp calls Verilated::traceEverOn only under +bscvcd}
 test_c_veri_bsv VCDTest1
 
 test_c_veri_bsv VCDTest2
+verinorun_end
