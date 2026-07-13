@@ -2211,6 +2211,7 @@ vModuleDeclVIds vmod =
     go (VMRegGroup i _ _ it) = i : go it
     go (VMGroup _ itss)      = concatMap (concatMap go) itss
     go (VMFunction (VFunction n _ decls _)) = n : concatMap declVIds decls
+    go (VMDPI (VDPI n _ _ _ args)) = n : [ a | (a, _, _) <- args ]
     declVIds :: VVDecl -> [VId]
     declVIds (VVDecl _ _ vs) = map vvName vs
     declVIds (VVDWire _ v _) = [vvName v]

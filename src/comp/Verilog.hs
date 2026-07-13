@@ -358,6 +358,12 @@ instance Ord VMItem where
          compare (VMRegGroup _ _ _ x) y                    = compare x y
          compare x                    (VMRegGroup _ _ _ y) = compare x y
 
+         -- DPI imports are declared at module scope ahead of
+         -- everything else, so they sort first
+         compare (VMDPI _) (VMDPI _)                = EQ
+         compare (VMDPI _) _                        = LT
+         compare _         (VMDPI _)                = GT
+
          compare (VMDecl dl) (VMDecl dr)            = compare dl dr
          compare (VMDecl  _) _                      = LT
 
