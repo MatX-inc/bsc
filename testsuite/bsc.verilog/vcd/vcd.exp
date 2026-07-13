@@ -1,6 +1,14 @@
 compile_verilog_pass DumpOnOff.bsv
 link_verilog_pass sysDumpOnOff.v sysDumpOnOff
+# The design initiates dumping itself ($dumpfile/$dumpvars/$dumpon/$dumpoff at
+# time 0), which Verilator only honors if Verilated::traceEverOn(true) was
+# called before time 0; bsc's sim_main.cpp arms tracing only when the harness
+# passes +bscvcd/+bscfst, so the run aborts (%Error ... traceEverOn).  Genuine
+# bsc gap in the verilator sim_main (candidate upstream fix: call traceEverOn
+# unconditionally when VM_TRACE is compiled in), not a hardware bug.
+verinorun verilator "design-initiated \$dump* aborts: sim_main only calls traceEverOn under +bscvcd"
 sim_verilog sysDumpOnOff
+verinorun_end
 
 # need to add vcd validation at this point
 

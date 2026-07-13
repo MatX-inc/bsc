@@ -1,4 +1,10 @@
 set here [file join [absolute $srcdir] $subdir]
 source $here/../common.tcl
 
+# This test drives 'bz onto test_expr (ConvertToZ) and expects the OVL
+# X-check to fire ("test_expr contains X or Z" via test_expr^test_expr).
+# Under 2-state verilator X/Z do not exist, so x^x self-detection is
+# identically 0 and the assertion can never fire, by design.
+verinorun verilator "X/Z-detection test: 2-state verilator has no X/Z, so assert_never_unknown_async can never fire"
 test_ovl  assertNeverUnknownAsync2  assert_never_unknown_async.vlib
+verinorun_end
