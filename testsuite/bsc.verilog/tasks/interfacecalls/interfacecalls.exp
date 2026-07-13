@@ -17,7 +17,12 @@ if {$vtest == 1} {
   compare_file_bug sysInterfaceTaskCalls.sysBar.v.out sysInterfaceTaskCalls.out.expected 215
   # Check that the wrong order is at least the same wrong order as it has
   # always been (otherwise, a change in sim output could go undetected)
-  compare_file sysInterfaceTaskCalls.sysBar.v.out sysInterfaceTaskCalls.sysBar.v.out.bug-expected
+  # (check_verilog_output, so that a simulator-keyed golden can record
+  # each simulator's arbitrary block ordering: verilator schedules the
+  # sysBar always block (the method tasks) before the parent's, iverilog
+  # the reverse -- same five lines, same values, permuted; see
+  # sysInterfaceTaskCalls.sysBar.v.out.bug-expected.verilator.)
+  check_verilog_output sysInterfaceTaskCalls.sysBar.v.out sysInterfaceTaskCalls.sysBar.v.out.bug-expected ""
 }
 
 # Test Blueim with synthesis boundary

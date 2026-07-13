@@ -1,5 +1,5 @@
 
-proc check_ats { filename_root } {
+proc check_ats { filename_root {options ""} } {
     global vtest
 
     if {$vtest == 1} {
@@ -9,12 +9,15 @@ proc check_ats { filename_root } {
 	# Ignore PreludeBSV line number changes
 	set ere_options { -e s/VRWire\[0-9\]\+/VRWireNNNN/g }
 
-	compile_verilog_pass $filename {} {-dATS}
+	compile_verilog_pass $filename {} "-dATS $options"
 	compare_file_filter_ids $output {} {} $ere_options
     }
 }
 
-check_ats FFunc
+# -no-use-dpi pins the VPI wrapper flavor whose "VPI wrapper files
+# created" message is part of the expected output (the harness implies
+# -use-dpi under verilator, which prints no such line)
+check_ats FFunc {-no-use-dpi}
 check_ats Method
 check_ats MethodActionValue
 check_ats MethodRead

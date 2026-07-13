@@ -3,11 +3,23 @@ compile_verilog_pass  DMAC.bsv
 compile_verilog_pass  Slave.bsv
 
 if { $vtest == 1 } {
+    # The design is driven by the hand-written event-driven testbench
+    # amba_tb.v (`always #4' clock generator, delay-based stimulus in
+    # initial blocks), which requires event timing that
+    # bsc_build_vsim_verilator deliberately disables (--timing).  The
+    # nominal toplevel `sysAmbaDmac' also names no Verilog module (the
+    # real top is `amba_tb'), so Verilator's build script cannot locate
+    # a top file; iverilog needs no top name (it elaborates all root
+    # modules) and runs the testbench fine.
+    verinorun verilator "hand-written event-driven testbench (amba_tb.v `always #4' clock) needs --timing; toplevel `sysAmbaDmac' names no Verilog module"
+
     link_verilog_no_main_pass \
 	{ mkDMAC.v mkSlave.v ahb_bus.v ahb_default.v ahb_ram.v ram_1024x32.v amba_tb.v} \
 	sysAmbaDmac
 
-    sim_verilog sysAmbaDmac 
+    sim_verilog sysAmbaDmac
 
     compare_file_bug sysAmbaDmac.out "" "Rob_Brown"
+
+    verinorun_end
 }

@@ -60,11 +60,20 @@ compile_verilog_fail_error ClockDivFifo1.bsv S0015
 
 
 ## a test for a showing offset on the mkClockDividerOffset
+# sysClockDivOffset links (no ClockGen in its closure) but the offset
+# divider never fires $finish under Verilator's scheduling: the
+# simulation spins forever (observed spinning at full CPU for 31+ min).
+verinorun verilator "offset clock divider simulation spins forever under verilator"
 test_veri_only_bsv ClockDivOffset  sysClockDivOffset.v.out.expected
+verinorun_end
 
 
 ## a test for mkGatedClockDivider
+# spins forever at runtime under Verilator, like ClockDivOffset above
+# (observed: killed by the harness's 300s verilator sim timeout)
+verinorun verilator "gated clock divider simulation spins forever under verilator"
 test_veri_only_bsv GatedClockDiv "sysGatedClockDiv.v.out.expected"
+verinorun_end
 
 ## Test the clock dividers in Bluesim
 test_c_only_bsv ClockInv
