@@ -1,5 +1,23 @@
 
-test_c_veri ShallowSplit
+# The MatX-deployed Verilator (5.048) miscompiles a constant part-select that
+# does not reach the operand's top bit when it appears as a $display/$write
+# argument: the emitted VL_WRITEF passes the unmasked parent value with the
+# field's bit width (e.g. `'~',8,(IData)(theFoo)` for $signed(theFoo[7:0]) of a
+# 16-bit reg -- shift applied for nonzero lsb, mask dropped), and the runtime's
+# %d path (VL_EXTENDS_QQ) assumes clean upper bits, so the whole parent prints:
+# expected `y=  88' prints `y=19800' (= {77,88}); a 32-bit vector reg prints
+# W[31:lsb] per element instead of W[lsb+7:lsb].  Bluesim, iverilog and stock
+# Verilator 5.032 all agree on the expected values from the same .v, so this is
+# a Verilator regression, not a bsc bug -- XFAIL the output compare under
+# verilator only.  Keyed on the active sim (not a bare veribug) so that every
+# other simulator's checks, including the sim-executes PASSes, are untouched.
+if { [info exists verilog_compiler] && [string match $verilog_compiler "verilator"] } {
+    set dispsel_veribug {verilator}
+} else {
+    set dispsel_veribug ""
+}
+
+test_c_veri ShallowSplit "" "" $dispsel_veribug
 if { $vtest == 1 } {
     find_regexp mkShallowSplitTest.v {input  \[7 : 0\] putFoo_1_x;}
     find_regexp mkShallowSplitTest.v {input  \[15 : 0\] PUT_BAR_1_z;}
@@ -22,7 +40,7 @@ if { $vtest == 1 } {
     find_regexp mkShallowSplitTest.v {update_1_x -> update_v}
 }
 
-test_c_veri DeepSplit
+test_c_veri DeepSplit "" "" $dispsel_veribug
 if { $vtest == 1 } {
     find_regexp mkDeepSplitTest.v {input  \[7 : 0\] putFoo_1_x;}
     find_regexp mkDeepSplitTest.v {input  PUT_BAR_1_v_2;}
@@ -270,7 +288,9 @@ if { $vtest == 1 } {
 
 # SplitVector also delegates the standard Vector instances (Functor, Applicative,
 # Foldable, Traversable, Bounded, Eq, Bits, PrimSelectable, PrimUpdateable, FShow).
-test_c_veri SplitVectorOps
+# (dispsel_veribug: the `reg:'/`upd1' lines print $signed(reg_sv[k*8+7:k*8]) --
+# the Verilator 5.048 dropped-mask display bug described above.)
+test_c_veri SplitVectorOps "" "" $dispsel_veribug
 
 # ----------
 
