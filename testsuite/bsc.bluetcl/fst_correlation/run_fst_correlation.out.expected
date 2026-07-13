@@ -171,6 +171,7 @@
     syncfifo$sD_IN : Maybe#(WireTypes::Pixel)
     syncfifo$sENQ : Bool
     syncfifo$sFULL_N : Bool
+  Verilog module type at main.top.dut: mkWireTypes OK
 === Bluesim ===
   hits:    86
   matched wires (sorted):
@@ -248,6 +249,7 @@
     simplePulse : Bool
     mpxProbe$PROBE : Maybe#(WireTypes::Pixel)
     pxProbe$PROBE : WireTypes::Pixel
+  Bluesim module type at main.top.dut: mkWireTypes OK
 
 ##### module: mkPixelStash  @  main.top.dut.leafA #####
 === Verilog ===
@@ -283,6 +285,7 @@
     q$EMPTY_N : Bool
     q$ENQ : Bool
     q$FULL_N : Bool
+  Verilog module type at main.top.dut.leafA: mkPixelStash OK
 === Bluesim ===
   hits:    13
   matched wires (sorted):
@@ -298,6 +301,7 @@
     q.ENQ : Bool
     q.FULL_N : Bool
     q.RST : Reset
+  Bluesim module type at main.top.dut.leafA: mkPixelStash OK
 
 ##### module: mkPixelStash  @  main.top.dut.leafB #####
 === Verilog ===
@@ -333,6 +337,7 @@
     q$EMPTY_N : Bool
     q$ENQ : Bool
     q$FULL_N : Bool
+  Verilog module type at main.top.dut.leafB: mkPixelStash OK
 === Bluesim ===
   hits:    13
   matched wires (sorted):
@@ -348,6 +353,7 @@
     q.ENQ : Bool
     q.FULL_N : Bool
     q.RST : Reset
+  Bluesim module type at main.top.dut.leafB: mkPixelStash OK
 
 ##### module: mkAnnotStash  @  main.top.dut.annot #####
 === Verilog ===
@@ -379,6 +385,7 @@
     seen$EN : Bool
     ticks$D_IN : Bit#(8)
     ticks$EN : Bool
+  Verilog module type at main.top.dut.annot: mkAnnotStash OK
 === Bluesim ===
   hits:    14
   matched wires (sorted):
@@ -395,9 +402,11 @@
     q.RST : Reset
     seen : Bit#(8)
     ticks : Bit#(8)
+  Bluesim module type at main.top.dut.annot: mkAnnotStash OK
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 398
+  total FST hits across all (module, scope) pairs: 398
+  module types recorded for all (module, scope) pairs: yes
 RESULT: PASS
 
 ##### module: mkSplitPortsTest  @  main.top.dut #####
@@ -444,6 +453,7 @@ RESULT: PASS
     last_header$EN : Bool
     last_inner$D_IN : SplitPortsTest::Inner
     last_inner$EN : Bool
+  Verilog module type at main.top.dut: mkSplitPortsTest OK
 === Bluesim ===
   hits:    15
   matched wires (sorted):
@@ -461,9 +471,11 @@ RESULT: PASS
     inflight.RST : Reset
     last_header : SplitPortsTest::Header
     last_inner : SplitPortsTest::Inner
+  Bluesim module type at main.top.dut: mkSplitPortsTest OK
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 56
+  total FST hits across all (module, scope) pairs: 56
+  module types recorded for all (module, scope) pairs: yes
 RESULT: PASS
 
 ########## variant: kib (Verilog -keep-inlined-boundaries; Bluesim is flag-agnostic) ##########
@@ -670,6 +682,7 @@ RESULT: PASS
     syncfifo$sD_IN : Maybe#(WireTypes::Pixel)
     syncfifo$sENQ : Bool
     syncfifo$sFULL_N : Bool
+  Verilog module type at main.top.dut: mkWireTypes OK
 === Bluesim ===
   hits:    86
   matched wires (sorted):
@@ -747,6 +760,7 @@ RESULT: PASS
     simplePulse : Bool
     mpxProbe$PROBE : Maybe#(WireTypes::Pixel)
     pxProbe$PROBE : WireTypes::Pixel
+  Bluesim module type at main.top.dut: mkWireTypes OK
 
 ##### module: mkPixelStash  @  main.top.dut.leafA #####
 === Verilog ===
@@ -782,6 +796,7 @@ RESULT: PASS
     q$EMPTY_N : Bool
     q$ENQ : Bool
     q$FULL_N : Bool
+  Verilog module type at main.top.dut.leafA: mkPixelStash OK
 === Bluesim ===
   hits:    13
   matched wires (sorted):
@@ -797,6 +812,7 @@ RESULT: PASS
     q.ENQ : Bool
     q.FULL_N : Bool
     q.RST : Reset
+  Bluesim module type at main.top.dut.leafA: mkPixelStash OK
 
 ##### module: mkPixelStash  @  main.top.dut.leafB #####
 === Verilog ===
@@ -832,6 +848,7 @@ RESULT: PASS
     q$EMPTY_N : Bool
     q$ENQ : Bool
     q$FULL_N : Bool
+  Verilog module type at main.top.dut.leafB: mkPixelStash OK
 === Bluesim ===
   hits:    13
   matched wires (sorted):
@@ -847,6 +864,7 @@ RESULT: PASS
     q.ENQ : Bool
     q.FULL_N : Bool
     q.RST : Reset
+  Bluesim module type at main.top.dut.leafB: mkPixelStash OK
 
 ##### module: mkAnnotStash  @  main.top.dut.annot #####
 === Verilog ===
@@ -878,6 +896,7 @@ RESULT: PASS
     seen$EN : Bool
     ticks$D_IN : Bit#(8)
     ticks$EN : Bool
+  Verilog module type at main.top.dut.annot: mkAnnotStash OK
 === Bluesim ===
   hits:    14
   matched wires (sorted):
@@ -894,9 +913,11 @@ RESULT: PASS
     q.RST : Reset
     seen : Bit#(8)
     ticks : Bit#(8)
+  Bluesim module type at main.top.dut.annot: mkAnnotStash OK
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 429
+  total FST hits across all (module, scope) pairs: 429
+  module types recorded for all (module, scope) pairs: yes
 RESULT: PASS
 
 ##### module: mkSplitPortsTest  @  main.top.dut #####
@@ -943,6 +964,7 @@ RESULT: PASS
     last_header$EN : Bool
     last_inner$D_IN : SplitPortsTest::Inner
     last_inner$EN : Bool
+  Verilog module type at main.top.dut: mkSplitPortsTest OK
 === Bluesim ===
   hits:    15
   matched wires (sorted):
@@ -960,14 +982,10 @@ RESULT: PASS
     inflight.RST : Reset
     last_header : SplitPortsTest::Header
     last_inner : SplitPortsTest::Inner
+  Bluesim module type at main.top.dut: mkSplitPortsTest OK
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 56
+  total FST hits across all (module, scope) pairs: 56
+  module types recorded for all (module, scope) pairs: yes
 RESULT: PASS
 
-########## annotated-method phantom check (annot instance) ##########
-no-phantom: annot$EN_tick absent
-no-phantom: annot$RDY_tick absent
-no-phantom: annot$RDY_count absent
-present: annot$EN_push
-present: annot$RDY_push
