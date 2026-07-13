@@ -418,3 +418,22 @@ held out for process/risk (102-file unreviewed 3-layer stack). Full assessment i
   fingerprint/liftDicts) don't touch them; branches current as-is. checkout_possible_branch matches
   by name on PUSH events only — trigger matx-release by pushing the branch, never workflow_dispatch
   (dispatch silently falls back to B-Lang-org defaults). Toooba unmatched → bluespec/Toooba default.
+- VERILATOR BASELINE (attempt 6, in flight): harness gap found — NOTHING implies -use-dpi under
+  verilator (vcomp_flags empty; only iverilog gets derived flags), so all BDPI tests take the VPI
+  path and verilator's link hard-rejects → the whole bsc.codegen/foreign class is harness, not
+  divergence. Fix = derive -use-dpi for verilator at BOTH compile and link (wrapper flavor is chosen
+  at COMPILE — BDPI is the one class where sim choice reaches the bsc compile; multi-vsim plan must
+  special-case it: per-sim compile or always-DPI). -system-verilog-output must NOT be implied
+  (golden avalanche); per-test only. Verilator-keyed "don't try" interlocks barely exist (b925 +
+  990s) — the iverilog quirk list has no verilator counterpart; this baseline writes it.
+  NOTE the interlock: implying -use-dpi is only safe because the batch fixed the VMDPI crash.
+- INFINITELOOP CORRECTION (Ravi's call, confirmed): the fatal lint was a CORRECT interlock, not
+  noise — the flagged designs (mostly MCD: derived-clock generators needing --timing, which the
+  harness rightly disables via --no-timing) genuinely SPIN under verilator. My suppression converted
+  clean link-failures into hung sims (cores spinning; run killed). Suppression REVERTED (both .vlt
+  copies pristine). The ~60 INFINITELOOP sites from the attempt-4 logs enumerate the DON'T-RUN
+  interlock list. Verilator burn-down now well-defined: (a) imply -use-dpi under verilator
+  (compile+link harness derivation); (b) sim-keyed SKIP interlocks for the MCD/timing class
+  (fatal lint stays as enforcement); (c) triage genuine diffs (SquareRoot/FP/BRAM/fwrite/params);
+  (d) per-test -system-verilog-output where SV output is the point. GATING SEQUENCE DECISION
+  PENDING: the committed gating job would be RED on a release run until the burn-down lands.
