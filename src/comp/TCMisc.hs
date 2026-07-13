@@ -645,7 +645,12 @@ sat dvs ps solved pool p =
                   SolveResult ps@(_:_) sbs s_final solved' -> return (SatResult ps sbs s_final Provisional solved')
                   SolveResult [] sbs s_final solved' -> do
                     recordPackageUse mpkg
-                    recordATFs s_final
+                    -- No recordATFs here: an incoherent match is an
+                    -- information-dependent choice (the same reason the
+                    -- binding is marked so it is never frozen into the
+                    -- solved-dictionary pool), so its ATF projection must
+                    -- not be recorded where the .bo cache would deliver
+                    -- it to importing compiles as if it were canonical.
                     let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
                     let pos = getPosition $ getVPredPositions p
                     let VPred dictId _ = p
