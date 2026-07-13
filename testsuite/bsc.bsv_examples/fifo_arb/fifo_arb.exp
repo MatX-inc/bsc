@@ -15,7 +15,11 @@ compile_verilog_pass Tb1.bsv mkTb1
 link_verilog_pass {mkTb1.v mkBlock1.v} mkTb1
 sim_verilog mkTb1
 copy mkTb1.out mkTb1.v.out
-compare_file mkTb1.v.out mkTb1.out.expected
+# check_verilog_output (not bare compare_file) so that the
+# simulator-keyed golden (mkTb1.out.expected.verilator) is preferred
+# under Verilator: the design calls $dumpvars() with no $dumpfile,
+# which Verilator warns about (and ignores) on stdout.
+check_verilog_output mkTb1.v.out mkTb1.out.expected ""
 }
 
 # C simulation of Block2
@@ -35,7 +39,8 @@ compile_verilog_pass Tb2.bsv mkTb2
 link_verilog_pass {mkTb2.v mkBlock2.v} mkTb2
 sim_verilog mkTb2 
 copy mkTb2.out mkTb2.v.out
-compare_file mkTb2.v.out mkTb2.out.expected
+# see mkTb1 note: simulator-keyed golden for the $dumpvars warning
+check_verilog_output mkTb2.v.out mkTb2.out.expected ""
 }
 
 # C simulation of Block2b
@@ -52,7 +57,8 @@ compile_verilog_pass Tb2b.bsv mkTb2b
 link_verilog_pass {mkTb2b.v mkBlock2b.v} mkTb2b
 sim_verilog mkTb2b
 copy mkTb2b.out mkTb2b.v.out
-compare_file mkTb2b.v.out mkTb2b.out.expected
+# see mkTb1 note: simulator-keyed golden for the $dumpvars warning
+check_verilog_output mkTb2b.v.out mkTb2b.out.expected ""
 }
 # C simulation of Block3
 if {$ctest == 1} {
@@ -68,5 +74,6 @@ compile_verilog_pass Tb3.bsv mkTb3
 link_verilog_pass {mkTb3.v mkBlock3.v} mkTb3
 sim_verilog mkTb3
 copy mkTb3.out mkTb3.v.out
-compare_file mkTb3.v.out mkTb3.out.expected
+# see mkTb1 note: simulator-keyed golden for the $dumpvars warning
+check_verilog_output mkTb3.v.out mkTb3.out.expected ""
 }
