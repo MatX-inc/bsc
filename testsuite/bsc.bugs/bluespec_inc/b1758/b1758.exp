@@ -50,8 +50,11 @@ if { $vtest == 1 } {
 # --
 # Concrete with arguments
 
+# -no-use-dpi pins the VPI wrapper flavor that the $imported_ check
+# below asserts (the harness implies -use-dpi under verilator, which
+# would emit a plain DPI call instead)
 compile_verilog_pass ZeroBitActionValueForeignWithArgs.bsv \
-    {} {-dexpanded -dATS}
+    {} {-dexpanded -dATS -no-use-dpi}
 
 # Test that the method reference has been replaced by 0 in the evaluator
 if { $vtest == 1 } {
