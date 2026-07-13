@@ -311,3 +311,20 @@ conclude failure from the pre-fix jobs — expected; the release dispatch picks 
 branches. GOTCHA (contrib/bdw leaf Makefiles): leaf `make check` runs runtest twice; the
 second bare invocation overwrites testrun.sum with an empty one when the first was all
 green — judge leaf reruns by EXIT CODE, not the sum.
+
+## INTERLOCK DESIGN REFINEMENT (Ravi, 2026-07-13 midday): output clocks, not primitive names
+The principled refusal predicate is INTERFACE-level: "instantiates a module with an OUTPUT
+CLOCK" — knowledge that exists only in bsc (Clock is a type; VModInfo records clock ports
+and direction; BVI declares output_clock) and dies at Verilog emission ("which Verilog
+doesn't really know"). The shipped harness name-list is a .v-side approximation forced by
+rc4's harness-only constraint (and .ba availability: post-988, -verilog links may have no
+.ba — today's contrib/bdw S0099 evidence). Refinement from the burn-down data: refuse
+output clocks OUTSIDE the family of the module's input clocks (gating/muxing stay in-family
+and measurably run green; edge GENERATION — ClockGen's forever/#delay, inverters — is the
+fatal class). Even the family predicate isn't exact (pure ClockDiv makes a new family yet
+3 tests run green; ClockDivOffset spins), so the VSIM_RUN_TIMEOUT backstop stays regardless.
+UPSTREAM FOLLOW-UP SHAPE: bsc at -e link with -vsim verilator walks the loaded .ba AVInst/
+VModInfo closure and refuses out-of-family output clocks with a real diagnostic naming the
+instances (mirror of the existing VPI rejection); harness .v scan remains the degraded-mode
+path for .ba-less and hand-written Verilog; the CI UNSUPPORTED contract guards whichever
+predicate is in force.
