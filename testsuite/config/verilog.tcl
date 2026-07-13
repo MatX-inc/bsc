@@ -5,6 +5,15 @@ proc link_verilog_pass { objects toplevel {options ""}} {
     global vtest
 
     if {$vtest == 1} {
+      # each link starts a fresh evaluation of the automatic interlock
+      verinorun_auto_clear
+      if { ! [verinorun_active] } {
+          verinorun_auto_check $objects $toplevel
+      }
+      if { [verinorun_active] } {
+          verinorun_unsupported "`$objects' link to executable `$toplevel'"
+          return
+      }
       incr_stat "link_verilog_pass"
 
       if [bsc_link_verilog $objects $toplevel $options] then {
@@ -31,6 +40,14 @@ proc link_verilog_fail { objects toplevel {options ""}} {
     global vtest
 
     if {$vtest == 1} {
+      verinorun_auto_clear
+      if { ! [verinorun_active] } {
+          verinorun_auto_check $objects $toplevel
+      }
+      if { [verinorun_active] } {
+          verinorun_unsupported "`$objects' do not link to executable `$toplevel'"
+          return
+      }
       incr_stat "link_verilog_fail"
 
       if [bsc_link_verilog $objects $toplevel $options] then {
@@ -54,7 +71,7 @@ proc bsc_link_verilog { objects toplevel { options "" } } {
     cd [file join $here $subdir]
     set output [make_bsc_vcomp_output_name $toplevel]
     set vexename [make_vexe_name $toplevel]
-    set link_options "-verilog -vsim $verilog_compiler -e $toplevel -o $vexename $vcomp_flags"
+    set link_options "-verilog -vsim $verilog_compiler -e $toplevel -o $vexename [vsim_implied_bsc_flags] $vcomp_flags"
     set cmd "$bsc $link_options $options $objects >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "def_link_verilog" $cmd 2]
@@ -70,6 +87,14 @@ proc link_verilog_no_main_pass { objects toplevel { options "" } } {
     global vtest
 
     if {$vtest == 1} {
+      verinorun_auto_clear
+      if { ! [verinorun_active] } {
+          verinorun_auto_check $objects $toplevel
+      }
+      if { [verinorun_active] } {
+          verinorun_unsupported "`$objects' link to executable `$toplevel'"
+          return
+      }
       incr_stat "link_verilog_no_main_pass"
 
       if [link_verilog_no_main $objects $toplevel $options] then {
@@ -138,6 +163,10 @@ proc sim_verilog { sim {options ""} } {
     global lasterr
 
     if { $vtest == 1 } {
+        if { [verinorun_active] } {
+            verinorun_unsupported "Verilog simulation `$sim' executes"
+            return
+        }
         set status [sim_verilog_int $sim $options 0]
         incr_stat "sim_verilog"
         if { $status == 0 } then {
@@ -154,6 +183,10 @@ proc sim_verilog_vcd { sim {options ""} } {
     global lasterr
 
     if { $vtest == 1 } {
+        if { [verinorun_active] } {
+            verinorun_unsupported "Verilog simulation `$sim' executes with VCD dump"
+            return
+        }
         set status [sim_verilog_int $sim $options 1]
         incr_stat "sim_verilog_vcd"
         if { $status == 0 } then {
@@ -169,6 +202,10 @@ proc sim_verilog_status { sim expstatus {options ""} } {
     global lasterr
 
     if { $vtest == 1 } {
+        if { [verinorun_active] } {
+            verinorun_unsupported "Verilog simulation `$sim' exits with expected status"
+            return
+        }
         set status [sim_verilog_int $sim $options 0]
         incr_stat "sim_verilog_status"
 
@@ -208,7 +245,7 @@ proc sim_verilog_int { sim {options ""} {vcd 0} } {
     } else {
         perror "sim_verilog_int called with invalid vcd argument: $vcd"
     }
-    set status [exec_with_log_and_return $sim_name "$sim_exec $sim_flags $options >& $output" lasterr 2]
+    set status [exec_with_log_and_return $sim_name "[vsim_run_timeout_prefix]$sim_exec $sim_flags $options >& $output" lasterr 2]
 
     # Pop back up, because
     # the commands after this point will also cd to the subdir
