@@ -2807,11 +2807,6 @@ walkNF e =
                           do (P p' e', ws) <- walkNF e
                              upd (pConj p0 p') (IAps f ts [e']) ws
 
-                        -- the inner selector can wind up on the heap
-                        -- because of "move" in evalHeap
-                        [e_ref@(IRefT t ptr poss ref)] | (isitActionValue_ t) || (isitAction t)
-                            ->  do (P p' e', ws) <- walkNF e_ref
-                                   upd (pConj p0 p') (IAps f ts [e']) ws
                         _ ->    do when doDebug $ traceM "not stvar or foreign\n"
                                    when doDebug $ traceM (show u ++ "\n")
                                    when doDebug $ traceM (show es' ++ "\n")
