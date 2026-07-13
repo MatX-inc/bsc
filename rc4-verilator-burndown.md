@@ -328,3 +328,16 @@ VModInfo closure and refuses out-of-family output clocks with a real diagnostic 
 instances (mirror of the existing VPI rejection); harness .v scan remains the degraded-mode
 path for .ba-less and hand-written Verilog; the CI UNSUPPORTED contract guards whichever
 predicate is in force.
+
+## PUBLISHED (2026-07-13 ~13:05 local): build-20260713-1
+- Release run 29277020606 (ratchet mode): completed/success, EVERY job green — verilator
+  verdict GREEN (0 fails, UNSUPPORTED contract exact), contrib/bdw picked up the fixed
+  branches, Toooba/doc/releasenotes green.
+- matx-prerelease run 29280903246: published build-20260713-1 (linux-x86_64 +
+  darwin-aarch64 tarballs) at the run's head commit on release-2026.07.rc4.
+- Interlock design notes from Ravi's review discussion folded in above (output-clock
+  ex-nihilo predicate — new-family REFUTED by the data table; inout-alias deducible from
+  ASPackage; .ba matrix: old bsc unconditional under -verilog, rc4 gates on -elab
+  (genABin), rc4 -e satisfies currency via the 988 reuse descriptor with -vdir — the
+  bdw S0099 mechanism). Upstream follow-up: deduce both predicates at -g, record in the
+  reuse descriptor, refuse at -e -vsim verilator with instance-naming diagnostics.
