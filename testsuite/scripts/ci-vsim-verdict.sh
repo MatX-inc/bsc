@@ -68,14 +68,14 @@ seed)
     mkdir -p "$mdir"
     collect_tree "$root" > /tmp/ci-vsim-seed.$$
     grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " /tmp/ci-vsim-seed.$$ \
-        | sort > "$mdir/fails-$PLATFORM.txt" || true
+        | sort -u > "$mdir/fails-$PLATFORM.txt" || true
     grep -E " :: UNSUPPORTED: " /tmp/ci-vsim-seed.$$ \
-        | sort > "$mdir/unsupported-$PLATFORM.txt" || true
+        | sort -u > "$mdir/unsupported-$PLATFORM.txt" || true
     rm -f /tmp/ci-vsim-seed.$$
     touch "$mdir/flaky-$PLATFORM.txt"
     echo "seeded: $(wc -l < "$mdir/fails-$PLATFORM.txt") fail entries," \
          "$(wc -l < "$mdir/unsupported-$PLATFORM.txt") unsupported entries"
-    echo "annotate fails-$PLATFORM.txt entries with '#' disposition comments before committing"
+    echo "annotate entries with whole-line '#' comments before committing (trailing comments are not supported: entries are exact line keys and reasons may contain '#')"
     ;;
 
 judge)
@@ -132,9 +132,11 @@ judge)
     grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " /tmp/observed.$$ > /tmp/obs-fails-raw.$$ || true
     grep -E " :: UNSUPPORTED: " /tmp/observed.$$ > /tmp/obs-unsup.$$ || true
 
-    # manifests (strip comments/blank lines)
+    # manifests (drop whole-line comments and blanks; entries are exact
+    # line keys, and reason strings may legitimately contain '#', so
+    # trailing comments are NOT supported -- annotate on their own line)
     for f in fails unsupported flaky; do
-        sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
+        sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' \
             "$mdir/$f-$PLATFORM.txt" 2>/dev/null | sort -u > "/tmp/man-$f.$$" || true
         touch "/tmp/man-$f.$$"
     done
