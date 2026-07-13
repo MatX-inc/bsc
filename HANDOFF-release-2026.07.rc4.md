@@ -39,7 +39,16 @@ Commit 81a91b38 added GATING MatX-verilator jobs (ubuntu+macos) to matx-release
 (a) hold release for burn-down; (b) demote the new job to informational for this release
 (one line), gate next; (c) gate on a curated subset. RAVI TO DECIDE.
 
-## Verilator burn-down (well-defined, not started beyond diagnosis)
+## Verilator burn-down — **COMPLETE 2026-07-13, see rc4-verilator-burndown.md**
+
+The section below is the pre-burn-down diagnosis, kept for history.  The burn-down
+finished with the full suite GREEN under the MatX verilator (22,921 PASS / 0 FAIL /
+634 reasoned UNSUPPORTED), a rewritten sharded+manifest-gated CI leg, and an empty
+fails manifest (gate-eligible content).  All changes uncommitted, awaiting Ravi.
+The gating decision (a)/(b)/(c) below is superseded by the ratchet-mode design —
+see the journal's CI section and scratchpad/ci-synthesis.md.
+
+## Verilator burn-down (original diagnosis; superseded)
 
 Baseline attempts 1-6 chronicle (logs rc4-verilator-baseline.attempt*.log at repo root):
 OOM at -j128 (use -j24; /tmp worktrees were eating tmpfs — removed) → python3.11 missing
