@@ -1,0 +1,103 @@
+Tester1 Start
+  Testing 1 stage module
+    sqrt(00000001.00000000) = (expected) 00000001.00000000 = (actual) 00000001.00000000, 0
+    sqrt(00000002.00000000) = (expected) 00000001.6a09e667 = (actual) 00000001.6a09e666, 1
+    sqrt(00000004.00000000) = (expected) 00000002.00000000 = (actual) 00000002.00000000, 0
+    sqrt(0000000a.00000000) = (expected) 00000003.298b075b = (actual) 00000003.298b0758, 1
+    sqrt(02000000.00000000) = (expected) 000016a0.9e667f3b = (actual) 000016a0.9e666000, 1
+    sqrt(03d80000.00000000) = (expected) 00001f5e.67fdcbdf = (actual) 00001f5e.67fdc000, 1
+    sqrt(03ef9db0.00000000) = (expected) 00001fbe.33193b3d = (actual) 00001fbe.33192000, 1
+    sqrt(03ffffff.00000000) = (expected) 00001fff.fffc0000 = (actual) 00001fff.fffbe000, 1
+    sqrt(03ffc000.00000000) = (expected) 00001ffe.fffbffdf = (actual) 00001ffe.fffbe000, 1
+    sqrt(7fffffff.ffffffff) = (expected) 0000fffe.ffff7fff = (actual) 0000b504.f3330000, 1
+    sqrt(20000000.f0000000) = (expected) 00005a82.799b5058 = (actual) 00005a82.799b0000, 1
+    sqrt(40000000.f8000000) = (expected) 00008000.0000f800 = (actual) 00008000.00000000, 1
+    sqrt(00000000.80000000) = (expected) 00000000.b504f333 = (actual) 00000000.b504f333, 1
+    sqrt(00000000.40000000) = (expected) 00000000.80000000 = (actual) 00000000.80000000, 0
+    sqrt (21f057af.7044ab24) = 00005d36.16600000, 1 = PASS (diff = 00000000.3dd00724)
+    sqrt (2be57ea0.880a9c27) = 00006a01.ce060000, 1 = PASS (diff = 00000000.4e30f403)
+    sqrt (622ff512.0836c0d7) = 00009e8b.116f0000, 1 = FAIL (diff = 00000001.147cd2b6)
+    sqrt (57639862.82ebacf9) = 00009592.456b0000, 1 = PASS (diff = 00000000.b40cd240)
+    sqrt (7a5505ba.908ecd50) = 0000b0f7.565f0000, 1 = PASS (diff = 00000000.2818d60f)
+    sqrt (76258cf7.b383da3a) = 0000ade9.98470000, 1 = FAIL (diff = 00000001.31b17689)
+    sqrt (1aaa09f8.532b86d4) = 0000529e.ae390000, 1 = PASS (diff = 00000000.4a3dfe23)
+    sqrt (06365642.cfbd4a30) = 000027e1.080c0000, 1 = PASS (diff = 00000000.026489a0)
+    sqrt (18d02025.59eaee9f) = 00004fb3.41d30000, 1 = PASS (diff = 00000000.01ec1ab6)
+    sqrt (342f692a.759a61c5) = 00007395.3a138000, 1 = PASS (diff = 00000000.48ba8a49)
+  Testing 2 stage module
+    sqrt(00000001.00000000) = (expected) 00000001.00000000 = (actual) 00000001.00000000, 0
+    sqrt(00000002.00000000) = (expected) 00000001.6a09e667 = (actual) 00000001.6a09e666, 1
+    sqrt(00000004.00000000) = (expected) 00000002.00000000 = (actual) 00000002.00000000, 0
+    sqrt(0000000a.00000000) = (expected) 00000003.298b075b = (actual) 00000003.298b0758, 1
+    sqrt(02000000.00000000) = (expected) 000016a0.9e667f3b = (actual) 000016a0.9e666000, 1
+    sqrt(03d80000.00000000) = (expected) 00001f5e.67fdcbdf = (actual) 00001f5e.67fdc000, 1
+    sqrt(03ef9db0.00000000) = (expected) 00001fbe.33193b3d = (actual) 00001fbe.33192000, 1
+    sqrt(03ffffff.00000000) = (expected) 00001fff.fffc0000 = (actual) 00001fff.fffbe000, 1
+    sqrt(03ffc000.00000000) = (expected) 00001ffe.fffbffdf = (actual) 00001ffe.fffbe000, 1
+    sqrt(7fffffff.ffffffff) = (expected) 0000fffe.ffff7fff = (actual) 0000b504.f3330000, 1
+    sqrt(20000000.f0000000) = (expected) 00005a82.799b5058 = (actual) 00005a82.799b0000, 1
+    sqrt(40000000.f8000000) = (expected) 00008000.0000f800 = (actual) 00008000.00000000, 1
+    sqrt(00000000.80000000) = (expected) 00000000.b504f333 = (actual) 00000000.b504f333, 1
+    sqrt(00000000.40000000) = (expected) 00000000.80000000 = (actual) 00000000.80000000, 0
+    sqrt (38ee91e3.dac53c93) = 000078b9.a59c8000, 1 = PASS (diff = 00000000.5b711fe7)
+    sqrt (4661ef19.034a0385) = 0000863b.1c210000, 1 = PASS (diff = 00000000.7cfcc744)
+    sqrt (7433970f.23ae2335) = 0000ac79.92d80000, 1 = PASS (diff = 00000000.bf430cf5)
+    sqrt (435d13ac.5d156fe3) = 00008352.0d110000, 1 = PASS (diff = 00000000.9786b4c2)
+    sqrt (44109217.52b2e47d) = 00008400.8da90000, 1 = PASS (diff = 00000000.bc4f4aec)
+    sqrt (538fbed4.dcc69a95) = 00009242.591a0000, 1 = FAIL (diff = 00000001.245b83f1)
+    sqrt (76b23a78.507602fb) = 0000ae51.038e0000, 1 = PASS (diff = 00000000.088d6037)
+    sqrt (21ed8e4f.cb2c6597) = 00005d32.42ac8000, 1 = PASS (diff = 00000000.596cff5b)
+    sqrt (4114bdf6.33a113d3) = 00008113.954c0000, 1 = PASS (diff = 00000000.1b478543)
+    sqrt (1a9b4d47.42d307cb) = 00005287.d62b0000, 1 = PASS (diff = 00000000.224d1c92)
+Tester2 Start
+  Testing 1 stage module
+    sqrt(000000000001.0000) = (expected) 000000000001.0000 = (actual) 000000000001.0000, 0
+    sqrt(000000000002.0000) = (expected) 000000000001.6a09 = (actual) 000000000001.6a09, 1
+    sqrt(000000000004.0000) = (expected) 000000000002.0000 = (actual) 000000000002.0000, 0
+    sqrt(00000000000a.0000) = (expected) 000000000003.298b = (actual) 000000000003.298b, 1
+    sqrt(000002000000.0000) = (expected) 0000000016a0.9e66 = (actual) 0000000016a0.9e66, 1
+    sqrt(000003d80000.0000) = (expected) 000000001f5e.67fd = (actual) 000000001f5e.67fd, 1
+    sqrt(000003ef9db0.0000) = (expected) 000000001fbe.3319 = (actual) 000000001fbe.3319, 1
+    sqrt(000003ffffff.0000) = (expected) 000000001fff.fffc = (actual) 000000001fff.fffb, 1
+    sqrt(000003ffc000.0000) = (expected) 000000001ffe.fffb = (actual) 000000001ffe.fffb, 1
+    sqrt(0000fffe0000.0000) = (expected) 00000000fffe.ffff = (actual) 00000000fffe.ffff, 1
+    sqrt(000020000000.f000) = (expected) 000000005a82.799b = (actual) 000000005a82.799b, 1
+    sqrt(000040000000.f800) = (expected) 000000008000.0000 = (actual) 000000008000.0000, 1
+    sqrt(000000000000.8000) = (expected) 000000000000.b504 = (actual) 000000000000.b504, 1
+    sqrt(000000000000.4000) = (expected) 000000000000.8000 = (actual) 000000000000.8000, 0
+    sqrt (4dff709ac01c.f71e) = 0000008d4e62.9700, 1 = FAIL (diff = 000000003021.020d)
+    sqrt (31b8dbbdb9ba.b3f4) = 00000070d27e.7900, 1 = FAIL (diff = 000000001cbb.5ec3)
+    sqrt (6e6da44a014d.dadd) = 000000a822c2.b800, 1 = FAIL (diff = 000000003452.769d)
+    sqrt (6edd9bb006c8.2c61) = 000000a877ea.4c00, 1 = FAIL (diff = 000000009db1.25d1)
+    sqrt (6bfc383c4ba6.d32c) = 000000a643f8.6f00, 1 = FAIL (diff = 000000005c75.930b)
+    sqrt (06aa33a9e3e1.3820) = 000000294e62.d8c0, 1 = FAIL (diff = 000000001421.8d9b)
+    sqrt (5ce047468b9e.b184) = 0000009a3211.db00, 1 = FAIL (diff = 0000000014d3.e02b)
+    sqrt (2eaa093a1006.edef) = 0000006d4c44.b380, 1 = FAIL (diff = 000000005803.1413)
+    sqrt (3b30229a8b25.000c) = 0000007b1811.0100, 1 = FAIL (diff = 0000000063d3.de0b)
+    sqrt (26fc5efcf76b.e0a6) = 00000063e6dc.d300, 1 = FAIL (diff = 000000003bcc.8abd)
+  Testing 2 stage module
+    sqrt(000000000001.0000) = (expected) 000000000001.0000 = (actual) 000000000001.0000, 0
+    sqrt(000000000002.0000) = (expected) 000000000001.6a09 = (actual) 000000000001.6a09, 1
+    sqrt(000000000004.0000) = (expected) 000000000002.0000 = (actual) 000000000002.0000, 0
+    sqrt(00000000000a.0000) = (expected) 000000000003.298b = (actual) 000000000003.298b, 1
+    sqrt(000002000000.0000) = (expected) 0000000016a0.9e66 = (actual) 0000000016a0.9e66, 1
+    sqrt(000003d80000.0000) = (expected) 000000001f5e.67fd = (actual) 000000001f5e.67fd, 1
+    sqrt(000003ef9db0.0000) = (expected) 000000001fbe.3319 = (actual) 000000001fbe.3319, 1
+    sqrt(000003ffffff.0000) = (expected) 000000001fff.fffc = (actual) 000000001fff.fffb, 1
+    sqrt(000003ffc000.0000) = (expected) 000000001ffe.fffb = (actual) 000000001ffe.fffb, 1
+    sqrt(0000fffe0000.0000) = (expected) 00000000fffe.ffff = (actual) 00000000fffe.ffff, 1
+    sqrt(000020000000.f000) = (expected) 000000005a82.799b = (actual) 000000005a82.799b, 1
+    sqrt(000040000000.f800) = (expected) 000000008000.0000 = (actual) 000000008000.0000, 1
+    sqrt(000000000000.8000) = (expected) 000000000000.b504 = (actual) 000000000000.b504, 1
+    sqrt(000000000000.4000) = (expected) 000000000000.8000 = (actual) 000000000000.8000, 0
+    sqrt (1189aac8fcf7.858f) = 000000430146.4380, 1 = FAIL (diff = 000000000827.89c3)
+    sqrt (1b8c506ae1f6.c892) = 00000053fa61.f880, 1 = FAIL (diff = 00000000401e.865a)
+    sqrt (5c6c27ff1d70.5c59) = 00000099d18e.9a00, 1 = FAIL (diff = 00000000e28d.27b5)
+    sqrt (132b3a79e807.1503) = 000000460d36.7b00, 1 = FAIL (diff = 000000000ff0.f5ea)
+    sqrt (713e9a2ff6fd.a0a4) = 000000aa442a.3100, 1 = FAIL (diff = 000000007201.8343)
+    sqrt (01d7c47b2bec.6c94) = 00000015b85f.a7c0, 1 = FAIL (diff = 00000000018a.7e28)
+    sqrt (16c72e13f5cd.0b9c) = 0000004c5cb6.bc80, 1 = FAIL (diff = 000000002fe0.7ad0)
+    sqrt (0f6969decd5a.7aa1) = 0000003ed001.c600, 1 = FAIL (diff = 000000000397.557d)
+    sqrt (4080381c5fbd.71e0) = 000000807ff8.2400, 1 = FAIL (diff = 000000003b7f.acd0)
+    sqrt (26acc2b5a1b6.0ac6) = 0000006380a8.2580, 1 = FAIL (diff = 000000000cc4.cd48)
+Done

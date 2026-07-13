@@ -64,12 +64,24 @@ test_c_only_bsv DynamicFormat2
 # so do some sorting to make the output comparable.
 if { $vtest == 1 } {
 compile_verilog_pass ModuleDisplay.bsv sysModuleDisplay
+# Verilator 5.048 hits an internal error at link on mkPipeStage.v's
+# $display calls ("Display with %m but no AstScopeName",
+# V3EmitCFunc.cpp:288): it cannot handle %m in a format string that is
+# not the first $display argument (e.g. $display(time_expr, " %m: ...")).
+# The Verilog is legal and other simulators accept it; the .v compile
+# above still runs everywhere.
+verinorun verilator {Verilator 5.048 internal error: %m in a non-leading $display format argument (V3EmitCFunc.cpp:288)}
+if { ! [verinorun_active] } {
 link_verilog_pass {sysModuleDisplay.v mkPipeStage.v} sysModuleDisplay
 sim_verilog sysModuleDisplay
 move sysModuleDisplay.out sysModuleDisplay.v.out
 sort sysModuleDisplay.v.out sysModuleDisplay.sorted.v.out {-k 1,1n -k 2}
 awk sysModuleDisplay.sorted.v.out sysModuleDisplay.trimmed.v.out {{{ gsub("main\\.", "", $0); for (i=2; i<=NF; i=i+1) printf "%s ", $i; print ""; }}}
 compare_verilog sysModuleDisplay.trimmed.v.out sysModuleDisplay.out.expected
+} else {
+    verinorun_unsupported "sysModuleDisplay Verilog link/sim/compare"
+}
+verinorun_end
 }
 if { $ctest == 1 } {
 compile_object_pass ModuleDisplay.bsv sysModuleDisplay
@@ -151,6 +163,14 @@ if { $verilog_compiler == "iverilog" &&
     # add 'iverilog' to the list of simulators to exempt
     set verilog_bug $verilog_compiler
 }
+# Verilator (without --timing) does not honor the zero-delay (#0)
+# statements that this test depends on: the logic between the two tasks
+# leaves and re-enters the module through ports, and without the #0
+# settling the second task displays a stale value (all-ones instead of
+# ~v1 & rg).  Same zero-delay capability gap as old iverilog above.
+if { $verilog_compiler == "verilator" } {
+    lappend verilog_bug $verilog_compiler
+}
 # This test doesn't make the expected outputs match, because that adds
 # inlined logic, so separate calls are needed
 #
@@ -168,8 +188,13 @@ test_c_veri_bsv_separately LogicBetweenTasks3 sysLogicBetweenTasks3.out.expected
 # Check that the Verilog output fails in the way that we expected,
 # so that we can be alerted if it changes (but still fails the above test).
 #
-copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out 
-compare_file sysLogicBetweenTasks3.v-bug.out
+# (check_verilog_output, so that a simulator-keyed golden can record the
+# 2-state rendering of the buggy line: 4-state simulators show the
+# unsettled value as 'x'es, verilator shows its deterministic 2-state
+# stale value; see sysLogicBetweenTasks3.v-bug.out.expected.verilator.)
+#
+copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out
+check_verilog_output sysLogicBetweenTasks3.v-bug.out sysLogicBetweenTasks3.v-bug.out.expected ""
 
 # The above examples are about logic between tasks in the same module.
 # That situation can be made to work, with proper inserting of zero-delay.
@@ -230,6 +255,16 @@ compile_verilog_pass ErrorTest.bsv sysErrorTest "-system-verilog-tasks"
 link_verilog_pass sysErrorTest.v sysErrorTest
 sim_verilog_status sysErrorTest 1
 move sysErrorTest.out sysErrorTest.v.out
+# The exit-status check above passes under verilator, but the message
+# compare cannot: verilator prints $error in its own assertion style
+# ("[5] %Error: sysErrorTest.v:38: Assertion failed in main.top: foo",
+# not covered by the filters below) and implements $fatal as $stop,
+# discarding the "bar" message entirely.  That is simulator behavior,
+# not a BSC bug (the generated .v carries both calls verbatim), so
+# expected-fail the text compare under verilator only.
+if { $verilog_compiler == "verilator" } {
+    setup_xfail $target_triplet {verilator}
+}
 compare_file_filtered sysErrorTest.v.out sysErrorTest.out.expected {} \
     {-e "/^ *Time:/d" -e "/^ *Scope:/d" -e "s/^(ERROR|FATAL):.*: //"}
 }
