@@ -1,6 +1,19 @@
 test_c_veri_bsv Basic sysBasic.expected
 test_c_veri_bsv Arith sysArith.expected
 test_c_veri_bsv Synth sysSynth.expected
-test_c_veri_bsv ArithPipe sysArithPipe.expected
+
+# Verilator 5.048 mis-evaluates $signed(x[hi:lo] - K) when bit hi+1 of x
+# is 1: the part-select is read unmasked at the widened width, so the
+# fshow exponent display of a negative pipelined result prints +32
+# (e.g. "2^ 34" instead of "2^  2").  Standalone non-BSC repro confirms
+# it is a Verilator expression-width bug (iverilog, Bluesim and even
+# Verilator's own constant folding all print the IEEE-correct value),
+# so exempt the Verilog output compare under verilator only.
+set verilator_signed_partsel_bug {}
+if { $verilog_compiler == "verilator" } {
+    set verilator_signed_partsel_bug $verilog_compiler
+}
+test_c_veri_bsv ArithPipe sysArithPipe.expected "" $verilator_signed_partsel_bug
+
 test_c_veri_bsv PipeMult sysPipeMult.expected
 
