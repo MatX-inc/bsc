@@ -221,6 +221,45 @@ environment variable:
 
 The default value is `iverilog`.
 
+#### Simulator-specific behavior
+
+Some designs cannot run under some simulators, and some produce
+legitimately different output.  The harness provides these mechanisms
+(all inert under simulators they do not name):
+
+* Automatic refusal: under Verilator, the link step scans the design
+  for constructs Verilator cannot run (derived-clock generator
+  primitives such as `ClockGen`, which need `--timing`, and inout
+  aliasing, which Verilator rejects as unsupported "complex ports").
+  Affected link/sim/compare checks are reported as `UNSUPPORTED:`
+  lines, with the reason, instead of being attempted.  See
+  `verilator_unsupported_mods` and `vsim_design_unsupported` in
+  `config/unix.exp`.
+
+* `verinorun SIMS REASON` ... `verinorun_end` in an `.exp` file marks
+  the enclosed verilog link/sim/compare checks as un-runnable under the
+  listed simulators (e.g. designs that spin forever at runtime under
+  Verilator).  The checks report `UNSUPPORTED:` with the mandatory
+  REASON.  The BSC compile to Verilog still runs and is still checked.
+  Audit all sites with `grep -rn '^verinorun ' --include='*.exp'`.
+
+* Simulator-specific goldens: a comparison routed through
+  `check_verilog_output OUT EXPECTED VERIBUG` prefers
+  `EXPECTED.<simulator>` (e.g. `sysFoo.v.out.expected.verilator`) when
+  that file exists, so benign per-simulator output divergence
+  (2-state X initialization, `$random` implementation, z-display) is
+  validated exactly rather than excused.  Review every such golden
+  against the reference simulator's when creating it.
+
+* The `veribug` argument accepted by many test procedures may be a
+  list of simulator names: the output comparison becomes an expected
+  failure (`XFAIL`) under those simulators only.
+
+* Under Verilator, each simulation run is bounded by a timeout
+  (default 300 seconds; override with the `VSIM_RUN_TIMEOUT`
+  environment variable), so an unknown runtime spinner becomes an
+  ordinary bounded failure instead of a hung run.
+
 ### Providing additonal options to BSC
 
 If you want to provide additional options on the command line for all
