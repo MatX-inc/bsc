@@ -40,7 +40,13 @@ test_c_veri_bsv_multi_options TestActions mkTestActions "$action_abins andN.ba c
 
 copy actionvalues.c.keep actionvalues.c
 set actionvalue_abins { av_narrow.ba av_wide.ba av_poly.ba srandom.ba random_narrow.ba random_wide.ba }
+# The BDPI import `srandom' collides with the SystemVerilog built-in
+# method of the same name under DPI linkage (which the harness implies
+# for verilator); Verilator hits an internal error at link time.  The
+# import name is the point of the test, so it cannot be renamed.
+verinorun verilator "BDPI import `srandom' collides with the SV built-in srandom under DPI (Verilator internal error at link)"
 test_c_veri_bsv_multi_options TestActionValues mkTestActionValues "$actionvalue_abins const_narrow.ba const_wide.ba common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
+verinorun_end
 
 # Test the case where the values are unused
 test_c_veri_bsv_multi_options TestActionValuesUnusedValue mkTestActionValuesUnusedValue "av_narrow.ba av_wide.ba av_poly.ba const_narrow.ba const_wide.ba common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1

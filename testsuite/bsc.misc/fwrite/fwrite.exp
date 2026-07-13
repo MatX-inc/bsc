@@ -1,7 +1,18 @@
 
+# These tests fire a file-writing rule and a $finish rule in the same
+# cycle.  BSC emits the $finish before the same-cycle $fwrite in the
+# generated task block; event-driven simulators (and Bluesim) stop at the
+# $finish statement, but Verilator's documented $finish semantics finish
+# the current eval first, so the final cycle's write still lands in the
+# .dat file (the harness already truncates *stdout* at $finish for
+# verilator, see verilog.tcl).  The .verilator goldens are therefore the
+# base goldens plus that one extra final-cycle write; every shared line
+# is byte-identical.  check_verilog_output (veribug "") is a drop-in for
+# compare_file that picks up the sim-keyed golden.
+
 if { $vtest } {
     test_veri_only_bsv FOpen
-    compare_file FOpen.dat.out 
+    check_verilog_output FOpen.dat.out FOpen.dat.out.expected ""
 }
 if { $ctest } {
     test_c_only_bsv FOpen
@@ -25,8 +36,12 @@ compile_fail_error FOpen3.bsv T0020
 ## Some multi channel tests
 
 if { $vtest } {
+    # sysFOpen_MCD.out.expected.verilator also differs in the displayed
+    # $fopen MCD handle value: the multichannel-descriptor bit allocation
+    # is implementation-defined (iverilog hands out bit 1 = 00000002,
+    # verilator bit 30 = 40000000); all written data is identical.
     test_veri_only_bsv FOpen_MCD
-    compare_file FOpen_MCD.dat.out 
+    check_verilog_output FOpen_MCD.dat.out FOpen_MCD.dat.out.expected ""
 }
 if { $ctest } {
     test_c_only_bsv FOpen_MCD
@@ -95,16 +110,16 @@ compile_fail_error GetC_err3.bsv T0031
 
 if { $vtest } {
     test_veri_only_bsv FWrites
-    compare_file FWrites.dat.out
+    check_verilog_output FWrites.dat.out FWrites.dat.out.expected ""
 
     test_veri_only_bsv FWrite2
-    compare_file FWrite2.dat.out
+    check_verilog_output FWrite2.dat.out FWrite2.dat.out.expected ""
 
     test_veri_only_bsv FWrite3
-    compare_file FWrite3o.dat.out
-    compare_file FWrite3h.dat.out
-    compare_file FWrite3d.dat.out
-    compare_file FWrite3b.dat.out
+    check_verilog_output FWrite3o.dat.out FWrite3o.dat.out.expected ""
+    check_verilog_output FWrite3h.dat.out FWrite3h.dat.out.expected ""
+    check_verilog_output FWrite3d.dat.out FWrite3d.dat.out.expected ""
+    check_verilog_output FWrite3b.dat.out FWrite3b.dat.out.expected ""
 }
 
 if { $ctest } {

@@ -79,15 +79,19 @@ find_n_strings [make_bsc_vcomp_output_name NoInline.bsv] \
 
 if { $vtest == 1 } {
 
+# -no-use-dpi pins the VPI wrapper flavor whose generated files this
+# section tests (the harness implies -use-dpi under verilator, which
+# generates no wrapper files at all)
+
 # Compile, generating .h and .c
-compile_verilog_pass BDPI.bsv
+compile_verilog_pass BDPI.bsv {} {-no-use-dpi}
 
 # Remove the .c
 erase {vpi_wrapper_my_C_or.c}
 exec sleep 1
 
 # Try recompile
-compile_verilog_pass BDPI.bsv {} {-u}
+compile_verilog_pass BDPI.bsv {} {-u -no-use-dpi}
 # Test that the file was generated
 find_n_strings [make_bsc_vcomp_output_name BDPI.bsv] \
     {VPI wrapper files created: vpi_wrapper_my_C_or} 1
@@ -97,7 +101,7 @@ erase {vpi_wrapper_my_C_or.h}
 exec sleep 1
 
 # Try recompile
-compile_verilog_pass BDPI.bsv {} {-u}
+compile_verilog_pass BDPI.bsv {} {-u -no-use-dpi}
 # Test that the file was generated
 find_n_strings [make_bsc_vcomp_output_name BDPI.bsv] \
     {VPI wrapper files created: vpi_wrapper_my_C_or} 1
