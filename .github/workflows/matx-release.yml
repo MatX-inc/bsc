@@ -5,6 +5,15 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      verilator_mode:
+        description: >-
+          MatX verilator leg (off|observe|ratchet|gate).  Only demote
+          below the committed default (e.g. observe for a shakedown);
+          promotion to gate is a reviewed edit of the default here.
+        required: false
+        default: 'ratchet'
+        type: string
 
 concurrency:
   # When changes to a PR trigger a new run, cancel in-progress runs fro that PR;
@@ -56,7 +65,8 @@ jobs:
       ghc_version: 9.6.7
       hls_version: 2.13.0.0
       timeout_override: ${{ matrix.timeout_override }}
-      matx_verilator_gating: true
+      # push-trigger runs (inputs empty) use the committed default
+      matx_verilator_mode: ${{ inputs.verilator_mode || 'ratchet' }}
     secrets: inherit
 
   build-and-test-macos:
@@ -74,7 +84,9 @@ jobs:
       hls_version: 2.13.0.0
       timeout_override: ${{ matrix.timeout_override }}
       brew_update: ${{ matrix.brew_update }}
-      matx_verilator_gating: true
+      # No macOS verilator leg: the deployed simulator is linux-x86_64,
+      # the 3-core/7GB macOS runners OOM under verilator g++, and their
+      # queue starvation (observed 24h) would hold releases hostage.
     secrets: inherit
 
   # ------------------------------
