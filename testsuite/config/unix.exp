@@ -438,6 +438,266 @@ proc get_vcomp_flags {} {
     }
 }
 
+## BSC flags implied by the selected Verilog simulator.
+## Verilator has no VPI support, so foreign-function (BDPI) designs must
+## use the DPI wrapper flavor.  The wrapper flavor is chosen when the
+## design is compiled to Verilog, so these flags are needed at both
+## compile time and link time.  They are placed before any per-test
+## options, so a test can still override them.
+proc vsim_implied_bsc_flags {} {
+    global verilog_compiler
+
+    if { ! [info exists verilog_compiler] } then {
+        return ""
+    }
+    if { [string match $verilog_compiler "verilator"] } then {
+        return "-use-dpi"
+    }
+    return ""
+}
+
+## Under Verilator, bound each simulation's runtime: designs that derive
+## clocks in ways Verilator cannot schedule spin forever instead of
+## failing (the fatal INFINITELOOP lint catches only provable loops).
+## The bound converts an unknown runtime spinner into an ordinary,
+## bounded FAIL.  Override the limit with VSIM_RUN_TIMEOUT (seconds).
+proc vsim_run_timeout_prefix {} {
+    global verilog_compiler
+    global env
+
+    if { ! [info exists verilog_compiler] } then {
+        return ""
+    }
+    if { ! [string match $verilog_compiler "verilator"] } then {
+        return ""
+    }
+    if { [auto_execok timeout] == "" } then {
+        return ""
+    }
+    set secs 300
+    if { [info exists env(VSIM_RUN_TIMEOUT)] } then {
+        set secs $env(VSIM_RUN_TIMEOUT)
+    }
+    return "timeout -k 10 $secs "
+}
+
+# ---------------
+# Sim-keyed "cannot run" interlock, in the style of the `veribug'
+# argument.
+#
+# `verinorun SIMS REASON' marks the verilog link/sim/compare checks that
+# follow as un-runnable under any simulator in SIMS: those checks are
+# reported as UNSUPPORTED (carrying REASON) instead of being attempted.
+# The BSC compile to Verilog still runs and is still checked.  Under
+# simulators not in SIMS, behavior is unchanged.  `verinorun_end'
+# restores normal behavior; the state also auto-clears around each .exp
+# file (see bsc_init/bsc_finish).  REASON is required: it is the audit
+# trail.
+#
+# In addition to the manual spans, the link procs consult
+# vsim_design_unsupported, which refuses to link-and-run designs that
+# instantiate library primitives known not to work under the selected
+# simulator (currently: Verilator).  That automatic interlock arms the
+# same suppression state for the remainder of the test's checks and is
+# re-evaluated at every link.
+
+# Simulator names the harness recognizes (see the clean_*_output
+# dispatch in verilog.tcl).  verinorun rejects anything else: a typo'd
+# sim name would silently disarm the guard, and for the designs this
+# mechanism exists for, that means a simulation that spins forever.
+set verinorun_known_sims {iverilog verilator cvc vcs vcsi ncverilog modelsim questa}
+
+set verinorun_sims        {}
+set verinorun_reason      ""
+set verinorun_auto_reason ""
+
+proc verinorun { sims reason } {
+    global verinorun_sims verinorun_reason verinorun_known_sims
+    if { [llength $sims] == 0 } {
+        perror "verinorun: a non-empty simulator list is required"
+        return
+    }
+    if { [string compare $reason ""] == 0 } {
+        perror "verinorun: a non-empty reason string is required"
+        return
+    }
+    foreach s $sims {
+        if { [lsearch -exact $verinorun_known_sims $s] == -1 } {
+            perror "verinorun: unknown simulator `$s'"
+            return
+        }
+    }
+    set verinorun_sims $sims
+    set verinorun_reason $reason
+}
+
+proc verinorun_end {} {
+    global verinorun_sims verinorun_reason
+    set verinorun_sims   {}
+    set verinorun_reason ""
+}
+
+proc verinorun_auto_clear {} {
+    global verinorun_auto_reason
+    set verinorun_auto_reason ""
+}
+
+# true iff the current verilog simulator is marked cannot-run, either by
+# a manual verinorun span or by the automatic link-time design check
+proc verinorun_active {} {
+    global verinorun_sims verinorun_auto_reason verilog_compiler
+    if { [string compare $verinorun_auto_reason ""] != 0 } {
+        return 1
+    }
+    if { ! [info exists verilog_compiler] } {
+        return 0
+    }
+    return [expr {[lsearch -exact $verinorun_sims $verilog_compiler] != -1}]
+}
+
+proc verinorun_why {} {
+    global verinorun_sims verinorun_reason verinorun_auto_reason
+    global verilog_compiler
+    if { [info exists verilog_compiler] && \
+         [lsearch -exact $verinorun_sims $verilog_compiler] != -1 } {
+        return $verinorun_reason
+    }
+    return $verinorun_auto_reason
+}
+
+# report one suppressed check
+proc verinorun_unsupported { what } {
+    global verilog_compiler
+    incr_stat "verinorun"
+    unsupported "$what: not run under $verilog_compiler: [verinorun_why]"
+}
+
+# Verilog library primitives whose implementations cannot run under
+# Verilator.  The clock generators need event-driven timing (Verilator's
+# --timing, which bsc_build_vsim_verilator rightly disables); designs
+# that instantiate them either trip the fatal INFINITELOOP lint at
+# verilation (ClockGen's `forever' loop) or spin forever at runtime.
+# InoutConnect aliases two inout ports onto one net, which Verilator
+# rejects as unsupported "complex ports" (IEEE 1800 23.2.2).
+# NOTE: ClockDiv, GatedClock, MakeClock, ClockMux and ClockSelect are
+# deliberately NOT listed: measured against a full-suite baseline
+# (2026-07-13), designs using them mostly run correctly under Verilator.
+# Known-bad individual tests carry explicit `verinorun' spans instead,
+# and vsim_run_timeout_prefix bounds any unknown runtime spinner.
+set verilator_unsupported_mods [list \
+    ClockGen           "derived-clock generator needs --timing" \
+    ClockInverter      "derived (inverted) clock generator needs --timing" \
+    GatedClockInverter "derived (inverted) clock generator needs --timing" \
+    InoutConnect       "two-port inout alias is Verilator-unsupported (complex ports)" \
+]
+
+# Scan the design being linked (the .v files among OBJECTS, plus
+# TOPLEVEL.v, plus any locally-generated submodule .v files they
+# reference, transitively) for instantiations of primitives the current
+# simulator cannot run.  Returns a reason string, or "" if the design
+# is supported.  Must be called with the current directory set to the
+# test directory.
+proc vsim_design_unsupported { objects toplevel } {
+    global verilog_compiler
+    global verilator_unsupported_mods
+
+    if { ! [info exists verilog_compiler] } {
+        return ""
+    }
+    if { ! [string match $verilog_compiler "verilator"] } {
+        return ""
+    }
+
+    # the .v files named at the link, plus the toplevel's own .v
+    set work {}
+    foreach o $objects {
+        if { [file extension $o] == ".v" } {
+            lappend work $o
+        }
+    }
+    if { [file exists $toplevel.v] } {
+        lappend work $toplevel.v
+    }
+
+    # locally-generated modules, by module name, for the closure walk
+    # (library primitives are matched by name and never need reading)
+    array set local_mod {}
+    set local_names {}
+    foreach f [glob -nocomplain *.v] {
+        set n [file rootname [file tail $f]]
+        # names with regexp metacharacters cannot be woven into the
+        # reference pattern below; such files are not bsc-generated
+        if { [regexp {^[A-Za-z_][A-Za-z0-9_]*$} $n] } {
+            set local_mod($n) $f
+            lappend local_names $n
+        }
+    }
+
+    set visited {}
+    while { [llength $work] > 0 } {
+        set f [lindex $work 0]
+        set work [lrange $work 1 end]
+        set n [file rootname [file tail $f]]
+        if { [lsearch -exact $visited $n] != -1 } {
+            continue
+        }
+        lappend visited $n
+        if { ! [file exists $f] } {
+            continue
+        }
+        if { [catch {open $f r} fh] } {
+            continue
+        }
+        set text [read $fh]
+        close $fh
+
+        # instantiations of known-unsupported primitives
+        foreach {mod why} $verilator_unsupported_mods {
+            if { [regexp -line "^\\s+$mod\\s+(#|\[A-Za-z_\\\\\])" $text] } {
+                return "instantiates $mod: $why"
+            }
+        }
+
+        # bsc expresses inout aliasing as multiple module-header ports
+        # bound to one internal net (named port expressions, e.g.
+        # ".i_in(x), .i_out(x)"); Verilator rejects the form outright
+        # as unsupported "complex ports" (IEEE 1800 23.2.2)
+        foreach {hdr ports} [regexp -all -inline \
+                {module\s+[A-Za-z_][A-Za-z0-9_$]*\s*\(([^;]*)\)\s*;} $text] {
+            if { [regexp {\.\s*[A-Za-z_][A-Za-z0-9_$]*\s*\(} $ports] } {
+                return "$n aliases inout ports in its module header (Verilator-unsupported complex ports)"
+            }
+        }
+
+        # follow references to locally-generated submodules
+        if { [llength $local_names] > 0 } {
+            set pat "\\m(?:[join $local_names |])\\M"
+            foreach hit [regexp -all -inline $pat $text] {
+                if { [lsearch -exact $visited $hit] == -1 } {
+                    lappend work $local_mod($hit)
+                }
+            }
+        }
+    }
+    return ""
+}
+
+# Re-evaluate the automatic interlock for a new link.  Called by the
+# link procs in verilog.tcl; leaves verinorun_auto_reason set iff the
+# design cannot run under the current simulator.
+proc verinorun_auto_check { objects toplevel } {
+    global srcdir subdir verinorun_auto_reason
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set why [vsim_design_unsupported $objects $toplevel]
+    cd $here
+    if { [string compare $why ""] != 0 } {
+        set verinorun_auto_reason $why
+    }
+}
+# ---------------
+
 #separated get_bsdir from get_bsc_prelude to get the right BLUESPECDIR for m4
 proc get_bsdir {} {
     global srcdir
@@ -1273,7 +1533,7 @@ proc bsc_compile_verilog { source { module "" } { options "" } } {
         append v_comp_options " -g $module"
     }
 
-    set cmd "$bsc $options $v_comp_options $source >& $output"
+    set cmd "$bsc [vsim_implied_bsc_flags] $options $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_verilog" "$cmd" 2]
     cd $here
@@ -2282,6 +2542,16 @@ proc compare_file { filename {expected ""} {stat "compare_file"}} {
     set here [absolute $srcdir]
     cd [file join $here $subdir]
 
+    # verinorun safety net: inside an armed span, a compare of a file the
+    # skipped simulator would have produced is UNSUPPORTED, not FAIL.
+    # Only fires when the file is missing, so Bluesim/compile-output
+    # compares inside the same span still run and still catch real bugs.
+    if { ! [file exists $filename] && [verinorun_active] } {
+        verinorun_unsupported "`$filename' output comparison"
+        cd $here
+        return 0
+    }
+
     if {[string compare $expected ""] == 0} {
         set expected "$filename.expected"
     }
@@ -2906,6 +3176,20 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
 
         compile_verilog_pass $top.$extension $sysmod $gen_options
         link_verilog_pass [join $vmods] $sysmod $link_options
+
+        if { [verinorun_active] } {
+            # Cannot run under this simulator (a manual verinorun span,
+            # or the link-time design interlock): link_verilog_pass
+            # already reported its own UNSUPPORTED; mark the remaining
+            # checks the same way.  The .v compile above still ran, and
+            # the Bluesim half below is untouched.
+            verinorun_unsupported "Verilog simulation `$sysmod' executes"
+            verinorun_unsupported "`$sysmod.v.out' matches `$expected'"
+            if { $check_vcd == 1 } {
+                verinorun_unsupported "Verilog simulation `$sysmod' executes with VCD dump"
+            }
+        } else {
+
         # if veribug is specified, we know the output will differ,
         # but we don't know if the sim will exit normally or not
         if { $veribug == "" } {
@@ -2945,6 +3229,8 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
 
             # XXX
             #check_verilog_output $sysmod.v-vcd.out $expected $veribug
+        }
+
         }
     }
 
@@ -3046,6 +3332,25 @@ proc check_block_codegen_modules { modules link_options } {
 
 proc check_verilog_output { output expected veribug } {
     global verilog_compiler
+    global srcdir subdir
+
+    if { [verinorun_active] } {
+        verinorun_unsupported "`$output' matches `$expected'"
+        return
+    }
+
+    # Prefer a simulator-specific golden when one exists ("EXPECTED.SIM",
+    # e.g. sysFoo.v.out.expected.verilator): legitimate per-simulator
+    # output divergence (2-state initialization, $random implementation,
+    # z-value display) is then validated exactly, instead of being
+    # blanket-excused as an expected failure.  Every such golden must be
+    # diff-reviewed against the reference simulator's when created.
+    if { [info exists verilog_compiler] } {
+        set simexp "$expected.$verilog_compiler"
+        if { [file exists [file join [absolute $srcdir] $subdir $simexp]] } {
+            set expected $simexp
+        }
+    }
 
     if {[string compare $veribug ""] == 0} {
         compare_file $output $expected
@@ -3587,6 +3892,20 @@ if { $systemctest == 1 } {
 ################################################################################
 ###
 ################################################################################
+
+# DejaGnu runs ${tool}_init before and ${tool}_finish after sourcing
+# each .exp file (tool is "bsc", set in site.exp; _finish runs even when
+# the file aborted on a Tcl error).  Clear any verinorun state here so a
+# skip span can never leak from one test file into the next.
+proc bsc_init { test_file_name } {
+    verinorun_end
+    verinorun_auto_clear
+}
+
+proc bsc_finish {} {
+    verinorun_end
+    verinorun_auto_clear
+}
 
 global bsc_initialized
 
