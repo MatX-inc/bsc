@@ -130,12 +130,21 @@ localcheck: $(LOCALCHECKPREREQUISITES)
 # treated as tests.
 tool ?= bsc
 
+# TESTDIRS (space-separated directory prefixes, e.g. "bsc.mcd
+# bsc.lib/BRAM") restricts the run to tests under those directories;
+# empty runs everything.  Used by CI to shard the suite across jobs.
+# The empty-list guard below makes a TESTDIRS value that matches
+# nothing loudly fatal rather than a silent zero-test run.
+TESTDIRS ?=
+export TESTDIRS
+
 # This creates the file 'all_tests.mk', that is used by the 'run-tests'
 # target in the 'parallel.mk' file.  It also checks for duplicates
 # which can cause problems.
 .PHONY: run-tests-setup
 run-tests-setup:
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| awk '{t=t " " $$0} END{print "ALL_TESTS :=" t}' \
 		> $(CONFDIR)/all_tests.mk
 	@grep -q '\.exp' $(CONFDIR)/all_tests.mk || \
@@ -144,6 +153,7 @@ run-tests-setup:
 		       "zero tests" >&2; \
 		  exit 1; }
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| perl $(CONFDIR)/scripts/double-directory.pl
 
 
