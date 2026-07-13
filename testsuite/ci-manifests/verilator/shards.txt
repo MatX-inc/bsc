@@ -1,0 +1,13 @@
+# CI shard assignment for the MatX-verilator testsuite leg.
+# Format: <shard-number> <space-separated testsuite directory prefixes>
+# The highest shard is always the computed REST: every bsc.* directory
+# not assigned above it (minus bsc.long_tests, which checkparallel
+# already excludes).  A new top-level directory therefore lands in REST
+# automatically and can never be silently dropped.
+1 bsc.lib
+2 bsc.interra
+3 bsc.bsv_examples
+4 bsc.verilog bsc.codegen bsc.scheduler
+5 bsc.mcd bsc.bugs
+6 bsc.evaluator bsc.typechecker bsc.syntax
+7 REST

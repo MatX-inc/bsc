@@ -19,6 +19,21 @@ on:
         required: false
         default: false
         type: boolean
+      verilator_testsuite:
+        required: false
+        default: false
+        type: boolean
+      # MatX-verilator leg mode: off | observe | ratchet | gate.
+      # "off" skips the leg entirely (the default keeps upstream ci.yml
+      # unaffected); the other modes run the sharded suite under the
+      # deployed MatX Verilator and grade it against the committed
+      # manifests in testsuite/ci-manifests/verilator (see
+      # testsuite/scripts/ci-vsim-verdict.sh for the exact semantics).
+      # An unknown mode string is a RED verdict, never a silent skip.
+      matx_verilator_mode:
+        required: false
+        default: 'off'
+        type: string
 
 jobs:
   build-ubuntu:
@@ -75,6 +90,12 @@ jobs:
             fi
 
           make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+
+          # Also build and install the extra utilities (vcdcheck,
+          # fstscopes, showrules, ...); the testsuite uses fstscopes,
+          # when available, to check FST waveform dumps
+          make -C src/comp -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-extra
+
           tar czf inst.tar.gz inst
       - name: CCache stats
         env:
@@ -194,6 +215,326 @@ jobs:
         with:
           name: test-logs-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}
           path: logs.tar.gz
+
+  # Run the Verilog testsuite with Verilator in place of iverilog.
+  # Informational for now (continue-on-error at the job level): a failure
+  # reports Verilator compatibility without failing the workflow or
+  # blocking the merge.  On ubuntu-22.04 the tolerance moves down to the
+  # testsuite step itself, so that job reports green with a warning
+  # annotation rather than a red X: its Verilator (4.038) predates
+  # several fixes the suite relies on and serves as a permanent
+  # old-version canary, never expected to run clean.  CTEST=0
+  # SYSTEMCTEST=0 makes the run Verilog-only: the Bluesim and SystemC
+  # backends are already covered by the main testsuite job.
+  test-ubuntu-verilator:
+    name: "Test Verilator ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 360
+    needs: build-ubuntu
+    if: inputs.verilator_testsuite
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        # verilator is installed here rather than in the shared script,
+        # so the jobs that don't run it don't pay for it
+        run: |
+          sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+          sudo apt-get install -y verilator
+
+      - name: Download bsc
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.os }} ghc-${{ inputs.ghc_version }} build
+      - name: Install bsc
+        run: "tar xzf inst.tar.gz"
+
+      # Restore previous ccache cache of compiled object files. Use a SHA
+      # in the key so that a new cache file is generated after every
+      # successful build, and have the restore-key use the most recent.
+      - name: CCache cache files
+        uses: actions/cache@v5
+        with:
+          path: ${{ GITHUB.WORKSPACE }}/ccache
+          key: test-verilator-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          restore-keys: |
+            test-verilator-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
+
+      - name: Run testsuite with Verilator
+        id: testsuite
+        # ubuntu-22.04 (Verilator 4.038) is informational-only: don't let
+        # its expected failures turn the step (and job) red
+        continue-on-error: ${{ inputs.os == 'ubuntu-22.04' }}
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+        run: |
+          # Use ccache to avoid recompiling generated .cxx every run.
+          ccache --zero-stats --max-size 500M
+          export PATH=/usr/lib/ccache:$PATH
+
+          # Use the LLVM linker as the C++ linker
+          # for a moderate build-time speedup over ld.bfd
+          export LINKER=lld
+          export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+
+          # Use -O0 for significantly faster C++ compiles (which more
+          # than make up for slower simulations)
+          export CXXFLAGS="-O0"
+
+          # Always archive logs, even if make fails (and terminates this script
+          # because it's invoked with :set -eo pipefile)
+          trap ./testsuite/archive_logs.sh EXIT
+
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+          verilator --version
+
+          make -j ${CORES} -C testsuite checkparallel \
+               TEST_BSC_VERILOG_SIM=verilator CTEST=0 SYSTEMCTEST=0
+
+      # Show ccache stats so we can see what the hit-rate is like.
+      - name: CCache stats
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+        run: ccache --show-stats
+
+      # Surface a tolerated failure without turning the job red
+      # (step outcome is the pre-continue-on-error result)
+      - name: Report informational failure
+        if: steps.testsuite.outcome == 'failure'
+        run: |
+          echo "::warning::Verilator testsuite failed on ${{ inputs.os }} (informational only)"
+          echo "Verilator testsuite failed on ${{ inputs.os }} (informational only)" \
+               >> "$GITHUB_STEP_SUMMARY"
+
+      # Save test logs on failure so we can diagnose
+      # (also on a tolerated failure, where failure() stays false)
+      - name: Archive test logs
+        if: failure() || steps.testsuite.outcome == 'failure'
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-logs-verilator-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}
+          path: logs.tar.gz
+
+  # MatX-verilator leg: runs the Verilog testsuite under the exact
+  # Verilator build MatX deploys (the MatX-inc/verilator release), so a
+  # red verdict here means the release disagrees with the simulator we
+  # actually ship.  Distinct from the informational legs above, which
+  # bracket upstream/apt versions.  The release tag is pinned below;
+  # bump it when the deployed Verilator changes.
+  #
+  # The suite is sharded 7 ways by directory (single-job runs died 4/4
+  # times on hosted runners); each shard uploads its observed results
+  # and schedule, and the verdict job below grades the union against
+  # the committed manifests.  Shard jobs go red only on infrastructure
+  # problems (timeout, runner death, setup) — CONTENT is graded solely
+  # by the verdict job, which treats a missing shard fragment as fatal,
+  # so nothing here needs (or is allowed) continue-on-error.
+  test-ubuntu-verilator-matx-shard:
+    name: "Test MatX Verilator shard ${{ matrix.shard }} ${{ inputs.os }}"
+    runs-on: ${{ inputs.os }}
+    # Room for the -j8 -> -j4 -> -j2 ratchet: 60 + 45 min windows for
+    # the first two attempts, the remainder for -j2 and setup.
+    timeout-minutes: 180
+    needs: build-ubuntu
+    if: inputs.matx_verilator_mode != 'off'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7]
+    env:
+      MATX_VERILATOR_RELEASE: build-20260701_1
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+
+      - name: Install MatX Verilator (deploy build)
+        shell: bash
+        run: |
+          ASSET="verilator-linux-x86_64-${MATX_VERILATOR_RELEASE#build-}.tar.gz"
+          curl -sSfL "https://github.com/MatX-inc/verilator/releases/download/${MATX_VERILATOR_RELEASE}/${ASSET}" \
+               | tar xz -C "$HOME"
+          echo "$HOME/inst/bin" >> "$GITHUB_PATH"
+          # The release's verilated.mk bakes the build host's python
+          # (python3.11); shim it to whatever python3 the runner has
+          mkdir -p "$HOME/pyshim"
+          ln -sf "$(command -v python3)" "$HOME/pyshim/python3.11"
+          echo "$HOME/pyshim" >> "$GITHUB_PATH"
+
+      - name: Assert deployed-verilator pin
+        run: |
+          # A PATH mishap silently testing some other verilator would
+          # invalidate the whole leg; fail loudly instead.  Bump the
+          # version literal together with MATX_VERILATOR_RELEASE.
+          test "$(command -v verilator)" = "$HOME/inst/bin/verilator"
+          verilator --version
+          verilator --version | grep -qF 'Verilator 5.048'
+
+      - name: Download bsc
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.os }} ghc-${{ inputs.ghc_version }} build
+      - name: Install bsc
+        run: "tar xzf inst.tar.gz"
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ GITHUB.WORKSPACE }}/ccache
+          key: test-verilator-matx-${{ inputs.os }}-shard${{ matrix.shard }}-ccache-${{ github.sha }}
+          restore-keys: |
+            test-verilator-matx-${{ inputs.os }}-shard${{ matrix.shard }}-ccache-
+
+      - name: Add swap (verilator g++ headroom on 7GB runners)
+        run: |
+          # Some runner images already ship an active /mnt/swapfile
+          # (fallocate on it dies with "Text file busy"), so use our own
+          # file, sized to min(8G, /mnt free minus 1G).
+          avail_kb=$(df --output=avail -k /mnt | tail -1)
+          size_kb=$(( avail_kb - 1048576 ))
+          if [ "$size_kb" -gt 8388608 ]; then size_kb=8388608; fi
+          if [ "$size_kb" -gt 0 ]; then
+            sudo fallocate -l "${size_kb}K" /mnt/bsc-swapfile
+            sudo chmod 600 /mnt/bsc-swapfile
+            sudo mkswap /mnt/bsc-swapfile
+            sudo swapon /mnt/bsc-swapfile
+          else
+            echo "No room on /mnt for an extra swapfile; using the image's swap as-is"
+          fi
+          swapon --show
+          free -h
+
+      - name: Run testsuite shard with MatX Verilator
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+          SHARD: ${{ matrix.shard }}
+        run: |
+          ccache --zero-stats --max-size 500M
+          export PATH=/usr/lib/ccache:$PATH
+
+          export LINKER=lld
+          export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+          export CXXFLAGS="-O0"
+
+          # LPT scheduling from the committed timing snapshot
+          # (timing.txt itself is untracked, so CI has none otherwise)
+          export RUN_TESTCASES_IN_ORDER_OF_TIME=1
+          cp testsuite/ci-manifests/verilator/timing-ci.txt testsuite/timing.txt || true
+
+          # Bound every simulation: an unknown runtime spinner becomes
+          # a bounded FAIL in the verdict diff, never a hung shard
+          export VSIM_RUN_TIMEOUT=300
+
+          # Resolve this shard's directories.  The shard marked REST is
+          # computed as every bsc.* directory nobody else claimed, so a
+          # newly added directory can never be silently dropped.
+          SHARDS_FILE=testsuite/ci-manifests/verilator/shards.txt
+          DIRS=$(awk -v s="$SHARD" '!/^#/ && $1==s && $2!="REST" {$1=""; print}' "$SHARDS_FILE")
+          if awk -v s="$SHARD" '!/^#/ && $1==s && $2=="REST" {found=1} END {exit !found}' "$SHARDS_FILE"; then
+            ASSIGNED=$(awk '!/^#/ && $2!="REST" {$1=""; print}' "$SHARDS_FILE" | tr ' ' '\n' | sed '/^$/d')
+            DIRS=$(cd testsuite && ls -d bsc.*/ | sed 's|/$||' | grep -vx 'bsc.long_tests' | grep -Fvxf <(echo "$ASSIGNED") | tr '\n' ' ')
+          fi
+          echo "shard $SHARD directories: $DIRS"
+          test -n "${DIRS// /}"
+          export TESTDIRS="$DIRS"
+
+          trap ./testsuite/archive_logs.sh EXIT
+
+          # Keep each test's verilator C++ compile serial: the link
+          # script's inner make otherwise runs unbounded -j on top of
+          # the suite's own parallelism (N tests x M g++ on a 4-core
+          # 7GB runner is how memory starves).
+          export VSIM_BUILD_JOBS=1
+
+          # Compensate at the test level: start at -j8 and ratchet down
+          # to -j4 then -j2 if an attempt overruns its time window
+          # (starvation/swap thrash).  Only a window overrun ratchets:
+          # DejaGnu exits nonzero on any FAIL, so a plain nonzero exit
+          # is content — recorded but not gating, graded by the verdict
+          # job from the collected results, never retried.
+          RC=0
+          for JOBS in 8 4 2; do
+            case $JOBS in
+              8) WINDOW=3600 ;;
+              4) WINDOW=2700 ;;
+              2) WINDOW=0 ;;   # 0 disables timeout; job timeout bounds it
+            esac
+            echo "=== testsuite attempt: -j${JOBS} (window: ${WINDOW}s) ==="
+            set +e
+            timeout -k 60 ${WINDOW} \
+                make -j ${JOBS} -C testsuite checkparallel \
+                     TEST_BSC_VERILOG_SIM=verilator CTEST=0 SYSTEMCTEST=0
+            RC=$?
+            set -e
+            # 124 = TERM on window overrun; 137 = KILL (stuck past the
+            # grace period, or the kernel OOM-killed make itself)
+            if [ "$RC" -ne 124 ] && [ "$RC" -ne 137 ]; then
+              break
+            fi
+            echo "-j${JOBS} attempt overran its window (rc=${RC}); ratcheting down"
+          done
+          echo "$RC" > suite-rc-shard-${SHARD}.txt
+
+          ./testsuite/scripts/ci-vsim-verdict.sh collect testsuite \
+              > observed-shard-${SHARD}.txt
+          cp testsuite/all_tests.mk schedule-shard-${SHARD}.mk
+
+      - name: CCache stats
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+        run: ccache --show-stats
+
+      # Save the cache even on a red run: warmth must be reachable
+      # while the leg is still being burned down
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ GITHUB.WORKSPACE }}/ccache
+          key: test-verilator-matx-${{ inputs.os }}-shard${{ matrix.shard }}-ccache-${{ github.sha }}
+
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: verilator-matx-shard-${{ matrix.shard }}-${{ inputs.os }}
+          path: |
+            observed-shard-*.txt
+            schedule-shard-*.mk
+            suite-rc-shard-*.txt
+            logs.tar.gz
+          if-no-files-found: warn
+
+  # Grades the union of the shard results against the committed
+  # manifests.  if: always() — this job cannot be skipped by a shard
+  # failure, and the verdict script treats a missing fragment as RED,
+  # so the leg can never go hollow-green.
+  verilator-matx-verdict:
+    name: "MatX Verilator verdict (${{ inputs.matx_verilator_mode }}) ${{ inputs.os }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: test-ubuntu-verilator-matx-shard
+    if: ${{ always() && inputs.matx_verilator_mode != 'off' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download shard results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: verilator-matx-shard-*-${{ inputs.os }}
+          merge-multiple: true
+          path: fragments
+
+      - name: Judge against manifests
+        run: |
+          ./testsuite/scripts/ci-vsim-verdict.sh judge \
+              "${{ inputs.matx_verilator_mode }}" \
+              testsuite/ci-manifests/verilator fragments testsuite
 
   test-toooba-ubuntu:
     name: "Test Toooba ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
