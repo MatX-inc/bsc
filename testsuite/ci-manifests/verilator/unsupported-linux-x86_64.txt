@@ -1,3 +1,5 @@
+# UNSUPPORTED contract for the CI verilator leg. Exact-line keys (deduplicated);
+# annotate only with whole-line '#' comments.
 bsc.bluesim/vcd :: UNSUPPORTED: Verilog simulation `sysVCDTest1' executes with VCD dump: not run under verilator: design-initiated $dumpvars aborts: sim_main.cpp calls Verilated::traceEverOn only under +bscvcd
 bsc.bluesim/vcd :: UNSUPPORTED: Verilog simulation `sysVCDTest1' executes: not run under verilator: design-initiated $dumpvars aborts: sim_main.cpp calls Verilated::traceEverOn only under +bscvcd
 bsc.bluesim/vcd :: UNSUPPORTED: Verilog simulation `sysVCDTest2' executes with VCD dump: not run under verilator: design-initiated $dumpvars aborts: sim_main.cpp calls Verilated::traceEverOn only under +bscvcd
@@ -20,8 +22,6 @@ bsc.bsv_examples/mcd_Rand :: UNSUPPORTED: Verilog simulation `mkTop' executes wi
 bsc.bsv_examples/mcd_Rand :: UNSUPPORTED: Verilog simulation `mkTop' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.bsv_examples/mcd_Rand :: UNSUPPORTED: `mkTop.v mkRandTop.v' link to executable `mkTop': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.bsv_examples/mcd_Rand :: UNSUPPORTED: `mkTop.v.out' matches `mkTop.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.bsv_examples/pong :: UNSUPPORTED: `pong.v mkTopLevel.v kbscan.v reset.v' link to executable `sysPong': not run under verilator: hand-written top `pong' (named sysPong by this test) lacks the CLK/RST_N convention required by verilator's sim_main.cpp link harness
-bsc.bsv_examples/pong :: UNSUPPORTED: `pong.v mkTopLevel.v kbscan.v reset.v' link to executable `sysPong': not run under verilator: hand-written top `pong' (named sysPong by this test) lacks the CLK/RST_N convention required by verilator's sim_main.cpp link harness
 bsc.bsv_examples/pong :: UNSUPPORTED: `pong.v mkTopLevel.v kbscan.v reset.v' link to executable `sysPong': not run under verilator: hand-written top `pong' (named sysPong by this test) lacks the CLK/RST_N convention required by verilator's sim_main.cpp link harness
 bsc.codegen/foreign/battery :: UNSUPPORTED: Verilog simulation `mkTestActionValues' executes with VCD dump: not run under verilator: BDPI import `srandom' collides with the SV built-in srandom under DPI (Verilator internal error at link)
 bsc.codegen/foreign/battery :: UNSUPPORTED: Verilog simulation `mkTestActionValues' executes: not run under verilator: BDPI import `srandom' collides with the SV built-in srandom under DPI (Verilator internal error at link)
@@ -182,56 +182,36 @@ bsc.lib/getput :: UNSUPPORTED: `sysTestFIFOSync1.v.out' matches `sysTestFIFOSync
 bsc.lib/getput :: UNSUPPORTED: `sysTestFIFOSync10.v' link to executable `sysTestFIFOSync10': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.lib/getput :: UNSUPPORTED: `sysTestFIFOSync10.v.out' matches `sysTestFIFOSync10.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivOffset' executes with VCD dump: not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivOffset' executes: not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockDiv' executes with VCD dump: not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockDiv' executes: not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv.v' link to executable `sysClockDiv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv.v' link to executable `sysClockDiv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv.v.out' matches `sysClockDiv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv.v.out' matches `sysClockDiv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v' link to executable `sysClockDiv2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v' link to executable `sysClockDiv2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v.out' matches `sysClockDiv2.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v.out' matches `sysClockDiv2.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v' link to executable `sysClockDivFifo': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v' link to executable `sysClockDivFifo': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v.out' matches `sysClockDivFifo.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v.out' matches `sysClockDivFifo.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivFifo2.v' link to executable `sysClockDivFifo2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivFifo2.v.out' matches `sysClockDivFifo2.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivOffset.v' link to executable `sysClockDivOffset': not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockDivOffset.v.out' matches `sysClockDivOffset.v.out.expected': not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockInv.v' link to executable `sysClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockInv.v' link to executable `sysClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockInv.v.out' matches `sysClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysClockInv.v.out' matches `sysClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysGatedClockDiv.v' link to executable `sysGatedClockDiv': not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysGatedClockDiv.v.out' matches `sysGatedClockDiv.v.out.expected': not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v' link to executable `sysGatedClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v' link to executable `sysGatedClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v.out' matches `sysGatedClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v.out' matches `sysGatedClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockMux :: UNSUPPORTED: Verilog simulation `sysSlowSelectClock' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/ClockMux :: UNSUPPORTED: Verilog simulation `sysSlowSelectClock' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
@@ -310,32 +290,20 @@ bsc.mcd/Misc :: UNSUPPORTED: `sysInvertAbsoluteClock.v.out' matches `sysInvertAb
 bsc.mcd/Misc :: UNSUPPORTED: `sysLaunderClock.v mkLaunderClock.v' link to executable `sysLaunderClock': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/Misc :: UNSUPPORTED: `sysLaunderClock.v.out' matches `sysLaunderClock.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingReg' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingReg' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingReg' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingReg' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegA' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegA' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegA' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegA' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegU' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegU' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegU' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullCrossingRegU' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullSyncTest' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullSyncTest' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullSyncTest2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: Verilog simulation `sysNullSyncTest2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingReg.v' link to executable `sysNullCrossingReg': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingReg.v' link to executable `sysNullCrossingReg': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingReg.v.out' matches `sysNullCrossingReg.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingReg.v.out' matches `sysNullCrossingReg.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegA.v' link to executable `sysNullCrossingRegA': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegA.v' link to executable `sysNullCrossingRegA': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegA.v.out' matches `sysNullCrossingReg.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegA.v.out' matches `sysNullCrossingReg.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegU.v' link to executable `sysNullCrossingRegU': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegU.v' link to executable `sysNullCrossingRegU': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegU.v.out' matches `sysNullCrossingReg.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullCrossingRegU.v.out' matches `sysNullCrossingReg.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullSyncTest.v' link to executable `sysNullSyncTest': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullSyncTest.v.out' matches `sysNullSyncTest.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
@@ -511,8 +479,6 @@ bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysRegEnConnect' executes:
 bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysRegEnConnect2' executes with VCD dump: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysRegEnConnect2' executes: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysSimpleConnect1' executes with VCD dump: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
-bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysSimpleConnect1' executes with VCD dump: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
-bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysSimpleConnect1' executes: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysSimpleConnect1' executes: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysSimpleConnect2' executes with VCD dump: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: Verilog simulation `sysSimpleConnect2' executes: not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
@@ -555,7 +521,6 @@ bsc.verilog/inout :: UNSUPPORTED: `sysRegEnConnect.v.out' matches `out0-9.expect
 bsc.verilog/inout :: UNSUPPORTED: `sysRegEnConnect2.v RegisteredSender.v EnabledReceiver.v' link to executable `sysRegEnConnect2': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: `sysRegEnConnect2.v.out' matches `out0-9.expected': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: `sysSimpleConnect1.v Sender.v Receiver.v' link to executable `sysSimpleConnect1': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
-bsc.verilog/inout :: UNSUPPORTED: `sysSimpleConnect1.v Sender.v Receiver.v' link to executable `sysSimpleConnect1': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: `sysSimpleConnect1.v.out' matches `out3737.expected': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: `sysSimpleConnect1.v.out' matches `out42.expected': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: `sysSimpleConnect2.v Sender.v Receiver.v' link to executable `sysSimpleConnect2': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
@@ -563,56 +528,36 @@ bsc.verilog/inout :: UNSUPPORTED: `sysSimpleConnect2.v.out' matches `out42.expec
 bsc.verilog/inout :: UNSUPPORTED: `sysTbBoth.v' link to executable `sysTbBoth': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/inout :: UNSUPPORTED: `sysTbBoth.v.out' matches `sysTbBoth.out.expected': not run under verilator: instantiates InoutConnect: two-port inout alias is Verilator-unsupported (complex ports)
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDiv2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo2' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivFifo2' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivOffset' executes with VCD dump: not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockDivOffset' executes: not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockDiv' executes with VCD dump: not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockDiv' executes: not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: Verilog simulation `sysGatedClockInv' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv.v' link to executable `sysClockDiv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv.v' link to executable `sysClockDiv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv.v.out' matches `sysClockDiv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv.v.out' matches `sysClockDiv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v' link to executable `sysClockDiv2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v' link to executable `sysClockDiv2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v.out' matches `sysClockDiv2.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDiv2.v.out' matches `sysClockDiv2.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v' link to executable `sysClockDivFifo': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v' link to executable `sysClockDivFifo': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v.out' matches `sysClockDivFifo.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivFifo.v.out' matches `sysClockDivFifo.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivFifo2.v' link to executable `sysClockDivFifo2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivFifo2.v.out' matches `sysClockDivFifo2.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivOffset.v' link to executable `sysClockDivOffset': not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockDivOffset.v.out' matches `sysClockDivOffset.v.out.expected': not run under verilator: offset clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockInv.v' link to executable `sysClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockInv.v' link to executable `sysClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockInv.v.out' matches `sysClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysClockInv.v.out' matches `sysClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockDiv.v' link to executable `sysGatedClockDiv': not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockDiv.v.out' matches `sysGatedClockDiv.v.out.expected': not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v' link to executable `sysGatedClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v' link to executable `sysGatedClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
-bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v.out' matches `sysGatedClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v.out' matches `sysGatedClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysMakeReset0' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysMakeReset0' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
