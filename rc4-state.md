@@ -132,6 +132,144 @@ VsortOriginal PASSES in the full suite.
 - STATUS: ASSEMBLY COMPLETE, SUITE CLEAN. NOT PUSHED — awaiting Ravi's explicit go
   (push to origin → matx-release.yml → matx-prerelease.yml, per rc3's sequence).
 
+## LATE ADDITIONS (2026-07-11/12, per Ravi) — rc4 now 206 commits
+1. **Testsuite speedup** (commit 196 = branch nanavati:testsuite-time-ordered-parallel @253bf12a, NO PR yet):
+   LPT time-ordered scheduling fixed (tool?=bsc, timing.txt refresh+merge, sort-by-time.pl graceful fallback,
+   README recipe). CXXFLAGS=-O0 half already active in the MatX workflows. Work recovered from the
+   UNCOMMITTED tree of /home/ravi/bluespec/upstream/bsc (memory: -home-ravi-bluespec-upstream-bsc/
+   testsuite-speedup-levers.md).
+2. **-remap-path-prefix determinism fix** (commit 197 = 42b968cf; upstream **PR #1040** from
+   nanavati:remap-path-prefix @772993f6): audit found .bo nondeterminism = paths ONLY (positions carry pwd
+   even for relative invocations; cascades transitively via ipkg_depends hashes; .ba adds abmi_path/src_name
+   + Flags paths; NO timestamps/other machine bytes — Ravi's "confirm no others" satisfied, documented in the
+   PR). Design: serialization-time remap at BinData's share-P chokepoint + .ba raw strings + stored-Flags
+   normalization INCLUDING clearing remapPathPrefix itself (its FROM values are machine-specific!).
+   Verified: byte-identical .bo/.ba across dirs, residual-free, repeatable, zero-flag byte-compat with the
+   old compiler. Test: testsuite/bsc.options/remap-path. Flags 136→137, .ba tag → bsc-ba-20260712-1.
+   GOTCHA: dev bsc binary needs LD_LIBRARY_PATH=inst/lib/SAT; worktree typecheck needs the MAIN checkout's
+   generated vendor include_hs + real BuildVersion/BuildSystem.hs (stubs lack getBinFmtType).
+3. **PR 1027 FST included + cleaned** (commits 198-206): picks 7a121215/911355b8/9ffd4e43/c0822bb7/6da4ca9d/
+   ac7512ae + REVERT of the interim d922a07a guard (superseded by 1027's real fst support + fsdb rejection);
+   skipped its bundled 1000-copies, 956-rework (rc4's 956 is a newer superset), d750379b (rc4 fixed same line).
+   Conflicts as scoped: Makefile UTILEXES union, SimFileUtils codeGenOptionDescr union (top + no-wave-dump).
+   Cleanup commits (also pushed to nanavati:bluesim-fst @259af1c2 + PR description written via REST API —
+   gh pr edit hits a projects-classic GraphQL bug): dead previous_files path deleted; sim vcd/fst queries
+   format-aware via bk_get_waveform_format (VCD-only fallback for old models).
+   libfst submodule initialized locally; build now needs `make -C src/comp install-extra` (fstscopes/fstcheck)
+   — CI covered by ac7512ae's edits to the shared build-and-test workflows (submodules:true already).
+4. Final rebuild + FULL SUITE RERUN pending (dogfooding RUN_TESTCASES_IN_ORDER_OF_TIME=1 CXXFLAGS=-O0).
+
+## UNREVIEWED-PR REVIEW PROGRAM (2026-07-12, 6 agents over 18 PRs; full reports in session transcripts)
+Review-status ground truth: 967/919/965/998/956/957/988/1004/955/1028 have upstream review activity; the rest had ZERO.
+Wrong-results-class findings (NONE are rc4 regressions — all shipped identically in published rc3):
+- #925 dropDict UNSOUND under legal cross-package instance overlap (counterexample: general instance in base
+  pkg, specific added downstream → downstream's evidence deleted, silently redirected to general; worse with
+  IdPDict on instance defs). Fix direction: never drop instance defs, dedup on evidence identity, deterministic
+  winner. ALSO: .bo tag not bumped in-PR (IdPCAF tag 38); cacheDef rewrite smuggled in; zero directed tests —
+  NOTE: untracked testsuite/bsc.misc/sal/*.bsv in THIS checkout look like the uncommitted directed tests.
+- #1035 capture-judgment keyed on WHOLE-pred unification but clause selection is INPUT-keyed → sibling-order-
+  dependent accept/reject (counterexample vs its own FdOrder contract). Design note referenced from code/tests
+  (typechecker-coherent-instance-commitment.md) DOES NOT EXIST in tree. #1033/#1037 ready; #1036 needs b675 pin;
+  #1038 tip (modal pool guard) unpinned.
+- #1034 REPRODUCED silent wrong hardware: negative Integer param at width>32 zero-extends (-3 → 4294967293
+  via 32-bit canonicalization). Fix: error on k>32 or document.
+- #1023 proviso-only tyvars become PHANTOM Verilog parameters (loud Verilog error, not silent).
+- #1020 emsg8 duplicate-attr check defeated by applyDefaultArgAttrs re-keying; legacy default_reset repurpose
+  has a silent-meaning-change corner.
+Hygiene pattern (3×!): #925/#997/#999 changed .bo/.ba formats WITHOUT tag bumps (same slip I made on the 1040
+branch — fixed b93ab61d). Suggest an upstream CI guard: Bin-instance-files-changed ⇒ tag-changed.
+Other: #1000 wired into only 3/11 sims ("none" not honest; fst→VCD bytes on iverilog; Bluesim trap — rc4 has
+1027's real fix, upstream 1000 alone does not); #1008 READY TO UNDRAFT after hygiene (consumer hunt clean;
+one LOW hole: Bits at monadic types ICEs); #1030 "hygiene" framing contradicted for residual-dynamic-array-
+selection designs (needs re-frame + test; tension with the earlier byte-identical A/B probe — different design
+class); #1026 licensing contradiction + 6MB generated artifacts + zero tests; #944/#945 mergeable;
+#996 ready-with-nits; #969 needs README (what is bloogle?).
+1040/1027-cleanup findings ALL FIXED same-day (rc4 fbe9893e; branches b93ab61d / 2e6b93bf).
+
+## REVIEW CONTINUATION (2026-07-12, workflow wf_41453822-4a8: 37 agents, 16 units, refute panels;
+## full archive ~/.claude/projects/-home-ravi-bluespec-matx-bsc/review-reports-2026-07-12b.md)
+Covered: the 10 upstream-reviewed-but-not-by-us PRs (967 919 955 957 1028 965 998 988 956 1004), rc4's
+own integration commits (weave/regolds/tags/workflows/late additions), release sweep. 97 findings,
+4 CONFIRMED HIGH:
+- **955 ATF cache DEAD in rc4** (also shipped dead in rc3): the 1038-pool weave (fb009a28) dropped the
+  coherent-arm recordATFs in TCMisc sat; only the incoherent arm recorded (the one that SHOULDN'T persist).
+  Masked from git -S by the duplicated arm 040614fc excised; invisible to the suite (only miss tests exist).
+  Empirically proven dead on the installed binary (-trace-atf-cache: zero hits, even Prelude.Rep PrimUnit).
+  **FIXED (Ravi-approved)**: recordATFs restored in coherent arm, REMOVED from incoherent arm (pool
+  never-freeze parity), + hit tests ATFCacheHit.bs (same-pkg) / ATFCacheHitDef+Use.bs (.bo-delivered) with
+  -trace-atf-cache assertions in typeclasses.exp. Rebuild green; hit trace verified:
+  (ATFCacheHit.EncSize, [PrimPair (UInt 5)(UInt 5)]) HIT + Prelude entries now hit.
+- **VMDPI crash**: vModuleDeclVIds (998's decl-scan gate) has no VMDPI case → `-verilog -use-dpi` on ANY
+  BDPI design = non-exhaustive pattern crash (AVerilog.hs:2203-2213). rc4-only weave interaction: 999's
+  module-scope VMDPI (ff244a07) x 998's gate. Ord VMItem also lacks VMDPI (latent). Fix: go(VMDPI...) case.
+- **Time-ordered scheduling can silently run ZERO tests** (38b84196): empty/malformed timing.txt →
+  sort-by-time.pl dies inside an unguarded pipeline → all_tests.mk empty → green no-op run; macOS
+  deterministic (time_cmd writes no time.out; generate-stats installs EMPTY timing.txt). ALSO F2: tool?=bsc
+  breaks subdirectory checkparallel (grep '^\./bsc\.' matches nothing from subdirs). MUST FIX before the
+  dogfooded rerun. Fix: fail on empty list + warn-fallback the dies + test -s in generate-stats.
+CONFIRMED MED: 919 resurrected pre-849 walkNF IRefT arm (rc3 deviation propagated; upstream 849 replaced
+it — drop or sentinel); 965 DerivingVia multi-constructor via-target = silent unspecified-value hardware
+(critic: treat as HIGH; fix = shape check in doVia); 998 string-keyed isExternal suppresses safe rename
+(same-scope reg/DPI-fn collision + misleading G0133); 988 imported_BDPI_functions.h closure-wide
+last-writer-wins under -c fan-out + codeGenOptionDescr misses -unspecified-to.
+Notable MEDs: b1490.exp caps regressed vs rc3 CI ground truth (5/6 tests at 256-275M < 320M rule —
+restore uniform 320M); remapPathMaybe trailing-'/' on marker-free paths corrupts .ba abmi_src_name
+(1040 branch needs same fix); untracked bsc.contrib (96 files) sweeps into rerun (inert w/o BSCCONTRIBDIR
+— decide track/move); binary provenance corrected: installed = aa12f09d (206), NOT b0a6d7d8 — only
+65896922/fbe9893e/5e593850 missing, so rerun REQUIRES the rebuild (goldens ahead of old binary);
+957 PROF -K inverted; 1028 T0156 double-report (dedup no-op); 965 `via` fully reserved in .bs lexer.
+Critic: every 209 commits owned; residue = ec1a1682 (926 if-then-undef, verify prior-1008-archive coverage),
+doc build unexercised, perf smoke recommended (green suite provably can't see perf deaths), delta review
+for post-HEAD fix commits, 998-crash attribution = 999's DPI commits (1004 unit reviewed CI trio only).
+
+## FIX BATCH (2026-07-12, Ravi: "make all the fixes, fix upstream PRs when possible, flag for human review")
+All in the WORKING TREE (uncommitted, per commit-approval rule). Each empirically validated on a fresh build:
+1. 955 ATF cache: recordATFs restored (coherent arm), REMOVED (incoherent arm), dead third sub-case excised
+   (TCMisc). Hit tests ATFCacheHit/Def/Use + typeclasses.exp -trace-atf-cache assertions. 3 hits verified.
+2. VMDPI: go(VMDPI...) in vModuleDeclVIds (AVerilog) + total Ord VMItem arms (Verilog). -use-dpi compiles.
+3. remapPathMaybe: marker-decode only paths containing "///" (FileNameUtil + isInfixOf import);
+   run_remap.sh extended w/ absolute-path leg (NO-TRAILING-SLASH / CLEAN / IDENTICAL-ABS all pass).
+4. DerivingVia: viaTargetShapeOK guard (single-ctor/single-arg/named-like-type) → positioned T0000;
+   DerivingViaMultiCon.bs + golden; ShallowSplit still accepted.
+5. b1490.exp: uniform 320M + upstream rationale comment restored (both prior CI burns cited).
+6. Scheduling: sort-by-time.pl die→warn+fallback ×2, numeric median, subdir filter fallback;
+   suitemake.mk empty-list HARD FAIL + timing.txt.new test -s guard. All paths exercised.
+7. Hygiene: '&1' + dupctx.c deleted; bsc.contrib → ./untracked-bsc.contrib-moved-from-testsuite.
+8. 919 walkNF resurrected arm DELETED (per Ravi, after posting the delete-wins resolution on PR 919):
+   the ICSel region now byte-matches upstream 578123c4; 919's only content there was the unused poss
+   pattern widening. Delta-review additions also in: qualifier-aware viaTargetShapeOK, fallback
+   harness-file exclusion, grep anchor. Deriving.hs+IExpand.hs changes still need the ONE rebuild.
+Withdrawn per Ravi: bespoke -use-dpi tests (coverage = 1004's Verilator legs, which force -use-dpi via
+bsc_build_vsim_verilator's VPI rejection; note legs are informational until green).
+
+## RESTRUCTURE 2026-07-12 (per Ravi): rc4 now 214 commits @ HEAD
+- Net-zero pair (d922a07a+503b077c) DROPPED via two-step --onto rebase; final tree verified
+  BYTE-IDENTICAL pre/post; branch moved with reset --soft under the uncommitted batch. 209→207.
+- Regolds kept separate (Ravi), 4804c375 NOT squashed (only the pair was named).
+- **925 re-picked from PR head c54eade7** (fingerprint stack, 7 commits → 214). PR 925 review activity:
+  still ZERO. Conflicts: GenBin/GenABin tags → THEIRS **bsc-bo-20260713-1 / bsc-ba-20260713-1** (one
+  never-released tag covers BOTH format changes: IdPEvidenceFP IdProp serialization + liftDicts Flags
+  field); FixupDefs signature → union (fingerprint map type + 955's 5-field IPackage); Bin Flags
+  REGENERATED via rc4-genflags.py → **138 fields / 10 chunks**; log2_loop golden → THEIRS (rerere fill
+  AUDITED == branch head; restored margins are the safe combined-tree choice); TCMisc/TypeCheck →
+  keep batch-6 Reduction constructor + adopt debris deletions (fst3 import NOT taken — no tuple shape
+  in rc4). GOTCHA: a mid-sequence 'cherry-pick failed' abort silently ADVANCED the sequencer past
+  d41012ce — caught by counting landed commits vs the range; picked explicitly after. Gate: LiftDicts
+  IDENTICAL to branch; FixupDefs delta = own_atf_cache weave only; Id.hs delta = 957 idQuality only.
+- **Scheduling PR OPENED: upstream #1043** (nanavati:testsuite-time-ordered-parallel @cd4e6ba1).
+- TODO (Ravi): bsc-contrib + bsc-bdw CI branches matching the release branch's .ba changes (tags
+  20260713-1, Flags 138) — prior branches exist from 988/verilator work; a release-branch-matched one
+  is wanted. matx-release.yml currently has NO contrib/bdw jobs and NO verilator legs (ci.yml enables
+  verilator_testsuite:true upstream only).
+UPSTREAM: PR 1040 pushed 7b3078db (remap fix + test); testsuite-time-ordered-parallel pushed f49e82d7
+(scheduling fixes); PR 955 fix COMMITTED LOCALLY on fix/atf-incoherent-record but push to
+nanavati:atf-cache-pr DENIED by permission classifier — needs Ravi's explicit go; VMDPI cross-PR comments
+posted on #998+#999 (neither branch can host the fix); #965 comment posted w/ confirmed repro + fix +
+offer to push (jkopanski's fork — not pushed unasked). b1490/TCMisc-weave fixes = rc4-only, no upstream.
+LEDGER: rc4-review-ledger.md at repo root — 28/209 commits at-or-before a verified human review point
+(965 full; pre-review parts of 956/998/967/1028); 181 flagged + this uncommitted batch; recommended
+human-review order included. Validation: 4 affected suite dirs running; delta-review agent on the batch.
+
 ## Pick log
 (append: PR, commits picked, conflicts, resolution)
 
@@ -191,3 +329,92 @@ kernel appends clock changes with NO $var defs (defs live in the stubbed dump_VC
 fst/fsdb for Bluesim in simLink (model on 1027's 9ffd4e43 bsc.hs hunk, S0015-style, cover BOTH formats).
 1027 itself: FST design sound (forward-buffering architecture moot's rollback concern; licensing/link-gating clean);
 held out for process/risk (102-file unreviewed 3-layer stack). Full assessment in the conversation of 2026-07-11.
+
+## 2026-07-12 LATE SESSION: 967 DROP + fixes + attribution sweep
+- **967 DROPPED from the release** (per Ravi; upstream PR discussion continues): first-5-commit rebase,
+  ZERO conflicts, 209 commits. AExpr2STP/Yices clean vs base; TypeAnalysis delta = 955's (fine);
+  splitports.exp REVERTED to base in the batch (d4000566's SplitArgSlice hunk asserted 967 behavior).
+  EXPECT suite arbitration: CSE-naming goldens (b302/lc/CTX/mkTop_glob) were captured on a 967 tree —
+  PrimPair struct removal may shift __h numbers; regold with diff verification if so. Scope now 29 PRs.
+- **956 EN/RDY fix** (batch): WireAnalysis submodEnRdyCandidates — EN from vf_enable minus VPinhigh
+  (always_enabled ⇒ inhigh ⇒ no netlist wire), RDY from isRdyId Method entries in vFields (always_ready
+  ⇒ entry absent) ⇒ no phantom candidates by construction. vcd_correlation baselines may shift (hits
+  count) — regold at suite time. Push to bluetcl-wiretypemap AFTER local validation.
+- **988 -unspecified-to descriptor fix** (batch): codeGenOptionDescr records "unspec-<v>"; DEVELOP.md
+  two-things → three-things. imported_BDPI_functions.h issue still OPEN (decision pending).
+- **ATTRIBUTION SWEEP** (per Ravi: he must be author/co-author on all session commits): scanned all
+  open PRs; 30 bare-"Claude" commits across 10 nanavati branches rewritten (author → Ravi, Claude
+  co-author trailer), patch-ids verified identical, force-pushed. NEW HEADS: 955=d0059875,
+  956=29681fc3, 1020=f523f16c, 957=85ec10a5, 1005=bd5374d2, 925=d98dc3f4, 1008=ceb370af,
+  919=99310ddd, 998=a3e7250f, 1004=9035771d. SKIPPED (not ours to rewrite): 988's 472d1df68
+  (Greg Steuck) and 1028's nine Lucas Kramer commits. refs/rcpr/* pins now stale hash-wise but
+  patch-id-safe. STANDING CONVENTION: repo git config makes Ravi author; keep Claude trailer.
+- macOS Verilator is a GOAL (Ravi): matx-release should gain macOS Verilator legs (advisory),
+  macOS CI needs gtkwave (fst2vcd checks silently skip), 1004 ccache save fix worthwhile.
+- PR-movement check (post-sweep): upstream/main UNMOVED (578123c4). 31/36 heads as expected.
+  Real movers: 969 → 29f99e25 (amy's merge+ByteString fix — the wanted update); 1027 → 2e6b93bf (our
+  earlier cleanup push). **919 REBASED onto 578123c4 by another session (13→12 commits, committer-dated
+  07-13): took the posted delete-wins walkNF resolution — old arm GONE, matching rc4's batch deletion —
+  but clobbered the attribution rewrite; re-applied on the rebased head → plug-leaks @ b6893d68**
+  (12 commits, patch-ids verified). GOTCHA: never hand-type lease hashes — take from ls-remote.
+- 919-rebase vs rc4 verdict (Ravi asked; answer: DON'T re-pick): range-diff shows all commits
+  patch-identical except (a) the IRefT commit minus the deleted walkNF arm hunk (matches rc4's batch
+  deletion) and (b) old resource commits 7+8 squashed into one. SOLE content divergence = log2_loop
+  golden caps: PR@-H128M -M256M -K20M vs rc4@-H150M -M300M -K30M (925-fix restore, last-pick-wins).
+  rc4's generous caps are DELIBERATE (combined tree carries more; b1490 CI lessons) — known deviation,
+  do not "fix" toward the PR; gates should expect this line to differ.
+- SUITE FINAL (2026-07-12 evening): **23,589 PASS / 11 triaged FAIL / 0 ERROR / 132 XFAIL** on the
+  full rebuild (binary 607f5b00, tags 20260713-1, Flags 138, 967 dropped, 925 fingerprint in).
+  967-drop naming goldens (b302/lc/CTX/mkTop_glob) ALL HELD — PrimPair revert shifted nothing.
+  The 11: 8 bluetcl EN/RDY golden growth (verified purely additive; hits 117→169; 12 RDY entries),
+  1 DerivingViaMultiCon golden missing the -u preamble (regenerated), 2 splitports patterns.
+  CORRECTION: my splitports revert-to-base was WRONG — the d4000566 regold patterns match the
+  no-967 output too (drift is combined-tree naming, NOT 967); exp restored from HEAD.
+- 956 upstream push prep: annotated fixture (mkAnnotStash: always_enabled tick / always_ready count /
+  plain push) compile-verified — mkAnnotStash.v has ONLY EN_push/RDY_push, no removed ports; phantom
+  check + dumpmap.tcl added; fixture mirrored into rc4 vcd+fst correlation dirs (fst compiles from
+  shared SRC; MOD_AT_LIST patched both). Branch build running in worktree; on green: regen branch
+  goldens → run bluetcl dirs → push to bluetcl-wiretypemap.
+- MatX CI verilator strategy (Ravi): pull **MatX-inc/verilator release (build-20260701_1)** into the
+  CI legs — exactly matches deployment, pins the version, avoids ALL 4.x veribugging (matx test matrix
+  = ubuntu-22.04 + macos-15; apt would give verilator 4.038). MatX-inc/iverilog exists too — same trick
+  available. Multi-vsim harness mode: PLANNING ONLY (wf_15a9fddd), nothing lands in rc4.
+- GOTCHA (harness): `make -j8 A.group B.group C.group` at the testsuite root ESCAPED SCOPE and ran
+  far beyond the named groups (observed in bsv_examples ~40min in; killed). Single .group targets,
+  sequentially, are the known-good pattern. (The earlier 4-target run Ravi killed likely did the same.)
+- FLAKE CANDIDATE: sysLife.c-vcd.out vs c.out trace-invariance diff appeared ONLY in the rogue run
+  (under ~full-machine load), NOT in the clean full suite — rerun bsc.games/life solo before reading
+  anything into it.
+- 956 branch: EN/RDY fix adapted to pre-spree base (vf_output SINGULAR — deliberate cross-base
+  deviation vs rc4's vf_outputs); phantom check corrected to query the PARENT map's annot$ entries
+  (the module's OWN map deliberately over-emits ifc-side candidates — pre-existing design); branch
+  probe: annot$EN_push/RDY_push present, EN_tick/RDY_tick/RDY_count absent ✓. Branch goldens all
+  purely additive (wiretypemap +108, splitports +12, clocks +26 — gating-primitive EN-class ports).
+- **rc4 VALIDATION COMPLETE (2026-07-12 late)**: full suite 23,589/0-err + all regolds settled +
+  final localcheck of the three fixture-affected bluetcl dirs GREEN (1/1/72, zero fails). The
+  clocks.tcl pair (missed in the first regold round) verified additive (+26) and regolded. Phantom
+  check green in rc4's own output. sort-by-time filter fixed (dir-form tools; default-tool-only
+  fallback; perl interpolation gotcha: $ARGV[0][/.] in a string = nested index + unterminated regex)
+  → pushed to 1043 @ bd04de4c. localcheck = the per-dir mechanism (the .group path is top-level-only).
+  **The working tree is commit-ready, awaiting Ravi's word.** 988 branch: header-elimination +
+  fan-out test green first try (52 pass); descriptor fix added; rebuild+retest cycle running.
+- **988 PUSHED @ 4975c60b** (2 commits): a67c230b inline per-module BDPI decls + -c header elimination
+  + -e deprecation (#warning/banner) + shared-simdir fan-out test (52/0 + sweep 50/0 green — the
+  descriptor change composes with byte-identity); 4975c60b unspec-<v> reuse descriptor + DEVELOP.md.
+  ALL confirmed review findings with our-venue fixes are now LANDED upstream. Remaining upstream
+  items sit on others' PRs (965 cherry-pick offer pending; 998/999 VMDPI comments posted).
+- ec1a1682 PROVENANCE CLOSED + DROPPED (per Ravi): the if-then-undef rule is upstream BASE content
+  (926 merged); rc4's commit carried ONLY the unused UndefKind import (the 1008-archive LOW), deduped
+  rule but kept import in the pick's whitespace resolution. Rebase-dropped (119 replayed clean, tree
+  delta = exactly the 1-line import). 223→222. Zero behavioral delta (unused import).
+- CORRECTED downstream-CI picture: the shared build-and-test workflows run THREE ungated
+  downstream-repo jobs — Toooba (bluespec/Toooba), bsc-contrib (B-Lang-org/bsc-contrib), bdw
+  (B-Lang-org/bdw) — all via checkout_possible_branch.sh NAME-MATCHED branches. matx-release runs all
+  three. Ravi's release-matched branches = push 'release-2026.07.rc4' branches to those repos (with
+  .ba@20260713-1/Flags-138-affected expectations updated); picked up automatically by the release run.
+- Downstream release branches PUSHED: MatX-inc/bsc-contrib and MatX-inc/bdw @ release-2026.07.rc4
+  (from nanavati vlink-regen d5b6a2c / 1cff4e4). Per Ravi these goldens check bsc COMMAND OUTPUT
+  (the .ba-written chatter), NOT .ba bytes — so the post-vlink-regen format changes (remap/
+  fingerprint/liftDicts) don't touch them; branches current as-is. checkout_possible_branch matches
+  by name on PUSH events only — trigger matx-release by pushing the branch, never workflow_dispatch
+  (dispatch silently falls back to B-Lang-org defaults). Toooba unmatched → bluespec/Toooba default.
