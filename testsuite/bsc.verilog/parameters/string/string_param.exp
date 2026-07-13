@@ -1,8 +1,37 @@
-test_c_veri_bsv_modules StringParam mkStringParamSub ""
-test_c_veri_bsv_modules StringParamCond mkStringParamCondSub ""
+# Verilator does not preserve the string-ness of a plain (untyped)
+# Verilog parameter: a string parameter used as a $display format is
+# printed as the decimal value of its bit vector (iverilog and the
+# other 4-state simulators keep the string semantics).  BSC's
+# -system-verilog-output flag emits typed `parameter string'
+# declarations, which restores string display under Verilator; it is
+# applied per-test, keyed on the simulator (never globally).
+#
+# Even with `parameter string', Verilator does not interpret % format
+# directives embedded in a non-literal format expression (a parameter,
+# or a mux/concat of parameters): it prints the directives literally
+# and appends the remaining arguments in default decimal format.
+# Tests whose string parameters embed format directives therefore
+# cannot match under Verilator and are marked as a simulator bug
+# (XFAIL) keyed on verilator only.  (Parameters used as $readmem
+# filenames or displayed via a literal "%s" format are unaffected:
+# StringConcat2 and TwoLevelString pass as-is.)
+if { $verilog_compiler == "verilator" } {
+    set string_svo "-system-verilog-output"
+    set verilator_param_fmt_bug $verilog_compiler
+} else {
+    set string_svo ""
+    set verilator_param_fmt_bug ""
+}
+
+# string parameter with no format directives: -system-verilog-output
+# (under verilator only) makes this pass exactly
+test_c_veri_bsv_modules_options StringParam mkStringParamSub $string_svo ""
+# string parameters with embedded %h: XFAIL under verilator
+test_c_veri_bsv_modules StringParamCond mkStringParamCondSub "" "" $verilator_param_fmt_bug
 
 # Bug 1547
-test_c_veri_bsv_modules StringConcat1 "" ""
+# string parameters with embedded %0b/%0h: XFAIL under verilator
+test_c_veri_bsv_modules StringConcat1 "" "" "" $verilator_param_fmt_bug
 test_c_veri_bsv_modules StringConcat2 "" ""
 
 test_c_veri_bsv_modules TwoLevelString {bsvDisplayString mkStringPassThrough}

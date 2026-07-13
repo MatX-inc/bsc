@@ -1,0 +1,5 @@
+Bar::poke
+Bar::peek
+Bar::prod
+s: 2
+r: 1
