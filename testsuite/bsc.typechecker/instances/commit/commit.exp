@@ -59,6 +59,20 @@ compile_pass PartialOutputCommit.bsv
 compile_fail WeakChainRoot.bsv
 compare_file WeakChainRoot.bsv.bsc-out
 
+# a committed match whose residual context is not yet reducible must
+# defer, not fail: the context's type functions (e.g. an ATF of the
+# instance's input) reduce once ordinary unification grounds the
+# input, which can happen after the commit.  Regression for a tag
+# that reaches a derived DefaultValue only through a higher-order
+# synonym and slot/pred type functions.
+erase DeferCommittedResidual.bo
+compile_pass DeferCommittedResidual.bs
+
+# same, with a second instance sharing the output type: proves the
+# resolution is structural unification, not reverse instance lookup
+erase DeferCommittedResidualTwoInstances.bo
+compile_pass DeferCommittedResidualTwoInstances.bs
+
 # the earlier-instance-may-capture judgment is modal: with the pred's
 # variable rigid, a guarded judgment would call the output conflict at
 # the less specific clause conclusive and name that clause as selected;

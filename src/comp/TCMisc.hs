@@ -2158,9 +2158,8 @@ byInstIsReducible (VPred i p) ii = do
     (mv, Inst e _ (ps :=> h) _) <- newInst ii (getPredPositions p)
     bound_tyvars <- getBoundTVs
     let p_bare = removePredPositions p
-    return $
-        (matchTopIsReducible bound_tyvars h p_bare,
-         earlierInstanceMayCapture p_bare h)
+    m <- matchTopIsReducible bound_tyvars h p_bare
+    return (m, earlierInstanceMayCapture p_bare h)
 
 
 -- This is like "matchTop" except that we need to try matching first
@@ -2175,13 +2174,16 @@ byInstIsReducible (VPred i p) ii = do
 --  * Match () if the predicate matches (or could, after refinement,
 --    match) this instance
 --  * NoMatch for no conclusion from this instance
-matchTopIsReducible :: [TyVar] -> Pred -> Pred -> Match ()
+--
+-- In TI because the unify path must normalize type functions under
+-- the trial substitution before judging the determined positions.
+matchTopIsReducible :: [TyVar] -> Pred -> Pred -> TI (Match ())
 matchTopIsReducible bound_tyvars p1@(IsIn c1 ts1) p2@(IsIn c2 ts2) =
   if c1 /= c2 then
-      NoMatch
+      return NoMatch
   else
       let
-          try_match :: [Bool] -> Match ()
+          try_match :: [Bool] -> TI (Match ())
           try_match bs =
               let nbs = map not bs
                   v1 = (boolCompress nbs ts1)
@@ -2194,37 +2196,47 @@ matchTopIsReducible bound_tyvars p1@(IsIn c1 ts1) p2@(IsIn c2 ts2) =
                   -- call sites, and the bound-variable guards would turn
                   -- "not yet" into "never"
                   uv = mgu [] v1 v2
-                  -- check if the fundeps unify, given a subst for
-                  -- non-fundeps (modal, as above)
-                  check_fds s =
-                      case (mgu []
-                                (apSub s (boolCompress bs ts1))
-                                (apSub s (boolCompress bs ts2))) of
-                        Nothing -> False
-                        Just _  -> True
+                  -- check if the fundeps unify, given a subst for the
+                  -- non-fundeps (modal, as above).  Normalize type
+                  -- functions under the trial substitution first: a
+                  -- predicate arising from a derived instance's context
+                  -- carries ATF applications of its inputs (e.g.
+                  -- "TilePred tag"), which only reduce once the
+                  -- substitution grounds the inputs.  Comparing them
+                  -- unreduced against the instance's ground outputs
+                  -- misjudges a satisfiable-after-refinement predicate
+                  -- as never reducible, and fail-fast context reduction
+                  -- then reports a committed reduction's residual that
+                  -- ordinary unification would have discharged.
+                  check_fds s = do
+                      fd1 <- mapM normT (apSub s (boolCompress bs ts1))
+                      fd2 <- mapM normT (apSub s (boolCompress bs ts2))
+                      return (isJust (mgu [] fd1 fd2))
               in
                   case (mv) of
                     Nothing ->
                         -- doesn't match, so try unify
                         case (uv) of
-                           Nothing -> NoMatch
-                           Just (s,ty_eqs)  ->
-                               if (check_fds s && null ty_eqs)
-                               then Match ()
-                               else NoMatch
+                           Nothing -> return NoMatch
+                           Just (s,ty_eqs)  -> do
+                               fds_ok <- check_fds s
+                               return $ if (fds_ok && null ty_eqs)
+                                        then Match ()
+                                        else NoMatch
                     Just s  ->
                         -- the inputs match: the shared row core renders
                         -- the conclusive answer (a conflict is final
                         -- pending the caller's earlier-unifiable check;
                         -- a rigid deferral is no conclusion from this
                         -- instance)
-                        case matchFDRow bound_tyvars matchList ts1 ts2 bs of
+                        return $ case matchFDRow bound_tyvars matchList ts1 ts2 bs of
                           Match _  -> Match ()
                           Defer    -> NoMatch
                           Conflict -> Conflict
                           NoMatch  -> NoMatch
       in
-          firstMatch (map try_match (funDeps c1))
+          do ms <- mapM try_match (funDeps c1)
+             return (firstMatch ms)
 
 
 byExplPredIsReducible :: VPred -> EPred -> TI (Match ())
