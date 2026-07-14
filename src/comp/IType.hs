@@ -9,6 +9,7 @@ module IType(
   ,fTVars
   ,VarSet
   ,fTVarSet
+  ,iTypeNodeId
   ,vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull
   ,ftvCacheEnabled
   ,iToCT
@@ -169,6 +170,18 @@ vsMember = S.member
 
 vsNull :: VarSet -> Bool
 vsNull = S.null
+
+-- The intern unique of an interior node (ITAp / ITForAll).  Uniques
+-- are process-local, arrival-order identifiers: two types carry the
+-- same unique exactly when they are the same interned node.  They are
+-- valid only as in-process identity -- notably as writer-local
+-- sharing-map keys in BinData -- and must never be serialized or
+-- otherwise influence anything observable.
+iTypeNodeId :: IType -> Int
+iTypeNodeId (ITForAll_ u _ _ _ _) = u
+iTypeNodeId (ITAp_ u _ _ _) = u
+iTypeNodeId t =
+    internalError ("IType.iTypeNodeId: not an interior node: " ++ show t)
 
 -- The free-variable set used by the substitution machinery: interior
 -- nodes answer from their cached field, leaves directly.  When the
