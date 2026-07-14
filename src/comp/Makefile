@@ -261,8 +261,11 @@ TCLEXES = bluetcl
 BO2BLOOGLEEXES = bo2bloogle
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
+# Build-consistency checkers: installed as part of the normal install
+# (not just install-extra), because the library build runs them
+CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -389,6 +392,12 @@ fstcheck: $(SOURCES) $(LIBFST_OBJS)
 		$(LIBFST_OBJS) -lz
 	$(POSTBUILDCOMMAND)
 
+.PHONY: tconcheck
+tconcheck: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
+	$(POSTBUILDCOMMAND)
+
 .PHONY: showrules
 showrules: $(SOURCES)
 	$(PREBUILDCOMMAND)
@@ -436,7 +445,7 @@ endif
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) install-bsc install-bluetcl install-bo2bloogle
+install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
@@ -475,6 +484,11 @@ install-utils: $(PKGINFO)
 install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
 install-showrules: $(addprefix $(BINDIR)/core/,$(SHOWRULESEXES))
 install-showrules: $(PKGINFO)
+
+.PHONY: install-checkers
+install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
+install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
+install-checkers: $(PKGINFO)
 
 # ----
 # Other targets

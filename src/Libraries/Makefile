@@ -25,7 +25,7 @@ SRCS = $(shell find . -name "*.bsv")
 
 BLOOGLEDIR = $(LIBDIR)/bloogle
 
-.PHONY: all install clean full_clean bloogle
+.PHONY: all build tconcheck install clean full_clean bloogle
 
 all: install TAGS
 
@@ -36,7 +36,14 @@ bloogle: build
 	install -d $(BLOOGLEDIR)
 	$(BO2BLOOGLE) bluespec $(BUILDDIR)/*.bo > $(BLOOGLEDIR)/bluespec.txt
 
-install: build bloogle
+# Check that the compiler's handwritten tycon constants agree with the
+# just-built Prelude (see src/comp/tconcheck.hs); drift fails the build
+TCONCHECK ?= $(BINDIR)/tconcheck
+
+tconcheck: build
+	$(TCONCHECK) $(BUILDDIR)
+
+install: build bloogle tconcheck
 	install -d $(INSTALLDIR)
 	install -m644 $(BUILDDIR)/* $(INSTALLDIR)
 
