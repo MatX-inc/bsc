@@ -10,6 +10,7 @@ module IType(
   ,VarSet
   ,fTVarSet
   ,vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull
+  ,ftvCacheEnabled
   ,iToCT
   ,iToCK
    )
@@ -27,6 +28,7 @@ import System.Environment(lookupEnv)
 import System.IO.Unsafe(unsafePerformIO)
 
 import ErrorUtil(internalError)
+import IOUtil(progArgs)
 import Id(Id, IdProp(..), getIdBase, getIdQual, getIdPosition, getIdProps)
 import PreIds(idArrow, idId, idTNumToStr)
 import TypeOps(opNumT, opStrT)
@@ -125,15 +127,23 @@ vsMember = S.member
 vsNull :: VarSet -> Bool
 vsNull = S.null
 
--- The cached free-variable set: interior nodes answer from their
--- field, leaves directly.
+-- The free-variable set used by the substitution machinery: interior
+-- nodes answer from their cached field, leaves directly.  When the
+-- cache is disabled (-hack-no-itype-ftv-cache, see below) the fields
+-- hold a shared dummy empty set, so this walks instead; consumers
+-- that need correct sets (context free-variable bookkeeping) must go
+-- through this function and never read the field directly.
 fTVarSet :: IType -> VarSet
-fTVarSet (ITForAll_ _ fvs _ _ _) = fvs
-fTVarSet (ITAp_ _ fvs _ _) = fvs
-fTVarSet (ITVar i) = vsSingleton i
-fTVarSet (ITCon _ _ _) = vsEmpty
-fTVarSet (ITNum _) = vsEmpty
-fTVarSet (ITStr _) = vsEmpty
+fTVarSet t0 | ftvCacheEnabled = cached t0
+            | otherwise       = walk t0
+  where cached (ITForAll_ _ fvs _ _ _) = fvs
+        cached (ITAp_ _ fvs _ _) = fvs
+        cached l = leaf l
+        walk (ITForAll_ _ _ i _ b) = vsDelete i (walk b)
+        walk (ITAp_ _ _ f a) = walk f `vsUnion` walk a
+        walk l = leaf l
+        leaf (ITVar i) = vsSingleton i
+        leaf _ = vsEmpty
 
 -- Free type variables as a Set Id (the historical interface).
 fTVars :: IType -> S.Set Id
@@ -349,6 +359,21 @@ internSanityOn = unsafePerformIO $ do
     mv <- lookupEnv "BSC_INTERN_SANITY"
     return (isJust mv)
 
+-- The hidden flag -hack-no-itype-ftv-cache (registered with the
+-- other progArgs-queried flags in FlagsDecode.traceflags, so the
+-- command-line parser accepts it; BSC_OPTIONS reaches progArgs too)
+-- disables the free-variable cache and the tSubst pruning that
+-- consumes it: interned nodes store one shared empty set in the
+-- metadata field and the substitution machinery takes the exact
+-- pre-cache code paths (full free-variable walks, original
+-- alpha-conversion behavior).  Absent the flag they are enabled (the
+-- default).  The switch lets the optimization be measured A/B on any
+-- workload with a single binary, and doubles as a diagnostic chicken
+-- switch.
+{-# NOINLINE ftvCacheEnabled #-}
+ftvCacheEnabled :: Bool
+ftvCacheEnabled = not ("-hack-no-itype-ftv-cache" `elem` progArgs)
+
 -- Structural equality at the granularity interning promises (the
 -- exactCmp* granularity: full leaf payloads, everything but heap
 -- identity).  Only used by the sanity check.
@@ -375,7 +400,9 @@ internAp f a = unsafePerformIO $ do
     go key st@(InternTable m n) =
         case M.lookup key m of
           Just t  -> (st, checkHit t)
-          Nothing -> let t = ITAp_ n (fTVarSet f `vsUnion` fTVarSet a) f a
+          Nothing -> let fvs | ftvCacheEnabled = fTVarSet f `vsUnion` fTVarSet a
+                             | otherwise       = vsEmpty
+                         t = ITAp_ n fvs f a
                      in  (InternTable (M.insert key t m) (n+1), t)
     checkHit t@(ITAp_ _ _ f' a')
         | not internSanityOn || (structEqT f f' && structEqT a a') = t
@@ -396,7 +423,9 @@ mkITForAll i k t = unsafePerformIO $ do
     go key st@(InternTable m n) =
         case M.lookup key m of
           Just t' -> (st, checkHit t')
-          Nothing -> let t' = ITForAll_ n (vsDelete i (fTVarSet t)) i k t
+          Nothing -> let fvs | ftvCacheEnabled = vsDelete i (fTVarSet t)
+                             | otherwise       = vsEmpty
+                         t' = ITForAll_ n fvs i k t
                      in  (InternTable (M.insert key t' m) (n+1), t')
     checkHit t'@(ITForAll_ _ _ i' k' b')
         | not internSanityOn ||
