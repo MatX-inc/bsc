@@ -736,7 +736,10 @@ eqPtrs heap ptrs =
                         case IM.lookup i ptrm of
                         Nothing -> e
                         -- hd_ref errors because we don't use it once we have the iheap
-                        Just i' -> IRefT t i' (internalError "eqPtrs ref") (internalError "eqPtrs ref")
+                        -- poss must be a real value (S.empty): the position
+                        -- readers and NFData force it.  The ref payload is
+                        -- genuinely never touched, so it stays an error.
+                        Just i' -> IRefT t i' S.empty (internalError "eqPtrs ref")
                     -- canonicalize array element pointers the same way,
                     -- so that selections over CSE-equal arrays compare
                     -- equal (cmpC compares arrays by ac_ptr); like the
