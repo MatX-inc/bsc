@@ -6,6 +6,7 @@ import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Debug.Trace(traceM)
+import GHC.Fingerprint(fingerprintString)
 
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
@@ -58,6 +59,9 @@ data LState = LState {
   -- the lifted dictionary can be reconstructed from this information
   -- at the end of the pass.
   liftedDictMap :: !(M.Map Id (CType, CExpr)),
+  -- digest -> canonical evidence rendering, to detect (and fail loudly
+  -- on) a fingerprint collision within this compile
+  fpDigests :: !(M.Map String String),
   -- Information about instances that do not appear in the symbol table.
   -- These are converted instance definitions that were added by convinst
   -- but never incorporated into the symbol table.
@@ -75,6 +79,7 @@ type L a = State LState a
 
 initLState :: SymTab -> CPackage -> LState
 initLState symt (CPackage mi exps imps impsigs fixs ds includes) = LState {
+  fpDigests = M.empty,
   dictNo = 0,
   typeDictMap = M.empty,
   exprDictMap = M.empty,
@@ -136,6 +141,25 @@ type BoundDicts = S.Set Id
 -- Nothing means the expression has a shape we do not fingerprint; the
 -- dictionary is still lifted and shared within its package, but is
 -- not eligible for cross-package deduplication.
+
+-- The IdProp (and therefore the .bo/.ba) stores a fixed-size digest of
+-- the canonical evidence rendering, not the rendering itself, which is
+-- unbounded.  Within a compile the digest->canonical map turns a
+-- digest collision into a loud internal error; across compiles a
+-- collision is caught by the structural verification in FixupDefs
+-- before any deduplication acts on it.
+digestEvidence :: String -> L String
+digestEvidence canon = do
+    let d = show (fingerprintString canon)
+    dm <- gets fpDigests
+    case M.lookup d dm of
+      Just canon' | canon' /= canon ->
+          internalError ("LiftDicts: evidence fingerprint collision:\n"
+                         ++ canon ++ "\n  vs\n" ++ canon')
+      Just _ -> return d
+      Nothing -> do
+        modify (\s -> s { fpDigests = M.insert d canon dm })
+        return d
 
 evidenceFP :: CExpr -> Maybe String
 evidenceFP (CVar i) =
@@ -200,10 +224,12 @@ handleCoherentDict p t e = do
                CVar i' -> return i'
                CApply (CVar i') [] -> return i'
                _ -> do lift_i0 <- newDictId (getPosition e)
-                       let lift_i = case evidenceFP e' of
-                                      Just fp -> addIdProp lift_i0
-                                          (IdPEvidenceFP (mkFString fp))
-                                      Nothing -> lift_i0
+                       lift_i <- case evidenceFP e' of
+                                   Just fp -> do
+                                     fpd <- digestEvidence fp
+                                     return $ addIdProp lift_i0
+                                         (IdPEvidenceFP (mkFString fpd))
+                                   Nothing -> return lift_i0
                        when trace_lift_dicts $ traceM $ "adding lifted dict (coherent): " ++ ppReadable (lift_i, e')
                        modify (\s -> s { liftedDictMap = M.insert lift_i (t, e') $ liftedDictMap s } )
                        return lift_i

@@ -79,13 +79,18 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
         m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
-        ads' = iDefsMap (fixUp coherent_dict_map m) ads
+        ads' = iDefsMap (fixUp coherent_dict_map m0 m) ads
+
+        -- pre-fixup definitions, used to verify fingerprint matches
+        -- against each package's own evidence as it was serialized
+        -- (before any redirection this pass performs)
+        m0 = M.fromList [ (i, e) | (IDef i _ e _) <- ads ]
 
         -- The new package contents
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
-        ds' = iDefsMap (fixUp coherent_dict_map m) ds
+        ds' = iDefsMap (fixUp coherent_dict_map m0 m) ds
         dropDict i t = tracep (trace_drop_dicts && result) ("dropDict: " ++ ppReadable (i,t)) result
-          where result = case coherentTarget coherent_dict_map i t of
+          where result = case coherentTarget coherent_dict_map m0 i t of
                            Just i' -> i' /= i
                            Nothing -> False
         ds'' = [ d' | d'@(IDef i t _ _) <- ds', not (dropDict i t) ]
@@ -132,24 +137,59 @@ updDef coherent_dict_map d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips
 
 -- ===============
 
-fixUp :: M.Map IType (M.Map FString Id) -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
-fixUp cm m (ILam i t e) = ILam i t (fixUp cm m e)
-fixUp cm m (ILAM i k e) = ILAM i k (fixUp cm m e)
-fixUp cm m (IAps f ts es) = IAps (fixUp cm m f) ts (map (fixUp cm m) es)
-fixUp cm m (ICon i (ICDef t _))
-  | Just i' <- coherentTarget cm i t = ICon i' (ICDef t (get m i'))
-fixUp cm m (ICon i (ICDef t _)) = ICon i (ICDef t (get m i))
-fixUp _ _ e = e
+fixUp :: M.Map IType (M.Map FString Id) -> M.Map Id (IExpr a) -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp cm m0 m (ILam i t e) = ILam i t (fixUp cm m0 m e)
+fixUp cm m0 m (ILAM i k e) = ILAM i k (fixUp cm m0 m e)
+fixUp cm m0 m (IAps f ts es) = IAps (fixUp cm m0 m f) ts (map (fixUp cm m0 m) es)
+fixUp cm m0 m (ICon i (ICDef t _))
+  | Just i' <- coherentTarget cm m0 i t = ICon i' (ICDef t (get m i'))
+fixUp cm m0 m (ICon i (ICDef t _)) = ICon i (ICDef t (get m i))
+fixUp _ _ _ e = e
 
 -- The canonical imported def a coherent dictionary may be replaced by:
--- one of the same type AND the same evidence fingerprint.  Fingerprint
--- equality is what makes the replacement sound; see mkCoherentDictMap.
-coherentTarget :: M.Map IType (M.Map FString Id) -> Id -> IType -> Maybe Id
-coherentTarget cm i t
+-- one of the same type AND the same evidence fingerprint, VERIFIED
+-- against the pre-fixup definitions.  The fingerprint is a digest, so
+-- equality alone is not proof of identical evidence; the structural
+-- check makes a collision harmless (the redirection is skipped and
+-- both dictionaries are kept -- the only cost is a lost
+-- deduplication).
+coherentTarget :: M.Map IType (M.Map FString Id) -> M.Map Id (IExpr a) -> Id -> IType -> Maybe Id
+coherentTarget cm m0 i t
   | isDictId i, not (isIncoherentDict i), itIsDictType t,
     Just fp <- getEvidenceFP i,
-    Just fpm <- M.lookup t cm = M.lookup fp fpm
+    Just fpm <- M.lookup t cm,
+    Just i' <- M.lookup fp fpm =
+      if i' == i then Just i'
+      else case (M.lookup i m0, M.lookup i' m0) of
+             (Just e, Just e') | eqEvidence e e' -> Just i'
+             (Just _, Just _) ->
+                 tracep trace_drop_dicts
+                     ("coherentTarget: digest matched but evidence"
+                      ++ " differs, keeping both: " ++ ppReadable (i, i'))
+                     Nothing
+             _ -> Nothing
   | otherwise = Nothing
+
+-- Structural equality of dictionary evidence definitions.  Dictionary
+-- references compare by qualified name or by evidence digest, because
+-- each package lifts its own copy of shared evidence under a local
+-- name.  Anything unrecognized falls back to plain equality, erring
+-- toward keeping both definitions.
+eqEvidence :: IExpr a -> IExpr a -> Bool
+eqEvidence (ILam i1 t1 e1) (ILam i2 t2 e2) =
+    i1 == i2 && t1 == t2 && eqEvidence e1 e2
+eqEvidence (ILAM i1 k1 e1) (ILAM i2 k2 e2) =
+    i1 == i2 && k1 == k2 && eqEvidence e1 e2
+eqEvidence (IAps f1 ts1 es1) (IAps f2 ts2 es2) =
+    ts1 == ts2 && length es1 == length es2 &&
+    eqEvidence f1 f2 && and (zipWith eqEvidence es1 es2)
+eqEvidence (ICon i1 (ICDef t1 _)) (ICon i2 (ICDef t2 _)) =
+    t1 == t2 &&
+    (qualEq i1 i2 ||
+     case (getEvidenceFP i1, getEvidenceFP i2) of
+       (Just d1, Just d2) -> d1 == d2
+       _ -> False)
+eqEvidence e1 e2 = e1 == e2
 
 get :: M.Map Id (IExpr a) -> Id -> IExpr a
 get m i = let value = get2 m i
