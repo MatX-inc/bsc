@@ -6,6 +6,10 @@ module IType(
   ,IKind(..)
   ,itArrow
   ,mkNumConT
+  ,fTVars
+  ,VarSet
+  ,fTVarSet
+  ,vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull
   ,iToCT
   ,iToCK
    )
@@ -16,6 +20,7 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
 import System.Environment(lookupEnv)
@@ -64,23 +69,75 @@ data IKind
 -- The uniques are arrival-order identifiers.  They must never influence
 -- anything observable (ordering, printing, serialization); they may
 -- only be used for pointer-style equality (same unique => same node).
+--
+-- Interior nodes also cache their free type variables (a VarSet) in a
+-- strict field computed at construction.  Since the intern table is
+-- immortal, a lazy field would be a permanent thunk; the eager cost
+-- is near zero because set union and delete return an existing set by
+-- pointer when one side is empty or the element is absent, and ground
+-- types all share the one vsEmpty.  The field is metadata only: it
+-- never serializes, never prints, and never participates in
+-- comparison or intern keys.
 data IType
-        = ITForAll_ {-# UNPACK #-} !Int !Id !IKind IType
-        | ITAp_ {-# UNPACK #-} !Int IType IType
+        = ITForAll_ {-# UNPACK #-} !Int !VarSet !Id !IKind IType
+        | ITAp_ {-# UNPACK #-} !Int !VarSet IType IType
         | ITVar !Id
         | ITCon !Id !IKind !TISort
         | ITNum !Integer
         | ITStr !FString
 
 pattern ITForAll :: Id -> IKind -> IType -> IType
-pattern ITForAll i k t <- ITForAll_ _ i k t
+pattern ITForAll i k t <- ITForAll_ _ _ i k t
   where ITForAll i k t = mkITForAll i k t
 
 pattern ITAp :: IType -> IType -> IType
-pattern ITAp f a <- ITAp_ _ f a
+pattern ITAp f a <- ITAp_ _ _ f a
   where ITAp f a = mkITAp f a
 
 {-# COMPLETE ITForAll, ITAp, ITVar, ITCon, ITNum, ITStr #-}
+
+-- --------------------------------
+-- Free type variable sets
+
+-- The set representation used for the cached free-variable metadata
+-- and for substitution-domain checks.  Kept behind a small API so the
+-- representation can be specialized in one place.
+type VarSet = S.Set Id
+
+vsEmpty :: VarSet
+vsEmpty = S.empty
+
+vsSingleton :: Id -> VarSet
+vsSingleton = S.singleton
+
+vsUnion :: VarSet -> VarSet -> VarSet
+vsUnion = S.union
+
+vsInsert :: Id -> VarSet -> VarSet
+vsInsert = S.insert
+
+vsDelete :: Id -> VarSet -> VarSet
+vsDelete = S.delete
+
+vsMember :: Id -> VarSet -> Bool
+vsMember = S.member
+
+vsNull :: VarSet -> Bool
+vsNull = S.null
+
+-- The cached free-variable set: interior nodes answer from their
+-- field, leaves directly.
+fTVarSet :: IType -> VarSet
+fTVarSet (ITForAll_ _ fvs _ _ _) = fvs
+fTVarSet (ITAp_ _ fvs _ _) = fvs
+fTVarSet (ITVar i) = vsSingleton i
+fTVarSet (ITCon _ _ _) = vsEmpty
+fTVarSet (ITNum _) = vsEmpty
+fTVarSet (ITStr _) = vsEmpty
+
+-- Free type variables as a Set Id (the historical interface).
+fTVars :: IType -> S.Set Id
+fTVars = fTVarSet
 
 -- --------------------------------
 -- The intern table
@@ -270,9 +327,9 @@ cmpNodeKey (NKForAll i1 k1 t1) (NKForAll i2 k2 t2) =
     exactCmpId i1 i2 `thenCmp` compare k1 k2 `thenCmp` cmpTKey t1 t2
 
 tKey :: IType -> TKey
-tKey (ITForAll_ u _ _ _) = TKNode u
-tKey (ITAp_ u _ _)       = TKNode u
-tKey t                   = TKLeaf t
+tKey (ITForAll_ u _ _ _ _) = TKNode u
+tKey (ITAp_ u _ _ _)       = TKNode u
+tKey t                     = TKLeaf t
 
 data InternTable = InternTable !(M.Map NodeKey IType) {-# UNPACK #-} !Int
 
@@ -296,14 +353,14 @@ internSanityOn = unsafePerformIO $ do
 -- exactCmp* granularity: full leaf payloads, everything but heap
 -- identity).  Only used by the sanity check.
 structEqT :: IType -> IType -> Bool
-structEqT (ITForAll_ u1 i1 k1 t1) (ITForAll_ u2 i2 k2 t2) =
+structEqT (ITForAll_ u1 _ i1 k1 t1) (ITForAll_ u2 _ i2 k2 t2) =
     exactCmpId i1 i2 == EQ && k1 == k2 && (u1 == u2 || structEqT t1 t2)
-structEqT (ITAp_ u1 f1 a1) (ITAp_ u2 f2 a2) =
+structEqT (ITAp_ u1 _ f1 a1) (ITAp_ u2 _ f2 a2) =
     u1 == u2 || (structEqT f1 f2 && structEqT a1 a2)
-structEqT t1@(ITForAll_ _ _ _ _) t2 = False
-structEqT t1 t2@(ITForAll_ _ _ _ _) = False
-structEqT t1@(ITAp_ _ _ _) t2 = False
-structEqT t1 t2@(ITAp_ _ _ _) = False
+structEqT t1@(ITForAll_ _ _ _ _ _) t2 = False
+structEqT t1 t2@(ITForAll_ _ _ _ _ _) = False
+structEqT t1@(ITAp_ _ _ _ _) t2 = False
+structEqT t1 t2@(ITAp_ _ _ _ _) = False
 structEqT t1 t2 = exactCmpLeaf t1 t2 == EQ
 
 {-# NOINLINE internAp #-}
@@ -318,13 +375,13 @@ internAp f a = unsafePerformIO $ do
     go key st@(InternTable m n) =
         case M.lookup key m of
           Just t  -> (st, checkHit t)
-          Nothing -> let t = ITAp_ n f a
+          Nothing -> let t = ITAp_ n (fTVarSet f `vsUnion` fTVarSet a) f a
                      in  (InternTable (M.insert key t m) (n+1), t)
-    checkHit t@(ITAp_ _ f' a')
+    checkHit t@(ITAp_ _ _ f' a')
         | not internSanityOn || (structEqT f f' && structEqT a a') = t
     checkHit t =
         internalError ("IType.internAp: intern table mismatch\n" ++
-                       "requested: " ++ show (ITAp_ (-1) f a) ++ "\n" ++
+                       "requested: " ++ show (ITAp_ (-1) vsEmpty f a) ++ "\n" ++
                        "canonical: " ++ show t)
 
 {-# NOINLINE mkITForAll #-}
@@ -339,14 +396,14 @@ mkITForAll i k t = unsafePerformIO $ do
     go key st@(InternTable m n) =
         case M.lookup key m of
           Just t' -> (st, checkHit t')
-          Nothing -> let t' = ITForAll_ n i k t
+          Nothing -> let t' = ITForAll_ n (vsDelete i (fTVarSet t)) i k t
                      in  (InternTable (M.insert key t' m) (n+1), t')
-    checkHit t'@(ITForAll_ _ i' k' b')
+    checkHit t'@(ITForAll_ _ _ i' k' b')
         | not internSanityOn ||
           (exactCmpId i i' == EQ && k == k' && structEqT t b') = t'
     checkHit t' =
         internalError ("IType.mkITForAll: intern table mismatch\n" ++
-                       "requested: " ++ show (ITForAll_ (-1) i k t) ++ "\n" ++
+                       "requested: " ++ show (ITForAll_ (-1) vsEmpty i k t) ++ "\n" ++
                        "canonical: " ++ show t')
 
 -- The smart constructor behind the ITAp pattern synonym.  It first
@@ -364,13 +421,13 @@ mkITForAll i k t = unsafePerformIO $ do
 -- real constructors (ITAp_): the ITAp synonym's builder is this very
 -- function.
 mkITAp :: IType -> IType -> IType
-mkITAp (ITAp_ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
+mkITAp (ITAp_ _ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x]
-mkITAp (ITAp_ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
+mkITAp (ITAp_ _ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
     ITStr (fromJust res)
   where res = opStrT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
@@ -394,10 +451,10 @@ mkNumConT i =
 -- intern uniques, matching what the derived instance printed before
 -- hash-consing (so debug dumps are unchanged).
 instance Show IType where
-    showsPrec d (ITForAll_ _ i k t) = showParen (d > 10) $
+    showsPrec d (ITForAll_ _ _ i k t) = showParen (d > 10) $
         showString "ITForAll " . showsPrec 11 i . showString " " .
         showsPrec 11 k . showString " " . showsPrec 11 t
-    showsPrec d (ITAp_ _ f a) = showParen (d > 10) $
+    showsPrec d (ITAp_ _ _ f a) = showParen (d > 10) $
         showString "ITAp " . showsPrec 11 f . showString " " .
         showsPrec 11 a
     showsPrec d (ITVar i) = showParen (d > 10) $
@@ -450,7 +507,7 @@ instance Ord IType where
 -- Interned interior nodes short-circuit on equal uniques (same unique
 -- means the same node, hence EQ).  Uniques are never used for LT/GT.
 cmpT :: IType -> IType -> Ordering
-cmpT (ITForAll_ u1 i1 _ t1) (ITForAll_ u2 i2 _ t2)  -- binder kind comparison skipped (see above)
+cmpT (ITForAll_ u1 _ i1 _ t1) (ITForAll_ u2 _ i2 _ t2)  -- binder kind comparison skipped (see above)
         | u1 == u2  = EQ
         | otherwise =
             case compare i1 i2 of
@@ -459,7 +516,7 @@ cmpT (ITForAll_ u1 i1 _ t1) (ITForAll_ u2 i2 _ t2)  -- binder kind comparison sk
 cmpT (ITForAll _  _  _ ) _                   = LT
 
 cmpT (ITAp _ _)          (ITForAll _  _  _)  = GT
-cmpT (ITAp_ u1 f1 a1)    (ITAp_ u2 f2 a2)
+cmpT (ITAp_ u1 _ f1 a1)  (ITAp_ u2 _ f2 a2)
         | u1 == u2  = EQ
         | otherwise =
             case cmpT f1 f2 of
