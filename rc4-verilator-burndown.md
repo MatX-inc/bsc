@@ -341,3 +341,35 @@ predicate is in force.
   (genABin), rc4 -e satisfies currency via the 988 reuse descriptor with -vdir — the
   bdw S0099 mechanism). Upstream follow-up: deduce both predicates at -g, record in the
   reuse descriptor, refuse at -e -vsim verilator with instance-naming diagnostics.
+
+## rc5 (2026-07-13 evening): pool removal + fingerprint digest+verify (per Ravi)
+- **PR 1038's six pool commits DROPPED** (58e95d9b..31b04e11, contiguous) via --onto;
+  four downstream stops resolved: stray-marker fix (pool-weave artifact, skipped),
+  cross-PR weave repair (pool-arity noise; the DirectIncoherence graft already present in
+  the pool-less arms — taken OURS), SolvedBinds record-completion (renameBinds/allBindIds/
+  extractClosures = pool-only, zero callers, dropped), 955-pool-weave repair (nothing to
+  repair, skipped), ATF-cache fix (KEPT its semantic core: no incoherent-arm recordATFs,
+  pool-free comment; **the pool-less replay shows 955's coherent-arm recordATFs was never
+  broken — the dead cache was purely a pool-weave casualty**).
+- **925 refreshed**: PR rebased onto upstream main (nanavati:lift-dictionaries, now
+  MERGEABLE; 923-content dropped as upstream-subsumed, TCMisc zero-delta vs upstream;
+  Bin Flags regenerated 136/10; tags bsc-bo/ba-20260714-1; review's no-tag-bump finding
+  fixed) + **digest+verify fingerprinting** (GHC.Fingerprint digest in IdPEvidenceFP;
+  in-compile digest->canonical collision guard = loud internalError; FixupDefs verifies
+  every match against pre-fixup defs with fp-aware structural equality before redirect/
+  drop — collision degrades to lost dedup, never wrong merge). Cherry-picked to rc5
+  (one IPackage-arity conflict vs 955's own_atf_cache field). PR head e740cdfb.
+- **PR 1038 comment posted** (park pending refactor; proxy-metric evidence; list-structure
+  overhead; memory signature; revival sketch = ground-only Map-keyed pool, strict forcing,
+  wall-clock+residency acceptance).
+- **MEMORY ATTRIBUTION NAILED**: Bug1490MyBool -verilog +RTS -s max residency:
+  rc4-with-pool 441.4MB vs rc5-without 254.3MB — **the pool was a 1.74x peak-heap
+  regression** on proviso-stress; explains the rc3-era 288->320M cap raises. (Caps left
+  at 320M: over-provisioned is harmless.)
+- rc5 tags: bsc-bo/ba-20260714-2 (digest changes fp payload semantics vs published
+  20260713-1; -1 taken by the standalone PR).
+- Validation: closures typecheck clean; full build; **iverilog suite 23,505 PASS / 1 FAIL**
+  — the 1 = DummyInDeflQual IdProp-dump digest regold (same class as ContextOnClassSubset;
+  regolded on rc5 AND the PR branch, both dirs 25/0). NO pool-emission-order golden drift
+  anywhere (liftDicts order-insensitivity covered it, per its own commit). Verilator suite
+  in flight.
