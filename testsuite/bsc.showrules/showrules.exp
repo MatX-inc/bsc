@@ -3,6 +3,9 @@ bsc_initialize
 
 if { ! [file exists "$showrules"] } {
     note "showrules is NOT available"
+    # an auditable marker, so a missing tool can never silently skip
+    # this file (the CI verdict diffs the UNSUPPORTED set)
+    unsupported "showrules: tool not built (make -C src/comp install-extra)"
 } else {
 
 # Execute the GCD test
