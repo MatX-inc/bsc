@@ -71,3 +71,33 @@ post-dates the woven 1035-1037 copies (see below).
   ratchet-mode gating design from rc4-verilator-burndown.md still applies).
 - NOT pushed to origin: per the rc discipline, push only with Ravi's
   explicit go.
+
+## Lifting swap (2026-07-14, later): fingerprint 925 -> structural stack
+
+- Backed out the old-925 line via drop-rebase onto 941eecfe (26 dropped:
+  the original lifting pass + ISimpDicts/FixupDefs/IdPCAF base, the
+  evidence-fingerprint stack, rc5's digest+verify and its tag bump and
+  regolds; 968cf1d8 emptied — its content was purely lifting-era golden
+  refresh).  d700f5ca re-applies the comment cleanup the itIsDictType
+  commit carried.
+- Cherry-picked the validated structural stack (nanavati/bsc
+  lift-dicts-idefs @ 94d70453 on ftv-metadata e06d39cc): SYB removal,
+  tconcheck x3, position restamp, interning x2, ftv metadata x3,
+  lifting x3 + tests (341deccc..1c84e1b1).  Key splices: IExpand eqPtrs
+  (stack's real-S.empty poss + rc line's ICLazyArray canonicalization),
+  tconcheck/bloogle/libfst Makefile union, GenABin Bin Flags regenerated
+  at 138 fields / 10 chunks via rc4-genflags.py.
+- Tags: bsc-bo-20260714-3 / bsc-ba-20260714-3 (f4c55204; -2 was
+  three-way ambiguous).  IdPCAF back at IdProp code 38; IdPEvidenceFP
+  gone.  No Error.hs tag changes.
+- Suite (iverilog, -j128 fullparallel, SystemC on, showrules installed):
+  **23,576 PASS / 0 FAIL / 132 XFAIL / 0 XPASS / 0 UNSUPPORTED**.
+  Movement: bsc.misc/liftdicts structural-evidence tests (34, replacing
+  the fingerprint set), five dump goldens settled in 95356a60 (three
+  identical to pre-swap; sysStructs pair = position renumbering +
+  name-form mix, no structural change).
+- Soundness repro: topTag=2 midTag=1 PASS.  BlowupN d=16: 9.5s.
+- tconcheck: 94 entries OK.  Verilator leg NOT run; timing-ci.txt:110
+  still lists bsc.misc/liftdicts (dir persists with same-name tests) —
+  re-shakedown when the verilator leg next runs.
+- NOT pushed; publication is the coordinator's call.
