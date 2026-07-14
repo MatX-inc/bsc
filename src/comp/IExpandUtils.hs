@@ -2592,7 +2592,7 @@ fullTypeNormalizer rules t@(ITAp _ _)
         canNorm (ITForAll _ _ _) = False
         canNorm (ITAp f a)       = canNorm f && canNorm a
         canNorm _                = True
-fullTypeNormalizer rules (ITAp f a) = changed2 normITAp f a f' a'
+fullTypeNormalizer rules (ITAp f a) = changed2 ITAp f a f' a'
   where f' = fullTypeNormalizer rules f
         a' = fullTypeNormalizer rules a
 
