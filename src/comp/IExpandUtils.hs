@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, FlexibleInstances, TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances, TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImplicitParams #-}
 module IExpandUtils(
@@ -77,7 +77,6 @@ import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.Map as M
 import qualified Data.Set as S
-import qualified Data.Generics as Generic
 
 import Eval
 import PPrint
@@ -271,7 +270,7 @@ pTermToIExpr (PSel idx idx_sz es) =
 
 -- An expression with an implicit condition.
 data PExpr = P !HPred HExpr
-        deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+        deriving (Eq, Ord, Show)
 
 instance PPrint PExpr where
     pPrint d prec (P p e) = pPrint d prec (iePrimWhen (iGetType e) (predToIExpr p) e)
@@ -411,7 +410,7 @@ data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo }
               | HNF { hc_pexpr :: PExpr, hc_wire_set :: HWireSet,
                       hc_name :: NameInfo }
               | HLoop { hc_name :: NameInfo }
-        deriving (Show, Eq, Ord, Generic.Data, Generic.Typeable)
+        deriving (Show, Eq, Ord)
 
 -- should I drop the predicate for better printing of error messages?
 heapCellToHExpr :: HeapCell -> HExpr
@@ -440,7 +439,6 @@ instance PPrint HeapCell where
             text "HLoop" <+> pPrint d 0 name
 
 newtype HeapData = HeapData (IORef (HeapCell))
-  deriving (Generic.Data, Generic.Typeable)
 
 {-
 instance Eq HeapData where
