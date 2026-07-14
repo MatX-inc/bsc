@@ -373,3 +373,12 @@ predicate is in force.
   regolded on rc5 AND the PR branch, both dirs 25/0). NO pool-emission-order golden drift
   anywhere (liftDicts order-insensitivity covered it, per its own commit). Verilator suite
   in flight.
+- rc5 verilator suite: **22,858 PASS / 0 FAIL / 628→634-equivalent UNSUPPORTED, exit 0**.
+  The contract diff caught a REAL hollow-run: bsc.showrules recorded an empty sum — the
+  worktree build lacked `make -C src/comp install-extra` (showrules/fstscopes/fstcheck are
+  UTILEXES/SHOWRULESEXES since the 1027 Makefile rework) and the .exp's availability gate
+  skipped the file SILENTLY. Fixed: install-extra run in the worktree; gate hardened to
+  emit an auditable `unsupported` marker; dir revalidated (verilator 30P/6U, iverilog
+  60P/0F/0U); contract re-verified EXACT vs the committed manifest. Lesson recorded:
+  worktree validation builds must run install-extra; the UNSUPPORTED-drift check is
+  demonstrably not decorative.
