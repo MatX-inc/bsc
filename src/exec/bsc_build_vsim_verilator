@@ -282,7 +282,10 @@ fi
 
 cp -p $BLUESPECDIR/Verilator/sim_main.cpp $OBJDIR/sim_main.cpp
 
-make -C $OBJDIR -j -f ${TOPCLASS}.mk ${TOPCLASS}
+# VSIM_BUILD_JOBS bounds the parallelism of this compile (empty = unbounded).
+# CI sets it to 1: test-level parallelism already saturates the runner there,
+# and several tests' unbounded compiles together can starve its memory.
+make -C $OBJDIR -j$VSIM_BUILD_JOBS -f ${TOPCLASS}.mk ${TOPCLASS}
 
 status=$?
 if [ "$status" != "0" ]; then
