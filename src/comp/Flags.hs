@@ -50,6 +50,7 @@ data Flags = Flags {
         dumps :: [(DumpFlag, Maybe FilePath)], -- dump to file or stdout
         enablePoisonPills :: Bool,
         codegenNames :: [String],
+        elabOnly :: Bool,
         entry :: Maybe String,
         expandATSlimit :: Int,
         expandIf :: Bool,

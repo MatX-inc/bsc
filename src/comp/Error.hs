@@ -1118,6 +1118,8 @@ data ErrMsg =
         | ETooManyBackends
         | EDollarNoVerilog
         | EDollarLink
+        | EElabOnlyNotSrcCompile
+        | EElabOnlyNoElab
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -4262,6 +4264,17 @@ getErrorText EDollarNoVerilog =
 getErrorText EDollarLink =
     (System 57, empty,
      s2par ("The flag -remove-dollar in only supported for compiling source, not linking."))
+
+getErrorText EElabOnlyNotSrcCompile =
+    (System 100, empty,
+     s2par ("The flag -elab-only is only supported when compiling source, " ++
+            "not when linking or generating code with -c."))
+
+getErrorText EElabOnlyNoElab =
+    (System 101, empty,
+     s2par ("The flag -elab-only cannot be combined with -no-elab: " ++
+            "suppressing both the .v and the .ba files would leave no " ++
+            "generated output."))
 
 -- Removed System 58 ELicenseUnavailable, BSC is now open source
 -- Removed System 59 WLicenseExpires, BSC is now open source

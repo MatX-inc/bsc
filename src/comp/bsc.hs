@@ -953,8 +953,12 @@ genModule
     --           IO properties which can be included as attributes in the
     --           Cmoduleverilog (import-BVI)
     --           XXX it would be nice if the Bluesim backend had the same info
+    -- With -elab-only, the Verilog backend stops at the .ba, like the
+    -- Bluesim backend: genModuleVerilog is not run at all, and a later
+    -- -c or link generates the .v from the .ba.  (The wrapper then has
+    -- no port properties, as with Bluesim.)
     (t, veriPortProps)
-        <- if (backend flags == Just Verilog)
+        <- if (backend flags == Just Verilog && not (elabOnly flags))
            then do (t', ips, _v)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
@@ -1205,7 +1209,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Return
        -- * the port properties (to be included in the import-BVI)
-       -- * the Verilog structure (for accessing in bluetcl)
+       -- * the Verilog files written
        return (t, ips, vfilenames)
 
 
