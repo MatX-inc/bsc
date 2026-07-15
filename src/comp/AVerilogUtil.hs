@@ -790,7 +790,7 @@ vExpr vco e@(AFunCall t _ n isC es) =
   let foreignName = if vco_use_dpi vco
                     then dpiMonoCallName vco n (Just (aSize t)) (map (aSize . aType) es)
                     else vNameToTask False n
-      name = vCommentTaskName vco (if isC then foreignName else n)
+      name = if isC then foreignName else n
   in VEFctCall (mkVId name) (map (vExpr vco) es)
 vExpr vco (ASInt idt (ATBit w) (IntLit _ b i))  = VEWConst (idToVId idt) w b i
 vExpr vco (ASReal _ _ r)                        = VEReal r
