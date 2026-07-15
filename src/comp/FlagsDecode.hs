@@ -174,6 +174,13 @@ decodeArgs prog args cdir =
                            else -- We allow the file names to be omitted if the
                                 -- backend and entry point are both specified
                                 case (entry flags) of
+                                  -- -elab-only applies to compiling source,
+                                  -- not linking (checkLinkFlags rejects it
+                                  -- when file names are given)
+                                  (Just e) | (elabOnly flags)
+                                    -> (warnings,
+                                        DError [(cmdPosition,
+                                                 EElabOnlyNotSrcCompile)])
                                   (Just e) | (backend flags == Just Verilog)
                                     -> (warnings, DVerLink flags e [] [] [])
                                   (Just e) | (backend flags == Just Bluesim)
@@ -261,6 +268,14 @@ checkBSrcFlags flags filename =
         if (removeVerilogDollar flags && (backend flags /= Just Verilog))
         then DError [(cmdPosition, EDollarNoVerilog)]
         else
+        -- -elab-only stops compilation at the .ba; for Bluesim (or no
+        -- backend) stopping there is already the behavior, so the flag
+        -- is accepted with any backend.  Suppressing the .ba as well
+        -- would leave nothing generated.
+        if (elabOnly flags && (backend flags /= Nothing)
+                           && not (genABin flags))
+        then DError [(cmdPosition, EElabOnlyNoElab)]
+        else
         -- If the user hasn't allowed Bluesim/Verilog to diverge,
         -- then don't-cares can only be 2-state values
         if (not (optUndet flags) &&
@@ -295,6 +310,10 @@ checkLinkFlags flags names =
         else
         if (removeVerilogDollar flags)
         then DError [(cmdPosition, EDollarLink)]
+        else
+        -- -elab-only applies to compiling source, not linking
+        if (elabOnly flags)
+        then DError [(cmdPosition, EElabOnlyNotSrcCompile)]
         else
         -- Verilog backend
         if (backend flags == Just Verilog)
@@ -353,6 +372,10 @@ checkCodeGenFlags flags names =
             -- SystemC generation has no per-module codegen mode
             if (genSysC flags)
             then DError [(cmdPosition, EGenWithSystemC)]
+            else
+            -- -elab-only suppresses exactly what -c generates
+            if (elabOnly flags)
+            then DError [(cmdPosition, EElabOnlyNotSrcCompile)]
             else
             case (backend flags) of
               Nothing -> DError [(cmdPosition, ENoBackendCodeGen mods)]
@@ -601,6 +624,7 @@ defaultFlags bluespecdir = Flags {
         doICheck = True,
         dumpAll = Nothing,
         dumps = [],
+        elabOnly = False,
         enablePoisonPills = False,
         entry = Nothing,
         expandATSlimit = 20,
@@ -1222,6 +1246,10 @@ externalFlags = [
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
           "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
+
+        ("elab-only",
+         (Toggle (\f x -> f {elabOnly=x}) (showIfTrue elabOnly),
+          "stop after elaboration: write .ba files but generate no code (-c or linking generates it later)", Visible)),
 
         ("expand-ATS-limit",
          (Arg "n"
@@ -1909,6 +1937,7 @@ showFlagsRaw flags =
           ("doICheck", show (doICheck flags)),
           ("dumpAll", show (dumpAll flags)),
           ("dumps", show (dumps flags)),
+          ("elabOnly", show (elabOnly flags)),
           ("enablePoisonPills", show (enablePoisonPills flags)),
           ("entry", show (entry flags)),
           ("expandATSlimit", show (expandATSlimit flags)),

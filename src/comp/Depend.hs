@@ -236,7 +236,11 @@ getGenFs flags pi =
             let mod_abin_files = map mkABinFileName (gens pi)
             in  foreign_abin_files ++ mod_abin_files
          Just Verilog ->
-            let mod_ver_files = map mkVerFileName (gens pi)
+            let -- with -elab-only, no .v is written, so a compile is up
+                -- to date without them (the .ba files are checked instead)
+                mod_ver_files = if (elabOnly flags)
+                                then []
+                                else map mkVerFileName (gens pi)
                 foreign_vpi_files = if (useDPI flags)
                                     then []
                                     else concatMap mkVPIFileNames (foreigns pi)
