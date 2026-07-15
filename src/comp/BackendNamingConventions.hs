@@ -13,6 +13,7 @@ module BackendNamingConventions
      regReadResId, regWriteEnId, regWriteArgId,
 
      isRWire, isRWire0, isBypassWire, isBypassWire0, isClockCrossingBypassWire,
+     rwireSetStr, rwireGetStr, rwireHasStr,
      rwireSetEnId, rwireSetArgId, rwireGetResId, rwireHasResId,
 
      isCRegInst, isCRegN, isCRegUN, isCRegA,
