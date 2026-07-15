@@ -21,6 +21,7 @@ Flags {
 	doICheck = True,
 	dumpAll = Nothing,
 	dumps = [],
+	elabOnly = False,
 	enablePoisonPills = False,
 	entry = Nothing,
 	expandATSlimit = 20,
