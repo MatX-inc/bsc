@@ -233,8 +233,8 @@ remapPathMaybe prefixes path =
                   | (from, to) <- prefixes
                   , from == take (length from) full ]
     in  case matches of
-          [] -> path
-          _  -> snd (maximum matches)
+          [] -> Nothing
+          _  -> Just (snd (maximum matches))
 
 -- =====
 
