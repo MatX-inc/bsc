@@ -335,7 +335,9 @@ jobs:
   test-ubuntu-verilator-matx-shard:
     name: "Test MatX Verilator shard ${{ matrix.shard }} ${{ inputs.os }}"
     runs-on: ${{ inputs.os }}
-    timeout-minutes: 120
+    # Room for the -j8 -> -j4 -> -j2 ratchet: 60 + 45 min windows for
+    # the first two attempts, the remainder for -j2 and setup.
+    timeout-minutes: 180
     needs: build-ubuntu
     if: inputs.matx_verilator_mode != 'off'
     strategy:
@@ -431,16 +433,40 @@ jobs:
 
           trap ./testsuite/archive_logs.sh EXIT
 
-          CORES=$(nproc)
-          echo "Cores: ${CORES}"
+          # Keep each test's verilator C++ compile serial: the link
+          # script's inner make otherwise runs unbounded -j on top of
+          # the suite's own parallelism (N tests x M g++ on a 4-core
+          # 7GB runner is how memory starves).
+          export VSIM_BUILD_JOBS=1
 
-          # The make exit code is recorded but does not gate: content
-          # is graded by the verdict job from the collected results.
-          set +e
-          make -j ${CORES} -C testsuite checkparallel \
-               TEST_BSC_VERILOG_SIM=verilator CTEST=0 SYSTEMCTEST=0
-          echo "$?" > suite-rc-shard-${SHARD}.txt
-          set -e
+          # Compensate at the test level: start at -j8 and ratchet down
+          # to -j4 then -j2 if an attempt overruns its time window
+          # (starvation/swap thrash).  Only a window overrun ratchets:
+          # DejaGnu exits nonzero on any FAIL, so a plain nonzero exit
+          # is content — recorded but not gating, graded by the verdict
+          # job from the collected results, never retried.
+          RC=0
+          for JOBS in 8 4 2; do
+            case $JOBS in
+              8) WINDOW=3600 ;;
+              4) WINDOW=2700 ;;
+              2) WINDOW=0 ;;   # 0 disables timeout; job timeout bounds it
+            esac
+            echo "=== testsuite attempt: -j${JOBS} (window: ${WINDOW}s) ==="
+            set +e
+            timeout -k 60 ${WINDOW} \
+                make -j ${JOBS} -C testsuite checkparallel \
+                     TEST_BSC_VERILOG_SIM=verilator CTEST=0 SYSTEMCTEST=0
+            RC=$?
+            set -e
+            # 124 = TERM on window overrun; 137 = KILL (stuck past the
+            # grace period, or the kernel OOM-killed make itself)
+            if [ "$RC" -ne 124 ] && [ "$RC" -ne 137 ]; then
+              break
+            fi
+            echo "-j${JOBS} attempt overran its window (rc=${RC}); ratcheting down"
+          done
+          echo "$RC" > suite-rc-shard-${SHARD}.txt
 
           ./testsuite/scripts/ci-vsim-verdict.sh collect testsuite \
               > observed-shard-${SHARD}.txt
