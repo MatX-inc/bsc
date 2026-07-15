@@ -349,7 +349,7 @@ printDefn (Cforeign {cforg_name, cforg_type}) =
 printDefn (CIinstance _ qt) = hsPrintWords ["instance", asHS qt]
 printDefn (CItype ik args _) =
   hsPrintWords (["data", asHS ik] <> (asHS <$> args))
-printDefn (CIclass _ _ ik args _ tyFuns _) = do
+printDefn (CIclass _ _ ik args _ tyFuns _ _) = do
   hsPrintWords
     ( ["class", asHS ik]
         <> (asHS <$> args)
@@ -381,6 +381,6 @@ whatIsDefn (CprimType ik) = "the type " <> getIdBaseString (iKName ik)
 whatIsDefn (Cforeign {cforg_name}) = "the value " <> getIdBaseString cforg_name
 whatIsDefn (CIinstance _ qt) = "the instance " <> pp80 qt
 whatIsDefn (CItype ik _ _) = "the type " <> getIdBaseString (iKName ik)
-whatIsDefn (CIclass _ _ ik _ _ _ _) =
+whatIsDefn (CIclass _ _ ik _ _ _ _ _) =
   "the class " <> getIdBaseString (iKName ik)
 whatIsDefn (CIValueSign i _) = "the value " <> getIdBaseString i
