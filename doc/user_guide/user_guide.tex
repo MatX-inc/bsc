@@ -827,6 +827,22 @@ which generates anything that is missing.  Code-generation flags (for
 example \te{-keep-fires}) take effect from the \te{-c} command line;
 elaboration choices are already recorded in the \te{.ba} file.
 
+\index{-elab-only@\te{-elab-only} (compiler flag)}
+Conversely, a Verilog compile can defer code generation entirely: with
+the \te{-elab-only} flag, \te{bsc -verilog -g mkFoo} stops after
+elaboration, writing only the \te{.ba} file for each module and no
+\te{.v}.  The Verilog is then produced from the \te{.ba} files by
+\te{-c} commands (for example, run in parallel by an external build
+system) or by the linking stage.  The generated modules are the same
+as a full compile's, except that port-property annotations deduced
+during a submodule's code generation (reported in the \te{.v}
+file-header comments) may be absent from modules whose submodules were
+compiled with \te{-elab-only}.  The flag applies when compiling source
+with any back end -- a Bluesim compile already stops after elaboration,
+so with \te{-sim} it is accepted as a no-op, and build systems can pass
+it unconditionally -- and cannot be combined with \te{-no-elab} (which
+would suppress the \te{.ba} files that later code generation needs).
+
 For Bluesim, the generated module is a reusable block: its C++ does
 not depend on where the module is later instantiated.  The top module
 of a Bluesim simulation is the one exception -- it is always generated
@@ -1597,6 +1613,7 @@ The following flags are the common flags used by the compiler.
 \index{-e@\te{-e} (compiler flag)}
 \index{-o@\te{-o} (compiler flag)}
 \index{-elab@\te{-elab} (compiler flag)}
+\index{-elab-only@\te{-elab-only} (compiler flag)}
 \index{-c@\te{-c} (compiler flag)}
 \begin{centerboxverbatim}
 -g module             generate code for `module' (requires -sim or -verilog)
@@ -1609,6 +1626,8 @@ The following flags are the common flags used by the compiler.
 -o name               name of generated executable
 -elab                 generate a .ba file after elaboration and scheduling
                       (on by default with -sim and -verilog)
+-elab-only            stop after elaboration: write .ba files but
+                      generate no code (-c or linking generates it later)
 \end{centerboxverbatim}
 
 

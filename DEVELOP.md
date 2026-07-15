@@ -163,6 +163,23 @@ flags are read from the `-c` invocation's command line (elaboration-affecting
 flags are baked into the `.ba`), and foreign-function `.ba` files are found
 via the same `-p`/`-bdir` search path as at link time.
 
+The mirror image is `-elab-only`, which makes a `-verilog` compile stop at
+the `.ba`, exactly as a Bluesim compile does: `genModuleVerilog` is not run
+at all, and every module's `.v` comes from `-c` or the link.  The flag is
+backend-agnostic when compiling source -- with `-sim` (or no backend)
+stopping at the `.ba` is already the behavior, so it is accepted as a
+no-op, letting build systems pass it unconditionally.  One knock-on
+effect: the port properties that `getIOProps` deduces (`const`, `reg`,
+`unused`, ...) are a codegen product fed back into the module's import-BVI
+wrapper, so under `-elab-only` they are absent -- as they always are for
+Bluesim -- and a parent that re-exports such a port loses the deduced
+annotation in its own `.v` header comment ("Ports:" blurb) and wrapper.
+Nothing structural consumes these deduced properties (the structural ones
+-- clock, reset, inout -- are attached by `AState`/`ASyntax` from
+`VModInfo`'s clock/reset fields, not from `getIOProps`), so per-module
+codegen from a given `.ba` is unchanged; only the annotation metadata in a
+parent's output can differ from a full compile's.
+
 ### Bluetcl
 
 * [Support for reflection in BSC](https://groups.io/g/b-lang-discuss/message/513)
