@@ -392,10 +392,22 @@ jobs:
 
       - name: Add swap (verilator g++ headroom on 7GB runners)
         run: |
-          sudo fallocate -l 8G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
+          # Some runner images already ship an active /mnt/swapfile
+          # (fallocate on it dies with "Text file busy"), so use our own
+          # file, sized to min(8G, /mnt free minus 1G).
+          avail_kb=$(df --output=avail -k /mnt | tail -1)
+          size_kb=$(( avail_kb - 1048576 ))
+          if [ "$size_kb" -gt 8388608 ]; then size_kb=8388608; fi
+          if [ "$size_kb" -gt 0 ]; then
+            sudo fallocate -l "${size_kb}K" /mnt/bsc-swapfile
+            sudo chmod 600 /mnt/bsc-swapfile
+            sudo mkswap /mnt/bsc-swapfile
+            sudo swapon /mnt/bsc-swapfile
+          else
+            echo "No room on /mnt for an extra swapfile; using the image's swap as-is"
+          fi
+          swapon --show
+          free -h
 
       - name: Run testsuite shard with MatX Verilator
         env:
