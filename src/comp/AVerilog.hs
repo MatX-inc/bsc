@@ -121,11 +121,19 @@ aVerilog errh flags pps aspack ffmap =
          -- the PPrint VId instance), which keeps the output legal, but the
          -- user may prefer to rename them (promote G0131 to make this an
          -- error)
-         let sv_clashes =
+         -- Collect the clashes from declaration positions only (plus the
+         -- DPI names, scanned above), not a whole-program traversal: by
+         -- the vModuleDeclVIds invariant every printed identifier occurs
+         -- there, and declarations precede uses in traversal order, so
+         -- the deduped representative position is unchanged.
+         let VProgram vprog_mods _ _ = vprog
+             sv_clashes =
                  M.toList $ M.fromListWith (\_ old -> old)
-                     [ (s, getPosition i)
-                     | VId s i _ <- Generic.listify isReservedVId vprog ]
-               where isReservedVId (VId s _ _) = isVReservedWord s
+                     ([ (s, getPosition i)
+                      | m <- vprog_mods, VId s i _ <- vModuleDeclVIds m,
+                        isVReservedWord s ] ++
+                      [ (s, getPosition i)
+                      | VId s i _ <- dpi_name_vids, isVReservedWord s ])
          if (null sv_clashes)
            then return ()
            else bsWarning errh
@@ -907,7 +915,10 @@ renameInoutPorts vm =
         subst :: VId -> VId
         subst v = M.findWithDefault v v renames
 
-        vm' = Generic.everywhere (Generic.mkT subst) vm
+        -- an empty rename map makes the rebuild an identity; skipping it
+        -- preserves sharing in the (typically inout-free) module body
+        vm' | M.null renames = vm
+            | otherwise      = Generic.everywhere (Generic.mkT subst) vm
 
         -- drop the now-trivial expressions (".iioo(iioo)"), including
         -- ports that were already 1:1 with a same-named net
@@ -2093,6 +2104,16 @@ renameSVStdIdentsInVModule :: S.Set String -> VModule
                            -> (VModule,
                                [(String, String, Position)],
                                [(String, Position)])
+renameSVStdIdentsInVModule extern_names vmod
+    -- Per-module gate, by the same soundness invariant as the program
+    -- gate in aVerilog (see vModuleDeclVIds): a module with no
+    -- std-package identifier in any declaration position prints no such
+    -- identifier at all, so there is nothing to rename or report and
+    -- the body need not be scanned or rebuilt.  (A collision surviving
+    -- only in a never-printed metadata slot no longer draws a spurious
+    -- warning when another module trips the program gate.)
+    | not (any (isSVStdPackageIdent . getVIdString) (vModuleDeclVIds vmod))
+    = (vmod, [], [])
 renameSVStdIdentsInVModule extern_names vmod =
     let mod_name  = getVIdString (vm_name vmod)
         port_vids = [ vid | (vargs, _) <- vm_ports vmod,
@@ -2151,7 +2172,10 @@ renameSVStdIdentsInVModule extern_names vmod =
               Just s' -> VId s' i inf
               Nothing -> vid
 
-        body' = mapRenameableVIds renameVId (vm_body vmod)
+        -- an empty rename map makes the rebuild an identity; skip it to
+        -- keep the body shared (external/formal-only clashes still warn)
+        body' | M.null ren_map = vm_body vmod
+              | otherwise      = mapRenameableVIds renameVId (vm_body vmod)
 
         externs = own_clashes ++ extern_uses ++ formal_only
     in  (vmod { vm_body = body' }, ren_list, externs)
