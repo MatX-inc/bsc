@@ -37,7 +37,7 @@ import CType(Type(..), CType, TyCon(..), TyVar(..), Kind(..),
              cTApplys, cTVar, cTCon, cTNum, cTStr)
 import Pragma(IfcPragma(..))
 import StdPrel(tiArrow)
-import Eval(NFData(..), rnf3, rnf2, rnf)
+import Eval(NFData(..), rnf3, rnf2, rnf, deepseq)
 import PPrint
 import PFPrint
 import Position(noPosition)
@@ -88,6 +88,8 @@ data IType
         | ITCon_ !Id !IKind !TISort
         | ITNum !Integer
         | ITStr !FString
+        -- (all fields strict or forced at construction: NFData relies
+        -- on WHNF == deep NF for every constructor)
 
 pattern ITForAll :: Id -> IKind -> IType -> IType
 pattern ITForAll i k t <- ITForAll_ _ _ i k t
@@ -290,7 +292,8 @@ tidyCT (TDefMonad _) = TDefMonad noPosition
 -- variables are local names -- normalized, never qualified, never
 -- interned (no payload to amortize).
 mkITVar :: Id -> IType
-mkITVar i = ITVar_ (tidyTypeId i)
+mkITVar i = let ti = tidyTypeId i
+            in  ti `deepseq` ITVar_ ti
 
 -- ITCon leaves are interned by qualified name.  Soundness rests on
 -- the one-tycon-per-qualified-name invariant (front-end enforced,
@@ -333,7 +336,13 @@ mkITCon i k s
     go key st@(TConTable m) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let t = ITCon_ (tidyTypeId i) k (tidySort (getIdQual i) s)
+          Nothing -> let ti = tidyTypeId i
+                         ts = tidySort (getIdQual i) s
+                         -- deep NF at construction (once per unique
+                         -- tycon; TISort can embed a whole CType), so
+                         -- NFData can stop at the interned node
+                         t = ti `deepseq` k `deepseq` ts `deepseq`
+                             ITCon_ ti k ts
                      in  (TConTable (M.insert key t m), t)
 
 -- --------------------------------
@@ -419,7 +428,11 @@ internAp f a = unsafePerformIO $ do
           Just t  -> (st, t)
           Nothing -> let fvs | ftvCacheEnabled = fTVarSet f `vsUnionCanon` fTVarSet a
                              | otherwise       = vsEmpty
-                         t = ITAp_ n fvs f a
+                         -- deep NF at construction (children are already
+                         -- deep by induction), so NFData can stop at
+                         -- interned nodes instead of re-walking the
+                         -- shared DAG as a tree on every deepseq
+                         t = fvs `deepseq` ITAp_ n fvs f a
                      in  (InternTable (M.insert key t m) (n+1), t)
 
 {-# NOINLINE mkITForAll #-}
@@ -438,7 +451,9 @@ mkITForAll i k t = unsafePerformIO $ do
           Just t' -> (st, t')
           Nothing -> let fvs | ftvCacheEnabled = vsDeleteCanon ti (fTVarSet t)
                              | otherwise       = vsEmpty
-                         t' = ITForAll_ n fvs ti k t
+                         -- deep NF at construction; see internAp
+                         t' = fvs `deepseq` ti `deepseq` k `deepseq`
+                              ITForAll_ n fvs ti k t
                      in  (InternTable (M.insert key t' m) (n+1), t')
 
 -- The smart constructor behind the ITAp pattern synonym.  It first
@@ -504,13 +519,12 @@ instance Show IType where
 
 -- --------------------------------
 -- NFData Instances
+-- Every constructor is brought to deep normal form when it is built
+-- (see internAp/mkITForAll/mkITCon/mkITVar), so rnf stops at the node.
+-- Interned types form immortal shared DAGs; a structural rnf would
+-- re-walk them as trees at every phase-boundary deepseq.
 instance NFData IType where
-    rnf (ITForAll i k t) = rnf3 i k t
-    rnf (ITAp a b) = rnf2 a b
-    rnf (ITVar i) = rnf i
-    rnf (ITCon i k s) = rnf3 i k s
-    rnf (ITNum i) = rnf i
-    rnf (ITStr s) = rnf s
+    rnf t = t `seq` ()
 
 instance NFData IKind where
     rnf IKStar = ()
