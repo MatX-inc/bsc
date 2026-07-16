@@ -191,10 +191,17 @@ GHCTMP = '-tmpdir $(TMPDIR)'
 # which inflates peak stack usage by roughly an order of magnitude
 # on the perf regression suite.
 # If you modify this, also update rts_opts in ../vendor/htcl/haskell.c
+# -A64m: a large allocation area is the single biggest GC lever for
+# bsc's allocation-heavy batch workload (the default nursery forces
+# very frequent minor GCs; GC was ~22% of total CPU on the matx perf
+# suite).  -n4m chunks the nursery for cache behavior; -I0 disables
+# idle GC, which only triggered spurious collections in a short-lived
+# batch process.  Callers can still override per invocation via +RTS
+# (the binary is built with -rtsopts).
 ifeq ($(BSC_BUILD),PROF)
-RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
+RTSFLAGS = "-with-rtsopts=-H256m -K256m -A64m -n4m -I0"
 else
-RTSFLAGS = "-with-rtsopts=-H256m -K10m -i1"
+RTSFLAGS = "-with-rtsopts=-H256m -K10m -A64m -n4m -I0"
 endif
 FVIA ?= -fasm
 GHCFLAGS = \
