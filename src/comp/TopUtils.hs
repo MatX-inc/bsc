@@ -11,7 +11,7 @@ import System.IO.Unsafe(unsafePerformIO)
 import System.CPUTime(getCPUTime)
 import Control.Monad(when, unless)
 import Control.Monad.Trans(MonadIO(..))
-import Data.Maybe(fromMaybe, isJust)
+import Data.Maybe(fromMaybe)
 import qualified Data.Set as S
 import System.Time -- XXX: from old-time package
 -- hbc libs
@@ -69,50 +69,33 @@ start flags d = when (verbose flags) (putStrLnF ("starting " ++ drop 2 (show d))
 
 type DumpNames = (Maybe String {- file name (last path component) -}, Maybe String {- package name -}, Maybe String {- module name -})
 
--- A phase result is deep-forced at its dump boundary only when
--- something observes per-phase behavior: verbose timing (-v), an
--- explicit dump of this stage, or an early exit (-KILL*) at this
--- stage.  Otherwise evaluation is left to the downstream consumer --
--- the repeated whole-program rnf walks at the ~50-70 boundaries a
--- compile crosses are pure overhead when nothing reads the boundary.
--- (Consequence: without -v, an embedded internalError surfaces at the
--- consuming phase rather than the producing one; rerun with -v to
--- localize.)
-forceAtBoundary :: NFData a => Flags -> DumpFlag -> a -> IO ()
-forceAtBoundary flags d a =
-    when (verbose flags || isJust (dumpInfo flags d) || killAt) $
-        deepseq a (return ())
-  where killAt = case kill flags of
-                   Just (pass, _) -> pass == d
-                   Nothing -> False
-
 dump :: (PPrint a, NFData a) =>
         ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
-dump errh flags t d names a = do
-        forceAtBoundary flags d a
+dump errh flags t d names a =
+        deepseq a          -- force evaluation
         dumpStr errh flags t d names (ppReadable a)
 
 ddump :: (PPrint a, NFData a) =>
         ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
-ddump errh flags t d names a = do
-        forceAtBoundary flags d a
+ddump errh flags t d names a =
+        deepseq a $        -- force evaluation
         dumpStr errh flags t d names (ppDebug a)
 
 vdump :: (PVPrint a, NFData a) =>
         ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
-vdump errh flags t d names a = do
-        forceAtBoundary flags d a
+vdump errh flags t d names a =
+        deepseq a $        -- force evaluation
         dumpStr errh flags t d names (pvpReadable a)
 
 
 sdump :: (Show a, NFData a) =>
         ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
-sdump errh flags t d names a = do
-        forceAtBoundary flags d a
+sdump errh flags t d names a =
+        deepseq a $        -- force evaluation
         dumpStr errh flags t d names (show a)
 
 dumpedFiles :: MutableVar (S.Set FilePath)
