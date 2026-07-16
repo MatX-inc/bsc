@@ -16,6 +16,7 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List(union, genericSplitAt, genericLength)
+import Data.Maybe(fromMaybe, isNothing)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -53,7 +54,15 @@ instance PVPrint t => PVPrint (Qual t) where
     pvPrint d p (ps :=> t) = pvparen (p>0) $ pvPrint d 0 t <+> pvPreds d (map removePredPositions ps)
 
 instance Types t => Types (Qual t) where
-    apSub s (ps :=> t) = apSub s ps :=> apSub s t
+    apSub s q = fromMaybe q (apSubM s q)
+    -- local changed-detection: contexts are short, so forcing the
+    -- element results here is cheap and buys whole-value sharing
+    apSubM s (ps :=> t) =
+        let mps = map (apSubM s) ps
+            mt  = apSubM s t
+        in  if all isNothing mps && isNothing mt
+            then Nothing
+            else Just (zipWith fromMaybe ps mps :=> fromMaybe t mt)
     tv      (ps :=> t) = tv ps `union` tv t
 
 instance (NFData a) => NFData (Qual a) where
@@ -148,11 +157,19 @@ instance PVPrint PredWithPositions where
 
 instance Types PredWithPositions where
     -- the ancestors are deliberately not substituted (see above)
-    apSub s (PredWithPositions p poss anc) = PredWithPositions (apSub s p) poss anc
+    apSub s pwp = fromMaybe pwp (apSubM s pwp)
+    apSubM s (PredWithPositions p poss anc) =
+        case apSubM s p of
+          Nothing -> Nothing
+          Just p' -> Just (PredWithPositions p' poss anc)
     tv      (PredWithPositions p poss anc) = tv p
 
 instance NFData PredWithPositions where
-    rnf (PredWithPositions p poss anc) = rnf3 p poss anc
+    -- ancestors are diagnostic-only (consumed by ContextErrors on the
+    -- error path) and are excluded from substitution and comparison;
+    -- excluding them from forcing too keeps phase-boundary deepseqs
+    -- from walking every residual predicate's reduction chain
+    rnf (PredWithPositions p poss _) = rnf2 p poss
 
 -----
 
@@ -167,7 +184,15 @@ instance PVPrint Pred where
     pvPrint d p (IsIn c ts) = pvparen (p>0) $ pvpId d (typeclassId $ name c) <> pvParameterTypes d ts
 
 instance Types Pred where
-    apSub s (IsIn c ts) = IsIn c $ expandSyn <$> apSub s ts
+    apSub s p = fromMaybe p (apSubM s p)
+    -- expandSyn re-normalizes only when the substitution actually
+    -- introduced new structure; an untouched pred is already expanded
+    -- (preds are synonym-expanded at construction)
+    apSubM s (IsIn c ts) =
+        let mts = map (apSubM s) ts
+        in  if all isNothing mts
+            then Nothing
+            else Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
     tv      (IsIn c ts) = tv ts
 
 instance NFData Pred where

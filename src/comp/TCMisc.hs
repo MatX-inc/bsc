@@ -195,9 +195,7 @@ split_rs s' rs  = partition affected_pred rs
           -- should only be a few since classes are small
           -- and the substitution comes from a single reducePred
           -- or joinCtx (at the end)
-    where changed_tv = getSubstDomain s'
-          affected_var v = v `elem` changed_tv
-          affected_pred r = any affected_var (tv r)
+    where affected_pred r = not (substDomainDisjoint s' (vpredFVs r))
 
 satisfy' :: DVS -> [EPred] -> [VPred] -> TI SolveResult
 satisfy' dvs es ps = do
@@ -283,20 +281,20 @@ expTConPred (VPred e (PredWithPositions (IsIn c ts) pos anc)) = do
         return (VPred e (PredWithPositions (IsIn c ts') pos anc): concat vss)
 
 -- Build a class predicate from a fully-applied ATF.  Given the ATF's
--- class, param indices, target index, the ATF arguments, and the type
--- to place at the target position, fills in fresh vars for any class
--- params not covered by the ATF.
-mkATFClassPred :: String -> Type -> Id -> [Int] -> Int -> [Type] -> Type
+-- class (already looked up by the caller), param indices, target
+-- index, the ATF arguments, and the type to place at the target
+-- position, fills in fresh vars for any class params not covered by
+-- the ATF.  Fresh vars are minted only for the uncovered positions.
+mkATFClassPred :: String -> Type -> Class -> [Int] -> Int -> [Type] -> Type
                -> TI (Class, [Type])
-mkATFClassPred tag posType clsId pIdxs tIdx atfArgs targetType = do
-    cls <- findCls (CTypeclass clsId)
+mkATFClassPred tag posType cls pIdxs tIdx atfArgs targetType = do
     let nParams = length (csig cls)
-    freshVars <- mapM (\tv -> newTVar tag (kind tv) posType) (csig cls)
-    let classArgs = [ if idx == tIdx then targetType
-                      else case elemIndex idx pIdxs of
-                            Just j  -> atfArgs !! j
-                            Nothing -> freshVars !! idx
-                    | idx <- [0..nParams-1] ]
+        mkArg idx | idx == tIdx = return targetType
+                  | otherwise =
+            case elemIndex idx pIdxs of
+              Just j  -> return (atfArgs !! j)
+              Nothing -> newTVar tag (kind (csig cls !! idx)) posType
+    classArgs <- mapM mkArg [0..nParams-1]
     return (cls, classArgs)
 
 -- Compute the transitive incoherence closure on a fully-merged SolvedBinds,
@@ -345,7 +343,7 @@ expTFun t0
     length as == length pIdxs = do
         cls <- findCls (CTypeclass clsId)
         v <- newTVar "expTFun" (kind (csig cls !! tIdx)) t0
-        (_, classArgs) <- mkATFClassPred "expTFun" t0 clsId pIdxs tIdx as v
+        (_, classArgs) <- mkATFClassPred "expTFun" t0 cls pIdxs tIdx as v
         vps <- mkVPred (getPosition t0) $ mkPredWithPositions [] (IsIn cls classArgs)
         return (vps, v)
 -- eliminate the identity type constructor.
@@ -1416,8 +1414,9 @@ tryATFClassPred atfType targetType = do
       TCon (TyCon _ _ (TIatf { atf_class_id = clsId, atf_param_idxs = pIdxs
                               , atf_target_idx = tIdx }))
         | length atfArgs == length pIdxs -> do
+        cls0 <- findCls (CTypeclass clsId)
         (cls, classArgs) <- mkATFClassPred "tryATFClassPred" atfType
-                              clsId pIdxs tIdx atfArgs targetType
+                              cls0 pIdxs tIdx atfArgs targetType
         return $ Just (IsIn cls classArgs)
       _ -> return Nothing
 
@@ -2042,7 +2041,7 @@ expandTCons (orig_qs :=> orig_t) =
                 cls <- findCls (CTypeclass clsId)
                 v <- newTVar "expandTCons" (kind (csig cls !! tIdx)) t0
                 (_, classArgs) <- mkATFClassPred "expandTCons" t0
-                                    clsId pIdxs tIdx as v
+                                    cls pIdxs tIdx as v
                 let p = PredWithPositions (IsIn cls classArgs) [] []
                 return ([p], v)
       exp (TAp t1 t2) = do (ps1, t1') <- exp t1
