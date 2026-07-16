@@ -987,13 +987,14 @@ genModule
     --           Cmoduleverilog (import-BVI)
     --           XXX it would be nice if the Bluesim backend had the same info
     (t, veriPortProps)
-        <- if (backend flags == Just Verilog)
+        <- if (backend flags == Just Verilog && not (elabOnly flags))
            then do (t', ips, _v)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final
                    return (t', ips)
+           -- -elab-only: the .v is generated later from the .ba (-c)
            else return (t, [])
 
     t <- if (genABin flags)
