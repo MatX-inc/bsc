@@ -185,14 +185,13 @@ instance PVPrint Pred where
 
 instance Types Pred where
     apSub s p = fromMaybe p (apSubM s p)
-    -- expandSyn re-normalizes only when the substitution actually
-    -- introduced new structure; an untouched pred is already expanded
-    -- (preds are synonym-expanded at construction)
+    -- apSub on a Pred doubles as a synonym-expansion pass (callers rely
+    -- on it normalizing types the substitution did not touch), so a
+    -- rebuild always runs expandSyn over every argument; the sharing
+    -- win here is per-element, via each type's own apSubM.
     apSubM s (IsIn c ts) =
         let mts = map (apSubM s) ts
-        in  if all isNothing mts
-            then Nothing
-            else Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
+        in  Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
     tv      (IsIn c ts) = tv ts
 
 instance NFData Pred where

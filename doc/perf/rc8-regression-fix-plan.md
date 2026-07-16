@@ -257,3 +257,42 @@ that specific change.
 | WS7.5 gated deepseq | `rtl.controller.TAControllerScalarUnit` (crosses most phases); guard: residency must not rise on `ComparePostSrbInstr` | total CPU; peak residency A/B |
 | WS7.8 IExpr interning/eqE | `rtl.tile.belts.vpu.test.VpuBkwdBeltTest` (transform 389s); `rtl.controller.test.TAInstrAssemblerCosimTest` (transform 151s) | transform phase |
 | WS8 elab/codegen split | full `//rtl/...` build critical path (bazel --profile); per-action: `rtl.bs_sv_validation.ComparePostSrbInstr` (verilog+writeVerilog ≈179s leaves critical path); grid chain `rtl.tile.TileGrid` → `emulation.gate_count.tile.TileGrid_16x32` | bazel critical path length; byte-identity of .v |
+
+## Implementation status (2026-07-16, branch claude/bsc-18772-perf-regressions-9vi622)
+
+Landed (bsc, this branch — one commit per item):
+- WS2a/2b verilog SYB gating; WS3.1 O(1) interned-IType rnf; WS1 scheduler
+  (ctx-tuple memo + unconditional-use shortcut, Yices+STP); WS3.2 LiftDicts
+  pre-conversion pool; WS3.3 fixup redirect hoist; WS4 (findCls hoist, fewer
+  ATF tyvars, VPred fv cache for split_rs, sharing-preserving Type apSubM,
+  lazy PredAncestor forcing); WS5 leaf-scoped instance comparisons; WS7.5
+  gated phase-boundary deepseq; WS7.1 RTS defaults (-A64m -n4m -I0);
+  WS8 verilog-codegen-stage merge + new -elab-only flag.
+
+Landed (matx, same branch name): +RTS -n4m -I0 on bsc actions;
+--//rtl/bluespec:split_codegen (default off) splitting BscV into
+BscVElab/BscVCodegen.
+
+Measured on the #19126 2000-register repro vs stock build-20260715-1:
+verilog phase notrip 0.37s -> 0.14s, trip 1.03s -> 0.57s (G0132 renames
+intact); typecheck at parity (45s); split flow .v byte-identical modulo
+timestamp comment.  Scheduler micro-bench (150 rules, shared register,
+distinct predicates): schedule 0.54s -> 0.32s.
+
+Learned the hard way (do not re-attempt without new evidence):
+- The Types [a] instance must stay LAZY: eager whole-list changed-detection
+  doubled typecheck on long assumption lists.
+- substDomainDisjoint must probe per-variable; Map.keysSet per call is
+  O(subst size) and also doubled typecheck.
+- apSub on a Pred doubles as an expandSyn normalization pass: skipping the
+  rebuild when the substitution changed nothing broke instance resolution
+  (T0031 in bsc.typechecker/PrintfATS.bs).  Whole-pred sharing therefore
+  requires first making construction sites expandSyn-normalized — future
+  work; per-element type sharing is kept.
+
+Remaining backlog (in priority order): WS7.3/7.4 Builder-based .v/.bo
+output; WS4 Tier-2 ATF constraint-synthesis memo; WS5 Tier-2 symtab
+trie/overlap reuse across rebuilds; WS7.6/7.8 IExpr fv-cache/interning;
+full 2131-action A/B via tools/bench_bs_master.sh on real build hosts
+(publish a prerelease with .github/workflows/matx-prerelease.yml), then the
+matx pin bump, memory_multiplier 8->4 revert, and split_codegen default-on.
