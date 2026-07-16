@@ -265,9 +265,14 @@ Landed (bsc, this branch — one commit per item):
   (ctx-tuple memo + unconditional-use shortcut, Yices+STP); WS3.2 LiftDicts
   pre-conversion pool; WS3.3 fixup redirect hoist; WS4 (findCls hoist, fewer
   ATF tyvars, VPred fv cache for split_rs, sharing-preserving Type apSubM,
-  lazy PredAncestor forcing); WS5 leaf-scoped instance comparisons; WS7.5
-  gated phase-boundary deepseq; WS7.1 RTS defaults (-A64m -n4m -I0);
-  WS8 verilog-codegen-stage merge + new -elab-only flag.
+  lazy PredAncestor forcing); WS5 leaf-scoped instance comparisons; WS7.1 RTS
+  defaults (-A64m -n4m -I0); WS8 verilog-codegen-stage merge + new
+  -elab-only flag.  (WS7.5 gated deepseq was landed and then REVERTED:
+  gating the force on -v made evaluation order -- hence string-intern
+  order, Map-over-Id iteration order, and emitted output order -- depend
+  on verbosity.  Identical flags must give identical bytes.  Revisit only
+  with intern-order-free Id ordering; the O(1) IType rnf already removed
+  most of the forcing cost.)
 
 Landed (matx, same branch name): +RTS -n4m -I0 on bsc actions;
 --//rtl/bluespec:split_codegen (default off) splitting BscV into
@@ -280,6 +285,9 @@ timestamp comment.  Scheduler micro-bench (150 rules, shared register,
 distinct predicates): schedule 0.54s -> 0.32s.
 
 Learned the hard way (do not re-attempt without new evidence):
+- WS7.2 (lazy aVars) was skipped on inspection: allIds is already passed
+  lazily and forced only in the alpha-conversion branch, which the
+  evaluator's heap-ref arguments never trigger.
 - The Types [a] instance must stay LAZY: eager whole-list changed-detection
   doubled typecheck on long assumption lists.
 - substDomainDisjoint must probe per-variable; Map.keysSet per call is
