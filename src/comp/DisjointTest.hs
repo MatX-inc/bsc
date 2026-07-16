@@ -21,7 +21,7 @@ import PPrint(PPrint(..), ppReadable)
 
 import Flags
 import ASyntax
-import ASyntaxUtil(AExprs(..), aAnd)
+import ASyntaxUtil(AExprs(..))
 import Pragma
 
 import VModInfo(VModInfo)
@@ -30,10 +30,12 @@ import AExpr2Util(getMethodOutputPorts)
 
 import qualified AExpr2STP as STP
          (SState, initSState, addADefToSState,
-          checkDisjointRulePair, checkDisjointExpr)
+          checkDisjointRulePair, checkDisjointExpr,
+          checkDisjointExprWithCtx)
 import qualified AExpr2Yices as Yices
          (YState, initYState, addADefToYState,
-          checkDisjointRulePair, checkDisjointExpr)
+          checkDisjointRulePair, checkDisjointExpr,
+          checkDisjointExprWithCtx)
 
 -- -------------------------
 
@@ -102,10 +104,25 @@ checkDisjointExprWithCtx dts ctx1 ctx2 e1 e2 = do
     (res, dts') <- checkDisjointExpr dts e1 e2
     case res of
       Just True -> return (res, dts')
-      _ -> do -- try again but with the context included
-              let e1' = aAnd ctx1 e1
-                  e2' = aAnd ctx2 e2
-              checkDisjointExpr dts' e1' e2'
+      -- constant-True contexts add nothing; the retry would repeat the
+      -- same query
+      _ | isTrue ctx1 && isTrue ctx2 -> return (res, dts')
+      -- try again but with the contexts included; the backend asserts
+      -- the four conjuncts separately (identical satisfiability) so no
+      -- "ctx AND e" composite is ever built or used as a memo key
+      _ -> checkDisjointExprCtx dts' ctx1 ctx2 e1 e2
+
+checkDisjointExprCtx :: DisjointTestState -> AExpr -> AExpr ->
+                        AExpr -> AExpr ->
+                        IO (Maybe Bool, DisjointTestState)
+checkDisjointExprCtx (DTS_Yices m yices_state) ctx1 ctx2 e1 e2 = do
+    (res, yices_state') <-
+        Yices.checkDisjointExprWithCtx yices_state ctx1 ctx2 e1 e2
+    return (res, DTS_Yices m yices_state')
+checkDisjointExprCtx (DTS_STP m stp_state) ctx1 ctx2 e1 e2 = do
+    (res, stp_state') <-
+        STP.checkDisjointExprWithCtx stp_state ctx1 ctx2 e1 e2
+    return (res, DTS_STP m stp_state')
 
 -- -------------------------
 
