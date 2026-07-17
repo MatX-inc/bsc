@@ -37,7 +37,7 @@ import CType(Type(..), CType, TyCon(..), TyVar(..), Kind(..),
              cTApplys, cTVar, cTCon, cTNum, cTStr)
 import Pragma(IfcPragma(..))
 import StdPrel(tiArrow)
-import Eval(NFData(..), rnf3, rnf2, rnf)
+import Eval(NFData(..), rnf2, rnf)
 import PPrint
 import PFPrint
 import Position(noPosition)
@@ -333,7 +333,9 @@ mkITCon i k s
     go key st@(TConTable m) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let t = ITCon_ (tidyTypeId i) k (tidySort (getIdQual i) s)
+          Nothing -> let ts = tidySort (getIdQual i) s
+                         t = rnf2 k ts `seq`
+                             ITCon_ (tidyTypeId i) k ts
                      in  (TConTable (M.insert key t m), t)
 
 -- --------------------------------
@@ -438,7 +440,7 @@ mkITForAll i k t = unsafePerformIO $ do
           Just t' -> (st, t')
           Nothing -> let fvs | ftvCacheEnabled = vsDeleteCanon ti (fTVarSet t)
                              | otherwise       = vsEmpty
-                         t' = ITForAll_ n fvs ti k t
+                         t' = rnf k `seq` ITForAll_ n fvs ti k t
                      in  (InternTable (M.insert key t' m) (n+1), t')
 
 -- The smart constructor behind the ITAp pattern synonym.  It first
@@ -504,13 +506,43 @@ instance Show IType where
 
 -- --------------------------------
 -- NFData Instances
+
+-- Interning does the real work: an IType in WHNF is already in normal
+-- form.  Every interior node is built by the smart constructors behind
+-- the pattern synonyms, which force both children to WHNF (tKey
+-- pattern-matches them to build the intern key), so by induction the
+-- whole spine below any constructed node is forced; the leaves carry
+-- only strict fields (and mkITCon deep-forces its payload once, at
+-- first intern).  All rnf has to do is force a possible outer thunk to
+-- WHNF -- an unevaluated smart-constructor application -- and
+-- construction (hence interning, hence forcing) takes it from there.
+-- That seq is still load-bearing: mkIRefT deepseqs every IRefT so a
+-- heap cell can never retain a type THUNK (which would close over the
+-- substitution that builds it); only the traversal below the
+-- constructed node is redundant.
+--
+-- rnf must NOT recurse: a deep traversal walks the interned DAG as a
+-- tree, turning the sharing that interning creates into repeated work
+-- -- exponential in the worst case, and paid on every heap-cell
+-- creation via mkIRefT's deepseq.  The testsuite pins this boundary
+-- (bsc.evaluator/itype-sharing).
+--
+-- The hidden flag -hack-deep-itype-rnf restores the historical deep
+-- traversal, for single-binary A/B measurement (same posture as
+-- -hack-no-itype-ftv-cache).
+{-# NOINLINE deepITypeRnf #-}
+deepITypeRnf :: Bool
+deepITypeRnf = "-hack-deep-itype-rnf" `elem` progArgs
+
 instance NFData IType where
-    rnf (ITForAll i k t) = rnf3 i k t
-    rnf (ITAp a b) = rnf2 a b
-    rnf (ITVar i) = rnf i
-    rnf (ITCon i k s) = rnf3 i k s
-    rnf (ITNum i) = rnf i
-    rnf (ITStr s) = rnf s
+    rnf t | deepITypeRnf = deep t
+          | otherwise    = t `seq` ()
+      where deep (ITForAll i k b) = rnf i `seq` rnf k `seq` deep b
+            deep (ITAp f a) = deep f `seq` deep a
+            deep (ITVar i) = rnf i
+            deep (ITCon i k s) = rnf i `seq` rnf k `seq` rnf s
+            deep (ITNum n) = rnf n
+            deep (ITStr s) = rnf s
 
 instance NFData IKind where
     rnf IKStar = ()
