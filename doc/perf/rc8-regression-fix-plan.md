@@ -304,3 +304,111 @@ trie/overlap reuse across rebuilds; WS7.6/7.8 IExpr fv-cache/interning;
 full 2131-action A/B via tools/bench_bs_master.sh on real build hosts
 (publish a prerelease with .github/workflows/matx-prerelease.yml), then the
 matx pin bump, memory_multiplier 8->4 revert, and split_codegen default-on.
+
+---
+
+# Per-change benchmark matrix (rc8 fix stack)
+
+Environment: 4-core shared container, GHC 9.6.7, one full `make install-src`
+tree per commit (`88e88222` rc8 base built in the same environment for
+uniformity). Method: per row, 3 interleaved PRE/POST pairs, medians of all
+four axes; phase CPU from `bsc -v`, total/alloc/max-residency from `+RTS -s`.
+Output gate: `.v` compared modulo the version-header comment; `.bo` compared
+with both binaries pinned to the PRE install's library (imported-`.bo`
+hashes differ per install tree — verified provenance-only). Box noise ±10%
+between batches; comparisons are only valid within a row, never across rows.
+Workload generators live in the session scratchpad and are inlined in the
+handoff doc; shapes are lifted from the matx targets named in the perf report.
+
+## Measured rows (adjacent commits; PRE → POST medians)
+
+| Row / commit | Workload | Target phase | Total CPU | Alloc | Max res | Output gate |
+|---|---|---|---|---|---|---|
+| verilog `ba2d13e4` | 2000-reg + `$`-ident cliff | verilog 1.27→0.74s (**0.58×**) | 47.4→40.7s (−14%) | −1% | flat | clean |
+| itype `cafa5243` | synonym-DAG D=16, 4 importers | internal/binary 15.3→14.3s (0.94×) | 120.3→116.3s (−3%) | identical | flat | clean |
+| sched `f8b55444` | 800 rules, distinct preds, const writes | schedule 32.0→28.1s (**0.88×**) | 44.6→41.1s (−8%) | −3% | +3% | `.v` = version header only |
+| ws4 `de4e7868` | proviso-heavy (1200 regs, depth-5 Vector) | typecheck 71.4→44.0s (**0.62×**) | 72.8→45.2s (−38%) | **−25%** | flat | clean |
+| symtab `fd0b22f1` | 4000 same-leaf instances | syminitial 34.9→41.3s (1.18×) | 168.8→214.4s (+27%) | **+175%** | **−95%** (822M→43M) | clean |
+| rts `33dcf06c` (defaults) | proviso-heavy | typecheck 36.8→43.9s (1.19×) | +19% | flat | +4% | `.bo` header-only |
+| rts2 `33dcf06c` (defaults) | 2000-reg register chain | typecheck 79.6→61.3s (**0.77×**) | −23% | flat | **−22%** (2.09→1.63G) | n/a |
+| wsa `6a3441c7` | proviso-heavy | typecheck 45.8→47.3s (1.03×) | +3% | flat | flat | `.bo` differs (expanded preds — intended) |
+| wsb `be4fd993` | proviso-heavy | typecheck 47.6→49.6s (1.04×) | flat | −0.4% | +1% | clean |
+| **bracket** `88e88222→be4fd993` | proviso-heavy | typecheck 66.8→55.5s (**0.83×**) | −16% | **−25%** | +2% | — |
+| split `03005593` | 800-rule sched shape | see split section below | | | | `.v` byte-identical |
+
+## Split row (`-elab-only` + `-verilog -c`, binary `03005593`)
+
+Same binary, same workload, medians of 3: monolithic `-verilog -g` wall
+**110.8s**; `-elab-only` wall **103.4s (0.93×)**; `-c` codegen wall
+**30.2s**. Split `.v` is byte-identical to monolithic `.v` (modulo the
+version header; timestamps suppressed). Reading for the matx build graph:
+downstream module elaborations depend only on elab outputs, so the
+per-module critical path shortens ~7% on this shape while the codegen wall
+(27% of the monolithic run) moves off the inter-module chain into
+parallelizable actions; total CPU rises ~20% (the `.ba` round-trip), the
+intended trade. Codegen-heavier real targets shift the ratio further toward
+the split; the ≥10%-critical-path goal is expected to be met on long matx
+chains and must be confirmed by the bazel replay / branch CI.
+
+Aggregate reference (measured earlier, same box): stock rc8 vs branch tip on
+the combined register repro: wall 55.3→49.5s (−10%), max residency
+2.01→1.51G (−25%); verilog cliff phase 0.37→0.11s; and on Rn.bs (2000 regs)
+tip-vs-WS-B interleaved: parity on all axes.
+
+## Honest notes per row
+
+- **verilog**: the 2× phase target is met (0.58× phase); the −14% total
+  shows the commit's gating helps several output phases. Phase absolute is
+  small (~1s) because larger modules make non-target phases dominate the run.
+- **itype**: no honest 2× workload found in-container. The structural-rnf
+  walk never dominates a feasible synthetic shape: linear types are too
+  small, synonym-DAG shapes are swamped by a *separate pre-existing*
+  CType-side exponential that hits both binaries equally (see Findings).
+  Primary evidence remains the aggregate residency (−25%) and the report's
+  binary/SimR2 rows (+70%/+2051%) — to be confirmed by bazel replay.
+- **sched**: 0.88× on the constant-write shape (weaker than the 0.59×
+  measured on the dev repro where predicates carry arithmetic); the SAT
+  short-circuit depends on predicate structure. Both numbers reported.
+- **symtab**: mixed on the adversarial shape (4000 instances in one trie
+  leaf): +18% phase CPU / +175% alloc, but −95% max residency — the dropped
+  eager memo was retaining 800MB. On the report's actual targets the sympost
+  regressions this commit fixes dominate. PR should present both and
+  consider a bounded memo if a real target ever shows the adversarial shape.
+- **rts**: workload-dependent, both directions (−23% churn-heavy, +19%
+  residency-heavy). matx bazel rules pass explicit per-action RTS flags, so
+  the baked default only governs bare invocations. Recommend keeping
+  `-A64m -n4m` and treating `-I0`/nursery size as tunable in the PR.
+- **wsa/wsb**: +3%/+4% on the proviso shape. WS-A's value is soundness
+  (construction-time normalization invariant, checker-enforced) and
+  enabling WS-B; WS-B's is architectural (universal null-subst shortcut,
+  one shared Changed machinery, precise dirty-bit forcing that fixed the
+  +52% residency regression measured mid-development). Neither shows a
+  standalone CPU win on available workloads; the typecheck stack as a whole
+  is the unit that wins (bracket row: −17% CPU / −25% alloc vs rc8).
+- **liftdicts `ab75cae4` / fixup `98282c71`**: no row — the liftdicts phase
+  stays <2s at every feasible synthetic scale (single- and cross-package
+  shapes tried); the fixed cost is per imported dictionary occurrence at
+  matx package scale. Evidence: in-session directed measurement during
+  development and the report's liftdicts/fixup rows; validate via bazel
+  replay.
+- **codegen-stage merge `9f049adb`**: does not build standalone (GenABin
+  ByteString mismatch; fixed in `03005593`) — row pairs `33dcf06c→03005593`
+  and conflates the merge with `-elab-only` (additive flag). Fold the fix
+  into the merge commit when preparing the upstream PR.
+
+## Findings surfaced by the matrix (not regressions in this stack)
+
+1. **CType/TItype symtab exponential** (pre-existing; OLD = rc8 = tip):
+   synonym `TyCon`s embed their RHS (`TItype`), so doubling-synonym chains
+   are DAGs walked as 2^D trees by MakeSymTab kind-checking (`chkTAp'`,
+   ~45% of profile), structural CType rnf (~15%), and
+   `setTypePosition`/`splitTAp` rebuilds. Repro: `gen-itype.py` D=18
+   (~15 min compile, 4.2TB alloc, both releases). Candidate follow-on fix:
+   the IType playbook (strictness → sharing/caches) applied to CType, or
+   one-level synonym kind-checking.
+2. **`-K10m` baked stack limit**: a 1400-rule module dies of stack overflow
+   in `adropdefs` (pre-existing; stock rc8 identical). Benchmarks pass
+   `-K256m`; real matx targets may want the same in rules.bzl.
+3. **`.bo` embeds imported-library hashes**: byte-comparing `.bo` across
+   binaries requires pinning one library install; same-binary compiles are
+   fully deterministic.
