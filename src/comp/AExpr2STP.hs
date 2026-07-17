@@ -4,6 +4,7 @@ module AExpr2STP(
        addADefToSState,
 
        checkDisjointExpr,
+       checkDisjointExprWithCtx,
        checkDisjointRulePair,
 
        checkBiImplication,
@@ -60,6 +61,7 @@ initSState str flags doHardFail ds avis rs = do
                                             | avi <- avis],
                    proofMap = M.empty,
                    proofMapS = M.empty,
+                   ctxProofMap = M.empty,
 
                    anyId = 0,
                    unknownId = 0,
@@ -125,6 +127,54 @@ checkDisjointExprM e1 e2 = withTraceTest $ do
 
   -- if query(False) is Valid, then there is an inconsistency
   -- when both "e1" and "e2" are asserted, so they are ME
+  return $ case (sat_res) of
+              S.Invalid -> Just False
+              S.Valid   -> Just True
+              S.Timeout -> Nothing
+              S.Error   -> internalError ("STP query error")
+
+-- Disjointness of (ctx1 AND e1) vs (ctx2 AND e2), without ever building
+-- the composite expressions: the four conjuncts are asserted separately
+-- (logically identical) and the memo is keyed on the component tuple.
+checkDisjointExprWithCtx :: SState -> AExpr -> AExpr -> AExpr -> AExpr ->
+                            IO (Maybe Bool, SState)
+checkDisjointExprWithCtx s ctx1 ctx2 e1 e2 =
+    runStateT (checkDisjointExprWithCtxM ctx1 ctx2 e1 e2) s
+
+checkDisjointExprWithCtxM :: AExpr -> AExpr -> AExpr -> AExpr ->
+                             SM (Maybe Bool)
+checkDisjointExprWithCtxM ctx1 ctx2 e1 e2 = withTraceTest $ do
+  when traceTest $
+      traceM("comparing exprs with ctx: " ++ ppString ((ctx1, e1), (ctx2, e2)))
+
+  let doProof = do
+        ctx <- gets context
+        liftIO $ S.ctxPush ctx
+        --
+        (yctx1, _) <- convAExpr2SExpr_Force True ctx1
+        (yctx2, _) <- convAExpr2SExpr_Force True ctx2
+        (ye1, _) <- convAExpr2SExpr_Force True e1
+        (ye2, _) <- convAExpr2SExpr_Force True e2
+
+        liftIO $ S.assert ctx yctx1
+        liftIO $ S.assert ctx yctx2
+        liftIO $ S.assert ctx ye1
+        liftIO $ S.assert ctx ye2
+
+        yf <- gets falseExpr
+        sat_res <- liftIO $ S.query ctx yf
+        liftIO $ S.ctxPop ctx
+        --
+        addToCtxProofMap ctx1 ctx2 e1 e2 sat_res
+        return sat_res
+
+  memRes <- lookupCtxProofMap ctx1 ctx2 e1 e2
+  sat_res <- case memRes of
+    Just r -> return r
+    Nothing -> doProof
+
+  -- if query(False) is Valid, then there is an inconsistency
+  -- when all four conjuncts are asserted, so they are ME
   return $ case (sat_res) of
               S.Invalid -> Just False
               S.Valid   -> Just True
@@ -300,6 +350,9 @@ data SState =
                stateMap      :: M.Map AId VModInfo,
                proofMap      :: M.Map (AExpr, AExpr) S.Result,
                proofMapS     :: M.Map S.Expr S.Result,
+               -- context-augmented disjointness results, keyed on the
+               -- four component exprs (see AExpr2Yices.ctxProofMap)
+               ctxProofMap   :: M.Map (AExpr, AExpr, AExpr, AExpr) S.Result,
 
                anyId         :: Integer,
                unknownId     :: Integer,
@@ -365,6 +418,20 @@ lookupProofMap :: AExpr -> AExpr -> SM (Maybe S.Result)
 lookupProofMap e1 e2 = do
   rmap <- gets proofMap
   return $ M.lookup (e1,e2) rmap
+
+addToCtxProofMap :: AExpr -> AExpr -> AExpr -> AExpr -> S.Result -> SM ()
+addToCtxProofMap ctx1 ctx2 e1 e2 res = do
+  rmap <- gets ctxProofMap
+  -- insert both orderings for expressions
+  let rmap1 = M.insert (ctx1, ctx2, e1, e2) res rmap
+      rmapX = M.insert (ctx2, ctx1, e2, e1) res rmap1
+  modify (\s -> s {ctxProofMap = rmapX})
+
+lookupCtxProofMap :: AExpr -> AExpr -> AExpr -> AExpr ->
+                     SM (Maybe S.Result)
+lookupCtxProofMap ctx1 ctx2 e1 e2 = do
+  rmap <- gets ctxProofMap
+  return $ M.lookup (ctx1, ctx2, e1, e2) rmap
 
 addToProofMapS :: S.Expr -> S.Result -> SM()
 addToProofMapS e1 res = do
