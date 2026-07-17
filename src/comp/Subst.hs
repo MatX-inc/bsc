@@ -2,13 +2,13 @@
 module Subst(
              Subst,
              nullSubst, isNullSubst, (+->), mkSubst,
-             Types(..), (@@), merge, mergeWith, mergeListWith,
+             Types(..), apSub, (@@), merge, mergeWith, mergeListWith,
              mergeAgreements,
              trimSubst, trimSubstByVars,
              {- removeFromSubst, -}
              apSubstToSubst,
              getSubstDomain, getSubstRange, sizeSubst,
-             substDomainDisjoint,
+             substDomainDisjoint, substFVsUpdate,
              chkSubstOrder
              ) where
 
@@ -17,7 +17,7 @@ import CType
 import Type
 import Util(fromJustOrErr)
 import Data.List(nub,union)
-import Data.Maybe(fromMaybe, isNothing)
+import Changed
 import Position
 
 import qualified Data.Set as Set
@@ -198,60 +198,58 @@ mergeAgreements s1 s2 = fj $ merge diff1 diff2
 
 -------
 
+-- Change-tracking substitution: Unchanged means the substitution
+-- provably left the value untouched, so the caller keeps the original
+-- object (preserving sharing and skipping any rebuild).  ALL internal
+-- recursion goes through apSubC and combines child results with the
+-- Changed combinators, so unchanged-ness propagates bottom-up with no
+-- per-node wrapper allocation; apSub (below, outside the class) is the
+-- consumer-facing entry point.
 class Types t where
-  apSub :: Subst -> t -> t
-  apSub s t = fromMaybe t (apSubM s t)
-  -- Change-tracking substitution: Nothing means the substitution
-  -- provably left the value untouched, so the caller keeps the
-  -- original object (preserving sharing and skipping any rebuild or
-  -- re-normalization).  Instances without a hand-written apSubM get
-  -- the conservative "always changed" default; new hot-path consumers
-  -- should define apSubM and derive apSub from it.
-  apSubM :: Subst -> t -> Maybe t
-  apSubM s t = Just (apSub s t)
-  tv    :: t -> [TyVar]
-  {-# MINIMAL (apSub | apSubM), tv #-}
+  apSubC :: Subst -> t -> Changed t
+  tv     :: t -> [TyVar]
+
+apSub :: Types t => Subst -> t -> t
+apSub s t | isNullSubst s = t
+          | otherwise     = changedOr t (apSubC s t)
+{-# INLINE apSub #-}
 
 instance Types Type where
-  apSub s t = fromMaybe t (apSubM s t)
-  apSubM s _ | isNullSubst s = Nothing
-  apSubM (S seo _) t0 = go t0
+  apSubC (S seo _) t0 = go t0
     where
       go v@(TVar u) =
         case slookup u seo of
         Just t  ->
             case t of
-            (TGen _ _) -> Just t -- (kind (TGen _ _)) errors out -- don't check kind
+            (TGen _ _) -> Changed t -- (kind (TGen _ _)) errors out -- don't check kind
             _ -> if isKVar (kind v) || kind t == kind v
-                 then Just t
+                 then Changed t
                  else internalError ("Subst.Type.apSub: bad kind: " ++
                                      ppString t ++ "::" ++ ppString (kind t) ++
                                      "@" ++ ppString (getPosition t) ++
                                      " / " ++ ppString v ++ "::" ++
                                      ppString (kind v) ++ "@" ++
                                      ppString (getPosition v))
-        Nothing -> Nothing
-      go (TAp l r) =
-        case (go l, go r) of
-          (Nothing, Nothing) -> Nothing
-          (ml, mr) -> Just (normTAp (fromMaybe l ml) (fromMaybe r mr))
-      go _ = Nothing
+        Nothing -> Unchanged
+      -- normTAp re-runs only when a child actually changed
+      go (TAp l r) = changed2 normTAp l r (go l) (go r)
+      go _ = Unchanged
 
   tv (TVar u)  = [u]
   tv (TAp l r) = tv l `union` tv r
   tv t         = []
 
 instance Types a => Types [a] where
-  -- NB deliberately lazy (and spine-rebuilding): consumers routinely
-  -- apply substitutions to long lists (assumption environments,
-  -- residual predicate sets) and force only part of the result, so an
-  -- eager changed-detection over the whole list here is a large
-  -- pessimization.  Element-level sharing still comes from each
-  -- element's own apSub.  Short-list containers that want whole-value
-  -- sharing (Pred's class args, Qual's context) do their own local
-  -- detection.
-  apSub s ts = map (apSub s) ts
-  tv ts      = nub (concatMap tv ts)
+  -- NB deliberately lazy (and spine-rebuilding, hence always Changed):
+  -- consumers routinely apply substitutions to long lists (assumption
+  -- environments, residual predicate sets) and force only part of the
+  -- result, so an eager whole-list detection here (mapChanged) is a
+  -- measured 2x pessimization.  Element-level sharing still comes from
+  -- each element's own apSubC.  Bounded containers that want
+  -- whole-value sharing (Pred's class args, Qual's context) use
+  -- mapChanged directly in their own instances.
+  apSubC s ts = Changed (map (changedOrId (apSubC s)) ts)
+  tv ts       = nub (concatMap tv ts)
 
 slookup :: TyVar -> S_map -> Maybe Type
 slookup v xs = {-if length xs > 1300 then trace ("slookup " ++ unwords [itos x|(_,x,_)<-xs]) slookup' v xs else-} Map.lookup v xs
@@ -276,6 +274,24 @@ substDomainDisjoint :: Subst -> Set.Set TyVar -> Bool
 substDomainDisjoint (S eo _) fvs
   | Map.null eo = True
   | otherwise   = not (any (`Map.member` eo) (Set.toAscList fvs))
+
+-- Incremental free-variable-cache maintenance: Nothing when the
+-- substitution domain is disjoint from the set (the substituted value
+-- is unchanged), otherwise the free variables of the substituted
+-- value, rebuilt from the old set plus the ranges of the entries that
+-- fired.  Sound because substitution is single-pass (range types are
+-- not re-substituted), so tv (apSub s t) = (tv t \\ dom) `union`
+-- tv (ranges hit).  O(|fvs| log n) set work per call -- never a walk
+-- of the substituted structure, so a cache can be kept current across
+-- substitution rounds at probe cost.
+substFVsUpdate :: Subst -> Set.Set TyVar -> Maybe (Set.Set TyVar)
+substFVsUpdate (S eo _) fvs
+  | Map.null eo   = Nothing
+  | Set.null hits = Nothing
+  | otherwise     = Just fvs'
+  where hits = Set.filter (`Map.member` eo) fvs
+        fvs' = Set.union (fvs Set.\\ hits)
+                         (Set.fromList (concatMap (tv . (eo Map.!)) (Set.toList hits)))
 
 getSubstRange :: Subst -> [TyVar]
 getSubstRange (S eo _ ) = concat (map tv (Map.elems eo))

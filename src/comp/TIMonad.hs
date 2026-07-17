@@ -53,7 +53,8 @@ import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Maybe(fromMaybe)
+import Changed
+import Eval(NFData(..))
 import Util(headOrErr)
 
 -------
@@ -378,9 +379,8 @@ addNumDecided proven refuted = modify (\ s ->
 
 mkEPred :: Pred -> TI EPred
 -- expandSynPred: givens must satisfy the same construction-time
--- normalization invariant as goals (lookfor matches structurally, so
--- an unexpanded synonym in a given would never match an expanded
--- solver predicate).
+-- normalization invariant as goals (lookfor matches structurally, and
+-- substitution no longer re-expands untouched preds).
 mkEPred p = do i <- newDict
                return $ EPred (CVar i) (expandSynPred p)
 
@@ -491,15 +491,26 @@ instance Show VPred where
         showString " " . showsPrec 11 p
 
 instance Types VPred where
-    -- No substitution-disjointness shortcut here: apSub on a Pred
-    -- doubles as a synonym-expansion pass (see the Pred instance), so
-    -- an "untouched" skip is not behavior-preserving.  The cached fv
-    -- set serves split_rs, which only needs membership.
-    apSub s vp = fromMaybe vp (apSubM s vp)
-    apSubM s (VPred_ i p _) =
-        case apSubM s p of
-          Nothing -> Nothing
-          Just p' -> Just (VPred i p')
+    -- The fv cache is maintained incrementally (substFVsUpdate): the
+    -- new set comes from the old one plus the substitution ranges
+    -- that fired, never from walking the (lazily substituted)
+    -- predicate.  This keeps all three consumers cheap at once:
+    -- apSub on an untouched pred is Unchanged (full sharing, cache
+    -- included), apSub on a touched pred is small set work plus an
+    -- O(1) pred thunk, and split_rs probes never force a substitution
+    -- tower.  Rebuilding the cache via the VPred builder here instead
+    -- (S.fromList . tv) is a measured ~20% regression on
+    -- proviso-heavy input.
+    -- A rebuilt pred is forced to NF immediately: Changed marks exactly
+    -- the values that would otherwise retain a substitution tower
+    -- across satisfy rounds (Unchanged preds are already in NF from
+    -- their last force), so deep-forcing here bounds residency at
+    -- tip-eager levels while untouched preds still pay nothing.
+    apSubC s (VPred_ i p fvs) =
+      case substFVsUpdate s fvs of
+        Nothing   -> Unchanged
+        Just fvs' -> let p' = changedOrId (apSubC s) p
+                     in rnf p' `seq` Changed (VPred_ i p' fvs')
     tv (VPred_ _ p _) = tv p
 
 instance PPrint VPred where
@@ -524,7 +535,7 @@ expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss anc)) = VPred i pwp'
 data EPred = EPred CExpr Pred
 
 instance Types EPred where
-    apSub s (EPred e p) = EPred e (apSub s p)
+    apSubC s (EPred e p) = changed1 (EPred e) (apSubC s p)
     tv (EPred _ p) = tv p
 
 instance PPrint EPred where

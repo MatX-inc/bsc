@@ -8,6 +8,7 @@ import Prelude hiding ((<>))
 import CType
 import Type
 import Subst
+import Changed
 import Pred
 import PFPrint
 import Position(noPosition, HasPosition(..))
@@ -29,7 +30,7 @@ instance PVPrint Scheme where
     (zip (map (TGen noPosition) [0..]) ks)
 
 instance Types Scheme where
-    apSub s (Forall ks qt) = Forall ks (apSub s qt)
+    apSubC s (Forall ks qt) = changed1 (Forall ks) (apSubC s qt)
     tv      (Forall ks qt) = tv qt
 
 instance NFData Scheme where

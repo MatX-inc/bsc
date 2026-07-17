@@ -53,3 +53,17 @@ changed3 f     _     _     _ (Changed a') (Changed b') (Changed c') = Changed $ 
 mapMaybeChanged :: (a -> Changed a) -> Maybe a -> Changed (Maybe a)
 mapMaybeChanged _ Nothing  = Unchanged
 mapMaybeChanged f (Just x) = changed1 Just (f x)
+
+-- Map a function returning Changed over a list - returns Unchanged
+-- (sharing the original spine and elements) only if every element is
+-- unchanged.  NB this forces the whole list to decide; use only where
+-- the result is fully consumed or the list is bounded.
+{-# INLINE mapChanged #-}
+mapChanged :: (a -> Changed a) -> [a] -> Changed [a]
+mapChanged _ [] = Unchanged
+mapChanged f xs0@(x:xs) = changed2 (:) x xs (f x) (mapChanged f xs)
+
+-- Map over the snd of each assoc-list pair.
+{-# INLINE mapSndChanged #-}
+mapSndChanged :: (b -> Changed b) -> [(a, b)] -> Changed [(a, b)]
+mapSndChanged f = mapChanged (\ (k, v) -> changed1 ((,) k) (f v))
