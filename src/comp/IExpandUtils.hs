@@ -2568,7 +2568,16 @@ updHeap tag (p, HeapData ref) e = do
 
 -- Type normalization function used in evaluation.
 -- Fully traverse and reduce all type function applications where possible.
+--
+-- A type that contains no ATF application anywhere (itAtfFree, an
+-- O(1) read of metadata cached on the interned nodes) has nothing to
+-- reduce, so it answers Unchanged without traversal.  This runs on
+-- every substituted type during evaluation, and interned types are
+-- heavily shared DAGs: traversing here would repeat work per unrolled
+-- (tree) node, which sharing can make exponential.  The testsuite
+-- pins this boundary (bsc.evaluator/itype-sharing).
 fullTypeNormalizer :: Flags -> SymTab -> IATFCache -> IType -> Changed IType
+fullTypeNormalizer _ _ _ t | atfBitEnabled && itAtfFree t = Unchanged
 fullTypeNormalizer _ _ _ (ITCon _ _ _) = Unchanged
 fullTypeNormalizer _ _ _ (ITNum _)     = Unchanged
 fullTypeNormalizer _ _ _ (ITStr _)     = Unchanged

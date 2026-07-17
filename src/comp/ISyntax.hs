@@ -41,6 +41,8 @@ module ISyntax(
         VarSet, fTVarSet,
         vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull,
         ftvCacheEnabled,
+        itAtfFree,
+        atfBitEnabled,
         itArrow,
         iToCT,
         iToCK,
