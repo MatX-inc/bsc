@@ -412,3 +412,16 @@ tip-vs-WS-B interleaved: parity on all axes.
 3. **`.bo` embeds imported-library hashes**: byte-comparing `.bo` across
    binaries requires pinning one library install; same-binary compiles are
    fully deterministic.
+
+### Appendix: eager-Pred variant (precise strictness) vs the landed rnf variant
+
+Two mechanically-equivalent ways to bound substitution towers in
+`VPred.apSubC` were built and measured head-to-head (3 interleaved pairs
+each): the landed version (`rnf` on the `Changed` arm) and a born-NF eager
+`Pred` instance (`mapChanged` + strict `expandSyn` on changed elements,
+ISyntaxSubst-style). Small-pred shape (2000-register repro at 800 regs):
+rnf wins ~4.5% CPU / ~5% residency. Large-pred shape (proviso workload):
+eager wins ~2.3% CPU at +2.7% residency. Both within a few percent either
+side of the crossover; the rnf version is kept (simpler, ahead on the
+shapes that dominate real code). Re-evaluate only if the bazel replay
+shows pred-argument sizes far beyond the proviso shape.
