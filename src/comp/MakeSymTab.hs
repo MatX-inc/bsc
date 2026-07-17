@@ -1088,7 +1088,7 @@ genBss vs fds = [ map (`elem` rs) vs | (_, rs) <- fds ]
 -- Variable positions in the instance key become Free in the probe query
 -- so cross-branch overlaps are correctly found.  j > i avoids self-comparison
 -- and processes each unordered pair only once, in the canonical (low, high)
--- direction that the memo table (see getCls) stores.
+-- direction.
 overlapErrors :: (Int -> Int -> Either EMsg (Maybe Ordering)) ->
                  [(Int, QInst, Inst)] -> PredTrie (Int, QInst, Inst) -> [EMsg]
 overlapErrors pairCmp tagged trie = nub errs
@@ -1180,24 +1180,27 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                 -- identity for the overlap self-check; QInst is needed by
                 -- cmpQInsts; Inst is what genInsts returns.
                 tagged = zip3 [0 :: Int ..] qinsts all_insts
-                -- Pairwise instance comparisons, memoized in a lazy Map
-                -- keyed on the canonical (low, high) index pair, so that
-                -- the overlap check and the leaf sort below each force a
-                -- given pair's cmpQInsts at most once between them.
-                -- (cmpQInsts freshens type variables before comparing, so
-                -- specificity is correctly detected even when instances
-                -- share variable names.)
-                cmpMemo = M.fromList
-                    [ ((i, j), cmpQInsts bss qi qj)
-                      | ((i, qi, _) : rest) <- tails tagged
-                      , (j, qj, _) <- rest ]
+                -- Pairwise instance comparison, computed directly per
+                -- pair.  Only pairs the trie brings together (overlap
+                -- probe hits, and same-leaf pairs in sortLeaf) are ever
+                -- compared, so no comparison table is built up front: a
+                -- shared memo over all pairs cost an O(n^2) Map spine
+                -- per class on every symbol-table rebuild, dwarfing the
+                -- few comparisons actually needed.  A same-leaf pair
+                -- can be compared once here and once in sortLeaf's
+                -- leaf-local memo; that duplication is bounded by the
+                -- leaf sizes.  (cmpQInsts freshens type variables
+                -- before comparing, so specificity is correctly
+                -- detected even when instances share variable names.)
+                qinst_map = M.fromList [ (i, q) | (i, q, _) <- tagged ]
+                qinstOf i = fromJustOrErr "MakeSymTab.getCls: qinstOf"
+                                (M.lookup i qinst_map)
                 pairCmp i j
                   | i == j = internalError "MakeSymTab.getCls: pairCmp i i"
-                  | i < j = find_cmp (i, j)
-                  | otherwise = fmap (fmap flipOrd) (find_cmp (j, i))
-                  where find_cmp k = fromJustOrErr "MakeSymTab.getCls: pairCmp"
-                                         (M.lookup k cmpMemo)
-                        flipOrd LT = GT
+                  | i < j = cmpQInsts bss (qinstOf i) (qinstOf j)
+                  | otherwise = fmap (fmap flipOrd)
+                                    (cmpQInsts bss (qinstOf j) (qinstOf i))
+                  where flipOrd LT = GT
                         flipOrd GT = LT
                         flipOrd EQ = EQ
                 -- Order each trie leaf most-specific-first.  cmpQInsts
@@ -1211,9 +1214,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                 -- sort the strict specificity edges, as getQInstsLegacy
                 -- does for the whole instance list.  Instances share a
                 -- leaf only when they agree on the head constructor at
-                -- every pure-input position, and the leaf's pairs have
-                -- already been compared by the overlap check, so this
-                -- costs no additional cmpQInsts calls.
+                -- every pure-input position, so leaves are small and
+                -- the per-pair comparisons here are cheap.
                 sortLeaf items@(_:_:_) =
                     let g = [ (i, [ j | (j, _, _) <- items, i /= j,
                                         pairCmp j i == Right (Just LT) ])
