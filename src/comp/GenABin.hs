@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenABin(genABinFile, readABinFile) where
+module GenABin(genABinFile, readABinFile, readABinFileMaybe) where
 
 import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Position
@@ -34,7 +34,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260716-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -50,6 +50,15 @@ readABinFile errh nm s =
        then (decode (B.drop hlen s), "")
        --then (decodeWithHash (B.drop hlen s))
        else bsErrorUnsafe errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- Tolerant variant: Nothing if the file tag does not match the current
+-- format (e.g. the file was written by a different version of BSC)
+readABinFileMaybe :: B.ByteString -> Maybe ABin
+readABinFileMaybe s =
+    let hlen = B.length headerBS
+    in if B.take hlen s == headerBS
+       then Just (decode (B.drop hlen s))
+       else Nothing
 
 -- ----------
 -- Bin ABin
@@ -79,7 +88,6 @@ instance Bin ABin where
             toBin (abmi_method_dump modinfo)
             toBin (abmi_pathinfo modinfo)
             toBin (abmi_flags modinfo)
-            toBin (abmi_vprogram modinfo)
   writeBytes (ABinModSchedErr modinfo version) =
          section "ABinModSchedErr" $
          do -- tag which kind of module
@@ -110,10 +118,9 @@ instance Bin ABin where
                            mi <- fromBin
                            pathinfo <- fromBin
                            flags <- fromBin
-                           vprog <- fromBin
                            let modinfo =
                                    ABinModInfo path srcName apkg asched pps
-                                               oqt mi pathinfo flags vprog
+                                               oqt mi pathinfo flags
                            return (ABinMod modinfo version)
                    2 -> do path <- fromBin
                            srcName <- fromBin

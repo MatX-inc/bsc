@@ -64,7 +64,10 @@ data Flags = Flags {
         fdir :: Maybe String,
         finalcleanup :: Int,
         genABin :: Bool,
-        genABinVerilog :: Bool,
+        -- stop the Verilog backend after elaboration/scheduling: write
+        -- .bo/.ba only, skipping AState and Verilog emission (the .v is
+        -- produced later from the .ba with -c)
+        elabOnly :: Bool,
         genName :: [String],
         genSysC :: Bool,
         ifcPathRaw :: [String],
