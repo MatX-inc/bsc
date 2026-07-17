@@ -40,7 +40,7 @@ import VModInfo(VSchedInfo, VPathInfo(..), VeriPortProp(..), VArgInfo(..),
 import Type hiding (isPrimAction, isActionValue, getAVType,
                     isReset, isClock, isInout)
 import TypeCheck(cCtxReduceDef)
-import Subst(mkSubst, Types(..))
+import Subst(mkSubst, Types(..), apSub)
 import Classic(isClassic)
 import Pragma
 import PragmaCheck
