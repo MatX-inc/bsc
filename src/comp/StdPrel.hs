@@ -27,7 +27,7 @@ import Type
 import Pred
 import PreIds
 import CSyntax
-import Subst(Types(..))
+import Subst(Types(..), apSub)
 import Unify(mgu)
 
 --import PPrint

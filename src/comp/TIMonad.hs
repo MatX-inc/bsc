@@ -53,6 +53,8 @@ import Control.Monad.State(State, StateT, runState, runStateT,
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Maybe(fromMaybe)
+import Changed
+import Eval(NFData(..))
 import Util(headOrErr)
 
 -------
@@ -459,12 +461,32 @@ instance Show VPred where
         showString " " . showsPrec 11 p
 
 instance Types VPred where
-    apSub s vp = fromMaybe vp (apSubM s vp)
+    apSubO s vp = fromMaybe vp (apSubM s vp)
     apSubM s vp@(VPred_ i p fvs)
       | substDomainDisjoint s fvs = Nothing
       | otherwise = case apSubM s p of
                       Nothing -> Nothing
                       Just p' -> Just (VPred i p')
+    -- The fv cache is maintained incrementally (substFVsUpdate): the
+    -- new set comes from the old one plus the substitution ranges
+    -- that fired, never from walking the (lazily substituted)
+    -- predicate.  This keeps all three consumers cheap at once:
+    -- apSub on an untouched pred is Unchanged (full sharing, cache
+    -- included), apSub on a touched pred is small set work plus an
+    -- O(1) pred thunk, and split_rs probes never force a substitution
+    -- tower.  Rebuilding the cache via the VPred builder here instead
+    -- (S.fromList . tv) is a measured ~20% regression on
+    -- proviso-heavy input.
+    -- A rebuilt pred is forced to NF immediately: Changed marks exactly
+    -- the values that would otherwise retain a substitution tower
+    -- across satisfy rounds (Unchanged preds are already in NF from
+    -- their last force), so deep-forcing here bounds residency at
+    -- tip-eager levels while untouched preds still pay nothing.
+    apSubC s (VPred_ i p fvs) =
+      case substFVsUpdate s fvs of
+        Nothing   -> Unchanged
+        Just fvs' -> let p' = changedOrId (apSubC s) p
+                     in rnf p' `seq` Changed (VPred_ i p' fvs')
     tv (VPred_ _ p _) = tv p
 
 instance PPrint VPred where
@@ -489,7 +511,8 @@ expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss)) = VPred i pwp'
 data EPred = EPred CExpr Pred
 
 instance Types EPred where
-    apSub s (EPred e p) = EPred e (apSub s p)
+    apSubO s (EPred e p) = EPred e (apSubO s p)
+    apSubC s (EPred e p) = changed1 (EPred e) (apSubC s p)
     tv (EPred _ p) = tv p
 
 instance PPrint EPred where
