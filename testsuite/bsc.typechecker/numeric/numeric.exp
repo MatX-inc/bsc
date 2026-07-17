@@ -421,3 +421,9 @@ compile_fail_error MinFunDeps.bsv T0079 2
 compare_file MinFunDeps.bsv.bsc-out
 
 # ---------------
+# A coherent instance match with a SAT-provable numeric residual, under
+# a same-class given that bars committing the partial reduction: the
+# residual must be settled at the reduction site, not lost to rollback
+# (regressed in the batched proviso-SAT rework)
+
+compile_pass PadRepack.bs

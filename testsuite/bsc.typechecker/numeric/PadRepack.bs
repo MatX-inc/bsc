@@ -1,0 +1,24 @@
+-- A coherent instance match whose residual is a SAT-provable numeric
+-- proviso, arising under a same-class given: Bits (Vector n (Bit 32))
+-- reduces to a Mul proviso whose third argument is a rigid TAdd/TSub
+-- expression, provable only by the proviso SAT solver.  The given
+-- (Bits a aSize) bars committing the partial reduction, so the numeric
+-- residual must be settled at the reduction site before the rollback
+-- discards it (regression: the batched-SAT rework lost this, T0030).
+package PadRepack where
+
+import Vector
+
+struct Pad t n =
+  padding :: Bit n
+  value :: t
+ deriving (Bits)
+
+repack :: (Bits a x, Bits b x) => a -> b
+repack x = unpack (pack x)
+
+readAll :: (Bits a aSize) => Vector (TDiv aSize 32) (Bit 32) -> a
+readAll pieces =
+  let padded :: Pad a (TSub (TMul (TDiv aSize 32) 32) aSize)
+      padded = repack pieces
+  in padded.value

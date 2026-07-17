@@ -513,7 +513,32 @@ sat dvs ps p =
                         return (if any unifiable givens
                                 then Provisional else Committable)
                     when (commitment == Committable) $ recordPackageUse mpkg
-                    return (SatResult needed sbs s_final commitment)
+                    -- A Provisional partial reduction is rolled back by
+                    -- the caller (for a non-numeric pred, or during
+                    -- defaulting), discarding its residual goals --
+                    -- including numeric residuals that are provable
+                    -- right now, which the per-predicate solver in
+                    -- reducePred formerly proved in place, making the
+                    -- reduction complete rather than partial.  Settle
+                    -- them in a local batch before rendering the
+                    -- verdict: if that empties the residual set, the
+                    -- reduction is in fact complete and there is
+                    -- nothing to roll back.
+                    let rollback = commitment == Provisional &&
+                                   (not (vpIsPreClass p) || isJust dvs)
+                    if not rollback
+                      then return (SatResult needed sbs s_final commitment)
+                      else do
+                        (needed', nsbs) <- batchSolveNumericPreds
+                                               (apSub s_final ps) needed
+                        case needed' of
+                          [] -> do
+                            recordPackageUse mpkg
+                            recordATFs s_final
+                            return (SatResult [] (nsbs <++ sbs) s_final
+                                        Provisional)
+                          _ -> return (SatResult needed sbs s_final
+                                           commitment)
             Just (Reduction qs sb us (Just (h@(IsIn c _))) mpkg) | fromMaybe ai (allowIncoherent c) ->
               satTrace ("sat calls satMany (incoherent) ") $ do
               result0 <- satMany (dvsSub us dvs) (apSub us ps) [] (fromSB sb) us qs
