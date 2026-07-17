@@ -5,7 +5,7 @@ module Pred(
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
             PredAncestor(..),
             getPredAncestors, mkPredAncestor, addPredAncestors,
-            expandSyn, predToType, qualToType, mkInst,
+            expandSyn, expandSynPred, predToType, qualToType, mkInst,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -185,14 +185,13 @@ instance PVPrint Pred where
 
 instance Types Pred where
     apSub s p = fromMaybe p (apSubM s p)
-    -- expandSyn re-normalizes only when the substitution actually
-    -- introduced new structure; an untouched pred is already expanded
-    -- (preds are synonym-expanded at construction)
+    -- apSub on a Pred doubles as a synonym-expansion pass (callers rely
+    -- on it normalizing types the substitution did not touch), so a
+    -- rebuild always runs expandSyn over every argument; the sharing
+    -- win here is per-element, via each type's own apSubM.
     apSubM s (IsIn c ts) =
         let mts = map (apSubM s) ts
-        in  if all isNothing mts
-            then Nothing
-            else Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
+        in  Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
     tv      (IsIn c ts) = tv ts
 
 instance NFData Pred where
@@ -290,7 +289,17 @@ instance NFData Inst where
     rnf (Inst x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
 
 mkInst :: CExpr -> Qual Pred -> Maybe Id -> Inst
-mkInst e i pkg = Inst e (tv i) i pkg
+-- The instance HEAD is synonym-expanded at construction: instance
+-- matching is structural, so a synonym in the head would never match
+-- an expanded solver predicate.  (Previously this was masked by apSub
+-- incidentally re-expanding every pred it touched.)  Context preds
+-- need no expansion here -- subgoals are minted through mkVPred*,
+-- which normalizes.
+mkInst e (ps :=> p) pkg = let i' = ps :=> expandSynPred p
+                          in  Inst e (tv i') i' pkg
+
+expandSynPred :: Pred -> Pred
+expandSynPred (IsIn c ts) = IsIn c (map expandSyn ts)
 
 instance Types Inst where
     apSub s (Inst e _ i pkg) = Inst (apSub s e) [] (apSub s i) pkg
