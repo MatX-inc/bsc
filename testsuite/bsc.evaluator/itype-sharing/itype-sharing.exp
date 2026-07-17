@@ -1,0 +1,138 @@
+# Pin the boundary that IType interning creates for evaluator-side
+# type handling: per heap cell, type work must be O(1) reads of the
+# metadata cached on interned nodes, never a structural walk.  A walk
+# pays per unrolled (tree) node, and sharing makes the tree size
+# exponential in the DAG size, so the design in ITypeSharing.bsv (a
+# type of 2^18 unrolled leaves, referenced by CELLS heap cells)
+# separates the two regimes qualitatively.
+#
+# No boundary other than CPU time can see two of the three walks.
+# Measured on this design (65536 cells): live heap and stack do not
+# move (a walk over an already-forced shared DAG allocates nothing
+# and recurses only to DAG depth), and total RTS allocation moves for
+# only one walk (fullTypeNormalizer traversal: 48x, from per-node
+# splitITAp spines; the deep-rnf and free-variable walks are
+# allocation-silent to within 0.01%).  So the enforced boundaries
+# are:
+#
+#  - an RTS heap cap (+RTS -M2g, ~4x over the measured ~530 MB
+#    residency), which pins the DAG-compactness side: a regression
+#    that unshares or re-materializes types per cell dies on heap
+#    exhaustion, machine-independently; and
+#
+#  - CPU-seconds rlimits (ulimit -t) whose values are CALIBRATED, not
+#    absolute: the same file is first compiled with a small cell
+#    count (-D CELLS=64), and every subsequent limit is a multiple of
+#    that reference's measured cost on this machine, this binary,
+#    this build flavor (PROF included).  Machine speed cancels in the
+#    ratio.  The stress compile with the metadata on costs ~1.2x the
+#    reference (both are dominated by the same one-time front-end
+#    work on the doubled type); each reintroduced walk costs >=60x
+#    the reference (measured: deep rnf ~36ms/cell => 60x, uncached
+#    free-variable walks ~56ms/cell => 90x, normalizer traversal
+#    ~350ms/cell => 550x).  The limit sits at 5x, comfortably above
+#    1.2x and far below 60x on any machine.  The reference itself
+#    runs under a generous static rlimit that is an anti-hang guard,
+#    not a performance assertion (this suite runs bsc under plain
+#    exec, so an unbounded hang would stall the whole run).
+#
+# The reference cost is measured as wall-clock time: under a loaded
+# parallel testsuite run wall >= CPU, which only makes the derived
+# CPU limits looser -- and 5x(inflated ref) stays below the >=60x a
+# walk needs even at 10x load inflation.
+#
+# The fail side uses the three chicken switches (registered in
+# FlagsDecode.traceflags) that restore one walk each in the same
+# binary; the kernel must kill those compiles at the derived rlimit
+# (SIGXCPU at the soft limit or SIGKILL at the hard limit, which
+# ulimit -t sets together).  A change that legitimately makes a
+# disabled mode cheap should retune or retire that switch's case.
+#   -hack-no-itype-ftv-cache  restore free-variable walks in tSubst
+#   -hack-no-itype-atf-bit    restore fullTypeNormalizer traversal
+#   -hack-deep-itype-rnf      restore deep NFData traversal (mkIRefT
+#                             deepseqs every heap ref's type)
+
+# Compile ITypeSharing.bsv with the given cell count and extra
+# options under a CPU-seconds rlimit; returns the wall-clock seconds
+# the compile took (-1 on any failure).  Outcome checking:
+#   expect_ok 1: the compile must succeed within the rlimit
+#   expect_ok 0: the compile must be killed by the CPU rlimit
+proc itype_sharing_compile { testname cpu_limit cells options expect_ok } {
+    global bsc
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set output "ITypeSharing.bsv.bsc-vcomp-out"
+    set flags "-verilog -elab -g sysITypeSharing -no-show-timestamps -no-show-version -D CELLS=$cells"
+    set shcmd "ulimit -t $cpu_limit ; exec $bsc $flags $options ITypeSharing.bsv"
+    verbose -log "Executing (itype-sharing): sh -c {$shcmd}" 2
+    set t0 [clock milliseconds]
+    set raw_status [catch {exec sh -c $shcmd >& $output} lasterr]
+    set elapsed [expr {([clock milliseconds] - $t0) / 1000.0}]
+    set status [get_exec_status $raw_status]
+
+    cd $here
+
+    set result -1
+    if { $expect_ok } {
+        if { [string equal $status 0] } {
+            pass "$testname"
+            set result $elapsed
+        } else {
+            verbose -log "itype-sharing compile failed with status: $status" 1
+            fail "$testname (status $status: per-cell type work overran a resource boundary?)"
+        }
+    } else {
+        if { [string equal $status "SIGXCPU"] || [string equal $status "SIGKILL"] } {
+            pass "$testname"
+            set result $elapsed
+        } else {
+            verbose -log "itype-sharing hack run ended with status: $status" 1
+            fail "$testname (status $status: expected the CPU rlimit to kill it)"
+        }
+    }
+    return $result
+}
+
+if { $vtest == 1 } {
+
+    # Calibration: same file, same front-end work, few cells.  The
+    # 1800s rlimit is an anti-hang guard only.
+    set ref [itype_sharing_compile "calibration compile (CELLS=64)" \
+                 1800 64 {+RTS -M2g -RTS} 1]
+
+    if { $ref > 0 } {
+        # Every limit below is relative to this machine's measured
+        # reference cost; 60s floors out timer granularity and noise
+        # on very fast machines.
+        set limit [expr {max(60, int(ceil(5 * $ref)))}]
+
+        # The property under test: with all metadata in place, the
+        # stress compile costs about the same as the reference
+        # (~1.2x today), so it fits far inside the 5x limit.
+        itype_sharing_compile "shared-type compile is cheap" \
+            $limit 65536 {+RTS -M2g -RTS} 1
+
+        # Each disabled mode restores a per-cell structural walk
+        # needing >=60x the reference; the kernel must kill it.
+        itype_sharing_compile "without ftv cache the subst walk cannot finish" \
+            $limit 65536 {-hack-no-itype-ftv-cache +RTS -M2g -RTS} 0
+
+        itype_sharing_compile "without the atf bit the normalizer walk cannot finish" \
+            $limit 65536 {-hack-no-itype-atf-bit +RTS -M2g -RTS} 0
+
+        itype_sharing_compile "with deep rnf the heap-ref forcing cannot finish" \
+            $limit 65536 {-hack-deep-itype-rnf +RTS -M2g -RTS} 0
+    } else {
+        # Without a reference there are no meaningful limits.
+        untested "shared-type compile is cheap"
+        untested "without ftv cache the subst walk cannot finish"
+        untested "without the atf bit the normalizer walk cannot finish"
+        untested "with deep rnf the heap-ref forcing cannot finish"
+    }
+}
