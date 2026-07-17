@@ -16,7 +16,7 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List(union, genericSplitAt, genericLength)
-import Data.Maybe(fromMaybe, isNothing)
+import Changed
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -54,15 +54,13 @@ instance PVPrint t => PVPrint (Qual t) where
     pvPrint d p (ps :=> t) = pvparen (p>0) $ pvPrint d 0 t <+> pvPreds d (map removePredPositions ps)
 
 instance Types t => Types (Qual t) where
-    apSub s q = fromMaybe q (apSubM s q)
-    -- local changed-detection: contexts are short, so forcing the
-    -- element results here is cheap and buys whole-value sharing
-    apSubM s (ps :=> t) =
-        let mps = map (apSubM s) ps
-            mt  = apSubM s t
-        in  if all isNothing mps && isNothing mt
-            then Nothing
-            else Just (zipWith fromMaybe ps mps :=> fromMaybe t mt)
+    -- NB deliberately lazy (always Changed): schemes are substituted
+    -- far more often than their contexts are consumed, so forcing the
+    -- context list here to detect unchanged-ness costs more than the
+    -- sharing it buys (measured +50% typecheck on a register-heavy
+    -- module).  Element-level sharing still comes from apSubC.
+    apSubC s (ps :=> t) =
+        Changed (map (changedOrId (apSubC s)) ps :=> changedOr t (apSubC s t))
     tv      (ps :=> t) = tv ps `union` tv t
 
 instance (NFData a) => NFData (Qual a) where
@@ -157,11 +155,8 @@ instance PVPrint PredWithPositions where
 
 instance Types PredWithPositions where
     -- the ancestors are deliberately not substituted (see above)
-    apSub s pwp = fromMaybe pwp (apSubM s pwp)
-    apSubM s (PredWithPositions p poss anc) =
-        case apSubM s p of
-          Nothing -> Nothing
-          Just p' -> Just (PredWithPositions p' poss anc)
+    apSubC s (PredWithPositions p poss anc) =
+        changed1 (\p' -> PredWithPositions p' poss anc) (apSubC s p)
     tv      (PredWithPositions p poss anc) = tv p
 
 instance NFData PredWithPositions where
@@ -184,14 +179,15 @@ instance PVPrint Pred where
     pvPrint d p (IsIn c ts) = pvparen (p>0) $ pvpId d (typeclassId $ name c) <> pvParameterTypes d ts
 
 instance Types Pred where
-    apSub s p = fromMaybe p (apSubM s p)
-    -- apSub on a Pred doubles as a synonym-expansion pass (callers rely
-    -- on it normalizing types the substitution did not touch), so a
-    -- rebuild always runs expandSyn over every argument; the sharing
-    -- win here is per-element, via each type's own apSubM.
-    apSubM s (IsIn c ts) =
-        let mts = map (apSubM s) ts
-        in  Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
+    -- NB deliberately lazy (always Changed): substitution over a pred
+    -- must be an O(1) thunk -- the satisfy stream substitutes every
+    -- residual pred every round and demands types selectively, so
+    -- eager per-element detection walks far more type structure than
+    -- is consumed (measured +25% typecheck on a register-heavy
+    -- module).  Per-element sharing still comes from apSubC; expandSyn
+    -- re-normalizes lazily on rebuild exactly as it always has.
+    apSubC s (IsIn c ts) =
+        Changed (IsIn c (map (expandSyn . changedOrId (apSubC s)) ts))
     tv      (IsIn c ts) = tv ts
 
 instance NFData Pred where
@@ -302,7 +298,15 @@ expandSynPred :: Pred -> Pred
 expandSynPred (IsIn c ts) = IsIn c (map expandSyn ts)
 
 instance Types Inst where
-    apSub s (Inst e _ i pkg) = Inst (apSub s e) [] (apSub s i) pkg
+    -- The tv cache is the freshening domain consumed by newInst BEFORE
+    -- substitution; the only apSub at this type is inside newInst
+    -- itself, and nothing ever reads the cache of a substituted Inst
+    -- (byInst and the fundep checks wildcard it).  [] is therefore the
+    -- cheapest correct value -- not a semantic signal.  (mkImpliedInst
+    -- constructs an empty cache deliberately, but that is a
+    -- construction-time choice independent of this instance.)
+    apSubC s (Inst e _ i pkg) =
+        Changed (Inst (changedOrId (apSubC s) e) [] (changedOrId (apSubC s) i) pkg)
     tv (Inst _ vs _ _) = vs
 
 {-

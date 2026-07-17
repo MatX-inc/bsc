@@ -487,7 +487,3 @@ eSubstBatch norm exprMap typeMap e
                         ftx = S.unions (map fTVars (M.elems typeMap))
                     in eSubstWith (BatchExpr exprMap fvx) (BatchTypeNorm typeMap ftxv norm) (fvx `S.union` ftx `S.union` aVars e) e
 
-{-# INLINE mapChanged #-}
-mapChanged :: (a -> Changed a) -> [a] -> Changed [a]
-mapChanged _ [] = Unchanged
-mapChanged f xs0@(x:xs) = changed2 (:) x xs (f x) (mapChanged f xs)

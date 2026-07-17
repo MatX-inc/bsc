@@ -28,6 +28,7 @@ import PPrint
 import Position
 import Pred(Class, Pred)
 import Subst
+import Changed
 
 -- Dictionary binding representation
 -- The CExpr produces the dictionary value by constructing it or referring to another dictionary
@@ -92,7 +93,9 @@ data SolvedBinds = SolvedBinds {
 } deriving (Show)
 
 instance Types SolvedBinds where
-  apSub s sbs = sbs {
+  -- always rebuilt: the bind lists embed CExprs whose Types instance
+  -- offers no sharing, so detection would force everything for nothing
+  apSubC s sbs = Changed $ sbs {
     recursiveBinds = [ ((i, apSub s t, apSub s e), fv) | ((i, t, e), fv) <- recursiveBinds sbs ],
     nonRecursiveBinds = [ ((i, apSub s t, apSub s e), fv) | ((i, t, e), fv) <- nonRecursiveBinds sbs ],
     bindTypes = M.map (apSub s) (bindTypes sbs)

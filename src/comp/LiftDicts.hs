@@ -20,7 +20,7 @@ import CType
 import Assump
 import Pred
 import Scheme
-import Subst(mkSubst, Types(..))
+import Subst(mkSubst, Types(..), apSub)
 import Id
 import Position(Position, noPosition)
 import PPrint
