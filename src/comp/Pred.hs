@@ -5,7 +5,7 @@ module Pred(
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
             PredAncestor(..),
             getPredAncestors, mkPredAncestor, addPredAncestors,
-            expandSyn, predToType, qualToType, mkInst,
+            expandSyn, expandSynPred, predToType, qualToType, mkInst,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -289,7 +289,17 @@ instance NFData Inst where
     rnf (Inst x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
 
 mkInst :: CExpr -> Qual Pred -> Maybe Id -> Inst
-mkInst e i pkg = Inst e (tv i) i pkg
+-- The instance HEAD is synonym-expanded at construction: instance
+-- matching is structural, so a synonym in the head would never match
+-- an expanded solver predicate.  (Previously this was masked by apSub
+-- incidentally re-expanding every pred it touched.)  Context preds
+-- need no expansion here -- subgoals are minted through mkVPred*,
+-- which normalizes.
+mkInst e (ps :=> p) pkg = let i' = ps :=> expandSynPred p
+                          in  Inst e (tv i') i' pkg
+
+expandSynPred :: Pred -> Pred
+expandSynPred (IsIn c ts) = IsIn c (map expandSyn ts)
 
 instance Types Inst where
     apSub s (Inst e _ i pkg) = Inst (apSub s e) [] (apSub s i) pkg

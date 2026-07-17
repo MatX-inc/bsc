@@ -66,6 +66,24 @@ useLegacyInstIndex = elem "-legacy-inst-index" progArgs
 legacyDeferInstances :: Bool
 legacyDeferInstances = elem "-legacy-defer-instances" progArgs
 
+-- Debug-only invariant check: every predicate entering the satisfy
+-- loop must be synonym-expanded at construction (see mkVPredFromPred).
+-- Enable with -hack-check-pred-expanded (also via BSC_OPTIONS) to make
+-- a violation an internal error naming the offending predicate.
+checkPredExpanded :: Bool
+checkPredExpanded = elem "-hack-check-pred-expanded" progArgs
+
+assertPredsExpanded :: String -> [VPred] -> a -> a
+assertPredsExpanded tag vps x
+  | not checkPredExpanded = x
+  | otherwise =
+      case [ p | vp@(VPred _ pwp) <- vps
+               , let p@(IsIn _ ts) = removePredPositions pwp
+               , map expandSyn ts /= ts ] of
+        [] -> x
+        (p:_) -> internalError (tag ++ ": unexpanded pred reached the " ++
+                                "solver: " ++ ppReadable p)
+
 doRTrace :: Bool
 doRTrace = elem "-trace-type" progArgs
 rtrace :: String -> a -> a
@@ -178,7 +196,7 @@ satisfyX dvs es ps = do
 
 satisfyXStream :: DVS -> [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
 satisfyXStream _   es [] = return ([], emptySBs)
-satisfyXStream dvs es ps = do
+satisfyXStream dvs es ps = assertPredsExpanded "satisfyXStream" ps $ do
         -- satTraceM ("satisfy enter: " ++ ppString (dvs, ps))
 -- it is not clear if applying the substitution here wins or not
         s0 <- getSubst
@@ -1621,7 +1639,12 @@ mkVPredNoNewPos p = do
 mkVPredFromPred :: [Position] -> Pred -> TI VPred
 mkVPredFromPred poss p = do
   v <- newDict
-  return (VPred v $ mkPredWithPositions poss p)
+  -- expandSynVPred upholds the solver invariant that every predicate
+  -- is synonym-expanded at construction (the other mkVPred* producers
+  -- already do this); resolution matches instance heads structurally,
+  -- so an unexpanded synonym (e.g. Action for ActionValue ()) would
+  -- fail to match
+  return (expandSynVPred (VPred v $ mkPredWithPositions poss p))
 
 toPredWithPositions :: VPred -> PredWithPositions
 toPredWithPositions (VPred _ p) = p
