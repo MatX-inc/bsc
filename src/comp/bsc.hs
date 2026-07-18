@@ -87,7 +87,7 @@ import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
-import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
+import ISyntax(IPackage(..), IModule(..),
                IEFace(..), IDef(..), IExpr(..), fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
@@ -571,15 +571,6 @@ compilePackage
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
 
-    -- The ATF cache used during elaboration: this package's entries unioned
-    -- with the entries of every (transitively) loaded import.  This union is
-    -- only ever held in memory; each .bo file stores just its own package's
-    -- entries.  The union covers the full transitive closure because
-    -- "binmods" does: each .bo's ipkg_depends records its writer's entire
-    -- loaded closure (see ipkg_sigs in fixupDefs).
-    let elabATFCache = foldl' mergeIATFCaches (ipkg_atf_cache imods)
-                              [ ipkg_atf_cache m | (m, _) <- binmods ]
-
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
         orderGens (IPackage pid _ _ ds _) gs =
                 --trace (ppReadable (gis, g, os)) $
@@ -631,7 +622,7 @@ compilePackage
                 def_comp = do
                   def <- genModule errh wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
-                             internalSymt alldefs elabATFCache (getDef im i')
+                             internalSymt alldefs (getDef im i')
                   return (def, True)
                 ex_comp s = do
                   hFlush stdout >> hPutStr stderr s
@@ -736,7 +727,6 @@ genModule ::
     String -> -- source package name
     SymTab ->
     M.Map Id (IExpr HeapData) ->
-    IATFCache ->
     IDef HeapData ->
     IO (CDefn)
 
@@ -751,7 +741,6 @@ genModule
     srcName
     symt
     alldefs
-    atf_cache
     def  =
 
   do
@@ -768,7 +757,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    imod0 <- iExpand errh flags symt alldefs fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
