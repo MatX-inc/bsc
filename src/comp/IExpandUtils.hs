@@ -2604,23 +2604,11 @@ fullTypeNormalizer rules t@(ITAp _ _)
         canNorm (ITForAll _ _ _) = False
         canNorm (ITAp f a)       = canNorm f && canNorm a
         canNorm _                = True
-<<<<<<< HEAD
-        normTFun t =
-          let t' = tracep doTraceATFCacheMiss
-                     ("fullTypeNormalizer - ATF cache miss: " ++ ppReadable t)
-                     (iConvT flags symt $ iToCT t)
-          in case splitITAp t' of
-               ((ITCon _ _ (TIatf {})), _) -> internalError $
-                    "fullTypeNormalizer - unsimplified: " ++ ppReadable (t,t')
-               _ -> t'
-fullTypeNormalizer flags symt cache (ITAp f a) = changed2 ITAp f a f' a'
-  where f' = fullTypeNormalizer flags symt cache f
-        a' = fullTypeNormalizer flags symt cache a
-=======
-fullTypeNormalizer rules (ITAp f a) = changed2 normITAp f a f' a'
+-- (rc8: type-function reduction lives in the ITAp smart constructor,
+-- so the plain rebuild below is upstream's normITAp)
+fullTypeNormalizer rules (ITAp f a) = changed2 ITAp f a f' a'
   where f' = fullTypeNormalizer rules f
         a' = fullTypeNormalizer rules a
->>>>>>> 5347d1fe (Evaluate type functions from instance equations, not the ATF cache)
 
 getTypeNormalizerC :: G (IType -> Changed IType)
 getTypeNormalizerC = do
