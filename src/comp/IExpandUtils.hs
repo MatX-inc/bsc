@@ -22,7 +22,7 @@ module IExpandUtils(
         addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getErrHandle, getModuleName,
         getBNotCache, updBNotCache,
-        getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer, mergeATFCache,
+        getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer,
         instFunType,
         getNewRuleSuffix, updNewRuleSuffix,
         mapPExprPosition,
@@ -107,7 +107,7 @@ import Util
 import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
-import IConv(iConvT)
+import ATFRules(ATFRules, atfReduceGround)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -149,10 +149,8 @@ doTracePortTypes :: Bool
 doTracePortTypes = elem "-trace-port-types" progArgs
 doTraceLoc :: Bool
 doTraceLoc = elem "-trace-state-loc" progArgs
-doTraceATFCache :: Bool
-doTraceATFCache = elem "-trace-atf-cache" progArgs
-doTraceATFCacheMiss :: Bool
-doTraceATFCacheMiss = doTraceATFCache || elem "-trace-atf-cache-miss" progArgs
+doTraceATFRules :: Bool
+doTraceATFRules = elem "-trace-atf-rules" progArgs
 
 -----------------------------------------------------------------------------
 
@@ -608,15 +606,15 @@ data GState = GState {
         -- aggressive conditions
         aggressive_cond :: Bool,
 
-        atfCache :: !IATFCache
+        atfRules :: !ATFRules
         }
 
 initGState :: ErrorHandle -> Flags ->
               SymTab -> M.Map Id HExpr ->
-              IATFCache ->
+              ATFRules ->
               Id -> Bool -> [PProp] ->
               GState
-initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
+initGState errh flags symt alldefs atf_rules defId is_noinlined_func pps =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
                           checkMaxStep = redStepsMaxIntervals flags /= 0,
@@ -668,7 +666,7 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       savedRules = [],
                       badEvaluation = False,
                       aggressive_cond = aggImpConds flags,
-                      atfCache = atf_cache
+                      atfRules = atf_rules
  }
     in  gs
 
@@ -685,16 +683,15 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_comments_map :: [(Id,[String])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
-                           go_atfCache :: IATFCache,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
         SymTab -> M.Map Id HExpr ->
-        IATFCache ->
+        ATFRules ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
-runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
-  do let gs = initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps
+runG errh flags symt alldefs atf_rules defId is_noinlined_func pps gFn =
+  do let gs = initGState errh flags symt alldefs atf_rules defId is_noinlined_func pps
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
      do
@@ -742,7 +739,6 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      go_comments_map = M.toList (commentsMap gs'),
                      go_backend_specific = backend_specific gs',
                      go_ffcallNo = ffcallNo gs',
-                     go_atfCache = atfCache gs',
                      goutput = retval
                     })
 
@@ -2574,36 +2570,41 @@ updHeap tag (p, HeapData ref) e = do
 
 -- Type normalization function used in evaluation.
 -- Fully traverse and reduce all type function applications where possible.
-fullTypeNormalizer :: Flags -> SymTab -> IATFCache -> IType -> Changed IType
+fullTypeNormalizer :: ATFRules -> IType -> Changed IType
 -- no ATF constructor anywhere inside (memoized per intern unique)
 -- means nothing can reduce: answer without descending -- the type may
 -- be an exponentially shared DAG, and this normalizer runs on every
 -- application node's computed type under iPCheck, four times per
 -- compile
-fullTypeNormalizer _ _ _ t | not (itHasATF t) = Unchanged
-fullTypeNormalizer _ _ _ (ITCon _ _ _) = Unchanged
-fullTypeNormalizer _ _ _ (ITNum _)     = Unchanged
-fullTypeNormalizer _ _ _ (ITStr _)     = Unchanged
-fullTypeNormalizer _ _ _ (ITVar _)     = Unchanged
-fullTypeNormalizer flags symt cache (ITForAll i k t) = changed1 (ITForAll i k) t'
-  where t' = fullTypeNormalizer flags symt cache t
-fullTypeNormalizer flags symt cache t@(ITAp _ _)
-    | (f@(ITCon atfId _ (TIatf { atf_param_idxs = pIdxs })), as) <- splitITAp t
+fullTypeNormalizer _ t | not (itHasATF t) = Unchanged
+fullTypeNormalizer _ (ITCon _ _ _) = Unchanged
+fullTypeNormalizer _ (ITNum _)     = Unchanged
+fullTypeNormalizer _ (ITStr _)     = Unchanged
+fullTypeNormalizer _ (ITVar _)     = Unchanged
+fullTypeNormalizer rules (ITForAll i k t) = changed1 (ITForAll i k) t'
+  where t' = fullTypeNormalizer rules t
+fullTypeNormalizer rules t@(ITAp _ _)
+    | (f@(ITCon atfId _ so@(TIatf { atf_param_idxs = pIdxs })), as) <- splitITAp t
     , length as == length pIdxs  -- Only attempt to reduce type functions that are fully applied.
-    , as' <- map (changedOrId $ fullTypeNormalizer flags symt cache) as
+    , as' <- map (changedOrId $ fullTypeNormalizer rules) as
     , all canNorm as'
-    = Changed $ case M.lookup (atfId, as') cache of
+    = Changed $ case atfReduceGround rules atfId so as' of
         Just result ->
-          tracep doTraceATFCache
-            ("fullTypeNormalizer - ATF cache hit: " ++ ppReadable (atfId, as') ++
+          tracep doTraceATFRules
+            ("fullTypeNormalizer - reduced: " ++ ppReadable (atfId, as') ++
              " -> " ++ ppReadable result)
             result
-        Nothing -> normTFun $ foldl ITAp f as'
-  where -- The cache is keyed on concrete types; ITVar and ITForAll can't be looked up
+        Nothing -> internalError $
+            "fullTypeNormalizer - unreduced ground type-function application: " ++
+            ppReadable (foldl ITAp f as')
+  where -- Reduction is evaluation over the family's instance equations,
+        -- so it needs ground arguments; ITVar or ITForAll means the
+        -- application is dormant (not yet reducible), not a miss.
         canNorm (ITVar _)        = False
         canNorm (ITForAll _ _ _) = False
         canNorm (ITAp f a)       = canNorm f && canNorm a
         canNorm _                = True
+<<<<<<< HEAD
         normTFun t =
           let t' = tracep doTraceATFCacheMiss
                      ("fullTypeNormalizer - ATF cache miss: " ++ ppReadable t)
@@ -2615,13 +2616,16 @@ fullTypeNormalizer flags symt cache t@(ITAp _ _)
 fullTypeNormalizer flags symt cache (ITAp f a) = changed2 ITAp f a f' a'
   where f' = fullTypeNormalizer flags symt cache f
         a' = fullTypeNormalizer flags symt cache a
+=======
+fullTypeNormalizer rules (ITAp f a) = changed2 normITAp f a f' a'
+  where f' = fullTypeNormalizer rules f
+        a' = fullTypeNormalizer rules a
+>>>>>>> 5347d1fe (Evaluate type functions from instance equations, not the ATF cache)
 
 getTypeNormalizerC :: G (IType -> Changed IType)
 getTypeNormalizerC = do
-  flags <- getFlags
-  symt <- getSymTab
-  cache <- getATFCache
-  return $ fullTypeNormalizer flags symt cache
+  rules <- getATFRules
+  return $ fullTypeNormalizer rules
 
 getTypeNormalizer :: G (IType -> IType)
 getTypeNormalizer = fmap changedOrId getTypeNormalizerC
@@ -2674,17 +2678,10 @@ getErrHandle :: G ErrorHandle
 getErrHandle = do s <- get
                   return (errHandle (ro s))
 
-{-# INLINE getATFCache #-}
-getATFCache :: G IATFCache
-getATFCache = do s <- get
-                 return (atfCache s)
-
-mergeATFCache :: IATFCache -> G ()
-mergeATFCache new_entries =
-    when (not (M.null new_entries)) $ do
-      when doTraceATFCache $
-        traceM $ "mergeATFCache: " ++ ppReadable new_entries
-      modify (\s -> s { atfCache = mergeIATFCaches new_entries (atfCache s) })
+{-# INLINE getATFRules #-}
+getATFRules :: G ATFRules
+getATFRules = do s <- get
+                 return (atfRules s)
 
 {-# INLINE getWireSetCache #-}
 getWireSetCache :: G (M.Map HeapPointer HWireSet)
