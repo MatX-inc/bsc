@@ -168,6 +168,7 @@ redirectDictProps redirects d@(IDef i t e props)
 -- (2) Find references to top-level variables and insert the definitions
 --     (to avoid lookups when evaluating the code).  This creates a cyclic
 --     data structure when defs call each other recursively.
+<<<<<<< HEAD
 --
 -- It also deduplicates lifted dictionaries against the imported
 -- packages: every lifted dictionary whose evidence identity verifies
@@ -179,6 +180,10 @@ redirectDictProps redirects d@(IDef i t e props)
 -- imported packages that are passed as the third argument.
 fixupDefs :: DictBuckets -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
 fixupDefs buckets (IPackage mi _ ps ds own_atf_cache) ipkgs =
+=======
+fixupDefs :: IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs (IPackage mi _ ps ds) ipkgs =
+>>>>>>> b57cecf6 (Retire the ATF cache: nothing captures, merges, or serializes results)
     let
         (ms, _) = unzip ipkgs
 
@@ -186,10 +191,10 @@ fixupDefs buckets (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- XXX The nub is needed (at least) because we call "fixupDefs"
         -- XXX multiple times on a package and so we may be adding the ipkg
         -- XXX pragmas multiple times.
-        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ _ <- ms ]
+        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ <- ms ]
 
         -- Get all the defs from this package and the imported packages
-        ads = concat (ds : map (\ (IPackage _ _ _ ds _) -> ds) ms)
+        ads = concat (ds : map (\ (IPackage _ _ _ ds) -> ds) ms)
 
         -- The evidence identities are read from the defs as their
         -- packages recorded them, before any redirection this pass
@@ -207,6 +212,7 @@ fixupDefs buckets (IPackage mi _ ps ds own_atf_cache) ipkgs =
                    (iDefsMap (fixUp redirects m) ads)
 
         -- The new package contents
+<<<<<<< HEAD
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = map (redirectDictProps redirects)
                   (iDefsMap (fixUp redirects m) ds)
@@ -226,6 +232,13 @@ fixupDefs buckets (IPackage mi _ ps ds own_atf_cache) ipkgs =
     in
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
         (IPackage mi ipkg_sigs ps' ds'' own_atf_cache, ads')
+=======
+        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _), s) <- ipkgs ]
+        ds' = iDefsMap (fixUp m) ds
+    in
+        --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
+        (IPackage mi ipkg_sigs ps' ds', ads')
+>>>>>>> b57cecf6 (Retire the ATF cache: nothing captures, merges, or serializes results)
 
 
 -- ===============

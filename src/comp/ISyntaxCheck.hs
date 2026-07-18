@@ -251,7 +251,7 @@ kCheckErr r t = fj $ kCheck r t
   where fj = fromJustOrErr ("findK: " ++ ppReadable (r, t))
 
 tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
-tCheckIPackage flags symt (IPackage pi _ _ ds _) =
+tCheckIPackage flags symt (IPackage pi _ _ ds) =
     let r  = emptyEnv
         rules = buildATFRules symt
         defOK (IDef i t e _) =

@@ -2,7 +2,6 @@
 module TIMonad(
         TI,
         apSubTI,
-        CATFCache, mergeCATFCaches,
         TIResult(..), runTI, err, errs, twarn, handle,
         GroundDictState(..), initGroundDictState, runTIWithGroundPool,
         getGroundDictState, setGroundDictState, newLiftedGroundDictId,
@@ -21,7 +20,7 @@ module TIMonad(
         literalCls, realLiteralCls, sizedLiteralCls, stringLiteralCls,
         numEqCls,
         updAssumpPos,
-        recordPackageUse, recordATFResult,
+        recordPackageUse,
         incrementSatStack, decrementSatStack, getSatStack, mkTSSatElement, TSSatElement,
               pushSatStackContext, popSatStackContext
         , tiRecoveringFromError
@@ -89,7 +88,6 @@ data TStatePersistent = TStatePersistent {
    tsAllowIncoherent :: Bool,
    tsWarns :: [WMsg], -- accumulated warning messages
    tsUsedPackages :: S.Set Id, -- packages from which symbols were used
-   tsATFCache :: CATFCache,
    tsGroundDicts :: Maybe GroundDictState
 }
 
@@ -161,11 +159,6 @@ getGroundDictState = lift $ gets tsGroundDicts
 setGroundDictState :: GroundDictState -> TI ()
 setGroundDictState gd =
     lift $ modify (\s -> s { tsGroundDicts = Just gd })
-
-type CATFCache = M.Map (Id, [Type]) Type
-
-mergeCATFCaches :: CATFCache -> CATFCache -> CATFCache
-mergeCATFCaches = M.union
 
 -- typechecking state that is restored in case of error
 data TStateRecover = TStateRecover {
@@ -242,7 +235,6 @@ initPersistentState flags ai s = TStatePersistent {
     tsAllowIncoherent = ai,
     tsRecoveredErrors = [],
     tsUsedPackages = S.empty,
-    tsATFCache = M.empty,
     tsGroundDicts = Nothing
   }
 
@@ -259,16 +251,14 @@ initRecoverState = TStateRecover {
 data TIResult a = TIResult {
     tiResult       :: Either [EMsg] a,
     tiWarnings     :: [WMsg],
-    tiUsedPackages :: S.Set Id,
-    tiATFCache     :: CATFCache
+    tiUsedPackages :: S.Set Id
   }
 
 runTI :: Flags -> Bool -> SymTab -> TI a -> TIResult a
 runTI flags ai s m = TIResult {
     tiResult       = mkFinalResult result rec_errors,
     tiWarnings     = tsWarns pState,
-    tiUsedPackages = tsUsedPackages pState,
-    tiATFCache     = tsATFCache pState
+    tiUsedPackages = tsUsedPackages pState
   }
   where (result, pState) = runTIState flags ai s m
         rec_errors = tsRecoveredErrors pState
@@ -285,8 +275,7 @@ runTIWithGroundPool flags ai s gd m = (tires, gd')
   where tires = TIResult {
             tiResult       = mkFinalResult result (tsRecoveredErrors pState),
             tiWarnings     = tsWarns pState,
-            tiUsedPackages = tsUsedPackages pState,
-            tiATFCache     = tsATFCache pState
+            tiUsedPackages = tsUsedPackages pState
           }
         (result, pState) =
             runState (runExceptT (runStateT m initRecoverState))
@@ -391,11 +380,6 @@ recordPackageUse :: Maybe Id -> TI ()
 recordPackageUse Nothing = return ()  -- no package to record
 recordPackageUse (Just pkg) = lift (modify (addPackage pkg))
   where addPackage pkg s = s { tsUsedPackages = S.insert pkg (tsUsedPackages s) }
-
-recordATFResult :: Id -> [Type] -> Type -> TI ()
-recordATFResult atfId args result =
-    lift (modify addATF)
-  where addATF s = s { tsATFCache = M.insert (atfId, args) result (tsATFCache s) }
 
 -- XXX maybe someday get rid of this function and replace with catchError
 handle :: TI a -> (EMsgs -> TI a) -> TI a
