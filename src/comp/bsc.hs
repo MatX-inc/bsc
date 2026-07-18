@@ -81,7 +81,7 @@ import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
+import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
@@ -409,7 +409,7 @@ compilePackage
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce) <- cCtxReduceIO errh flags symt11 mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -425,7 +425,7 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
+    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
@@ -459,8 +459,7 @@ compilePackage
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
-    imod <- iConvPackage errh flags symt combinedATFCache mod'
+    imod <- iConvPackage errh flags symt mod'
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
@@ -482,9 +481,9 @@ compilePackage
             [(String, IExpr a)] ->
             (IPackage a) ->
             (IPackage a)
-        adjEnv env (IPackage i lps ps ds atfCache)
+        adjEnv env (IPackage i lps ps ds)
                             | getIdString i == "Prelude" =
-                    IPackage i lps ps (map adjDef ds) atfCache
+                    IPackage i lps ps (map adjDef ds)
             where
                 adjDef (IDef i t x p) =
                     case lookup (getIdString (unQualId i)) env of
@@ -524,7 +523,7 @@ compilePackage
     stats flags DFisimplify imods
 
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
-        orderGens (IPackage pid _ _ ds _) gs =
+        orderGens (IPackage pid _ _ ds) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
           where gis = [ qualId pid i
@@ -549,7 +548,7 @@ compilePackage
                     "\n")
 
     let getDef :: IPackage a -> Id -> IDef a
-        getDef (IPackage _ _ _ ds _) i =
+        getDef (IPackage _ _ _ ds) i =
            case [ d | d@(IDef i' _ _ _) <- ds, unQualId i == unQualId i' ] of
                 [ d ] -> d
                 _ -> internalError ("No definition for " ++ pfpString i)
@@ -2187,11 +2186,11 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _) <- cCtxReduceIO errh flags symt cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs) <- cTypeCheck errh flags symt cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified
