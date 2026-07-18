@@ -42,6 +42,7 @@ import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
 import GroundCType(groundCTypeEnabled, internGroundCType)
+import ATFRules(buildATFRules, atfReduceInType)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
@@ -187,24 +188,19 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
         in  --trace ("iConvCs: " ++ ppReadable vs)
             (i, t'', e')
 
-<<<<<<< HEAD
--- expandSynN resolves ATFs before conversion to IType, so the resulting
--- IType contains no ATF applications and does not need the ATF cache.
--- With -hack-ground-ctype, conversions of internable ground types are
--- memoized process-globally, keyed on their GroundCType node id: a
--- repeated large type argument -- the dominant content of converted
--- dictionary constructions and wrapper interface definitions -- costs
--- one IntMap probe instead of a full expandSynN plus structural
--- re-conversion; and a circulating canonical node costs one pointer
--- probe inside the interner, no walk at all.  The memo is a bridge
--- between the two intern tables: its keys are interned CType nodes
--- and its values are interned ITypes.  Soundness: a type the walk
--- interns is ground, synonym-expandable and type-function-evaluable
--- purely, and free of associated type functions (the one symtab-
--- dependent piece of expandSynN, which resolves them against the
--- current instances) -- for exactly those types the conversion is
--- independent of the Flags and SymTab arguments, so one process-wide
--- entry serves every package.
+-- Ground ATF applications are reduced from the instance equations
+-- (pure), so the resulting IType contains no reducible ATF
+-- applications.  A type still carrying a dormant (variable-dependent)
+-- ATF application falls back to the typechecker round trip, where
+-- scope-relative reduction may apply; types reaching conversion have
+-- already been normalized by typechecking, so the fallback should be
+-- unreachable, and it is kept only until that is enforced.
+--
+-- With -hack-ground-ctype, internable ground types short-cut through
+-- a process-global memo keyed on their GroundCType node id: the
+-- canonical node is already a synonym-free, type-function-free,
+-- ATF-free normal form, so it converts directly -- once per distinct
+-- node, however many packages consult it.
 {-# NOINLINE convTMemo #-}
 convTMemo :: IORef (IM.IntMap IType)
 convTMemo = unsafePerformIO $ newIORef IM.empty
@@ -241,10 +237,6 @@ iConvTStats = do
            , ("iconvt.not_internable", b)
            ]
 
-=======
--- expandSynN resolves ATFs before conversion to IType, so the
--- resulting IType contains no reducible ATF applications.
->>>>>>> b57cecf6 (Retire the ATF cache: nothing captures, merges, or serializes results)
 iConvT :: Flags -> SymTab -> Type -> IType
 iConvT flags s t
   | groundCTypeEnabled, Just (nid, tc) <- internGroundCType t =
@@ -255,16 +247,16 @@ iConvT flags s t
                         return it
           Nothing -> do
             iconvBump cnConvTMiss
-            -- convert the canonical node: it is already in normal
-            -- form (and ATF-free, so expandSynN has nothing to do)
-            let it = iConvT' (expandSynN flags s tc)
+            let it = iConvT' tc
             atomicModifyIORef' convTMemo (\ m -> (IM.insert nid it m, ()))
             return it
-  | iconvStatsEnabled =
+  | otherwise =
       unsafePerformIO $ do
-        modifyIORef' cnConvTBypass (+1)
-        return (iConvT' (expandSynN flags s t))
-  | otherwise = iConvT' (expandSynN flags s t)
+        iconvBump cnConvTBypass
+        let it = iConvT' (expandSyn t)
+        return $ case atfReduceInType (buildATFRules s) it of
+                   Just it' -> it'
+                   Nothing  -> iConvT' (expandSynN flags s t)
 
 -- per-canonical-node conversion memo: iConvT' is a pure function of
 -- structure, and a canonical (cons-interned) CType may be an
