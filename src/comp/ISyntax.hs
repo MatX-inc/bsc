@@ -75,8 +75,7 @@ module ISyntax(
         getInoutClock,
         getInoutReset,
         getWireInfo,
-        isIConInt, isIConReal, isIConParam,
-        IATFCache, mergeIATFCaches
+        isIConInt, isIConReal, isIConParam
         ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -132,16 +131,9 @@ data IPackage a
               -- pragmas
               ipkg_pragmas :: [Pragma],
               -- definition list
-              ipkg_defs :: [IDef a],
-              -- cache of resolved associated type function applications
-              ipkg_atf_cache :: IATFCache
+              ipkg_defs :: [IDef a]
           }
      deriving (Eq, Ord, Show)
-
-type IATFCache = M.Map (Id, [IType]) IType
-
-mergeIATFCaches :: IATFCache -> IATFCache -> IATFCache
-mergeIATFCaches = M.union
 
 -- An elaborated module
 -- * These are created during iExpand for each module to be synthesized
@@ -1036,7 +1028,7 @@ pPrintLink :: PDetail -> Int -> (Id, String) -> Doc
 pPrintLink d i (mi, hash) = (ppId d mi) <+> (text hash)
 
 instance PPrint (IPackage a) where
- pPrint d p (IPackage mi lps ps ds _) =
+ pPrint d p (IPackage mi lps ps ds) =
         (text "IPackage" <+> ppId d mi) $+$
         (text "  --linked packages") $+$
         foldr (($+$) . pPrintLink d 0) (text "") lps $+$
@@ -1221,7 +1213,7 @@ instance PPrint (IExpr a) where
 -- Hyper (for those instances not defined alongside the type, above)
 
 instance NFData (IPackage a) where
-    rnf (IPackage i lps ps ds atfCache) = rnf5 i ps lps ds atfCache
+    rnf (IPackage i lps ps ds) = rnf4 i ps lps ds
 
 instance NFData (IModule a) where
     rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16) =
