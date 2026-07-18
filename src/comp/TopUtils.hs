@@ -256,7 +256,7 @@ instance Stats CPackage where
         (text "  " <> showLen [ () | CValueSign _ <- ds ] "values")
 
 instance Stats (IPackage a) where
-    pStats _ (IPackage _ _ _ ds _) =
+    pStats _ (IPackage _ _ _ ds) =
         showLen ds "definitions"
 
 instance Stats (IModule a) where
