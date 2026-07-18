@@ -55,7 +55,8 @@
 module ATFRules(
     ATFRules,
     buildATFRules,
-    atfReduceGround
+    atfReduceGround,
+    atfReduceInType
 ) where
 
 import qualified Data.Map as M
@@ -104,6 +105,34 @@ atfReduceGround rules atfId so args =
         | otherwise -> reduceATF rules maxFuel atfId so args
       _ -> internalError ("ATFRules.atfReduceGround: not an ATF tycon: " ++
                           ppReadable atfId)
+
+-- | Reduce every ground ATF application in a type, leaving all other
+-- structure -- including type variables -- untouched.  @Nothing@ if
+-- the type contains an ATF application this evaluator cannot
+-- eliminate: a fully applied application over type variables
+-- (dormant; possibly reducible by the typechecker's scope-relative
+-- judgment, never by ours) or a ground application with no matching
+-- equation.  Partially applied ATF constructors are inert structure
+-- and do not count.
+atfReduceInType :: ATFRules -> IType -> Maybe IType
+atfReduceInType rules t0 = go maxFuel t0
+  where
+    go fuel _ | fuel <= 0 = Nothing
+    go fuel (ITForAll i k b) = ITForAll i k `fmap` go (fuel - 1) b
+    go fuel t@(ITAp _ _) =
+      case spine t [] of
+        (ITCon atfId _ so@(TIatf { atf_param_idxs = pIdxs }), as)
+          | length as == length pIdxs -> do
+              as' <- mapM (go (fuel - 1)) as
+              if all isGround as'
+                then reduceATF rules (fuel - 1) atfId so as'
+                else Nothing
+        (f, as) -> do
+              as' <- mapM (go (fuel - 1)) as
+              Just (foldl normITAp f as')
+    go _ t = Just t
+    spine (ITAp f a) as = spine f (a : as)
+    spine f as = (f, as)
 
 reduceATF :: ATFRules -> Int -> Id -> TISort -> [IType] -> Maybe IType
 reduceATF rules@(ATFRules symt) fuel atfId
