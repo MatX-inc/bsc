@@ -425,3 +425,18 @@ eager wins ~2.3% CPU at +2.7% residency. Both within a few percent either
 side of the crossover; the rnf version is kept (simpler, ahead on the
 shapes that dominate real code). Re-evaluate only if the bazel replay
 shows pred-argument sizes far beyond the proviso shape.
+
+### Appendix: sched-conditions (f8b55444) regime sweep
+
+Four synthetic shapes bracket where the fix pays (schedule-phase medians,
+3 interleaved pairs each):
+1-bit preds, one unconditional use/rule (800 rules): 0.88x. Big arithmetic
+predicates, unconditional uses: ~1.0x (cost sits in the flag-independent
+base disjointness analysis - verified by a flag-off 2x2). Big distinct
+conditions: ~1.0x (intrinsic solver work; the precision-preserving fix
+does not reduce queries' logical content). Many small conditional uses
+(400 rules x 6 uses, ~480k queries/graph): **0.73x** - the fix's regime:
+per-query overhead x query count, plus composite-key retention. Real
+designs (tiny implicit conditions, quadratic counts, large heaps) sit in
+this last regime; the report's +200..+3865% schedule targets are the
+fleet-scale expression of it and are the bazel-replay validation rows.
