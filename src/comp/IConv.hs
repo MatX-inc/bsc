@@ -35,6 +35,7 @@ import CType(cTVarKind, typeclassId, cTVarNum)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
+import ATFRules(buildATFRules, atfReduceInType)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
@@ -166,10 +167,19 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
         in  --trace ("iConvCs: " ++ ppReadable vs)
             (i, t'', e')
 
--- expandSynN resolves ATFs before conversion to IType, so the
--- resulting IType contains no reducible ATF applications.
+-- Ground ATF applications are reduced from the instance equations
+-- (pure), so the resulting IType contains no reducible ATF
+-- applications.  A type still carrying a dormant (variable-dependent)
+-- ATF application falls back to the typechecker round trip, where
+-- scope-relative reduction may apply; types reaching conversion have
+-- already been normalized by typechecking, so the fallback should be
+-- unreachable, and it is kept only until that is enforced.
 iConvT :: Flags -> SymTab -> Type -> IType
-iConvT flags s t = iConvT' (expandSynN flags s t)
+iConvT flags s t =
+    let it = iConvT' (expandSyn t)
+    in case atfReduceInType (buildATFRules s) it of
+         Just it' -> it'
+         Nothing  -> iConvT' (expandSynN flags s t)
 
 iConvT' :: Type -> IType
 iConvT' (TVar (TyVar i _ _)) = ITVar i
