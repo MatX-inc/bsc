@@ -52,7 +52,7 @@
 -- domain and answers Nothing.  No ATF-carrying family in the current
 -- libraries does this.
 
-module ATFRules(
+module ATFRules(atfReduceGroundApp, 
     ATFRules,
     buildATFRules,
     atfReduceGround,
@@ -71,7 +71,11 @@ import CType(Type(..), TyVar(..), TyCon(..), Kind(..), TISort(..),
 import Pred(Pred(..), Qual(..), Class(..), Inst(..), expandSyn,
             removePredPositions)
 import SymTab(SymTab, findSClass)
-import ISyntax(IType(..), IKind(..), normITAp)
+import ISyntax(IType(..), IKind(..))
+import IType(iTypeNodeId)
+import qualified Data.IntMap.Strict as IM
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import ISyntaxSubst(tSubstBatch)
 
 -- The rules are views of the instance declarations already in the
@@ -95,6 +99,30 @@ maxFuel = 4096
 -- equation matched, the match was ambiguous, an instance context
 -- could not be grounded, or fuel ran out -- all internal errors at
 -- permanent-construction call sites.
+-- Ground reductions memoize per applied-node intern unique: the
+-- retired cache's amortization with a canonical-identity key instead
+-- of a deep type key.  Sound here because atfReduceGround always
+-- evaluates at the constant maxFuel (never cache a variable-fuel
+-- verdict: Nothing conflates no-equation with fuel-out).  The applied
+-- node is interned unconditionally, so the memo is active flag-off
+-- and strictly dominates the cache it replaces.
+{-# NOINLINE atfRedMemo #-}
+atfRedMemo :: IORef (IM.IntMap (Maybe IType))
+atfRedMemo = unsafePerformIO $ newIORef IM.empty
+
+atfReduceGroundApp :: ATFRules -> IType -> Id -> TISort -> [IType]
+                   -> Maybe IType
+atfReduceGroundApp rules app atfId so args = unsafeDupablePerformIO $ do
+    let u = iTypeNodeId app
+    m0 <- readIORef atfRedMemo
+    case IM.lookup u m0 of
+      Just r -> return r
+      Nothing -> do
+        let r = atfReduceGround rules atfId so args
+        _ <- return $! r
+        atomicModifyIORef' atfRedMemo (\ m -> (IM.insert u r m, ()))
+        return r
+
 atfReduceGround :: ATFRules -> Id -> TISort -> [IType] -> Maybe IType
 atfReduceGround rules atfId so args =
     case so of
@@ -129,7 +157,7 @@ atfReduceInType rules t0 = go maxFuel t0
                 else Nothing
         (f, as) -> do
               as' <- mapM (go (fuel - 1)) as
-              Just (foldl normITAp f as')
+              Just (foldl ITAp f as')
     go _ t = Just t
     spine (ITAp f a) as = spine f (a : as)
     spine f as = (f, as)
@@ -284,7 +312,7 @@ groundNorm rules fuel t0 = do
                 reduceATF rules (fuel - 1) atfId so as'
           (f, as) -> do
                 as' <- mapM (groundNorm rules (fuel - 1)) as
-                Just (foldl normITAp f as')
+                Just (foldl ITAp f as')
   where
     spine (ITAp f a) as = spine f (a : as)
     spine f as = (f, as)
@@ -307,7 +335,8 @@ cvtType = cvt . expandSyn
     cvt (TCon (TyCon i (Just k) s)) = ITCon i (cvtK k) s
     cvt (TCon (TyNum n _)) = ITNum n
     cvt (TCon (TyStr s _)) = ITStr s
-    cvt (TAp t1 t2) = normITAp (cvt t1) (cvt t2)
+    -- rc8: the ITAp smart constructor performs the reduction
+    cvt (TAp t1 t2) = ITAp (cvt t1) (cvt t2)
     cvt t = internalError ("ATFRules.cvtType: " ++ ppReadable t)
     cvtK KStar = IKStar
     cvtK KNum = IKNum
