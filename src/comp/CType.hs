@@ -1,9 +1,14 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving, PatternGuards, DeriveDataTypeable #-}
+{-# LANGUAGE PatternSynonyms #-}
 -- | The CType package defines the concrete representation of types and kinds.
 module CType(
   -- * Types
-  Type(..), CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
+  -- TAp and TCon are bidirectional pattern synonyms over the hidden
+  -- real constructors (the IType idiom); see the consing note below.
+  Type(TVar, TCon, TAp, TGen, TDefMonad),
+  CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
+  isCanonType, typeCanonId, consCTypeEnabled, cTypeConsStats,
 
   -- ** Examining Types
   getTyVarId, getTypeKind,
@@ -60,6 +65,16 @@ import Data.Char(isDigit, chr)
 import Data.List(union)
 import Data.Maybe
 import qualified Data.Generics as Generic
+import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
+import Data.IORef(IORef, newIORef, readIORef, modifyIORef', atomicModifyIORef')
+import Control.Exception(SomeException, SomeAsyncException(..),
+                         fromException, throwIO, try, evaluate)
+import Control.Monad(when)
+import Data.Bits(finiteBitSize)
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
+import IOUtil(progArgs)
 
 import Eval
 import PPrint
@@ -68,7 +83,7 @@ import Id
 import IdPrint
 import PreIds(idArrow, idPrimPair, idPrimUnit, idBit, idString,
               idPrimAction, idAction, idActionValue_, idActionValue,
-              idTNumToStr)
+              idTNumToStr, idId)
 import Util(itos)
 import ErrorUtil
 import Pragma(IfcPragma)
@@ -79,12 +94,68 @@ import FStringCompat
 -- Data structures
 
 -- | Representation of types
-data Type = TVar TyVar         -- ^ type variable
-          | TCon TyCon         -- ^ type constructor
-          | TAp Type Type      -- ^ type-level application
-          | TGen Position Int  -- ^ quantified type variable used in type schemes
-          | TDefMonad Position -- ^ not used after CVParserImperative
-    deriving (Show, Generic.Data, Generic.Typeable)
+--
+-- TCon_ and TAp_ carry a canonical-node id slot (the IType idiom):
+-- -1 means a raw node with no canonicality claim; >= 0 means THIS
+-- OBJECT is the unique intern-table representative of its structure,
+-- with every child transitively canonical -- and therefore ground
+-- (no TVar/TGen/TDefMonad anywhere inside).  Ids are assigned only by
+-- the intern machinery below; every other construction site must use
+-- -1.  The slot makes the child-membership groundness test a field
+-- read, and equal ids mean the same heap object.
+data Type = TVar TyVar          -- ^ type variable
+          | TCon_ {-# UNPACK #-} !Int TyCon
+                                -- ^ type constructor (build via 'TCon')
+          | TAp_ {-# UNPACK #-} !Int Type Type
+                                -- ^ type-level application (build via 'TAp')
+          | TGen Position Int   -- ^ quantified type variable used in type schemes
+          | TDefMonad Position  -- ^ not used after CVParserImperative
+    deriving (Generic.Typeable)
+
+-- The construction choke points: every out-of-module (and in-module)
+-- TCon/TAp goes through the smart constructors, which count and --
+-- with -hack-ctype-cons -- hash-cons ground nodes at construction.
+pattern TCon :: TyCon -> Type
+pattern TCon c <- TCon_ _ c
+  where TCon c = mkTCon c
+
+pattern TAp :: Type -> Type -> Type
+pattern TAp f a <- TAp_ _ f a
+  where TAp f a = mkTAp f a
+
+{-# COMPLETE TVar, TCon, TAp, TGen, TDefMonad #-}
+
+-- | The canonical-node id of a type: -1 unless this object is the
+-- unique canonical (hence ground) intern-table node for its structure.
+typeCanonId :: Type -> Int
+typeCanonId (TAp_ i _ _) = i
+typeCanonId (TCon_ i _)  = i
+typeCanonId _            = -1
+
+-- | Canonical implies ground: no TVar/TGen/TDefMonad anywhere inside,
+-- so substitution and zonking are identities and tv is empty.
+isCanonType :: Type -> Bool
+isCanonType t = typeCanonId t >= 0
+
+-- Derived Show would print the slots and the underscored names; this
+-- reproduces the original derived format over the public constructors.
+instance Show Type where
+    showsPrec d (TVar v) = showParen (d > 10) $
+        showString "TVar " . showsPrec 11 v
+    showsPrec d (TCon c) = showParen (d > 10) $
+        showString "TCon " . showsPrec 11 c
+    showsPrec d (TAp f a) = showParen (d > 10) $
+        showString "TAp " . showsPrec 11 f . showString " " . showsPrec 11 a
+    showsPrec d (TGen p i) = showParen (d > 10) $
+        showString "TGen " . showsPrec 11 p . showString " " . showsPrec 11 i
+    showsPrec d (TDefMonad p) = showParen (d > 10) $
+        showString "TDefMonad " . showsPrec 11 p
+
+-- No Data instance for Type: the pre-slot deriving was vestigial (syb
+-- traversals in the compiler are confined to the Verilog AST, and no
+-- Data-deriving container embeds a Type), and its absence closes the
+-- one generic-rebuild path that could have fabricated an id slot.
+-- TISort's and TyCon's Data derivings go with it -- they embed Type.
 
 -- | Representation of a type variable
 data TyVar = TyVar { tv_name :: Id    -- ^ name of the type variable
@@ -108,7 +179,7 @@ data TyCon = -- | A constructor for a type of value kind
            | TyStr { tystr_value :: FString  -- ^ type-level string value
                    , tystr_pos   :: Position -- ^ position of introduction
                    }
-    deriving (Show, Generic.Data, Generic.Typeable)
+    deriving (Show, Generic.Typeable)
 
 data TISort
         = -- type synonym
@@ -128,7 +199,7 @@ data TISort
                 , atf_param_idxs :: [Int]  -- index of each ATF param in the class param list
                 , atf_target_idx :: Int    -- index of the result param in the class param list
                 }
-        deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+        deriving (Eq, Ord, Show, Generic.Typeable)
 
 
 data StructSubType
@@ -145,6 +216,312 @@ data StructSubType
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 type CType = Type
+
+-- =====
+-- Construction-time consing of ground type nodes (-hack-ctype-cons):
+-- the lever-3 v2 prototype behind the TAp/TCon synonyms.
+--
+-- Toggle off: the smart constructors build a raw node (id -1) and
+-- count it (the construction "firehose").  Toggle on: ground nodes
+-- are hash-consed at construction.  Groundness is inductive and O(1):
+-- a node conses only if both children carry canonical ids -- a field
+-- read -- so a non-ground child refuses the parent for the cost of a
+-- constructor-tag check, with no table traffic at all (v1 paid a
+-- StableName registration per probe; that was the measured loss).
+-- TVar/TGen/TDefMonad never carry ids, and canonical leaves seed the
+-- induction.
+--
+-- Unlike GroundCType (the boundary interner), consing is RAW
+-- STRUCTURAL: no synonym expansion and no type-function evaluation,
+-- because construction must preserve the structure the caller wrote.
+-- This table is therefore separate from GroundCType's normalizing
+-- table (unifying them is the production design; the prototype keeps
+-- the audited boundary semantics untouched).
+--
+-- Leaf policy: TyCon leaves key on (qualifier, base) like Eq TyCon --
+-- qualified names only -- but additionally on the kind and a sort
+-- tag: construction-time put-back runs from the parser onward, where
+-- a same-named TyCon can temporarily carry an unresolved payload
+-- (kind Nothing / TIabstract), and payload variants must never
+-- conflate.  TNum/TStr leaves key on value alone; their positions
+-- conflate exactly as bsc's type equality (and the audited
+-- GroundCType leaf policy) already conflate them.  setTypePosition
+-- builds raw nodes: it explicitly writes positions, which put-back
+-- would undo.
+--
+-- Because equal canonical ids mean the same heap object, cmp answers
+-- EQ on id equality without descending, and structural descents on
+-- unequal canonical trees prune to the differing paths: comparisons
+-- over exponentially shared (DAG) ground types stay polynomial.
+--
+-- Conflation and lifetime (review-audited, measurement-accepted):
+-- canonical leaves carry FIRST-ARRIVAL positions, IdProps, and sort
+-- payloads -- the key deliberately covers only what Eq TyCon's
+-- qualified-name regime distinguishes (plus kind and sort tag),
+-- because keying the sort PAYLOAD would force synonym bodies at
+-- construction, which the symtab knot cannot tolerate, and keying
+-- positions would zero the sharing.  Soundness rests on the same
+-- one-tycon-per-qualified-name invariant Eq TyCon rests on.  The
+-- tables are process-global and never reset, so in a multi-package
+-- process flag-on .bo BYTES (positions of shared leaves) depend on
+-- compile order within the process -- semantically identical, but
+-- not byte-reproducible per input (the -hack-ground-ctype boundary
+-- tables share this property).  Before graduating from a measurement
+-- toggle: add a per-compilation-session table reset (also the fix
+-- for stale synonym bodies under a bluetcl-style in-process package
+-- reload), or make canonical nodes carry the caller's payload and
+-- share by id only.
+--
+-- The reset must cover ALL the process-global tables of this
+-- campaign, most critically the NAME-keyed memos, which go stale with
+-- wrong SEMANTICS (not just positions) if a package is redefined and
+-- reloaded in one process with the toggle in BSC_OPTIONS:
+-- Pred.expandSynNameMemo and MakeSymTab.chkSynSeen (name-keyed);
+-- CType.ccState, GroundCType.gcTable/ptrTable (note: the walk now
+-- ptr-memoizes every walked object, so ptrTable grows with distinct
+-- walked objects per compile), IConv.convTMemo/convCanonMemo,
+-- ISyntaxCheck.kCheckMemo, IType.itHasATFMemo/itRnfSeen,
+-- CType.ctRnfSeen (id/unique-keyed: stable identities, growth-only).
+
+-- Fused ap keys need ids to fit two base-2^31 digits in an Int, so
+-- the toggle requires a 64-bit Int (bsc's supported platforms; on a
+-- narrower one the toggle is off rather than silently dead per-node).
+{-# NOINLINE consCTypeEnabled #-}
+consCTypeEnabled :: Bool
+consCTypeEnabled = "-hack-ctype-cons" `elem` progArgs
+                   && finiteBitSize (0 :: Int) >= 64
+
+-- counters are recorded only under -trace-ctype-stats, so default
+-- builds pay no IORef traffic on the construction path
+{-# NOINLINE ctypeStatsEnabled #-}
+ctypeStatsEnabled :: Bool
+ctypeStatsEnabled = "-trace-ctype-stats" `elem` progArgs
+
+-- construction counters (approximate under GHC sharing; NOINLINE on
+-- the smart constructors keeps every construction a real call)
+{-# NOINLINE cnTApBuild #-}
+cnTApBuild :: IORef Int
+cnTApBuild = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnTConBuild #-}
+cnTConBuild :: IORef Int
+cnTConBuild = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnConsApHit #-}
+cnConsApHit :: IORef Int
+cnConsApHit = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnConsApNew #-}
+cnConsApNew :: IORef Int
+cnConsApNew = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnConsConHit #-}
+cnConsConHit :: IORef Int
+cnConsConHit = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnConsConNew #-}
+cnConsConNew :: IORef Int
+cnConsConNew = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRefuseChild #-}
+cnRefuseChild :: IORef Int
+cnRefuseChild = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRefuseLeaf #-}
+cnRefuseLeaf :: IORef Int
+cnRefuseLeaf = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRefuseKeyErr #-}
+cnRefuseKeyErr :: IORef Int
+cnRefuseKeyErr = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRefuseRedex #-}
+cnRefuseRedex :: IORef Int
+cnRefuseRedex = unsafePerformIO $ newIORef 0
+
+bump :: IORef Int -> IO ()
+bump r = when ctypeStatsEnabled (modifyIORef' r (+1))
+
+-- count a construction on the pure (non-consing) path; the IO result
+-- depends on both arguments, so it cannot be floated or shared
+{-# NOINLINE bumpRet #-}
+bumpRet :: IORef Int -> a -> a
+bumpRet r x
+  | ctypeStatsEnabled = unsafeDupablePerformIO (modifyIORef' r (+1) >> return x)
+  | otherwise = x
+
+-- The identity of a leaf inside the table key: normalized name or
+-- value (cf. GroundCType.GCKey), plus the kind/sort-tag fields per
+-- the leaf policy above.  Interior (ap) nodes key on their children's
+-- ids, fused into one Int.
+data CCKey
+        = CCCon !FString !FString !(Maybe Kind) {-# UNPACK #-} !Int
+        | CCNum !Integer
+        | CCStr !FString
+        deriving (Eq, Ord)
+
+ccSortTag :: TISort -> Int
+ccSortTag (TItype {})    = 0
+ccSortTag (TIdata {})    = 1
+ccSortTag (TIstruct {})  = 2
+ccSortTag (TIabstract)   = 3
+ccSortTag (TIatf {})     = 4
+
+-- ap-node keys fuse the two child ids into one Int (ids stay far
+-- below 2^31 in practice; the guard refuses consing rather than
+-- overflowing the fusion)
+ccFuse :: Int -> Int -> Int
+ccFuse fi ai = fi * 0x80000000 + ai
+
+ccFusable :: Int -> Bool
+ccFusable i = i < 0x80000000
+
+-- the intern state: canonical ap nodes by fused child ids, canonical
+-- leaves by CCKey, and the next id.  Ids are arrival-order and must
+-- never influence anything observable; they may only be used for
+-- identity (equal ids = the same heap object).
+data CCState = CCState !(IM.IntMap Type) !(M.Map CCKey Type)
+                       {-# UNPACK #-} !Int
+
+{-# NOINLINE ccState #-}
+ccState :: IORef CCState
+ccState = unsafePerformIO $ newIORef (CCState IM.empty M.empty 0)
+
+-- normTAp's redex shapes (CType.normTAp below): a prim type-function
+-- head over literal children.  These must never cons: apSub rebuilds
+-- interior nodes through normTAp, which REDUCES such redexes, and the
+-- ground short-circuit (apSub = identity on canonical nodes) is only
+-- sound if canonical implies normTAp-normal.  Refusing here keeps the
+-- invariant inductively -- a refused redex is raw, so no ancestor
+-- conses either.
+ccIsRedex :: Type -> Type -> Bool
+ccIsRedex (TAp_ _ (TCon_ _ (TyCon op _ _)) (TCon_ _ (TyNum x _))) (TCon_ _ (TyNum y _))
+    = isJust (opNumT op [x, y])
+ccIsRedex (TCon_ _ (TyCon op _ _)) (TCon_ _ (TyNum x _))
+    = isJust (opNumT op [x]) || op == idTNumToStr
+ccIsRedex (TAp_ _ (TCon_ _ (TyCon op _ _)) (TCon_ _ (TyStr x _))) (TCon_ _ (TyStr y _))
+    = isJust (opStrT op [x, y])
+ccIsRedex _ _ = False
+
+-- | The smart constructor behind the TAp pattern synonym.  The
+-- children's slots decide membership: a raw child (id -1) refuses for
+-- the cost of a field read.
+{-# NOINLINE mkTAp #-}
+mkTAp :: Type -> Type -> Type
+mkTAp f a
+  | not consCTypeEnabled = bumpRet cnTApBuild (TAp_ (-1) f a)
+  | otherwise = unsafeDupablePerformIO $ do
+      bump cnTApBuild
+      let fi = typeCanonId f
+          ai = typeCanonId a
+      if fi < 0 || ai < 0 || not (ccFusable fi) || not (ccFusable ai)
+        then do bump cnRefuseChild; return (TAp_ (-1) f a)
+      else if ccIsRedex f a
+        then do bump cnRefuseRedex; return (TAp_ (-1) f a)
+        else do
+          let key = ccFuse fi ai
+          CCState apm _ _ <- readIORef ccState
+          case IM.lookup key apm of
+            Just canon -> do bump cnConsApHit; return canon
+            Nothing -> do
+              (canon, isNew) <- atomicModifyIORef' ccState (insAp key)
+              bump (if isNew then cnConsApNew else cnConsApHit)
+              return canon
+  where
+    -- f and a carry ids, so they ARE the canonical table nodes:
+    -- store them directly
+    insAp key st@(CCState apm lm n) =
+        case IM.lookup key apm of
+          Just c  -> (st, (c, False))
+          Nothing -> let c = TAp_ n f a
+                     in  (CCState (IM.insert key c apm) lm (n+1), (c, True))
+
+-- deep-force a leaf key via its own Ord (kind and sort tag included)
+ccForceKey :: Maybe CCKey -> Maybe CCKey
+ccForceKey Nothing = Nothing
+ccForceKey (Just k) = (k `compare` k) `seq` Just k
+
+-- | The smart constructor behind the TCon pattern synonym.
+{-# NOINLINE mkTCon #-}
+mkTCon :: TyCon -> Type
+mkTCon tc
+  | not consCTypeEnabled = bumpRet cnTConBuild (TCon_ (-1) tc)
+  | otherwise = unsafeDupablePerformIO $ do
+      bump cnTConBuild
+      -- the whole key computation runs inside the guard: computing
+      -- ccConKey forces the TyCon and its Id, and forcing the key
+      -- forces the kind and the sort tag -- any of which may be a
+      -- latent error thunk the lazy baseline would never have forced.
+      -- Refuse the leaf on any synchronous exception (asynchronous
+      -- ones are rethrown).  bsc's internalError prints its banner
+      -- before throwing ExitCode -- an unrecoverable side effect --
+      -- but no stored kind/sort holds such a thunk today (audited).
+      mkey <- try (evaluate (ccForceKey (ccConKey tc)))
+      case (mkey :: Either SomeException (Maybe CCKey)) of
+        Left e -> case fromException e of
+          Just (SomeAsyncException _) -> throwIO e
+          Nothing -> do bump cnRefuseKeyErr; return (TCon_ (-1) tc)
+        Right Nothing -> do bump cnRefuseLeaf; return (TCon_ (-1) tc)
+        Right (Just key) -> do
+          CCState _ lm _ <- readIORef ccState
+          case M.lookup key lm of
+            Just canon -> do bump cnConsConHit; return canon
+            Nothing -> do
+              (canon, isNew) <- atomicModifyIORef' ccState (insLeaf key)
+              bump (if isNew then cnConsConNew else cnConsConHit)
+              return canon
+  where
+    insLeaf key st@(CCState apm lm n) =
+        case M.lookup key lm of
+          Just c  -> (st, (c, False))
+          Nothing -> let c = TCon_ n tc
+                     in  (CCState apm (M.insert key c lm) (n+1), (c, True))
+
+ccConKey :: TyCon -> Maybe CCKey
+ccConKey (TyNum n _) = Just (CCNum n)
+ccConKey (TyStr s _) = Just (CCStr s)
+ccConKey (TyCon i mk sort)
+  | isUnqualId i = Nothing
+  -- the identity type constructor is eliminated by expTFun like a
+  -- redex; refusing it keeps "canonical => nothing to reduce" exact
+  -- (it also lets the badCon scans skip canonical types wholesale)
+  | i == idId = Nothing
+  | otherwise = case sort of
+      -- synonyms and associated type functions are refused, like
+      -- normTAp redexes: the certificate means GROUND NORMAL FORM
+      -- (the space the ground-dict pool and the IType-conversion memo
+      -- key), so expandSyn is the identity on canonical nodes and no
+      -- walker can find anything to reduce inside one
+      TItype {} -> Nothing
+      TIatf {}  -> Nothing
+      _ -> Just (CCCon (getIdQual i) (getIdBase i) mk (ccSortTag sort))
+
+-- | Counter/table snapshot for the -trace-ctype-stats dump.
+cTypeConsStats :: IO [(String, Int)]
+cTypeConsStats = do
+    tap <- readIORef cnTApBuild
+    tcon <- readIORef cnTConBuild
+    aphit <- readIORef cnConsApHit
+    apnew <- readIORef cnConsApNew
+    chit <- readIORef cnConsConHit
+    cnew <- readIORef cnConsConNew
+    rchild <- readIORef cnRefuseChild
+    rleaf <- readIORef cnRefuseLeaf
+    rkey <- readIORef cnRefuseKeyErr
+    rredex <- readIORef cnRefuseRedex
+    CCState _ _ n <- readIORef ccState
+    return [ ("ctype.tap_built", tap)
+           , ("ctype.tcon_built", tcon)
+           , ("ctype.cons_ap_hit", aphit)
+           , ("ctype.cons_ap_new", apnew)
+           , ("ctype.cons_con_hit", chit)
+           , ("ctype.cons_con_new", cnew)
+           , ("ctype.refuse_child_not_canon", rchild)
+           , ("ctype.refuse_leaf", rleaf)
+           , ("ctype.refuse_key_err", rkey)
+           , ("ctype.refuse_redex", rredex)
+           , ("ctype.cons_table_nodes", n)
+           ]
 
 -- | Representation of kinds
 data Kind = KStar           -- ^ kind of a simple value type
@@ -180,6 +557,13 @@ data CPred = CPred { cpred_tc   :: CTypeclass  -- ^ constraint class, e.g., "Eq"
 -- TAp first because it brings forward instances with larger structure
 -- see the Has_tpl_n instances in the Prelude
 cmp :: Type -> Type -> Ordering
+-- equal canonical ids = the same heap object: answer EQ without
+-- descending.  (Only an EQ shortcut -- the order stays structural, so
+-- container iteration order is unchanged.)  On unequal canonical
+-- trees the recursion below prunes to the differing paths, keeping
+-- comparisons over exponentially shared ground types polynomial.
+cmp x y | i >= 0, i == typeCanonId y = EQ
+  where i = typeCanonId x
 cmp (TAp f1 a1) (TAp f2 a2) = compare (f1, a1) (f2, a2)
 cmp (TAp _  _)  _           = LT
 cmp (TCon c1) (TCon c2) = compare c1 c2
@@ -282,7 +666,28 @@ instance PPrint Type where
     pPrint d p (TDefMonad _) = text ("TDefMonad")
     pPrint d p (TGen _ n) = pparen True (text "TGen" <+> pPrint d p n)
 
+-- canonical nodes deep-force once per cons id (cf. itRnfOnce in
+-- IType.hs): identical semantics to the plain walk -- everything is
+-- forced, once per node -- but linear on exponentially shared DAGs.
+-- Raw nodes have no identity to key and keep the plain walk (the
+-- default path is untouched: ids are always -1 there).
+{-# NOINLINE ctRnfSeen #-}
+ctRnfSeen :: IORef IS.IntSet
+ctRnfSeen = unsafePerformIO $ newIORef IS.empty
+
+ctRnfOnce :: Int -> () -> ()
+ctRnfOnce i force = unsafeDupablePerformIO $ do
+    s <- readIORef ctRnfSeen
+    if IS.member i s
+      then return ()
+      else do -- force BEFORE marking (cf. itRnfOnce)
+              _ <- return $! force
+              atomicModifyIORef' ctRnfSeen (\ ss -> (IS.insert i ss, ()))
+              return ()
+
 instance NFData Type where
+    rnf (TCon_ i c) | i >= 0 = ctRnfOnce i (rnf c)
+    rnf (TAp_ i t1 t2) | i >= 0 = ctRnfOnce i (rnf2 t1 t2)
     rnf (TVar v) = rnf v
     rnf (TCon c) = rnf c
     rnf (TAp t1 t2) = rnf2 t1 t2
@@ -689,6 +1094,10 @@ instance NFData StructSubType where
 
 -- Force evaluation of a Ctype
 seqCType :: CType -> CType
+-- a canonical node was forced when it was interned (children
+-- recursively canonical), and its spine may be exponentially shared:
+-- do not re-walk it
+seqCType t | isCanonType t = t
 seqCType t@(TVar v) = seq v t
 seqCType t@(TCon c) = t
 seqCType t@(TAp t1 t2) = seq (seqCType t1) (seq (seqCType t2) t)
@@ -696,11 +1105,27 @@ seqCType t@(TGen _ _) = t
 seqCType t@(TDefMonad _) = t
 
 ----
+-- builds raw (non-canonical) nodes: it explicitly writes positions,
+-- which the consing put-back would replace with first-arrival ones.
+--
+-- CONTRACT: never called on a canonical (ground) type.  Positions on
+-- canonical nodes are first-arrival-conflated representatives by
+-- policy -- stamping one is meaningless, and honoring the stamp would
+-- either mutate a shared node (unsound) or copy it raw (silently
+-- defeating the sharing).  Callers must skip ground types (see
+-- Pred.expandSyn and MakeSymTab.chkTAp, the only callers); the guard
+-- makes a violating new caller fail loudly.  Canonical SUBTREES of a
+-- non-ground type are likewise kept shared, unstamped -- they are
+-- ground, so the same policy applies per node.
 setTypePosition :: Position -> Type -> Type
+setTypePosition pos t | isCanonType t =
+    internalError "CType.setTypePosition: canonical ground type"
 setTypePosition pos (TVar (TyVar id n k)) = (TVar (TyVar (setIdPosition pos id) n k))
-setTypePosition pos (TCon (TyCon id k s)) = (TCon (TyCon (setIdPosition pos id) k s))
-setTypePosition pos (TCon (TyNum n _)) = (TCon (TyNum n pos))
-setTypePosition pos (TCon (TyStr s _)) = (TCon (TyStr s pos))
-setTypePosition pos (TAp f a) = (TAp (setTypePosition pos f) (setTypePosition pos a))
+setTypePosition pos (TCon (TyCon id k s)) = (TCon_ (-1) (TyCon (setIdPosition pos id) k s))
+setTypePosition pos (TCon (TyNum n _)) = (TCon_ (-1) (TyNum n pos))
+setTypePosition pos (TCon (TyStr s _)) = (TCon_ (-1) (TyStr s pos))
+setTypePosition pos (TAp f a) = (TAp_ (-1) (setSub f) (setSub a))
+  where setSub s | isCanonType s = s
+                 | otherwise     = setTypePosition pos s
 setTypePosition pos (TGen _ n)    = (TGen pos n)
 setTypePosition pos (TDefMonad _) = (TDefMonad pos)
