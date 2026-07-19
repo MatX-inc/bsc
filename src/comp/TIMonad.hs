@@ -53,6 +53,7 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -102,13 +103,12 @@ data TStatePersistent = TStatePersistent {
 -- self-contained ground evidence, valid regardless of whether the
 -- definition whose solving created them later fails.
 data GroundDictState = GroundDictState {
-  -- exact-match pool: synonym-normalized ground dictionary type
-  -- (equivalently: qualified class name plus normalized ground type
-  -- arguments) -> the pooled top-level dictionary id.  The keys are
-  -- ordinary (uninterned) CTypes compared structurally; a lookup's
-  -- single type traversal is still far cheaper than the derivation
-  -- it skips.
-  gdPool :: M.Map Type Id,
+  -- exact-match pool: the interned node id of the ground dictionary
+  -- type (GroundCType.internGroundCType -- which determines the
+  -- qualified class name plus normalized ground type arguments) ->
+  -- the pooled top-level dictionary id.  The intern table is process
+  -- global; this pool of what the ids MEAN stays package-scoped.
+  gdPool :: IM.IntMap Id,
   -- local solved-bind id -> the expression that stands for it in
   -- lifted evidence: a reference to its pooled definition, or the
   -- inlined (small, closed) evidence of a binding that is not worth
@@ -133,7 +133,7 @@ data GroundDictState = GroundDictState {
 
 initGroundDictState :: Id -> S.Set FString -> GroundDictState
 initGroundDictState pkgName taken = GroundDictState {
-  gdPool = M.empty,
+  gdPool = IM.empty,
   gdLocalSubst = M.empty,
   gdLifted = [],
   gdNext = 0,

@@ -29,3 +29,10 @@ test_c_only_bs_modules_options LiftWrapTb {} {-no-warn-action-shadowing} sysLift
 # typechecker ground-dictionary pooling on top of the pass
 compile_object_pass WrapperDicts.bs {} {-no-warn-action-shadowing -hack-ground-ctype}
 test_c_only_bs_modules_options LiftWrapTb {} {-no-warn-action-shadowing -hack-ground-ctype} sysLiftWrapTb.out.expected
+
+# the all-miss face of the pool: every definition in DistinctGrounds
+# demands dictionaries at a distinct large ground type, so top-level
+# probes never hit and each consultation pays the ground-CType
+# interning walk; compiling cleanly in both modes is the assertion
+compile_pass DistinctGrounds.bs
+compile_pass DistinctGrounds.bs {-hack-ground-ctype}
