@@ -35,6 +35,7 @@ import CSyntax
 import CSyntaxUtil(isEnum)
 import SymTab
 import CType
+import TypeShareFlags(useNormalGuards, useShareMemos)
 import CFreeVars(getFTCDn, getVDefIds, getFTyCons)
 import StdPrel
 import InferKind(inferKinds)
@@ -1307,7 +1308,7 @@ chkTAp :: Type -> K.KI ()
 -- inside, by the cons leaf policy), so every clause of this walk is
 -- vacuous on it: skip, don't descend (the node may be exponentially
 -- shared)
-chkTAp t | isCanonType t = return ()
+chkTAp t | useNormalGuards, isCanonType t = return ()
 chkTAp t = (uncurry (chkTAp' []) . splitTAp) t
   where -- f and as should be the outputs of splitTAp, so there should be no remaining TAps
         chkTAp' _ f@(TAp _ _) as = internalError $ "chkTAp' unexpected TAp: " ++ ppReadable (f, as)
@@ -1315,7 +1316,7 @@ chkTAp t = (uncurry (chkTAp' []) . splitTAp) t
           | i `elem` syns = K.err (getPosition syns, ETypeSynRecursive (map pfpString syns))
           | let numArgs = genericLength as,
             numArgs < n = K.err (getPosition i, EPartialTypeApp (pfpString i) n numArgs)
-          | n == 0, null as, consCTypeEnabled, not (isUnqualId i) =
+          | n == 0, null as, useShareMemos, not (isUnqualId i) =
               let key = (getIdQual i, getIdBase i)
               in if unsafePerformIO (S.member key <$> readIORef chkSynSeen)
                  then return ()

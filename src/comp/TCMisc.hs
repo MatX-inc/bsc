@@ -27,6 +27,7 @@ import Util
 import PFPrint
 import Position
 import CType
+import TypeShareFlags(useNormalGuards)
 import FStringCompat(mkFString)
 import Id
 import Error(internalError, EMsg, ErrMsg(..))
@@ -347,7 +348,7 @@ expTFun :: Type -> TI ([VPred], Type)
 -- prim-tfun redexes, and no idId applications (all refused at cons
 -- time), so there is nothing here to expand -- and the node may be an
 -- exponentially shared DAG that the rebuild below would unroll
-expTFun t0 | isCanonType t0 = return ([], t0)
+expTFun t0 | useNormalGuards, isCanonType t0 = return ([], t0)
 expTFun t0
   | let (f, as) = splitTAp t0,
     TCon (TyCon _ _ (TIatf { atf_class_id = clsId
@@ -800,7 +801,8 @@ reducePredsAggressive' dvs es sbs1 s1 vps1 = do
   -- canonical types cannot contain a badCon (TItype/TIatf/idId are
   -- all refused at cons time) and may be exponentially shared: skip
   -- them instead of unrolling their DAGs through allTyCons
-  let allPredTyCons = concat [ concatMap allTyCons (filter (not . isCanonType) ts)
+  let skipCanon = if useNormalGuards then filter (not . isCanonType) else id
+  let allPredTyCons = concat [ concatMap allTyCons (skipCanon ts)
                              | IsIn _ ts <- map toPred vps2 ]
   let badCon (TyCon _ _ (TItype _ _)) = True
       badCon (TyCon _ _ (TIatf {})) = True
@@ -1537,7 +1539,7 @@ expandSynN :: Flags -> SymTab -> Type -> Type
 -- ATF-free by the cons leaf policy -- so the whole normalization
 -- (expandSyn + ATF resolution) is the identity; skip the per-call
 -- runTI setup and the walk
-expandSynN _ _ t | isCanonType t = t
+expandSynN _ _ t | useNormalGuards, isCanonType t = t
 expandSynN flags s t =
    -- should only need to match instances for coherent typeclasses
    -- XXX user code corner-case?

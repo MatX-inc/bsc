@@ -16,7 +16,7 @@ import Error(internalError, EMsg, WMsg, ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsErrorUnsafe, bsWarning)
 import ContextErrors
 import Flags(Flags, enablePoisonPills, allowIncoherentMatches, liftDicts)
-import IOUtil(progArgs)
+import TypeShareFlags(shareTypesPool, useGroundGuards)
 import CSyntax
 import CType(isCanonType)
 import PoisonUtils
@@ -39,7 +39,7 @@ import Util(separate, apFst, quote)
 -- presupposes the lifting infrastructure, so the liftDicts flag must
 -- also be on (its default).
 useGroundDictPool :: Bool
-useGroundDictPool = elem "-hack-ground-ctype" progArgs
+useGroundDictPool = shareTypesPool
 
 -- The extra [Id] is ids (beyond the package's own definitions) whose
 -- names the ground-dictionary pooling must not reuse for lifted
@@ -323,7 +323,7 @@ getFreeD vs _ = internalError "TypeCheck.getFreeD: not CLValueSign"
 getFreeT :: [TyVar] -> CType -> [TyVar]
 -- canonical nodes are ground (no TVar anywhere) and may be
 -- exponentially shared: answer without descending
-getFreeT vs t | isCanonType t = []
+getFreeT vs t | useGroundGuards, isCanonType t = []
 getFreeT vs (TVar v) | v `notElem` vs = [v]
 getFreeT vs (TAp t1 t2) = getFreeT vs t1 ++ getFreeT vs t2
 getFreeT vs t = []

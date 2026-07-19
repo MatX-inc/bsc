@@ -13,6 +13,7 @@ module Subst(
 
 import PPrint
 import CType
+import TypeShareFlags(useGroundGuards)
 import Type
 import Util(fromJustOrErr)
 import Data.List(nub,union)
@@ -205,7 +206,7 @@ instance Types Type where
   -- and normTAp-normal (mkTAp refuses redexes), so substitution is
   -- the identity and there are no free variables; both answers are
   -- O(1) where the walk over a huge ground dictionary type dominated
-  apSub _ t | isCanonType t = t
+  apSub _ t | useGroundGuards, isCanonType t = t
   apSub (S seo _) v@(TVar u) =
         case slookup u seo of
         Just t  ->
@@ -223,7 +224,7 @@ instance Types Type where
   apSub s (TAp l r) = normTAp (apSub s l) (apSub s r)
   apSub s t         = t
 
-  tv t | isCanonType t = []
+  tv t | useGroundGuards, isCanonType t = []
   tv (TVar u)  = [u]
   tv (TAp l r) = tv l `union` tv r
   tv t         = []

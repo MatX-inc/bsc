@@ -4,6 +4,7 @@ import Data.Maybe(fromMaybe, isJust)
 import Type
 import Subst
 import CType
+import TypeShareFlags(useIdentityShortcuts)
 import Pred(expandSyn)
 import ErrorUtil(internalError)
 import Util(fastNub)
@@ -40,7 +41,8 @@ mguWork :: Bool -> [TyVar] -> Type -> Type -> Maybe (Subst, [(Type, Type)])
 -- no substitution, no deferred equalities.  (Also prunes the
 -- per-path descent over exponentially shared ground types; unequal
 -- ids prove nothing and fall through.)
-mguWork _ _ t1 t2 | i >= 0, i == typeCanonId t2 = Just (nullSubst, [])
+mguWork _ _ t1 t2 | useIdentityShortcuts, i >= 0, i == typeCanonId t2 =
+    Just (nullSubst, [])
   where i = typeCanonId t1
 -- an unreducable ATF application: identical types unify cleanly (reflexivity);
 -- different types generate a deferred equality constraint.
@@ -197,7 +199,8 @@ isUnSatSyn' _  _ = False
 
 match :: Type -> Type -> Maybe Subst
 -- same canonical object: matches with no bindings (cf. mguWork)
-match t1 t2 | i >= 0, i == typeCanonId t2 = Just nullSubst
+match t1 t2 | useIdentityShortcuts, i >= 0, i == typeCanonId t2 =
+    Just nullSubst
   where i = typeCanonId t1
 match (TAp l r) (TAp l' r') = rtrace ("match: TAp: " ++ ppReadable (l,r)) $ do
     sl <- match l l'

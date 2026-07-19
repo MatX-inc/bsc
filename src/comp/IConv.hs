@@ -44,6 +44,7 @@ import TCMisc(expandSynN)
 import GroundCType(groundCTypeEnabled, internGroundCType)
 import ATFRules(buildATFRules, atfReduceInType)
 import IType(itHasATF)
+import TypeShareFlags(useShareMemos, noITypeWalkMemos, typeShareStatsEnabled)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
@@ -210,7 +211,7 @@ convTMemo = unsafePerformIO $ newIORef IM.empty
 -- under the flag: default builds pay no IORef traffic on this path)
 {-# NOINLINE iconvStatsEnabled #-}
 iconvStatsEnabled :: Bool
-iconvStatsEnabled = "-trace-ctype-stats" `elem` progArgs
+iconvStatsEnabled = typeShareStatsEnabled
 
 iconvBump :: IORef Int -> IO ()
 iconvBump r = when iconvStatsEnabled (modifyIORef' r (+1))
@@ -257,7 +258,7 @@ iConvT flags s t
         let it = iConvT' (expandSyn t)
         -- ATF-free (memoized per unique): nothing to reduce, and the
         -- reducer's walk must not descend an exponentially shared DAG
-        return $ if not (itHasATF it) then it
+        return $ if not noITypeWalkMemos && not (itHasATF it) then it
                  else case atfReduceInType (buildATFRules s) it of
                         Just it' -> it'
                         Nothing  -> iConvT' (expandSynN flags s t)
@@ -273,7 +274,7 @@ convCanonMemo :: IORef (IM.IntMap IType)
 convCanonMemo = unsafePerformIO $ newIORef IM.empty
 
 iConvT' :: Type -> IType
-iConvT' t | i >= 0 = unsafePerformIO $ do
+iConvT' t | useShareMemos, i >= 0 = unsafePerformIO $ do
     m0 <- readIORef convCanonMemo
     case IM.lookup i m0 of
       Just it -> return it
