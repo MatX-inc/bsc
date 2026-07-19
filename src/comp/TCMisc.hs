@@ -36,6 +36,8 @@ import Subst
 import Assump
 import Scheme
 import SolvedBinds
+import CFreeVars(getFVE)
+import CSubst(cSubstN)
 import Unify
 import Pred
 import SATPred
@@ -186,7 +188,10 @@ satisfyXStream dvs es ps = do
 --      SolveResult rs sbs s <- satisfy' dvs es ps
         -- satTraceM ("satisfy exit: " ++ ppString (rs,sbs,s) ++ "\n")
         extSubst "satisfyX" s
-        return $ (rs, apSub s sbs)
+        -- hoist this batch's poolable ground dictionaries (no-op
+        -- unless the -lift-ground-dicts pool is active; see there)
+        sbs' <- poolGroundBinds (apSub s sbs)
+        return (rs, sbs')
 
 -- break up preds into those affected by a substitution and those not
 -- in order to loop more efficiently in satisfy'
@@ -842,8 +847,180 @@ instance PPrint Reduction where
     pPrint d p (Reduction qs sb us minst mpkg) =
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
+-- =====
+-- Ground-dictionary pooling (the -lift-ground-dicts lever)
+--
+-- The typechecker mints a fresh dictionary binding per use site, so a
+-- fully ground predicate (no free type variables) is re-derived --
+-- instance walk, subgoal minting, recursive context solving -- at
+-- every occurrence, although within one package compile every
+-- coherent derivation of the same ground predicate is identical (the
+-- visible instance set is fixed).  With the lever on, the first
+-- derivation of a poolable binding is hoisted to a top-level
+-- _lifted_dict definition (collected and emitted by
+-- TypeCheck.tiDefns, which threads the pool state across the
+-- package's per-definition typecheck runs) and the local binding
+-- becomes a reference; "groundPoolHit" then answers later
+-- occurrences of the same predicate from the pool before instance
+-- reduction even starts.
+--
+-- A binding is poolable only when
+--   - its resolution is coherent, transitively: a direct incoherent
+--     match is never pooled, and since a parent is pooled only when
+--     every dictionary it references is itself pooled, anything
+--     depending on an incoherent binding is disqualified without a
+--     separate closure computation;
+--   - its dictionary type and evidence are ground, so no later
+--     substitution can change them;
+--   - its class has members (a memberless dictionary -- the numeric
+--     provisos Add, Mul, Max, ..., and any other method- and
+--     superclass-free class -- carries no content, so lifting it
+--     would add references without saving any work; note that the
+--     LiftDicts pass does lift such dictionaries when their evidence
+--     is an instance application, which costs it nothing since it
+--     converts the evidence either way);
+--   - its evidence references only pooled dictionaries and qualified
+--     (top-level) names, never a locally bound one (a given, a
+--     lambda-bound dictionary, or a recursive-knot reference).
+--
+-- The pool key is the synonym-normalized ground dictionary type,
+-- which determines (qualified class name, normalized ground type
+-- arguments) injectively.  Keying on the type alone (rather than on
+-- the evidence structure, as the LiftDicts pass's pool does) is what
+-- lets a hit skip the derivation entirely -- there is no evidence to
+-- compare before deriving -- and is sound because the coherence gate
+-- guarantees any re-derivation would produce the same evidence.
+
+-- Answer a predicate from the ground-dictionary pool: Nothing when
+-- pooling is inactive, the predicate is not ground, or the pool has
+-- no entry.
+groundPoolHit :: VPred -> TI (Maybe Bind)
+groundPoolHit p = do
+  mgd <- getGroundDictState
+  case mgd of
+    Nothing -> return Nothing
+    Just gd -> do
+      VPred i pp <- apSubTI p
+      let t = predToType (removePredPositions pp)
+      if not (null (tv t))
+        then return Nothing
+        else case M.lookup (expandSyn t) (gdPool gd) of
+               Just li ->
+                 satTrace ("ground pool hit: " ++ ppReadable (i, li)) $
+                 return (Just (i, t, CVar li))
+               Nothing -> return Nothing
+
+-- A class with neither methods nor superclasses (its dictionary
+-- struct has no fields); the numeric proviso classes are not in the
+-- symbol table and are answered directly.
+classIsMemberless :: SymTab -> Class -> Bool
+classIsMemberless r cl =
+    case findType r (typeclassId (name cl)) of
+      Just (TypeInfo _ _ _ (TIstruct SClass fs) _) -> null fs
+      _ -> isPreClass cl
+
+-- Pool the poolable bindings of a solved batch (see the note above):
+-- hoist each to a top-level definition (or, for evidence that is
+-- already a direct reference to a top-level dictionary, record that
+-- id), redirect the local binding to it, and record the pool entry
+-- that lets "groundPoolHit" skip later derivations.  The batch's
+-- non-recursive bindings arrive in dependency order (kids first), so
+-- redirects accumulate bottom-up and duplicate bindings within one
+-- batch collapse too.
+poolGroundBinds :: SolvedBinds -> TI SolvedBinds
+poolGroundBinds sbs = do
+  mgd <- getGroundDictState
+  case mgd of
+    Nothing -> return sbs
+    Just gd0 -> do
+      r <- getSymTab
+      let incoh = getIncoherentIds sbs
+          classes = bindClasses sbs
+          step acc ((i, t, e), _fv)
+            | S.member i incoh = acc
+            | otherwise =
+                -- only instance-derived bindings record their class;
+                -- a given, a recursive knot or a pool-hit alias has
+                -- none and can at most substitute through
+                case M.lookup i classes of
+                  Just cl | not (classIsMemberless r cl)
+                    -> tryPool acc (i, t, e)
+                  _ -> passThrough acc (i, t, e)
+          tryPool acc@(gd, rw) (i, t, e)
+            | not ok = acc
+            | otherwise =
+                case M.lookup key (gdPool gd) of
+                  Just li -> (subst gd i (CVar li), M.insert i (CVar li) rw)
+                  Nothing ->
+                    case e' of
+                      -- evidence that is already a direct reference
+                      -- to a top-level dictionary: pool that id, no
+                      -- definition needed
+                      CVar g -> (subst (gd { gdPool =
+                                                 M.insert key g (gdPool gd) })
+                                       i e',
+                                 rw)
+                      _ -> mint
+            where
+              (ok, e') = groundClosed gd t e
+              key = expandSyn t
+              mint =
+                let (li, gd1) = newLiftedGroundDictId (getPosition t) gd
+                    gd2 = gd1 { gdPool = M.insert key li (gdPool gd1),
+                                gdLifted = (li, t, e') : gdLifted gd1 }
+                in  satTrace ("ground pool lift: " ++ ppReadable (li, t)) $
+                    (subst gd2 i (CVar li), M.insert i (CVar li) rw)
+          -- A binding that is not lifted must not block a parent: if
+          -- its evidence is ground and closed, it substitutes inline
+          -- into any lifted evidence that references it.  For a
+          -- memberless dictionary that inlines a small construction
+          -- (deliberately not worth a definition of its own); for a
+          -- pool-hit alias it is just the pooled reference.
+          passThrough acc@(gd, rw) (i, t, e)
+            | ok = (subst gd i e', rw)
+            | otherwise = acc
+            where (ok, e') = groundClosed gd t e
+          -- the evidence with the local substitutions applied (and
+          -- nullary applications peeled, as the LiftDicts pass's
+          -- simpCExpr does -- a bare reference must be recognized as
+          -- one, or a redundant definition would be minted for it),
+          -- and whether the result is ground and closed: free of type
+          -- variables, and referencing only package-qualified
+          -- (top-level) names -- every locally bound id (an unpooled
+          -- solved bind, a given, a lambda-bound dictionary, a
+          -- recursive-knot reference) is an unqualified generated name
+          groundClosed gd t e = (ok, e')
+            where e' = simp (cSubstN (M.empty, M.empty,
+                                      gdLocalSubst gd, M.empty) e)
+                  simp (CApply f []) = simp f
+                  simp (CTApply f []) = simp f
+                  simp x = x
+                  ok = null (tv t) && null (tv e') &&
+                       all (\ v -> getIdQualString v /= "")
+                           (S.toList (snd (getFVE e')))
+          subst gd i e = gd { gdLocalSubst = M.insert i e (gdLocalSubst gd) }
+      let (gdF, rewrites) =
+              foldl' step (gd0, M.empty) (nonRecursiveBinds sbs)
+      setGroundDictState gdF
+      return $ if M.null rewrites then sbs
+               else updateNonRecursiveBindExprs rewrites sbs
+
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
-reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
+reducePred eps dvs vp = do
+    -- A ground predicate already answered by the ground-dictionary
+    -- pool (the -lift-ground-dicts lever) skips the entire instance
+    -- walk and re-derivation of its context.  The hook sits here, at
+    -- the head of instance reduction, so pooling replaces exactly
+    -- (and only) what instance resolution would re-derive: the
+    -- recursion check and the in-scope givens in "sat" keep priority.
+    mhit <- groundPoolHit vp
+    case mhit of
+      Just b -> return (Just (Reduction [] (mkSolvedBind b False)
+                                        nullSubst Nothing Nothing))
+      Nothing -> reducePredViaInstances eps dvs vp
+
+reducePredViaInstances :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
+reducePredViaInstances _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
     pushSatStackContext
     bound_tyvars <- getBoundTVs
     ts' <- mapM normT ts
