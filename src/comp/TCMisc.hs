@@ -19,6 +19,7 @@ import Data.Maybe
 import Data.List
 import Control.Monad(foldM, when)
 import qualified Data.Map as M
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import System.IO.Unsafe(unsafePerformIO)
 
@@ -37,6 +38,7 @@ import Assump
 import Scheme
 import SolvedBinds
 import CFreeVars(getFVE)
+import GroundCType(internGroundCType)
 import CSubst(cSubstN)
 import Unify
 import Pred
@@ -891,24 +893,46 @@ instance PPrint Reduction where
 -- compare before deriving -- and is sound because the coherence gate
 -- guarantees any re-derivation would produce the same evidence.
 
--- Answer a predicate from the ground-dictionary pool: Nothing when
--- pooling is inactive, the predicate is not ground, or the pool has
--- no entry.
-groundPoolHit :: VPred -> TI (Maybe Bind)
+-- Answer a predicate from the ground-dictionary pool: no bind when
+-- pooling is inactive, the predicate is not ground (or not
+-- internable), or the pool has no entry.  The intern walk subsumes
+-- the groundness check and the synonym normalization, and makes the
+-- probe itself O(1) -- a distinct large ground type (the all-miss
+-- case) costs one interning walk, not a deep comparison per pool
+-- entry it is compared against.
+--
+-- The canonical put-back: a hit's binding carries the canonical
+-- shared type, and on a miss the returned predicate carries the
+-- canonical argument types, so instance reduction re-examines (and
+-- its binding retains) the one shared tree -- and any later
+-- consultation of these nodes stops at the interner's pointer fast
+-- path without a walk.
+groundPoolHit :: VPred -> TI (Maybe Bind, VPred)
 groundPoolHit p = do
   mgd <- getGroundDictState
   case mgd of
-    Nothing -> return Nothing
+    Nothing -> return (Nothing, p)
     Just gd -> do
-      VPred i pp <- apSubTI p
+      p'@(VPred i pp) <- apSubTI p
       let t = predToType (removePredPositions pp)
-      if not (null (tv t))
-        then return Nothing
-        else case M.lookup (expandSyn t) (gdPool gd) of
-               Just li ->
-                 satTrace ("ground pool hit: " ++ ppReadable (i, li)) $
-                 return (Just (i, t, CVar li))
-               Nothing -> return Nothing
+      case internGroundCType t of
+        Nothing -> return (Nothing, p')
+        Just (nid, tc) ->
+          case IM.lookup nid (gdPool gd) of
+            Just li ->
+              satTrace ("ground pool hit: " ++ ppReadable (i, li)) $
+              return (Just (i, tc, CVar li), p')
+            Nothing ->
+              -- rebuild the predicate over the canonical node's
+              -- argument types (the spine below the class
+              -- constructor); the class itself is untouched
+              case (pp, splitTAp tc) of
+                (PredWithPositions (IsIn c tys) poss anc, (_, tys'))
+                  | length tys' == length tys ->
+                      return (Nothing,
+                              VPred i (PredWithPositions (IsIn c tys')
+                                                         poss anc))
+                _ -> return (Nothing, p')
 
 -- A class with neither methods nor superclasses (its dictionary
 -- struct has no fields); the numeric proviso classes are not in the
@@ -946,40 +970,50 @@ poolGroundBinds sbs = do
                   Just cl | not (classIsMemberless r cl)
                     -> tryPool acc (i, t, e)
                   _ -> passThrough acc (i, t, e)
-          tryPool acc@(gd, rw) (i, t, e)
-            | not ok = acc
-            | otherwise =
-                case M.lookup key (gdPool gd) of
-                  Just li -> (subst gd i (CVar li), M.insert i (CVar li) rw)
-                  Nothing ->
-                    case e' of
-                      -- evidence that is already a direct reference
-                      -- to a top-level dictionary: pool that id, no
-                      -- definition needed
-                      CVar g -> (subst (gd { gdPool =
-                                                 M.insert key g (gdPool gd) })
-                                       i e',
-                                 rw)
-                      _ -> mint
+          tryPool acc@(gd, rw) (i, t, e) =
+              -- interning subsumes the type-groundness check and the
+              -- synonym normalization (see groundPoolHit)
+              case internGroundCType t of
+                Nothing -> acc
+                Just (key, tc)
+                  | not ok -> acc
+                  | otherwise ->
+                    case IM.lookup key (gdPool gd) of
+                      Just li ->
+                          (subst gd i (CVar li), M.insert i (CVar li) rw)
+                      Nothing ->
+                        case e' of
+                          -- evidence that is already a direct
+                          -- reference to a top-level dictionary:
+                          -- pool that id, no definition needed
+                          CVar g ->
+                              (subst (gd { gdPool =
+                                               IM.insert key g (gdPool gd) })
+                                     i e',
+                               rw)
+                          _ -> mint key tc
             where
-              (ok, e') = groundClosed gd t e
-              key = expandSyn t
-              mint =
+              (ok, e') = evidenceClosed gd e
+              -- the lifted definition retains the canonical shared
+              -- type (the put-back); the fresh id keeps the original
+              -- type's position
+              mint key tc =
                 let (li, gd1) = newLiftedGroundDictId (getPosition t) gd
-                    gd2 = gd1 { gdPool = M.insert key li (gdPool gd1),
-                                gdLifted = (li, t, e') : gdLifted gd1 }
-                in  satTrace ("ground pool lift: " ++ ppReadable (li, t)) $
+                    gd2 = gd1 { gdPool = IM.insert key li (gdPool gd1),
+                                gdLifted = (li, tc, e') : gdLifted gd1 }
+                in  satTrace ("ground pool lift: " ++ ppReadable (li, tc)) $
                     (subst gd2 i (CVar li), M.insert i (CVar li) rw)
           -- A binding that is not lifted must not block a parent: if
-          -- its evidence is ground and closed, it substitutes inline
-          -- into any lifted evidence that references it.  For a
-          -- memberless dictionary that inlines a small construction
-          -- (deliberately not worth a definition of its own); for a
-          -- pool-hit alias it is just the pooled reference.
+          -- its type and evidence are ground and closed, it
+          -- substitutes inline into any lifted evidence that
+          -- references it.  For a memberless dictionary that inlines
+          -- a small construction (deliberately not worth a definition
+          -- of its own); for a pool-hit alias it is just the pooled
+          -- reference.
           passThrough acc@(gd, rw) (i, t, e)
-            | ok = (subst gd i e', rw)
+            | null (tv t), ok = (subst gd i e', rw)
             | otherwise = acc
-            where (ok, e') = groundClosed gd t e
+            where (ok, e') = evidenceClosed gd e
           -- the evidence with the local substitutions applied (and
           -- nullary applications peeled, as the LiftDicts pass's
           -- simpCExpr does -- a bare reference must be recognized as
@@ -989,13 +1023,13 @@ poolGroundBinds sbs = do
           -- (top-level) names -- every locally bound id (an unpooled
           -- solved bind, a given, a lambda-bound dictionary, a
           -- recursive-knot reference) is an unqualified generated name
-          groundClosed gd t e = (ok, e')
+          evidenceClosed gd e = (ok, e')
             where e' = simp (cSubstN (M.empty, M.empty,
                                       gdLocalSubst gd, M.empty) e)
                   simp (CApply f []) = simp f
                   simp (CTApply f []) = simp f
                   simp x = x
-                  ok = null (tv t) && null (tv e') &&
+                  ok = null (tv e') &&
                        all (\ v -> getIdQualString v /= "")
                            (S.toList (snd (getFVE e')))
           subst gd i e = gd { gdLocalSubst = M.insert i e (gdLocalSubst gd) }
@@ -1013,11 +1047,13 @@ reducePred eps dvs vp = do
     -- the head of instance reduction, so pooling replaces exactly
     -- (and only) what instance resolution would re-derive: the
     -- recursion check and the in-scope givens in "sat" keep priority.
-    mhit <- groundPoolHit vp
+    -- On a miss the predicate continues with its canonical (shared)
+    -- ground argument types put back in.
+    (mhit, vp') <- groundPoolHit vp
     case mhit of
       Just b -> return (Just (Reduction [] (mkSolvedBind b False)
                                         nullSubst Nothing Nothing))
-      Nothing -> reducePredViaInstances eps dvs vp
+      Nothing -> reducePredViaInstances eps dvs vp'
 
 reducePredViaInstances :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
 reducePredViaInstances _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
