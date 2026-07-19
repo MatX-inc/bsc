@@ -93,7 +93,7 @@ data TStatePersistent = TStatePersistent {
 }
 
 -- State for ground-dictionary pooling in the typechecker (the
--- -lift-ground-dicts lever).  Present only in runs entered through
+-- -hack-ground-ctype lever).  Present only in runs entered through
 -- "runTIWithGroundPool": pooling rewrites solved dictionary bindings
 -- into references to lifted top-level definitions, which only the
 -- package typecheck driver (TypeCheck.tiDefns) collects and emits, so

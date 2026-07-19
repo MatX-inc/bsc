@@ -189,7 +189,7 @@ satisfyXStream dvs es ps = do
         -- satTraceM ("satisfy exit: " ++ ppString (rs,sbs,s) ++ "\n")
         extSubst "satisfyX" s
         -- hoist this batch's poolable ground dictionaries (no-op
-        -- unless the -lift-ground-dicts pool is active; see there)
+        -- unless the -hack-ground-ctype pool is active; see there)
         sbs' <- poolGroundBinds (apSub s sbs)
         return (rs, sbs')
 
@@ -848,7 +848,7 @@ instance PPrint Reduction where
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
 -- =====
--- Ground-dictionary pooling (the -lift-ground-dicts lever)
+-- Ground-dictionary pooling (the -hack-ground-ctype lever)
 --
 -- The typechecker mints a fresh dictionary binding per use site, so a
 -- fully ground predicate (no free type variables) is re-derived --
@@ -1008,7 +1008,7 @@ poolGroundBinds sbs = do
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
 reducePred eps dvs vp = do
     -- A ground predicate already answered by the ground-dictionary
-    -- pool (the -lift-ground-dicts lever) skips the entire instance
+    -- pool (the -hack-ground-ctype lever) skips the entire instance
     -- walk and re-derivation of its context.  The hook sits here, at
     -- the head of instance reduction, so pooling replaces exactly
     -- (and only) what instance resolution would re-derive: the

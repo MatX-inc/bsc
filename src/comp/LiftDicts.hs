@@ -102,7 +102,7 @@ liftDictsPkg' errh flags symt taken hostDs (CPackage mi exps imps impsigs fixs d
   = (CPackage mi exps imps impsigs fixs ds'' includes, reverse (liftedDefs s'))
   where s0 = initLState errh flags symt taken (hostDs ++ ds) mi
         -- Ground dictionaries already lifted by the typechecker (the
-        -- -lift-ground-dicts lever) are adopted rather than processed
+        -- -hack-ground-ctype lever) are adopted rather than processed
         -- as ordinary defs: each is converted and recorded exactly as
         -- handleDict records a dictionary this pass lifts itself, so
         -- it leaves the CSyntax package, joins the emitted IDefs with
