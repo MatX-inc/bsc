@@ -91,7 +91,12 @@ import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
                IEFace(..), IDef(..), IExpr(..), fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
-import IConv(iConvPackage, iConvDef)
+import IConv(iConvPackage, iConvDef, iConvTStats)
+import CType(cTypeConsStats)
+import GroundCType(groundCTypeStats)
+import BinData(binTypeStats)
+import IOUtil(progArgs)
+import Control.Exception(finally)
 import LiftDicts(liftDictsPkg, liftDictsWrapper)
 import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets)
@@ -180,7 +185,18 @@ main = do
     hSetEncoding stderr utf8
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args)
+    bsCatch (hmain args) `finally` ctypeStatsDump
+
+-- -trace-ctype-stats: print the construction/interning counters on
+-- every exit path (lever-3 measurement arms read these)
+ctypeStatsDump :: IO ()
+ctypeStatsDump =
+    when ("-trace-ctype-stats" `elem` progArgs) $ do
+      stats <- concat <$> sequence [cTypeConsStats, groundCTypeStats,
+                                    iConvTStats, binTypeStats]
+      mapM_ (\ (k, v) ->
+               hPutStr stderr ("CTYPE-STAT " ++ k ++ " " ++ show v ++ "\n"))
+            stats
 
 -- Use with hugs top level
 hmain :: [String] -> IO ()
