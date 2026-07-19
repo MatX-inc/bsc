@@ -11,7 +11,7 @@ import System.IO.Unsafe(unsafePerformIO)
 import System.Mem.StableName(StableName, makeStableName, hashStableName,
                              eqStableName)
 
-import IOUtil(progArgs)
+import TypeShareFlags(shareTypesBoundary)
 import Id(Id, getIdBase, getIdQual)
 import CType(Type(..), TyCon(..), TISort(..), splitTAp)
 import TypeOps(opNumT, opStrT, isPrimTFunName)
@@ -98,7 +98,7 @@ import PreStrings(fsEmpty)
 
 {-# NOINLINE groundCTypeEnabled #-}
 groundCTypeEnabled :: Bool
-groundCTypeEnabled = "-hack-ground-ctype" `elem` progArgs
+groundCTypeEnabled = shareTypesBoundary
 
 -- measurement counters for the -trace-ctype-stats dump: consultation
 -- count, pointer-fast-path hits (root and in-walk), and nodes walked

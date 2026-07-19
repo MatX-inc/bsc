@@ -95,6 +95,7 @@ import PreIds
 import CSyntax(CExpr)
 import CType(TISort(..), StructSubType(..))
 import IType(itHasATF)
+import TypeShareFlags(noITypeWalkMemos)
 import VModInfo
 import ISyntax
 import ISyntaxUtil
@@ -2576,7 +2577,7 @@ fullTypeNormalizer :: ATFRules -> IType -> Changed IType
 -- be an exponentially shared DAG, and this normalizer runs on every
 -- application node's computed type under iPCheck, four times per
 -- compile
-fullTypeNormalizer _ t | not (itHasATF t) = Unchanged
+fullTypeNormalizer _ t | not noITypeWalkMemos, not (itHasATF t) = Unchanged
 fullTypeNormalizer _ (ITCon _ _ _) = Unchanged
 fullTypeNormalizer _ (ITNum _)     = Unchanged
 fullTypeNormalizer _ (ITStr _)     = Unchanged

@@ -21,6 +21,7 @@ import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO)
 import Control.Monad(when)
 import FStringCompat(FString)
+import TypeShareFlags(useGroundGuards, useNormalGuards, useShareMemos)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -329,7 +330,7 @@ expandNullaryMemo i walk = unsafePerformIO $ do
         return r
 
 expandSyn :: Type -> Type
-expandSyn t0 | isCanonType t0 = t0
+expandSyn t0 | useNormalGuards, isCanonType t0 = t0
 expandSyn t0 = exp [] f as
   where (f, as) = splitTAp t0
         -- All type applications should be split before entering exp
@@ -353,7 +354,7 @@ expandSyn t0 = exp [] f as
           -- The walk keeps the (i:syns) recursion stack.  Gated on the
           -- cons toggle: the memo returns first-arrival stamps, which
           -- the default path must not observe.
-          | n == 0, null as, consCTypeEnabled, not (isUnqualId i) =
+          | n == 0, null as, useShareMemos, not (isUnqualId i) =
               expandNullaryMemo i $
                 let t' = if isCanonType t then t
                          else setTypePosition (getIdPosition i) t
@@ -401,7 +402,7 @@ class Instantiate t where
 instance Instantiate Type where
     -- canonical nodes are ground (no TGen), so instantiation is the
     -- identity: don't re-walk (and re-cons) the shared structure
-    inst ts t | isCanonType t = t
+    inst ts t | useGroundGuards, isCanonType t = t
     inst ts (TAp l r) = TAp (inst ts l) (inst ts r)
     inst ts (TGen _ n)  = ts !! n
     inst ts t         = t

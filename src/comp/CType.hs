@@ -74,7 +74,8 @@ import Control.Exception(SomeException, SomeAsyncException(..),
 import Control.Monad(when)
 import Data.Bits(finiteBitSize)
 import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
-import IOUtil(progArgs)
+import TypeShareFlags(shareTypes, typeShareStatsEnabled,
+                      useIdentityShortcuts)
 
 import Eval
 import PPrint
@@ -283,19 +284,16 @@ type CType = Type
 -- ISyntaxCheck.kCheckMemo, IType.itHasATFMemo/itRnfSeen,
 -- CType.ctRnfSeen (id/unique-keyed: stable identities, growth-only).
 
--- Fused ap keys need ids to fit two base-2^31 digits in an Int, so
--- the toggle requires a 64-bit Int (bsc's supported platforms; on a
--- narrower one the toggle is off rather than silently dead per-node).
+-- The flag story lives in TypeShareFlags (one module, one CAF per
+-- flag, so hooks cannot drift); these are the local names the
+-- machinery below reads.
 {-# NOINLINE consCTypeEnabled #-}
 consCTypeEnabled :: Bool
-consCTypeEnabled = "-hack-ctype-cons" `elem` progArgs
-                   && finiteBitSize (0 :: Int) >= 64
+consCTypeEnabled = shareTypes
 
--- counters are recorded only under -trace-ctype-stats, so default
--- builds pay no IORef traffic on the construction path
 {-# NOINLINE ctypeStatsEnabled #-}
 ctypeStatsEnabled :: Bool
-ctypeStatsEnabled = "-trace-ctype-stats" `elem` progArgs
+ctypeStatsEnabled = typeShareStatsEnabled
 
 -- construction counters (approximate under GHC sharing; NOINLINE on
 -- the smart constructors keeps every construction a real call)
@@ -562,7 +560,7 @@ cmp :: Type -> Type -> Ordering
 -- container iteration order is unchanged.)  On unequal canonical
 -- trees the recursion below prunes to the differing paths, keeping
 -- comparisons over exponentially shared ground types polynomial.
-cmp x y | i >= 0, i == typeCanonId y = EQ
+cmp x y | useIdentityShortcuts, i >= 0, i == typeCanonId y = EQ
   where i = typeCanonId x
 cmp (TAp f1 a1) (TAp f2 a2) = compare (f1, a1) (f2, a2)
 cmp (TAp _  _)  _           = LT

@@ -33,6 +33,7 @@ import TCMisc
 import TIMonad
 
 import IOUtil(progArgs)
+import TypeShareFlags(noITypeWalkMemos)
 import Util(tracep, fromJustOrErr)
 
 doTraceICheck :: Bool
@@ -48,7 +49,7 @@ eqType :: Flags -> SymTab -> Env -> IType -> IType -> Bool
 -- (==), whose cmpT skips ITForAll binder kinds) is equal without the
 -- alpha-renaming substitution below: the common iPCheck case, where
 -- the declared and recomputed types are the same node
-eqType _ _ _ t t' | sameITypeNode t t' = True
+eqType _ _ _ t t' | not noITypeWalkMemos, sameITypeNode t t' = True
 eqType flags symt r (ITForAll i k t) (ITForAll i' k' t') =
     k == k' &&
     eqType flags symt (addK i k r) t (tSubst i' (ITVar i) t')
@@ -218,7 +219,7 @@ kCheck r (ITForAll i k t) = do
   kr <- kCheck (addK i k r) t
   return (IKFun k kr)
 kCheck r tc@(ITAp f a)
-  | ftvCacheEnabled, vsNull (fTVarSet tc) = unsafeDupablePerformIO $ do
+  | not noITypeWalkMemos, ftvCacheEnabled, vsNull (fTVarSet tc) = unsafeDupablePerformIO $ do
       let u = iTypeNodeId tc
       m0 <- readIORef kCheckMemo
       case IM.lookup u m0 of
