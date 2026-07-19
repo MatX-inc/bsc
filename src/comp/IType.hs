@@ -14,7 +14,7 @@ module IType(
   ,ftvCacheEnabled
   ,iToCT
   ,iToCK
-  ,itHasATF
+  ,itHasTFun
   ,sameITypeNode
    )
     where
@@ -36,7 +36,7 @@ import ErrorUtil(internalError)
 import IOUtil(progArgs)
 import Id(Id, getIdBase, getIdQual, setIdPosition, setIdProps, setIdQual)
 import PreIds(idArrow, idId, idTNumToStr)
-import TypeOps(opNumT, opStrT)
+import TypeOps(opNumT, opStrT, isPrimTFunName)
 import CType(Type(..), CType, TyCon(..), TyVar(..), Kind(..),
              TISort(..), StructSubType(..),
              cTApplys, cTVar, cTCon, cTNum, cTStr)
@@ -675,22 +675,27 @@ sameITypeNode (ITAp_ u _ _ _) (ITAp_ u' _ _ _) = u == u'
 sameITypeNode (ITForAll_ u _ _ _ _) (ITForAll_ u' _ _ _ _) = u == u'
 sameITypeNode _ _ = False
 
--- | Does the type contain an associated-type-function constructor
--- anywhere?  Memoized per intern unique, so exponentially shared DAGs
--- answer in O(distinct nodes); ATF-free types need no normalization
--- (fullTypeNormalizer's common case).
+-- | Does the type contain a TYPE-FUNCTION constructor anywhere -- an
+-- associated type function (TIatf) or a primitive type function
+-- (TAdd, TLog, ...)?  Only such types have anything the normalizers
+-- can reduce, and BOTH kinds count: a dormant application over
+-- variables becomes a redex when instantiation makes its arguments
+-- literal, so mere ATF-absence is not sufficient to skip
+-- normalization (nested prim applications reduce during elaboration;
+-- cf. bsc.evaluator/primtcons TestTAdd_Nested).  Memoized per intern
+-- unique, so exponentially shared DAGs answer in O(distinct nodes).
 {-# NOINLINE itHasATFMemo #-}
 itHasATFMemo :: IORef (IM.IntMap Bool)
 itHasATFMemo = unsafePerformIO $ newIORef IM.empty
 
-itHasATF :: IType -> Bool
-itHasATF (ITCon _ _ (TIatf {})) = True
-itHasATF (ITCon _ _ _) = False
-itHasATF (ITNum _) = False
-itHasATF (ITStr _) = False
-itHasATF (ITVar _) = False
-itHasATF (ITAp_ u _ f a) = itHasATFOnce u (itHasATF f || itHasATF a)
-itHasATF (ITForAll_ u _ _ _ t) = itHasATFOnce u (itHasATF t)
+itHasTFun :: IType -> Bool
+itHasTFun (ITCon _ _ (TIatf {})) = True
+itHasTFun (ITCon i _ _) = isPrimTFunName i
+itHasTFun (ITNum _) = False
+itHasTFun (ITStr _) = False
+itHasTFun (ITVar _) = False
+itHasTFun (ITAp_ u _ f a) = itHasATFOnce u (itHasTFun f || itHasTFun a)
+itHasTFun (ITForAll_ u _ _ _ t) = itHasATFOnce u (itHasTFun t)
 
 itHasATFOnce :: Int -> Bool -> Bool
 itHasATFOnce u v = unsafeDupablePerformIO $ do

@@ -37,6 +37,7 @@ import ErrorUtil(internalError)
 import Data.IORef(IORef, newIORef, readIORef, modifyIORef')
 import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import IOUtil(progArgs)
+import TypeShareFlags(useBinShareIds)
 
 import FStringCompat
 import PreIds(idDefaultClock)
@@ -264,7 +265,7 @@ type_key :: Type -> TypeKey
 -- values.  Equal ids = the same heap object, so key-equal stays
 -- structurally-equal; a raw twin of a canonical node keys deep and
 -- misses the share (larger file, same meaning).
-type_key t | typeCanonId t >= 0 = TKI (typeCanonId t)
+type_key t | useBinShareIds, typeCanonId t >= 0 = TKI (typeCanonId t)
 type_key (TVar (TyVar i n k))  = TKV (id_key i) n k
 type_key (TCon (TyCon i mk s)) = TKC (id_key i) mk s
 type_key (TCon (TyNum n p))    = TKN n p

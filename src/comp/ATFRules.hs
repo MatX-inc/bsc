@@ -72,7 +72,7 @@ import Pred(Pred(..), Qual(..), Class(..), Inst(..), expandSyn,
             removePredPositions)
 import SymTab(SymTab, findSClass)
 import ISyntax(IType(..), IKind(..))
-import IType(iTypeNodeId, itHasATF)
+import IType(iTypeNodeId, itHasTFun)
 import TypeShareFlags(noITypeWalkMemos)
 import qualified Data.IntMap.Strict as IM
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
@@ -113,7 +113,9 @@ atfRedMemo = unsafePerformIO $ newIORef IM.empty
 
 atfReduceGroundApp :: ATFRules -> IType -> Id -> TISort -> [IType]
                    -> Maybe IType
-atfReduceGroundApp rules app atfId so args = unsafeDupablePerformIO $ do
+atfReduceGroundApp rules app atfId so args
+  | noITypeWalkMemos = atfReduceGround rules atfId so args
+  | otherwise = unsafeDupablePerformIO $ do
     let u = iTypeNodeId app
     m0 <- readIORef atfRedMemo
     case IM.lookup u m0 of
@@ -148,7 +150,7 @@ atfReduceInType rules t0 = go maxFuel t0
   where
     -- ATF-free subtrees (memoized per intern unique) are returned
     -- unwalked: they may be exponentially shared DAGs
-    go _ t | not noITypeWalkMemos, not (itHasATF t) = Just t
+    go _ t | not noITypeWalkMemos, not (itHasTFun t) = Just t
     go fuel _ | fuel <= 0 = Nothing
     go fuel (ITForAll i k b) = ITForAll i k `fmap` go (fuel - 1) b
     go fuel t@(ITAp _ _) =

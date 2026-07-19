@@ -11,7 +11,7 @@ import System.IO.Unsafe(unsafePerformIO)
 import System.Mem.StableName(StableName, makeStableName, hashStableName,
                              eqStableName)
 
-import TypeShareFlags(shareTypesBoundary)
+import TypeShareFlags(shareTypesBoundary, useBoundaryWalkMemo)
 import Id(Id, getIdBase, getIdQual)
 import CType(Type(..), TyCon(..), TISort(..), splitTAp)
 import TypeOps(opNumT, opStrT, isPrimTFunName)
@@ -258,8 +258,8 @@ walk syns t0 = do
         -- cached: a refusal under a non-empty synonym stack (rec
         -- detection) does not transfer to other contexts.
         case r of
-          Just e  -> ptrInsert t0 e
-          Nothing -> return ()
+          Just e | useBoundaryWalkMemo -> ptrInsert t0 e
+          _ -> return ()
         return r
 
 walk' :: [Id] -> Type -> IO (Maybe (Int, Type))

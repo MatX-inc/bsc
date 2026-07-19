@@ -35,8 +35,9 @@
 -- identity equality shortcut, ATF-presence skip) for bisection.  Both
 -- diagnostics are expected to be deleted once the machinery has aged.
 module TypeShareFlags(
-    shareTypes, shareTypesBoundary, shareTypesPool,
+    shareTypes, shareTypesBoundary, shareTypesPool, consTypesEnabled,
     useIdentityShortcuts, useGroundGuards, useNormalGuards, useShareMemos,
+    useBinShareIds, useBoundaryWalkMemo,
     noITypeWalkMemos,
     typeShareStatsEnabled,
   ) where
@@ -64,6 +65,26 @@ shareTypesBoundary = shareTypes || has "-hack-ground-ctype"
 {-# NOINLINE shareTypesPool #-}
 shareTypesPool :: Bool
 shareTypesPool = shareTypesBoundary && not (has "-share-types-no-pool")
+
+-- construction-time interning itself can back off (leaving the
+-- boundary world -- lever 2 -- running under the master), the
+-- coarsest bisection step of all
+{-# NOINLINE consTypesEnabled #-}
+consTypesEnabled :: Bool
+consTypesEnabled = shareTypes && not (has "-share-types-no-cons")
+
+-- .bo writer share-map keys: id-keyed (TKI) normally; the backoff
+-- falls back to the old deep structural keys so a suspected .bo
+-- issue can be isolated from everything else
+{-# NOINLINE useBinShareIds #-}
+useBinShareIds :: Bool
+useBinShareIds = shareTypes && not (has "-share-types-no-bin")
+
+-- the boundary interner's per-walked-object memo (a lever-2 fix that
+-- predates the master; independent of it, but bisectable)
+{-# NOINLINE useBoundaryWalkMemo #-}
+useBoundaryWalkMemo :: Bool
+useBoundaryWalkMemo = not (has "-share-types-no-memo")
 
 {-# NOINLINE useIdentityShortcuts #-}
 useIdentityShortcuts :: Bool

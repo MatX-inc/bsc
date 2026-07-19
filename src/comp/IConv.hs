@@ -43,7 +43,7 @@ import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
 import GroundCType(groundCTypeEnabled, internGroundCType)
 import ATFRules(buildATFRules, atfReduceInType)
-import IType(itHasATF)
+import IType(itHasTFun)
 import TypeShareFlags(useShareMemos, noITypeWalkMemos, typeShareStatsEnabled)
 import ISyntax
 import ISyntaxSubst
@@ -258,7 +258,7 @@ iConvT flags s t
         let it = iConvT' (expandSyn t)
         -- ATF-free (memoized per unique): nothing to reduce, and the
         -- reducer's walk must not descend an exponentially shared DAG
-        return $ if not noITypeWalkMemos && not (itHasATF it) then it
+        return $ if not noITypeWalkMemos && not (itHasTFun it) then it
                  else case atfReduceInType (buildATFRules s) it of
                         Just it' -> it'
                         Nothing  -> iConvT' (expandSynN flags s t)
