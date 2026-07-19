@@ -1,0 +1,83 @@
+package WrapperDicts where
+
+-- A synthesized module whose interface methods repeat a family of
+-- nested struct/data types.  The generated wrapper needs a dictionary
+-- (Bits, SplitPorts, WrapPorts, WrapMethod, ...) per method
+-- argument/result type PER USE SITE, and the typechecker mints each
+-- one fresh; the wrapper compilation path must lift and deduplicate
+-- them like the package flow does (see liftdicts-wrapper.exp).
+
+data Leaf = LA (Bit 2) | LB (Bit 2) | LC (Bit 2) | LD (Bit 2)
+  deriving (Bits, Eq)
+
+struct L1 =
+    u :: Leaf
+    v :: Leaf
+    w :: Bit 4
+  deriving (Bits, Eq)
+
+struct L2 =
+    a :: L1
+    b :: L1
+  deriving (Bits, Eq)
+
+struct L3 =
+    a :: L2
+    b :: L2
+  deriving (Bits, Eq)
+
+struct L4 =
+    a :: L3
+    b :: L3
+  deriving (Bits, Eq)
+
+struct L5 =
+    a :: L4
+    b :: L4
+  deriving (Bits, Eq)
+
+interface WrapperDicts =
+    m00 :: L5 -> ActionValue L5
+    m01 :: L5 -> ActionValue L5
+    m02 :: L5 -> ActionValue L5
+    m03 :: L5 -> ActionValue L5
+    m04 :: L5 -> ActionValue L5
+    m05 :: L5 -> ActionValue L5
+    m06 :: L5 -> ActionValue L5
+    m07 :: L5 -> ActionValue L5
+    v00 :: L4 -> L4 -> L4
+    v01 :: L4 -> L4 -> L4
+    v02 :: L4 -> L4 -> L4
+    v03 :: L4 -> L4 -> L4
+    a00 :: L5 -> Action
+    a01 :: L5 -> Action
+    a02 :: L5 -> Action
+    a03 :: L5 -> Action
+
+{-# verilog mkWrapperDicts #-}
+mkWrapperDicts :: Module WrapperDicts
+mkWrapperDicts =
+  module
+    r :: Reg L5 <- mkReg (unpack 0)
+    s :: Reg L4 <- mkReg (unpack 0)
+    a0 :: Reg L5 <- mkReg (unpack 0)
+    a1 :: Reg L5 <- mkReg (unpack 0)
+    a2 :: Reg L5 <- mkReg (unpack 0)
+    a3 :: Reg L5 <- mkReg (unpack 0)
+    interface
+      m00 x = do { r := x; return r }
+      m01 x = do { a0 := x; return r }
+      m02 x = do { a1 := x; return r }
+      m03 x = do { a2 := x; return r }
+      m04 x = do { a3 := x; return r }
+      m05 x = do { s := x.a; return r }
+      m06 x = do { s := x.b; return r }
+      m07 x = do { r := x; return a0 }
+      v00 x y = if pack x == 0 then y else s
+      v01 x y = if pack x == 0 then y else s
+      v02 x y = if pack x == 0 then y else s
+      v03 x y = if pack x == 0 then y else s
+      a00 x = a0 := x
+      a01 x = a1 := x
+      a02 x = a2 := x
+      a03 x = a3 := x

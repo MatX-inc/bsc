@@ -571,6 +571,7 @@ defaultFlags bluespecdir = Flags {
         ifLift = True,
         letGen = False,
         liftDicts = True,
+        liftGroundDicts = False,
         maxTIStackDepth = 1000,
         methodBVI = False,
         methodConf = False,
@@ -1262,6 +1263,10 @@ externalFlags = [
          (Toggle (\f x -> f {liftDicts=x}) (showIfTrue liftDicts),
           "lift and deduplicate typeclass dictionaries", Hidden)),
 
+        ("lift-ground-dicts",
+         (Toggle (\f x -> f {liftGroundDicts=x}) (showIfTrue liftGroundDicts),
+          "pool ground dictionary derivations in the typechecker", Hidden)),
+
         ("lift",
          (Toggle (\f x -> f {ifLift=x}) (showIfTrue ifLift),
           "lift method calls in \"if\" actions", Visible)),
@@ -1875,6 +1880,7 @@ showFlagsRaw flags =
           ("kill", show (kill flags)),
           ("letGen", show (letGen flags)),
           ("liftDicts", show (liftDicts flags)),
+          ("liftGroundDicts", show (liftGroundDicts flags)),
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
           ("methodBVI", show (methodBVI flags)),

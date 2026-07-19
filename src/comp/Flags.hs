@@ -67,6 +67,7 @@ data Flags = Flags {
         ifLift :: Bool,
         letGen :: Bool,
         liftDicts :: Bool,
+        liftGroundDicts :: Bool,
         maxTIStackDepth :: Int,
         methodBVI :: Bool,
         methodConf :: Bool,
