@@ -107,7 +107,7 @@ import Util
 import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
-import ATFRules(ATFRules, atfReduceGround)
+import ATFRules(ATFRules, atfReduceGroundApp)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -2588,7 +2588,9 @@ fullTypeNormalizer rules t@(ITAp _ _)
     , length as == length pIdxs  -- Only attempt to reduce type functions that are fully applied.
     , as' <- map (changedOrId $ fullTypeNormalizer rules) as
     , all canNorm as'
-    = Changed $ case atfReduceGround rules atfId so as' of
+    = Changed $
+      let app = foldl ITAp f as'
+      in case atfReduceGroundApp rules app atfId so as' of
         Just result ->
           tracep doTraceATFRules
             ("fullTypeNormalizer - reduced: " ++ ppReadable (atfId, as') ++
@@ -2596,7 +2598,7 @@ fullTypeNormalizer rules t@(ITAp _ _)
             result
         Nothing -> internalError $
             "fullTypeNormalizer - unreduced ground type-function application: " ++
-            ppReadable (foldl ITAp f as')
+            ppReadable app
   where -- Reduction is evaluation over the family's instance equations,
         -- so it needs ground arguments; ITVar or ITForAll means the
         -- application is dormant (not yet reducible), not a miss.
