@@ -74,7 +74,7 @@ import Control.Exception(SomeException, SomeAsyncException(..),
 import Control.Monad(when)
 import Data.Bits(finiteBitSize)
 import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
-import TypeShareFlags(shareTypes, typeShareStatsEnabled,
+import TypeShareFlags(consTypesEnabled, typeShareStatsEnabled,
                       useIdentityShortcuts)
 
 import Eval
@@ -289,7 +289,7 @@ type CType = Type
 -- machinery below reads.
 {-# NOINLINE consCTypeEnabled #-}
 consCTypeEnabled :: Bool
-consCTypeEnabled = shareTypes
+consCTypeEnabled = consTypesEnabled
 
 {-# NOINLINE ctypeStatsEnabled #-}
 ctypeStatsEnabled :: Bool

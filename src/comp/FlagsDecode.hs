@@ -534,6 +534,8 @@ traceflags = [
           "share-types-no-normal",
           "share-types-no-memo",
           "share-types-no-pool",
+          "share-types-no-cons",
+          "share-types-no-bin",
           "hack-no-itype-walk-memos",
           "trace-ctype-stats",
           "trace-kind-inference",
