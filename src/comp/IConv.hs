@@ -43,6 +43,7 @@ import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
 import GroundCType(groundCTypeEnabled, internGroundCType)
 import ATFRules(buildATFRules, atfReduceInType)
+import IType(itHasATF)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
@@ -254,9 +255,12 @@ iConvT flags s t
       unsafePerformIO $ do
         iconvBump cnConvTBypass
         let it = iConvT' (expandSyn t)
-        return $ case atfReduceInType (buildATFRules s) it of
-                   Just it' -> it'
-                   Nothing  -> iConvT' (expandSynN flags s t)
+        -- ATF-free (memoized per unique): nothing to reduce, and the
+        -- reducer's walk must not descend an exponentially shared DAG
+        return $ if not (itHasATF it) then it
+                 else case atfReduceInType (buildATFRules s) it of
+                        Just it' -> it'
+                        Nothing  -> iConvT' (expandSynN flags s t)
 
 -- per-canonical-node conversion memo: iConvT' is a pure function of
 -- structure, and a canonical (cons-interned) CType may be an
