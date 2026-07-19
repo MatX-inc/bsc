@@ -690,7 +690,9 @@ itHasATFMemo = unsafePerformIO $ newIORef IM.empty
 
 itHasTFun :: IType -> Bool
 itHasTFun (ITCon _ _ (TIatf {})) = True
-itHasTFun (ITCon i _ _) = isPrimTFunName i
+-- idId: the identity type operator, eliminated by mkITAp's reduction
+-- but absent from isPrimTFunName's op list
+itHasTFun (ITCon i _ _) = isPrimTFunName i || i == idId
 itHasTFun (ITNum _) = False
 itHasTFun (ITStr _) = False
 itHasTFun (ITVar _) = False
