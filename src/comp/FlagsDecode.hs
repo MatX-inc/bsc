@@ -528,6 +528,8 @@ traceflags = [
           "legacy-inst-index",
           "legacy-defer-instances",
           "hack-ground-ctype",
+          "hack-ctype-cons",
+          "trace-ctype-stats",
           "trace-kind-inference",
           "trace-lift",
           "trace-lift-dicts",
