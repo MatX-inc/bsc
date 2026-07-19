@@ -1,7 +1,7 @@
 {-# LANGUAGE RankNTypes, ScopedTypeVariables, PatternGuards #-}
 module IConv(
              iConvPackage, iConvT, iConvK, iConvExpr, iConvSc, iConvDef,
-             lookupSelType
+             lookupSelType, iConvTStats
             ) where
 
 import Data.List(union, findIndex)
@@ -10,7 +10,10 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.List as List
-import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Data.IORef(IORef, newIORef, readIORef, modifyIORef',
+                  atomicModifyIORef')
+import Control.Monad(when)
+import IOUtil(progArgs)
 import System.IO.Unsafe(unsafePerformIO)
 
 import Util(fromJustOrErr)
@@ -34,7 +37,7 @@ import Assump
 import Pred
 import SymTab
 import Type(tPrimPair, tBit, HasKind(..))
-import CType(cTVarKind, typeclassId, cTVarNum)
+import CType(cTVarKind, typeclassId, cTVarNum, typeCanonId)
 import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
@@ -209,28 +212,89 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
 convTMemo :: IORef (IM.IntMap IType)
 convTMemo = unsafePerformIO $ newIORef IM.empty
 
+-- measurement counters for the -trace-ctype-stats dump (recorded only
+-- under the flag: default builds pay no IORef traffic on this path)
+{-# NOINLINE iconvStatsEnabled #-}
+iconvStatsEnabled :: Bool
+iconvStatsEnabled = "-trace-ctype-stats" `elem` progArgs
+
+iconvBump :: IORef Int -> IO ()
+iconvBump r = when iconvStatsEnabled (modifyIORef' r (+1))
+
+{-# NOINLINE cnConvTHit #-}
+cnConvTHit :: IORef Int
+cnConvTHit = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnConvTMiss #-}
+cnConvTMiss :: IORef Int
+cnConvTMiss = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnConvTBypass #-}
+cnConvTBypass :: IORef Int
+cnConvTBypass = unsafePerformIO $ newIORef 0
+
+-- | Counter snapshot for the -trace-ctype-stats dump.
+iConvTStats :: IO [(String, Int)]
+iConvTStats = do
+    h <- readIORef cnConvTHit
+    m <- readIORef cnConvTMiss
+    b <- readIORef cnConvTBypass
+    return [ ("iconvt.memo_hit", h)
+           , ("iconvt.memo_miss", m)
+           , ("iconvt.not_internable", b)
+           ]
+
 iConvT :: Flags -> SymTab -> Type -> IType
 iConvT flags s t
   | groundCTypeEnabled, Just (nid, tc) <- internGroundCType t =
       unsafePerformIO $ do
         m0 <- readIORef convTMemo
         case IM.lookup nid m0 of
-          Just it -> return it
+          Just it -> do iconvBump cnConvTHit
+                        return it
           Nothing -> do
+            iconvBump cnConvTMiss
             -- convert the canonical node: it is already in normal
             -- form (and ATF-free, so expandSynN has nothing to do)
             let it = iConvT' (expandSynN flags s tc)
             atomicModifyIORef' convTMemo (\ m -> (IM.insert nid it m, ()))
             return it
+  | iconvStatsEnabled =
+      unsafePerformIO $ do
+        modifyIORef' cnConvTBypass (+1)
+        return (iConvT' (expandSynN flags s t))
   | otherwise = iConvT' (expandSynN flags s t)
 
+-- per-canonical-node conversion memo: iConvT' is a pure function of
+-- structure, and a canonical (cons-interned) CType may be an
+-- exponentially shared DAG -- without this the recursion below
+-- converts it once per PATH, re-probing IType's intern tables each
+-- time.  Keyed by the cons id (a DIFFERENT id space from convTMemo's
+-- GroundCType node ids -- the tables must stay separate).
+{-# NOINLINE convCanonMemo #-}
+convCanonMemo :: IORef (IM.IntMap IType)
+convCanonMemo = unsafePerformIO $ newIORef IM.empty
+
 iConvT' :: Type -> IType
-iConvT' (TVar (TyVar i _ _)) = ITVar i
-iConvT' (TCon (TyCon i (Just k) s)) = ITCon i (iConvK k) s
-iConvT' (TCon (TyNum n _)) = ITNum n
-iConvT' (TCon (TyStr s _)) = ITStr s
-iConvT' (TAp t1 t2) = ITAp (iConvT' t1) (iConvT' t2)
-iConvT' t = internalError("iConvT': " ++ ppReadable t)
+iConvT' t | i >= 0 = unsafePerformIO $ do
+    m0 <- readIORef convCanonMemo
+    case IM.lookup i m0 of
+      Just it -> return it
+      Nothing -> do
+        let it = iConvT'' t
+        _ <- return $! it
+        atomicModifyIORef' convCanonMemo (\ m -> (IM.insert i it m, ()))
+        return it
+  where i = typeCanonId t
+iConvT' t = iConvT'' t
+
+iConvT'' :: Type -> IType
+iConvT'' (TVar (TyVar i _ _)) = ITVar i
+iConvT'' (TCon (TyCon i (Just k) s)) = ITCon i (iConvK k) s
+iConvT'' (TCon (TyNum n _)) = ITNum n
+iConvT'' (TCon (TyStr s _)) = ITStr s
+iConvT'' (TAp t1 t2) = ITAp (iConvT' t1) (iConvT' t2)
+iConvT'' t = internalError("iConvT'': " ++ ppReadable t)
 
 iConvK :: Kind -> IKind
 iConvK KStar = IKStar
