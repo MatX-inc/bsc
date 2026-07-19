@@ -22,6 +22,12 @@ class Unify t where
         -> t -> t -> Maybe (Subst, [(Type, Type)])
 
 instance Unify Type where
+    -- equal canonical ids = the same ground heap object: reflexivity --
+    -- no substitution, no deferred equalities.  (Also prunes the
+    -- per-path descent over exponentially shared ground types; unequal
+    -- ids prove nothing and fall through.)
+    mgu _ t1 t2 | i >= 0, i == typeCanonId t2 = Just (nullSubst, [])
+      where i = typeCanonId t1
     -- an unreducable ATF application: identical types unify cleanly (reflexivity);
     -- different types generate a deferred equality constraint.
     mgu bound_tyvars t1 t2
@@ -127,6 +133,9 @@ isUnSatSyn' (TAp f a) args = isUnSatSyn' f (args + 1)
 isUnSatSyn' _  _ = False
 
 match :: Type -> Type -> Maybe Subst
+-- same canonical object: matches with no bindings (cf. mgu)
+match t1 t2 | i >= 0, i == typeCanonId t2 = Just nullSubst
+  where i = typeCanonId t1
 match (TAp l r) (TAp l' r') = rtrace ("match: TAp: " ++ ppReadable (l,r)) $ do
     sl <- match l l'
     sr <- match r r'

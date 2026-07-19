@@ -1,9 +1,10 @@
 module GroundCType(groundCTypeEnabled, internGroundCType,
-                   isGroundNodeId) where
+                   isGroundNodeId, groundCTypeStats) where
 
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
-import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Data.IORef(IORef, newIORef, readIORef, modifyIORef',
+                  atomicModifyIORef')
 import Data.List(genericLength, genericSplitAt)
 import Control.Monad(foldM, when)
 import System.IO.Unsafe(unsafePerformIO)
@@ -112,6 +113,43 @@ import PreStrings(fsEmpty)
 -- here.)
 groundCTypeEnabled :: Bool
 groundCTypeEnabled = True
+
+-- measurement counters for the -trace-ctype-stats dump: consultation
+-- count, pointer-fast-path hits (root and in-walk), and nodes walked
+-- (the "walk bytes" the lever-3 decision needs)
+{-# NOINLINE cnGCIntern #-}
+cnGCIntern :: IORef Int
+cnGCIntern = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnGCRootPtrHit #-}
+cnGCRootPtrHit :: IORef Int
+cnGCRootPtrHit = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnGCWalkPtrHit #-}
+cnGCWalkPtrHit :: IORef Int
+cnGCWalkPtrHit = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnGCWalkNodes #-}
+cnGCWalkNodes :: IORef Int
+cnGCWalkNodes = unsafePerformIO $ newIORef 0
+
+gcBump :: IORef Int -> IO ()
+gcBump r = modifyIORef' r (+1)
+
+-- | Counter/table snapshot for the -trace-ctype-stats dump.
+groundCTypeStats :: IO [(String, Int)]
+groundCTypeStats = do
+    n1 <- readIORef cnGCIntern
+    n2 <- readIORef cnGCRootPtrHit
+    n3 <- readIORef cnGCWalkPtrHit
+    n4 <- readIORef cnGCWalkNodes
+    GCTable _ n <- readIORef gcTable
+    return [ ("gctype.intern_calls", n1)
+           , ("gctype.root_ptr_hit", n2)
+           , ("gctype.walk_ptr_hit", n3)
+           , ("gctype.walk_nodes", n4)
+           , ("gctype.table_nodes", n)
+           ]
 
 -- The identity of a child inside a table key: interior applications
 -- by their node ids, leaves by normalized name or value (positions,
@@ -235,9 +273,11 @@ viewOf _ = GVOther
 {-# NOINLINE internGroundCType #-}
 internGroundCType :: Type -> Maybe (Int, Type)
 internGroundCType t = unsafePerformIO $ do
+    gcBump cnGCIntern
     hit <- ptrLookup t
     case hit of
-      Just e -> return (Just e)
+      Just e -> do gcBump cnGCRootPtrHit
+                   return (Just e)
       Nothing -> do
         r <- walk [] t
         case r of
@@ -249,11 +289,23 @@ walk :: [Id] -> Type -> IO (Maybe (Int, Type))
 walk syns t0 = do
     hit <- ptrLookup t0
     case hit of
-      Just e -> return (Just e)
-      Nothing -> walk' syns t0
+      Just e -> do gcBump cnGCWalkPtrHit
+                   return (Just e)
+      Nothing -> do
+        r <- walk' syns t0
+        -- memoize every successfully walked OBJECT, not only interned
+        -- roots: a duplicating synonym body puts the same raw node in
+        -- both slots, and without this the walk re-expands it once
+        -- per path (exponential on synonym towers).  Refusals are not
+        -- cached: a refusal under a non-empty synonym stack (rec
+        -- detection) does not transfer to other contexts.
+        case r of
+          Just e  -> ptrInsert t0 e
+          Nothing -> return ()
+        return r
 
 walk' :: [Id] -> Type -> IO (Maybe (Int, Type))
-walk' syns t0 =
+walk' syns t0 = gcBump cnGCWalkNodes >>
     let (f, as) = splitTAp t0
     in  case f of
           TCon (TyCon i _ (TItype n body))
