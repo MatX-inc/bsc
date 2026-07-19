@@ -62,6 +62,24 @@ import PreStrings(fsEmpty)
 -- design).  Node ids are arrival-order identifiers and must never
 -- influence anything observable; they may only be used for identity.
 --
+-- Position policy: table keys carry no positions anywhere -- interior
+-- nodes are keyed on child node ids, TCon leaves on (qualifier, base)
+-- exactly like Id's own equality (idEq compares only the name
+-- strings, excluding positions and IdProps), and TNum/TStr leaves on
+-- their Integer/FString value alone (their Position fields excluded;
+-- literal leaves are the highest-hit-rate entries, and position-
+-- sensitive keys would silently zero their sharing).  Canonicalization
+-- therefore conflates exactly what bsc's type equality already
+-- conflates.  Canonical nodes keep their first-encounter positions
+-- (inside TCon/TyNum/TyStr; a ground type contains no TVar or TGen,
+-- so there are no other position carriers) -- the same conflation
+-- .bo-imported types already exhibit; a literal produced by
+-- type-function evaluation gets noPosition, as it has no single
+-- source occurrence.  Predicate-level error positions (the position
+-- lists of VPred/PredWithPositions) live outside the type and are
+-- unaffected by the put-back; typecheck error anchors come from
+-- those, and types print without positions.
+--
 -- A type is refused (Nothing) when interning cannot both establish
 -- identity cheaply and guarantee a context-free normal form:
 --   - it contains a type variable (not ground) or a TGen/TDefMonad;
