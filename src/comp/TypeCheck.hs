@@ -39,7 +39,7 @@ import Util(separate, apFst, quote)
 -- presupposes the lifting infrastructure, so the liftDicts flag must
 -- also be on (its default).
 useGroundDictPool :: Bool
-useGroundDictPool = elem "-lift-ground-dicts" progArgs
+useGroundDictPool = elem "-hack-ground-ctype" progArgs
 
 -- The extra [Id] is ids (beyond the package's own definitions) whose
 -- names the ground-dictionary pooling must not reuse for lifted
@@ -63,7 +63,7 @@ cTypeCheck errh flags symtab extraTaken (CPackage name exports imports impsigs f
 
 -- type check top-level definitions in parallel (since they are independent)
 --
--- ...except when ground-dictionary pooling (-lift-ground-dicts) is
+-- ...except when ground-dictionary pooling (-hack-ground-ctype) is
 -- active: the pool is an accumulator threaded through the
 -- per-definition typecheck runs in order, so a ground dictionary
 -- derived while checking one definition is reused by every later
