@@ -343,6 +343,11 @@ warnTransitiveIncoherent sbs = do
 expTFun :: Type -> TI ([VPred], Type)
 -- Type function application: try to generate a class constraint so
 -- the result gets bound when the class is resolved.
+-- a canonical node is a ground normal form with no TIatf heads, no
+-- prim-tfun redexes, and no idId applications (all refused at cons
+-- time), so there is nothing here to expand -- and the node may be an
+-- exponentially shared DAG that the rebuild below would unroll
+expTFun t0 | isCanonType t0 = return ([], t0)
 expTFun t0
   | let (f, as) = splitTAp t0,
     TCon (TyCon _ _ (TIatf { atf_class_id = clsId
@@ -806,7 +811,11 @@ reducePredsAggressive' dvs es sbs1 s1 vps1 = do
   -- performance of type checking.
   SolveResult vps2 sbs2 s2 <- maskAllowIncoherent $ satMany' dvs es [] emptySBs s1 vps1
   checkJoinCtxs "reducePredsAggressive 2" vps1 s2 vps2
-  let allPredTyCons = concat [ concatMap allTyCons ts | IsIn _ ts <- map toPred vps2 ]
+  -- canonical types cannot contain a badCon (TItype/TIatf/idId are
+  -- all refused at cons time) and may be exponentially shared: skip
+  -- them instead of unrolling their DAGs through allTyCons
+  let allPredTyCons = concat [ concatMap allTyCons (filter (not . isCanonType) ts)
+                             | IsIn _ ts <- map toPred vps2 ]
   let badCon (TyCon _ _ (TItype _ _)) = True
       badCon (TyCon _ _ (TIatf {})) = True
       badCon (TyCon i _ _) | i == idId = True
@@ -1538,6 +1547,11 @@ rmQualLit (CQGen i p e) = do
 -- will substitute in fresh variables for all type variables in the input type
 -- to avoid variable capture
 expandSynN :: Flags -> SymTab -> Type -> Type
+-- a canonical node is a ground normal form -- synonym-free AND
+-- ATF-free by the cons leaf policy -- so the whole normalization
+-- (expandSyn + ATF resolution) is the identity; skip the per-call
+-- runTI setup and the walk
+expandSynN _ _ t | isCanonType t = t
 expandSynN flags s t =
    -- should only need to match instances for coherent typeclasses
    -- XXX user code corner-case?

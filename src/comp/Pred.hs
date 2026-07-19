@@ -16,6 +16,11 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List(union, genericSplitAt, genericLength)
+import qualified Data.Map.Strict as M
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import System.IO.Unsafe(unsafePerformIO)
+import Control.Monad(when)
+import FStringCompat(FString)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -285,7 +290,46 @@ instance PVPrint Inst where
 
 -----------------------------------------------------------------------------
 
+-- A canonical (cons-interned) node is a GROUND NORMAL FORM -- the
+-- leaf policy refuses synonym and ATF tycons, and mkTAp refuses
+-- normTAp redexes -- so expansion is the identity, read off the slot.
+--
+-- Nullary ground synonym expansions are memoized process-wide by
+-- qualified name: expansion is context-free (the body travels inside
+-- the TItype sort) and name-determined (one tycon per qualified
+-- name), and without the memo a duplicating body -- (a, a) holding
+-- the same synonym leaf in both slots -- re-expands that leaf once
+-- per PATH, exponentially on synonym towers.  Ground results cons,
+-- so their use-site stamps conflate to first-arrival, the policy for
+-- ground normal forms; non-ground and applied synonyms take the
+-- plain stamping walk.  (Recursive nullary synonyms are rejected at
+-- symbol-table construction, before this memo can see one.)
+{-# NOINLINE expandSynNameMemo #-}
+expandSynNameMemo :: IORef (M.Map (FString, FString) Type)
+expandSynNameMemo = unsafePerformIO $ newIORef M.empty
+
+-- The recursion argument (the walk under the memo) is supplied by the
+-- caller WITH ITS SYNONYM STACK INTACT, so the ETypeSynRecursive
+-- backstop still fires on (mutually) recursive synonyms that slip
+-- past the symbol table's SCC rejection -- the memo must never reset
+-- that defense.  Only canonical results are memoized: a raw residue
+-- carries per-occurrence position stamps that first-arrival caching
+-- would conflate outside the documented (ground-normal-form) policy.
+expandNullaryMemo :: Id -> Type -> Type
+expandNullaryMemo i walk = unsafePerformIO $ do
+    let key = (getIdQual i, getIdBase i)
+    m0 <- readIORef expandSynNameMemo
+    case M.lookup key m0 of
+      Just r -> return r
+      Nothing -> do
+        let r = walk
+        _ <- return $! r
+        when (isCanonType r) $
+          atomicModifyIORef' expandSynNameMemo (\ m -> (M.insert key r m, ()))
+        return r
+
 expandSyn :: Type -> Type
+expandSyn t0 | isCanonType t0 = t0
 expandSyn t0 = exp [] f as
   where (f, as) = splitTAp t0
         -- All type applications should be split before entering exp
@@ -303,9 +347,27 @@ expandSyn t0 = exp [] f as
           -- context (which includes the eventual return from exp), it is an error.
           | let numArgs = genericLength as,
             numArgs < n = bsErrorReallyUnsafe [(getPosition i, EPartialTypeApp (pfpString i) n numArgs)]
+          -- Nullary QUALIFIED synonyms expand once process-wide (see
+          -- expandNullaryMemo): the name determines the expansion, and
+          -- per-path re-expansion is exponential on synonym towers.
+          -- The walk keeps the (i:syns) recursion stack.  Gated on the
+          -- cons toggle: the memo returns first-arrival stamps, which
+          -- the default path must not observe.
+          | n == 0, null as, consCTypeEnabled, not (isUnqualId i) =
+              expandNullaryMemo i $
+                let t' = if isCanonType t then t
+                         else setTypePosition (getIdPosition i) t
+                    (f', as') = splitTAp t'
+                in exp (i:syns) f' as'
           -- We have a synonym we can expand, so do so.
           | otherwise = let (as1, as2) = genericSplitAt n as
-                            t' = setTypePosition (getIdPosition i) t
+                            -- a canonical (ground) body stays shared and
+                            -- unstamped: its positions are conflated by
+                            -- policy, and no new error can anchor inside
+                            -- it (it kind-checked at its definition);
+                            -- setTypePosition rejects canonical input
+                            t' = if isCanonType t then t
+                                 else setTypePosition (getIdPosition i) t
                             (f', as') = splitTAp $ inst as1 t'
                         in exp (i:syns) f' (as' ++ as2)
         -- Type functions (TIatf) are NOT expanded here; they are handled by
@@ -337,6 +399,9 @@ class Instantiate t where
     inst  :: [Type] -> t -> t
 
 instance Instantiate Type where
+    -- canonical nodes are ground (no TGen), so instantiation is the
+    -- identity: don't re-walk (and re-cons) the shared structure
+    inst ts t | isCanonType t = t
     inst ts (TAp l r) = TAp (inst ts l) (inst ts r)
     inst ts (TGen _ n)  = ts !! n
     inst ts t         = t
