@@ -7,6 +7,7 @@ module SolvedBinds(SolvedBind, mkSolvedBind, SolvedBinds, Bind,
                    DirectIncoherence(..), addDirectIncoherence,
                    addBindDeps,
                    sbsEmpty, fromSB, (<++), emptySBs,
+                   updateNonRecursiveBindExprs,
                    recursiveBinds, nonRecursiveBinds,
                    bindClasses, bindTypes, directIncoherences,
                    getRecursiveDefls, getNonRecursiveDefls,
@@ -169,6 +170,18 @@ new <++ old
                       directIncoherences = directIncoherences new `M.union` directIncoherences old
                    }
           noBadDeps = all (not . dependsOn (recursiveIds result)) (nonRecursiveBinds result)
+
+-- Replace the expressions of the selected non-recursive bindings (ids
+-- and order unchanged), recomputing their free-variable sets.  Used by
+-- the ground-dictionary pooling (TCMisc.poolGroundBinds) to redirect a
+-- hoisted binding to its top-level definition; the replacement must
+-- not introduce a dependency the original did not have.
+updateNonRecursiveBindExprs :: M.Map Id CExpr -> SolvedBinds -> SolvedBinds
+updateNonRecursiveBindExprs m sbs = sbs {
+    nonRecursiveBinds = [ case M.lookup i m of
+                            Just e' -> ((i, t, e'), snd (getFVE e'))
+                            Nothing -> b
+                        | b@((i, t, _e), _) <- nonRecursiveBinds sbs ] }
 
 -- Compute the transitive closure of incoherence across all bindings: any
 -- binding whose free variables reference an incoherent Id is itself incoherent.

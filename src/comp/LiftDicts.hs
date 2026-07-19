@@ -2,6 +2,7 @@ module LiftDicts(liftDictsPkg, liftDictsWrapper) where
 
 import Control.Applicative((<|>))
 import Control.Monad(when, zipWithM)
+import Data.List(partition)
 import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -98,9 +99,48 @@ liftDictsWrapper = liftDictsPkg'
 liftDictsPkg' :: ErrorHandle -> Flags -> SymTab -> [Id] -> [CDefn]
               -> CPackage -> (CPackage, [IDef a])
 liftDictsPkg' errh flags symt taken hostDs (CPackage mi exps imps impsigs fixs ds includes)
-  = (CPackage mi exps imps impsigs fixs ds' includes, reverse (liftedDefs s'))
+  = (CPackage mi exps imps impsigs fixs ds'' includes, reverse (liftedDefs s'))
   where s0 = initLState errh flags symt taken (hostDs ++ ds) mi
-        (ds', s') = runState (liftDicts S.empty M.empty ds) s0
+        -- Ground dictionaries already lifted by the typechecker (the
+        -- -lift-ground-dicts lever) are adopted rather than processed
+        -- as ordinary defs: each is converted and recorded exactly as
+        -- handleDict records a dictionary this pass lifts itself, so
+        -- it leaves the CSyntax package, joins the emitted IDefs with
+        -- the same DefProps, and dedups later handleDict candidates
+        -- through the pool.  The typechecker emits them first and in
+        -- dependency order, so each one's kid references resolve
+        -- through the conversion environment when it is adopted.
+        (adopted, rest) = partition isTCLiftedDict ds
+        isTCLiftedDict (CValueSign (CDefT i [] (CQType [] _) [CClause [] [] _]))
+            = isLiftedDict i
+        isTCLiftedDict _ = False
+        (ds'', s') = runState (do mapM_ adoptDict adopted
+                                  liftDicts S.empty M.empty rest) s0
+
+-- Adopt a typechecker-lifted ground dictionary (see liftDictsPkg'):
+-- the definition keeps its id; its evidence is converted and recorded
+-- as if handleDict had just lifted it.
+adoptDict :: CDefn -> L a ()
+adoptDict (CValueSign (CDefT i [] (CQType [] t) [CClause [] [] e])) = do
+  (it, ie) <- convDict t e
+  s0 <- get
+  -- the typechecker never pools an incoherent resolution, but respect
+  -- the marker if one ever arrives (see handleDict on why incoherent
+  -- dictionaries carry no evidence rendering)
+  let mev = if isIncoherentDict i then Nothing
+            else renderEvidence (flags s0) (symt s0) e
+      props = case mev of
+                Nothing -> []
+                Just (str, kids, tys) -> [ DefP_DictRendering str,
+                                           DefP_DictKids kids,
+                                           DefP_DictTypes tys ]
+      ref = ICon i (ICDef it (icUndetAt (getIdPosition i) it UNoMatch))
+  modify (\s -> s {
+      dictPool = M.insertWith (\new old -> old ++ new) it [(i, ie)] (dictPool s),
+      liftedDefs = IDef i it ie props : liftedDefs s,
+      liftedTypes = M.insert i t (liftedTypes s),
+      convEnv = M.insert i ref (convEnv s) })
+adoptDict d = internalError ("LiftDicts.adoptDict: " ++ ppReadable d)
 
 data LState a = LState {
   errHandle :: ErrorHandle,

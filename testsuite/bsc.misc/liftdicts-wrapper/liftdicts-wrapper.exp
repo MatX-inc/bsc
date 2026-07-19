@@ -1,0 +1,31 @@
+# Dictionary lifting in the module-wrapper compilation path, and the
+# typechecker's ground-dictionary pool (LiftDicts / TypeCheck/TCMisc).
+#
+# WrapperDicts is a synthesized module whose interface methods repeat
+# a family of nested struct types; its generated wrapper needs a
+# dictionary (Bits, SplitPorts, WrapPorts, WrapMethod, ...) per
+# method-argument/result type per use site, and the typechecker mints
+# each one fresh.  The wrapper compilation path (compileCDefToIDef)
+# runs dictionary lifting before its ISyntax conversion, so the
+# converted interface definition references each distinct dictionary
+# once instead of re-expanding its construction at every use; the
+# lifted definitions travel through the .bo, and LiftWrapTb -- a
+# separately compiled importer -- must resolve them when it elaborates
+# the module from the .bo.
+#
+# The second variant enables -lift-ground-dicts (a measurement toggle
+# for benchmarking): the typechecker pools fully-ground, fully-
+# coherent dictionary derivations into top-level _lifted_dict defs at
+# solve time, and the LiftDicts pass adopts those defs -- same naming
+# scheme and DefProps -- and lifts whatever remains itself.  The
+# combined case must produce no name collisions and exactly the same
+# design: the compile fails internal consistency checks on any
+# mismatch, and the simulation output pins the behavior.
+
+# dictionary lifting alone (the default flags)
+compile_object_pass WrapperDicts.bs {} {-no-warn-action-shadowing}
+test_c_only_bs_modules_options LiftWrapTb {} {-no-warn-action-shadowing} sysLiftWrapTb.out.expected
+
+# typechecker ground-dictionary pooling on top of the pass
+compile_object_pass WrapperDicts.bs {} {-no-warn-action-shadowing -lift-ground-dicts}
+test_c_only_bs_modules_options LiftWrapTb {} {-no-warn-action-shadowing -lift-ground-dicts} sysLiftWrapTb.out.expected
