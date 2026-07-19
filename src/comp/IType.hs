@@ -14,6 +14,8 @@ module IType(
   ,ftvCacheEnabled
   ,iToCT
   ,iToCK
+  ,itHasATF
+  ,sameITypeNode
    )
     where
 
@@ -24,6 +26,9 @@ import Prelude hiding ((<>))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import qualified Data.IntSet as IS
+import qualified Data.IntMap.Strict as IM
+import System.IO.Unsafe(unsafeDupablePerformIO)
 import Data.Maybe(isJust, fromJust)
 import System.IO.Unsafe(unsafePerformIO)
 
@@ -504,9 +509,31 @@ instance Show IType where
 
 -- --------------------------------
 -- NFData Instances
+
+-- Interned interior nodes deep-force ONCE per intern unique: forcing
+-- is idempotent, so remembering "this node is fully forced" is
+-- observationally identical to the plain walk -- but linear on
+-- exponentially shared DAGs, which per-path rnf (e.g. the per-phase
+-- dump deepseq) would re-walk once per path.  Unconditional: the
+-- interning (and hence the DAG shape) is unconditional upstream.
+{-# NOINLINE itRnfSeen #-}
+itRnfSeen :: IORef IS.IntSet
+itRnfSeen = unsafePerformIO $ newIORef IS.empty
+
+itRnfOnce :: Int -> () -> ()
+itRnfOnce u force = unsafeDupablePerformIO $ do
+    s <- readIORef itRnfSeen
+    if IS.member u s
+      then return ()
+      else do -- force BEFORE marking: an exception mid-force must not
+              -- leave the node marked as fully forced
+              _ <- return $! force
+              atomicModifyIORef' itRnfSeen (\ ss -> (IS.insert u ss, ()))
+              return ()
+
 instance NFData IType where
-    rnf (ITForAll i k t) = rnf3 i k t
-    rnf (ITAp a b) = rnf2 a b
+    rnf (ITForAll_ u _ i k t) = itRnfOnce u (rnf3 i k t)
+    rnf (ITAp_ u _ a b) = itRnfOnce u (rnf2 a b)
     rnf (ITVar i) = rnf i
     rnf (ITCon i k s) = rnf3 i k s
     rnf (ITNum i) = rnf i
@@ -627,6 +654,10 @@ ppQuant s d p i t e =
 -- ---------------------------------------------------
 -- Convert ISyntax kinds/types to CType
 
+-- (No conversion memo here: iToCT's only hot caller is
+-- fullTypeNormalizer's ATF-miss path, which the atfrules replacement
+-- deletes outright; a memo would also share result objects across
+-- callers that today receive fresh trees.)
 iToCT :: IType -> CType
 iToCT (ITForAll _ _ _) = internalError "IConv.iToCT: ITForAll"
 iToCT (ITAp t1 t2) = TAp (iToCT t1) (iToCT t2)
@@ -634,6 +665,43 @@ iToCT (ITVar i) = internalError "IConv.iToCT: ITVar"
 iToCT (ITCon i k s) = TCon (TyCon i (Just (iToCK k)) s)
 iToCT (ITNum n) = TCon (TyNum n noPosition)
 iToCT (ITStr s) = TCon (TyStr s noPosition)
+
+-- | True node identity: the same interned interior node (equal
+-- uniques).  Unlike Eq IType (cmpT), this cannot conflate two
+-- distinct nodes -- cmpT skips ITForAll binder kinds, so structural
+-- (==) is coarser than interning and must not stand in for identity.
+sameITypeNode :: IType -> IType -> Bool
+sameITypeNode (ITAp_ u _ _ _) (ITAp_ u' _ _ _) = u == u'
+sameITypeNode (ITForAll_ u _ _ _ _) (ITForAll_ u' _ _ _ _) = u == u'
+sameITypeNode _ _ = False
+
+-- | Does the type contain an associated-type-function constructor
+-- anywhere?  Memoized per intern unique, so exponentially shared DAGs
+-- answer in O(distinct nodes); ATF-free types need no normalization
+-- (fullTypeNormalizer's common case).
+{-# NOINLINE itHasATFMemo #-}
+itHasATFMemo :: IORef (IM.IntMap Bool)
+itHasATFMemo = unsafePerformIO $ newIORef IM.empty
+
+itHasATF :: IType -> Bool
+itHasATF (ITCon _ _ (TIatf {})) = True
+itHasATF (ITCon _ _ _) = False
+itHasATF (ITNum _) = False
+itHasATF (ITStr _) = False
+itHasATF (ITVar _) = False
+itHasATF (ITAp_ u _ f a) = itHasATFOnce u (itHasATF f || itHasATF a)
+itHasATF (ITForAll_ u _ _ _ t) = itHasATFOnce u (itHasATF t)
+
+itHasATFOnce :: Int -> Bool -> Bool
+itHasATFOnce u v = unsafeDupablePerformIO $ do
+    m0 <- readIORef itHasATFMemo
+    case IM.lookup u m0 of
+      Just r -> return r
+      Nothing -> do
+        let r = v
+        _ <- return $! r
+        atomicModifyIORef' itHasATFMemo (\ m -> (IM.insert u r m, ()))
+        return r
 
 iToCK :: IKind -> Kind
 iToCK (IKStar) = KStar

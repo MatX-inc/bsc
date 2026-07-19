@@ -1,7 +1,7 @@
 {-# LANGUAGE RankNTypes, ScopedTypeVariables, PatternGuards #-}
 module IConv(
              iConvPackage, iConvT, iConvK, iConvExpr, iConvSc, iConvDef,
-             lookupSelType
+             lookupSelType, iConvTStats
             ) where
 
 import Data.List(union, findIndex)

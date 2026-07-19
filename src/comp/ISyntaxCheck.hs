@@ -23,6 +23,11 @@ import SymTab(SymTab, mustFindClass, findSClass, getAllTypes, TypeInfo(..))
 
 import Pred
 import CType
+import IType(fTVarSet, vsNull, ftvCacheEnabled, iTypeNodeId,
+             sameITypeNode)
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import qualified Data.IntMap.Strict as IM
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import TCMisc
 import TIMonad
 
@@ -38,6 +43,11 @@ trace_icheck = tracep doTraceICheck
 -----
 
 eqType :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+-- the same interned node (identity by intern unique -- NOT structural
+-- (==), whose cmpT skips ITForAll binder kinds) is equal without the
+-- alpha-renaming substitution below: the common iPCheck case, where
+-- the declared and recomputed types are the same node
+eqType _ _ _ t t' | sameITypeNode t t' = True
 eqType flags symt r (ITForAll i k t) (ITForAll i' k' t') =
     k == k' &&
     eqType flags symt (addK i k r) t (tSubst i' (ITVar i) t')
@@ -195,21 +205,42 @@ tCheck flags symt cache r eqTy (IAps f [] []) =
 tCheck _ _ _ _ _ (IRefT t _ _ _) = t
 --tCheck _ _ _ _ e = internalError ("no match in tCheck: " ++ ppReadable e)
 
+-- variable-free applications kind-check independently of the Env, so
+-- the result is memoized per intern unique: an exponentially shared
+-- DAG checks once per distinct node instead of once per path
+{-# NOINLINE kCheckMemo #-}
+kCheckMemo :: IORef (IM.IntMap (Maybe IKind))
+kCheckMemo = unsafePerformIO $ newIORef IM.empty
+
 kCheck :: Env -> IType -> Maybe IKind
 kCheck r (ITForAll i k t) = do
   kr <- kCheck (addK i k r) t
   return (IKFun k kr)
-kCheck r tc@(ITAp f a) = do
+kCheck r tc@(ITAp f a)
+  | ftvCacheEnabled, vsNull (fTVarSet tc) = unsafeDupablePerformIO $ do
+      let u = iTypeNodeId tc
+      m0 <- readIORef kCheckMemo
+      case IM.lookup u m0 of
+        Just k -> return k
+        Nothing -> do
+          let k = kCheckAp r tc f a
+          _ <- return $! k
+          atomicModifyIORef' kCheckMemo (\ m -> (IM.insert u k m, ()))
+          return k
+kCheck r tc@(ITAp f a) = kCheckAp r tc f a
+kCheck r (ITVar i) = findK i r
+kCheck r (ITCon _ k _) = return k
+kCheck r (ITNum _) = return IKNum
+kCheck r (ITStr _) = return IKStr
+
+kCheckAp :: Env -> IType -> IType -> IType -> Maybe IKind
+kCheckAp r tc f a = do
   kf <- kCheck r f
   case kf of
     IKFun ka kr ->
         do ka' <- kCheck r a
            assert (ka' == ka) "ITAp" (tc, (f, kf), (ka', ka)) (ka', ka) $ return kr
     k -> internalError ("kCheck " ++ ppReadable (tc, k))
-kCheck r (ITVar i) = findK i r
-kCheck r (ITCon _ k _) = return k
-kCheck r (ITNum _) = return IKNum
-kCheck r (ITStr _) = return IKStr
 
 iGetKind :: IType -> Maybe IKind
 iGetKind = kCheck emptyEnv
