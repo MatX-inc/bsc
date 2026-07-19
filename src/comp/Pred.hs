@@ -259,7 +259,13 @@ expandSyn t0 = exp [] f as
             numArgs < n = bsErrorReallyUnsafe [(getPosition i, EPartialTypeApp (pfpString i) n numArgs)]
           -- We have a synonym we can expand, so do so.
           | otherwise = let (as1, as2) = genericSplitAt n as
-                            t' = setTypePosition (getIdPosition i) t
+                            -- a canonical (ground) body stays shared and
+                            -- unstamped: its positions are conflated by
+                            -- policy, and no new error can anchor inside
+                            -- it (it kind-checked at its definition);
+                            -- setTypePosition rejects canonical input
+                            t' = if isCanonType t then t
+                                 else setTypePosition (getIdPosition i) t
                             (f', as') = splitTAp $ inst as1 t'
                         in exp (i:syns) f' (as' ++ as2)
         -- Type functions (TIatf) are NOT expanded here; they are handled by

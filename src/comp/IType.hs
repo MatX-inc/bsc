@@ -45,7 +45,7 @@ data IType
         | ITCon Id IKind TISort
         | ITNum Integer
         | ITStr FString
-        deriving (Show, Generic.Data, Generic.Typeable)
+        deriving (Show, Generic.Typeable)
 
 -- --------------------------------
 -- NFData Instances
