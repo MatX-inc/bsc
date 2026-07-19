@@ -6,9 +6,12 @@ module IConv(
 
 import Data.List(union, findIndex)
 import Data.Maybe(catMaybes)
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.List as List
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import System.IO.Unsafe(unsafePerformIO)
 
 import Util(fromJustOrErr)
 import qualified SCC(tsort,Graph)
@@ -36,6 +39,7 @@ import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
+import GroundCType(groundCTypeEnabled, internGroundCType)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
@@ -186,8 +190,39 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
 
 -- expandSynN resolves ATFs before conversion to IType, so the resulting
 -- IType contains no ATF applications and does not need the ATF cache.
+-- With -hack-ground-ctype, conversions of internable ground types are
+-- memoized process-globally, keyed on their GroundCType node id: a
+-- repeated large type argument -- the dominant content of converted
+-- dictionary constructions and wrapper interface definitions -- costs
+-- one IntMap probe instead of a full expandSynN plus structural
+-- re-conversion; and a circulating canonical node costs one pointer
+-- probe inside the interner, no walk at all.  The memo is a bridge
+-- between the two intern tables: its keys are interned CType nodes
+-- and its values are interned ITypes.  Soundness: a type the walk
+-- interns is ground, synonym-expandable and type-function-evaluable
+-- purely, and free of associated type functions (the one symtab-
+-- dependent piece of expandSynN, which resolves them against the
+-- current instances) -- for exactly those types the conversion is
+-- independent of the Flags and SymTab arguments, so one process-wide
+-- entry serves every package.
+{-# NOINLINE convTMemo #-}
+convTMemo :: IORef (IM.IntMap IType)
+convTMemo = unsafePerformIO $ newIORef IM.empty
+
 iConvT :: Flags -> SymTab -> Type -> IType
-iConvT flags s t = iConvT' (expandSynN flags s t)
+iConvT flags s t
+  | groundCTypeEnabled, Just (nid, tc) <- internGroundCType t =
+      unsafePerformIO $ do
+        m0 <- readIORef convTMemo
+        case IM.lookup nid m0 of
+          Just it -> return it
+          Nothing -> do
+            -- convert the canonical node: it is already in normal
+            -- form (and ATF-free, so expandSynN has nothing to do)
+            let it = iConvT' (expandSynN flags s tc)
+            atomicModifyIORef' convTMemo (\ m -> (IM.insert nid it m, ()))
+            return it
+  | otherwise = iConvT' (expandSynN flags s t)
 
 iConvT' :: Type -> IType
 iConvT' (TVar (TyVar i _ _)) = ITVar i
