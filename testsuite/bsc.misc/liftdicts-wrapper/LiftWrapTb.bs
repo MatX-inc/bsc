@@ -1,0 +1,30 @@
+package LiftWrapTb(sysLiftWrapTb) where
+
+-- Imports the separately synthesized WrapperDicts module, so
+-- elaboration resolves the wrapper's interface definition -- and the
+-- lifted dictionaries it references -- from the .bo.
+
+import WrapperDicts
+
+sysLiftWrapTb :: Module Empty
+sysLiftWrapTb =
+  module
+    dut :: WrapperDicts <- mkWrapperDicts
+    cnt :: Reg (Bit 8) <- mkReg 0
+    addRules $
+      rules
+        "drive": when (cnt < 8) ==> action
+                  { cnt := cnt + 1
+                  ; x <- dut.m00 (unpack (zeroExtend cnt))
+                  ; dut.a01 x
+                  ; $display "m00 %h" (pack x)
+                  }
+        "obs": when (cnt >= 8 && cnt < 10) ==> action
+                  { cnt := cnt + 1
+                  ; $display "v00 %h" (pack (dut.v00 (unpack 0) (unpack 195)))
+                  ; $display "v01 %h" (pack (dut.v01 (unpack 7) (unpack 195)))
+                  }
+        "fin": when (cnt == 10) ==> action
+                  { $display "done"
+                  ; $finish 0
+                  }

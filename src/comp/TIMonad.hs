@@ -4,6 +4,8 @@ module TIMonad(
         apSubTI,
         CATFCache, mergeCATFCaches,
         TIResult(..), runTI, err, errs, twarn, handle,
+        GroundDictState(..), initGroundDictState, runTIWithGroundPool,
+        getGroundDictState, setGroundDictState, newLiftedGroundDictId,
         getAllowIncoherent, maskAllowIncoherent,
         getFlags, setFlags, getSymTab,
         getSubst, clearSubst, extSubst, updSubst,
@@ -37,6 +39,7 @@ import IdPrint
 import Position
 import CSyntax(CExpr(..))
 import CType
+import FStringCompat(FString)
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
 import Subst
@@ -50,6 +53,7 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -85,8 +89,78 @@ data TStatePersistent = TStatePersistent {
    tsAllowIncoherent :: Bool,
    tsWarns :: [WMsg], -- accumulated warning messages
    tsUsedPackages :: S.Set Id, -- packages from which symbols were used
-   tsATFCache :: CATFCache
+   tsATFCache :: CATFCache,
+   tsGroundDicts :: Maybe GroundDictState
 }
+
+-- State for ground-dictionary pooling in the typechecker (the
+-- -hack-ground-ctype lever).  Present only in runs entered through
+-- "runTIWithGroundPool": pooling rewrites solved dictionary bindings
+-- into references to lifted top-level definitions, which only the
+-- package typecheck driver (TypeCheck.tiDefns) collects and emits, so
+-- it must never be active for the standalone "runTI" entry points.
+-- It lives in the persistent state: the lifted definitions are
+-- self-contained ground evidence, valid regardless of whether the
+-- definition whose solving created them later fails.
+data GroundDictState = GroundDictState {
+  -- exact-match pool: the interned node id of the ground dictionary
+  -- type (GroundCType.internGroundCType -- which determines the
+  -- qualified class name plus normalized ground type arguments) ->
+  -- the pooled top-level dictionary id.  The intern table is process
+  -- global; this pool of what the ids MEAN stays package-scoped.
+  gdPool :: IM.IntMap Id,
+  -- local solved-bind id -> the expression that stands for it in
+  -- lifted evidence: a reference to its pooled definition, or the
+  -- inlined (small, closed) evidence of a binding that is not worth
+  -- a definition of its own (a memberless dictionary).  STRICTLY
+  -- PER-RUN: _tcdict numbering restarts with every runTI invocation,
+  -- so entries must never survive into the next definition's run --
+  -- "runTIWithGroundPool" clears this field on entry.
+  gdLocalSubst :: M.Map Id CExpr,
+  -- lifted definitions, most recent first (reverse creation order;
+  -- creation order is dependency order, since a ground dictionary's
+  -- kids are ground and pooled before it)
+  gdLifted :: [(Id, CType, CExpr)],
+  -- next candidate number for _lifted_dict<n> names
+  gdNext :: !Int,
+  -- base names the lifted ids must avoid: the package's own top-level
+  -- definitions plus any caller-supplied ids (the wrapper path's host
+  -- IPackage defs, which include the main flow's lifted dictionaries)
+  gdTaken :: S.Set FString,
+  -- name of the package being checked (qualifies the lifted ids)
+  gdPkgName :: Id
+}
+
+initGroundDictState :: Id -> S.Set FString -> GroundDictState
+initGroundDictState pkgName taken = GroundDictState {
+  gdPool = IM.empty,
+  gdLocalSubst = M.empty,
+  gdLifted = [],
+  gdNext = 0,
+  gdTaken = taken,
+  gdPkgName = pkgName
+}
+
+-- Mint a fresh lifted-dictionary id, mirroring LiftDicts.newDictId:
+-- the same _lifted_dict<n> naming scheme, skipping taken base names,
+-- qualified with the package and marked IdPDict+IdPCAF -- so the
+-- LiftDicts pass and everything downstream treat these ids exactly
+-- like the dictionaries the pass itself lifts.
+newLiftedGroundDictId :: Position -> GroundDictState -> (Id, GroundDictState)
+newLiftedGroundDictId pos gd = (i, gd { gdNext = n' + 1 })
+  where fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` gdTaken gd
+                    = fresh (k + 1)
+                | otherwise = k
+        n' = fresh (gdNext gd)
+        i = qualId (gdPkgName gd) $
+              addIdProps (enumId "lifted_dict" pos n') [IdPDict, IdPCAF]
+
+getGroundDictState :: TI (Maybe GroundDictState)
+getGroundDictState = lift $ gets tsGroundDicts
+
+setGroundDictState :: GroundDictState -> TI ()
+setGroundDictState gd =
+    lift $ modify (\s -> s { tsGroundDicts = Just gd })
 
 type CATFCache = M.Map (Id, [Type]) Type
 
@@ -168,7 +242,8 @@ initPersistentState flags ai s = TStatePersistent {
     tsAllowIncoherent = ai,
     tsRecoveredErrors = [],
     tsUsedPackages = S.empty,
-    tsATFCache = M.empty
+    tsATFCache = M.empty,
+    tsGroundDicts = Nothing
   }
 
 initRecoverState :: TStateRecover
@@ -197,6 +272,33 @@ runTI flags ai s m = TIResult {
   }
   where (result, pState) = runTIState flags ai s m
         rec_errors = tsRecoveredErrors pState
+
+-- Like "runTI", but with ground-dictionary pooling active, seeded
+-- from (and returning) the given pool state -- the accumulator that
+-- TypeCheck.tiDefns threads through the package's per-definition
+-- typecheck runs.  The pool is returned even when the run fails: its
+-- lifted definitions are self-contained and may already be referenced
+-- by bindings pooled in earlier (successful) runs.
+runTIWithGroundPool :: Flags -> Bool -> SymTab -> GroundDictState -> TI a
+                    -> (TIResult a, GroundDictState)
+runTIWithGroundPool flags ai s gd m = (tires, gd')
+  where tires = TIResult {
+            tiResult       = mkFinalResult result (tsRecoveredErrors pState),
+            tiWarnings     = tsWarns pState,
+            tiUsedPackages = tsUsedPackages pState,
+            tiATFCache     = tsATFCache pState
+          }
+        (result, pState) =
+            runState (runExceptT (runStateT m initRecoverState))
+                     ((initPersistentState flags ai s)
+                        -- the local substitutions are per-run (see
+                        -- gdLocalSubst); the pool, the lifted defs and
+                        -- the name counter carry across
+                        { tsGroundDicts =
+                              Just (gd { gdLocalSubst = M.empty }) })
+        gd' = case tsGroundDicts pState of
+                Just x -> x
+                Nothing -> internalError "runTIWithGroundPool: pool state lost"
 
 runTIState :: Flags -> Bool -> SymTab -> TI a ->
               (Either EMsgs (a, TStateRecover), TStatePersistent)

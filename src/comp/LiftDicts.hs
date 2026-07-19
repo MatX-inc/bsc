@@ -1,7 +1,8 @@
-module LiftDicts(liftDictsPkg) where
+module LiftDicts(liftDictsPkg, liftDictsWrapper) where
 
 import Control.Applicative((<|>))
 import Control.Monad(when, zipWithM)
+import Data.List(partition)
 import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -77,10 +78,69 @@ trace_lift_dicts = "-trace-lift-dicts" `elem` progArgs
 
 liftDictsPkg :: ErrorHandle -> Flags -> SymTab -> CPackage
              -> (CPackage, [IDef a])
-liftDictsPkg errh flags symt pkg@(CPackage mi exps imps impsigs fixs ds includes)
-  = (CPackage mi exps imps impsigs fixs ds' includes, reverse (liftedDefs s'))
-  where s0 = initLState errh flags symt pkg
-        (ds', s') = runState (liftDicts S.empty M.empty ds) s0
+liftDictsPkg errh flags symt = liftDictsPkg' errh flags symt [] []
+
+-- Entry point for the wrapper path, where the lifted definitions are
+-- spliced into an already-converted IPackage rather than emitted with
+-- the package's own conversion.  The extra ids are the IPackage's
+-- current defs, which join the taken-name set so a freshly minted
+-- lifted-dict name never collides with a definition already in the
+-- package (the main flow's lifted dictionaries and those of previously
+-- compiled wrappers).  The extra defs are the host package's
+-- typechecked top-level definitions: they supply the instance-def
+-- information (localInstInfo/convEnv below) that the main flow reads
+-- from the package it is lifting, but which the single-def wrapper
+-- package does not contain -- wrapper dictionary evidence freely
+-- references the host package's converted-instance definitions.
+liftDictsWrapper :: ErrorHandle -> Flags -> SymTab -> [Id] -> [CDefn]
+                 -> CPackage -> (CPackage, [IDef a])
+liftDictsWrapper = liftDictsPkg'
+
+liftDictsPkg' :: ErrorHandle -> Flags -> SymTab -> [Id] -> [CDefn]
+              -> CPackage -> (CPackage, [IDef a])
+liftDictsPkg' errh flags symt taken hostDs (CPackage mi exps imps impsigs fixs ds includes)
+  = (CPackage mi exps imps impsigs fixs ds'' includes, reverse (liftedDefs s'))
+  where s0 = initLState errh flags symt taken (hostDs ++ ds) mi
+        -- Ground dictionaries already lifted by the typechecker (the
+        -- -hack-ground-ctype lever) are adopted rather than processed
+        -- as ordinary defs: each is converted and recorded exactly as
+        -- handleDict records a dictionary this pass lifts itself, so
+        -- it leaves the CSyntax package, joins the emitted IDefs with
+        -- the same DefProps, and dedups later handleDict candidates
+        -- through the pool.  The typechecker emits them first and in
+        -- dependency order, so each one's kid references resolve
+        -- through the conversion environment when it is adopted.
+        (adopted, rest) = partition isTCLiftedDict ds
+        isTCLiftedDict (CValueSign (CDefT i [] (CQType [] _) [CClause [] [] _]))
+            = isLiftedDict i
+        isTCLiftedDict _ = False
+        (ds'', s') = runState (do mapM_ adoptDict adopted
+                                  liftDicts S.empty M.empty rest) s0
+
+-- Adopt a typechecker-lifted ground dictionary (see liftDictsPkg'):
+-- the definition keeps its id; its evidence is converted and recorded
+-- as if handleDict had just lifted it.
+adoptDict :: CDefn -> L a ()
+adoptDict (CValueSign (CDefT i [] (CQType [] t) [CClause [] [] e])) = do
+  (it, ie) <- convDict t e
+  s0 <- get
+  -- the typechecker never pools an incoherent resolution, but respect
+  -- the marker if one ever arrives (see handleDict on why incoherent
+  -- dictionaries carry no evidence rendering)
+  let mev = if isIncoherentDict i then Nothing
+            else renderEvidence (flags s0) (symt s0) e
+      props = case mev of
+                Nothing -> []
+                Just (str, kids, tys) -> [ DefP_DictRendering str,
+                                           DefP_DictKids kids,
+                                           DefP_DictTypes tys ]
+      ref = ICon i (ICDef it (icUndetAt (getIdPosition i) it UNoMatch))
+  modify (\s -> s {
+      dictPool = M.insertWith (\new old -> old ++ new) it [(i, ie)] (dictPool s),
+      liftedDefs = IDef i it ie props : liftedDefs s,
+      liftedTypes = M.insert i t (liftedTypes s),
+      convEnv = M.insert i ref (convEnv s) })
+adoptDict d = internalError ("LiftDicts.adoptDict: " ++ ppReadable d)
 
 data LState a = LState {
   errHandle :: ErrorHandle,
@@ -121,8 +181,12 @@ data LState a = LState {
 
 type L t a = State (LState t) a
 
-initLState :: ErrorHandle -> Flags -> SymTab -> CPackage -> LState a
-initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
+-- "taken" is extra ids (beyond the defs of "ds") whose names lifted
+-- dictionaries must avoid; "ds" is the defs to draw instance-def and
+-- taken-name information from (for the main flow the package's own
+-- defs, for the wrapper path the host package's defs as well)
+initLState :: ErrorHandle -> Flags -> SymTab -> [Id] -> [CDefn] -> Id -> LState a
+initLState errh fs r taken ds mi = LState {
   errHandle = errh,
   flags = fs,
   dictNo = 0,
@@ -131,7 +195,8 @@ initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
   liftedTypes = M.empty,
   convEnv = instConvEnv,
   localInstInfo = instInfo,
-  topLevelBases = S.fromList [ getIdBase (getDName def) | CValueSign def <- ds ],
+  topLevelBases = S.fromList ([ getIdBase (getDName def) | CValueSign def <- ds ]
+                              ++ map getIdBase taken),
   packageName = mi,
   symt = r
 }

@@ -1,0 +1,136 @@
+package DistinctGrounds where
+
+-- The all-miss face of the ground-dictionary pool: every definition
+-- demands dictionaries at a DISTINCT large ground type (a wide
+-- synonym-built tuple tree, distinct in its tail), so pool probes
+-- never hit and every consultation pays the ground-type interning
+-- walk.  Compiling within the suite budget, with identical results
+-- flag-off and flag-on, is the assertion (see liftdicts-wrapper.exp).
+
+type P2 a = (a, a)
+type T0 = Bit 1
+type T1 = P2 T0
+type T2 = P2 T1
+type T3 = P2 T2
+type T4 = P2 T3
+type T5 = P2 T4
+
+d00 :: (T5, Bit 1)
+d00 = unpack 0
+
+d01 :: (T5, Bit 2)
+d01 = unpack 0
+
+d02 :: (T5, Bit 3)
+d02 = unpack 0
+
+d03 :: (T5, Bit 4)
+d03 = unpack 0
+
+d04 :: (T5, Bit 5)
+d04 = unpack 0
+
+d05 :: (T5, Bit 6)
+d05 = unpack 0
+
+d06 :: (T5, Bit 7)
+d06 = unpack 0
+
+d07 :: (T5, Bit 8)
+d07 = unpack 0
+
+d08 :: (T5, Bit 9)
+d08 = unpack 0
+
+d09 :: (T5, Bit 10)
+d09 = unpack 0
+
+d10 :: (T5, Bit 11)
+d10 = unpack 0
+
+d11 :: (T5, Bit 12)
+d11 = unpack 0
+
+d12 :: (T5, Bit 13)
+d12 = unpack 0
+
+d13 :: (T5, Bit 14)
+d13 = unpack 0
+
+d14 :: (T5, Bit 15)
+d14 = unpack 0
+
+d15 :: (T5, Bit 16)
+d15 = unpack 0
+
+d16 :: (T5, Bit 17)
+d16 = unpack 0
+
+d17 :: (T5, Bit 18)
+d17 = unpack 0
+
+d18 :: (T5, Bit 19)
+d18 = unpack 0
+
+d19 :: (T5, Bit 20)
+d19 = unpack 0
+
+d20 :: (T5, Bit 21)
+d20 = unpack 0
+
+d21 :: (T5, Bit 22)
+d21 = unpack 0
+
+d22 :: (T5, Bit 23)
+d22 = unpack 0
+
+d23 :: (T5, Bit 24)
+d23 = unpack 0
+
+d24 :: (T5, Bit 25)
+d24 = unpack 0
+
+d25 :: (T5, Bit 26)
+d25 = unpack 0
+
+d26 :: (T5, Bit 27)
+d26 = unpack 0
+
+d27 :: (T5, Bit 28)
+d27 = unpack 0
+
+d28 :: (T5, Bit 29)
+d28 = unpack 0
+
+d29 :: (T5, Bit 30)
+d29 = unpack 0
+
+d30 :: (T5, Bit 31)
+d30 = unpack 0
+
+d31 :: (T5, Bit 32)
+d31 = unpack 0
+
+d32 :: (T5, Bit 33)
+d32 = unpack 0
+
+d33 :: (T5, Bit 34)
+d33 = unpack 0
+
+d34 :: (T5, Bit 35)
+d34 = unpack 0
+
+d35 :: (T5, Bit 36)
+d35 = unpack 0
+
+d36 :: (T5, Bit 37)
+d36 = unpack 0
+
+d37 :: (T5, Bit 38)
+d37 = unpack 0
+
+d38 :: (T5, Bit 39)
+d38 = unpack 0
+
+d39 :: (T5, Bit 40)
+d39 = unpack 0

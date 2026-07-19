@@ -527,6 +527,7 @@ traceflags = [
           "trace-instance-overlap",
           "legacy-inst-index",
           "legacy-defer-instances",
+          "hack-ground-ctype",
           "trace-kind-inference",
           "trace-lift",
           "trace-lift-dicts",
