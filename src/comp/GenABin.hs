@@ -21,7 +21,8 @@ import Verilog
 
 import ABin
 import BinData
-import FileIOUtil(writeBinaryFileCatch)
+import qualified Data.ByteString.Lazy as BL
+import FileIOUtil(writeBinaryFileLazyCatch)
 
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -46,7 +47,8 @@ headerBS = B.pack header
 
 genABinFile :: ErrorHandle -> String -> ABin -> IO ()
 genABinFile errh fn abin =
-    writeBinaryFileCatch errh fn (header ++ encode abin)
+    writeBinaryFileLazyCatch errh fn
+        (BL.fromStrict headerBS `BL.append` encodeLazy abin)
 
 readABinFile :: ErrorHandle -> String -> B.ByteString -> (ABin, String)
 readABinFile errh nm s =

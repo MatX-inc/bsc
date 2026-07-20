@@ -3,7 +3,6 @@
 module GenBin(genBinFile, readBinFile, genBcFile, readBcFile) where
 
 import Control.Monad(when)
-import Data.List(foldl')
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
@@ -17,7 +16,8 @@ import ISyntaxUtil(icUndet, pkgHasPoisonPill)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
 import BinData
-import FileIOUtil(writeBinaryFileCatch)
+import qualified Data.ByteString.Lazy as BL
+import FileIOUtil(writeBinaryFileLazyCatch)
 import PFPrint
 
 import Debug.Trace
@@ -59,14 +59,15 @@ pillByte p = if p then 1 else 0
 -- longer moves it, and fixupDefs does rewrite a package's defs against
 -- imported def bodies -- rebuild ordering (make/bazel) is what covers that.
 sigHash :: CSignature -> String
-sigHash sig = showHash (foldl' nextHashByte hashInit (encode sig))
+sigHash sig = showHash (BL.foldl' nextHashByte hashInit (encodeLazy sig))
 
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh fn bi_sig bo_sig ipkg =
-    writeBinaryFileCatch errh fn
-        (header ++ pillByte (pkgHasPoisonPill ipkg) :
-             encode (sigHash bi_sig, (bi_sig, bo_sig, ipkg)))
+    writeBinaryFileLazyCatch errh fn
+        (BL.fromStrict headerBS `BL.append`
+         BL.singleton (pillByte (pkgHasPoisonPill ipkg)) `BL.append`
+             encodeLazy (sigHash bi_sig, (bi_sig, bo_sig, ipkg)))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String, Bool)
@@ -106,8 +107,9 @@ bcHeaderBS = B.pack bcHeader
 genBcFile :: ErrorHandle -> String -> [(Id, Maybe String)] -> CSignature ->
              IO ()
 genBcFile errh fn depends bi_sig =
-    writeBinaryFileCatch errh fn
-        (bcHeader ++ encode (sigHash bi_sig, (depends, bi_sig)))
+    writeBinaryFileLazyCatch errh fn
+        (BL.fromStrict bcHeaderBS `BL.append`
+         encodeLazy (sigHash bi_sig, (depends, bi_sig)))
 
 readBcFile :: ErrorHandle -> String -> B.ByteString ->
               IO (([(Id, Maybe String)], CSignature), String)
