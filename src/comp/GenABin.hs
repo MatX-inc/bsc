@@ -37,7 +37,7 @@ import Data.Word(Word8)
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260720-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260720-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
