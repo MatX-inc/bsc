@@ -15,7 +15,7 @@ import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
-            isPrefixOf, isSuffixOf, unzip5, intercalate, foldl')
+            isPrefixOf, isSuffixOf, unzip5, intercalate, foldl', tails)
 import Data.Time.Clock.POSIX(getPOSIXTime)
 import Data.Maybe(isJust, isNothing)
 import Numeric(showOct)
@@ -152,6 +152,7 @@ import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
 import SystemCWrapper(checkSystemCIfc, wrapSystemC)
 import SimFileUtils(analyzeBluesimDependencies)
+import VFileUtils(partitionStaleVerilogMods)
 import Verilog(VProgram(..), vGetMainModName, getVeriInsts)
 import Depend
 import Version(bscVersionStr, copyright, buildnum)
@@ -1008,24 +1009,24 @@ genModule
             getIOPropsA flags pps (Just sched_info'') amod_final
     t <- dump errh flags t DFAPackageIOproperties dumpnames aioprops
 
-    -- Additional info from the Verilog backend
-    -- * vprog = the Verilog data structure, for recording in the .ba file,
-    --           so that it's available to bluetcl
-    (t, vprog)
-        <- if (backend flags == Just Verilog)
-           then do (t', v)
-                       <- genModuleVerilog
-                             errh pps flags dumpnames t prefix modstr
-                             blurb methodConflictBlurb methodConflictBVI
-                             vPathInfo sched_info'' aioprops amod_final
-                   return (t', Just v)
-           else return (t, Nothing)
+    -- With -elab-only, the Verilog backend stops at the .ba, like the
+    -- Bluesim backend: genModuleVerilog is not run at all, and a later
+    -- -c or link generates the .v from the .ba.  (The port properties
+    -- above come from the APackage analysis, so they are unaffected.)
+    t <- if (backend flags == Just Verilog && not (elabOnly flags))
+         then do (t', _vfilenames)
+                     <- genModuleVerilog
+                           errh pps flags dumpnames t prefix modstr
+                           blurb methodConflictBlurb methodConflictBVI
+                           vPathInfo sched_info'' aioprops amod_final
+                 return t'
+         else return t
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
                   modstr srcName (orig_cqt wi)
                   sched_info'' methodConflict vPathInfo
-                  amod_final vprog
+                  amod_final
          else return t
 
     -- Wrapper generation
@@ -1053,9 +1054,9 @@ genModule
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
              AScheduleInfo -> MethodDumpInfo -> VPathInfo ->
-             APackage -> Maybe VProgram -> IO (TimeInfo)
+             APackage -> IO (TimeInfo)
 writeABin errh pps flags dumpnames t prefix modstr srcName oqt
-          sched_info methodConflict vPathInfo amod vprog =
+          sched_info methodConflict vPathInfo amod =
     do
        start flags DFwriteABin
 
@@ -1087,9 +1088,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_oqt         = oqt,
                           abmi_method_dump = methodConflict,
                           abmi_pathinfo = vPathInfo,
-                          abmi_flags       = remapFlagsPaths remapPath flags,
-                          abmi_vprogram    = if (genABinVerilog flags)
-                                             then vprog else Nothing
+                          abmi_flags       = remapFlagsPaths remapPath flags
                      }
            abin = ABinMod modinfo (bscVersionStr True)
        genABinFile errh remapP afilename abin
@@ -1144,7 +1143,7 @@ genModuleVerilog :: ErrorHandle
                  -> VIOProps -- port properties (from the APackage)
                  -> APackage
                  -> IO (TimeInfo,
-                        VProgram)  -- generated Verilog
+                        [VFileName]) -- the Verilog files written
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  aioprops atsPackage =
@@ -1281,8 +1280,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        t <- dump errh flags t DFwriteVerilog dumpnames vfilenames
 
        -- Return
-       -- * the Verilog structure (for accessing in bluetcl)
-       return (t, vprog)
+       -- * the Verilog files written
+       return (t, vfilenames)
 
 
 -- Write a Verilog program to file (along with its use file)
@@ -1480,11 +1479,95 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 -- file, the middle stage of the three-stage flow (elaborate -> codegen ->
 -- link).  For Bluesim this reuses the front half of simLink, which under
 -- blockCodegen generates each module's C++ as a reusable block (no
--- schedule or top-level wrapper) and skips compiling and linking.
+-- schedule or top-level wrapper) and skips compiling and linking.  For
+-- Verilog each named module's .v is generated from its own .ba alone.
 codeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
 codeGen errh flags mods abinFiles =
-    let flags' = flags { blockCodegen = True }
-    in  mapM_ (\m -> simLink errh flags' m abinFiles []) mods
+    case (backend flags) of
+      Just Verilog -> vCodeGen errh flags mods abinFiles
+      _ -> let flags' = flags { blockCodegen = True }
+           in  mapM_ (\m -> simLink errh flags' m abinFiles []) mods
+
+-- Generate each named module's Verilog from its elaborated (.ba) file:
+-- from a .ba given on the command line when one defines the module, and
+-- otherwise found by module name on the search path.  Root-only, which
+-- is Verilog's native granularity: a module's .v needs only its own
+-- ABinModInfo (children are referenced by name).
+vCodeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
+vCodeGen errh flags mods afilenames = do
+    tStart <- getNow
+    user_abis <- mapM (readAndCheckABin errh (Just Verilog)) (nub afilenames)
+    let abinModName (ABinMod mi _) =
+            getIdString (unQualId (apkg_name (abmi_apkg mi)))
+        abinModName _ = ""
+        findMod name =
+            case [ (fn, abin) | (fn, abin) <- user_abis
+                              , abinModName abin == name ] of
+              ((fn, abin):_) -> return (fn, abin)
+              [] -> let err = (cmdPosition,
+                               EMissingABinModFile name Nothing)
+                    in  readAndCheckABinPathCatch errh
+                            (verbose flags) (ifcPath flags) (Just Verilog)
+                            name err
+        assertMod (fn, ABinMod mi _) = return (fn, mi)
+        assertMod (_, ABinModSchedErr {}) =
+            bsError errh [(cmdPosition, EABinModSchedErr (unwords mods) Nothing)]
+        assertMod (fn, ABinForeignFunc {}) =
+            bsError errh [(cmdPosition,
+                           EWrongABinTypeExpectedModule fn Nothing)]
+    named_abis <- mapM findMod mods
+    abmis <- mapM assertMod named_abis
+    _ <- vGenMods errh flags tStart abmis
+    return ()
+
+-- Generate Verilog for modules from their elaborated (.ba) files,
+-- reconstructing the inputs of genModuleVerilog from each ABinModInfo.
+-- Codegen flags come from this invocation's command line, matching the
+-- Bluesim path; elaboration-affecting flags are baked into the .ba.
+vGenMods :: ErrorHandle -> Flags -> TimeInfo -> [(String, ABinModInfo)] ->
+            IO (TimeInfo, [VFileName])
+vGenMods errh flags t0 abmis = do
+    pwd <- getCurrentDirectory
+    -- output goes to the current directory unless -vdir overrides it
+    -- (a .ba's own directory is typically -bdir, which is not where
+    -- generated Verilog belongs)
+    let prefix = dirName (createEncodedFullFilePath "placeholder" pwd) ++ "/"
+        genV (t, vfns_so_far) (_, abmi) = do
+            let modId = apkg_name (abmi_apkg abmi)
+                modstr = getIdString (unQualId modId)
+                dumpnames = (Nothing, Nothing, Just modstr)
+            when (verbose flags) $ putStrLnF ("*****")
+            when (showCodeGen flags || verbose flags) $
+                putStrLnF ("Verilog generation for " ++ modstr ++ " starts")
+            blurb <- mkGenFileHeader flags
+            let apkg = abmi_apkg abmi
+                pps = abmi_pps abmi
+                methodConflict = abmi_method_dump abmi
+                methodConflictBlurb
+                  | methodConf flags =
+                      ["Method conflict info:"]
+                      ++ lines (pretty 78 78
+                                  (vcat (dumpMethodInfo flags methodConflict)))
+                  | otherwise = []
+                methodConflictBVI
+                  | methodBVI flags =
+                      ["BVI format method schedule info:"]
+                      ++ lines (pretty 78 78
+                                  (vcat (dumpMethodBVIInfo methodConflict)))
+                  | otherwise = []
+                pathinfo = abmi_pathinfo abmi
+                aschedinfo = abmi_aschedinfo abmi
+                -- the same APackage-based port properties the compile
+                -- itself would use (see getIOPropsA), so a regenerated
+                -- .v matches one written at compile time
+                (aioprops, _) =
+                    getIOPropsA flags pps (Just aschedinfo) apkg
+            (t', vfns) <-
+                genModuleVerilog errh pps flags dumpnames t prefix modstr
+                    blurb methodConflictBlurb methodConflictBVI
+                    pathinfo aschedinfo aioprops apkg
+            return (t', vfns_so_far ++ vfns)
+    foldM genV (t0, []) abmis
 
 -- ===============
 -- SimLink
@@ -1583,6 +1666,11 @@ simLink errh flags toplevel afilenames cfilenames = do
 
 -- Reuse a Bluesim generated object file
 -- returns the name of the object file being reused
+-- report that a generated Verilog file was reused rather than regenerated
+reuseVerilogFile :: Flags -> String -> IO ()
+reuseVerilogFile flags vNameRel =
+    unless (quiet flags) $ putStrLnF ("Verilog file reused: " ++ vNameRel)
+
 reuseBluesimCFile :: Flags -> String -> IO String
 reuseBluesimCFile flags oName = do
     -- show is used for quoting
@@ -2051,11 +2139,12 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
                           [(cmdPosition,
                             EMultipleABinFilesForName link_name file_names)]
 
-            -- XXX Until we allow re-generation of Verilog files,
-            -- XXX the module .ba files are unused
-            when (not (null (mod_abis))) $
-                bsWarning errh
-                    [(cmdPosition, WExtraABinFiles (map fst mod_abis))]
+            -- without the design's .ba hierarchy, the staleness of
+            -- generated Verilog cannot be checked; warn and use the .v
+            -- files as found (module .ba files given explicitly on the
+            -- command line are still regenerated from, below)
+            bsWarning errh
+                [(cmdPosition, WNoABinForVerilogRegen topmod_name)]
 
             let ffuncs = [ abffi_foreign_func abfi
                            | (_, (ABinForeignFunc abfi _)) <- ffunc_abis ]
@@ -2078,17 +2167,32 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     t <- dump errh flags t DFreadelab dumpnames
              (map (pfpString . ff_name) ffuncs ++ map fst mod_abmis)
 
-{-
-    -- generate Verilog for the module abis
-    -- XXX only if the verilog doesn't exist or is older
-    -- XXX print a message about reusing a file?
-    (t, gen_vfilenames) <-
-        if (updCheck flags)
-        then vGenMods t flags mod_abmis
-        else return (t, [])
-    let vfilenames = vfilenames0  ++ gen_vfilenames
--}
-    let vfilenames = vfilenames0
+    -- Regenerate any module .v that is missing or older than its .ba, and
+    -- reuse the rest, so a link is self-sufficient regardless of which
+    -- subset was pre-generated (with -c or an earlier compile).  A module
+    -- whose .v was given explicitly on the command line is the user's to
+    -- provide and is never regenerated.  File arguments can be glob
+    -- patterns (bsc forwards them to the simulator's shell unexpanded, so
+    -- "*.v" has always meant "the user provides every module"); match
+    -- module names against the patterns rather than comparing literally.
+    let vfile_pats = [ baseName (dropSuf (vfnString vfn))
+                     | vfn <- vfilenames0 ]
+        -- glob match with * and ? (the shell metacharacters that can
+        -- appear in a forwarded filename argument)
+        globMatch ('*':ps) s = any (globMatch ps) (tails s)
+        globMatch ('?':ps) (_:cs) = globMatch ps cs
+        globMatch (p:ps) (c:cs) = (p == c) && globMatch ps cs
+        globMatch [] [] = True
+        globMatch _ _ = False
+        abmiModName abmi = getIdString (unQualId (apkg_name (abmi_apkg abmi)))
+        checked_abmis = [ p | p@(_, abmi) <- mod_abmis
+                            , not (any (`globMatch` abmiModName abmi)
+                                       vfile_pats) ]
+    (stale_abmis, reused_vs) <-
+        partitionStaleVerilogMods flags prefix checked_abmis
+    mapM_ (reuseVerilogFile flags . snd) reused_vs
+    (t, gen_vfilenames) <- vGenMods errh flags t stale_abmis
+    let vfilenames = vfilenames0 ++ map fst reused_vs ++ gen_vfilenames
 
     -- generate files for the foreign functions
     start flags DFcompileVPI

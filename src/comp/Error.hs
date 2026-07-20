@@ -1131,6 +1131,8 @@ data ErrMsg =
         | ETooManyBackends
         | EDollarNoVerilog
         | EDollarLink
+        | EElabOnlyNotSrcCompile
+        | EElabOnlyNoElab
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -1154,6 +1156,7 @@ data ErrMsg =
 
         -- ABin (.ba) file issues
         | WExtraABinFiles [String]
+        | WNoABinForVerilogRegen String
         | EMissingABinModFile String (Maybe String)
         | EMissingABinForeignFuncFile String String
         | EMultipleABinFilesForName String [String]
@@ -4280,6 +4283,12 @@ getErrorText (WExtraABinFiles filenames) =
     (System 39, empty,
      s2par ("The following elaboration files were not used in the design:") $$
      nest 2 (sepList (map text filenames) comma))
+getErrorText (WNoABinForVerilogRegen topmod) =
+    (System 99, empty,
+     s2par ("No elaboration file (.ba) was found for module " ++
+            ishow topmod ++ " or one of its submodules, so BSC cannot " ++
+            "check whether the generated Verilog is up to date; linking " ++
+            "will use the Verilog files found on the search path."))
 getErrorText (EMissingABinModFile module_name mparent) =
     (System 40, empty,
      case (mparent) of
@@ -4392,6 +4401,17 @@ getErrorText EDollarNoVerilog =
 getErrorText EDollarLink =
     (System 57, empty,
      s2par ("The flag -remove-dollar in only supported for compiling source, not linking."))
+
+getErrorText EElabOnlyNotSrcCompile =
+    (System 100, empty,
+     s2par ("The flag -elab-only is only supported when compiling source, " ++
+            "not when linking or generating code with -c."))
+
+getErrorText EElabOnlyNoElab =
+    (System 101, empty,
+     s2par ("The flag -elab-only cannot be combined with -no-elab: " ++
+            "suppressing both the .v and the .ba files would leave no " ++
+            "generated output."))
 
 -- Removed System 58 ELicenseUnavailable, BSC is now open source
 -- Removed System 59 WLicenseExpires, BSC is now open source
@@ -4654,14 +4674,16 @@ getErrorText (EGenWithSrcFile fname) =
             "source file (" ++ ishow fname ++ ") cannot be provided.  " ++
             "To compile and generate from source, use -g."))
 
-getErrorText EGenVerilogNotSupported =
+getErrorText EGenWithSystemC =
     (System 98, empty,
+     s2par ("The flag -c is not supported with -systemc; use -sim."))
+
+-- No longer raised now that -c supports the Verilog back end; the tag is
+-- retained (renumbered from System 98) so downstream matches keep compiling.
+getErrorText EGenVerilogNotSupported =
+    (System 102, empty,
      s2par ("The flag -c is only supported with the Bluesim " ++
             "back end (-sim)."))
-
-getErrorText EGenWithSystemC =
-    (System 99, empty,
-     s2par ("The flag -c is not supported with -systemc; use -sim."))
 
 -- Runtime errors
 getErrorText (EMutuallyExclusiveRulesFire r1 r2) =
