@@ -14,7 +14,8 @@ import ISyntaxUtil(icUndet)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
 import BinData
-import FileIOUtil(writeBinaryFileCatch)
+import qualified Data.ByteString.Lazy as BL
+import FileIOUtil(writeBinaryFileLazyCatch)
 import PFPrint
 
 import Debug.Trace
@@ -36,8 +37,9 @@ headerBS = B.pack header
 genBinFile :: ErrorHandle -> (Position -> Position) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
-    writeBinaryFileCatch errh fn
-        (header ++ encodeWith remapP (bi_sig, bo_sig, ipkg))
+    writeBinaryFileLazyCatch errh fn
+        (BL.fromStrict headerBS `BL.append`
+             encodeLazyWith remapP (bi_sig, bo_sig, ipkg))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)

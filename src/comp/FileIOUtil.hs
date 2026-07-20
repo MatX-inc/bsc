@@ -10,6 +10,7 @@ module FileIOUtil
     ,readBinaryFileCatch
     ,writeFileCatch
     ,writeBinaryFileCatch
+    ,writeBinaryFileLazyCatch
     ,appendFileCatch
     ,removeFileCatch
     ,copyFileCatch
@@ -248,6 +249,14 @@ writeBinaryFileCatch errh fname content = do
     checkDirectory fname (fileWriteError errh emptyContext noPosition fname)
     -- try to write the file
     catchIO (B.writeFile fname $ B.pack content)
+            (fileWriteError errh emptyContext noPosition fname)
+
+-- variant taking an already-chunked lazy ByteString (streams to disk
+-- without the per-byte pack)
+writeBinaryFileLazyCatch :: ErrorHandle -> FilePath -> B.ByteString -> IO ()
+writeBinaryFileLazyCatch errh fname content = do
+    checkDirectory fname (fileWriteError errh emptyContext noPosition fname)
+    catchIO (B.writeFile fname content)
             (fileWriteError errh emptyContext noPosition fname)
 
 appendFileCatch :: ErrorHandle -> FilePath -> String -> IO ()

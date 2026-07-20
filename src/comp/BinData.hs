@@ -5,11 +5,11 @@
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module BinData ( Byte
-               , putBs, putB, putI
-               , getN, getB, getI -- , getBytesRead
+               , putBs, putB, putI, putChunk
+               , getN, getB, getI, getBS -- , getBytesRead
                , Bin(..)
                , section
-               , encode, encodeWith, decode, decodeWithHash
+               , encode, encodeWith, encodeLazyWith, decode, decodeWithHash
                , binTypeStats
                ) where
 
@@ -67,6 +67,7 @@ import Data.Bits
 import Data.Word
 import GHC.Exts(IsList(..))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
@@ -123,6 +124,7 @@ type Byte = Word8
 -}
 
 data BinElem = B [Byte]
+             | BC !BS.ByteString  -- a pre-packed chunk of plain bytes
              -- shared types
              | S FString
              | I Id
@@ -138,6 +140,9 @@ data BinElem = B [Byte]
 instance Show BinElem where
   show (B bs)    = "[" ++
                    (intercalate "," [showHex b "" | b <- bs]) ++
+                   "]"
+  show (BC bs)   = "[" ++
+                   (intercalate "," [showHex b "" | b <- BS.unpack bs]) ++
                    "]"
   show (S s)     = getFString s
   show (I i)     = show i
@@ -329,6 +334,11 @@ putBs bs = Out [B bs] ()
 putB :: Byte -> Out ()
 putB b = putBs [b]
 
+-- Insert a pre-packed chunk of bytes (avoids the [Byte] detour for
+-- payloads that already exist as a ByteString)
+putChunk :: BS.ByteString -> Out ()
+putChunk bs = Out [BC bs] ()
+
 -- Insert an Int value (between 0 and 255) into the byte stream
 putI :: Int -> Out ()
 putI n = if (n >= 0) && (n < 256)
@@ -373,6 +383,19 @@ instance Applicative In where
 
 getN :: Int -> In [Byte]
 getN n = replicateM n getB
+
+-- Read n bytes as one slice of the input (no per-byte list cells).
+-- The running hash must see every byte exactly as getB would show it.
+getBS :: Int -> In BS.ByteString
+getBS n = In $ \(IS bc bs off mh) ->
+  if off + n > BS.length bs
+  then internalError "BinData.getBS: unexpected end of byte stream"
+  else let sl = BS.take n (BS.drop off bs)
+           !off' = off + n
+           mh' = case mh of
+                   Just h  -> Just $! BS.foldl' nextHashByte h sl
+                   Nothing -> Nothing
+       in (sl, IS bc bs off' mh')
 
 getB :: In Byte
 getB = In $ \(IS bc bs off mh) ->
@@ -698,10 +721,10 @@ instance Bin FString where
 instance {-# OVERLAPPABLE #-} Bin String where
     writeBytes fs = do let bs = TE.encodeUtf8 $ T.pack fs
                        toBin $ toInteger $ B.length bs
-                       putBs $ B.unpack bs
+                       putChunk $ B.toStrict bs
     readBytes     = do len <- fromBin
-                       bs <- getN len
-                       return (T.unpack $ TE.decodeUtf8 $ B.pack bs)
+                       bs <- getBS len
+                       return (T.unpack $ TE.decodeUtf8 $ B.fromStrict bs)
 
 instance Bin Position where
     writeBytes (Position fs l c is_stdlib) = section "Position" $ do
@@ -1544,6 +1567,8 @@ buildHistogram bes = snd (foldl build (["<UNCLAIMED>"], M.empty) bes)
   where build ([], _) _ = internalError "unbalanced accounting marks"
         build (sec, hist) (B b) =
           (sec, updateBytes sec (toInteger (length b)) hist)
+        build (sec, hist) (BC b) =
+          (sec, updateBytes sec (toInteger (BS.length b)) hist)
         build (sec, hist) (Start s) = ((s:sec), incrSection s hist)
         build ((_:sec), hist) End   = (sec, hist)
         build _ x = internalError $ "unexpected BinElem: " ++ (show x)
@@ -1587,6 +1612,7 @@ share' k x bc =
 compress :: (Position -> Position) -> [BinElem] -> [BinElem]
 compress remapP bes = compress' (bes, unknownCache)
   where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
+        compress' ((x@(BC _):xs), cache) = x:(compress' (xs, cache))
         compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
         compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
         compress' ((x:xs), cache) =
@@ -1602,12 +1628,31 @@ compress remapP bes = compress' (bes, unknownCache)
 runOutWith :: (Position -> Position) -> Out () -> [Byte]
 runOutWith remapP (Out xs _) =
     let bes   = compress remapP $ toList xs
-        bytes = concat [ bs | B bs <- bes ]
+        bytes = concat [ elemBytes e | e <- bes ]
+        elemBytes (B bs)  = bs
+        elemBytes (BC bs) = BS.unpack bs
+        elemBytes _       = []
     in -- trace ("xs = " ++ (show xs)) $
        -- trace ("bytes = " ++ (show bytes)) $
        if trace_bindata
        then trace (showHist (buildHistogram bes)) $ bytes
        else bytes
+
+-- Builder-backed variant of the same pipeline: the compressed element
+-- stream folds straight into Builder buffers (adjacent byte runs
+-- coalesce into ~4k chunks) instead of materializing a [Byte].  The
+-- element stream is consumed lazily exactly as above, so production
+-- stays demand-driven: nothing is forced that the traversal does not
+-- visit.
+runOutBuilderWith :: (Position -> Position) -> Out () -> BB.Builder
+runOutBuilderWith remapP (Out xs _) =
+    let bes = compress remapP $ toList xs
+        toB (B bs)  = foldMap BB.word8 bs
+        toB (BC bs) = BB.byteString bs
+        toB _       = mempty
+    in if trace_bindata
+       then trace (showHist (buildHistogram bes)) $ foldMap toB bes
+       else foldMap toB bes
 
 -- Convenience function for encoding structures in the Bin typeclass
 encode :: (Bin a) => a -> [Byte]
@@ -1617,6 +1662,10 @@ encode = encodeWith id
 -- (-remap-path-prefix; see share)
 encodeWith :: (Bin a) => (Position -> Position) -> a -> [Byte]
 encodeWith remapP x = runOutWith remapP (toBin x)
+
+-- lazy-ByteString encode: chunks stream to the consumer as they fill
+encodeLazyWith :: (Bin a) => (Position -> Position) -> a -> B.ByteString
+encodeLazyWith remapP x = BB.toLazyByteString (runOutBuilderWith remapP (toBin x))
 
 runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
 runIn (In f) bs do_hash =
