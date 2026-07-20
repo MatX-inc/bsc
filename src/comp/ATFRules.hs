@@ -65,11 +65,13 @@ import Control.Monad(foldM, guard)
 
 import Id(Id)
 import ErrorUtil(internalError)
+import Position(noPosition)
 import PPrint(ppReadable)
 import CType(Type(..), TyVar(..), TyCon(..), Kind(..), TISort(..),
              CTypeclass(..))
 import Pred(Pred(..), Qual(..), Class(..), Inst(..), expandSyn,
             removePredPositions)
+import StdPrel(isPreClass)
 import SymTab(SymTab, findSClass)
 import ISyntax(IType(..), IKind(..))
 import IType(iTypeNodeId, itHasTFun)
@@ -195,10 +197,12 @@ resolveClass :: ATFRules -> Int -> Class -> [Int] -> [Int] -> [IType]
              -> Maybe [IType]
 resolveClass rules fuel cls inPos outPos ins = do
     guard (fuel > 0)
-    let cands = [ (n, map (argPats !!) inPos, map (argPats !!) outPos,
+    let insts | isPreClass cls = preClassInsts cls inPos ins
+              | otherwise      = getInsts cls
+        cands = [ (n, map (argPats !!) inPos, map (argPats !!) outPos,
                    map removePredPositions ctx)
                 | (n, Inst _ _ (ctx :=> IsIn _ cargs) _)
-                      <- zip [0 :: Int ..] (getInsts cls)
+                      <- zip [0 :: Int ..] insts
                 , let argPats = map cvtType cargs ]
         matches = [ c | c@(_, ipats, _, _) <- cands
                       , isJust (matchMany ipats ins M.empty) ]
@@ -206,6 +210,26 @@ resolveClass rules fuel cls inPos outPos ins = do
     b0 <- matchMany ipats ins M.empty
     b  <- solveCtx rules (fuel - 1) b0 ctx
     mapM (groundNorm rules (fuel - 1) . tSubstBatch b) opats
+
+-- The numeric pre-classes (Add, Mul, Div, Log, Max, Min, NumEq)
+-- declare no instances -- getInsts is empty by construction -- and
+-- their equations are instead generated on demand by the genInsts
+-- clauses in StdPrel.  At a query that is ground at the fundep's
+-- input positions those clauses are pure arithmetic evaluation of a
+-- compiler-sealed closed family (first matching clause wins, at most
+-- one instance comes back), so consulting them stays inside the
+-- evaluator's ground domain.  The judgment-flavored "last resort"
+-- clauses (which invent structural results for unconstrained
+-- variables during defaulting) are all gated on the Just-defaulting
+-- context, which we never supply.  Non-input positions are filled
+-- with the class's own signature variables, so only clauses that
+-- compute those positions can fire.
+preClassInsts :: Class -> [Int] -> [IType] -> [Inst]
+preClassInsts cls inPos ins = genInsts cls [] Nothing (IsIn cls qargs)
+  where
+    inArgs = zip inPos ins
+    qargs = [ maybe (TVar v) uncvtType (lookup i inArgs)
+            | (i, v) <- zip [0 ..] (csig cls) ]
 
 -- Among the instances that match, the committed one must generalize
 -- none and be generalized by all -- i.e., be the unique minimum of the
@@ -328,6 +352,23 @@ isGround (ITVar _) = False
 isGround (ITForAll _ _ _) = False
 isGround (ITAp f a) = isGround f && isGround a
 isGround _ = True
+
+-- Ground IType -> CType, the inverse of cvtType (source positions are
+-- gone; these types only feed genInsts pattern matching and come
+-- straight back in through cvtType).
+uncvtType :: IType -> Type
+uncvtType (ITNum n) = TCon (TyNum n noPosition)
+uncvtType (ITStr s) = TCon (TyStr s noPosition)
+uncvtType (ITCon i k s) = TCon (TyCon i (Just (uncvtK k)) s)
+uncvtType (ITAp f a) = TAp (uncvtType f) (uncvtType a)
+uncvtType t =
+    internalError ("ATFRules.uncvtType: not ground: " ++ ppReadable t)
+
+uncvtK :: IKind -> Kind
+uncvtK IKStar = KStar
+uncvtK IKNum = KNum
+uncvtK IKStr = KStr
+uncvtK (IKFun k1 k2) = Kfun (uncvtK k1) (uncvtK k2)
 
 -- Structural CType -> IType conversion for instance components
 -- (a mirror of IConv.iConvT', which is not importable here without a
