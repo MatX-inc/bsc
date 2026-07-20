@@ -27,6 +27,7 @@ Flags {
 	extraVerbose = False,
 	fdir = Nothing,
 	finalcleanup = 1,
+	baDebugInfo = False,
 	genABin = False,
 	genABinVerilog = False,
 	genName = [],
