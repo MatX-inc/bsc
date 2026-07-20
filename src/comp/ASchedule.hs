@@ -3830,9 +3830,27 @@ mkRuleRelationDB rule_names rule_disjoint cf_map sc_map
                       else Nothing
           in ((rule1,rule2), rule1 `rule_disjoint` rule2, minfo)
 
-      infos = [ getPairInfo r1 r2 | r1 <- rule_names, r2 <- rule_names ]
+      -- the byproduct pairs are the scheduling run's own outcomes;
+      -- build their (complete) entries eagerly and WITHOUT touching
+      -- the all-pairs enumeration, so that serializing them never
+      -- forces the dense halves below
+      byproduct_keys =
+          S.fromList ( [ (r1,r2) | (r1,r2,_) <- res_drops ]
+                    ++ [ (r1,r2) | (r1,r2,_) <- cycle_drops ]
+                    ++ [ (r1,r2) | (r1,r2,_) <- sched_pragma_drops ]
+                    ++ M.keys arb_map )
+      byp_map = M.fromList [ (p, rri) | p@(r1,r2) <- S.toList byproduct_keys
+                                      , let (_, _, minfo) = getPairInfo r1 r2
+                                      , Just rri <- [minfo] ]
 
-  in rrdbFromList infos
+      -- dense halves: lazy, quadratic, and only ever forced by a
+      -- -ba-debug-info write or an explicit relation query (bluetcl)
+      infos = [ getPairInfo r1 r2 | r1 <- rule_names, r2 <- rule_names ]
+      dset = S.fromList [ p | (p, True, _) <- infos ]
+      dense_map = M.fromList [ (p, rri) | (p, _, Just rri) <- infos
+                                        , not (p `S.member` byproduct_keys) ]
+
+  in RuleRelationDB dset dense_map byp_map
 
 doQueries :: ErrorHandle -> Flags -> [ARuleId] -> RuleRelationDB -> IO ()
 doQueries errh flags rule_names relationDB =

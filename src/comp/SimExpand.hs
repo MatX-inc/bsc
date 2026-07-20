@@ -1016,7 +1016,11 @@ makeCSIForModule curmod_abi =
         curmod_drdb = exclRulesDBToDisjRulesDB $
                           asi_exclusive_rules_db curmod_aschedinfo
 
-        (RuleRelationDB _ curmod_rule_rel_map)
+        -- only the byproduct entries: the sole read (isFFuncEdge's
+        -- exact all-Nothing-but-mArb pattern) treats a missing pair
+        -- and a cf/sc-only dense pair identically, so the dense map
+        -- (absent from thin .ba files) is not consulted at all
+        (RuleRelationDB _ _ curmod_rule_rel_map)
             = asi_rule_relation_db curmod_aschedinfo
 
         curmod_apkg    = abmi_apkg            curmod_abi

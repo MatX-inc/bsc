@@ -167,7 +167,10 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- appended last: the Bin Flags instance in GenABin.hs is
+        -- positional, so new fields go at the end (position a_138)
+        baDebugInfo :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

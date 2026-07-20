@@ -124,6 +124,7 @@ import ARankMethCalls(aRankMethCalls)
 import AState(aState)
 import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
+import AScheduleInfo(thinRuleRelationDB)
 import AAddScheduleDefs(aAddScheduleDefs)
 import APaths(aPathsPreSched, aPathsPostSched)
 import AProofs(aCheckProofs)
@@ -1078,15 +1079,28 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                       "Elaborated " ++ ppString be ++ " module file created: "
            remapP = remapPositionFile (remapPathPrefix flags)
            remapS = remapPath (remapPathPrefix flags)
+           -- by default the .ba carries only what code generation
+           -- consumes: the dense pairwise rule relations (quadratic in
+           -- rules, derivable from the apkg) and the method-conflict
+           -- dump are debug data -- -ba-debug-info serializes them
+           sched_info_ba
+               | baDebugInfo flags = sched_info
+               | otherwise =
+                   sched_info { asi_rule_relation_db =
+                                    thinRuleRelationDB
+                                        (asi_rule_relation_db sched_info) }
+           method_dump_ba
+               | baDebugInfo flags = methodConflict
+               | otherwise         = []
            modinfo = ABinModInfo {
                           abmi_path = remapS prefix,
                           abmi_src_name = remapS srcName,
                           --abmi_time = now,
                           abmi_apkg        = amod_for_abin,
-                          abmi_aschedinfo  = sched_info,
+                          abmi_aschedinfo  = sched_info_ba,
                           abmi_pps         = pps,
                           abmi_oqt         = oqt,
-                          abmi_method_dump = methodConflict,
+                          abmi_method_dump = method_dump_ba,
                           abmi_pathinfo = vPathInfo,
                           abmi_flags       = remapFlagsPaths remapPath flags
                      }
