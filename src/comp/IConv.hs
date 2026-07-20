@@ -36,7 +36,6 @@ import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
 import ATFRules(buildATFRules, atfReduceInType)
-import Pred(expandSyn)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
