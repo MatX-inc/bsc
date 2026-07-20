@@ -20,6 +20,7 @@ Compiler flags:
 -Xl arg                 pass argument to the C/C++ linker
 -Xv arg                 pass argument to the Verilog link process
 -aggressive-conditions  construct implicit conditions aggressively
+-ba-debug-info          serialize full debug info into .ba files (all pairwise rule relations and the method-conflict dump); without it .ba files carry only what code generation needs
 -bdir dir               output directory for .bo and .ba files
 -c module               generate code for ``module'' from its elaborated .ba file
 -check-assert           test assertions with the Assert library

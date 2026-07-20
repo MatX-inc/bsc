@@ -18,6 +18,9 @@ module AScheduleInfo (
     isSchedNode,
     printRuleRelationInfo,
     rrdbFromList,
+    rrdbFromSerialized,
+    rrdbSerializedConflicts,
+    thinRuleRelationDB,
     unionRuleRelationInfo
 ) where
 
@@ -27,7 +30,8 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List(intersperse)
+import Data.List(intersperse, partition)
+import Data.Maybe(isJust)
 import Util(thd)
 import Eval
 
@@ -262,12 +266,26 @@ instance Ord FastSchedNode where
 --   - If a pair is not in the map, then the rules have no conflicts
 --   - If a pair maps to a RuleRelationInfo value, then the breakdown
 --     of conflicts is given in the RuleRelationInfo structure.
+-- The dense halves (disjointness set; conflict entries whose only
+-- content is the cf/sc analysis) are quadratic in rules, derivable
+-- from (flags, apkg), and kept as never-forced lazy fields: nothing
+-- in a normal compile consumes them, and .ba writing omits them
+-- unless -ba-debug-info asks for the fat form.  The byproduct map
+-- holds the complete relation for exactly those pairs where the
+-- scheduling run recorded an outcome (resource/cycle/pragma/arb
+-- drop); it is small and always serialized -- and it is the only
+-- part the Bluesim path reads (its lookup treats a missing pair and
+-- a cf/sc-only pair identically).
 data RuleRelationDB =
-    RuleRelationDB (S.Set (ARuleId,ARuleId))                  -- disjointness
-                   (M.Map (ARuleId,ARuleId) RuleRelationInfo) -- conflicts
+    RuleRelationDB (S.Set (ARuleId,ARuleId))                  -- disjointness (dense, lazy)
+                   (M.Map (ARuleId,ARuleId) RuleRelationInfo) -- cf/sc-only conflicts (dense, lazy)
+                   (M.Map (ARuleId,ARuleId) RuleRelationInfo) -- byproduct pairs (complete)
 
 instance NFData RuleRelationDB where
-  rnf (RuleRelationDB s m) = rnf2 s m
+  -- deliberately NOT forcing the dense halves: rnf here (dump calls
+  -- deepseq unconditionally) would materialize the quadratic maps and
+  -- reintroduce the writeABin heap blowup this split exists to fix
+  rnf (RuleRelationDB _ _ byp) = rnf byp
 
 data RuleRelationInfo = RuleRelationInfo { mCF :: Maybe Conflicts
                                          , mSC :: Maybe Conflicts
@@ -291,26 +309,59 @@ defaultRuleRelationship = RuleRelationInfo { mCF     = Nothing
                                            }
 
 
+-- a byproduct entry records an outcome of the scheduling run itself
+isByproductRRI :: RuleRelationInfo -> Bool
+isByproductRRI rri =
+    isJust (mRes rri) || isJust (mCycle rri) ||
+    isJust (mPragma rri) || isJust (mArb rri)
+
 rrdbToList :: RuleRelationDB ->
               [((ARuleId,ARuleId),Bool,(Maybe RuleRelationInfo))]
-rrdbToList (RuleRelationDB dset cmap) =
-    let all_pairs = dset `S.union` (M.keysSet cmap)
+rrdbToList (RuleRelationDB dset dense byp) =
+    let cmap = M.union byp dense
+        all_pairs = dset `S.union` (M.keysSet cmap)
     in [ (k, k `S.member` dset, M.lookup k cmap) | k <- S.toList all_pairs ]
 
 rrdbFromList :: [((ARuleId,ARuleId),Bool,(Maybe RuleRelationInfo))] ->
                 RuleRelationDB
 rrdbFromList xs =
     let dset = S.fromList [ k | (k,True,_) <- xs ]
-        cmap = M.fromList [ (k,rri) | (k,_,(Just rri)) <- xs ]
-    in RuleRelationDB dset cmap
+        cmap = [ (k,rri) | (k,_,(Just rri)) <- xs ]
+        (byp, dense) = partition (isByproductRRI . snd) cmap
+    in RuleRelationDB dset (M.fromList dense) (M.fromList byp)
+
+-- reconstruct from the serialized form (a thin file carries an empty
+-- set and only byproduct entries; a -ba-debug-info file carries all)
+rrdbFromSerialized :: [(ARuleId,ARuleId)]
+                   -> [((ARuleId,ARuleId), RuleRelationInfo)]
+                   -> RuleRelationDB
+rrdbFromSerialized dset_list cmap_list =
+    let (byp, dense) = partition (isByproductRRI . snd) cmap_list
+    in RuleRelationDB (S.fromList dset_list)
+                      (M.fromList dense) (M.fromList byp)
+
+-- the conflict entries as a single map, the wire representation
+-- (forces the dense half only when it is non-empty, i.e. fat writes)
+rrdbSerializedConflicts :: RuleRelationDB
+                        -> [((ARuleId,ARuleId), RuleRelationInfo)]
+rrdbSerializedConflicts (RuleRelationDB _ dense byp) =
+    M.toList (M.union byp dense)
+
+-- drop the dense halves before serialization (the default .ba form)
+thinRuleRelationDB :: RuleRelationDB -> RuleRelationDB
+thinRuleRelationDB (RuleRelationDB _ _ byp) =
+    RuleRelationDB S.empty M.empty byp
 
 instance Show RuleRelationDB where
     show rrdb = show (rrdbToList rrdb)
 
 getRuleRelation :: RuleRelationDB -> ARuleId -> ARuleId -> (Bool,RuleRelationInfo)
-getRuleRelation (RuleRelationDB dset cmap) r1 r2 =
+getRuleRelation (RuleRelationDB dset dense byp) r1 r2 =
     let disj = S.member (r1,r2) dset
-        rri  = M.findWithDefault defaultRuleRelationship (r1,r2) cmap
+        rri  = case M.lookup (r1,r2) byp of
+                 Just i  -> i
+                 Nothing -> M.findWithDefault defaultRuleRelationship
+                                              (r1,r2) dense
     in (disj,rri)
 
 -- -----
