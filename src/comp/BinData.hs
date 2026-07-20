@@ -388,6 +388,21 @@ getB = In $ \(IS bc bs off mh) ->
 getI :: In Int
 getI = do { b <- getB; return (fromEnum b) }
 
+-- LEB128: little-endian 7-bit groups, high bit set on all but the last.
+-- Values below 128 cost one byte, below 16384 two, and so on.
+putVarint :: Int -> Out ()
+putVarint n
+    | n < 0     = internalError $ "BinData.putVarint: negative: " ++ show n
+    | n < 0x80  = putB (toEnum n)
+    | otherwise = do putB (toEnum ((n .&. 0x7f) .|. 0x80))
+                     putVarint (n `shiftR` 7)
+
+getVarint :: In Int
+getVarint = go 0 0
+  where go acc sh = do b <- getB
+                       let acc' = acc .|. ((fromEnum b .&. 0x7f) `shiftL` sh)
+                       if b < 0x80 then return acc' else go acc' (sh + 7)
+
 {-
 getBytesRead :: In Integer
 getBytesRead = In $ \is@(IS _ _ _ n) -> (n,is)
@@ -476,15 +491,13 @@ mkLookupIdx get idx =
 -- indexes are assigned in the same top-down order as they are assigned
 -- during writing.  This particularly affects recursive types.
 readShared :: (Bin a, Shared k a) => In a
-readShared = do tag <- getI
+readShared = do tag <- getVarint
                 case tag of
                   0 -> do (idx, dummy) <- newVal
                           v <- readBytes
                           recordVal idx (v `asTypeOf` dummy)
                           return v
-                  1 -> do idx <- readBytes
-                          lookupIdx idx
-                  n -> internalError $ "BinData.readShared: invalid tag " ++ (show tag)
+                  n -> lookupIdx (n - 1)
 
 -- actual Shared instance definitions
 
@@ -1558,11 +1571,16 @@ share _ (IT t)  bc = share' (itype_key t) t bc
 -- share _ (ASL l) bc = share' l l bc
 share _ be      bc = ([be], bc)
 
+-- A shared value is either new (payload follows) or a backreference.
+-- One varint carries both: 0 = new, v = a backref to index v-1.
+-- Interned values repeat constantly, so backref width dominates the
+-- stream: indices below 127 cost a single byte (the old encoding spent
+-- a discriminator byte plus a terminated base-254 integer, 2-4 bytes).
 share' :: (Bin v, Shared k v) => k -> v -> BinCache -> ([BinElem], BinCache)
 share' k x bc =
           case (knownAs k x bc) of
-            (Just idx) -> (out_data $ do { putI 1; writeBytes idx }, bc)
-            Nothing    -> (out_data $ do { putI 0; writeBytes x },
+            (Just idx) -> (out_data $ putVarint (idx + 1), bc)
+            Nothing    -> (out_data $ do { putVarint 0; writeBytes x },
                            addKey k x bc)
 
 
