@@ -23,17 +23,21 @@ import ABin
 import BinData
 import FileIOUtil(writeBinaryFileCatch)
 
+import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import Data.Bits((.&.), shiftR, shiftL, (.|.))
+import Data.List(sort)
+import Data.Word(Word8)
 
 -- import Debug.Trace
 
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-8"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260720-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -423,9 +427,68 @@ instance Bin RuleUses where
     readBytes = do pus <- fromBin; rus <- fromBin; wus <- fromBin
                    return (RuleUses pus rus wus)
 
+-- The exclusive-rules db is pairwise-dense: every disjoint-and-state-
+-- sharing rule pair appears in two adjacency sets, and the generic
+-- per-element list encoding (a tag byte plus an interned-Id reference
+-- per member) costs ~10 bytes per pair.  Instead emit the rule table
+-- once and each adjacency set as one raw blob of varint-encoded deltas
+-- over sorted table indices (~1 byte per member for dense relations).
 instance Bin ExclusiveRulesDB where
-    writeBytes erdb = section "ExclusiveRulesDB" $ toBin (erdbToList erdb)
-    readBytes = do es <- fromBin; return (erdbFromList es)
+    writeBytes (ExclusiveRulesDB emap) =
+        section "ExclusiveRulesDB" $ do
+            let keys  = M.keys emap
+                extra = S.toList
+                            (S.unions [ S.union s1 s2
+                                      | (s1, s2) <- M.elems emap ]
+                             `S.difference` S.fromList keys)
+                table = keys ++ extra
+                idx   = M.fromList (zip table [0 :: Int ..])
+                packSet s = packVarintDeltas
+                                (sort [ idx M.! r | r <- S.toList s ])
+                writeBlob bs = do toBin (length bs); putBs bs
+            toBin table
+            toBin (length keys)
+            mapM_ (\ (s1, s2) -> do writeBlob (packSet s1)
+                                    writeBlob (packSet s2))
+                  (M.elems emap)
+    readBytes =
+        do table <- fromBin
+           nkeys <- fromBin
+           let tmap = M.fromList (zip [0 :: Int ..] (table :: [ARuleId]))
+               readBlob = do n <- fromBin; getN n
+               readSet = do bs <- readBlob
+                            return (S.fromList
+                                        [ tmap M.! i
+                                        | i <- unpackVarintDeltas bs ])
+           entries <- mapM (\ k -> do s1 <- readSet
+                                      s2 <- readSet
+                                      return (k, (s1, s2)))
+                           (take nkeys table)
+           return (ExclusiveRulesDB (M.fromList entries))
+
+-- sorted distinct non-negative ints -> little-endian 7-bit varints of
+-- the successive gaps (first element as-is, then x_i - x_{i-1} - 1)
+packVarintDeltas :: [Int] -> [Word8]
+packVarintDeltas xs =
+    let ds = zipWith (\ prev x -> x - prev - 1) ((-1) : xs) xs
+        varint n | n < 0x80  = [fromIntegral n]
+                 | otherwise = (fromIntegral (n .&. 0x7f) .|. 0x80)
+                               : varint (n `shiftR` 7)
+    in  concatMap varint ds
+
+unpackVarintDeltas :: [Word8] -> [Int]
+unpackVarintDeltas = go (-1)
+  where
+    go _ [] = []
+    go prev bs =
+        let (d, rest) = varint 0 0 bs
+            x = prev + d + 1
+        in  x : go x rest
+    varint acc sh (b:bs)
+        | b < 0x80  = (acc .|. (fromIntegral b `shiftL` sh), bs)
+        | otherwise = varint (acc .|. (fromIntegral (b .&. 0x7f) `shiftL` sh))
+                             (sh + 7) bs
+    varint _ _ [] = internalError "GenABin.unpackVarintDeltas: truncated"
 
 -- wire form is unchanged (a set and one merged conflict list); a thin
 -- db (the default -- see thinRuleRelationDB in writeABin) has an empty
