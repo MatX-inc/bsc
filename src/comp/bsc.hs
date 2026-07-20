@@ -1079,16 +1079,26 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                       "Elaborated " ++ ppString be ++ " module file created: "
            remapP = remapPositionFile (remapPathPrefix flags)
            remapS = remapPath (remapPathPrefix flags)
+           -- asi_sched_order has no reader anywhere (not codegen, not
+           -- Bluesim, not bluetcl, and PPrint omits it so dumpba can't
+           -- show it) -- drop it unconditionally.  Bluesim rederives
+           -- the order it needs by flattening the merged sched graph.
+           sched_info_dead = sched_info { asi_sched_order = [] }
            -- by default the .ba carries only what code generation
            -- consumes: the dense pairwise rule relations (quadratic in
-           -- rules, derivable from the apkg) and the method-conflict
-           -- dump are debug data -- -ba-debug-info serializes them
+           -- rules, derivable from the apkg), the rule-uses map (no .ba
+           -- reader -- its compile-time users run before writeABin, and
+           -- the method-uses map codegen needs is derived from it), and
+           -- the method-conflict dump are debug data -- -ba-debug-info
+           -- serializes them
            sched_info_ba
-               | baDebugInfo flags = sched_info
+               | baDebugInfo flags = sched_info_dead
                | otherwise =
-                   sched_info { asi_rule_relation_db =
-                                    thinRuleRelationDB
-                                        (asi_rule_relation_db sched_info) }
+                   sched_info_dead
+                       { asi_rule_relation_db =
+                             thinRuleRelationDB
+                                 (asi_rule_relation_db sched_info_dead)
+                       , asi_rule_uses_map = M.empty }
            method_dump_ba
                | baDebugInfo flags = methodConflict
                | otherwise         = []
