@@ -3,7 +3,8 @@ module InlineReg (
                   RegInstInfo
                   ) where
 
-import Data.List(partition)
+import Data.List(partition, groupBy)
+import Data.Function(on)
 import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -36,9 +37,14 @@ import BackendNamingConventions
 -- A register whose enable def is the constant 1 (resp. 0) is emitted as an
 -- unconditional update (resp. no update): the enable pin would otherwise
 -- be tied to a constant net, and the guard is dead logic anyway.
+-- The S.Set AId before the [AVInst] names the registers whose updates only
+-- simulation reads. Their assignments are wrapped in translate_off IN PLACE,
+-- inside the always block they share with every other register on that clock
+-- -- not lifted into a block of their own, which would duplicate the reset
+-- structure and hand synthesis a second always block for a methodology flag.
 vInlineReg :: ErrorHandle -> Flags -> M.Map AId AExpr -> S.Set AId ->
-              [AVInst] -> ([VMItem], [RegInstInfo], S.Set AId)
-vInlineReg errh flags def_values used_elsewhere avis =
+              S.Set AId -> [AVInst] -> ([VMItem], [RegInstInfo], S.Set AId)
+vInlineReg errh flags def_values used_elsewhere sim_regs avis =
     let
         vco = flagsToVco flags
 
@@ -64,13 +70,13 @@ vInlineReg errh flags def_values used_elsewhere avis =
 
         -- translate the partitioned RegN/RegUNs into always blocks
         ns_and_uns_items =
-            mapMaybe (vInlineN errh vco en_const) ns_and_uns_by_clock
+            mapMaybe (vInlineN errh vco en_const sim_regs) ns_and_uns_by_clock
 
         -- make a map from clock and reset to the RegAs for that pair
         as_by_clock_and_reset = M.toList (partitionByClockAndReset errh regas)
 
         -- translate the partitioned RegAs into always blocks
-        as_items = mapMaybe (vInlineA vco en_const) as_by_clock_and_reset
+        as_items = mapMaybe (vInlineA vco en_const sim_regs) as_by_clock_and_reset
 
         -- All the registers should all be set in an initial block --
         -- there is no guarantee that they will be reset properly
@@ -131,9 +137,9 @@ mkRegInstInfo errh flags removed_en_defs avi =
 -- Generate an always block for RegN and RegUN on the same clock
 -- (Nothing when every register in the group folded away, e.g. all
 -- uninitialized registers with a constant-0 enable)
-vInlineN :: ErrorHandle -> VConvtOpts -> M.Map AId Bool ->
+vInlineN :: ErrorHandle -> VConvtOpts -> M.Map AId Bool -> S.Set AId ->
             (AExpr, [AVInst]) -> Maybe VMItem
-vInlineN errh vco en_const (clk, avis) =
+vInlineN errh vco en_const sim_regs (clk, avis) =
     let
         -- partition the avis into those with resets and those without
         (regns, reguns) = partition isRegN avis
@@ -144,9 +150,10 @@ vInlineN errh vco en_const (clk, avis) =
         -- translate into statements inside the always block
         body_items =
             -- put a comment here "initialized registers"
-            mapMaybe (translateRegN vco en_const) (M.toList regns_by_reset) ++
+            mapMaybe (translateRegN vco en_const sim_regs)
+                     (M.toList regns_by_reset) ++
             -- put a comment here "uninitialized registers"
-            mapMaybe (translateRegUN vco en_const) reguns
+            mapMaybe (translateRegUN vco en_const sim_regs) reguns
 
         -- event for the surrounding always block
         ev = VEEposedge (vExpr vco clk)
@@ -161,13 +168,13 @@ vInlineN errh vco en_const (clk, avis) =
 
 
 -- generate an always block for all RegA on the same clock and reset
-vInlineA :: VConvtOpts -> M.Map AId Bool ->
+vInlineA :: VConvtOpts -> M.Map AId Bool -> S.Set AId ->
             ((AExpr, AExpr), [AVInst]) -> Maybe VMItem
-vInlineA vco en_const ((clk, rstn), avis) =
+vInlineA vco en_const sim_regs ((clk, rstn), avis) =
     let
         -- create the conditional inside the always block
         -- (same body item as RegN!)
-        m_body_item = translateRegN vco en_const (rstn, avis)
+        m_body_item = translateRegN vco en_const sim_regs (rstn, avis)
 
         -- event for the surrounding always block
         ev = let v_rstn = vExpr vco rstn
@@ -239,14 +246,32 @@ mkRSTAssignment vco avi =
     in
         VAssignA qout init_val
 
-translateRegN :: VConvtOpts -> M.Map AId Bool -> (AExpr, [AVInst]) -> Maybe VStmt
-translateRegN vco en_const (rstn, avis) =
+-- Wrap the statements belonging to simulation-only registers in
+-- translate_off, grouping adjacent ones so a run of them costs one region
+-- rather than one each. Statement order is preserved: the pragma is lexical,
+-- so hiding is purely a matter of where the markers fall.
+hideSimRegs :: S.Set AId -> [(AVInst, VStmt)] -> [VStmt]
+hideSimRegs sim_regs =
+    -- tag once, then group: `on` would re-evaluate the set lookup for every
+    -- comparison groupBy makes within a run
+    concatMap emit . groupBy ((==) `on` fst) . map tag
+  where
+    tag (avi, st) = (avi_vname avi `S.member` sim_regs, st)
+    emit grp@((True, _) : _) = [VTranslateOff (map snd grp)]
+    emit grp                 = map snd grp
+
+translateRegN :: VConvtOpts -> M.Map AId Bool -> S.Set AId ->
+                 (AExpr, [AVInst]) -> Maybe VStmt
+translateRegN vco en_const sim_regs (rstn, avis) =
     let
         -- the assignments on reset
-        rstn_items = map (mkRSTAssignment vco) avis
+        rstn_items = hideSimRegs sim_regs
+                         [ (avi, mkRSTAssignment vco avi) | avi <- avis ]
 
         -- the assignments on enable
-        en_items = mapMaybe (mkENAssignment en_const) avis
+        en_items = hideSimRegs sim_regs
+                       [ (avi, st) | avi <- avis
+                       , Just st <- [mkENAssignment en_const avi] ]
 
         -- RST == `BSV_RESET_VALUE
         v_rstn = vExpr vco rstn
@@ -266,8 +291,13 @@ translateRegN vco en_const (rstn, avis) =
                         then Vif v_rst (vSeq rstn_items)
                         else Vifelse v_rst (vSeq rstn_items) (vSeq en_items)
 
-translateRegUN :: VConvtOpts -> M.Map AId Bool -> AVInst -> Maybe VStmt
-translateRegUN vco en_const avi = mkENAssignment en_const avi
+translateRegUN :: VConvtOpts -> M.Map AId Bool -> S.Set AId ->
+                  AVInst -> Maybe VStmt
+translateRegUN vco en_const sim_regs avi =
+    case mkENAssignment en_const avi of
+        Nothing -> Nothing
+        Just st | avi_vname avi `S.member` sim_regs -> Just (VTranslateOff [st])
+                | otherwise                         -> Just st
 
 
 -- ==============================

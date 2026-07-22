@@ -29,17 +29,23 @@ module mkWhenCurry(CLK,
   input  CLK;
   input  RST_N;
 
+  // synopsys translate_off
   // register pred1
   reg pred1;
   wire pred1$D_IN;
+  // synopsys translate_on
 
+  // synopsys translate_off
   // register pred2
   reg pred2;
   wire pred2$D_IN;
+  // synopsys translate_on
 
+  // synopsys translate_off
   // register switch
   reg switch;
   wire switch$D_IN;
+  // synopsys translate_on
 
   // rule scheduling signals
   wire WILL_FIRE_RL_go;
@@ -50,22 +56,22 @@ module mkWhenCurry(CLK,
   // rule RL_go
   assign WILL_FIRE_RL_go = switch ? pred1 : pred2 ;
 
-  // register pred1
-  assign pred1$D_IN = 1'b0 ;
-
-  // register pred2
-  assign pred2$D_IN = 1'b0 ;
-
-  // register switch
-  assign switch$D_IN = 1'b0 ;
-
   // remaining internal signals
   assign pred1$EN = 1'b0 ;
   assign pred2$EN = 1'b0 ;
   assign switch$EN = 1'b0 ;
 
+  // simulation-only signals (system-task fan-in and scheduling signals kept for waveform dumping)
+  // synopsys translate_off
+  assign pred1$D_IN = 1'b0 ;
+  assign pred2$D_IN = 1'b0 ;
+  assign switch$D_IN = 1'b0 ;
+  // synopsys translate_on
+
   // handling of inlined registers
 
+  // register updates visible only to simulation
+  // synopsys translate_off
   always@(posedge CLK)
   begin
     if (RST_N == `BSV_RESET_VALUE)
@@ -75,7 +81,7 @@ module mkWhenCurry(CLK,
 	switch <= `BSV_ASSIGNMENT_DELAY 1'd0;
       end
   end
-
+  // synopsys translate_on
   // synopsys translate_off
   `ifdef BSV_NO_INITIAL_BLOCKS
   `else // not BSV_NO_INITIAL_BLOCKS

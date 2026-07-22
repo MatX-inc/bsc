@@ -1016,6 +1016,7 @@ instance Bin VStmt where
     writeBytes (VTask i es)      = do putI 11; toBin i; toBin es
     writeBytes (VAssert e es)    = do putI 12; toBin e; toBin es
     writeBytes (VZeroDelay)      = do putI 13
+    writeBytes (VTranslateOff ss) = do putI 14; toBin ss
     readBytes = do
       i <- getI
       case i of
@@ -1035,6 +1036,7 @@ instance Bin VStmt where
         11 -> do i <- fromBin; es <- fromBin; return (VTask i es)
         12 -> do e <- fromBin; es <- fromBin; return (VAssert e es)
         13 -> return VZeroDelay
+        14 -> do ss <- fromBin; return (VTranslateOff ss)
         n -> internalError $ "GenABin(VStmt).readBytes: " ++ show n
 
 instance Bin VEventExpr where

@@ -506,6 +506,13 @@ data VStmt
         | Valways VStmt
         | Vinitial VStmt
         | VSeq [VStmt]
+        -- statements hidden from synthesis in place, WITHOUT moving them out
+        -- of the block they belong to. The pragma is lexical, so the region
+        -- may sit inside a procedural block as long as what survives stays
+        -- syntactically valid -- which whole statements do. Splitting the
+        -- enclosing always block instead would duplicate the reset structure
+        -- and change the netlist's shape for every reader.
+        | VTranslateOff [VStmt]
         | Vcasex { vs_case_expr :: VExpr,
                    vs_case_arms :: [VCaseArm],
                    vs_parallel :: Bool,
@@ -535,6 +542,10 @@ instance PPrint VStmt where
              sep [text "initial", pPrint d 0 s] $$
              text "`endif // BSV_NO_INITIAL_BLOCKS"
         pPrint d p (VSeq ss) = text "begin" $+$ (text "  " <> ppLines d ss) $+$ text "end"
+        pPrint d p (VTranslateOff ss) =
+            mkSynthPragma "translate_off" $+$
+            ppLines d ss $+$
+            mkSynthPragma "translate_on"
         pPrint d p s@(Vcasex {}) =
             (text "casex" <+> pparen True (pPrint d 0 (vs_case_expr s))) <+>
                 pprintCaseAttributes (vs_parallel s) (vs_full s) $+$
@@ -582,6 +593,7 @@ instance NFData VStmt where
     rnf (Valways stmt) = rnf stmt
     rnf (Vinitial stmt) = rnf stmt
     rnf (VSeq stmts) = rnf stmts
+    rnf (VTranslateOff stmts) = rnf stmts
     rnf (Vcasex expr arms par full) = rnf4 expr arms par full
     rnf (Vcase expr arms par full) = rnf4 expr arms par full
     rnf (VAssign lval expr) = rnf2 lval expr
