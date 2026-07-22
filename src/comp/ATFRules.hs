@@ -52,7 +52,7 @@
 -- domain and answers Nothing.  No ATF-carrying family in the current
 -- libraries does this.
 
-module ATFRules(atfReduceGroundApp, 
+module ATFRules(atfReduceGroundApp,
     ATFRules,
     buildATFRules,
     atfReduceGround,
