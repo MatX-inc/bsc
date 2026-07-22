@@ -699,7 +699,8 @@ aVerilog errh flags pps aspack0 ffmap =
         -- as well as defs inlinded into foreign blocks.
         foreign_writes = concatMap afc_writes $ concatMap snd fs
         (foreign_decls_group, defmap7) =
-            groupForeignBlockDefs vDef (foreign_writes ++ defs_in_foreign_blocks) defmap6
+            groupForeignBlockDefs vDef synth_live_ids
+                (foreign_writes ++ defs_in_foreign_blocks) defmap6
 
         -- -----
         -- other
@@ -994,22 +995,36 @@ groupMuxDefs vDef si ds =
         (mux_decl_group, mux_def_group, other_defs)
 
 -- returns
---  * group for decls (of regs for foreign function assignments)
+--  * groups for decls (of regs for foreign function assignments)
 --  * remaining ADefs
 -- Does not return a group of defs because these decls are assigned
 -- in the foreign function block.
-groupForeignBlockDefs :: (ADef -> [VMItem]) -> [AId] -> M.Map AId ADef ->
-                ([VMItem], M.Map AId ADef)
-groupForeignBlockDefs _ [] ds = ([], ds)
-groupForeignBlockDefs vDef foreign_block_ids  ds =
+-- A decl whose value is read by synthesized logic is emitted outside
+-- the translate_off group: hiding the only declaration of a
+-- synthesis-visible reference is an error to lint tools.
+groupForeignBlockDefs :: (ADef -> [VMItem]) -> S.Set AId -> [AId] ->
+                M.Map AId ADef -> ([VMItem], M.Map AId ADef)
+groupForeignBlockDefs _ _ [] ds = ([], ds)
+groupForeignBlockDefs vDef synth_live_ids foreign_block_ids ds =
     let (foreign_defs, other_defs) = findADefs foreign_block_ids ds
-        (foreign_vdecls, foreign_vdefs) = mkVDeclsAndDefs vDef foreign_defs
+        (live_defs, sim_defs) =
+            partition (\ (ADef i _ _ _) -> i `S.member` synth_live_ids)
+                      foreign_defs
+        (live_vdecls, live_vdefs) = mkVDeclsAndDefs vDef live_defs
+        (sim_vdecls, sim_vdefs) = mkVDeclsAndDefs vDef sim_defs
+        live_group =
+            vGroupWithComment False live_vdecls
+                ["registers assigned by system tasks," ++
+                 " read by synthesized logic"]
         comment = ["declarations used by system tasks"]
-        foreign_vgroup = VMGroup { vg_translate_off = True
-                                 , vg_body = [foreign_vdecls]
-                                 }
-    in case foreign_vdefs of
-         [] -> ([VMComment comment foreign_vgroup], other_defs)
+        sim_vgroup = VMGroup { vg_translate_off = True
+                             , vg_body = [sim_vdecls]
+                             }
+        sim_group = if null sim_vdecls
+                    then []
+                    else [VMComment comment sim_vgroup]
+    in case live_vdefs ++ sim_vdefs of
+         [] -> (live_group ++ sim_group, other_defs)
          _  -> internalError ("groupForeignBlockDefs: " ++ ppReadable (foreign_block_ids, ds))
 
 -- ----------
