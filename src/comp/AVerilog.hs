@@ -43,7 +43,7 @@ import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
 import BackendNamingConventions(isRegInst, isClockCrossingRegInst,
-                                isInoutConnect, mkQOUT)
+                                isInoutConnect, mkDIN, mkEN, mkQOUT)
 import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getDPIInstantiations)
 import qualified GraphWrapper as G
 
@@ -452,8 +452,10 @@ aVerilog errh flags pps aspack0 ffmap =
          inout_rewire_map,
          inlined_submod_comments,
          unread_reg_warns,
-         folded_en_ids)
-             = genInstances errh flags foreignfunc_blocks vDef aspack
+         folded_en_ids,
+         sim_reg_input_ids)
+             = genInstances errh flags foreignfunc_blocks vDef
+                            sim_only_reg_insts aspack
 
         -- currently, inst_blocks are only from inlined registers
         -- (the always blocks and initial blocks)
@@ -519,11 +521,56 @@ aVerilog errh flags pps aspack0 ffmap =
         -- the translate_off region along with its consumers, so synthesis
         -- and lint tools never see logic that drives nothing.
 
+        -- the same inlined-register partition genInstances emits with,
+        -- so liveness can trace through registers by naming convention
+        -- (rooting at the rendered register blocks would make liveness
+        -- depend on the partition it computes)
+        (inout_connect_avis, inlined_reg_avis, noninlined_avis) =
+            sortedInstancePartitions flags aspack
+
+        -- a register emitted in the synthesis view needs its inputs
+        -- there too: live registers pull them through these edges;
+        -- registers kept in the synthesis view without being live
+        -- (dead state, or state read only by dead logic) get their
+        -- inputs as plain roots instead.
+        -- The D_IN/EN wires cover the declared-wire form; when
+        -- vInlineReg instead inlines those defs' expressions into the
+        -- update block (its def_values lookup), the def disappears
+        -- from the emitted stream, so the edge also carries the
+        -- expressions' variables from the original package defs
+        -- (e.g. a PulseWire whas in an inlined enable).
+        aspkg_def_map :: M.Map AId AExpr
+        aspkg_def_map =
+            M.fromList [ (i, e) | ADef i _ e _ <- aspkg_values aspack ]
+        reg_fanin_ids :: AVInst -> [AId]
+        reg_fanin_ids avi =
+            let look i = maybe [] aVars (M.lookup i aspkg_def_map)
+            in  mkDIN avi : mkEN avi :
+                look (mkDIN avi) ++ look (mkEN avi) ++
+                concatMap aVars (avi_iargs avi)
+        reg_edges :: M.Map AId [AId]
+        reg_edges =
+            M.fromList [ (mkQOUT avi, reg_fanin_ids avi)
+                       | avi <- inlined_reg_avis ]
+        -- every register that is NOT sim-reachable stays in the
+        -- synthesis view (live ones redundantly so), so its fan-in
+        -- must stay declared there too
+        kept_reg_roots =
+            concat [ reg_fanin_ids avi
+                   | avi <- inlined_reg_avis
+                   , mkQOUT avi `S.notMember` sim_reachable_ids ]
+
         -- ids read by anything synthesis can see: module outputs and
-        -- inouts, submodule instantiations, the inlined register blocks,
-        -- and scan structures. Probe input defs are deliberately kept
-        -- sinks (the Probe instance itself is deleted), so they seed
-        -- liveness to keep their fan-in declared alongside them.
+        -- inouts, submodule instantiations (their connection def
+        -- groups carry both the port wires and the expressions feeding
+        -- them; instance args cover the modes where those groups are
+        -- empty), and scan structures. Probe input defs are
+        -- deliberately kept sinks (the Probe instance itself is
+        -- deleted), so they seed liveness to keep their fan-in
+        -- declared alongside them. (probe_ins and inst_def_groups are
+        -- the roots taken from genInstances output; the probe and
+        -- submodule machinery is independent of the sim-register
+        -- partition passed in, so this is not a cycle.)
         synth_root_ids :: S.Set AId
         synth_root_ids =
             S.fromList $
@@ -532,12 +579,17 @@ aVerilog errh flags pps aspack0 ffmap =
                  in  map vidToId probe_ins) ++
                 concatMap aVars
                     [ e | ADef _ _ e _ <- aspkg_inout_values aspack ] ++
-                map vidToId
-                    (vuses (inst_decl_groups ++ inst_def_groups ++
-                            inst_blocks ++ scanDefs))
+                concatMap (aVars . avi_iargs)
+                    (inout_connect_avis ++ noninlined_avis) ++
+                map vidToId (vuses (inst_def_groups ++ scanDefs)) ++
+                kept_reg_roots
 
         def_uses_map :: M.Map AId [AId]
         def_uses_map = M.fromList [ (i, aVars e) | ADef i _ e _ <- ds ]
+
+        -- def fan-in plus the register Q -> inputs edges
+        use_edges :: M.Map AId [AId]
+        use_edges = M.unionWith (++) def_uses_map reg_edges
 
         growLive :: S.Set AId -> [AId] -> S.Set AId
         growLive live [] = live
@@ -545,9 +597,24 @@ aVerilog errh flags pps aspack0 ffmap =
             | i `S.member` live = growLive live ws
             | otherwise =
                 growLive (S.insert i live)
-                         (M.findWithDefault [] i def_uses_map ++ ws)
+                         (M.findWithDefault [] i use_edges ++ ws)
 
         synth_live_ids = growLive S.empty (S.toList synth_root_ids)
+
+        -- registers some simulation construct transitively reads, but
+        -- nothing synthesizable does: genInstances emits their
+        -- declaration and update inside translate_off. Registers read
+        -- by NOTHING reachable -- dead state, or state read only by
+        -- dead logic -- stay visible in the synthesis view instead:
+        -- hiding them would paper over a genuine source issue, and
+        -- moving them would strand their (dead-dropped) fan-in.
+        sim_only_reg_insts :: S.Set AId
+        sim_only_reg_insts =
+            S.fromList [ avi_vname avi
+                       | avi <- inlined_reg_avis
+                       , let q = mkQOUT avi
+                       , q `S.notMember` synth_live_ids
+                       , q `S.member` sim_reachable_ids ]
 
         -- exclude ids the foreign-block machinery already declares
         foreign_decl_ids =
@@ -566,7 +633,10 @@ aVerilog errh flags pps aspack0 ffmap =
                          (concatMap snd subs ++ concatMap snd regs ++
                           rwire_ins ++ probe_ins ++
                           inst_declared_signals))
-                `S.difference` inlined_port_ids
+                `S.difference`
+                -- translate_off registers take their input decls with
+                -- them, so those defs must downgrade too
+                (inlined_port_ids `S.union` sim_reg_input_ids)
 
         sim_only_ids :: S.Set AId
         sim_only_ids =
@@ -629,9 +699,19 @@ aVerilog errh flags pps aspack0 ffmap =
 
         (sim_only_decls, sim_only_defs) = mkVDeclsAndDefs vDef sim_only_ds
 
+        -- input wires of translate_off registers are declared by their
+        -- relocated register group, so this group must not redeclare
+        isSimRegInputDecl =
+            isDeclFromList $
+                S.fromList [ vId i | i <- S.toList sim_reg_input_ids ]
+
         sim_only_group =
-            let decls = filter (not . isPreDeclared)
-                               (mergeCommonDecl sim_only_decls)
+            -- filter before merging: a merged decl can mix vars that
+            -- are declared elsewhere with ones that are not
+            let decls = mergeCommonDecl
+                            (filter (\ d -> not (isPreDeclared d) &&
+                                            not (isSimRegInputDecl d))
+                                    sim_only_decls)
                 body = filter (not . null) [decls, sort sim_only_defs]
                 comment = ["simulation-only signals (system-task fan-in and" ++
                            " scheduling signals kept for waveform dumping)"]
@@ -1149,7 +1229,33 @@ filterSharedInout args =
 -- * "ifc args", which are handled like instantiations
 --  XXX should make the return type a structure.
 -- XXX this function is too big
-genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) -> ASPackage ->
+
+-- The state instances in emission order, split into inout-connects,
+-- inlined registers, and everything else. The caller's liveness pass
+-- and genInstances' emission must agree on which instances are
+-- inlined registers, so both go through this one function.
+sortedInstancePartitions :: Flags -> ASPackage ->
+                            ([AVInst], [AVInst], [AVInst])
+sortedInstancePartitions flags aspack =
+    let sortAVInst a b = cmpIdByName (avi_vname a) (avi_vname b)
+        sorted_instances = sortBy sortAVInst (aspkg_state_instances aspack)
+        (inout_connect, not_inout_connect) =
+            if (removeInoutConnect flags)
+            then partition isInoutConnect sorted_instances
+            else ([], sorted_instances)
+        should_inline x = isRegInst x &&
+                          ((not (isClockCrossingRegInst x)) || (removeCross flags))
+        (inlined_regs, noninlined) =
+            if (removeReg flags)
+            then partition should_inline not_inout_connect
+            else ([], not_inout_connect)
+    in  (inout_connect, inlined_regs, noninlined)
+
+genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) ->
+                S.Set AId ->  -- inlined regs (by inst name) whose whole
+                              -- emission moves into translate_off; must
+                              -- only be consumed by block/decl grouping
+                ASPackage ->
                 ([ADef],    -- filtered (not yet converted) package defs
                  [VMItem],  -- decl groups
                  [VMItem],  -- def groups
@@ -1163,8 +1269,9 @@ genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) -> ASPack
                  M.Map AId AId, -- inout rewiring map
                  [String],  -- toplevel comments for inlined submodules
                  [EMsg],    -- unread-register warnings
-                 S.Set AId) -- folded constant-enable defs kept for dumping
-genInstances errh flags ff_blocks vDef aspack =
+                 S.Set AId, -- folded constant-enable defs kept for dumping
+                 S.Set AId) -- input wires of the translate_off registers
+genInstances errh flags ff_blocks vDef sim_reg_insts aspack =
     let
 
     -- ----------
@@ -1189,27 +1296,19 @@ genInstances errh flags ff_blocks vDef aspack =
 
         parent_ps = map fst (aspkg_parameters aspack)
 
-    -- ----------
-    -- Sort the instances by name so they are easier to find,
-    -- in the generated Verilog
-
-        sortAVInst :: AVInst -> AVInst -> Ordering
-        sortAVInst a b = cmpIdByName (avi_vname a) (avi_vname b)
-
-        aspkg_instances :: [AVInst]
-        aspkg_instances = sortBy sortAVInst (aspkg_state_instances aspack)
+    -- -----------
+    -- state instance partition (shared with the caller's liveness pass)
+    -- (sorted by name so instances are easier to find in the Verilog)
+        inout_connect_instances :: [AVInst]
+        inlined_reg_instances :: [AVInst]
+        noninlined_aspkg_instances :: [AVInst]
+        (inout_connect_instances,
+         inlined_reg_instances,
+         noninlined_aspkg_instances) = sortedInstancePartitions flags aspack
 
     -- -----------
     -- Inline inout connections
     -- to pacify some picky tools (e.g. Xilinx)
-        inout_connect_instances :: [AVInst]
-        not_inout_connect_instances :: [AVInst]
-        (inout_connect_instances,
-         not_inout_connect_instances) =
-         if (removeInoutConnect flags)
-         then partition isInoutConnect aspkg_instances
-         else ([], aspkg_instances)
-
         mkInoutPair [ASPort t1 i1, ASPort t2 i2] | t1 == t2 = (i1, i2)
         mkInoutPair l = internalError ("bad inout connect: " ++ ppReadable (l, inout_connect_instances))
 
@@ -1241,15 +1340,6 @@ genInstances errh flags ff_blocks vDef aspack =
               M.insert i1 [i1,i2] rcm)
            else internalError ("addInoutPair: " ++ ppReadable ((i1,i2),cm,rcm))
     -- ----------
-    -- separate the Reg* instances, when inlining registers
-
-        inlined_reg_instances :: [AVInst]
-        noninlined_aspkg_instances :: [AVInst]
-        should_inline x = isRegInst x && ((not (isClockCrossingRegInst x)) || (removeCross flags))
-        (inlined_reg_instances, noninlined_aspkg_instances) =
-            if (removeReg flags)
-            then partition should_inline not_inout_connect_instances
-            else ([], not_inout_connect_instances)
 
         (inlined_reg_comments, noninlinedreg_comments) =
             let reg_inst_ids = map avi_vname inlined_reg_instances
@@ -1275,14 +1365,65 @@ genInstances errh flags ff_blocks vDef aspack =
         -- as "reg" instead of "wire"), to declare the inputs (separate from
         -- their assignments), and to keep track of any CLK/RSTN uses for
         -- removed unused ports on other modules;
-        -- constant enable defs it folded away come back for removal below
-        (inlined_reg_blocks, reg_infos, folded_en_ids) =
+        -- constant enable defs it folded away come back for removal below.
+        -- This info pass runs over ALL inlined regs: reg_inputs, reg_uses
+        -- and folded_en_ids feed the def pipeline whose liveness decides
+        -- sim_reg_insts, so they must not depend on that partition.
+        (_, reg_infos, folded_en_ids) =
             vInlineReg errh flags reg_def_values ids_used_elsewhere
                        inlined_reg_instances
 
-        -- generate the reg/wire declarations
-        reg_decl_groups =
-            map (mkRegGroup sos sztm inlined_reg_comments) reg_infos
+        -- update blocks, split so registers read only by simulation
+        -- constructs can sit inside translate_off (a register's update
+        -- shares its clock's always block, so hiding it requires its
+        -- own block)
+        (sim_reg_avis, live_reg_avis) =
+            partition ((`S.member` sim_reg_insts) . avi_vname)
+                      inlined_reg_instances
+        (live_reg_blocks, _, _) =
+            vInlineReg errh flags reg_def_values ids_used_elsewhere
+                       live_reg_avis
+        (sim_reg_blocks, _, _) =
+            vInlineReg errh flags reg_def_values ids_used_elsewhere
+                       sim_reg_avis
+        -- translate_off does not nest, and some blocks arrive already
+        -- self-guarded (the initial block is a VMStmt carrying its own
+        -- translate_off): wrap only the unguarded items, one by one
+        -- (an inner translate_on would re-enable translation for
+        -- whatever follows it inside an enclosing region)
+        selfGuarded (VMGroup { vg_translate_off = True }) = True
+        selfGuarded (VMStmt { vi_translate_off = True }) = True
+        selfGuarded (VMComment _ i) = selfGuarded i
+        selfGuarded _ = False
+        wrapSimRegBlock item
+            | selfGuarded item = item
+            | otherwise =
+                VMGroup { vg_translate_off = True, vg_body = [[item]] }
+        inlined_reg_blocks =
+            live_reg_blocks ++
+            if null sim_reg_blocks
+            then []
+            else [VMComment ["register updates visible only to simulation"]
+                      (VMGroup { vg_translate_off = False
+                               , vg_body = [map wrapSimRegBlock
+                                                sim_reg_blocks] })]
+
+        -- generate the reg/wire declarations; a sim-only register's
+        -- decl group is surrounded in place, keeping declaration order
+        mkRegDeclGroup info@(inst_vid, _, _, _, _) =
+            let g = mkRegGroup sos sztm inlined_reg_comments info
+            in  if vidToId inst_vid `S.member` sim_reg_insts
+                then VMGroup { vg_translate_off = True, vg_body = [[g]] }
+                else g
+        reg_decl_groups = map mkRegDeclGroup reg_infos
+
+        -- input wires of the translate_off registers: their decls move
+        -- with the register, so their defs must not stay in the open
+        sim_reg_input_ids =
+            S.fromList [ vidToId v
+                       | (inst_vid, _, _, inps, _) <- reg_infos
+                       , vidToId inst_vid `S.member` sim_reg_insts
+                       , (v, _) <- inps ]
 
         -- Registers whose value nothing reads: not any def, instance
         -- argument, foreign (system task) call, or inout -- dead state.
@@ -1512,7 +1653,8 @@ genInstances errh flags ff_blocks vDef aspack =
              inout_rewire_map,
              top_level_comments,
              unread_reg_warns,
-             folded_en_ids)
+             folded_en_ids,
+             sim_reg_input_ids)
 
 
 -- a wrapper for mkInstGroup,
