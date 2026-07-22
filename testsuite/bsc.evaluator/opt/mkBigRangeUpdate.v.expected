@@ -32,27 +32,29 @@ module mkBigRangeUpdate(CLK,
   // register x
   reg [65535 : 0] x;
   wire [65535 : 0] x$D_IN;
-  wire x$EN;
 
   // register y
   reg [16383 : 0] y;
   wire [16383 : 0] y$D_IN;
-  wire y$EN;
+
+  // remaining internal signals
+  wire x$EN, y$EN;
 
   // register x
   assign x$D_IN = { x[65535:32769], y, x[16384:0] } ;
-  assign x$EN = 1'd1 ;
 
   // register y
   assign y$D_IN = 16384'h0 ;
+
+  // remaining internal signals
+  assign x$EN = 1'd1 ;
   assign y$EN = 1'b0 ;
 
   // handling of inlined registers
 
   always@(posedge CLK)
   begin
-    if (x$EN) x <= `BSV_ASSIGNMENT_DELAY x$D_IN;
-    if (y$EN) y <= `BSV_ASSIGNMENT_DELAY y$D_IN;
+    x <= `BSV_ASSIGNMENT_DELAY x$D_IN;
   end
 
   // synopsys translate_off

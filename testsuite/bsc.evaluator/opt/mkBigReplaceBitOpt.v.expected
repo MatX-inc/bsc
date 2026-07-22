@@ -32,11 +32,13 @@ module mkBigReplaceBitOpt(CLK,
   // register r
   reg [65535 : 0] r;
   wire [65535 : 0] r$D_IN;
-  wire r$EN;
 
   // register s
   reg s;
-  wire s$D_IN, s$EN;
+  wire s$D_IN;
+
+  // remaining internal signals
+  wire r$EN, s$EN;
 
   // register r
   assign r$D_IN =
@@ -72,18 +74,19 @@ module mkBigReplaceBitOpt(CLK,
 	       s,
 	       s,
 	       r[0] } ;
-  assign r$EN = 1'd1 ;
 
   // register s
   assign s$D_IN = 1'b0 ;
+
+  // remaining internal signals
+  assign r$EN = 1'd1 ;
   assign s$EN = 1'b0 ;
 
   // handling of inlined registers
 
   always@(posedge CLK)
   begin
-    if (r$EN) r <= `BSV_ASSIGNMENT_DELAY r$D_IN;
-    if (s$EN) s <= `BSV_ASSIGNMENT_DELAY s$D_IN;
+    r <= `BSV_ASSIGNMENT_DELAY r$D_IN;
   end
 
   // synopsys translate_off

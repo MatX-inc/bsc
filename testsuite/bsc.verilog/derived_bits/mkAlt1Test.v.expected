@@ -71,6 +71,8 @@ module mkAlt1Test(CLK,
   // register r
   reg [2 : 0] r;
   wire [2 : 0] r$D_IN;
+
+  // remaining internal signals
   wire r$EN;
 
   // value method isA
@@ -91,14 +93,11 @@ module mkAlt1Test(CLK,
 
   // register r
   assign r$D_IN = 3'h0 ;
+
+  // remaining internal signals
   assign r$EN = 1'b0 ;
 
   // handling of inlined registers
-
-  always@(posedge CLK)
-  begin
-    if (r$EN) r <= `BSV_ASSIGNMENT_DELAY r$D_IN;
-  end
 
   // synopsys translate_off
   `ifdef BSV_NO_INITIAL_BLOCKS

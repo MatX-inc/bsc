@@ -32,17 +32,21 @@ module mkBigXor(CLK,
   // register x
   reg [65535 : 0] x;
   wire [65535 : 0] x$D_IN;
+
+  // remaining internal signals
   wire x$EN;
 
   // register x
   assign x$D_IN = { x[65535:32768], ~x[32767:16384], x[16383:0] } ;
+
+  // remaining internal signals
   assign x$EN = 1'd1 ;
 
   // handling of inlined registers
 
   always@(posedge CLK)
   begin
-    if (x$EN) x <= `BSV_ASSIGNMENT_DELAY x$D_IN;
+    x <= `BSV_ASSIGNMENT_DELAY x$D_IN;
   end
 
   // synopsys translate_off
