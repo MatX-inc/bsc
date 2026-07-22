@@ -33,7 +33,7 @@ import Flags(Flags, systemVerilogOutput,
              useDPI, verilogDeclareAllFirst)
 import Id
 import IntLit(IntLit(..))
-import Prim(PrimOp(PrimConcat))
+import Prim(PrimOp(PrimConcat, PrimExtract, PrimSignExt, PrimZeroExt))
 import Pragma(PProp(..))
 import ASyntax
 import ASyntaxUtil
@@ -65,7 +65,7 @@ import qualified GraphWrapper as G
 -- XXX this function is too big
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
-aVerilog errh flags pps aspack ffmap =
+aVerilog errh flags pps aspack0 ffmap =
     do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
@@ -134,6 +134,10 @@ aVerilog errh flags pps aspack ffmap =
                     [ (pos, WSVReservedIdent name) | (name, pos) <- sv_clashes ]
          return vprog
   where
+        -- narrow replication defs whose top bits nothing reads
+        -- (before anything else looks at the def widths)
+        aspack = narrowReplicationDefs aspack0
+
         -- vco carries the foreign-function map and def widths so that DPI call
         -- sites can be monomorphized (name-mangled by concrete width)
         vco = (flagsToVco flags)
@@ -1981,6 +1985,138 @@ isADefFromMap :: M.Map AId a -> ADef -> Bool
 isADefFromMap m (ADef i _ _ _) = M.member i m
 
 -- ==============================
+
+-- ==============================
+-- Narrow same-element replication defs to their used width
+--
+-- A def like  x = {1025{c}}  whose every reader extracts only low bits
+-- (x[1023:0]) leaves the top bits driven but never loaded, which lint
+-- tools report bit by bit.  When every use of such a def is a
+-- constant-bounded extract, narrow the def to the widest bit read by
+-- dropping the excess replication count.
+
+narrowReplicationDefs :: ASPackage -> ASPackage
+narrowReplicationDefs aspack =
+    let
+        defs = aspkg_values aspack
+
+        -- every reference to a def: (Just hi) for a constant-bounded
+        -- extract of it, Nothing for any other kind of use
+        useExpr :: AExpr -> [(AId, Maybe Integer)]
+        useExpr (APrim _ _ PrimExtract
+                     [ASDef _ i, ASInt _ _ (IntLit _ _ h), ASInt {}]) =
+            [(i, Just h)]
+        useExpr (ASDef _ i) = [(i, Nothing)]
+        useExpr (APrim _ _ _ es) = concatMap useExpr es
+        useExpr (ANoInlineFunCall _ _ _ es) = concatMap useExpr es
+        useExpr (AFunCall _ _ _ _ es) = concatMap useExpr es
+        useExpr (AMethCall _ _ _ es) = concatMap useExpr es
+        useExpr (ATuple _ es) = concatMap useExpr es
+        useExpr (ATupleSel _ e _) = useExpr e
+        useExpr _ = []
+
+        fcalls = concatMap snd (aspkg_foreign_calls aspack)
+
+        all_uses =
+            concatMap useExpr
+                ([ e | ADef _ _ e _ <- defs ] ++
+                 [ e | ADef _ _ e _ <- aspkg_inout_values aspack ] ++
+                 concatMap avi_iargs (aspkg_state_instances aspack) ++
+                 concatMap afc_args fcalls ++
+                 concatMap afc_resets fcalls)
+
+        -- per def: Just maxhi when every use is a constant extract
+        use_summary :: M.Map AId (Maybe Integer)
+        use_summary = M.fromListWith comb all_uses
+          where comb _ Nothing = Nothing
+                comb Nothing _ = Nothing
+                comb (Just a) (Just b) = Just (max a b)
+
+        -- ports and inlined wire ports are emitted at their full
+        -- declared width regardless of expression uses
+        fixed_width_ids =
+            S.fromList ([ o | (o, _) <- aspkg_outputs aspack ] ++
+                        [ o | (o, _) <- aspkg_inouts aspack ] ++
+                        aspkg_inlined_ports aspack)
+
+        narrowDef d@(ADef i (ATBit w) rhs props)
+            | i `S.notMember` fixed_width_ids,
+              Just (Just maxhi) <- M.lookup i use_summary,
+              let neww = maxhi + 1,
+              neww < w,
+              Just e' <- narrowRhs neww rhs
+            = ADef i (ATBit neww) e' props
+        narrowDef d = d
+
+        -- widths of the defs that were narrowed
+        narrowed :: M.Map AId Integer
+        narrowed = M.fromList
+            [ (i, w') | (ADef i (ATBit w) _ _, ADef _ (ATBit w') _ _)
+                            <- zip defs defs', w' /= w ]
+
+        -- rewrite the uses: retype the reference, and drop an extract
+        -- that now spans the whole (narrowed) def
+        fixExpr :: AExpr -> AExpr
+        fixExpr (APrim p t PrimExtract
+                     [ASDef _ i,
+                      hi@(ASInt _ _ (IntLit _ _ h)),
+                      lo@(ASInt _ _ (IntLit _ _ l))])
+            | Just neww <- M.lookup i narrowed =
+                let inner = ASDef (ATBit neww) i
+                in  if l == 0 && h == neww - 1
+                    then inner
+                    else APrim p t PrimExtract [inner, hi, lo]
+        fixExpr (APrim p t op es) = APrim p t op (map fixExpr es)
+        fixExpr (ANoInlineFunCall t i f es) =
+            ANoInlineFunCall t i f (map fixExpr es)
+        fixExpr e@(AFunCall {}) = e { ae_args = map fixExpr (ae_args e) }
+        fixExpr (AMethCall t o m es) = AMethCall t o m (map fixExpr es)
+        fixExpr (ATuple t es) = ATuple t (map fixExpr es)
+        fixExpr (ATupleSel t e n) = ATupleSel t (fixExpr e) n
+        fixExpr e = e
+
+        fixDef (ADef i t e props) = ADef i t (fixExpr e) props
+        fixInst avi = avi { avi_iargs = map fixExpr (avi_iargs avi) }
+        fixFCall afc = afc { afc_args = map fixExpr (afc_args afc),
+                             afc_resets = map fixExpr (afc_resets afc) }
+        fixFBlock (clks, afcs) = (clks, map fixFCall afcs)
+
+        defs' = map narrowDef defs
+
+        -- rebuild a replication/extension RHS at the narrower width
+        -- (only when it still covers the un-extended operand)
+        narrowRhs :: Integer -> AExpr -> Maybe AExpr
+        narrowRhs neww (APrim p _ PrimConcat es)
+            | allSame es,
+              let we = aSize (headOrErr "narrowReplicationDefs" es),
+              we > 0,
+              neww `mod` we == 0
+            = let newk = neww `div` we
+                  es' = take (fromInteger newk) es
+              in  Just $ case es' of
+                           [e] -> e
+                           _   -> APrim p (ATBit neww) PrimConcat es'
+        narrowRhs neww (APrim p _ op [e])
+            | op == PrimSignExt || op == PrimZeroExt =
+                let we = aSize e
+                in  if neww == we
+                    then Just e
+                    else if neww > we
+                    then Just (APrim p (ATBit neww) op [e])
+                    else Nothing
+        narrowRhs _ _ = Nothing
+    in
+        if M.null narrowed
+        then aspack
+        else aspack { aspkg_values = map fixDef defs'
+                    , aspkg_inout_values =
+                          map fixDef (aspkg_inout_values aspack)
+                    , aspkg_state_instances =
+                          map fixInst (aspkg_state_instances aspack)
+                    , aspkg_foreign_calls =
+                          map fixFBlock (aspkg_foreign_calls aspack)
+                    }
+
 
 -- If the wire connected to the port of an instantiated submodule is unused,
 -- then remove the wire and leave the port unconnected (it will appear as
