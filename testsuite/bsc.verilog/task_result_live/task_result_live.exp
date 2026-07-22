@@ -1,0 +1,18 @@
+#
+# A value assigned by a foreign function but read by synthesized logic must
+# be declared outside translate_off.  Hiding the only declaration of a
+# synthesis-visible reference leaves it undeclared, and one such error
+# aborts the whole analysis -- so this is about the netlist being valid at
+# all, not about tidiness.
+#
+
+# The live/simulation split of this group is unconditional -- it is about
+# the netlist being valid, not about the partitioning flag -- so the
+# default compile is the one that matters.
+compile_verilog_pass TaskResultLive.bsv mkTaskResultLive
+
+sed mkTaskResultLive.v mkTaskResultLive-synth.v {-e "/translate_off/,/translate_on/d"}
+
+# the declaration the register input refers to survives the strip
+find_regexp mkTaskResultLive-synth.v {registers assigned by system tasks, read by synthesized logic}
+find_regexp mkTaskResultLive-synth.v {held\$D_IN}
