@@ -5,7 +5,7 @@
 // Ports:
 // Name                         I/O  size props
 // CLK                            I     1 clock
-// RST_N                            I     1 reset
+// RST_N                          I     1 reset
 //
 // No combinational paths from inputs to outputs
 //
@@ -31,32 +31,37 @@ module mkWhenCurry(CLK,
 
   // register pred1
   reg pred1;
-  wire pred1$D_IN, pred1$EN;
+  wire pred1$D_IN;
 
   // register pred2
   reg pred2;
-  wire pred2$D_IN, pred2$EN;
+  wire pred2$D_IN;
 
   // register switch
   reg switch;
-  wire switch$D_IN, switch$EN;
+  wire switch$D_IN;
 
   // rule scheduling signals
   wire WILL_FIRE_RL_go;
+
+  // remaining internal signals
+  wire pred1$EN, pred2$EN, switch$EN;
 
   // rule RL_go
   assign WILL_FIRE_RL_go = switch ? pred1 : pred2 ;
 
   // register pred1
   assign pred1$D_IN = 1'b0 ;
-  assign pred1$EN = 1'b0 ;
 
   // register pred2
   assign pred2$D_IN = 1'b0 ;
-  assign pred2$EN = 1'b0 ;
 
   // register switch
   assign switch$D_IN = 1'b0 ;
+
+  // remaining internal signals
+  assign pred1$EN = 1'b0 ;
+  assign pred2$EN = 1'b0 ;
   assign switch$EN = 1'b0 ;
 
   // handling of inlined registers
@@ -68,12 +73,6 @@ module mkWhenCurry(CLK,
         pred1 <= `BSV_ASSIGNMENT_DELAY 1'd1;
 	pred2 <= `BSV_ASSIGNMENT_DELAY 1'd1;
 	switch <= `BSV_ASSIGNMENT_DELAY 1'd0;
-      end
-    else
-      begin
-        if (pred1$EN) pred1 <= `BSV_ASSIGNMENT_DELAY pred1$D_IN;
-	if (pred2$EN) pred2 <= `BSV_ASSIGNMENT_DELAY pred2$D_IN;
-	if (switch$EN) switch <= `BSV_ASSIGNMENT_DELAY switch$D_IN;
       end
   end
 

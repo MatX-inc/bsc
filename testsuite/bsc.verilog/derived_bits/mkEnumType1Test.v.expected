@@ -133,6 +133,8 @@ module mkEnumType1Test(CLK,
   // register r
   reg [3 : 0] r;
   wire [3 : 0] r$D_IN;
+
+  // remaining internal signals
   wire r$EN;
 
   // value method isA
@@ -173,6 +175,8 @@ module mkEnumType1Test(CLK,
 
   // register r
   assign r$D_IN = 4'h0 ;
+
+  // remaining internal signals
   assign r$EN = 1'b0 ;
 
   // handling of inlined registers
@@ -182,10 +186,6 @@ module mkEnumType1Test(CLK,
     if (RST_N == `BSV_RESET_VALUE)
       begin
         r <= `BSV_ASSIGNMENT_DELAY 4'd8;
-      end
-    else
-      begin
-        if (r$EN) r <= `BSV_ASSIGNMENT_DELAY r$D_IN;
       end
   end
 
