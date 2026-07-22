@@ -77,7 +77,10 @@ data VConvtOpts = VConvtOpts {
                               -- foreign-function map and def widths, for
                               -- monomorphizing polymorphic DPI call names
                               vco_ffmap       :: ForeignFuncMap,
-                              vco_def_widths  :: M.Map AId Integer
+                              vco_def_widths  :: M.Map AId Integer,
+                              -- defs that are zero-extensions of a
+                              -- narrower value (width of the low bits)
+                              vco_def_zext    :: M.Map AId Integer
                               }
 
 
@@ -88,7 +91,8 @@ flagsToVco flags = VConvtOpts {
                                vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
                                vco_ffmap = M.empty,
-                               vco_def_widths = M.empty
+                               vco_def_widths = M.empty,
+                               vco_def_zext = M.empty
                               }
 
 -- This has been abolished from the compiler everywhere but the Verilog backend
@@ -582,25 +586,55 @@ vDefMpd vco defin@(ADef i t (APrim _ _ PrimCase es@(x:defarm:ces_t)) _) _ =
           VMStmt { vi_translate_off = False,
                    vi_body =
                        Valways $ VAt ev $
-                       VSeq [Vcase { vs_case_expr = vExpr vco x,
-                               vs_case_arms = arms (makePairs ces_t) ++ def,
+                       VSeq [Vcase { vs_case_expr = case_expr,
+                               vs_case_arms = arms ces_pairs ++ def,
                                vs_parallel = False,
                                vs_full = False
                              }]
                  }
         ]
   where vi = vId i
+        -- A selector that is a constant-zero extension (inline, or via a
+        -- def known to be one) can never reach the upper case labels;
+        -- lint tools flag such dead arms. Select on the meaningful low
+        -- bits instead and drop the unreachable arms.
+        narrowSel (APrim _ _ PrimConcat [ASInt _ _ (IntLit _ _ 0), y]) =
+            narrowSel y
+        narrowSel e = e
+        (sel_ae, sel_sliced, n) =
+            let y = narrowSel x
+            in  if aSize y < aSize x
+                then (y, False, aSize y)
+                else case x of
+                       (ASDef _ xid)
+                           | Just m <- M.lookup xid (vco_def_zext vco),
+                             m < aSize x
+                           -> (x, True, m)
+                       _   -> (x, False, aSize x)
+        case_expr = if sel_sliced
+                    then VESelect (vExpr vco sel_ae)
+                                  (VEConst (n-1)) (VEConst 0)
+                    else vExpr vco sel_ae
+        reachableArm (ASInt _ _ (IntLit _ _ v), _) = v < 2^n
+        reachableArm _ = True
+        relabelArm (c@(ASInt {}), e) = (c { ae_type = ATBit n }, e)
+        relabelArm p = p
+        ces_pairs = [ relabelArm p
+                    | p <- makePairs ces_t, reachableArm p ]
         arms [] = []
         arms ((c,e) : ces) =
                 let (cs, ces') = partition ((== e) . snd) ces
                 in  VCaseArm (map (vExpr vco) (c:map fst cs)) (VAssign (VLId vi) (vExpr vco e)) : arms ces'
-        sensitivityList = nub (concatMap aIds es)
+        used_es = sel_ae : (defarm_es ++ map snd ces_pairs)
+        sensitivityList = nub (concatMap aIds used_es)
         ev = if (null sensitivityList)
              then (internalError("AVerilogUtil:: null sensitivity list for case" ++ ppReadable defin))
              else foldr1 VEEOr (map (VEE . VEVar) sensitivityList)
-        n = aSize x
-        fullcase = (2^n * 2) == (length ces_t)
-        def = if fullcase then [] else [VDefault (VAssign (VLId vi) (vExpr vco defarm))]
+        fullcase = (2^n) == (genericLength ces_pairs :: Integer)
+        (def, defarm_es) =
+            if fullcase
+            then ([], [])
+            else ([VDefault (VAssign (VLId vi) (vExpr vco defarm))], [defarm])
 
 vDefMpd vco (ADef i_t t_t@(ATBit _) (ATaskValue {}) _) _ =
     [VMDecl $ VVDecl VDReg (vSize t_t) [VVar (vId i_t)]]

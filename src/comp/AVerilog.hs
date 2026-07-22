@@ -32,6 +32,8 @@ import Flags(Flags, systemVerilogOutput,
              removeReg, removeCross, removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
+import IntLit(IntLit(..))
+import Prim(PrimOp(PrimConcat))
 import Pragma(PProp(..))
 import ASyntax
 import ASyntaxUtil
@@ -138,6 +140,14 @@ aVerilog errh flags pps aspack ffmap =
                 { vco_ffmap = ffmap
                 , vco_def_widths =
                     M.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspack ]
+                -- defs that are zero-extensions, and the width of their
+                -- meaningful low bits: lets case emission drop arms the
+                -- selector can never reach
+                , vco_def_zext =
+                    M.fromList [ (i, aSize y)
+                               | ADef i _ (APrim _ _ PrimConcat
+                                     [ASInt _ _ (IntLit _ _ 0), y]) _
+                                     <- aspkg_values aspack ]
                 }
         -- look for pass-through comments, taking care of \n
         -- XXX should these attach to the main module instead of the
