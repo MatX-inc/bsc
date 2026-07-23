@@ -68,6 +68,7 @@ import ASyntax
 import ASyntaxUtil
 import Pragma
 import DefProp
+import ASchedule(aScheduleDenseRuleRelationDB)
 import AScheduleInfo
 import AUses(MethodId(..))
 import VModInfo
@@ -174,6 +175,10 @@ data TclP = TclP { tp_flags    :: Flags
                  , tp_symtab   :: !SymTab
                  , tp_cpack    :: !CPackage
                  , tp_mods     :: !(Maybe ModInfo)
+                   -- per-module rule-relation DBs completed with dense
+                   -- halves rederived from the APackage (the default
+                   -- .ba omits them); cleared whenever tp_mods changes
+                 , tp_rrdbCache :: !(M.Map String RuleRelationDB)
                  , tp_packView :: !(ExpandInfoBag BPackView)
                  , tp_modView  :: !(ExpandInfoBag BModView)
                  , tp_typeView :: !( [(CType, TypeAnalysis)]
@@ -197,6 +202,7 @@ initState =
             , tp_symtab   = emptySymtab
             , tp_cpack    = (CPackage pid (Right []) [] [] [] [] [])
             , tp_mods     = Nothing
+            , tp_rrdbCache = M.empty
             , tp_packView = initExpandInfoBag
             , tp_modView  = initExpandInfoBag
             , tp_typeView = ([], initExpandInfoBag)
@@ -1053,7 +1059,8 @@ tclModule ["load",topname] = do
   let modnames = map fst abmis_by_name
   let res = (topmodId, hierMap, instModMap, ffuncMap, foreign_mods,
              [(n,mi) | (n,(mi,_)) <- abmis_by_name])
-  modifyIORef globalVar (\gv -> gv { tp_mods = Just res })
+  modifyIORef globalVar (\gv -> gv { tp_mods = Just res
+                                   , tp_rrdbCache = M.empty })
 
   -- now load the package in which the module was defined
   -- (so that its interface types are available)
@@ -1075,7 +1082,8 @@ tclModule ["list"] = do
 
 ------
 tclModule ["clear"] = do
-  modifyIORef globalVar (\gv -> gv { tp_mods = Nothing })
+  modifyIORef globalVar (\gv -> gv { tp_mods = Nothing
+                                   , tp_rrdbCache = M.empty })
   return $ TLst []
 ------
 tclModule ["submods",modname] = do
@@ -1255,6 +1263,34 @@ tclModule ("flags":modname:ss) = do
 ------
 tclModule xs = internalError $ "tclModule: grmap (TStr . pfpString) grammar mismatch: " ++ (show xs)
 
+
+-- The default .ba stores only the byproduct entries of the
+-- rule-relation DB; the dense halves (the disjointness set and the
+-- cf/sc conflict entries) are omitted and must be rederived from the
+-- APackage for 'rule rel' to report complete relations (see
+-- thinRuleRelationDB).  The rederivation reruns the schedule conflict
+-- analysis (quadratic in rules, with SAT calls for disjointness), so
+-- cache the completed DB per module; the cache is cleared whenever
+-- tp_mods changes.  A DB that already has its dense halves (from a
+-- -ba-debug-info .ba) is used as is.
+getFullRuleRelationDB :: String -> ABinEitherModInfo -> RuleRelationDB
+                      -> IO RuleRelationDB
+getFullRuleRelationDB modname abmi rrdb
+  | not (rrdbIsThin rrdb) = return rrdb
+  | otherwise = do
+      g <- readIORef globalVar
+      case (M.lookup modname (tp_rrdbCache g)) of
+        Just full -> return full
+        Nothing -> do
+          mdense <- aScheduleDenseRuleRelationDB globalErrHandle
+                        (abemi_flags abmi) (abemi_apkg abmi)
+          let full = case mdense of
+                       Just dense -> rrdbGraftDenseHalves dense rrdb
+                       Nothing    -> rrdb
+          modifyIORef globalVar
+              (\gv -> gv { tp_rrdbCache =
+                               M.insert modname full (tp_rrdbCache gv) })
+          return full
 
 findModule :: String -> IO (Maybe ABinEitherModInfo)
 findModule modname =
@@ -1616,7 +1652,8 @@ tclRule ["rel", modname, rule1, rule2] =
            case (abemi_rule_relation_db abmi) of
              Nothing -> return $
                             TStr "Rule relationship information not available"
-             Just rrdb -> do
+             Just rrdb0 -> do
+                 rrdb <- getFullRuleRelationDB modname abmi rrdb0
                  let apkg = abemi_apkg abmi
                      user_rule_names = map arule_id (apkg_rules apkg)
                      ifc_rule_names = concatMap aIfaceSchedNames

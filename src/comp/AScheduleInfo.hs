@@ -19,6 +19,8 @@ module AScheduleInfo (
     printRuleRelationInfo,
     rrdbFromList,
     rrdbFromSerialized,
+    rrdbGraftDenseHalves,
+    rrdbIsThin,
     rrdbSerializedConflicts,
     thinRuleRelationDB,
     unionRuleRelationInfo
@@ -351,6 +353,19 @@ rrdbSerializedConflicts (RuleRelationDB _ dense byp) =
 thinRuleRelationDB :: RuleRelationDB -> RuleRelationDB
 thinRuleRelationDB (RuleRelationDB _ _ byp) =
     RuleRelationDB S.empty M.empty byp
+
+-- whether the dense halves are absent, i.e. the DB came from a thin
+-- .ba and a reader wanting complete relations must rederive them
+-- (see ASchedule.aScheduleDenseRuleRelationDB).  Only meaningful on
+-- a deserialized DB: on a freshly computed one, the null tests would
+-- force the lazy dense halves.
+rrdbIsThin :: RuleRelationDB -> Bool
+rrdbIsThin (RuleRelationDB dset dense _) = S.null dset && M.null dense
+
+-- attach rederived dense halves to the byproduct entries of a thin DB
+rrdbGraftDenseHalves :: RuleRelationDB -> RuleRelationDB -> RuleRelationDB
+rrdbGraftDenseHalves (RuleRelationDB dset dense _) (RuleRelationDB _ _ byp) =
+    RuleRelationDB dset dense byp
 
 instance Show RuleRelationDB where
     show rrdb = show (rrdbToList rrdb)
