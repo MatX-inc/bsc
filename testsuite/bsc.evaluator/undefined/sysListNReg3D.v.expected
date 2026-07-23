@@ -368,27 +368,6 @@ module sysListNReg3D(CLK,
   wire WILL_FIRE_RL_tick, WILL_FIRE_RL_write;
 
   // remaining internal signals
-  reg [7 : 0] IF_i_47_EQ_0_48_THEN_lns_0_0_0_ELSE_IF_i_47_EQ_ETC___d155,
-	      IF_i_47_EQ_0_48_THEN_lns_0_0_1_ELSE_IF_i_47_EQ_ETC___d179,
-	      IF_i_47_EQ_0_48_THEN_lns_0_0_2_0_ELSE_IF_i_47__ETC___d200,
-	      IF_i_47_EQ_0_48_THEN_lns_0_0_3_3_ELSE_IF_i_47__ETC___d221,
-	      IF_i_47_EQ_0_48_THEN_lns_0_1_0_5_ELSE_IF_i_47__ETC___d160,
-	      IF_i_47_EQ_0_48_THEN_lns_0_1_1_7_ELSE_IF_i_47__ETC___d183,
-	      IF_i_47_EQ_0_48_THEN_lns_0_1_2_9_ELSE_IF_i_47__ETC___d204,
-	      IF_i_47_EQ_0_48_THEN_lns_0_1_3_1_ELSE_IF_i_47__ETC___d225,
-	      IF_i_47_EQ_0_48_THEN_lns_0_2_0_3_ELSE_IF_i_47__ETC___d165,
-	      IF_i_47_EQ_0_48_THEN_lns_0_2_1_5_ELSE_IF_i_47__ETC___d187,
-	      IF_i_47_EQ_0_48_THEN_lns_0_2_2_7_ELSE_IF_i_47__ETC___d208,
-	      IF_i_47_EQ_0_48_THEN_lns_0_2_3_0_ELSE_IF_i_47__ETC___d229,
-	      IF_i_47_EQ_0_48_THEN_lns_0_3_0_3_ELSE_IF_i_47__ETC___d170,
-	      IF_i_47_EQ_0_48_THEN_lns_0_3_1_5_ELSE_IF_i_47__ETC___d191,
-	      IF_i_47_EQ_0_48_THEN_lns_0_3_2_7_ELSE_IF_i_47__ETC___d212,
-	      IF_i_47_EQ_0_48_THEN_lns_0_3_3_9_ELSE_IF_i_47__ETC___d233,
-	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d174,
-	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d195,
-	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d216,
-	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d237,
-	      IF_k_EQ_0_44_THEN_IF_j_45_EQ_0_46_THEN_IF_i_47_ETC___d241;
   wire [15 : 0] j_45_MUL_k___d253;
 
   // rule RL_write
@@ -731,6 +710,31 @@ module sysListNReg3D(CLK,
 
   // remaining internal signals
   assign j_45_MUL_k___d253 = j * k ;
+
+  // simulation-only signals (used only by system tasks)
+  // synopsys translate_off
+  reg [7 : 0] IF_i_47_EQ_0_48_THEN_lns_0_0_0_ELSE_IF_i_47_EQ_ETC___d155,
+	      IF_i_47_EQ_0_48_THEN_lns_0_0_1_ELSE_IF_i_47_EQ_ETC___d179,
+	      IF_i_47_EQ_0_48_THEN_lns_0_0_2_0_ELSE_IF_i_47__ETC___d200,
+	      IF_i_47_EQ_0_48_THEN_lns_0_0_3_3_ELSE_IF_i_47__ETC___d221,
+	      IF_i_47_EQ_0_48_THEN_lns_0_1_0_5_ELSE_IF_i_47__ETC___d160,
+	      IF_i_47_EQ_0_48_THEN_lns_0_1_1_7_ELSE_IF_i_47__ETC___d183,
+	      IF_i_47_EQ_0_48_THEN_lns_0_1_2_9_ELSE_IF_i_47__ETC___d204,
+	      IF_i_47_EQ_0_48_THEN_lns_0_1_3_1_ELSE_IF_i_47__ETC___d225,
+	      IF_i_47_EQ_0_48_THEN_lns_0_2_0_3_ELSE_IF_i_47__ETC___d165,
+	      IF_i_47_EQ_0_48_THEN_lns_0_2_1_5_ELSE_IF_i_47__ETC___d187,
+	      IF_i_47_EQ_0_48_THEN_lns_0_2_2_7_ELSE_IF_i_47__ETC___d208,
+	      IF_i_47_EQ_0_48_THEN_lns_0_2_3_0_ELSE_IF_i_47__ETC___d229,
+	      IF_i_47_EQ_0_48_THEN_lns_0_3_0_3_ELSE_IF_i_47__ETC___d170,
+	      IF_i_47_EQ_0_48_THEN_lns_0_3_1_5_ELSE_IF_i_47__ETC___d191,
+	      IF_i_47_EQ_0_48_THEN_lns_0_3_2_7_ELSE_IF_i_47__ETC___d212,
+	      IF_i_47_EQ_0_48_THEN_lns_0_3_3_9_ELSE_IF_i_47__ETC___d233,
+	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d174,
+	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d195,
+	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d216,
+	      IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d237,
+	      IF_k_EQ_0_44_THEN_IF_j_45_EQ_0_46_THEN_IF_i_47_ETC___d241;
+
   always@(i or lns_3_3_1 or lns_0_3_1 or lns_1_3_1 or lns_2_3_1)
   begin
     case (i)
@@ -1087,6 +1091,7 @@ module sysListNReg3D(CLK,
 		   IF_j_45_EQ_0_46_THEN_IF_i_47_EQ_0_48_THEN_lns__ETC___d237;
     endcase
   end
+  // synopsys translate_on
 
   // handling of inlined registers
 

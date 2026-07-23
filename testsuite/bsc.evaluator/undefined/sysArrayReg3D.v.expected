@@ -368,27 +368,6 @@ module sysArrayReg3D(CLK,
   wire WILL_FIRE_RL_tick, WILL_FIRE_RL_write;
 
   // remaining internal signals
-  reg [7 : 0] SEL_ARR_SEL_ARR_SEL_ARR_r3_0_0_0_r3_0_0_1_r3_0_ETC___d187,
-	      SEL_ARR_SEL_ARR_r3_0_0_0_r3_0_0_1_r3_0_0_2_0_r_ETC___d154,
-	      SEL_ARR_SEL_ARR_r3_1_0_0_2_r3_1_0_1_4_r3_1_0_2_ETC___d164,
-	      SEL_ARR_SEL_ARR_r3_2_0_0_7_r3_2_0_1_9_r3_2_0_2_ETC___d174,
-	      SEL_ARR_SEL_ARR_r3_3_0_0_11_r3_3_0_1_13_r3_3_0_ETC___d184,
-	      SEL_ARR_r3_0_0_0_r3_0_0_1_r3_0_0_2_0_r3_0_0_3__ETC___d145,
-	      SEL_ARR_r3_0_1_0_5_r3_0_1_1_7_r3_0_1_2_9_r3_0__ETC___d147,
-	      SEL_ARR_r3_0_2_0_3_r3_0_2_1_5_r3_0_2_2_7_r3_0__ETC___d149,
-	      SEL_ARR_r3_0_3_0_3_r3_0_3_1_5_r3_0_3_2_7_r3_0__ETC___d151,
-	      SEL_ARR_r3_1_0_0_2_r3_1_0_1_4_r3_1_0_2_6_r3_1__ETC___d156,
-	      SEL_ARR_r3_1_1_0_0_r3_1_1_1_2_r3_1_1_2_4_r3_1__ETC___d158,
-	      SEL_ARR_r3_1_2_0_8_r3_1_2_1_0_r3_1_2_2_2_r3_1__ETC___d160,
-	      SEL_ARR_r3_1_3_0_8_r3_1_3_1_0_r3_1_3_2_2_r3_1__ETC___d162,
-	      SEL_ARR_r3_2_0_0_7_r3_2_0_1_9_r3_2_0_2_1_r3_2__ETC___d166,
-	      SEL_ARR_r3_2_1_0_5_r3_2_1_1_7_r3_2_1_2_9_r3_2__ETC___d168,
-	      SEL_ARR_r3_2_2_0_3_r3_2_2_1_5_r3_2_2_2_7_r3_2__ETC___d170,
-	      SEL_ARR_r3_2_3_0_02_r3_2_3_1_04_r3_2_3_2_06_r3_ETC___d172,
-	      SEL_ARR_r3_3_0_0_11_r3_3_0_1_13_r3_3_0_2_15_r3_ETC___d176,
-	      SEL_ARR_r3_3_1_0_19_r3_3_1_1_21_r3_3_1_2_23_r3_ETC___d178,
-	      SEL_ARR_r3_3_2_0_27_r3_3_2_1_29_r3_3_2_2_31_r3_ETC___d180,
-	      SEL_ARR_r3_3_3_0_35_r3_3_3_1_37_r3_3_3_2_39_r3_ETC___d182;
   wire [15 : 0] j_53_MUL_k___d202;
 
   // rule RL_write
@@ -731,6 +710,31 @@ module sysArrayReg3D(CLK,
 
   // remaining internal signals
   assign j_53_MUL_k___d202 = j * k ;
+
+  // simulation-only signals (used only by system tasks)
+  // synopsys translate_off
+  reg [7 : 0] SEL_ARR_SEL_ARR_SEL_ARR_r3_0_0_0_r3_0_0_1_r3_0_ETC___d187,
+	      SEL_ARR_SEL_ARR_r3_0_0_0_r3_0_0_1_r3_0_0_2_0_r_ETC___d154,
+	      SEL_ARR_SEL_ARR_r3_1_0_0_2_r3_1_0_1_4_r3_1_0_2_ETC___d164,
+	      SEL_ARR_SEL_ARR_r3_2_0_0_7_r3_2_0_1_9_r3_2_0_2_ETC___d174,
+	      SEL_ARR_SEL_ARR_r3_3_0_0_11_r3_3_0_1_13_r3_3_0_ETC___d184,
+	      SEL_ARR_r3_0_0_0_r3_0_0_1_r3_0_0_2_0_r3_0_0_3__ETC___d145,
+	      SEL_ARR_r3_0_1_0_5_r3_0_1_1_7_r3_0_1_2_9_r3_0__ETC___d147,
+	      SEL_ARR_r3_0_2_0_3_r3_0_2_1_5_r3_0_2_2_7_r3_0__ETC___d149,
+	      SEL_ARR_r3_0_3_0_3_r3_0_3_1_5_r3_0_3_2_7_r3_0__ETC___d151,
+	      SEL_ARR_r3_1_0_0_2_r3_1_0_1_4_r3_1_0_2_6_r3_1__ETC___d156,
+	      SEL_ARR_r3_1_1_0_0_r3_1_1_1_2_r3_1_1_2_4_r3_1__ETC___d158,
+	      SEL_ARR_r3_1_2_0_8_r3_1_2_1_0_r3_1_2_2_2_r3_1__ETC___d160,
+	      SEL_ARR_r3_1_3_0_8_r3_1_3_1_0_r3_1_3_2_2_r3_1__ETC___d162,
+	      SEL_ARR_r3_2_0_0_7_r3_2_0_1_9_r3_2_0_2_1_r3_2__ETC___d166,
+	      SEL_ARR_r3_2_1_0_5_r3_2_1_1_7_r3_2_1_2_9_r3_2__ETC___d168,
+	      SEL_ARR_r3_2_2_0_3_r3_2_2_1_5_r3_2_2_2_7_r3_2__ETC___d170,
+	      SEL_ARR_r3_2_3_0_02_r3_2_3_1_04_r3_2_3_2_06_r3_ETC___d172,
+	      SEL_ARR_r3_3_0_0_11_r3_3_0_1_13_r3_3_0_2_15_r3_ETC___d176,
+	      SEL_ARR_r3_3_1_0_19_r3_3_1_1_21_r3_3_1_2_23_r3_ETC___d178,
+	      SEL_ARR_r3_3_2_0_27_r3_3_2_1_29_r3_3_2_2_31_r3_ETC___d180,
+	      SEL_ARR_r3_3_3_0_35_r3_3_3_1_37_r3_3_3_2_39_r3_ETC___d182;
+
   always@(k or r3_0_0_0 or r3_0_0_1 or r3_0_0_2 or r3_0_0_3)
   begin
     case (k)
@@ -1150,6 +1154,7 @@ module sysArrayReg3D(CLK,
 		   8'b10101010 /* unspecified value */ ;
     endcase
   end
+  // synopsys translate_on
 
   // handling of inlined registers
 
