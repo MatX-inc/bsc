@@ -451,7 +451,8 @@ aVerilog errh flags pps aspack0 ffmap =
          inst_inputs, inst_declared_signals, inst_blocks,
          inout_rewire_map,
          inlined_submod_comments,
-         unread_reg_warns)
+         unread_reg_warns,
+         folded_en_ids)
              = genInstances errh flags foreignfunc_blocks vDef aspack
 
         -- currently, inst_blocks are only from inlined registers
@@ -586,6 +587,7 @@ aVerilog errh flags pps aspack0 ffmap =
         -- waveform dumps even with no simulation reader: their defs go
         -- to the translate_off group, never dropped
         dump_keep_ids =
+            folded_en_ids `S.union`
             S.filter (\ i -> isFire i || isIdEnable i || isRdyId i ||
                              i `S.member` inlined_port_ids)
                      (M.keysSet def_uses_map)
@@ -1145,7 +1147,8 @@ genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) -> ASPack
                  [VMItem],  -- always and initial blocks
                  M.Map AId AId, -- inout rewiring map
                  [String],  -- toplevel comments for inlined submodules
-                 [EMsg])    -- unread-register warnings
+                 [EMsg],    -- unread-register warnings
+                 S.Set AId) -- folded constant-enable defs kept for dumping
 genInstances errh flags ff_blocks vDef aspack =
     let
 
@@ -1240,13 +1243,27 @@ genInstances errh flags ff_blocks vDef aspack =
     -- ----------
     -- translate the inlined registers into Verilog items
 
+        -- the def values, so vInlineReg can resolve constant enables,
+        -- and the ids referenced outside the register update blocks, so
+        -- it knows which constant enable defs have no other readers
+        reg_def_values = M.fromList [ (i, e)
+                                    | ADef i _ e _ <- aspkg_values aspack ]
+        ids_used_elsewhere =
+            S.fromList $
+                concatMap aVars [ e | ADef _ _ e _ <- aspkg_values aspack ] ++
+                concatMap aVars [ e | ADef _ _ e _ <- aspkg_inout_values aspack ] ++
+                concatMap (aVars . avi_iargs) noninlined_aspkg_instances ++
+                map vidToId (vuses ff_blocks)
+
         -- vInlineReg returns the always blocks for implementing the regs
         -- and port info used to declare the Q_OUT (which needs to be declared
         -- as "reg" instead of "wire"), to declare the inputs (separate from
         -- their assignments), and to keep track of any CLK/RSTN uses for
-        -- removed unused ports on other modules
-        (inlined_reg_blocks, reg_infos) =
-            vInlineReg errh flags inlined_reg_instances
+        -- removed unused ports on other modules;
+        -- constant enable defs it folded away come back for removal below
+        (inlined_reg_blocks, reg_infos, folded_en_ids) =
+            vInlineReg errh flags reg_def_values ids_used_elsewhere
+                       inlined_reg_instances
 
         -- generate the reg/wire declarations
         reg_decl_groups =
@@ -1314,6 +1331,8 @@ genInstances errh flags ff_blocks vDef aspack =
             (not (alwaysEnabledString (getIdString aid)))
 
         -- definitions which are not always_enabled
+        -- (folded register enables stay in the stream: the caller emits
+        -- them under translate_off so waveforms keep scheduling signals)
         filtered_ds = filter notAlwaysEnabledADef (aspkg_values aspack)
 
         -- note that we start again from the ASP ds, because vDef might expand
@@ -1351,8 +1370,10 @@ genInstances errh flags ff_blocks vDef aspack =
             = dropUnusedPortWires ff_blocks (filtered_defs ++ all_io_wires) reg_uses inst_infos
 
         filtered_ds2 =
-            let unused_ids = map vidToId unused_defs
-                isUsedDef (ADef { adef_objid=i }) = i `notElem` unused_ids
+            let unused_ids = S.fromList (map vidToId unused_defs)
+                isUsedDef (ADef { adef_objid=i }) =
+                    i `S.notMember` unused_ids ||
+                    i `S.member` folded_en_ids
             in  filter isUsedDef filtered_ds
 
     -- ----------
@@ -1475,7 +1496,8 @@ genInstances errh flags ff_blocks vDef aspack =
              inlined_reg_blocks,
              inout_rewire_map,
              top_level_comments,
-             unread_reg_warns)
+             unread_reg_warns,
+             folded_en_ids)
 
 
 -- a wrapper for mkInstGroup,
