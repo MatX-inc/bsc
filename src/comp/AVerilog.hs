@@ -254,7 +254,8 @@ aVerilog errh flags pps aspack ffmap =
             output_decls_group ++
             -- signals for submodule ports
             -- (depending on flag, this can also include the instantiations)
-            inst_decl_groups ++
+            -- (minus wire-port decls downgraded to the translate_off group)
+            inst_decl_groups_emitted ++
             -- remaining declarations
             rule_decls_group ++  -- includes method_rule_decls
             mux_decls_group ++
@@ -269,7 +270,9 @@ aVerilog errh flags pps aspack ffmap =
             rule_def_groups ++
             mux_defs_group ++
             submod_def_groups ++
-            other_defs_group
+            other_defs_group ++
+            -- translate_off: logic feeding only the system task blocks
+            sim_only_group
 
 
         -- The main module
@@ -486,8 +489,111 @@ aVerilog errh flags pps aspack ffmap =
         -- declared for submodule instantiations
         isPreDeclared = isDeclFromList $ S.fromList inst_declared_signals
 
+        -- -----
+        -- Simulation-only defs
+        --
+        -- A def whose value is read (transitively) only by the foreign
+        -- (system task) blocks is invisible to synthesis: emit it inside
+        -- the translate_off region along with its consumers, so synthesis
+        -- and lint tools never see logic that drives nothing.
+
+        -- ids read by anything synthesis can see: module outputs and
+        -- inouts, submodule instantiations, the inlined register blocks,
+        -- and scan structures. Probe input defs are deliberately kept
+        -- sinks (the Probe instance itself is deleted), so they seed
+        -- liveness to keep their fan-in declared alongside them.
+        synth_root_ids :: S.Set AId
+        synth_root_ids =
+            S.fromList $
+                [ o | (o, _) <- os ] ++
+                (let (_, _, _, probe_ins) = inst_inputs
+                 in  map vidToId probe_ins) ++
+                concatMap aVars
+                    [ e | ADef _ _ e _ <- aspkg_inout_values aspack ] ++
+                map vidToId
+                    (vuses (inst_decl_groups ++ inst_def_groups ++
+                            inst_blocks ++ scanDefs))
+
+        def_uses_map :: M.Map AId [AId]
+        def_uses_map = M.fromList [ (i, aVars e) | ADef i _ e _ <- ds ]
+
+        growLive :: S.Set AId -> [AId] -> S.Set AId
+        growLive live [] = live
+        growLive live (i:ws)
+            | i `S.member` live = growLive live ws
+            | otherwise =
+                growLive (S.insert i live)
+                         (M.findWithDefault [] i def_uses_map ++ ws)
+
+        synth_live_ids = growLive S.empty (S.toList synth_root_ids)
+
+        -- exclude ids the foreign-block machinery already declares
+        foreign_decl_ids =
+            S.fromList (foreign_writes ++ defs_in_foreign_blocks)
+
+        -- ids whose declarations the instance machinery owns (submodule
+        -- inputs, register inputs, probes): their defs stay in the
+        -- normal flow so the single declaration keeps a driver.
+        -- Inlined wire ports are the exception -- they are downgraded
+        -- declaration and all (see dropSimOnlyPortDecls).
+        inlined_port_ids = S.fromList (aspkg_inlined_ports aspack)
+        externally_declared_ids =
+            let (subs, regs, rwire_ins, probe_ins) = inst_inputs
+            in  S.fromList
+                    (map vidToId
+                         (concatMap snd subs ++ concatMap snd regs ++
+                          rwire_ins ++ probe_ins ++
+                          inst_declared_signals))
+                `S.difference` inlined_port_ids
+
+        sim_only_ids :: S.Set AId
+        sim_only_ids =
+            S.filter (\ i -> i `S.notMember` synth_live_ids &&
+                             i `S.notMember` foreign_decl_ids &&
+                             i `S.notMember` externally_declared_ids)
+                     (M.keysSet def_uses_map)
+
+        (sim_only_ds, synth_ds) =
+            partition (\ (ADef i _ _ _) -> i `S.member` sim_only_ids) ds
+
+        -- inlined wire ports read only by system tasks are downgraded
+        -- with their defs: drop mkRWireGroup's unconditional decls so
+        -- the translate_off group's declaration is the only one
+        sim_only_port_ids = S.intersection sim_only_ids inlined_port_ids
+
+        dropSimOnlyPortDecls :: [VMItem] -> [VMItem]
+        dropSimOnlyPortDecls = mapMaybe go
+          where
+            go (VMDecl (VVDecl t r vars)) =
+                case filter keepVar vars of
+                  []    -> Nothing
+                  vars' -> Just (VMDecl (VVDecl t r vars'))
+            go (VMGroup toff body) =
+                Just (VMGroup toff (map dropSimOnlyPortDecls body))
+            go (VMComment c i) = fmap (VMComment c) (go i)
+            go item = Just item
+            keepVar v = vidToId (vvName v) `S.notMember` sim_only_port_ids
+
+        inst_decl_groups_emitted =
+            if S.null sim_only_port_ids
+            then inst_decl_groups
+            else dropSimOnlyPortDecls inst_decl_groups
+
+        (sim_only_decls, sim_only_defs) = mkVDeclsAndDefs vDef sim_only_ds
+
+        sim_only_group =
+            let decls = filter (not . isPreDeclared)
+                               (mergeCommonDecl sim_only_decls)
+                body = filter (not . null) [decls, sort sim_only_defs]
+                comment = ["simulation-only signals (used only by system tasks)"]
+            in  if null body
+                then []
+                else [VMComment comment
+                          (VMGroup { vg_translate_off = True
+                                   , vg_body = body })]
+
         -- make a map to hold the defs, for easy access
-        defmap = M.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
+        defmap = M.fromList [ (i,d) | d@(ADef i _ _ _) <- synth_ds ]
 
         -- -----
         -- special outputs
@@ -1977,6 +2083,8 @@ instance VUse VMItem where
     vuses (VMAssign l e) = vuses l ++ vuses e
     vuses (VMInst _ _ ps as) = vuses ps ++ vuses as
     vuses (VMGroup _ ll) = concatMap vuses (concat ll)
+    vuses (VMComment _ i) = vuses i
+    vuses (VMRegGroup _ _ _ i) = vuses i
     vuses _ = []
 
 instance VUse VStmt where
