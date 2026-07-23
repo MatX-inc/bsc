@@ -564,19 +564,17 @@ aVerilog errh flags pps aspack0 ffmap =
         -- inouts, submodule instantiations (their connection def
         -- groups carry both the port wires and the expressions feeding
         -- them; instance args cover the modes where those groups are
-        -- empty), and scan structures. Probe input defs are
-        -- deliberately kept sinks (the Probe instance itself is
-        -- deleted), so they seed liveness to keep their fan-in
-        -- declared alongside them. (probe_ins and inst_def_groups are
-        -- the roots taken from genInstances output; the probe and
-        -- submodule machinery is independent of the sim-register
-        -- partition passed in, so this is not a cycle.)
+        -- empty), and scan structures. Probes are NOT synthesis roots:
+        -- they are simulation-only observation points, so they seed
+        -- the sim view instead (see sim_reachable_ids) and probe-only
+        -- fan-in lands in the translate_off group. (inst_def_groups
+        -- comes from genInstances output; the submodule machinery is
+        -- independent of the sim-register partition passed in, so
+        -- this is not a cycle.)
         synth_root_ids :: S.Set AId
         synth_root_ids =
             S.fromList $
                 [ o | (o, _) <- os ] ++
-                (let (_, _, _, probe_ins) = inst_inputs
-                 in  map vidToId probe_ins) ++
                 concatMap aVars
                     [ e | ADef _ _ e _ <- aspkg_inout_values aspack ] ++
                 concatMap (aVars . avi_iargs)
@@ -648,9 +646,14 @@ aVerilog errh flags pps aspack0 ffmap =
         (sim_only_ds0, synth_ds) =
             partition (\ (ADef i _ _ _) -> i `S.member` sim_only_ids) ds
 
-        -- ids some simulation construct transitively consumes
+        -- ids some simulation construct transitively consumes; probe
+        -- inputs seed here (the probe group is translate_off, so a
+        -- probe read keeps its fan-in in the simulation view)
         sim_reachable_ids =
-            growLive S.empty (map vidToId (vuses foreignfunc_blocks))
+            growLive S.empty
+                (map vidToId
+                     (let (_, _, _, probe_ins) = inst_inputs
+                      in  probe_ins ++ vuses foreignfunc_blocks))
 
         -- scheduling signals (rule fires, method/register enables),
         -- method readies, and inlined wire ports stay visible to
@@ -1031,19 +1034,24 @@ groupSubmoduleDefs vDef inst_inputs ds =
         mkRegDefGroup    = mkModDefGroup "register"
 
         -- for grouping all wires into one commented group
-        -- rather than a comment per wire
-        mkWireDefGroup :: VComment -> ([VMItem], M.Map AId ADef) -> [VId] ->
-                          ([VMItem], M.Map AId ADef)
-        mkWireDefGroup comment (gs, defs) ss =
+        -- rather than a comment per wire; the Bool puts the group
+        -- inside translate_off
+        mkWireDefGroup :: Bool -> VComment -> ([VMItem], M.Map AId ADef) ->
+                          [VId] -> ([VMItem], M.Map AId ADef)
+        mkWireDefGroup xoff comment (gs, defs) ss =
             let ss' = map vidToId ss
                 (wire_defs, other_defs) = findADefs ss' defs
                 (_{-wire_vdecls-}, wire_vdefs) = mkVDeclsAndDefs vDef wire_defs
-                -- if (null wire_vdefs) this returns []
-                g = vGroupWithComment False wire_vdefs comment
+                g = if null wire_vdefs
+                    then []
+                    else [VMComment comment
+                              (VMGroup { vg_translate_off = xoff
+                                       , vg_body = [wire_vdefs] })]
             in  (g ++ gs, other_defs)
 
-        mkRWireDefGroup = mkWireDefGroup ["inlined wires"]
-        mkProbeDefGroup = mkWireDefGroup ["probes"]
+        mkRWireDefGroup = mkWireDefGroup False ["inlined wires"]
+        -- probes are simulation-only observation points
+        mkProbeDefGroup = mkWireDefGroup True ["probes"]
 
         -- fold over the mods
         (gs1, ds1) = foldr mkSubmodDefGroup ([],ds) submod_inputs
@@ -1820,7 +1828,12 @@ mkProbeGroup sos sztm comments_map probe_infos =
         comment = if (null inst_comments)
                   then hdr_comment
                   else hdr_comment ++ [""] ++ inst_comments ++ [""]
-        group = VMComment comment (VMGroup False [mergeCommonDecl probe_decls])
+        -- probes are simulation-only observation points (write-only,
+        -- nothing synthesizable can read one): the whole group lives
+        -- inside translate_off
+        group = VMComment comment
+                    (VMGroup { vg_translate_off = True
+                             , vg_body = [mergeCommonDecl probe_decls] })
     in
         if (null probe_decls)
         then ([], [])
