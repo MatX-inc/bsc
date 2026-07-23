@@ -711,7 +711,7 @@ module sysVectorReg3D(CLK,
   // remaining internal signals
   assign j_53_MUL_k___d202 = j * k ;
 
-  // simulation-only signals (used only by system tasks)
+  // simulation-only signals (system-task fan-in and scheduling signals kept for waveform dumping)
   // synopsys translate_off
   reg [7 : 0] SEL_ARR_SEL_ARR_SEL_ARR_vs_0_0_0_vs_0_0_1_vs_0_ETC___d187,
 	      SEL_ARR_SEL_ARR_vs_0_0_0_vs_0_0_1_vs_0_0_2_0_v_ETC___d154,

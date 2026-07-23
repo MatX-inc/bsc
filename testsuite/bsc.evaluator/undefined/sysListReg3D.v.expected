@@ -711,7 +711,7 @@ module sysListReg3D(CLK,
   // remaining internal signals
   assign j_45_MUL_k___d253 = j * k ;
 
-  // simulation-only signals (used only by system tasks)
+  // simulation-only signals (system-task fan-in and scheduling signals kept for waveform dumping)
   // synopsys translate_off
   reg [7 : 0] IF_i_47_EQ_0_48_THEN_ls_0_0_0_ELSE_IF_i_47_EQ__ETC___d155,
 	      IF_i_47_EQ_0_48_THEN_ls_0_0_1_ELSE_IF_i_47_EQ__ETC___d179,

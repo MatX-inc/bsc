@@ -25,10 +25,11 @@ import Util
 import FileNameUtil(hasSuf)
 import PFPrint
 import Error(internalError, ErrorHandle, bsWarning,
-             ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal))
+             ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal,
+                    WDeadLogic))
 import Position(getPosition, Position)
 import qualified Data.Generics as Generic
-import Flags(Flags, systemVerilogOutput, translateSimOnly,
+import Flags(Flags, systemVerilogOutput, translateSimOnly, warnDeadCode,
              removeReg, removeCross, removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
@@ -41,7 +42,8 @@ import Verilog
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
-import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnect)
+import BackendNamingConventions(isRegInst, isClockCrossingRegInst,
+                                isInoutConnect, mkQOUT)
 import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getDPIInstantiations)
 import qualified GraphWrapper as G
 
@@ -66,7 +68,10 @@ import qualified GraphWrapper as G
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack0 ffmap =
-    do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
+    do if (warnDeadCode flags && not (null dead_sim_warns))
+           then bsWarning errh dead_sim_warns
+           else return ()
+       let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
        -- sound by the invariant documented at vModuleDeclVIds: every VId
@@ -583,8 +588,27 @@ aVerilog errh flags pps aspack0 ffmap =
                      (M.keysSet def_uses_map)
           where isSchedulingSignal i = isFire i || isIdEnable i || isRdyId i
 
-        (sim_only_ds, synth_ds) =
+        (sim_only_ds0, synth_ds) =
             partition (\ (ADef i _ _ _) -> i `S.member` sim_only_ids) ds
+
+        -- ids some simulation construct transitively consumes
+        sim_reachable_ids =
+            growLive S.empty (map vidToId (vuses foreignfunc_blocks))
+
+        -- An inlined wire port stays visible to waveform dumps even
+        -- with no simulation reader: its def goes to the translate_off
+        -- group rather than being dropped. Other sim-only defs nothing
+        -- consumes are pure waste, so drop them from the output entirely
+        -- (and warn under -warn-dead-code).
+        (sim_dead_ds, sim_only_ds) =
+            partition (\ (ADef i _ _ _) ->
+                          i `S.notMember` sim_reachable_ids &&
+                          i `S.notMember` inlined_port_ids)
+                      sim_only_ds0
+
+        dead_sim_warns =
+            [ (getPosition i, WDeadLogic (getIdString i))
+            | ADef i _ _ _ <- sim_dead_ds ]
 
         -- inlined wire ports read only by system tasks are downgraded
         -- with their defs: drop mkRWireGroup's unconditional decls so
@@ -615,7 +639,8 @@ aVerilog errh flags pps aspack0 ffmap =
             let decls = filter (not . isPreDeclared)
                                (mergeCommonDecl sim_only_decls)
                 body = filter (not . null) [decls, sort sim_only_defs]
-                comment = ["simulation-only signals (used only by system tasks)"]
+                comment = ["simulation-only signals (system-task fan-in and" ++
+                           " scheduling signals kept for waveform dumping)"]
             in  if null body
                 then []
                 else [VMComment comment
