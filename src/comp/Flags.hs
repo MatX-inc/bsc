@@ -144,6 +144,7 @@ data Flags = Flags {
         suppressWarnings :: MsgListFlag,
         synthesize :: Bool,
         systemVerilogOutput :: Bool,
+        warnDeadCode :: Bool,
         tclShowHidden :: Bool,
         timeStamps :: Bool,
         showVersion :: Bool,

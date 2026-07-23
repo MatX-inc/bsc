@@ -1013,6 +1013,8 @@ data ErrMsg =
         | WSVReservedIdent String
         | WSVStdIdentRenamed String String
         | WSVStdIdentExternal String
+        | WRegNeverRead String
+        | WDeadLogic String
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
         | WRuleNoDefaultClock String
@@ -4135,6 +4137,18 @@ getErrorText (WSVStdIdentRenamed name new_name) =
             "resolve even in escaped form.  It has been renamed to " ++
             quote new_name ++ " in the generated Verilog.  Consider " ++
             "renaming it in the source."))
+
+getErrorText (WDeadLogic name) =
+    (Generate 135, empty,
+     s2par ("The signal " ++ quote name ++ " is not consumed by " ++
+            "generated hardware nor by any simulation construct.  " ++
+            "The logic is dead and is not emitted."))
+
+getErrorText (WRegNeverRead inst) =
+    (Generate 134, empty,
+     s2par ("The register " ++ quote inst ++ " is written but its value " ++
+            "is never read, neither by generated hardware nor by " ++
+            "simulation constructs.  The state it holds is dead."))
 
 getErrorText (WSVStdIdentExternal name) =
     (Generate 133, empty,

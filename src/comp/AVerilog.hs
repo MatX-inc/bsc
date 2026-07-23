@@ -24,11 +24,12 @@ import ListMap(lookupWithDefault)
 import Util
 import FileNameUtil(hasSuf)
 import PFPrint
-import Error(internalError, ErrorHandle, bsWarning,
-             ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal))
+import Error(internalError, ErrorHandle, bsWarning, EMsg,
+             ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal,
+                    WRegNeverRead, WDeadLogic))
 import Position(getPosition, Position)
 import qualified Data.Generics as Generic
-import Flags(Flags, systemVerilogOutput,
+import Flags(Flags, systemVerilogOutput, warnDeadCode,
              removeReg, removeCross, removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
@@ -41,7 +42,8 @@ import Verilog
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
-import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnect)
+import BackendNamingConventions(isRegInst, isClockCrossingRegInst,
+                                isInoutConnect, mkQOUT)
 import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getDPIInstantiations)
 import qualified GraphWrapper as G
 
@@ -66,7 +68,11 @@ import qualified GraphWrapper as G
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack0 ffmap =
-    do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
+    do let state_warns = unread_reg_warns ++ dead_sim_warns
+       if (warnDeadCode flags && not (null state_warns))
+           then bsWarning errh state_warns
+           else return ()
+       let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
        -- sound by the invariant documented at vModuleDeclVIds: every VId
@@ -444,7 +450,8 @@ aVerilog errh flags pps aspack0 ffmap =
         (ds, inst_decl_groups, inst_def_groups,
          inst_inputs, inst_declared_signals, inst_blocks,
          inout_rewire_map,
-         inlined_submod_comments)
+         inlined_submod_comments,
+         unread_reg_warns)
              = genInstances errh flags foreignfunc_blocks vDef aspack
 
         -- currently, inst_blocks are only from inlined registers
@@ -567,8 +574,33 @@ aVerilog errh flags pps aspack0 ffmap =
                              i `S.notMember` externally_declared_ids)
                      (M.keysSet def_uses_map)
 
-        (sim_only_ds, synth_ds) =
+        (sim_only_ds0, synth_ds) =
             partition (\ (ADef i _ _ _) -> i `S.member` sim_only_ids) ds
+
+        -- ids some simulation construct transitively consumes
+        sim_reachable_ids =
+            growLive S.empty (map vidToId (vuses foreignfunc_blocks))
+
+        -- scheduling signals (rule fires, method/register enables),
+        -- method readies, and inlined wire ports stay visible to
+        -- waveform dumps even with no simulation reader: their defs go
+        -- to the translate_off group, never dropped
+        dump_keep_ids =
+            S.filter (\ i -> isFire i || isIdEnable i || isRdyId i ||
+                             i `S.member` inlined_port_ids)
+                     (M.keysSet def_uses_map)
+
+        -- other sim-only defs nothing consumes are pure waste: drop them
+        -- from the output entirely (and warn under -warn-dead-code)
+        (sim_dead_ds, sim_only_ds) =
+            partition (\ (ADef i _ _ _) ->
+                          i `S.notMember` sim_reachable_ids &&
+                          i `S.notMember` dump_keep_ids)
+                      sim_only_ds0
+
+        dead_sim_warns =
+            [ (getPosition i, WDeadLogic (getIdString i))
+            | ADef i _ _ _ <- sim_dead_ds ]
 
         -- inlined wire ports read only by system tasks are downgraded
         -- with their defs: drop mkRWireGroup's unconditional decls so
@@ -599,7 +631,8 @@ aVerilog errh flags pps aspack0 ffmap =
             let decls = filter (not . isPreDeclared)
                                (mergeCommonDecl sim_only_decls)
                 body = filter (not . null) [decls, sort sim_only_defs]
-                comment = ["simulation-only signals (used only by system tasks)"]
+                comment = ["simulation-only signals (system-task fan-in and" ++
+                           " scheduling signals kept for waveform dumping)"]
             in  if null body
                 then []
                 else [VMComment comment
@@ -1111,7 +1144,8 @@ genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) -> ASPack
                             --   so don't re-declare these either
                  [VMItem],  -- always and initial blocks
                  M.Map AId AId, -- inout rewiring map
-                 [String])  -- toplevel comments for inlined submodules
+                 [String],  -- toplevel comments for inlined submodules
+                 [EMsg])    -- unread-register warnings
 genInstances errh flags ff_blocks vDef aspack =
     let
 
@@ -1217,6 +1251,25 @@ genInstances errh flags ff_blocks vDef aspack =
         -- generate the reg/wire declarations
         reg_decl_groups =
             map (mkRegGroup sos sztm inlined_reg_comments) reg_infos
+
+        -- Registers whose value nothing reads: not any def, instance
+        -- argument, foreign (system task) call, or inout -- dead state.
+        -- Any expression-level reference counts as a read, so this
+        -- never flags intentionally kept (e.g. sim-visible) state.
+        unread_reg_warns =
+            let read_ids = S.fromList $
+                    concatMap aVars
+                        [ e | ADef _ _ e _ <- aspkg_values aspack ] ++
+                    concatMap aVars
+                        [ e | ADef _ _ e _ <- aspkg_inout_values aspack ] ++
+                    concatMap (aVars . avi_iargs)
+                        (aspkg_state_instances aspack) ++
+                    map vidToId (vuses ff_blocks) ++
+                    [ o | (o, _) <- aspkg_outputs aspack ]
+            in  [ (getPosition inst_id, WRegNeverRead (getIdString inst_id))
+                | avi <- inlined_reg_instances
+                , let inst_id = avi_vname avi
+                , mkQOUT avi `S.notMember` read_ids ]
 
         -- the input wire decls (to be later assigned to, but not re-declared)
         reg_inputs :: [(AId, [VId])]
@@ -1421,7 +1474,8 @@ genInstances errh flags ff_blocks vDef aspack =
              extra_submod_decls,
              inlined_reg_blocks,
              inout_rewire_map,
-             top_level_comments)
+             top_level_comments,
+             unread_reg_warns)
 
 
 -- a wrapper for mkInstGroup,
