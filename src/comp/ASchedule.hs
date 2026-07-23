@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module ASchedule(
                  aSchedule,
+                 aScheduleDenseRuleRelationDB,
                  extractCFPairsSP,
                  extractMEPairsSP,
                  errAction,
@@ -461,6 +462,35 @@ aSchedule errh flags prefix urgency_pairs pps amod = do
                          return (Right (schedule_info, amod'))
               _ -> internalError "aSchedule: missing info"
 
+
+-- Rederive the dense halves of the RuleRelationDB -- the disjointness
+-- set and the cf/sc conflict entries -- that writeABin omits from the
+-- default (thin) .ba.  Reruns the conflict analysis on the APackage
+-- exactly as the original scheduling run did; the analysis is
+-- deterministic, so the result matches what -ba-debug-info would have
+-- serialized.  The result carries no byproduct entries (those are
+-- always in the .ba); graft it onto the serialized DB with
+-- rrdbGraftDenseHalves.  Returns Nothing if the analysis reports
+-- errors (a module whose schedule already failed at compile time);
+-- the byproduct entries are all that is knowable then.
+aScheduleDenseRuleRelationDB :: ErrorHandle -> Flags -> APackage
+                             -> IO (Maybe RuleRelationDB)
+aScheduleDenseRuleRelationDB errh flags amod = do
+    let -- rederivation must not re-dump schedule DOT files
+        flags' = flags { schedDOT = False }
+        f = aSchedule_step1 errh flags' "" () amod
+    (result, _) <- runStateT (runExceptT f) initSState
+    case result of
+      Left _ -> return Nothing
+      Right ( scConflictMap0, cfConflictMap0, _, _, _
+            , _, _, userARules, _, _
+            , rule_disjoint, _, _, _, _
+            , _, _, _, _, _
+            , _, _, _ ) ->
+          let ruleNames = map ruleName (concatMap cvtIfc (apkg_interface amod))
+                          ++ map aRuleName userARules
+          in  return $ Just $ mkRuleRelationDB ruleNames rule_disjoint
+                                  cfConflictMap0 scConflictMap0 [] [] [] []
 
 aSchedule' :: ErrorHandle -> Flags ->
               String -> PathUrgencyPairs -> [PProp] -> APackage ->
