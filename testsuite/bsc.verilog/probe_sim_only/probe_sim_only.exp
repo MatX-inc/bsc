@@ -1,0 +1,24 @@
+#
+# A Probe is write-only: nothing synthesizable can read one, so it belongs
+# inside translate_off rather than sitting in the synthesis view as an
+# unloaded net.
+#
+# Probe-only fan-in follows the probe.  Fan-in the probe shares with real
+# logic stays, through ordinary liveness -- that is the case a naive
+# "everything a probe touches is simulation" rule would get wrong.
+#
+
+compile_verilog_pass ProbeSimOnly.bsv mkProbeSimOnly
+
+sed mkProbeSimOnly.v mkProbeSimOnly-synth.v {-e "/translate_off/,/translate_on/d"}
+
+# neither probe is in the synthesis view
+find_regexp_fail mkProbeSimOnly-synth.v {p1}
+find_regexp_fail mkProbeSimOnly-synth.v {p2}
+
+# but both are still emitted, for waveforms
+find_regexp mkProbeSimOnly.v {p1}
+find_regexp mkProbeSimOnly.v {p2}
+
+# count feeds the method too, so it stays in the synthesis view
+find_regexp mkProbeSimOnly-synth.v {reg \[7 : 0\] count}

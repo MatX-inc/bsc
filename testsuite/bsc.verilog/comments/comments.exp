@@ -353,6 +353,7 @@ if {$vtest == 1} {
   // Comments for probe \`the_r\'\:
   //   This is a probe
   //
+  // synopsys translate_off
   wire the_r\\\$PROBE, the_r\\\$PROBE_VALID\;"
 }
 
