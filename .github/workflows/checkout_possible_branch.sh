@@ -41,7 +41,10 @@ if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
         exit 1
     fi
     user_branch_checkout "${HEAD_OWNER}" "${GITHUB_HEAD_REF}"
-elif [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+elif [ "${GITHUB_EVENT_NAME}" = "push" ] || [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+    # workflow_dispatch also sets GITHUB_REF_NAME (the ref dispatched on),
+    # so release runs dispatched on a branch pick up name-matched
+    # downstream branches exactly like a push of that branch would
     user_branch_checkout "${GITHUB_REPOSITORY_OWNER}" "${GITHUB_REF_NAME}"
 else
     echo "GITHUB_EVENT_NAME: ${GITHUB_EVENT_NAME}"
