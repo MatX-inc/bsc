@@ -36,7 +36,6 @@ module sysRegToReg(CLK,
   // register idx
   reg [2 : 0] idx;
   wire [2 : 0] idx$D_IN;
-  wire idx$EN;
 
   // register rg
   reg [63 : 0] rg;
@@ -46,7 +45,8 @@ module sysRegToReg(CLK,
   // remaining internal signals
   wire [47 : 0] IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d27;
   wire [31 : 0] IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d20;
-  wire [7 : 0] _0_CONCAT_idx_PLUS_1___d35;
+  wire [7 : 0] _0_CONCAT_idx_PLUS_1___d6;
+  wire idx$EN;
 
   // register done
   assign done$D_IN = 1'd1 ;
@@ -54,26 +54,26 @@ module sysRegToReg(CLK,
 
   // register idx
   assign idx$D_IN = 3'h0 ;
-  assign idx$EN = 1'b0 ;
 
   // register rg
   assign rg$D_IN =
 	     { IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d27,
-	       (idx == 3'd1) ? _0_CONCAT_idx_PLUS_1___d35 : rg[15:8],
-	       (idx == 3'd0) ? _0_CONCAT_idx_PLUS_1___d35 : rg[7:0] } ;
+	       (idx == 3'd1) ? _0_CONCAT_idx_PLUS_1___d6 : rg[15:8],
+	       (idx == 3'd0) ? _0_CONCAT_idx_PLUS_1___d6 : rg[7:0] } ;
   assign rg$EN = !done ;
 
   // remaining internal signals
   assign IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d20 =
-	     { (idx == 3'd7) ? _0_CONCAT_idx_PLUS_1___d35 : rg[63:56],
-	       (idx == 3'd6) ? _0_CONCAT_idx_PLUS_1___d35 : rg[55:48],
-	       (idx == 3'd5) ? _0_CONCAT_idx_PLUS_1___d35 : rg[47:40],
-	       (idx == 3'd4) ? _0_CONCAT_idx_PLUS_1___d35 : rg[39:32] } ;
+	     { (idx == 3'd7) ? _0_CONCAT_idx_PLUS_1___d6 : rg[63:56],
+	       (idx == 3'd6) ? _0_CONCAT_idx_PLUS_1___d6 : rg[55:48],
+	       (idx == 3'd5) ? _0_CONCAT_idx_PLUS_1___d6 : rg[47:40],
+	       (idx == 3'd4) ? _0_CONCAT_idx_PLUS_1___d6 : rg[39:32] } ;
   assign IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d27 =
 	     { IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d20,
-	       (idx == 3'd3) ? _0_CONCAT_idx_PLUS_1___d35 : rg[31:24],
-	       (idx == 3'd2) ? _0_CONCAT_idx_PLUS_1___d35 : rg[23:16] } ;
-  assign _0_CONCAT_idx_PLUS_1___d35 = { 5'd0, idx } + 8'd1 ;
+	       (idx == 3'd3) ? _0_CONCAT_idx_PLUS_1___d6 : rg[31:24],
+	       (idx == 3'd2) ? _0_CONCAT_idx_PLUS_1___d6 : rg[23:16] } ;
+  assign _0_CONCAT_idx_PLUS_1___d6 = { 5'd0, idx } + 8'd1 ;
+  assign idx$EN = 1'b0 ;
 
   // handling of inlined registers
 
@@ -88,7 +88,6 @@ module sysRegToReg(CLK,
     else
       begin
         if (done$EN) done <= `BSV_ASSIGNMENT_DELAY done$D_IN;
-	if (idx$EN) idx <= `BSV_ASSIGNMENT_DELAY idx$D_IN;
 	if (rg$EN) rg <= `BSV_ASSIGNMENT_DELAY rg$D_IN;
       end
   end

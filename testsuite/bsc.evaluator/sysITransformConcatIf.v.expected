@@ -45,26 +45,25 @@ module sysITransformConcatIf(CLK,
   // register a
   reg [2 : 0] a;
   wire [2 : 0] a$D_IN;
-  wire a$EN;
 
   // register b
   reg [2 : 0] b;
   wire [2 : 0] b$D_IN;
-  wire b$EN;
 
   // register c
   reg [3 : 0] c;
   wire [3 : 0] c$D_IN;
-  wire c$EN;
 
   // register cond
   reg cond;
-  wire cond$D_IN, cond$EN;
+  wire cond$D_IN;
 
   // register d
   reg [3 : 0] d;
   wire [3 : 0] d$D_IN;
-  wire d$EN;
+
+  // remaining internal signals
+  wire a$EN, b$EN, c$EN, cond$EN, d$EN;
 
   // value method out
   assign out = cond ? { a, c } : { b, d } ;
@@ -72,34 +71,27 @@ module sysITransformConcatIf(CLK,
 
   // register a
   assign a$D_IN = 3'h0 ;
-  assign a$EN = 1'b0 ;
 
   // register b
   assign b$D_IN = 3'h0 ;
-  assign b$EN = 1'b0 ;
 
   // register c
   assign c$D_IN = 4'h0 ;
-  assign c$EN = 1'b0 ;
 
   // register cond
   assign cond$D_IN = 1'b0 ;
-  assign cond$EN = 1'b0 ;
 
   // register d
   assign d$D_IN = 4'h0 ;
+
+  // remaining internal signals
+  assign a$EN = 1'b0 ;
+  assign b$EN = 1'b0 ;
+  assign c$EN = 1'b0 ;
+  assign cond$EN = 1'b0 ;
   assign d$EN = 1'b0 ;
 
   // handling of inlined registers
-
-  always@(posedge CLK)
-  begin
-    if (a$EN) a <= `BSV_ASSIGNMENT_DELAY a$D_IN;
-    if (b$EN) b <= `BSV_ASSIGNMENT_DELAY b$D_IN;
-    if (c$EN) c <= `BSV_ASSIGNMENT_DELAY c$D_IN;
-    if (cond$EN) cond <= `BSV_ASSIGNMENT_DELAY cond$D_IN;
-    if (d$EN) d <= `BSV_ASSIGNMENT_DELAY d$D_IN;
-  end
 
   // synopsys translate_off
   `ifdef BSV_NO_INITIAL_BLOCKS

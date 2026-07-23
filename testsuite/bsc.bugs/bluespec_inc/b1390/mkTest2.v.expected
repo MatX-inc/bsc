@@ -31,10 +31,13 @@ module mkTest2(CLK,
 
   // register p
   reg p;
-  wire p$D_IN, p$EN;
+  wire p$D_IN;
 
   // ports of submodule f
   wire f$CLR, f$DEQ, f$D_IN, f$ENQ, f$FULL_N;
+
+  // remaining internal signals
+  wire p$EN;
 
   // submodule f
   FIFOL1 #(.width(32'd1)) f(.RST(RST_N),
@@ -49,7 +52,6 @@ module mkTest2(CLK,
 
   // register p
   assign p$D_IN = 1'b0 ;
-  assign p$EN = 1'b0 ;
 
   // submodule f
   assign f$D_IN = 1'd1 ;
@@ -57,12 +59,10 @@ module mkTest2(CLK,
   assign f$DEQ = 1'b0 ;
   assign f$CLR = 1'b0 ;
 
-  // handling of inlined registers
+  // remaining internal signals
+  assign p$EN = 1'b0 ;
 
-  always@(posedge CLK)
-  begin
-    if (p$EN) p <= `BSV_ASSIGNMENT_DELAY p$D_IN;
-  end
+  // handling of inlined registers
 
   // synopsys translate_off
   `ifdef BSV_NO_INITIAL_BLOCKS

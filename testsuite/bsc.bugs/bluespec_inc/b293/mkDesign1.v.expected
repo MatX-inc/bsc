@@ -65,15 +65,14 @@ module mkDesign1(clk,
   // register count
   reg [3 : 0] count;
   wire [3 : 0] count$D_IN;
-  wire count$EN;
 
   // register done_reg
   reg done_reg;
-  wire done_reg$D_IN, done_reg$EN;
+  wire done_reg$D_IN;
 
   // register enable
   reg enable;
-  wire enable$D_IN, enable$EN;
+  wire enable$D_IN;
 
   // register multiplicand
   reg [7 : 0] multiplicand;
@@ -88,6 +87,9 @@ module mkDesign1(clk,
   // inputs to muxes for submodule ports
   wire [7 : 0] MUX_multiplicand$write_1__VAL_1;
   wire MUX_accumulator$write_1__SEL_1;
+
+  // remaining internal signals
+  wire count$EN, done_reg$EN, enable$EN;
 
   // value method done
   assign done = done_reg ;
@@ -106,15 +108,12 @@ module mkDesign1(clk,
 
   // register count
   assign count$D_IN = 4'd0 ;
-  assign count$EN = 1'b1 ;
 
   // register done_reg
   assign done_reg$D_IN = 1'd1 ;
-  assign done_reg$EN = 1'b1 ;
 
   // register enable
   assign enable$D_IN = 1'd0 ;
-  assign enable$EN = 1'b1 ;
 
   // register multiplicand
   assign multiplicand$D_IN = MUX_multiplicand$write_1__VAL_1 ;
@@ -123,6 +122,11 @@ module mkDesign1(clk,
   // register multiplier
   assign multiplier$D_IN = shift_and_add_b ;
   assign multiplier$EN = MUX_accumulator$write_1__SEL_1 ;
+
+  // remaining internal signals
+  assign count$EN = 1'b1 ;
+  assign done_reg$EN = 1'b1 ;
+  assign enable$EN = 1'b1 ;
 
   // handling of inlined registers
 
@@ -141,9 +145,9 @@ module mkDesign1(clk,
       begin
         if (accumulator$EN)
 	  accumulator <= `BSV_ASSIGNMENT_DELAY accumulator$D_IN;
-	if (count$EN) count <= `BSV_ASSIGNMENT_DELAY count$D_IN;
-	if (done_reg$EN) done_reg <= `BSV_ASSIGNMENT_DELAY done_reg$D_IN;
-	if (enable$EN) enable <= `BSV_ASSIGNMENT_DELAY enable$D_IN;
+	count <= `BSV_ASSIGNMENT_DELAY count$D_IN;
+	done_reg <= `BSV_ASSIGNMENT_DELAY done_reg$D_IN;
+	enable <= `BSV_ASSIGNMENT_DELAY enable$D_IN;
 	if (multiplicand$EN)
 	  multiplicand <= `BSV_ASSIGNMENT_DELAY multiplicand$D_IN;
 	if (multiplier$EN)

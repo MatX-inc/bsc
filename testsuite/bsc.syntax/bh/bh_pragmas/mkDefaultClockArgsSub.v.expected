@@ -54,6 +54,8 @@ module mkDefaultClockArgsSub(CLK_clk,
   // register ctr
   reg [7 : 0] ctr;
   wire [7 : 0] ctr$D_IN;
+
+  // remaining internal signals
   wire ctr$EN;
 
   // action method poke
@@ -65,6 +67,8 @@ module mkDefaultClockArgsSub(CLK_clk,
 
   // register ctr
   assign ctr$D_IN = ctr + 8'd1 ;
+
+  // remaining internal signals
   assign ctr$EN = 1'd1 ;
 
   // handling of inlined registers
@@ -77,7 +81,7 @@ module mkDefaultClockArgsSub(CLK_clk,
       end
     else
       begin
-        if (ctr$EN) ctr <= `BSV_ASSIGNMENT_DELAY ctr$D_IN;
+        ctr <= `BSV_ASSIGNMENT_DELAY ctr$D_IN;
       end
   end
 

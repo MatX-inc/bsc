@@ -32,10 +32,14 @@ module mkFOO(CLK,
   // register addr
   reg [31 : 0] addr;
   wire [31 : 0] addr$D_IN;
+
+  // remaining internal signals
   wire addr$EN;
 
   // register addr
   assign addr$D_IN = 32'h0 ;
+
+  // remaining internal signals
   assign addr$EN = 1'b0 ;
 
   // handling of inlined registers
@@ -45,10 +49,6 @@ module mkFOO(CLK,
     if (RST_N == `BSV_RESET_VALUE)
       begin
         addr <= `BSV_ASSIGNMENT_DELAY 32'hAAAAAAAA;
-      end
-    else
-      begin
-        if (addr$EN) addr <= `BSV_ASSIGNMENT_DELAY addr$D_IN;
       end
   end
 

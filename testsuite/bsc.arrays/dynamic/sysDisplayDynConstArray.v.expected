@@ -31,25 +31,25 @@ module sysDisplayDynConstArray(CLK,
 
   // register c
   reg c;
-  wire c$D_IN, c$EN;
+  wire c$D_IN;
 
   // register idx
   reg [1 : 0] idx;
   wire [1 : 0] idx$D_IN;
-  wire idx$EN;
 
   // remaining internal signals
   reg [7 : 0] CASE_idx_0_IF_c_THEN_1_ELSE_4_1_IF_c_THEN_2_EL_ETC__q1;
+  wire c$EN, idx$EN;
 
   // register c
   assign c$D_IN = 1'b0 ;
-  assign c$EN = 1'b0 ;
 
   // register idx
   assign idx$D_IN = 2'h0 ;
-  assign idx$EN = 1'b0 ;
 
   // remaining internal signals
+  assign c$EN = 1'b0 ;
+  assign idx$EN = 1'b0 ;
   always@(idx or c)
   begin
     case (idx)
@@ -76,11 +76,6 @@ module sysDisplayDynConstArray(CLK,
       begin
         c <= `BSV_ASSIGNMENT_DELAY 1'd1;
 	idx <= `BSV_ASSIGNMENT_DELAY 2'd0;
-      end
-    else
-      begin
-        if (c$EN) c <= `BSV_ASSIGNMENT_DELAY c$D_IN;
-	if (idx$EN) idx <= `BSV_ASSIGNMENT_DELAY idx$D_IN;
       end
   end
 

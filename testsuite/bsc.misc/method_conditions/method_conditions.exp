@@ -4,6 +4,12 @@
 # and Syntax stages (to preserve the COND signals and not mix them into the
 # actual signals for the design), and bluetcl (to read out the position info)
 
+# The `wire COND_...` patterns below end in [,;] rather than a bare `;`. What
+# they pin is that the COND signals are declared, and declared next to each
+# other; whether the declaration ENDS there is incidental, and a folded
+# constant enable now shares the line. The separate find_n_strings COND_RL_
+# counts are what pin "not mingled with the actual design".
+
 # -----
 
 # Options to use when compiling to Verilog
@@ -29,7 +35,7 @@ if { $vtest == 1 } {
 compile_verilog_pass MethodConds_RegWrite.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_RegWrite.v \
-    {wire COND\_RL\_r\_rg\_write\_1\, COND\_RL\_r\_rg\_write\_2\;}
+    {wire COND\_RL\_r\_rg\_write\_1\, COND\_RL\_r\_rg\_write\_2[,;]}
 find_regexp sysMethodConds_RegWrite.v \
     {assign COND\_RL\_r\_rg\_write\_1 \= c1 \;}
 find_regexp sysMethodConds_RegWrite.v \
@@ -53,7 +59,7 @@ if { $vtest == 1 } {
 compile_verilog_pass MethodConds_ActionNoArg.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_ActionNoArg.v \
-    {wire COND\_RL\_r\_s\_am2\_1\, COND\_RL\_r\_s\_am2\_2\;}
+    {wire COND\_RL\_r\_s\_am2\_1\, COND\_RL\_r\_s\_am2\_2[,;]}
 find_regexp sysMethodConds_ActionNoArg.v \
     {assign COND\_RL\_r\_s\_am2\_1 \= c1 \;}
 find_regexp sysMethodConds_ActionNoArg.v \
@@ -68,7 +74,7 @@ check_positions sysMethodConds_ActionNoArg
 compile_verilog_pass MethodConds_ActionArg.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_ActionArg.v \
-    {wire COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am1\_2\;}
+    {wire COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am1\_2[,;]}
 find_regexp sysMethodConds_ActionArg.v \
     {assign COND\_RL\_r\_s\_am1\_1 \= c1 \;}
 find_regexp sysMethodConds_ActionArg.v \
@@ -89,7 +95,7 @@ if { $vtest == 1 } {
 compile_verilog_pass MethodConds_ActionArg_BVI.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_ActionArg_BVI.v \
-    {wire COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am1\_2\;}
+    {wire COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am1\_2[,;]}
 find_regexp sysMethodConds_ActionArg_BVI.v \
     {assign COND\_RL\_r\_s\_am1\_1 \= c1 \;}
 find_regexp sysMethodConds_ActionArg_BVI.v \
@@ -110,7 +116,7 @@ if { $vtest == 1 } {
 compile_verilog_pass MethodConds_TaskCond.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_TaskCond.v \
-    {wire COND\_RL\_r\_FUNCTION\_\$display\_3\, COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am2\_2\;}
+    {wire COND\_RL\_r\_FUNCTION\_\$display\_3\, COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am2\_2[,;]}
 find_regexp sysMethodConds_TaskCond.v \
     {assign COND\_RL\_r\_FUNCTION\_\$display\_3 \= TASK\_getCond\_\_\_d4 \;}
 find_regexp sysMethodConds_TaskCond.v \
@@ -201,7 +207,7 @@ find_regexp sysMethodConds_CaseAction.v \
     {wire COND\_RL\_r1\_rg0\_write\_1\,
        COND\_RL\_r1\_rg1\_write\_2\,
        COND\_RL\_r1\_rg2\_write\_3\,
-       COND\_RL\_r1\_rg3\_write\_4\;}
+       COND\_RL\_r1\_rg3\_write\_4[,;]}
 find_regexp sysMethodConds_CaseAction.v \
     {assign COND\_RL\_r1\_rg0\_write\_1 \= idx \=\= 2\'d0 \;}
 find_regexp sysMethodConds_CaseAction.v \
@@ -221,7 +227,7 @@ find_regexp sysMethodConds_CaseAction_SamePos.v \
     {wire COND\_RL\_r1\_rg0\_write\_1\,
        COND\_RL\_r1\_rg1\_write\_2\,
        COND\_RL\_r1\_rg2\_write\_3\,
-       COND\_RL\_r1\_rg3\_write\_4\;}
+       COND\_RL\_r1\_rg3\_write\_4[,;]}
 find_regexp sysMethodConds_CaseAction_SamePos.v \
     {assign COND\_RL\_r1\_rg0\_write\_1 \= idx \=\= 2\'d0 \;}
 find_regexp sysMethodConds_CaseAction_SamePos.v \
@@ -241,7 +247,7 @@ find_regexp sysMethodConds_VecSelAction.v \
     {wire COND\_RL\_r1\_rg0\_write\_1\,
        COND\_RL\_r1\_rg1\_write\_2\,
        COND\_RL\_r1\_rg2\_write\_3\,
-       COND\_RL\_r1\_rg3\_write\_4\;}
+       COND\_RL\_r1\_rg3\_write\_4[,;]}
 find_regexp sysMethodConds_VecSelAction.v \
     {assign COND\_RL\_r1\_rg0\_write\_1 \= idx \=\= 2\'d0 \;}
 find_regexp sysMethodConds_VecSelAction.v \
@@ -261,7 +267,7 @@ find_regexp sysMethodConds_VecSelAction_SamePos.v \
     {wire COND\_RL\_r1\_rgs\_0\_write\_1\,
        COND\_RL\_r1\_rgs\_1\_write\_2\,
        COND\_RL\_r1\_rgs\_2\_write\_3\,
-       COND\_RL\_r1\_rgs\_3\_write\_4\;}
+       COND\_RL\_r1\_rgs\_3\_write\_4[,;]}
 find_regexp sysMethodConds_VecSelAction_SamePos.v \
     {assign COND\_RL\_r1\_rgs\_0\_write\_1 \= idx \=\= 2\'d0 \;}
 find_regexp sysMethodConds_VecSelAction_SamePos.v \
@@ -289,7 +295,7 @@ find_regexp sysMethodConds_MultiplicityCond.v \
     {wire COND\_RL\_r1\_FUNCTION\_\$display\_3\,
        COND\_RL\_r1\_s\_am1\_1,
        COND\_RL\_r1\_s\_am2\_2,
-       COND\_RL\_r2\_idx2\_write\_1;}
+       COND\_RL\_r2\_idx2\_write\_1[,;]}
 # NB: which RegFile read port each rule's uses get is an arbitrary (but
 # deterministic) allocation choice; it flipped when pack/unpack coercion
 # holding changed evaluation order.  The property being tested is only
@@ -319,7 +325,7 @@ if { $vtest == 1 } {
 compile_verilog_pass MethodConds_TwoLevel.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_TwoLevel.v \
-    {wire COND\_RL\_r\_s\_rg\_write\_1, COND\_RL\_r\_s\_rg\_write\_2\;}
+    {wire COND\_RL\_r\_s\_rg\_write\_1, COND\_RL\_r\_s\_rg\_write\_2[,;]}
 find_regexp sysMethodConds_TwoLevel.v \
     {assign COND\_RL\_r\_s\_rg\_write\_1 \= c1 \;}
 find_regexp sysMethodConds_TwoLevel.v \
@@ -332,7 +338,7 @@ check_positions sysMethodConds_TwoLevel
 compile_verilog_pass MethodConds_TwoLevel2.bsv {} $opts
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_TwoLevel2.v \
-    {wire COND\_RL\_r\_s\_u\_am1\_1, COND\_RL\_r\_s\_u\_am1\_2\;}
+    {wire COND\_RL\_r\_s\_u\_am1\_1, COND\_RL\_r\_s\_u\_am1\_2[,;]}
 find_regexp sysMethodConds_TwoLevel2.v \
     {assign COND\_RL\_r\_s\_u\_am1\_1 \= c1 \;}
 find_regexp sysMethodConds_TwoLevel2.v \
@@ -354,7 +360,7 @@ compile_verilog_pass_warning \
     MethodConds_DroppedRule_FalseCond.bsv G0023 1 {} "$opts -remove-false-rules"
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_DroppedRule_FalseCond.v \
-    {wire COND\_RL\_r2\_s2\_am1\_1, COND\_RL\_r2\_s2\_am1\_2\;}
+    {wire COND\_RL\_r2\_s2\_am1\_1, COND\_RL\_r2\_s2\_am1\_2[,;]}
 find_regexp sysMethodConds_DroppedRule_FalseCond.v \
     {assign COND\_RL\_r2\_s2\_am1\_1 \= c1 \;}
 find_regexp sysMethodConds_DroppedRule_FalseCond.v \
@@ -369,7 +375,7 @@ compile_verilog_pass_warning \
     MethodConds_DroppedRule_Blocked.bsv G0021 1 {} "$opts -remove-starved-rules"
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_DroppedRule_Blocked.v \
-    {wire COND\_RL\_r2\_s2\_am1\_1, COND\_RL\_r2\_s2\_am1\_2\;}
+    {wire COND\_RL\_r2\_s2\_am1\_1, COND\_RL\_r2\_s2\_am1\_2[,;]}
 find_regexp sysMethodConds_DroppedRule_Blocked.v \
     {assign COND\_RL\_r2\_s2\_am1\_1 \= c1 \;}
 find_regexp sysMethodConds_DroppedRule_Blocked.v \
@@ -401,7 +407,7 @@ find_regexp sysMethodConds_Function.v \
        COND\_RL\_r\_s\_write\_3\,
        COND\_RL\_r\_s\_write\_4\,
        COND\_RL\_r\_s\_write\_5\,
-       COND\_RL\_r\_s\_write\_6\;}
+       COND\_RL\_r\_s\_write\_6[,;]}
 find_regexp sysMethodConds_Function.v \
     {assign COND\_RL\_r\_s\_write\_1 \= c1 \&\& c2 \;}
 find_regexp sysMethodConds_Function.v \

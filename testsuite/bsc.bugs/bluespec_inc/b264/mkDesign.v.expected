@@ -61,27 +61,30 @@ module mkDesign(clk,
 
   // register i_a0
   reg i_a0;
-  wire i_a0$D_IN, i_a0$EN;
+  wire i_a0$D_IN;
 
   // register i_a1
   reg i_a1;
-  wire i_a1$D_IN, i_a1$EN;
+  wire i_a1$D_IN;
 
   // register i_b0
   reg i_b0;
-  wire i_b0$D_IN, i_b0$EN;
+  wire i_b0$D_IN;
 
   // register i_b1
   reg i_b1;
-  wire i_b1$D_IN, i_b1$EN;
+  wire i_b1$D_IN;
 
   // register i_res1
   reg i_res1;
-  wire i_res1$D_IN, i_res1$EN;
+  wire i_res1$D_IN;
 
   // register i_res2
   reg i_res2;
-  wire i_res2$D_IN, i_res2$EN;
+  wire i_res2$D_IN;
+
+  // remaining internal signals
+  wire i_a0$EN, i_a1$EN, i_b0$EN, i_b1$EN, i_res1$EN, i_res2$EN;
 
   // value method result_adder1
   assign result_adder1 = i_res1 ;
@@ -91,26 +94,28 @@ module mkDesign(clk,
 
   // register i_a0
   assign i_a0$D_IN = calc_aa ;
-  assign i_a0$EN = 1'd1 ;
 
   // register i_a1
   assign i_a1$D_IN = calc_ab ;
-  assign i_a1$EN = 1'd1 ;
 
   // register i_b0
   assign i_b0$D_IN = calc_ba ;
-  assign i_b0$EN = 1'd1 ;
 
   // register i_b1
   assign i_b1$D_IN = calc_bb ;
-  assign i_b1$EN = 1'd1 ;
 
   // register i_res1
   assign i_res1$D_IN = i_a0 ^ i_a1 ;
-  assign i_res1$EN = 1'd1 ;
 
   // register i_res2
   assign i_res2$D_IN = i_b0 ^ i_b1 ;
+
+  // remaining internal signals
+  assign i_a0$EN = 1'd1 ;
+  assign i_a1$EN = 1'd1 ;
+  assign i_b0$EN = 1'd1 ;
+  assign i_b1$EN = 1'd1 ;
+  assign i_res1$EN = 1'd1 ;
   assign i_res2$EN = 1'd1 ;
 
   // handling of inlined registers
@@ -128,12 +133,12 @@ module mkDesign(clk,
       end
     else
       begin
-        if (i_a0$EN) i_a0 <= `BSV_ASSIGNMENT_DELAY i_a0$D_IN;
-	if (i_a1$EN) i_a1 <= `BSV_ASSIGNMENT_DELAY i_a1$D_IN;
-	if (i_b0$EN) i_b0 <= `BSV_ASSIGNMENT_DELAY i_b0$D_IN;
-	if (i_b1$EN) i_b1 <= `BSV_ASSIGNMENT_DELAY i_b1$D_IN;
-	if (i_res1$EN) i_res1 <= `BSV_ASSIGNMENT_DELAY i_res1$D_IN;
-	if (i_res2$EN) i_res2 <= `BSV_ASSIGNMENT_DELAY i_res2$D_IN;
+        i_a0 <= `BSV_ASSIGNMENT_DELAY i_a0$D_IN;
+	i_a1 <= `BSV_ASSIGNMENT_DELAY i_a1$D_IN;
+	i_b0 <= `BSV_ASSIGNMENT_DELAY i_b0$D_IN;
+	i_b1 <= `BSV_ASSIGNMENT_DELAY i_b1$D_IN;
+	i_res1 <= `BSV_ASSIGNMENT_DELAY i_res1$D_IN;
+	i_res2 <= `BSV_ASSIGNMENT_DELAY i_res2$D_IN;
       end
   end
 

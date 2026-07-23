@@ -32,7 +32,6 @@ module sysActionVecShortIndex(CLK,
   // register idx
   reg [1 : 0] idx;
   wire [1 : 0] idx$D_IN;
-  wire idx$EN;
 
   // ports of submodule fs_0
   wire [7 : 0] fs_0$D_IN;
@@ -60,6 +59,9 @@ module sysActionVecShortIndex(CLK,
 
   // rule scheduling signals
   reg WILL_FIRE_RL_r;
+
+  // remaining internal signals
+  wire idx$EN;
 
   // submodule fs_0
   FIFO2 #(.width(32'd8), .guarded(1'd1)) fs_0(.RST(RST_N),
@@ -140,7 +142,6 @@ module sysActionVecShortIndex(CLK,
 
   // register idx
   assign idx$D_IN = 2'h0 ;
-  assign idx$EN = 1'b0 ;
 
   // submodule fs_0
   assign fs_0$D_IN = 8'd0 ;
@@ -178,6 +179,9 @@ module sysActionVecShortIndex(CLK,
   assign fs_5$DEQ = 1'b0 ;
   assign fs_5$CLR = 1'b0 ;
 
+  // remaining internal signals
+  assign idx$EN = 1'b0 ;
+
   // handling of inlined registers
 
   always@(posedge CLK)
@@ -185,10 +189,6 @@ module sysActionVecShortIndex(CLK,
     if (RST_N == `BSV_RESET_VALUE)
       begin
         idx <= `BSV_ASSIGNMENT_DELAY 2'd0;
-      end
-    else
-      begin
-        if (idx$EN) idx <= `BSV_ASSIGNMENT_DELAY idx$D_IN;
       end
   end
 

@@ -32,19 +32,18 @@ module sysVecCondAction(CLK,
   // register idx
   reg [1 : 0] idx;
   wire [1 : 0] idx$D_IN;
-  wire idx$EN;
 
   // register rgs_0
   reg rgs_0;
-  wire rgs_0$D_IN, rgs_0$EN;
+  wire rgs_0$D_IN;
 
   // register rgs_1
   reg rgs_1;
-  wire rgs_1$D_IN, rgs_1$EN;
+  wire rgs_1$D_IN;
 
   // register rgs_2
   reg rgs_2;
-  wire rgs_2$D_IN, rgs_2$EN;
+  wire rgs_2$D_IN;
 
   // ports of submodule f
   wire [7 : 0] f$D_IN;
@@ -52,6 +51,7 @@ module sysVecCondAction(CLK,
 
   // remaining internal signals
   reg SEL_ARR_rgs_0_rgs_1_rgs_2_idx___d6;
+  wire idx$EN, rgs_0$EN, rgs_1$EN, rgs_2$EN;
 
   // submodule f
   FIFO2 #(.width(32'd8), .guarded(1'd1)) f(.RST(RST_N),
@@ -66,19 +66,15 @@ module sysVecCondAction(CLK,
 
   // register idx
   assign idx$D_IN = 2'h0 ;
-  assign idx$EN = 1'b0 ;
 
   // register rgs_0
   assign rgs_0$D_IN = 1'b0 ;
-  assign rgs_0$EN = 1'b0 ;
 
   // register rgs_1
   assign rgs_1$D_IN = 1'b0 ;
-  assign rgs_1$EN = 1'b0 ;
 
   // register rgs_2
   assign rgs_2$D_IN = 1'b0 ;
-  assign rgs_2$EN = 1'b0 ;
 
   // submodule f
   assign f$D_IN = 8'd0 ;
@@ -89,6 +85,10 @@ module sysVecCondAction(CLK,
   assign f$CLR = 1'b0 ;
 
   // remaining internal signals
+  assign idx$EN = 1'b0 ;
+  assign rgs_0$EN = 1'b0 ;
+  assign rgs_1$EN = 1'b0 ;
+  assign rgs_2$EN = 1'b0 ;
   always@(idx or rgs_0 or rgs_1 or rgs_2)
   begin
     case (idx)
@@ -108,13 +108,6 @@ module sysVecCondAction(CLK,
       begin
         idx <= `BSV_ASSIGNMENT_DELAY 2'd0;
       end
-    else
-      begin
-        if (idx$EN) idx <= `BSV_ASSIGNMENT_DELAY idx$D_IN;
-      end
-    if (rgs_0$EN) rgs_0 <= `BSV_ASSIGNMENT_DELAY rgs_0$D_IN;
-    if (rgs_1$EN) rgs_1 <= `BSV_ASSIGNMENT_DELAY rgs_1$D_IN;
-    if (rgs_2$EN) rgs_2 <= `BSV_ASSIGNMENT_DELAY rgs_2$D_IN;
   end
 
   // synopsys translate_off

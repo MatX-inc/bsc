@@ -36,10 +36,12 @@ module sysBug262Opt(CLK,
   // register r
   reg [19 : 0] r;
   wire [19 : 0] r$D_IN;
-  wire r$EN;
 
   // inputs to muxes for submodule ports
   wire [19 : 0] MUX_r$write_1__VAL_1;
+
+  // remaining internal signals
+  wire r$EN;
 
   // inputs to muxes for submodule ports
   assign MUX_r$write_1__VAL_1 =
@@ -51,6 +53,8 @@ module sysBug262Opt(CLK,
 
   // register r
   assign r$D_IN = done ? MUX_r$write_1__VAL_1 : 20'd524293 ;
+
+  // remaining internal signals
   assign r$EN = 1'b1 ;
 
   // handling of inlined registers
@@ -66,7 +70,7 @@ module sysBug262Opt(CLK,
     else
       begin
         if (done$EN) done <= `BSV_ASSIGNMENT_DELAY done$D_IN;
-	if (r$EN) r <= `BSV_ASSIGNMENT_DELAY r$D_IN;
+	r <= `BSV_ASSIGNMENT_DELAY r$D_IN;
       end
   end
 

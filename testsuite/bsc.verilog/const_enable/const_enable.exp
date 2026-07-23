@@ -1,0 +1,40 @@
+#
+# A register whose enable resolves to a constant updates unconditionally.
+#
+# The guard can never be false, so emitting it leaves dead logic and an
+# enable pin tied high on the inferred flop.
+#
+
+compile_verilog_pass ConstEnable.bsv mkConstEnable
+
+# the update is unconditional -- no guard on the enable
+find_regexp_fail mkConstEnable.v {if \(c\$EN\)}
+
+# but the enable itself survives: a scheduling signal keeps its waveform
+# value even with no remaining reader, so an always-firing rule's enable is
+# still observable
+find_regexp mkConstEnable.v {assign c\$EN = 1'd1}
+
+# ----------
+# The constant-0 arm: a register whose enable resolves to 0.
+#
+# Three things have to hold at once, and the constant-1 case above pins none
+# of them. The dangerous one is the reset: dropping a whole always-block arm
+# instead of just the update would leave a resettable register coming up X.
+# A register with no reset (mkRegU) cannot catch that -- its entire block
+# legitimately disappears -- so this uses mkReg.
+
+compile_verilog_pass ConstZeroEnable.bsv mkConstZeroEnable
+
+# the enable folded to 0
+find_regexp mkConstZeroEnable.v {assign frozen\$EN = 1'b0}
+
+# the update it guarded is gone entirely
+find_regexp_fail mkConstZeroEnable.v {frozen <= `BSV_ASSIGNMENT_DELAY frozen\$D_IN}
+
+# but the reset assignment survives
+find_regexp mkConstZeroEnable.v {frozen <= `BSV_ASSIGNMENT_DELAY 8'hAB}
+
+# and the register alongside it is untouched: reset arm and update arm both
+find_regexp mkConstZeroEnable.v {live <= `BSV_ASSIGNMENT_DELAY 8'd0}
+find_regexp mkConstZeroEnable.v {live <= `BSV_ASSIGNMENT_DELAY live\$D_IN}

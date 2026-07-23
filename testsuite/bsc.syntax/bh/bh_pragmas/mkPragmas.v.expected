@@ -46,7 +46,6 @@ module mkPragmas(CLK_foo,
   // register addr
   reg [3 : 0] addr;
   wire [3 : 0] addr$D_IN;
-  wire addr$EN;
 
   // ports of submodule rf
   wire [7 : 0] rf$D_IN, rf$D_OUT_1;
@@ -57,6 +56,9 @@ module mkPragmas(CLK_foo,
 	       rf$ADDR_5,
 	       rf$ADDR_IN;
   wire rf$WE;
+
+  // remaining internal signals
+  wire addr$EN;
 
   // value method _read
   assign _read = rf$D_OUT_1 ;
@@ -85,7 +87,6 @@ module mkPragmas(CLK_foo,
 
   // register addr
   assign addr$D_IN = 4'h0 ;
-  assign addr$EN = 1'b0 ;
 
   // submodule rf
   assign rf$ADDR_1 = addr ;
@@ -97,6 +98,9 @@ module mkPragmas(CLK_foo,
   assign rf$D_IN = 8'h0 ;
   assign rf$WE = 1'b0 ;
 
+  // remaining internal signals
+  assign addr$EN = 1'b0 ;
+
   // handling of inlined registers
 
   always@(posedge CLK_foo)
@@ -104,10 +108,6 @@ module mkPragmas(CLK_foo,
     if (RST_N_bar == `BSV_RESET_VALUE)
       begin
         addr <= `BSV_ASSIGNMENT_DELAY 4'd0;
-      end
-    else
-      begin
-        if (addr$EN) addr <= `BSV_ASSIGNMENT_DELAY addr$D_IN;
       end
   end
 

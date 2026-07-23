@@ -32,16 +32,16 @@ module sysDisplayConstArray(CLK,
   // register idx
   reg [1 : 0] idx;
   wire [1 : 0] idx$D_IN;
-  wire idx$EN;
 
   // remaining internal signals
   reg [7 : 0] CASE_idx_0_17_1_2_2_42_3_22_DONTCARE__q1;
+  wire idx$EN;
 
   // register idx
   assign idx$D_IN = 2'h0 ;
-  assign idx$EN = 1'b0 ;
 
   // remaining internal signals
+  assign idx$EN = 1'b0 ;
   always@(idx)
   begin
     case (idx)
@@ -59,10 +59,6 @@ module sysDisplayConstArray(CLK,
     if (RST_N == `BSV_RESET_VALUE)
       begin
         idx <= `BSV_ASSIGNMENT_DELAY 2'd0;
-      end
-    else
-      begin
-        if (idx$EN) idx <= `BSV_ASSIGNMENT_DELAY idx$D_IN;
       end
   end
 

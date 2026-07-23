@@ -32,16 +32,17 @@ module mkTest(CLK,
   // register the_cnd
   reg [2 : 0] the_cnd;
   wire [2 : 0] the_cnd$D_IN;
-  wire the_cnd$EN;
 
   // register the_y
   reg [3 : 0] the_y;
   reg [3 : 0] the_y$D_IN;
   wire the_y$EN;
 
+  // remaining internal signals
+  wire the_cnd$EN;
+
   // register the_cnd
   assign the_cnd$D_IN = 3'h0 ;
-  assign the_cnd$EN = 1'b0 ;
 
   // register the_y
   always@(the_cnd)
@@ -55,6 +56,9 @@ module mkTest(CLK,
   end
   assign the_y$EN = the_cnd == 3'd1 || the_cnd == 3'd0 || the_cnd == 3'd2 ;
 
+  // remaining internal signals
+  assign the_cnd$EN = 1'b0 ;
+
   // handling of inlined registers
 
   always@(posedge CLK)
@@ -66,8 +70,7 @@ module mkTest(CLK,
       end
     else
       begin
-        if (the_cnd$EN) the_cnd <= `BSV_ASSIGNMENT_DELAY the_cnd$D_IN;
-	if (the_y$EN) the_y <= `BSV_ASSIGNMENT_DELAY the_y$D_IN;
+        if (the_y$EN) the_y <= `BSV_ASSIGNMENT_DELAY the_y$D_IN;
       end
   end
 

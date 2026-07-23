@@ -53,7 +53,10 @@ module mkClockFamily(CLK_ungated,
 
   // register toggle_delay
   reg toggle_delay;
-  wire toggle_delay$D_IN, toggle_delay$EN;
+  wire toggle_delay$D_IN;
+
+  // remaining internal signals
+  wire toggle_delay$EN;
 
   // value method ticked
   assign ticked = toggle_delay != toggle ;
@@ -65,6 +68,8 @@ module mkClockFamily(CLK_ungated,
 
   // register toggle_delay
   assign toggle_delay$D_IN = toggle ;
+
+  // remaining internal signals
   assign toggle_delay$EN = 1'd1 ;
 
   // handling of inlined registers
@@ -83,8 +88,7 @@ module mkClockFamily(CLK_ungated,
 
   always@(posedge CLK_ungated)
   begin
-    if (toggle_delay$EN)
-      toggle_delay <= `BSV_ASSIGNMENT_DELAY toggle_delay$D_IN;
+    toggle_delay <= `BSV_ASSIGNMENT_DELAY toggle_delay$D_IN;
   end
 
   // synopsys translate_off
