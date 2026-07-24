@@ -26,7 +26,7 @@ import FileNameUtil(hasSuf)
 import PFPrint
 import Error(internalError, ErrorHandle, bsWarning, EMsg,
              ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal,
-                    WRegNeverRead, WDeadLogic))
+                    WRegNeverRead, WRegNeverWritten, WDeadLogic))
 import Position(getPosition, Position)
 import qualified Data.Generics as Generic
 import Flags(Flags, systemVerilogOutput, warnDeadCode,
@@ -68,7 +68,7 @@ import qualified GraphWrapper as G
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack0 ffmap =
-    do let state_warns = unread_reg_warns ++ dead_sim_warns
+    do let state_warns = dead_state_warns ++ dead_sim_warns
        if (warnDeadCode flags && not (null state_warns))
            then bsWarning errh state_warns
            else return ()
@@ -451,7 +451,7 @@ aVerilog errh flags pps aspack0 ffmap =
          inst_inputs, inst_declared_signals, inst_blocks,
          inout_rewire_map,
          inlined_submod_comments,
-         unread_reg_warns,
+         dead_state_warns,
          folded_en_ids,
          sim_reg_input_ids)
              = genInstances errh flags foreignfunc_blocks vDef
@@ -1452,6 +1452,20 @@ genInstances errh flags ff_blocks vDef sim_reg_insts aspack =
                 , let inst_id = avi_vname avi
                 , mkQOUT avi `S.notMember` read_ids ]
 
+        -- Registers that nothing ever writes: the enable resolves to the
+        -- constant 0, so no rule or method in the source reaches a write.
+        -- The dual of unread_reg_warns above; together they report dead
+        -- state at whole-register granularity.  The constant is the
+        -- evidence and it is produced here, by elaboration: downstream
+        -- the enable pin is simply tied low, which is indistinguishable
+        -- from a write that the parent gates off.
+        unwritten_reg_warns =
+            [ (getPosition inst_id, WRegNeverWritten (getIdString inst_id))
+            | avi <- inlined_reg_instances
+            , let inst_id = avi_vname avi
+            , Just (ASInt _ _ (IntLit _ _ 0)) <-
+                  [M.lookup (mkEN avi) reg_def_values] ]
+
         -- the input wire decls (to be later assigned to, but not re-declared)
         reg_inputs :: [(AId, [VId])]
         reg_inputs = map (\((VId _ inst_id _),def_name,c,d,e) -> (inst_id, map fst d)) reg_infos
@@ -1660,7 +1674,7 @@ genInstances errh flags ff_blocks vDef sim_reg_insts aspack =
              inlined_reg_blocks,
              inout_rewire_map,
              top_level_comments,
-             unread_reg_warns,
+             unread_reg_warns ++ unwritten_reg_warns,
              folded_en_ids,
              sim_reg_input_ids)
 

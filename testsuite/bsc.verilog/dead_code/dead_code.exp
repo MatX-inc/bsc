@@ -1,0 +1,28 @@
+#
+# Tests for the dead-state reports under -warn-dead-code
+#
+# The two register reports are duals: G0136 is a register nothing writes,
+# G0134 is a register nothing reads.  Both are elaboration knowledge --
+# in the emitted netlist the first is an enable pin tied low and the
+# second is an unloaded output, neither of which distinguishes dead state
+# from state that is driven or consumed somewhere the netlist cannot see.
+#
+
+# ----------
+# A register that no rule or method ever writes
+
+compile_verilog_pass_warning RegNeverWritten.bsv G0136 1 mkRegNeverWritten \
+    {-warn-dead-code}
+
+# ----------
+# A register that is written but whose value nothing reads
+
+compile_verilog_pass_warning RegNeverRead.bsv G0134 1 mkRegNeverRead \
+    {-warn-dead-code}
+
+# ----------
+# Both reports are opt-in: nothing is said without the flag
+
+compile_verilog_pass_no_warning RegNeverWritten.bsv mkRegNeverWritten
+
+compile_verilog_pass_no_warning RegNeverRead.bsv mkRegNeverRead

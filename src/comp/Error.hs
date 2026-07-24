@@ -1015,6 +1015,7 @@ data ErrMsg =
         | WSVStdIdentExternal String
         | WRegNeverRead String
         | WDeadLogic String
+        | WRegNeverWritten String
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
         | WRuleNoDefaultClock String
@@ -4157,6 +4158,13 @@ getErrorText (WDeadLogic name) =
      s2par ("The signal " ++ quote name ++ " is not consumed by " ++
             "generated hardware nor by any simulation construct.  " ++
             "The logic is dead and is not emitted."))
+
+getErrorText (WRegNeverWritten inst) =
+    (Generate 136, empty,
+     s2par ("The register " ++ quote inst ++ " is never written: no rule " ++
+            "or method of this module reaches a write of it.  Its value is " ++
+            "fixed for the life of the design -- its reset value, or " ++
+            "undefined if it has no reset."))
 
 
 ---------------------------------------------------------------------------
