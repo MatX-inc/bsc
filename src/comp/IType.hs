@@ -232,8 +232,7 @@ iTypeNodeId t =
 -- the pattern synonyms, so key-equal is byte-equal by construction,
 -- representative choice cannot drift .bo output, and no consumer can
 -- smuggle per-type data through the Id side-channel.  Per-type data
--- belongs in IType/TISort.  The consumer audit behind this (which
--- reads survive, which regold) is in ITYPE-INTERNING-DESIGN.md.
+-- belongs in IType/TISort.
 
 tidyTypeId :: Id -> Id
 tidyTypeId i = setIdPosition noPosition (setIdProps i [])
