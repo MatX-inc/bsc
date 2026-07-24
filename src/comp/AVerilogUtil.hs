@@ -15,6 +15,7 @@ module AVerilogUtil (
                      -- higher level conversion functions
                      -- XXX these might belong in AVerilog?
                      vState, InstInfo, wiredInstance,
+                     methResultPorts,
                      vForeignBlock, vForeignCall,
 
                      -- separate decls and defs
@@ -1019,8 +1020,6 @@ vState  flags rewire_map avinst =
 
         mkEnId m m_port = vMethId v_inst_name m m_port MethodEnable port_rename_table
 
-        mkResId m k m_port = vMethId v_inst_name m m_port (MethodResult k) port_rename_table
-
         -- add the multiplicity to Verilog port names
         -- (if there are not multiple ports, no uniquifier is added)
         portid :: String -> Maybe Integer -> String
@@ -1083,17 +1082,11 @@ vState  flags rewire_map avinst =
         -- the result name in method syntax (<inst>$<meth>)
         -- (nub, because several methods might have their return value
         --  come from the same output port)
+        -- shared with methResultPorts, which additionally reports which
+        -- method each wire belongs to
         meth_return_vals =
-            nub
-                [ (mkVId (portid s ino),
-                   mkResId m k ino)
-                  | ((Method m _ _ mult ss outs me), (_,_,retTypes))
-                        <- zip (vFields vi) mts,
-                     ((VName s, vps), retType, k) <- zip3 outs retTypes (splitPortNums outs),
-                     isNotZeroSized retType,
-                     -- let multu = getMethodMultUse m,
-                     ino <- if mult > 1 then map Just [0..mult-1] else [Nothing]
-                ]
+            [ (port_vid, res_vid)
+              | (_, port_vid, res_vid) <- methResultPorts flags avinst ]
 
         -- clock and reset outputs
         -- no nub because getSpecialPorts takes care of it
@@ -1221,6 +1214,39 @@ tildeHack p = p
 
 vIdV :: VName -> VId
 vIdV (VName s) = mkVId s
+
+-- The result wires of an instance's methods: the method each wire belongs
+-- to, the submodule port it connects to, and the wire itself.  vState's
+-- port/wire pairs come from here, so anything that needs to name the
+-- method behind a wire (a report about a result nothing consumes) cannot
+-- drift from what was emitted.
+--
+-- Interface-method identity lives in the VModInfo and nowhere else: the
+-- emitted netlist has only the port and the wire, and once the wire is
+-- dropped for being unused it has neither.
+methResultPorts :: Flags -> AVInst -> [(Id, VId, VId)]
+methResultPorts flags avinst =
+    let v_inst_name = avi_vname avinst
+        vi = avi_vmi avinst
+        mts = avi_meth_types avinst
+        port_rename_table =
+            M.fromList (createVerilogNameMapForAVInst flags avinst)
+        mkResId m k m_port =
+            vMethId v_inst_name m m_port (MethodResult k) port_rename_table
+        -- the multiplicity uniquifier, as it appears in the port name
+        -- (no uniquifier when there are not multiple ports)
+        portid :: String -> Maybe Integer -> String
+        portid s Nothing  = s
+        portid s (Just n) = s ++ "_" ++ itos (n+1)
+    in  nub
+            [ (m, mkVId (portid s ino), mkResId m k ino)
+              | ((Method m _ _ mult _ss outs _me), (_,_,retTypes))
+                    <- zip (vFields vi) mts,
+                ((VName s, _vps), retType, k)
+                    <- zip3 outs retTypes (splitPortNums outs),
+                isNotZeroSized retType,
+                ino <- if mult > 1 then map Just [0..mult-1] else [Nothing]
+            ]
 
 vMethId :: Id -> Id -> Maybe Integer -> MethodPart -> M.Map FString FString -> VId
 vMethId i m m_port mp fsmap =

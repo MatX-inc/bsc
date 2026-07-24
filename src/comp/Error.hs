@@ -1016,6 +1016,7 @@ data ErrMsg =
         | WRegNeverRead String
         | WDeadLogic String
         | WRegNeverWritten String
+        | WMethodResultUnused String String
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
         | WRuleNoDefaultClock String
@@ -4165,6 +4166,12 @@ getErrorText (WRegNeverWritten inst) =
             "or method of this module reaches a write of it.  Its value is " ++
             "fixed for the life of the design -- its reset value, or " ++
             "undefined if it has no reset."))
+
+getErrorText (WMethodResultUnused inst method) =
+    (Generate 137, empty,
+     s2par ("Nothing uses the result of the method " ++ quote method ++
+            " of submodule " ++ quote inst ++ ".  Its wire is not emitted.  " ++
+            "If the method is called only for its effect, this is expected."))
 
 
 ---------------------------------------------------------------------------

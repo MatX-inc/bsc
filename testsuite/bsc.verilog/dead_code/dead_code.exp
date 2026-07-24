@@ -21,8 +21,18 @@ compile_verilog_pass_warning RegNeverRead.bsv G0134 1 mkRegNeverRead \
     {-warn-dead-code}
 
 # ----------
-# Both reports are opt-in: nothing is said without the flag
+# A submodule method whose result nothing consumes.  Reported by method,
+# which only the interface knows: the wire is dropped, and even kept it
+# would not say which method it came from.
+
+compile_verilog_pass_warning MethodResultUnused.bsv G0137 1 \
+    mkMethodResultUnused {-warn-dead-code}
+
+# ----------
+# The reports are opt-in: nothing is said without the flag
 
 compile_verilog_pass_no_warning RegNeverWritten.bsv mkRegNeverWritten
 
 compile_verilog_pass_no_warning RegNeverRead.bsv mkRegNeverRead
+
+compile_verilog_pass_no_warning MethodResultUnused.bsv mkMethodResultUnused

@@ -26,7 +26,8 @@ import FileNameUtil(hasSuf)
 import PFPrint
 import Error(internalError, ErrorHandle, bsWarning, EMsg,
              ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal,
-                    WRegNeverRead, WRegNeverWritten, WDeadLogic))
+                    WRegNeverRead, WRegNeverWritten, WDeadLogic,
+                    WMethodResultUnused))
 import Position(getPosition, Position)
 import qualified Data.Generics as Generic
 import Flags(Flags, systemVerilogOutput, warnDeadCode,
@@ -1547,6 +1548,26 @@ genInstances errh flags ff_blocks vDef sim_reg_insts aspack =
         (unused_defs, inst_info2)
             = dropUnusedPortWires ff_blocks (filtered_defs ++ all_io_wires) reg_uses inst_infos
 
+        -- Submodule method results that nothing consumes.  Named by the
+        -- method they belong to, which only the interface knows: the wire
+        -- is dropped from the output, so downstream there is no port left
+        -- to attribute -- and a kept one would say nothing about which
+        -- method it came from.
+        --
+        -- A method's readiness is a method of its own here, and one whose
+        -- value the parent does not consume is ordinary: the schedule uses
+        -- it, or the method is always ready.  Only results the source asked
+        -- for are worth reporting.
+        unused_method_warns =
+            let unused_set = S.fromList unused_defs
+            in  [ (getPosition inst_id,
+                   WMethodResultUnused (getIdString inst_id) (getIdString m))
+                | avi <- noninlined_aspkg_instances
+                , let inst_id = avi_vname avi
+                , (m, _, res_vid) <- methResultPorts flags avi
+                , not (isRdyId m)
+                , res_vid `S.member` unused_set ]
+
         filtered_ds2 =
             let unused_ids = S.fromList (map vidToId unused_defs)
                 isUsedDef (ADef { adef_objid=i }) =
@@ -1674,7 +1695,8 @@ genInstances errh flags ff_blocks vDef sim_reg_insts aspack =
              inlined_reg_blocks,
              inout_rewire_map,
              top_level_comments,
-             unread_reg_warns ++ unwritten_reg_warns,
+             unread_reg_warns ++ unwritten_reg_warns
+                              ++ unused_method_warns,
              folded_en_ids,
              sim_reg_input_ids)
 
