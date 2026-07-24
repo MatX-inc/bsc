@@ -19,8 +19,8 @@ import qualified Data.ByteString as BS
 import Data.Char
   ( GeneralCategory (..),
     generalCategory,
-    isLowerCase,
-    isUpperCase,
+    isLower,
+    isUpper,
   )
 import Data.String (IsString (..))
 import Error (initErrorHandle)
@@ -172,7 +172,11 @@ checkRepresentable name
   | otherwise = Nothing
   where
     isSmallOrLarge :: Char -> Bool
-    isSmallOrLarge ch = isLowerCase ch || isUpperCase ch || ch == '_'
+    -- isLower/isUpper rather than isLowerCase/isUpperCase: the latter
+    -- pair was added in base-4.18 (GHC 9.6), and this tool is built by
+    -- every GHC the compiler supports.  The two agree on the characters
+    -- that can begin an identifier.
+    isSmallOrLarge ch = isLower ch || isUpper ch || ch == '_'
     isDigit :: Char -> Bool
     isDigit ch = generalCategory ch == DecimalNumber
     -- Despite what the Haskell 2010 Report says, the 'otherwise' case is _not_
