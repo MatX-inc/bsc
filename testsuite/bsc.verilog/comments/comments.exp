@@ -64,22 +64,27 @@ touch CommentOnRule.bsv
 compile_verilog_pass CommentOnRule.bsv "" "-keep-fires"
 if {$vtest == 1} {
     move mkCommentOnRule.v mkCommentOnRule-keep.v
-    # comment on the rule
-    find_regexp mkCommentOnRule-keep.v "
-  // rule RL_do_something
-  //   This rule is important
-  //   Foo
-  //   Bar
-  //   Baz
-  assign (CAN|WILL)_FIRE_RL_do_something"
-
-    # no top-level comment
+    # Nothing synthesizable reads this rule's firing signals, so they are
+    # emitted in the simulation-only group.  The comment stays at the top
+    # level rather than moving down to them.
     find_regexp mkCommentOnRule-keep.v "
 // No combinational paths from inputs to outputs
 //
 //
+// Comments on the inlined rule \`RL_do_something\'\:
+//   This rule is important
+//   Foo
+//   Bar
+//   Baz
+//
+//
 
 `ifdef BSV_ASSIGNMENT_DELAY"
+
+    # -keep-fires still preserves them; they are declared under
+    # translate_off, so synthesis does not see nets it cannot use
+    find_regexp mkCommentOnRule-keep.v {  // synopsys translate_off
+  wire CAN_FIRE_RL_do_something,}
 
     # no comment on the other rule
     find_regexp mkCommentOnRule-keep.v "
@@ -353,6 +358,7 @@ if {$vtest == 1} {
   // Comments for probe \`the_r\'\:
   //   This is a probe
   //
+  // synopsys translate_off
   wire the_r\\\$PROBE, the_r\\\$PROBE_VALID\;"
 }
 
