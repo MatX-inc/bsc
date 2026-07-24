@@ -62,7 +62,7 @@ import ErrorUtil(internalError)
 import Id
 import Position
 import FStringCompat
-import Data.Char(isDigit, isAlpha)
+import Data.Char(isDigit, isAlpha, toLower)
 import qualified Data.Generics as Generic
 import SystemVerilogKeywords(SV_Version(..), svKeywordTable,
                              svOutputReservedWords, svStdPackageIdents)
@@ -79,6 +79,32 @@ synthesis_str = "synopsys"
 
 mkSynthPragma :: String -> Doc
 mkSynthPragma s = text ("// " ++ synthesis_str ++ " " ++ s)
+
+-- A synthesis directive is a comment whose first word is a pragma
+-- introducer: the word this emitter uses (synthesis_str, above) or one of
+-- the alternatives noted beside it.
+pragmaIntroducers :: [String]
+pragmaIntroducers = ["synopsys", "synthesis", "pragma"]
+
+-- Comment text is not always written by this emitter: a "doc" attribute
+-- carries a string from the source through to the output.  Such a string
+-- must not be able to form a directive.  Emitted verbatim, a doc string
+-- reading "synopsys translate_off" would become a live directive and
+-- silently drop everything after it from the synthesis view, while
+-- simulation continued to see it -- a divergence with no trace in the
+-- source.  Only the emitter can prevent this, because only the emitter
+-- knows the text is about to be written into directive position.
+--
+-- Displace the introducer out of first position by quoting the line.
+-- The text is preserved and still legible in the output; being quoted is
+-- what stops it being read as a directive.  Directives this emitter
+-- means to write go through mkSynthPragma rather than through here, so
+-- none of them are affected.
+sanitizeCommentLine :: String -> String
+sanitizeCommentLine str =
+    case (words str) of
+      (w:_) | (map toLower w) `elem` pragmaIntroducers -> "\"" ++ str ++ "\""
+      _ -> str
 
 
 -- VProgram
@@ -129,7 +155,7 @@ type VComment = [String]
 -- so there is no extra line in the output when there are no comments
 ppComment :: [String] -> Doc
 ppComment cs =
-    let ppline str = text ("// " ++ str)
+    let ppline str = text ("// " ++ sanitizeCommentLine str)
     in  foldr ($+$) empty (map ppline cs)
 
 

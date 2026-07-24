@@ -443,4 +443,32 @@ if {$vtest == 1} {
 }
 
 # ----------
+# A doc comment must not be able to form a synthesis directive.  A
+# directive is a comment whose first word is a pragma introducer, so a doc
+# string shaped like one is quoted, displacing the introducer out of first
+# position.  (Emitted verbatim, a "translate_off" the user did not mean as
+# a directive would delete the rest of the module from the synthesis view
+# while simulation still saw it.)  The module has no state, so it carries
+# no directive of bsc's own.
+
+compile_verilog_pass CommentPragmaShaped.bsv
+if {$vtest == 1} {
+    # nothing reaches the output in directive position
+    find_regexp_fail mkCommentPragmaShaped.v {// synopsys translate_off}
+    find_regexp_fail mkCommentPragmaShaped.v {// synthesis translate_off}
+    find_regexp_fail mkCommentPragmaShaped.v {// pragma translate_off}
+    find_regexp_fail mkCommentPragmaShaped.v {// SYNOPSYS TRANSLATE_OFF}
+    # the text is preserved, just not in directive position
+    find_regexp mkCommentPragmaShaped.v {// "synopsys translate_off"}
+    find_regexp mkCommentPragmaShaped.v {// "synthesis translate_off"}
+    find_regexp mkCommentPragmaShaped.v {// "pragma translate_off"}
+    find_regexp mkCommentPragmaShaped.v {// "SYNOPSYS TRANSLATE_OFF"}
+    # leading whitespace does not hide the introducer
+    find_regexp mkCommentPragmaShaped.v {// "   synopsys translate_off"}
+    # prose that merely mentions a directive is left alone
+    find_regexp mkCommentPragmaShaped.v \
+        {// this emitter writes translate_off around simulation-only logic}
+}
+
+# ----------
 
