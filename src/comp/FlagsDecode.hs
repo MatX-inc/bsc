@@ -181,10 +181,16 @@ decodeArgs prog args cdir =
                                     -> (warnings,
                                         DError [(cmdPosition,
                                                  EElabOnlyNotSrcCompile)])
-                                  (Just e) | (backend flags == Just Verilog)
-                                    -> (warnings, DVerLink flags e [] [] [])
-                                  (Just e) | (backend flags == Just Bluesim)
-                                    -> (warnings, DSimLink flags e [] [])
+                                  -- There are no file names to check, but
+                                  -- the link flags still have to be: go
+                                  -- through checkLinkFlags with an empty
+                                  -- file list, so that omitting the file
+                                  -- names does not also omit the checks.
+                                  -- (Bluesim rejecting a 4-state
+                                  -- -unspecified-to is one such check.)
+                                  (Just _) | (backend flags == Just Verilog) ||
+                                             (backend flags == Just Bluesim)
+                                    -> (warnings, checkLinkFlags flags [])
                                   _ -> if (verbose flags)
                                        then -- handle -v without compilation
                                             (warnings, DNoSrc flags)

@@ -318,6 +318,19 @@ compile_fail_error NoOptUndet_UnspecToZ.bsv S0075 1 \
 link_objects_fail_error m.ba mkBluesimLink_UnspecToX S0043 1 {-unspecified-to x}
 link_objects_fail_error m.ba mkBluesimLink_UnspecToZ S0043 1 {-unspecified-to z}
 
+# The file names may be omitted when the backend and the entry point are
+# both given; that is still a link, so it still rejects a 4-state
+# -unspecified-to.  (The check used to be reached only via the file-name
+# path, so a link with the names omitted accepted the flag silently.)
+compile_no_source_fail_error "sim_link_no_files_unspec_x" \
+    {-sim -e mkBluesimLink_UnspecToX -unspecified-to x} S0043
+compile_no_source_fail_error "sim_link_no_files_unspec_z" \
+    {-sim -e mkBluesimLink_UnspecToZ -unspecified-to z} S0043
+
+# The other link-flag checks are reached by that path too
+compile_no_source_fail_error "ver_link_no_files_remove_dollar" \
+    {-verilog -e mkVerilogLink_RemoveDollar -remove-dollar} S0057
+
 
 ## Test that BSC_OPTIONS are used
 set envopt $::env(BSC_OPTIONS)
