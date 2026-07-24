@@ -4138,18 +4138,6 @@ getErrorText (WSVStdIdentRenamed name new_name) =
             quote new_name ++ " in the generated Verilog.  Consider " ++
             "renaming it in the source."))
 
-getErrorText (WDeadLogic name) =
-    (Generate 135, empty,
-     s2par ("The signal " ++ quote name ++ " is not consumed by " ++
-            "generated hardware nor by any simulation construct.  " ++
-            "The logic is dead and is not emitted."))
-
-getErrorText (WRegNeverRead inst) =
-    (Generate 134, empty,
-     s2par ("The register " ++ quote inst ++ " is written but its value " ++
-            "is never read, neither by generated hardware nor by " ++
-            "simulation constructs.  The state it holds is dead."))
-
 getErrorText (WSVStdIdentExternal name) =
     (Generate 133, empty,
      s2par ("The externally visible identifier " ++ quote name ++ " is " ++
@@ -4157,6 +4145,18 @@ getErrorText (WSVStdIdentExternal name) =
             "and cannot be renamed in the generated Verilog.  Some tools " ++
             "(for example verilator) will fail to parse code that uses " ++
             "this name.  Consider renaming it in the source."))
+
+getErrorText (WRegNeverRead inst) =
+    (Generate 134, empty,
+     s2par ("The register " ++ quote inst ++ " is written but its value " ++
+            "is never read, neither by generated hardware nor by " ++
+            "simulation constructs.  The state it holds is dead."))
+
+getErrorText (WDeadLogic name) =
+    (Generate 135, empty,
+     s2par ("The signal " ++ quote name ++ " is not consumed by " ++
+            "generated hardware nor by any simulation construct.  " ++
+            "The logic is dead and is not emitted."))
 
 
 ---------------------------------------------------------------------------
