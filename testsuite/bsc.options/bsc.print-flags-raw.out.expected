@@ -114,6 +114,7 @@ Flags {
 	suppressWarnings = SomeMsgs [],
 	synthesize = False,
 	systemVerilogOutput = False,
+	warnDeadCode = False,
 	tclShowHidden = False,
 	testAssert = False,
 	timeStamps = True,
