@@ -98,7 +98,7 @@ import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile, genBcFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
-import GenForeign(genForeign)
+import GenForeign(genForeign, checkForeignFuncDuplicates)
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
@@ -462,6 +462,13 @@ compilePackage
     --------------------------------------------
     if checkOnly flags
      then do
+        -- the one diagnostic the skipped passes own; the rest of genForeign
+        -- only writes .ba, which a check compile has no business emitting.
+        -- Ordered ahead of the unused-import warning to match the full path,
+        -- where genForeign runs long before it: bsError does not return, so
+        -- getting this backwards would make a package with both problems
+        -- report differently in the two modes.
+        checkForeignFuncDuplicates errh mod
         (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
         warnUnusedImports pkgsUsedInExports
         let bc_filename = putInDir (bdir flags) name bcSuffix
