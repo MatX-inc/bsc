@@ -403,15 +403,17 @@ tiExpr as td exp@(CApply f@(CVar gn) es@[(CVar i)]) | gn `qualEq` idPrimGetName 
 
 tiExpr as td exp@(CApply f@(CVar vo) [e@(CHasType _ t)]) | vo == idValueOf = do
     let vs = nub (tv t)
-    bvs <- getBoundTVs
-    case vs \\ bvs of
+    bvs <- getBoundTVSet
+    -- filter, not (\\): keeps the order of `vs`
+    case filter (`S.notMember` bvs) vs of
         [] -> tiApply as td exp f e
         v : _ -> err (getPosition exp, EValueOf (pfpString v))
 
 tiExpr as td exp@(CApply f@(CVar vo) [e@(CHasType _ t)]) | vo == idStringOf = do
     let vs = nub (tv t)
-    bvs <- getBoundTVs
-    case vs \\ bvs of
+    bvs <- getBoundTVSet
+    -- filter, not (\\): keeps the order of `vs`
+    case filter (`S.notMember` bvs) vs of
         [] -> tiApply as td exp f e
         v : _ -> err (getPosition exp, EStringOf (pfpString v))
 
@@ -1924,10 +1926,10 @@ tiStmts' chke mon _ as td (e@(CSBindT _ _ _ (ty@(CQType (_:_) _)) _) : _) =
         -- XXX is that ever the right thing to do?
         err (getPosition e, EStmtContext (pfpString ty))
 tiStmts' chke mon mt as td (CSBindT (CPVar i) maybeName pprops (CQType [] ty) e : ss) = do
-        bs <- getBoundTVs
+        bs <- getBoundTVSet
         -- Of the type variables in the explicit declaration, separate the
         -- free type variables (fvs) from those bound by the context (bvs)
-        let (bvs, fvs) = partition (\x -> elem x bs) (tv ty)
+        let (bvs, fvs) = partition (`S.member` bs) (tv ty)
         -- Check that the variables bound in this declaration (bvs)
         -- have the same kind as where they were bound
         let kindCheckBV v =
@@ -2265,11 +2267,15 @@ tiExpl_1 as (i, cqt, alts, me) = do
 
     -- We're going to generalize this type over the type variables,
     -- so figure out which ones are bound.
-    bs           <- getBoundTVs
+    bs           <- getBoundTVSet
+    -- the cumulative list is cached, so taking both forms is free; the
+    -- union below feeds checkForAmbiguousPreds, which wants a list in
+    -- the original (stack) order rather than the set's sorted order
+    bsl          <- getBoundTVs
 
     -- Of the type variables in the explicit declaration, separate the
     -- free type variables (vs) from those bound by the context (bvs)
-    let (bvs, vs) = partition (\x -> elem x bs) (tv qt)
+    let (bvs, vs) = partition (`S.member` bs) (tv qt)
 
     -- Check that the variables bound in this declaration (bvs)
     -- have the same kind as where they were bound
@@ -2289,7 +2295,7 @@ tiExpl_1 as (i, cqt, alts, me) = do
     -- XXX do we need to apply the subst?
     --s <- getSubst
     --let fvs = tv (apSub s as) `union` bs
-    let fvs = tv as `union` bs
+    let fvs = tv as `union` bsl
     checkForAmbiguousPreds i fvs qt
 
 {-
