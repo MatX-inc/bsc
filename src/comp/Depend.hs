@@ -2,7 +2,7 @@
 module Depend(chkDeps, parseFile, chkParse, doCPP, genDepend, genFileDepend,
               outlaw_sv_kws_as_classic_ids) where
 
-import Data.Maybe(isJust)
+import Data.Maybe(isJust, isNothing)
 import Data.List(nub)
 import Control.Monad(when)
 import System.Process(system)
@@ -27,6 +27,7 @@ import PFPrint
 import FStringCompat
 import Lex
 import Parse
+import BinUtil(outputSuffixes, importSuffixes)
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
                     bscSrcSuffix, bsvSrcSuffix, binSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
@@ -117,7 +118,10 @@ getPkgInfo :: ErrorHandle -> Flags -> PkgName -> IO (Either EMsg PkgInfo)
 getPkgInfo errh flags pname =
     let name = getIdString pname ++ "." ++ bscSrcSuffix
         bsvname = getIdString pname ++ "." ++ bsvSrcSuffix
-        bname = getIdString pname ++ "." ++ binSuffix
+        -- a source-less package can be satisfied by any binary file the
+        -- mode reads, in the mode's order of preference (BinUtil.doImport);
+        -- a full compile looks for the .bo alone
+        bnames = [ getIdString pname ++ "." ++ suf | suf <- importSuffixes flags ]
         path = ifcPath flags
         errPackageMissing = (getIdPosition pname,
                              EMissingPackage (pfpString pname))
@@ -132,10 +136,14 @@ getPkgInfo errh flags pname =
                 -- parseFile checks package name matches filename (fatal error)
                 return (Just pi)
         trybo :: IO (Maybe PkgInfo)
-        trybo = do
-          mfile <- readBinFilePath errh noPosition False bname path
+        trybo = tryBinNames bnames
+
+        tryBinNames :: [String] -> IO (Maybe PkgInfo)
+        tryBinNames [] = return Nothing
+        tryBinNames (nm:nms) = do
+          mfile <- readBinFilePath errh noPosition False nm path
           case mfile of
-            Nothing -> return Nothing
+            Nothing -> tryBinNames nms
             Just (file, fname) ->
                 -- this comparison forces evaluation to force close on the file
                 if file /= file then internalError "getPkgInfo" else do
@@ -169,11 +177,25 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     -- (like TopUtils::putInDir)
     let mkdname dir suf = dir ++ "/" ++ baseName (dropSuf fname) ++ "." ++ suf
 
-    -- find the mod time of the bo file (either in same dir or in the bdir)
-    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ binSuffix)
+    -- find the mod time of the output files (either in same dir or in the
+    -- bdir).  Under a signature-only compile those are the .bi and, for a
+    -- check, the .bcheck: a .bo left by an ordinary build says nothing
+    -- about whether the mode's outputs exist or are current, and taking it
+    -- as the answer makes -u decide every package is up to date and emit
+    -- nothing at all.  The oldest output decides and a missing one makes
+    -- the package stale, so a check that lost its .bcheck is redone
+    -- although its .bi is current, and one that lost its .bi likewise.
+    -- outputSuffixes is never empty, so minimum always has an element.
+    let outSuffixes = outputSuffixes flags
+        oldest ts = if any isNothing ts then Nothing else minimum ts
+    tbo_samedir <- oldest <$>
+                   mapM (\suf -> getModTime (dropSuf fname ++ "." ++ suf))
+                        outSuffixes
     tbo_bdir <- case (bdir flags) of
                     Nothing -> return Nothing
-                    Just dir -> getModTime (mkdname dir binSuffix)
+                    Just dir -> oldest <$>
+                                mapM (\suf -> getModTime (mkdname dir suf))
+                                     outSuffixes
     let tbo = if (isJust tbo_bdir) then tbo_bdir else tbo_samedir
 
     -- include the prelude to avoid failures when predule was updated.

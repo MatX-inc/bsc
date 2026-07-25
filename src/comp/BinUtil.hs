@@ -2,6 +2,7 @@ module BinUtil (
                 BinMap, BinFile,
                 HashMap,
                 readImports,
+                outputSuffixes, importSuffixes,
                 readBin, sortImportedSignatures,
                 replaceImportedSignatures
                ) where
@@ -11,7 +12,7 @@ import qualified Data.Map as M
 import Flags(Flags,
              ifcPath,
              enablePoisonPills,
-             signatureCompile,
+             checkOnly, signatureOnly, signatureCompile,
              usePrelude,
              verbose)
 import Position(noPosition)
@@ -23,7 +24,7 @@ import Prim
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsWarning)
 import PFPrint
 import SCC
-import FileNameUtil(binSuffix, biSuffix)
+import FileNameUtil(binSuffix, biSuffix, bcheckSuffix)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinFile, readBiFile)
 import Util(fromJustOrErr, fromMaybeM,
@@ -168,8 +169,28 @@ addPrelude flags imps | usePrelude flags = CImpId False idPrelude :
                                            imps
                       | otherwise = imps
 
+-- The binary files a compile writes for a package, in the order it writes
+-- them: a check compile the .bi and the .bcheck, a -signature-only compile
+-- the .bi, a full compile the .bo.  Depend times every one of them, the
+-- oldest deciding and a missing one making the package stale.
+outputSuffixes :: Flags -> [String]
+outputSuffixes flags
+    | checkOnly flags = [biSuffix, bcheckSuffix]
+    | signatureOnly flags = [biSuffix]
+    | otherwise = [binSuffix]
+
+-- The binary files that can satisfy an import, most preferred first: the
+-- probe doImport makes below, for Depend's source-less packages.  Under a
+-- signature-only compile the package's .bi, then a full .bo, so that
+-- libraries shipped as .bo alone resolve; a full compile reads .bo files
+-- only; a .bcheck is never an import.
+importSuffixes :: Flags -> [String]
+importSuffixes flags
+    | signatureCompile flags = [biSuffix, binSuffix]
+    | otherwise = [binSuffix]
+
 -- Import one package: its interface file (.bi) under a signature-only
--- compile when there is one, else its .bo file
+-- compile when there is one, else its .bo file (importSuffixes)
 doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
             IO (String, CSignature, CSignature, IPackage a, String,
                 HashMap, [Id])
