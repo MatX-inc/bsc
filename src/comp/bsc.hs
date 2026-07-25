@@ -103,7 +103,7 @@ import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile, genBiFile, genBcheckFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
-import GenForeign(genForeign)
+import GenForeign(genForeign, foreignFuncInfos, checkForeignFuncDuplicates)
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
@@ -542,10 +542,10 @@ signatureDepends (CtxReduced { cr_impsigs = impsigs }) =
 -- form (an LSP), never an import, so an edit inside a body, which changes
 -- the .bcheck and leaves the .bi the same, reaches no dependent.  Of the
 -- passes skipped, Simplify and VPIWrappers have no bsError/bsWarning sites
--- at all, and genVPI is a no-op without a backend; the single diagnostic
--- given up is genForeign's EForeignFuncDuplicates, which a non-check
--- compile of the same source still raises.  Skipping genForeign also stops
--- a check emitting foreign .ba files as a side effect.
+-- at all, and genVPI is a no-op without a backend; the one diagnostic
+-- those passes own, genForeign's EForeignFuncDuplicates, is raised here
+-- (checkForeignFuncDuplicates).  Skipping genForeign also stops a check
+-- emitting foreign .ba files as a side effect.
 --
 -- No .bcheck is written when the typecheck reported errors and recovered
 -- (-continue-after-errors): the file's existence means the package
@@ -573,6 +573,13 @@ genCheckOnly
     (TypeChecked { tc_pkg = mod, tc_errors = tcErrors,
                    tc_pkgsUsedInCode = pkgsUsedInCode, tc_time = t }) = do
     start flags DFwriteBin
+    -- the one diagnostic the skipped passes own; the rest of genForeign
+    -- only writes .ba, which a check compile has no business emitting.
+    -- Ordered ahead of the unused-import warning to match the full path,
+    -- where genForeign runs long before it: bsError does not return, so
+    -- getting this backwards would make a package with both problems
+    -- report differently in the two modes.
+    checkForeignFuncDuplicates errh (foreignFuncInfos mod)
     (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
     warnUnusedImports errh mctx [pkgsUsedInTypes, pkgsUsedInCtxReduce,
                                  pkgsUsedInCode, pkgsUsedInExports]
