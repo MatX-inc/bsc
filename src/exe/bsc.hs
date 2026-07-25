@@ -573,12 +573,23 @@ compilePackage
                                 | (WrapInfo i _ _ _ _ _) <- gs ]
                 tr = [ (qualId pid i_, qualId pid i)
                                 | (WrapInfo i _ _ i_ _ _) <- gs ]
+                -- Set-backed membership for the three scans below.  As
+                -- lists these cost O(|ds| * |gis|) and, for the SCC edge
+                -- lists, O(|ds| * |fdVars| * |ds'|) Id comparisons -- and
+                -- one Id comparison is two FString compares, so this
+                -- single block dominated the compile on definition-heavy
+                -- packages (profiled at ~69% of runtime, split across
+                -- orderGens.g / idEq / id_fs, before this change).
+                -- Semantics are preserved: filter keeps the first list's
+                -- order and duplicates, which is what intersect does.
+                gisSet = S.fromList gis
                 ds' = [ IDef (lookupWithDefault tr i i) t e p
-                                | IDef i t e p <- ds, i `notElem` gis ]
-                is = [ i | IDef i _ _ _ <- ds' ]
-                g  = [ (i, fdVars e `intersect` is) | IDef i _ e _ <- ds' ]
+                                | IDef i t e p <- ds, i `S.notMember` gisSet ]
+                isSet = S.fromList [ i | IDef i _ _ _ <- ds' ]
+                g  = [ (i, filter (`S.member` isSet) (fdVars e))
+                                | IDef i _ e _ <- ds' ]
                 iis = scc g
-                os = concat iis `intersect` gis
+                os = filter (`S.member` gisSet) (concat iis)
                 get i = headOrErr "bsc.orderGens: no WrapInfo"
                                   [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
                                                 unQualId i == i' ]
