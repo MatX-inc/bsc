@@ -430,6 +430,21 @@ compilePackage
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
+    -- Shared by both exits so they cannot drift: an import used only in a
+    -- definition body is still a use (pkgsUsedInCode), so this must run on
+    -- the check path too or -check-only reports a clean package that the
+    -- real build warns about.
+    let warnUnusedImports pkgsUsedInExports =
+          let (CPackage _ _ imports _ _ _ _) = mctx
+              allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce,
+                                      pkgsUsedInCode, pkgsUsedInExports]
+              importedPkgs = [i | (CImpId _ i) <- imports]
+              unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs))
+                                  importedPkgs
+              unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg))
+                                | pkg <- unusedPkgs]
+          in  when (not (null unusedWarns)) $ bsWarning errh unusedWarns
+
     --------------------------------------------
     -- -check-only: the package typechecked, which was the whole question.
     -- Emit the signature-only .bc and stop.
@@ -447,7 +462,8 @@ compilePackage
     --------------------------------------------
     if checkOnly flags
      then do
-        (bi_sig, _) <- genUserSign errh symt mctx
+        (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
+        warnUnusedImports pkgsUsedInExports
         let bc_filename = putInDir (bdir flags) name bcSuffix
             -- The same list "fixupDefs" would put in ipkg_depends, built the
             -- same way the .bo path builds "binmods": every package in the
@@ -673,12 +689,7 @@ compilePackage
      bo_sig <- genEverythingSign errh symt mctx
 
      -- Check for unused imports by combining packages from all three sources
-     let (CPackage _ _ imports _ _ _ _) = mctx
-         allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
-         importedPkgs = [i | (CImpId _ i) <- imports]
-         unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
-         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
-     when (not (null unusedWarns)) $ bsWarning errh unusedWarns
+     warnUnusedImports pkgsUsedInExports
 
      -- Generate binary version of the internal tree .bo file
      let bin_filename = putInDir (bdir flags) name binSuffix
