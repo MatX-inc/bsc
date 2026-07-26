@@ -15,7 +15,7 @@ import IOUtil(progArgs)
 import Util(mapSndM, itos)
 
 import CSyntax
-import FStringCompat(FString)
+import FStringCompat(FString, mkFString)
 import CFreeVars(getPV, getFVE, fvSetToFreeVars)
 import CType
 import Assump
@@ -243,17 +243,53 @@ getTopNameInfo i = do
                 tyVars = zipWith tVarKind tmpTyVarIds ks
                 t'     = inst (map TVar tyVars) (qualToType qt)
 
-newDictId :: Position -> L a Id
-newDictId pos = do
-  n <- gets dictNo
+-- Name a lifted dictionary after a hash of its evidence, so that adding an
+-- unrelated definition to a package does not renumber its dictionaries and
+-- move the bytes of every artifact that references them.
+--
+-- A type does not determine a lifted dictionary here (see the "dictPool type
+-- collision (different evidence)" trace), so the evidence is what pins it
+-- down.  Cheap by construction: "renderEvidence" refers to kid dictionaries
+-- by slot and to types by marker, so the only name-dependent input is the kid
+-- list -- and lifting is bottom-up, so kids are already named.  This hashes
+-- one flat record per dictionary rather than walking the evidence DAG;
+-- walking it as a tree is what made an earlier attempt two orders of
+-- magnitude slower (testsuite/bsc.misc/perf-liftdicts-blowup).
+--
+-- A kid without evidence (incoherent) keeps a counter name, so a parent above
+-- one inherits its instability.  That is as stable as such a dictionary can
+-- be: an incoherent resolution is not a function of its evidence alone.
+evidenceBase :: CType -> (String, [Id], [IType]) -> String
+evidenceBase t (str, kids, tys) =
+    dictBaseName t (unlines (str : map getIdBaseString kids ++
+                             map ppString tys))
+
+-- Evidence yields a stable name; without it (an incoherent dictionary) fall
+-- back to the package-local counter.  The counter is also the escape hatch if
+-- a user definition has somehow claimed the hashed name.
+newDictId :: Position -> CType -> Maybe (String, [Id], [IType]) -> L a Id
+newDictId pos t mev = do
   mi <- gets packageName
   taken <- gets topLevelBases
-  -- skip any name a user definition already claims
-  let fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` taken = fresh (k + 1)
-              | otherwise = k
-      n' = fresh n
-  modify (\s -> s { dictNo = n' + 1 })
-  return $ qualId mi $ addIdProps (enumId "lifted_dict" pos n') [IdPDict, IdPCAF]
+  -- setBadId as enumId does: isBadId marks a name the user did not write, and
+  -- AConv, SimCCBlock and the instance-hierarchy walks all key on it to keep
+  -- these out of Bluesim symbols and bluetcl's hierarchy.
+  let mk base = qualId mi $ addIdProps (setBadId (mkId pos (mkFString base)))
+                                       [IdPDict, IdPCAF]
+  case mev of
+    Just ev | let base = evidenceBase t ev,
+              not (mkFString base `S.member` taken)
+            -> return (mk base)
+    _ -> do
+      n <- gets dictNo
+      -- skip any name a user definition already claims
+      let fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` taken
+                      = fresh (k + 1)
+                  | otherwise = k
+          n' = fresh n
+      modify (\s -> s { dictNo = n' + 1 })
+      return $ qualId mi $
+          addIdProps (enumId "lifted_dict" pos n') [IdPDict, IdPCAF]
 
 isIncoherentDict :: Id -> Bool
 isIncoherentDict i = isDictId i && hasIdProp i IdPIncoherent
@@ -407,16 +443,13 @@ handleDict incoherent p t e = do
           [] -> do
             when (trace_lift_dicts && not (null cands)) $ traceM $
                 "dictPool type collision (different evidence): " ++ ppReadable t
-            lift_i0 <- newDictId (getPosition e)
-            let lift_i = if incoherent then addIdProp lift_i0 IdPIncoherent
-                         else lift_i0
-            when trace_lift_dicts $ traceM $
-                "adding lifted dict: " ++ ppReadable (lift_i, e')
             s0 <- get
             -- The evidence identity for cross-package deduplication (see
             -- "renderEvidence"), recorded at mint time.  An incoherent
             -- resolution depends on the instances visible HERE, so it
             -- never gets one.
+            --
+            -- Computed before the name, because the name is derived from it.
             let mev = if incoherent then Nothing
                       else renderEvidence (flags s0) (symt s0) e'
                 props = case mev of
@@ -424,6 +457,11 @@ handleDict incoherent p t e = do
                           Just (str, kids, tys) -> [ DefP_DictRendering str,
                                                      DefP_DictKids kids,
                                                      DefP_DictTypes tys ]
+            lift_i0 <- newDictId (getPosition e) t mev
+            let lift_i = if incoherent then addIdProp lift_i0 IdPIncoherent
+                         else lift_i0
+            when trace_lift_dicts $ traceM $
+                "adding lifted dict: " ++ ppReadable (lift_i, e')
             when (trace_lift_dicts && not incoherent && null props) $ traceM $
                 "no evidence rendering (not cross-package dedupable): "
                 ++ ppReadable (lift_i, e')

@@ -4,6 +4,7 @@ module Pred(
             Qual(..), PredWithPositions(..), Pred(..), Class(..), Inst(..),
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
             expandSyn, predToType, qualToType, mkInst,
+            dictBaseName,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -13,7 +14,11 @@ module Pred(
 import Prelude hiding ((<>))
 #endif
 
-import Data.List(union, genericSplitAt, genericLength)
+import Data.List(union, genericSplitAt, genericLength, intersperse)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString as B
+import Util(hashInit, nextHashByte, showHash)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -238,6 +243,32 @@ instance PVPrint Inst where
     pvPrint d p (Inst e _ qp pkg) = text "(Inst" <+> pvPrint d 10 e <+> pvPrint d 10 qp <+> pvPrint d 10 pkg <> text ")"
 
 -----------------------------------------------------------------------------
+
+-- The base name for a lifted dictionary: its type, flattened the way mkInstId
+-- flattens an instance head, plus a hash of a discriminator.
+--
+-- Content-derived rather than counter-derived, so that adding an unrelated
+-- definition to a package does not renumber its dictionaries and move the
+-- bytes of every artifact that references them.  Readable, because these
+-- names reach the user in typechecker output and in dumped IR.
+--
+-- The discriminator is hashed in unconditionally rather than only to break
+-- ties: a tie-break would depend on what else the package happens to contain,
+-- which is the positional instability this exists to remove.  Callers pass
+-- whatever pins the dictionary down beyond its type -- its evidence rendering
+-- where the type does not determine it, the type itself where it does.
+dictBaseName :: Type -> String -> String
+dictBaseName t disc =
+    "_dict_" ++ typePart ++ "_" ++
+    showHash (B.foldl' nextHashByte hashInit (TE.encodeUtf8 (T.pack disc)))
+  where typePart = concat $ intersperse "~" $ map getIdBaseString $
+                       flat (expandSyn t)
+        flat (TAp t1 t2)          = flat t1 ++ flat t2
+        flat (TVar (TyVar i _ _)) = [i]
+        flat (TCon (TyCon i _ _)) = [i]
+        flat (TCon (TyNum n _))   = [mkNumId n]
+        flat (TCon (TyStr s _))   = [mkStrId s]
+        flat _                    = []
 
 expandSyn :: Type -> Type
 expandSyn t0 = exp [] f as
