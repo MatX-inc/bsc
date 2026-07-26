@@ -17,13 +17,13 @@ ContextOnClassSubset.ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prel
 	·(Prelude.Bit 16)
 	·(Prelude.Bit 8)
 	_bar
-	ContextOnClassSubset._dict_Literal~Bit~16_16246552827821980232=
+	ContextOnClassSubset._dict_Literal~(Bit~16)_16246552827821980232=
 -- IdProp: ContextOnClassSubset::ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prelude.Bit~8[IdPDict]
 next def..........................................................
-ContextOnClassSubset._dict_Literal~Bit~16_16246552827821980232 :: Prelude.Literal (Prelude.Bit 16)
-ContextOnClassSubset._dict_Literal~Bit~16_16246552827821980232 =
+ContextOnClassSubset._dict_Literal~(Bit~16)_16246552827821980232 :: Prelude.Literal (Prelude.Bit 16)
+ContextOnClassSubset._dict_Literal~(Bit~16)_16246552827821980232 =
   Prelude.Prelude.Literal~Prelude.Bit~n= ·16
--- IdProp: ContextOnClassSubset::_dict_Literal~Bit~16_16246552827821980232[IdP_bad_name,IdPDict,IdPCAF]
+-- IdProp: ContextOnClassSubset::_dict_Literal~(Bit~16)_16246552827821980232[IdP_bad_name,IdPDict,IdPCAF]
 -- Properties: [DefP_DictRendering "P1(V(Q7:Prelude;B29:Prelude.Literal~Prelude.Bit~n;)T0;)",DefP_DictKids [],DefP_DictTypes [ITNum 16]]
 next def..........................................................
 

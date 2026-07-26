@@ -10,6 +10,10 @@ import Control.Monad(foldM)
 import Debug.Trace(trace)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 -- import Numeric(showHex)
 
 import ErrorUtil(internalError)
@@ -604,7 +608,12 @@ isWhitespace _ = False
 -- A computational simple hash
 -- 4000000063 and 1442968193 are large primes that fit in 32 bits
 
+-- Eq/Ord so a hash can be stored and compared as itself.  Without them the
+-- only comparable form was showHash's decimal rendering, which is why every
+-- caller escaped to String immediately and why hashes are stored as ~21 bytes
+-- of text where 8 would do.
 data Hash = Hash !Word32 !Word32
+  deriving (Eq, Ord)
 
 hashInit :: Hash
 hashInit = Hash 0 4000000063
@@ -620,5 +629,21 @@ nextHashByte (Hash x y) c =
 hashValue :: Hash -> Word64
 hashValue (Hash x y) = ((fromIntegral x) `shiftL` 32) .|. (fromIntegral y)
 
+-- Every caller wants exactly one of these folds; hand-rolling them per call
+-- site is how the codebase ended up with the same expression in five places.
+-- One home also means one place to change if 64 bits proves too narrow --
+-- these now name lifted dictionaries, where a collision is two different
+-- dictionaries sharing an identity.
+hashBytes :: B.ByteString -> Hash
+hashBytes = B.foldl' nextHashByte hashInit
+
+hashBytesL :: BL.ByteString -> Hash
+hashBytesL = BL.foldl' nextHashByte hashInit
+
+hashString :: String -> Hash
+hashString = hashBytes . TE.encodeUtf8 . T.pack
+
+-- For diagnostics and user-visible output.  Not the storage form: prefer the
+-- Hash itself, which is 8 bytes and cannot be malformed.
 showHash :: Hash -> String
 showHash h = show (hashValue h)
