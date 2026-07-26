@@ -19,7 +19,8 @@ import ISyntaxUtil(iDefsMap)
 -- (2) Find references to top-level variables and insert the definitions
 --     (to avoid lookups when evaluating the code).  This creates a cyclic
 --     data structure when defs call each other recursively.
-fixupDefs :: IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs :: IPackage a -> [(IPackage a, Maybe String)] ->
+             (IPackage a, [IDef a])
 fixupDefs (IPackage mi _ ps ds own_atf_cache) ipkgs =
     let
         (ms, _) = unzip ipkgs
@@ -58,7 +59,7 @@ fixupDefs (IPackage mi _ ps ds own_atf_cache) ipkgs =
 -- Replace the definition for a top-level variable with a new definition.
 -- (This is used to replace the pre-synthesis definition for a module with
 -- the post-synthesis definition.)
-updDef :: IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef :: IDef a -> IPackage a -> [(IPackage a, Maybe String)] -> IPackage a
 updDef d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list

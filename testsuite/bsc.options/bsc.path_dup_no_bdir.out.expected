@@ -9,6 +9,7 @@ bsc -i BLUESPECDIR -print-flags -p foo::foo:bar:foo:baz:baz:foo
 Flags:
     -aggressive-conditions
     -i BLUESPECDIR
+    -import-hashes
     -lift
     -o a.out
     -p foo:bar:baz

@@ -17,6 +17,7 @@ bsc -i BLUESPECDIR -print-flags -vdir INVALID
 Flags:
      -aggressive-conditions
      -i   BLUESPECDIR
+     -import-hashes
      -lift
      -o   a.out
      -parallel-sim-link   1
