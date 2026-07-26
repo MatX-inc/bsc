@@ -169,14 +169,41 @@ many_cycle errh ds@(d1:_) =
           get_tvars (CLValueSign (CDefT _ vs _ _) _) = vs
           get_tvars _ = internalError "many_cycle . get_tvars"
           get_expression :: CDefl -> CExpr
-          get_expression d@(CLValueSign (CDefT _ _ _ clauses) _) =
+          get_expression d@(CLValueSign (CDefT _ tvs (CQType ctx _) clauses) _) =
               case clauses of
                 [(CClause [] [] e)] -> e
-                _ -> bsErrorUnsafe errh
-                     [(getPosition d,
-                       EMutualRecursionComplicatedClause (ppReadable (get_id d)))]
-                     -- Desugaring makes this error case happen less frequently
-                     -- than expected.  For example:
+                -- A polymorphic member still cannot enter the knot: the
+                -- tuple is one monomorphic primFix and def_qtype drops the
+                -- context, so a member abstracted over type variables or
+                -- dictionaries has nowhere to put them.  Keep the error --
+                -- without this guard the wrapping below lets it through to
+                -- die in convType with an internal error, which is a worse
+                -- diagnostic than the honest "not supported".  Letrect.bs
+                -- is the testcase.
+                _ | not (null tvs) || not (null ctx) ->
+                      bsErrorUnsafe errh
+                        [(getPosition d,
+                          EMutualRecursionComplicatedClause
+                            (ppReadable (get_id d)))]
+                -- Monomorphic, but with arguments, patterns or qualifiers:
+                -- do the rewrite the error above asks the USER to do --
+                -- "f x = y" becomes "f = let temp x = y in temp" -- and the
+                -- member enters the knot argument-free.
+                --
+                -- Whether a definition already arrived point-free was never
+                -- decided here: it depended on a letseq being needed to hold
+                -- the definition's local dictionary bindings, which happens
+                -- to bind the arguments in an inner temp.  Anything that
+                -- resolves those dictionaries elsewhere -- the ground-
+                -- dictionary pool hoisting them to top-level defs -- removes
+                -- the letseq and leaves the clause in argument form, which
+                -- is why this used to fail unpredictably.
+                _ -> let tmp = mkIdPost (get_id d) fsDollar
+                         tmp_def = CLValueSign
+                                     (CDefT tmp [] (CQType [] (get_type d))
+                                            clauses)
+                                     []
+                     in  Cletseq [tmp_def] (CVar tmp)
     {-
 five :: Integer
 five = let evens :: Integer -> List Integer
