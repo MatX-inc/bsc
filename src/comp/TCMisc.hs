@@ -328,8 +328,16 @@ warnTransitiveIncoherent sbs = do
       case M.lookup i clsMap >>= allowIncoherent of
         Just True -> return ()   -- incoherent class: suppress
         mallow    ->
-          let msg = (pos, WTransitiveIncoherentMatch tStr rootPredStr rootInstStr)
-          in  if fromMaybe ai mallow then twarn msg else err msg
+          -- Distinct codes, because these are different claims: the
+          -- warning says a proviso happens to rest on an incoherent
+          -- match, the error says a proviso PROMISED coherence and does
+          -- not deliver. One code for both could not be waived or
+          -- promoted independently of the other.
+          if fromMaybe ai mallow
+            then twarn (pos, WTransitiveIncoherentMatch
+                                 tStr rootPredStr rootInstStr)
+            else err   (pos, ECoherentTransitiveIncoherentMatch
+                                 tStr rootPredStr rootInstStr)
       where
         t  = fromJustOrErr "warnTransitiveIncoherent: id not in bindTypes"
                            (M.lookup i typeMap)
