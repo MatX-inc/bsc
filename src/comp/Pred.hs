@@ -263,23 +263,39 @@ instance PVPrint Inst where
 -- injective when type normalisation changes.
 dictBaseName :: Type -> String -> String
 dictBaseName t disc =
-    "_dict_" ++ render (expandSyn t) ++ "_" ++ showHash (hashString disc)
-  where
-    -- Structure-preserving, unlike mkInstId's flattening: a nested
-    -- application is bracketed, so C (D E) F does not read as C D (E F).
-    render ty = case spine ty [] of
-                  (h, [])   -> leaf h
-                  (h, args) -> concat $ intersperse "~" (leaf h : map arg args)
-    arg a = case spine a [] of
-              (h, []) -> leaf h
-              _       -> "(" ++ render a ++ ")"
-    spine (TAp f x) acc = spine f (x:acc)
-    spine h acc         = (h, acc)
-    leaf (TVar (TyVar i _ _)) = getIdBaseString i
-    leaf (TCon (TyCon i _ _)) = getIdBaseString i
-    leaf (TCon (TyNum n _))   = getIdBaseString (mkNumId n)
-    leaf (TCon (TyStr s _))   = getIdBaseString (mkStrId s)
-    leaf _                    = "_"
+    "_dict_" ++ dictRender (expandSyn t) ("_" ++ showHash (hashString disc))
+
+-- Structure-preserving, unlike mkInstId's flattening: a nested application is
+-- bracketed, so C (D E) F does not read as C D (E F).
+--
+-- A ShowS rather than a String.  Concatenating at every level of nesting is
+-- quadratic in depth, and dictionary types nest deeply enough for that to
+-- dominate: on IsaR2Tile the old rendering was 67% of the compile and its
+-- longest single render is 53KB.  Difference lists make it linear and let a
+-- parent refer to its children instead of copying them; only dictBaseName
+-- flattens, once, straight onto the hash suffix.
+dictRender :: Type -> ShowS
+dictRender ty = case dictSpine ty [] of
+                  (h, [])   -> dictLeaf h
+                  (h, args) -> foldr (.) id $
+                                 intersperse (showChar '~')
+                                             (dictLeaf h : map dictArg args)
+
+dictArg :: Type -> ShowS
+dictArg a = case dictSpine a [] of
+              (h, []) -> dictLeaf h
+              _       -> showChar '(' . dictRender a . showChar ')'
+
+dictSpine :: Type -> [Type] -> (Type, [Type])
+dictSpine (TAp f x) acc = dictSpine f (x:acc)
+dictSpine h acc         = (h, acc)
+
+dictLeaf :: Type -> ShowS
+dictLeaf (TVar (TyVar i _ _)) = showString (getIdBaseString i)
+dictLeaf (TCon (TyCon i _ _)) = showString (getIdBaseString i)
+dictLeaf (TCon (TyNum n _))   = showString (getIdBaseString (mkNumId n))
+dictLeaf (TCon (TyStr s _))   = showString (getIdBaseString (mkStrId s))
+dictLeaf _                    = showString "_"
 
 expandSyn :: Type -> Type
 expandSyn t0 = exp [] f as
