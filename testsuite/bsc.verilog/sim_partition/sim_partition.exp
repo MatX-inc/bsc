@@ -1,0 +1,95 @@
+#
+# -no-translate-sim-only moves logic that only simulation reads out of the
+# synthesis view.
+#
+# Both arms assert against the file with the translate_off regions deleted,
+# which is what synthesis actually reads.  Asserting against the whole file
+# would pass whether or not the partitioning worked.
+#
+# The default arm matters more than the flagged one: a leak there changes
+# every netlist without anyone asking for it, which is why this is a flag.
+#
+
+# ----------
+# Default: registers stay put.  Folded scheduling signals still go to
+# translate_off -- that is unconditional and not what this flag controls.
+
+compile_verilog_pass SimPartition.bsv mkSimPartition
+
+sed mkSimPartition.v mkSimPartition-synth-default.v {-e "/translate_off/,/translate_on/d"}
+
+find_regexp mkSimPartition-synth-default.v {reg \[7 : 0\] watched}
+
+# the UPDATES stay too, not just the declaration
+find_regexp mkSimPartition-synth-default.v {watched <= }
+find_regexp mkSimPartition-synth-default.v {reg \[7 : 0\] counted}
+
+# a combinational def computed only for the $display likewise stays
+find_regexp mkSimPartition-synth-default.v {scaled__h}
+
+# ----------
+# Flagged: the register only $display reads leaves the synthesis view
+
+erase SimPartition.bo
+erase mkSimPartition.v
+compile_verilog_pass SimPartition.bsv mkSimPartition {-no-translate-sim-only}
+
+sed mkSimPartition.v mkSimPartition-synth-flagged.v {-e "/translate_off/,/translate_on/d"}
+
+find_regexp_fail mkSimPartition-synth-flagged.v {reg \[7 : 0\] watched}
+
+# and the update statements move WITH it. watched gets its own always
+# block inside translate_off; if its assignments leaked back into the
+# synthesis-view block that counted uses, the decl assertion above would
+# still pass and the stripped netlist would drive a register it cannot see.
+find_regexp_fail mkSimPartition-synth-flagged.v {watched <= }
+
+# ...and it is hidden IN PLACE. One always block, as in the default arm:
+# splitting it would duplicate the reset structure and hand synthesis a
+# second block for what the design has as one.
+find_n_strings mkSimPartition.v {always@(posedge CLK)} 1
+
+# counted's own always block is untouched -- both arms
+find_regexp mkSimPartition-synth-flagged.v {counted <= `BSV_ASSIGNMENT_DELAY counted\$D_IN}
+find_regexp mkSimPartition-synth-flagged.v {counted <= `BSV_ASSIGNMENT_DELAY 8'd0}
+
+# and so does its combinational fan-in: the flag covers defs, not just
+# registers
+find_regexp_fail mkSimPartition-synth-flagged.v {scaled__h}
+
+# counted is reachable from the method, so it stays regardless
+find_regexp mkSimPartition-synth-flagged.v {reg \[7 : 0\] counted}
+
+# moved, not dropped: simulation still sees it
+find_regexp mkSimPartition.v {reg \[7 : 0\] watched}
+
+# ----------
+# Scheduling signals stay in the synthesis view under BOTH arms.
+#
+# -keep-fires asks for fire signals nothing reads; a folded enable is one
+# by construction.  Neither may migrate: a register's enable is a register
+# input and cannot move without its register, so moving the rest would put
+# half of one naming family in each zone and a waiver could no longer be
+# written by name.  This is the case that regresses silently -- the netlist
+# stays valid, only the waiver story breaks.
+
+erase SimPartition.bo
+erase mkSimPartition.v
+compile_verilog_pass SimPartition.bsv mkSimPartition {-keep-fires}
+sed mkSimPartition.v mkSimPartition-synth-fires.v \
+    {-e "/translate_off/,/translate_on/d"}
+
+find_regexp mkSimPartition-synth-fires.v {CAN_FIRE_RL_go}
+find_regexp mkSimPartition-synth-fires.v {WILL_FIRE_RL_go}
+find_regexp mkSimPartition-synth-fires.v {counted\$EN}
+
+erase SimPartition.bo
+erase mkSimPartition.v
+compile_verilog_pass SimPartition.bsv mkSimPartition \
+    {-keep-fires -no-translate-sim-only}
+sed mkSimPartition.v mkSimPartition-synth-fires-flagged.v \
+    {-e "/translate_off/,/translate_on/d"}
+
+find_regexp mkSimPartition-synth-fires-flagged.v {CAN_FIRE_RL_go}
+find_regexp mkSimPartition-synth-fires-flagged.v {WILL_FIRE_RL_go}
+find_regexp mkSimPartition-synth-fires-flagged.v {counted\$EN}

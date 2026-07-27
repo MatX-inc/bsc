@@ -29,7 +29,7 @@ import Error(internalError, ErrorHandle, bsWarning,
                     WDeadLogic))
 import Position(getPosition, Position)
 import qualified Data.Generics as Generic
-import Flags(Flags, systemVerilogOutput, translateSimOnly, warnDeadCode,
+import Flags(Flags, systemVerilogOutput, warnDeadCode, translateSimOnly,
              removeReg, removeCross, removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
@@ -604,17 +604,18 @@ aVerilog errh flags pps aspack0 ffmap =
         -- dead logic -- stay visible in the synthesis view instead:
         -- hiding them would paper over a genuine source issue, and
         -- moving them would strand their (dead-dropped) fan-in.
-        -- Gated from the outset, like sim_only_ids: a register moves only
-        -- when -no-translate-sim-only asks for the partition.
+        -- Registers move only under -no-translate-sim-only: unlike a folded
+        -- enable, a register read only by simulation is discovered by the
+        -- liveness analysis rather than known by construction.
         sim_only_reg_insts :: S.Set AId
         sim_only_reg_insts
             | translateSimOnly flags = S.empty
             | otherwise =
-            S.fromList [ avi_vname avi
-                       | avi <- inlined_reg_avis
-                       , let q = mkQOUT avi
-                       , q `S.notMember` synth_live_ids
-                       , q `S.member` sim_reachable_ids ]
+                S.fromList [ avi_vname avi
+                           | avi <- inlined_reg_avis
+                           , let q = mkQOUT avi
+                           , q `S.notMember` synth_live_ids
+                           , q `S.member` sim_reachable_ids ]
 
         -- exclude ids the foreign-block machinery already declares
         foreign_decl_ids =
@@ -638,28 +639,33 @@ aVerilog errh flags pps aspack0 ffmap =
                 -- them, so those defs must downgrade too
                 (inlined_port_ids `S.union` sim_reg_input_ids)
 
-        -- The compiler's own scheduling signals (rule fires, method and
-        -- register enables, method readies) stay in the synthesis view
-        -- even when nothing there reads them. A register's enable is a
-        -- register input, so it cannot move without its register;
-        -- migrating only the ones that can move would split one naming
-        -- family across the two zones, and a waiver would then have to
-        -- know which half each signal landed in. Kept whole, they are
-        -- waivable by name -- sound precisely because nothing
-        -- human-written is called CAN_FIRE_*, WILL_FIRE_*, *$EN or RDY_*.
-        -- Gated from the outset: under -translate-sim-only (the default)
-        -- nothing leaves the synthesis view, so this commit changes no
-        -- output until the flag is turned off.
+        -- Defs that leave the synthesis view.
+        --
+        -- Under -translate-sim-only (the default) none do: the synthesis
+        -- view is what it was before this partition existed.
+        --
+        -- With -no-translate-sim-only the liveness result applies: every
+        -- def no synthesis-visible sink reaches follows -- except the
+        -- compiler's own scheduling signals (rule fires, method and
+        -- register enables, method readies), which stay put even when
+        -- nothing there reads them. A register's enable is a register
+        -- input, so it cannot move without its register; migrating only
+        -- the ones that can move would split one naming family across
+        -- the two zones, and a waiver would then have to know which half
+        -- each signal landed in. Kept whole, they are waivable by name --
+        -- sound precisely because nothing human-written is called
+        -- CAN_FIRE_*, WILL_FIRE_*, *$EN or RDY_*. -keep-fires asks for
+        -- exactly this bargain, so it gets exactly this treatment.
         sim_only_ids :: S.Set AId
         sim_only_ids
             | translateSimOnly flags = S.empty
-            | otherwise =
-            S.filter (\ i -> i `S.notMember` synth_live_ids &&
-                             i `S.notMember` foreign_decl_ids &&
-                             i `S.notMember` externally_declared_ids &&
-                             not (isSchedulingSignal i))
-                     (M.keysSet def_uses_map)
-          where isSchedulingSignal i = isFire i || isIdEnable i || isRdyId i
+            | otherwise = S.filter notSynthVisible (M.keysSet def_uses_map)
+          where notSynthVisible i =
+                    i `S.notMember` synth_live_ids &&
+                    i `S.notMember` foreign_decl_ids &&
+                    i `S.notMember` externally_declared_ids &&
+                    not (isSchedulingSignal i)
+                isSchedulingSignal i = isFire i || isIdEnable i || isRdyId i
 
         (sim_only_ds0, synth_ds) =
             partition (\ (ADef i _ _ _) -> i `S.member` sim_only_ids) ds
