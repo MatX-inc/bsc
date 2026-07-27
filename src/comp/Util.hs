@@ -641,7 +641,14 @@ hashBytesL :: BL.ByteString -> Hash
 hashBytesL = BL.foldl' nextHashByte hashInit
 
 hashString :: String -> Hash
-hashString = hashBytes . TE.encodeUtf8 . T.pack
+hashString = nextHashString hashInit
+
+-- Continue a fold with a string's bytes.  A caller hashing a STRUCTURE
+-- interleaves literal text with its own tags, and must not have to
+-- concatenate the text first -- that is the cost such a caller exists to
+-- avoid (see Pred.hashType).
+nextHashString :: Hash -> String -> Hash
+nextHashString h s = B.foldl' nextHashByte h (TE.encodeUtf8 (T.pack s))
 
 -- For diagnostics and user-visible output.  Not the storage form: prefer the
 -- Hash itself, which is 8 bytes and cannot be malformed.

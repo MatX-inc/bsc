@@ -12,7 +12,7 @@ import Error(ErrorHandle)
 import ErrorUtil(internalError)
 import Flags(Flags)
 import IOUtil(progArgs)
-import Util(mapSndM, itos)
+import Util(mapSndM, itos, hashString)
 
 import CSyntax
 import FStringCompat(FString, mkFString)
@@ -261,8 +261,8 @@ getTopNameInfo i = do
 -- be: an incoherent resolution is not a function of its evidence alone.
 evidenceBase :: CType -> (String, [Id], [IType]) -> String
 evidenceBase t (str, kids, tys) =
-    dictBaseName t (unlines (str : map getIdBaseString kids ++
-                             map ppString tys))
+    dictBaseName t (hashString (unlines (str : map getIdBaseString kids ++
+                                         map ppString tys)))
 
 -- Evidence yields a stable name; without it (an incoherent dictionary) fall
 -- back to the package-local counter.  The counter is also the escape hatch if
