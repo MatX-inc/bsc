@@ -16,7 +16,7 @@ bsc -i BLUESPECDIR -print-flags -vdir INVALID
 
 Flags:
      -aggressive-conditions
-    -dump-formats   vcd
+     -dump-formats   vcd
      -i   BLUESPECDIR
      -import-hashes
      -lift
@@ -34,6 +34,7 @@ Flags:
      -steps   1000000
      -steps-max-intervals   10
      -steps-warn-interval   100000
+     -translate-sim-only
      -unspecified-to   A
      -vdir   INVALID
      -warn-action-shadowing

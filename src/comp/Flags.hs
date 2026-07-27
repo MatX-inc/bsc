@@ -145,6 +145,7 @@ data Flags = Flags {
         synthesize :: Bool,
         systemVerilogOutput :: Bool,
         warnDeadCode :: Bool,
+        translateSimOnly :: Bool,
         tclShowHidden :: Bool,
         timeStamps :: Bool,
         showVersion :: Bool,

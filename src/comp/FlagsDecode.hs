@@ -775,6 +775,7 @@ defaultFlags bluespecdir = Flags {
         synthesize = False,
         systemVerilogOutput = False,
         warnDeadCode = False,
+        translateSimOnly = True,
         tclShowHidden = False,
         testAssert = False,
         timeStamps = True,
@@ -1633,6 +1634,11 @@ externalFlags = [
           "check that rule names are unique (when disabled unique numbers are assigned)", Hidden)),
 
 
+        ("translate-sim-only",
+         (Toggle (\f x -> f {translateSimOnly=x}) (showIfTrue translateSimOnly),
+          "translate simulation-only logic; off emits it inside " ++
+          "translate_off, where synthesis will not see it", Visible)),
+
         ("warn-dead-code",
          (Toggle (\f x -> f {warnDeadCode=x}) (showIfTrue warnDeadCode),
          "warn about dead state and logic (written or driven, never read)", Hidden)),
@@ -2157,6 +2163,7 @@ showFlagsRaw flags =
           ("synthesize", show (synthesize flags)),
           ("systemVerilogOutput", show (systemVerilogOutput flags)),
           ("warnDeadCode", show (warnDeadCode flags)),
+          ("translateSimOnly", show (translateSimOnly flags)),
           ("tclShowHidden", show (tclShowHidden flags)),
           ("testAssert", show (testAssert flags)),
           ("timeStamps", show (timeStamps flags)),

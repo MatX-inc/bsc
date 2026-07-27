@@ -8,14 +8,14 @@ Warning: Command line: (S0091)
 Warning: Command line: (S0073)
   Duplicate directories were found in the path specified with the -p flag.
   Only the first occurrence will be used. The duplicates are:
-    HERE/baz
-    HERE/foo
+    /home/ravi/bluespec/intern-rigid/testsuite/bsc.options/baz
+    /home/ravi/bluespec/intern-rigid/testsuite/bsc.options/foo
 Invoking command line:
 bsc -i BLUESPECDIR -print-flags -p foo:foo/:./foo:bar/../foo:./foo/../foo:baz:./baz:./baz/bar/../../foo/
 
 Flags:
      -aggressive-conditions
-    -dump-formats   vcd
+     -dump-formats   vcd
      -i   BLUESPECDIR
      -import-hashes
      -lift
@@ -34,6 +34,7 @@ Flags:
      -steps   1000000
      -steps-max-intervals   10
      -steps-warn-interval   100000
+     -translate-sim-only
      -unspecified-to   A
      -warn-action-shadowing
      -warn-method-urgency

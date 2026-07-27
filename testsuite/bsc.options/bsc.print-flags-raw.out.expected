@@ -115,6 +115,7 @@ Flags {
 	synthesize = False,
 	systemVerilogOutput = False,
 	warnDeadCode = False,
+	translateSimOnly = True,
 	tclShowHidden = False,
 	testAssert = False,
 	timeStamps = True,
