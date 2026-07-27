@@ -7,15 +7,20 @@ import AUses
 import Flags
 import Pragma
 import DefProp
+import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
+import ASchedule(errAction)
+import FStringCompat(mkFString)
 import ProofObligation(ProofObligation(..), ProofResult(..), MsgFn(..),
                        MsgTuple, warnUnlessProof, errorUnlessProof)
 import PFPrint
 import Error(ErrMsg(..))
 import ErrorUtil(internalError)
 import VModInfo(VModInfo(..), VFieldInfo(..), VeriPortProp(..), mkNamedEnable)
-import Id (Id, getIdString, isRdyId, dropReadyPrefixId,
-           mkIdWillFire, mkIdCanFire, mkRdyId)
+import Id (Id, getIdString, getIdBaseString, mkId, isRdyId, addIdProp,
+           IdProp(..),
+           dropReadyPrefixId, mkIdWillFire, mkIdCanFire, mkRdyId)
 import Position
+
 import BackendNamingConventions
 import PreIds(id_write)
 
@@ -151,6 +156,41 @@ aAddScheduleDefs flags pps pkg aschedinfo =
      let rules1 = map replaceRulePredicate rules0
          ifc2   = map replaceIfcRulePredicates ifc1
 
+     -- Interface method pairs the schedule marks as conflicting.  A parent
+     -- compiled by bsc can never enable both in one cycle -- the scheduler
+     -- enforces the annotation -- but an instantiator written directly in
+     -- Verilog has no such enforcement, and the module then misbehaves
+     -- silently: the muxes whose arm exclusivity the scheduler derived from
+     -- this very relationship stop being exclusive, with no diagnostic
+     -- anywhere.
+     --
+     -- Carried as an assumption on each method's own body rules, the way the
+     -- conflict-free assumptions already work, so the whole lowering path is
+     -- shared: aRemoveAssumps turns it into a predicated $error, and the
+     -- backends put that inside translate_off.  A method's rule firing
+     -- already implies its own enable, so the assumption only has to name the
+     -- other one.  One direction is enough: the lowered check is guarded by
+     -- the condition alone, not by the host rule firing, so it reports
+     -- whenever both enables are asserted.
+     let conflict_pairs =
+           [ (m1, m2)
+           | (m1, m2) <- sC (methodConflictInfo (asi_v_sched_info aschedinfo))
+           -- a method conflicts with itself, which says only that it cannot
+           -- be called twice in a cycle; one enable cannot assert twice
+           , m1 /= m2
+           ]
+         conflictAssumps m =
+           [ AAssumption e [errAction (conflictMsg m other)]
+           | (me, other) <- conflict_pairs
+           , me == m
+           , Just e <- [M.lookup other en_map]
+           ]
+         addConflictAssumps ifc =
+           case conflictAssumps (aif_name ifc) of
+             []      -> ifc
+             asmps   -> mapARules (addAsmps asmps) ifc
+         addAsmps asmps r = r { arule_assumps = arule_assumps r ++ asmps }
+
      -- return a modified APackage
      let cf_defs = user_cfs ++ ifc_cfs
          wf_defs = user_wfs ++ ifc_wfs
@@ -158,9 +198,16 @@ aAddScheduleDefs flags pps pkg aschedinfo =
 
      return pkg { apkg_local_defs        = defs1
                 , apkg_rules             = rules1
-                , apkg_interface         = ifc2
+                , apkg_interface         = map addConflictAssumps ifc2
                 , apkg_proof_obligations = proofs1
                 }
+
+conflictMsg :: Id -> Id -> String
+conflictMsg m1 m2 =
+    "Methods " ++ quote (getIdBaseString m1) ++ " and " ++
+    quote (getIdBaseString m2) ++ " conflict and may not be enabled in the " ++
+    "same clock cycle."
+  where quote x = "\"" ++ x ++ "\""
 
 -- Helper function for use with looking up list values
 ll :: (Eq a) => a -> [(a,[b])] -> [b]
