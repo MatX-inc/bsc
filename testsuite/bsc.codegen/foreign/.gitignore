@@ -32,6 +32,7 @@ directc_mkBDPIStringArg.sft
 directc_mkBDPIWideResult.sft
 directc_mkBDPI_CapitalLinkName.sft
 directc_mkBug.sft
+dupctx.c
 incr64.c
 logic.c
 poly.c
