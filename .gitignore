@@ -13,3 +13,8 @@ build
 
 .vagrant/
 vagrant-out/
+
+# cabal build artifacts (see bsc.cabal, util/bluehs/)
+dist-newstyle/
+.ghc.environment.*
+cabal.project.local
