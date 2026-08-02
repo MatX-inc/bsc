@@ -313,8 +313,13 @@ endif
 endif
 endif
 
+# The program entry files live in ../exe (so that cabal executables can
+# share the library without source shadowing); point --make at them.
+bsc: GHCMAKEFLAGS = --make ../exe/$@.hs -o $@ -j$(GHCJOBS)
+bluetcl: GHCMAKEFLAGS = --make ../exe/$@.hs -j$(GHCJOBS)
+
 .PHONY: bsc
-bsc: $(SOURCES)
+bsc: $(SOURCES) ../exe/bsc.hs
 	$(PREBUILDCOMMAND)
         # to force updating of BuildVersion/BuildSystem when necessary
 	./update-build-version.sh
@@ -361,16 +366,16 @@ showrules: $(SOURCES)
 
 # bluetcl is built in two steps:
 # 1. Build BlueTcl module using -c to emit .hi/.o files, and also the
-#    BlueTcl_stub.h reqired by bluetcl_Main.hsc in the next action
+#    BlueTcl_stub.h reqired by bluetcl_Main.c in the next action
 # 2. Link BlueTcl with a custom C main that #includes BlueTcl_stub.h
 .PHONY: bluetcl
-bluetcl: bluetcl.hs bluetcl_Main.hsc $(SOURCES)
+bluetcl: ../exe/bluetcl.hs ../exe/bluetcl_Main.c $(SOURCES)
 	$(PREBUILDCOMMAND)
 	$(BUILDCOMMAND) $(BUILDFLAGS) -c
 	$(BUILDCOMMAND) $(BUILDFLAGS) $(BLUETCL_BUILDLIBS) \
 		-o $@ \
 		-no-hs-main \
-		-x c bluetcl_Main.hsc
+		-x c ../exe/bluetcl_Main.c
 	$(POSTBUILDCOMMAND)
 
 # -----
