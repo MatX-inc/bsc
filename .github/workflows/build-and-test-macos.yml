@@ -50,12 +50,20 @@ jobs:
         with:
           ghc: ${{ inputs.ghc_version }}
           cabal: recommended
-      # Until BSC uses cabal to build, pre-install these packages
-      - name: Install Haskell dependencies
+      # The build fetches Haskell library dependencies itself; it only
+      # needs the package index.  Constrain GHC parallelism/heap for the
+      # small CI runners via the machine-local cabal configuration that
+      # the Makefile would otherwise generate with defaults.
+      - name: Configure Haskell build
         shell: bash
         run: |
           cabal update
-          cabal v1-install old-time regex-compat split strict-concurrency syb
+          cat > cabal.project.local <<EOF
+          package bsc
+            extra-lib-dirs: $PWD/src/vendor/stp/lib
+            extra-lib-dirs: $PWD/src/vendor/yices/lib
+            ghc-options: -j2 +RTS -M4500M -A128m -RTS
+          EOF
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every build,
       # and have the restore-key use the most recent.
@@ -88,13 +96,7 @@ jobs:
           # Generate package info
           export BSC_BUILD_PKGINFO=1
 
-          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-src
-
-          # Also build and install the extra utilities (vcdcheck,
-          # fstscopes, showrules, ...); the testsuite uses fstscopes,
-          # when available, to check FST waveform dumps
-          make -C src/comp -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-extra
-
+          make -j ${CORES} install-src
           tar czf inst.tar.gz inst
       - name: CCache stats
         env:

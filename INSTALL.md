@@ -114,11 +114,11 @@ sudo apt-get install \
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ghcup install ghc 9.6.7
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
-Those final four commands install the recommended GHC compiler version
-and libraries. If you would prefer to install GHC via the system's
+Those final three commands install the recommended GHC compiler version
+and the `cabal` build tool, and download the Haskell package index
+(the build fetches the Haskell library dependencies itself). If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
 substitute the following command.  Note well that the version of `ghc`
 tested for building the Bluespec toolchain is the version specified in
@@ -177,11 +177,11 @@ sudo dnf install \
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ghcup install ghc 9.6.7
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
-Those final four commands install the recommended GHC compiler version
-and libraries. If you would prefer to install GHC via the system's
+Those final three commands install the recommended GHC compiler version
+and the `cabal` build tool, and download the Haskell package index
+(the build fetches the Haskell library dependencies itself). If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
 substitute the following command.  Note well that the version of `ghc`
 tested for building the Bluespec toolchain is the version specified in
@@ -258,11 +258,11 @@ brew install \
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ghcup install ghc 9.6.7
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
-Those final four commands install the recommended GHC compiler version
-and libraries.
+Those final three commands install the recommended GHC compiler version
+and the `cabal` build tool, and download the Haskell package index
+(the build fetches the Haskell library dependencies itself).
 
 ### GHC Haskell compiler
 
@@ -294,13 +294,12 @@ then you may need to install libraries through the package manager as
 well (as shown in the above summaries) or you may need to install `cabal`
 through the package manager.
 
-The BSC build currently assumes that libraries have been installed
-globally with GHC.  This is why we have shown the `cabal` command
-using the legacy `v1-install` subcommand, which install globally:
+The build resolves and fetches the Haskell library dependencies
+itself via `cabal`; it only requires the package index to have been
+downloaded:
 
 ```bash
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
 Cabal's newer `v2-install` has the advantage of not installing the
@@ -402,13 +401,9 @@ make BSC_BUILD=PROF
 ```
 
 You can provide the `-j` flag to `make` to specify the number of targets
-to execute in parallel, however this does not control the parallelism of
-the core haskell build.  To specify the number of modules that GHC may
-compile in parallel, define `GHCJOBS` in the environment to that number:
-
-```bash
-make GHCJOBS=4
-```
+to execute in parallel.  The core Haskell build is driven by `cabal`
+and compiles modules in parallel on all available cores automatically
+(see the generated `cabal.project.local`).
 
 ### Optionally avoiding the compile of STP or Yices
 
