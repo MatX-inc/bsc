@@ -312,3 +312,40 @@ library
         -Wno-unused-matches
         -Wtabs
         -fmax-pmcheck-models=800
+
+-- Shared by the executables below; the library carries the SAT/Tcl link info
+common exe-deps
+    default-language: GHC2021
+    hs-source-dirs: src/exe
+    build-depends:
+        base, bsc, containers, array, mtl, unix, regex-compat, bytestring,
+        directory, process, filepath, time, old-time, old-locale, split, syb,
+        integer-gmp, text, deepseq, strict-concurrency
+    ghc-options:
+        -Wall
+        -Wno-orphans
+        -Wno-name-shadowing
+        -Wno-unused-matches
+
+-- Larger -K for profiling: -fprof-auto wraps every closure entry in a
+-- cost-centre frame, inflating peak stack ~10x (see src/comp/Makefile)
+flag prof-rts
+    description: Bake profiling-sized RTS defaults into the executables
+    default: False
+    manual: True
+
+executable bsc
+    import: exe-deps
+    main-is: bsc.hs
+    ghc-options: -main-is Main_bsc -rtsopts
+    if flag(prof-rts)
+        ghc-options: "-with-rtsopts=-H256m -K256m -i1"
+    else
+        ghc-options: "-with-rtsopts=-H256m -K10m -i1"
+
+executable bluetcl
+    import: exe-deps
+    main-is: bluetcl.hs
+    c-sources: src/exe/bluetcl_Main.c
+    ghc-options: -no-hs-main
+    pkgconfig-depends: tcl >= 8.5
