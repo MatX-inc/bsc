@@ -258,14 +258,12 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-BO2BLOOGLEEXES = bo2bloogle
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
-SHOWRULESEXES = showrules
+UTILEXES = fstcheck fstscopes
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
 CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(CHECKEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -332,36 +330,6 @@ bsc: $(SOURCES) ../exe/bsc.hs
 		$(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
 	$(POSTBUILDCOMMAND)
 
-.PHONY: bsc2bsv
-bsc2bsv: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: bsv2bsc
-bsv2bsc: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: dumpbo
-dumpbo: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: dumpba
-dumpba: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: vcdcheck
-vcdcheck: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
 # fstscopes and fstcheck read FST files with libfst (the
 # src/vendor/libfst submodule), whose sources are compiled into the
 # executables here, with the <config.h> that fstapi.c includes
@@ -403,18 +371,6 @@ tconcheck: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
 	$(POSTBUILDCOMMAND)
 
-.PHONY: showrules
-showrules: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: bo2bloogle
-bo2bloogle: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
 # bluetcl is built in two steps:
 # 1. Build BlueTcl module using -c to emit .hi/.o files, and also the
 #    BlueTcl_stub.h reqired by bluetcl_Main.c in the next action
@@ -450,14 +406,7 @@ endif
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
-
-# NOTE: the utilities below are also provided as bluehs scripts (see
-# util/bluehs/), which ship in the bsc-bluehs distribution tarball.
-# Once that is a standard release artifact, this target (and the
-# compiled utility binaries) is a candidate for retirement.
-.PHONY: install-extra
-install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
+install: $(BSCEXES) $(TCLEXES) $(UTILEXES) $(CHECKEXES) install-bsc install-bluetcl install-utils install-checkers
 
 # Until the need for BLUESPECDIR and LD_LIBRARY_PATH to be set is removed
 # put the binaries in a "core" subdirectory and a wrapper script in "bin"
@@ -479,20 +428,10 @@ install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
 install-bluetcl: $(addprefix $(BINDIR)/core/,$(TCLEXES))
 install-bluetcl: $(PKGINFO)
 
-.PHONY: install-bo2bloogle
-install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
-install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
-install-bo2bloogle: $(PKGINFO)
-
 .PHONY: install-utils
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
 install-utils: $(addprefix $(BINDIR)/core/,$(UTILEXES))
 install-utils: $(PKGINFO)
-
-.PHONY: install-showrules
-install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
-install-showrules: $(addprefix $(BINDIR)/core/,$(SHOWRULESEXES))
-install-showrules: $(PKGINFO)
 
 .PHONY: install-checkers
 install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
