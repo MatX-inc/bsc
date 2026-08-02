@@ -38,14 +38,19 @@ export BLUESPECDIR
 TEST_BSC     ?= $(TEST_RELEASE)/bin/bsc
 TEST_BLUETCL ?= $(TEST_RELEASE)/bin/bluetcl
 
+# The utility tools are bluehs scripts (see util/bluehs); the launcher
+# runs them against the cabal-built library, which `make install-src`
+# builds.  Override with compiled equivalents if you have them.
+BLUEHS_BIN ?= $(realpath $(CONFDIR)/..)/util/bluehs/bin
+
 # This tool will only be used if it exists
-TEST_SHOWRULES ?= $(TEST_RELEASE)/bin/showrules
+TEST_SHOWRULES ?= $(BLUEHS_BIN)/showrules
 
 # These only need to exist when DO_INTERNAL_CHECKS=1
-TEST_BSC2BSV  ?= $(TEST_RELEASE)/bin/bsc2bsv
-TEST_DUMPBO   ?= $(TEST_RELEASE)/bin/dumpbo
-TEST_DUMPBA   ?= $(TEST_RELEASE)/bin/dumpba
-TEST_VCDCHECK ?= $(TEST_RELEASE)/bin/vcdcheck
+TEST_BSC2BSV  ?= $(BLUEHS_BIN)/bsc2bsv
+TEST_DUMPBO   ?= $(BLUEHS_BIN)/dumpbo
+TEST_DUMPBA   ?= $(BLUEHS_BIN)/dumpba
+TEST_VCDCHECK ?= $(BLUEHS_BIN)/vcdcheck
 
 TEST_CONFIG ?= $(CONFDIR)/config
 

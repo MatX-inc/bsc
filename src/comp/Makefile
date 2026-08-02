@@ -258,10 +258,8 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
-SHOWRULESEXES = showrules
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
+EXES = $(BSCEXES) $(TCLEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -328,42 +326,6 @@ bsc: $(SOURCES) ../exe/bsc.hs
 		$(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
 	$(POSTBUILDCOMMAND)
 
-.PHONY: bsc2bsv
-bsc2bsv: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: bsv2bsc
-bsv2bsc: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: dumpbo
-dumpbo: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: dumpba
-dumpba: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: vcdcheck
-vcdcheck: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: showrules
-showrules: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
 # bluetcl is built in two steps:
 # 1. Build BlueTcl module using -c to emit .hi/.o files, and also the
 #    BlueTcl_stub.h reqired by bluetcl_Main.c in the next action
@@ -401,13 +363,6 @@ endif
 .PHONY: install
 install: $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
 
-# NOTE: the utilities below are also provided as bluehs scripts (see
-# util/bluehs/), which ship in the bsc-bluehs distribution tarball.
-# Once that is a standard release artifact, this target (and the
-# compiled utility binaries) is a candidate for retirement.
-.PHONY: install-extra
-install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
-
 # Until the need for BLUESPECDIR and LD_LIBRARY_PATH to be set is removed
 # put the binaries in a "core" subdirectory and a wrapper script in "bin"
 $(BINDIR)/core/%: %
@@ -427,16 +382,6 @@ install-bsc: $(PKGINFO)
 install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
 install-bluetcl: $(addprefix $(BINDIR)/core/,$(TCLEXES))
 install-bluetcl: $(PKGINFO)
-
-.PHONY: install-utils
-install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
-install-utils: $(addprefix $(BINDIR)/core/,$(UTILEXES))
-install-utils: $(PKGINFO)
-
-.PHONY: install-showrules
-install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
-install-showrules: $(addprefix $(BINDIR)/core/,$(SHOWRULESEXES))
-install-showrules: $(PKGINFO)
 
 # ----
 # Other targets

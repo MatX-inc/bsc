@@ -30,10 +30,9 @@ ROOTS = [
 
 # Program entry files (compiled with -main-is by the Makefile; scripts in
 # util/bluehs replace the utility ones).
-EXCLUDE_FILES = {
-    "bsc.hs", "bsc2bsv.hs", "bsv2bsc.hs", "dumpbo.hs", "dumpba.hs",
-    "showrules.hs", "vcdcheck.hs", "bluetcl.hs",
-}
+# (Program entry files now live in src/exe, outside the library roots;
+# this set remains as a guard should any reappear under src/comp.)
+EXCLUDE_FILES = set()
 
 # Dead code in the vendored Parsec fork: unreachable from any tool and
 # uncompilable with modern base (Haskell98 'Char'/'List' imports, stale API).
