@@ -96,6 +96,32 @@ After adding/removing modules under `src/comp` (or the other source roots):
 
 (Candidate CI check: run this and fail if `bsc.cabal` changes.)
 
+## Distribution
+
+`util/bluehs/mk-dist.sh` builds `bsc-bluehs-<os>-<arch>-<version>.tar.gz`: a
+self-contained, relocatable tree (pruned GHC runtime + relocatable package
+store + SAT solver libraries + these scripts + a `bin/bluehs` launcher) so
+tarball users can run Haskell scripts against the bsc library with **no
+Haskell toolchain installed**. Host requirements: glibc, libgmp, libtcl8.6,
+and a C compiler (GHC probes it when loading libraries; CPP scripts
+preprocess with it).
+
+This artifact is a *companion* to the main bsc tarball and must be built
+from the same commit (the packaged library rejects `.ba` files whose build
+version stamp differs — see Caveats). Ship both from one release action;
+they are versioned in lockstep, like bluetcl.
+
+Everything redistributed in the tarball is covered in its `LICENSES/`
+directory: `LICENSE.ghc` (compiler/runtime), a generated
+`LICENSE.ghc_pkgs` enumerating every shipped Haskell package with license
+and copyright (via `src/comp/make-ghc-pkg-info.sh` over the exact shipped
+package closure), and the STP/Yices texts for the bundled solver
+libraries.
+
+The scripts in this tarball provide what `make install-extra` builds as
+compiled binaries; once bluehs ships as a standard release artifact,
+`install-extra` is a candidate for retirement.
+
 ## Not converted
 
 * `bsc` itself: works as a script mechanically, but the ~1.5s/invocation
