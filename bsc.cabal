@@ -326,6 +326,9 @@ common exe-deps
         -Wno-orphans
         -Wno-name-shadowing
         -Wno-unused-matches
+    -- macOS release packaging rewrites dylib install names in place
+    if os(osx)
+        ghc-options: -optl-headerpad_max_install_names
 
 -- Larger -K for profiling: -fprof-auto wraps every closure entry in a
 -- cost-centre frame, inflating peak stack ~10x (see src/comp/Makefile)

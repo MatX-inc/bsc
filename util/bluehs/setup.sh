@@ -38,6 +38,7 @@ if [ ! -f cabal.project.local ]; then
 package bsc
   extra-lib-dirs: $REPO/src/vendor/stp/lib
   extra-lib-dirs: $REPO/src/vendor/yices/lib
+  ghc-options: -j +RTS -A64m -RTS
 EOF
     echo "setup.sh: wrote cabal.project.local"
 fi
