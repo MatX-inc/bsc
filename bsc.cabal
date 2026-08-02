@@ -326,6 +326,9 @@ common exe-deps
         -Wno-orphans
         -Wno-name-shadowing
         -Wno-unused-matches
+    -- macOS release packaging rewrites dylib install names in place
+    if os(osx)
+        ghc-options: -optl-headerpad_max_install_names
 
 -- Larger -K for profiling: -fprof-auto wraps every closure entry in a
 -- cost-centre frame, inflating peak stack ~10x (see src/comp/Makefile)
@@ -349,3 +352,36 @@ executable bluetcl
     c-sources: src/exe/bluetcl_Main.c
     ghc-options: -no-hs-main
     pkgconfig-depends: tcl >= 8.5
+
+executable tconcheck
+    import: exe-deps
+    hs-source-dirs: src/comp
+    main-is: tconcheck.hs
+    ghc-options: -main-is Main_tconcheck
+
+executable fstscopes
+    import: exe-deps
+    hs-source-dirs: src/comp
+    main-is: fstscopes.hs
+    ghc-options: -main-is Main_fstscopes
+    c-sources:
+        src/comp/fstscopes_hier.c
+        src/vendor/libfst/src/fstapi.c
+        src/vendor/libfst/src/fastlz.c
+        src/vendor/libfst/src/lz4.c
+    include-dirs: src/vendor/libfst/src, src/libfst_config
+    cc-options: -O2
+    extra-libraries: z
+
+executable fstcheck
+    import: exe-deps
+    hs-source-dirs: src/comp
+    main-is: fstcheck.hs
+    ghc-options: -main-is Main_fstcheck
+    c-sources:
+        src/vendor/libfst/src/fstapi.c
+        src/vendor/libfst/src/fastlz.c
+        src/vendor/libfst/src/lz4.c
+    include-dirs: src/vendor/libfst/src, src/libfst_config
+    cc-options: -O2
+    extra-libraries: z
