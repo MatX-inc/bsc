@@ -12,6 +12,7 @@
 // No combinational paths from inputs to outputs
 //
 //
+// This module keeps inout ports in port-expression form
 
 `ifdef BSV_ASSIGNMENT_DELAY
 `else

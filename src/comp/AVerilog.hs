@@ -35,6 +35,7 @@ import Pragma(PProp(..))
 import ASyntax
 import ASyntaxUtil
 import Verilog
+import VModInfo(vName, getVNameString)
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
@@ -45,6 +46,54 @@ import qualified GraphWrapper as G
 --import Debug.Trace
 --import Util(traces)
 
+
+-- ==============================
+-- Link-check facts
+
+-- Facts about a generated module that the verilator build script needs
+-- at link time.  They are recorded as comments in the .v header (see
+-- aVerilog) and grepped from there by bsc_build_vsim_verilator: the .v
+-- files are the only artifacts guaranteed to exist when linking Verilog
+-- (.ba files are only written with -elab, so a link-time hierarchy
+-- analysis would silently see nothing in the common flows).
+
+-- Header marker for a module that instantiates a delay-based clock or
+-- reset generator (grepped by bsc_build_vsim_verilator; keep in sync).
+vNeedsTimingMarker :: String
+vNeedsTimingMarker = "This module instantiates delay-based clock or reset generators"
+
+-- Header marker for a module whose header keeps inout ports in
+-- port-expression form (grepped by bsc_build_vsim_verilator; keep in
+-- sync).
+vInoutExprsMarker :: String
+vInoutExprsMarker = "This module keeps inout ports in port-expression form"
+
+-- Whether an instantiated submodule is one of the library primitives
+-- whose simulation Verilog is delay-based -- code with active delays
+-- OUTSIDE translate_off regions, which only simulates under
+-- Verilator's --timing:
+--   ClockGen      (mkAbsoluteClock: an initial/forever # oscillator)
+--   ClockDiv      (mkClockDivider: #0 in its edge generator)
+--   GatedClockDiv (gated divider: #1 in its edge generator)
+--   InitialReset  (mkInitialReset: its whole body, flops included, is
+--                  translate_off -- sim-only by design, so Verilator
+--                  would leave OUT_RST undriven and silently never
+--                  reset the design)
+-- Everything else in the library is exempt, verified by classifying
+-- every src/Verilog file's delay tokens against its translate_off
+-- regions: the clock muxes/selectors/inverters, MakeClock (and so
+-- mkUngatedClock / primMakeDisabledClock), and all the reset
+-- synchronizers (SyncReset, SyncResetA, MakeReset*, ResetMux) confine
+-- delays to translate_off initial blocks, and their synthesizable
+-- bodies are plain synchronous logic that two-state --no-timing
+-- simulation handles exactly (reset-synchronizer traces verified
+-- identical to iverilog).  Unknown user primitives are also not
+-- flagged: if their Verilog carries active delays, Verilator itself
+-- fails loudly under --no-timing.
+instGensDelayClockOrReset :: AVInst -> Bool
+instGensDelayClockOrReset avi =
+    getVNameString (vName (avi_vmi avi))
+        `elem` ["ClockGen", "ClockDiv", "GatedClockDiv", "InitialReset"]
 
 -- ==============================
 -- aVerilog
@@ -63,7 +112,16 @@ import qualified GraphWrapper as G
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack ffmap =
-    do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
+    do let mods' = map renameInoutPorts mods
+           link_facts =
+               [ vNeedsTimingMarker
+               | any instGensDelayClockOrReset (aspkg_state_instances aspack) ] ++
+               [ vInoutExprsMarker
+               | or [ True | m <- mods', (as, _) <- vm_ports m
+                           , VAInout _ (Just _) _ <- as ] ||
+                 (not (removeInoutConnect flags) &&
+                  any isInoutConnect (aspkg_state_instances aspack)) ]
+           vprog0 = VProgram mods' dpi_decls (comments ++ link_facts)
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
        -- sound by the invariant documented at vModuleDeclVIds: every VId
@@ -920,6 +978,7 @@ renameInoutPorts vm =
             = VAInout i Nothing r
         plain a = a
     in  vm' { vm_ports = [ (map plain as, c) | (as, c) <- vm_ports vm' ] }
+
 
 computeInouts :: M.Map AId AId -> ASPackage -> [(Id, AType, Id)]
 computeInouts inout_rewire_map aspack =
