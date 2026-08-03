@@ -1,7 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 {-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE MagicHash #-}
 module ISyntax(
         IPackage(..),
         IDef(..),
@@ -93,8 +92,6 @@ import qualified Data.Map as M
 import Data.List(intercalate)
 
 import qualified Data.Array as Array
-import GHC.Exts(reallyUnsafePtrEquality#, isTrue#)
-
 import IntLit
 import Undefined
 import Eval
@@ -514,151 +511,36 @@ pattern ICon i ic <- ICon_ _ i ic
 efvCacheEnabled :: Bool
 efvCacheEnabled = not ("-hack-no-iexpr-fv-cache" `elem` progArgs)
 
--- --------------------------------
--- Known-empty fast path
---
--- The cached set fields are lazy, so a node whose sets are never
--- demanded pays only the two thunks -- but tens of millions of nodes
--- rebuilt AFTER IExpand (ITransform, IInline, wrapper fixup) have
--- all-empty sets (IVar/ILam/ILAM are gone and the types are ground),
--- and a retained thunk per field is pure GC load.  The constructors
--- below therefore test, at construction and without forcing anything,
--- whether every input's cached set is the already-evaluated shared
--- empty; if so they store the shared empty directly (no thunk).
---
--- The test is a pointer comparison against vsEmpty: every evaluated
--- empty Set is the one static Tip closure, so equality means "known
--- empty", and anything else -- an unevaluated thunk, a nonempty set --
--- conservatively falls back to the thunk path.  A false negative only
--- costs the thunk that would have been allocated anyway; correctness
--- never depends on the answer.  Emptiness self-propagates: nodes built
--- from known-empty children get evaluated empty fields, which their
--- parents then recognize, so post-IExpand construction stays thunk-free
--- while anything under an IVar (or a nonempty type) keeps the lazy
--- behavior.
---
--- These checks force child NODES to WHNF (one constructor layer, never
--- the knot-tied ICDef/ICValue/IStateVar payloads), which the strict
--- variant of these fields also did; the termination argument is the
--- same as for the set computation itself (see the IExpr comment).
-knownEmptySet :: VarSet -> Bool
-knownEmptySet s = isTrue# (reallyUnsafePtrEquality# s vsEmpty)
-
--- is this node's free-value-variable set known (evaluated) empty?
-fvKnownEmpty :: IExpr a -> Bool
-fvKnownEmpty (ILam_ fvs _ _ _ _) = knownEmptySet fvs
-fvKnownEmpty (IAps_ fvs _ _ _ _) = knownEmptySet fvs
-fvKnownEmpty (ILAM_ fvs _ _ _ _) = knownEmptySet fvs
-fvKnownEmpty (IVar _) = False
-fvKnownEmpty (ICon_ _ _ ic) = conFVKnownEmpty ic
-fvKnownEmpty (IRefT _ _ _ _) = True
-
-conFVKnownEmpty :: IConInfo a -> Bool
-conFVKnownEmpty (ICUndet { imVal = Just e }) = fvKnownEmpty e
-conFVKnownEmpty (ICClock { iClock = c }) = fvKnownEmpty (ic_wires c)
-conFVKnownEmpty (ICReset { iReset = r }) =
-    fvKnownEmpty (ic_wires (ir_clock r)) && fvKnownEmpty (ir_wire r)
-conFVKnownEmpty (ICInout { iInout = io }) =
-    fvKnownEmpty (ic_wires (io_clock io)) &&
-    fvKnownEmpty (ic_wires (ir_clock (io_reset io))) &&
-    fvKnownEmpty (ir_wire (io_reset io)) &&
-    fvKnownEmpty (io_wire io)
-conFVKnownEmpty (ICLazyArray { uninit = Just (u1, u2) }) =
-    fvKnownEmpty u1 && fvKnownEmpty u2
-conFVKnownEmpty _ = True
-
--- is this node's free-type-variable set known (evaluated) empty?
-ftvKnownEmpty :: IExpr a -> Bool
-ftvKnownEmpty (ILam_ _ ftvs _ _ _) = knownEmptySet ftvs
-ftvKnownEmpty (IAps_ _ ftvs _ _ _) = knownEmptySet ftvs
-ftvKnownEmpty (ILAM_ _ ftvs _ _ _) = knownEmptySet ftvs
-ftvKnownEmpty (IVar _) = True
-ftvKnownEmpty (ICon_ ftvs _ _) = knownEmptySet ftvs
-ftvKnownEmpty (IRefT _ _ _ _) = True
-
--- is this type's free-variable set known (evaluated) empty?
--- (interned ITypes hold their sets in strict fields, so this is a
--- plain read; ITVar answers a computed singleton and so says False)
-tyKnownEmpty :: IType -> Bool
-tyKnownEmpty t = knownEmptySet (fTVarSet t)
-
--- In each constructor the known-empty test runs eagerly (guard
--- position) and picks between the shared evaluated empty and the
--- ordinary lazy computation; the union thunks in the where clauses are
--- only referenced from the not-known-empty branches, so the empty case
--- allocates nothing at all.
 mkILam :: Id -> IType -> IExpr a -> IExpr a
 mkILam i t e
-  | not efvCacheEnabled = ILam_ vsEmpty vsEmpty i t e
-  | fvE && ftvE = ILam_ vsEmpty vsEmpty i t e
-  | fvE         = ILam_ vsEmpty ftvs i t e
-  | ftvE        = ILam_ fvs vsEmpty i t e
-  | otherwise   = ILam_ fvs ftvs i t e
-  where fvE  = fvKnownEmpty e
+  | efvCacheEnabled = ILam_ fvs ftvs i t e
+  | otherwise       = ILam_ vsEmpty vsEmpty i t e
+  where fvs  = vsDelete i (eFVarSet e)
         -- unlike the historical ftVars, the binder's type is included:
         -- substitution rewrites it (ISyntaxSubst substitutes ILam
         -- types), so pruning needs its variables counted
-        ftvE = tyKnownEmpty t && ftvKnownEmpty e
-        fvs  = vsDelete i (eFVarSet e)
         ftvs = fTVarSet t `vsUnion` eFTVarSet e
 
 mkIAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
 mkIAps f ts es
-  | not efvCacheEnabled = IAps_ vsEmpty vsEmpty f ts es
-  | fvE && ftvE = IAps_ vsEmpty vsEmpty f ts es
-  | fvE         = IAps_ vsEmpty ftvs f ts es
-  | ftvE        = IAps_ fvs vsEmpty f ts es
-  | otherwise   = IAps_ fvs ftvs f ts es
-  where fvE  = fvKnownEmpty f && all fvKnownEmpty es
-        ftvE = ftvKnownEmpty f && all tyKnownEmpty ts
-                               && all ftvKnownEmpty es
-        fvs  = foldr (vsUnion . eFVarSet) (eFVarSet f) es
+  | efvCacheEnabled = IAps_ fvs ftvs f ts es
+  | otherwise       = IAps_ vsEmpty vsEmpty f ts es
+  where fvs  = foldr (vsUnion . eFVarSet) (eFVarSet f) es
         ftvs = foldr (vsUnion . eFTVarSet)
                      (foldr (vsUnion . fTVarSet) (eFTVarSet f) ts)
                      es
 
 mkILAM :: Id -> IKind -> IExpr a -> IExpr a
 mkILAM i k e
-  | not efvCacheEnabled = ILAM_ vsEmpty vsEmpty i k e
-  | fvE && ftvE = ILAM_ vsEmpty vsEmpty i k e
-  | fvE         = ILAM_ vsEmpty ftvs i k e
-  | ftvE        = ILAM_ fvs vsEmpty i k e
-  | otherwise   = ILAM_ fvs ftvs i k e
-  where fvE  = fvKnownEmpty e
-        ftvE = ftvKnownEmpty e
-        fvs  = eFVarSet e
+  | efvCacheEnabled = ILAM_ fvs ftvs i k e
+  | otherwise       = ILAM_ vsEmpty vsEmpty i k e
+  where fvs  = eFVarSet e
         ftvs = vsDelete i (eFTVarSet e)
 
 mkICon :: Id -> IConInfo a -> IExpr a
 mkICon i ic
-  | not efvCacheEnabled = ICon_ vsEmpty i ic
-  | conFTVKnownEmpty ic = ICon_ vsEmpty i ic
-  | otherwise           = ICon_ (conFTVarSet ic) i ic
-
--- the known-empty test mirroring conFTVarSet arm for arm
-conFTVKnownEmpty :: IConInfo a -> Bool
-conFTVKnownEmpty (ICDef {}) = True
-conFTVKnownEmpty (ICValue {}) = True
-conFTVKnownEmpty (ICLazyPack {}) = True
-conFTVKnownEmpty (ICLazyUnpack {}) = True
-conFTVKnownEmpty (ICClock { iClock = c }) = ftvKnownEmpty (ic_wires c)
-conFTVKnownEmpty (ICReset { iReset = r }) =
-    ftvKnownEmpty (ic_wires (ir_clock r)) && ftvKnownEmpty (ir_wire r)
-conFTVKnownEmpty ic@(ICInout { iInout = io }) =
-    tyKnownEmpty (iConType ic) &&
-    ftvKnownEmpty (ic_wires (io_clock io)) &&
-    ftvKnownEmpty (ic_wires (ir_clock (io_reset io))) &&
-    ftvKnownEmpty (ir_wire (io_reset io)) &&
-    ftvKnownEmpty (io_wire io)
-conFTVKnownEmpty ic@(ICVerilog { vMethTs = tss }) =
-    tyKnownEmpty (iConType ic) && all (all tyKnownEmpty) tss
-conFTVKnownEmpty (ICType { iType = t }) = tyKnownEmpty t
-conFTVKnownEmpty ic@(ICUndet { imVal = mv }) =
-    tyKnownEmpty (iConType ic) && maybe True ftvKnownEmpty mv
-conFTVKnownEmpty ic@(ICLazyArray { uninit = mu }) =
-    tyKnownEmpty (iConType ic) &&
-    maybe True (\ (u1, u2) -> ftvKnownEmpty u1 && ftvKnownEmpty u2) mu
-conFTVKnownEmpty ic = tyKnownEmpty (iConType ic)
+  | efvCacheEnabled = ICon_ (conFTVarSet ic) i ic
+  | otherwise       = ICon_ vsEmpty i ic
 
 -- The free type variables reachable by substitution below an ICon:
 -- every type position ISyntaxSubst.etSubstIConInfo rewrites and every
