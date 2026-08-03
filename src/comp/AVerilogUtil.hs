@@ -32,12 +32,13 @@ module AVerilogUtil (
                     ) where
 
 import Data.List(nub, partition, genericLength, genericIndex, union, intersect,
-                 (\\), uncons)
+                 (\\), uncons, sortBy)
+import Data.Ord(comparing)
 import Data.Maybe
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
-import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI)
+import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI, stableVerilog)
 import PPrint
 import IntLit
 import Id
@@ -78,7 +79,9 @@ data VConvtOpts = VConvtOpts {
                               -- foreign-function map and def widths, for
                               -- monomorphizing polymorphic DPI call names
                               vco_ffmap       :: ForeignFuncMap,
-                              vco_def_widths  :: M.Map AId Integer
+                              vco_def_widths  :: M.Map AId Integer,
+                              -- canonical (text-keyed) orderings; -stable-verilog
+                              vco_stable      :: Bool
                               }
 
 
@@ -89,7 +92,8 @@ flagsToVco flags = VConvtOpts {
                                vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
                                vco_ffmap = M.empty,
-                               vco_def_widths = M.empty
+                               vco_def_widths = M.empty,
+                               vco_stable = stableVerilog flags
                               }
 
 -- This has been abolished from the compiler everywhere but the Verilog backend
@@ -151,14 +155,21 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
       av_depend_defs = getAVDependDefs rev_dep_map fcalls
       -- find the defs which fcalls depend on
       fcall_depend_defs = getFCallDependDefs dep_map fcalls
-      -- the intersection of these lists is the defs that we need to inline
-      inline_def_ids = av_depend_defs `intersect` fcall_depend_defs
+      -- the intersection of these lists is the defs that we need to inline.
+      -- Under -stable-verilog the list is canonicalized by the ids' text:
+      -- it arrives in Ord AId (interning) order from the closure Sets and
+      -- becomes the foreign-block group's reg-declaration order.
+      inline_def_ids
+        | vco_stable vco = sortBy (comparing idKey) inline_def_ids0
+        | otherwise      = inline_def_ids0
+        where idKey i = (getIdBaseString i, getIdQualString i)
+      inline_def_ids0 = av_depend_defs `intersect` fcall_depend_defs
 
       -- convert from the ids back to the defs
       inline_defs = map findDef inline_def_ids
 
       -- tsort these inlined defs among the fcalls
-      fcalls_and_defs = tsortForeignCallsAndDefs inline_defs fcalls
+      fcalls_and_defs = tsortForeignCallsAndDefs (vco_stable vco) inline_defs fcalls
 
       -- convert the sorted list to VStmts
       convert :: Either ADef AForeignCall -> [VStmt]
@@ -285,18 +296,26 @@ buildVerilogTask vco etask es | vco_sv_tasks vco == False &&
 buildVerilogTask vco taskid es | isMappedAVId (vidToId taskid) = VSeq [VTask taskid es, VZeroDelay]
 buildVerilogTask vco taskid es = VTask taskid es
 
-tsortForeignCallsAndDefs :: [ADef] -> [AForeignCall] ->
+tsortForeignCallsAndDefs :: Bool -> [ADef] -> [AForeignCall] ->
                             [Either ADef AForeignCall]
 -- if there are no defs, just return the fcalls
-tsortForeignCallsAndDefs [] fcalls = map Right fcalls
-tsortForeignCallsAndDefs ds fcalls =
+tsortForeignCallsAndDefs _ [] fcalls = map Right fcalls
+tsortForeignCallsAndDefs stable ds fcalls =
     let
         -- we will create a graph where the edges are:
-        -- * "Left AId" to represent a def (by it's name)
+        -- * "Left key" to represent a def (by it's name)
         -- * "Right Integer" to represent an fcall (by it's position)
 
         -- The use of Left and Right was chosen to make Defs lower in
         -- the Ord order than ForeignCalls.  This way, tsort puts them first.
+
+        -- Under -stable-verilog the def-node key carries the id's TEXT
+        -- first, so the tsort tie-break among ready defs (SCC's PSQ
+        -- pops equal-priority nodes in Ord order) is interning-history
+        -- independent; with the flag off the constant text component
+        -- makes the key order-isomorphic to bare Ord AId.
+        mkKey i | stable    = ((getIdBaseString i, getIdQualString i), i)
+                | otherwise = (("", ""), i)
 
         -- ----------
         -- Defs
@@ -308,7 +327,7 @@ tsortForeignCallsAndDefs ds fcalls =
         s = S.fromList ds_ids
 
         -- make edges for def-to-def dependencies
-        def_edges = [ (Left i, map Left uses)
+        def_edges = [ (Left (mkKey i), map (Left . mkKey) uses)
                           | ADef i _ e _ <- ds,
                             let uses = filter (`S.member` s) (aVars e) ]
 
@@ -353,7 +372,7 @@ tsortForeignCallsAndDefs ds fcalls =
 
         -- any defs used by an fcall have to be computed before the
         -- fcall is called
-        fcall_def_edges = [ (Right n, map Left uses)
+        fcall_def_edges = [ (Right n, map (Left . mkKey) uses)
                                 | (n,f) <- numbered_fcalls,
                                   let uses = filter (`S.member` s) (aVars f) ]
 
@@ -378,7 +397,7 @@ tsortForeignCallsAndDefs ds fcalls =
                                    let refs = filter isAV (aVars e),
                                    not (null refs) ]
             in  -- make the edges
-                [ (Left i, map (Right . findNum) refs)
+                [ (Left (mkKey i), map (Right . findNum) refs)
                      | (i, refs) <- aval_refs ]
 
         -- ----------
@@ -404,7 +423,7 @@ tsortForeignCallsAndDefs ds fcalls =
         -- convert a graph node back into a def/action
         -- and then to a SimCCFnStmt
 
-        convertNode (Left i) = Left (getDef i)
+        convertNode (Left (_, i)) = Left (getDef i)
         convertNode (Right n) = Right (getFCall n)
 
     in
