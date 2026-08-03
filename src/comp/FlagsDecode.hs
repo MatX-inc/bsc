@@ -658,7 +658,8 @@ defaultFlags bluespecdir = Flags {
         verilogFilter = [],
         warnActionShadowing = True,
         warnMethodUrgency = True,
-        warnUndetPred = False
+        warnUndetPred = False,
+        stableVerilog = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1464,6 +1465,11 @@ externalFlags = [
          (Toggle (\f x -> f {schedDOT=x}) (showIfTrue schedDOT),
           "generate .dot files with schedule information", Visible)),
 
+        ("stable-verilog",
+         (Toggle (\f x -> f {stableVerilog=x}) (showIfTrue stableVerilog),
+          "deterministic Verilog emission (canonical names and ordering)",
+          Hidden)),
+
         ("show-compiles",
          (Toggle (\f x -> f {showUpds=x}) (showIfTrue showUpds),
           "show recompilations", Visible)),
@@ -1954,7 +1960,8 @@ showFlagsRaw flags =
           ("vsim", show (vsim flags)),
           ("warnActionShadowing", show (warnActionShadowing flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
-          ("warnUndetPred", show (warnUndetPred flags))
+          ("warnUndetPred", show (warnUndetPred flags)),
+          ("stableVerilog", show (stableVerilog flags))
          ]
         in "Flags {\n" ++
                (intercalate ",\n" (map render fields)) ++

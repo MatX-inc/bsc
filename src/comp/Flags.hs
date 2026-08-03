@@ -154,7 +154,13 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- deterministic Verilog emission: canonical counter numbering,
+        -- deterministic CSE-representative names, and canonical operand
+        -- ordering, so the same .ba yields byte-identical .v in any
+        -- compile (off by default: the emitted names then match what
+        -- this compiler has historically produced)
+        stableVerilog :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
