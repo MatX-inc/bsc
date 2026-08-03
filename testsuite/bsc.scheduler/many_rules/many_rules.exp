@@ -19,6 +19,23 @@ compare_file_filter_ids DenseRules.bsv.bsc-sched-out
 compile_verilog_schedule_pass GuardedRules.bsv mkGuardedRules
 compare_file_filter_ids GuardedRules.bsv.bsc-sched-out
 
+# Lock the schedule for a tile grid: local, constant-degree
+# interaction (the common shape of real designs).
+compile_verilog_schedule_pass GridRules.bsv mkGridRules
+compare_file_filter_ids GridRules.bsv.bsc-sched-out
+
+# The same three schedules must be reproduced with the transposed
+# pair enumeration disabled (the all-pairs debug path,
+# -no-sched-transposed), locking the equivalence of the two paths.
+# (The .bo files are erased so that -u recompiles.)
+erase_many *.bo
+compile_verilog_schedule_pass DenseRules.bsv mkDenseRules "-no-sched-transposed"
+compare_file_filter_ids DenseRules.bsv.bsc-sched-out
+compile_verilog_schedule_pass GuardedRules.bsv mkGuardedRules "-no-sched-transposed"
+compare_file_filter_ids GuardedRules.bsv.bsc-sched-out
+compile_verilog_schedule_pass GridRules.bsv mkGridRules "-no-sched-transposed"
+compare_file_filter_ids GridRules.bsv.bsc-sched-out
+
 # Scale guard: 16384 non-interacting rules, compiled under a cap on
 # CUMULATIVE heap allocation -- the total bytes ever allocated over
 # the run, almost all immediately garbage-collected, NOT resident
