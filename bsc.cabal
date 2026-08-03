@@ -241,6 +241,7 @@ library
         SystemCWrapper
         SystemCheck
         SystemVerilogKeywords
+        ATFRules
         DefProp
         ISimpDicts
         LiftDicts

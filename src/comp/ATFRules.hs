@@ -73,7 +73,7 @@ import Pred(Pred(..), Qual(..), Class(..), Inst(..), expandSyn,
             removePredPositions)
 import StdPrel(isPreClass)
 import SymTab(SymTab, findSClass)
-import ISyntax(IType(..), IKind(..), normITAp)
+import IType(IType(..), IKind(..), mkITAp)
 import ISyntaxSubst(tSubstBatch)
 
 -- The rules are views of the instance declarations already in the
@@ -131,7 +131,7 @@ atfReduceInType rules t0 = go maxFuel t0
                 else Nothing
         (f, as) -> do
               as' <- mapM (go (fuel - 1)) as
-              Just (foldl normITAp f as')
+              Just (foldl mkITAp f as')
     go _ t = Just t
     spine (ITAp f a) as = spine f (a : as)
     spine f as = (f, as)
@@ -285,7 +285,7 @@ matchMany ps ts m
   | otherwise = Nothing
 
 -- Fully normalize a ground type: reduce ATF applications innermost-
--- first and rebuild through normITAp, which folds the primitive
+-- first and rebuild through mkITAp, which folds the primitive
 -- numeric/string type functions as their arguments become literals.
 -- Partially applied ATF constructors are inert structure, like any
 -- other constructor.  Nothing if a variable survives (the input was
@@ -308,7 +308,7 @@ groundNorm rules fuel t0 = do
                 reduceATF rules (fuel - 1) atfId so as'
           (f, as) -> do
                 as' <- mapM (groundNorm rules (fuel - 1)) as
-                Just (foldl normITAp f as')
+                Just (foldl mkITAp f as')
   where
     spine (ITAp f a) as = spine f (a : as)
     spine f as = (f, as)
@@ -348,7 +348,7 @@ cvtType = cvt . expandSyn
     cvt (TCon (TyCon i (Just k) s)) = ITCon i (cvtK k) s
     cvt (TCon (TyNum n _)) = ITNum n
     cvt (TCon (TyStr s _)) = ITStr s
-    cvt (TAp t1 t2) = normITAp (cvt t1) (cvt t2)
+    cvt (TAp t1 t2) = mkITAp (cvt t1) (cvt t2)
     cvt t = internalError ("ATFRules.cvtType: " ++ ppReadable t)
     cvtK KStar = IKStar
     cvtK KNum = IKNum

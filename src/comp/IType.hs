@@ -4,6 +4,7 @@
 module IType(
   IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll)
   ,IKind(..)
+  ,mkITAp
   ,itArrow
   ,mkNumConT
   ,iTypeNodeId

@@ -177,7 +177,7 @@ initPersistentState flags ai s = TStatePersistent {
     tsWarns = [],
     tsAllowIncoherent = ai,
     tsRecoveredErrors = [],
-    tsUsedPackages = S.empty,
+    tsUsedPackages = S.empty
   }
 
 initRecoverState :: TStateRecover
