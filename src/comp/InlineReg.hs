@@ -28,6 +28,18 @@ import BackendNamingConventions
 --      * the name of the instance
 --      * the list of inputs and their sizes
 --      * the output, to be declared "Reg" and its size
+-- tie-break for text-identical (but distinct) clock/reset key
+-- expressions: the key id's own string -- interning-free -- since
+-- pretty-printing drops the id for constant-shaped exprs
+exprIdText :: AExpr -> String
+exprIdText (APrim i _ _ _)  = getIdBaseString i
+exprIdText (ASInt i _ _)    = getIdBaseString i
+exprIdText (ASStr i _ _)    = getIdBaseString i
+exprIdText (ASPort _ i)     = getIdBaseString i
+exprIdText (ASParam _ i)    = getIdBaseString i
+exprIdText (ASDef _ i)      = getIdBaseString i
+exprIdText _                = ""
+
 vInlineReg :: ErrorHandle -> Flags -> [AVInst] -> ([VMItem], [RegInstInfo])
 vInlineReg errh flags avis =
     let
@@ -36,10 +48,17 @@ vInlineReg errh flags avis =
         -- Under -stable-verilog, the clock/reset domain groups are
         -- ordered by the printed text of their keys; the Map iteration
         -- order is Ord AExpr, which bottoms out in interning order.
-        stableGroups :: PPrint k => [(k, v)] -> [(k, v)]
+        stableGroups :: [(AExpr, v)] -> [(AExpr, v)]
         stableGroups gs = if stable
-                          then sortBy (comparing (ppString . fst)) gs
+                          then sortBy (comparing (\ (k, _) -> (ppString k, exprIdText k))) gs
                           else gs
+        stableGroups2 :: [((AExpr, AExpr), v)] -> [((AExpr, AExpr), v)]
+        stableGroups2 gs =
+            if stable
+            then sortBy (comparing (\ ((c, r), _) ->
+                             (ppString (c, r),
+                              (exprIdText c, exprIdText r)))) gs
+            else gs
         -- separate the RegAs from the RegN and RegUN
         (regas, regns_and_reguns) = partition isRegA avis
 
@@ -52,7 +71,7 @@ vInlineReg errh flags avis =
 
         -- make a map from clock and reset to the RegAs for that pair
         as_by_clock_and_reset =
-            stableGroups (M.toList (partitionByClockAndReset errh regas))
+            stableGroups2 (M.toList (partitionByClockAndReset errh regas))
 
         -- translate the partitioned RegAs into always blocks
         as_items = map (vInlineA vco) as_by_clock_and_reset
@@ -121,7 +140,7 @@ vInlineN errh vco stable (clk, avis) =
 
         -- translate into statements inside the always block
         stableGroups gs = if stable
-                          then sortBy (comparing (ppString . fst)) gs
+                          then sortBy (comparing (\ (k, _) -> (ppString k, exprIdText k))) gs
                           else gs
         body_items =
             -- put a comment here "initialized registers"

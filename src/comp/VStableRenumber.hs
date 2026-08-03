@@ -41,13 +41,23 @@ stableRenumberVProgram :: VProgram -> VProgram
 stableRenumberVProgram (VProgram ms dpis cs) =
     VProgram (map renumberModule ms) dpis cs
 
-data Family = FamD | FamH | FamQ
+data Family = FamD | FamH | FamQ | FamF | FamDM | FamDS
     deriving (Eq, Ord)
 
 markerText :: Family -> String
-markerText FamD = "___d"
-markerText FamH = "__h"
-markerText FamQ = "__q"
+markerText FamD  = "___d"
+markerText FamH  = "__h"
+markerText FamQ  = "__q"
+markerText FamF  = "__f"   -- ANoInline instance-connection wires
+markerText FamDM = "_dm"   -- AOpt-minted names (whole name, no stem)
+markerText FamDS = "_ds"   -- Synthesize-minted names (whole name, no stem)
+
+-- whether the family's names are the bare marker plus number
+-- (no stem before the marker)
+stemlessOK :: Family -> Bool
+stemlessOK FamDM = True
+stemlessOK FamDS = True
+stemlessOK _     = False
 
 -- split a name into (stem, family, number-text) at the rightmost
 -- marker-followed-by-digits suffix
@@ -58,12 +68,12 @@ matchFamily s =
         try fam = let m = markerText fam
                       lm = length m
                       (pre, suf) = splitAt (length rest - lm) rest
-                  in  if suf == m && not (null pre)
+                  in  if suf == m && (stemlessOK fam || not (null pre))
                       then Just (pre, fam)
                       else Nothing
     in  if null rds
         then Nothing
-        else case [ r | Just r <- map try [FamD, FamH, FamQ] ] of
+        else case [ r | Just r <- map try [FamD, FamH, FamQ, FamF, FamDM, FamDS] ] of
                (r : _) -> Just r
                []      -> Nothing
 
@@ -87,10 +97,31 @@ renumberModule vm =
         instFixed (VMGroup _ itss)      = concatMap (concatMap instFixed) itss
         instFixed _                     = []
 
+        -- foreign linkage names must never change: the function/task
+        -- names of foreign calls (DPI declarations live at file scope,
+        -- outside this module walk)
+        -- (a user's imported function may itself be family-shaped,
+        -- e.g. import \"BDPI\" f__h1)
+        isFctName :: VExpr -> [String]
+        isFctName (VEFctCall f _) = [vidStr f]
+        isFctName _               = []
+
+        foreignFixed :: [String]
+        foreignFixed =
+            concatMap isFctName (listify (\e -> case e of
+                                                  VEFctCall _ _ -> True
+                                                  _             -> False)
+                                         (vm_body vm)) ++
+            [ vidStr t | VTask t _ <- listify (\st -> case st of
+                                                        VTask _ _ -> True
+                                                        _         -> False)
+                                              (vm_body vm) ]
+
         excluded :: S.Set String
         excluded = S.fromList (
             vidStr (vm_name vm) :
             [ s | VId s _ _ <- listify isVId (vm_ports vm) ] ++
+            foreignFixed ++
             concatMap instFixed (vm_body vm))
 
         -- family members in order of first occurrence in the body
