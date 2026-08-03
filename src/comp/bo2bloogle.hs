@@ -19,9 +19,21 @@ import qualified Data.ByteString as BS
 import Data.Char
   ( GeneralCategory (..),
     generalCategory,
+#if MIN_VERSION_base(4,18,0)
     isLowerCase,
     isUpperCase,
+#endif
   )
+
+#if !MIN_VERSION_base(4,18,0)
+-- isLowerCase/isUpperCase (the Unicode Lowercase/Uppercase properties)
+-- only reached Data.Char in base 4.18 (GHC 9.6); on older base fall
+-- back to the general categories, which agree on every character that
+-- can appear in a BSC identifier
+isLowerCase, isUpperCase :: Char -> Bool
+isLowerCase c = generalCategory c == LowercaseLetter
+isUpperCase c = generalCategory c == UppercaseLetter
+#endif
 import Data.String (IsString (..))
 import Error (initErrorHandle)
 import GenBin (readBinFile)
