@@ -1601,6 +1601,8 @@ externalFlags = [
          (Toggle (\f x -> f {semanticPortsComment=x})
                  (showIfTrue semanticPortsComment),
           "derive the Verilog Ports comment from the APackage analysis",
+          Hidden)),
+
         ("stable-verilog",
          (Toggle (\f x -> f {stableVerilog=x}) (showIfTrue stableVerilog),
           "deterministic Verilog emission (canonical names and ordering)",

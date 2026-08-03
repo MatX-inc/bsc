@@ -67,20 +67,20 @@ data ExpandData a2 = ExpandData{
 -- expansion from a point inside the recursive structure.
 
 
-aExpand :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
-aExpand errh keepFires expnond expcheap pkg =
-    aSRemoveUnused keepFires
-                   (expandASPackage errh keepFires expnond expcheap pkg)
+aExpand :: ErrorHandle -> Bool -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
+aExpand errh stable keepFires expnond expcheap pkg =
+    aSRemoveUnused stable keepFires
+                   (expandASPackage errh stable keepFires expnond expcheap pkg)
 
-xaXExpand :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
-xaXExpand errh keepFires expnond expcheap pkg =
-    xaSRemoveUnused keepFires
-        (expandASPackage errh keepFires expnond expcheap pkg)
+xaXExpand :: ErrorHandle -> Bool -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
+xaXExpand errh stable keepFires expnond expcheap pkg =
+    xaSRemoveUnused stable keepFires
+        (expandASPackage errh stable keepFires expnond expcheap pkg)
 
 
 -- common core
-expandASPackage :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
-expandASPackage errh keepFires expnond expcheap pkg =
+expandASPackage :: ErrorHandle -> Bool -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
+expandASPackage errh stable keepFires expnond expcheap pkg =
     let
         ss = aspkg_state_instances pkg
         ws = aspkg_inlined_ports pkg
@@ -96,7 +96,7 @@ expandASPackage errh keepFires expnond expcheap pkg =
 
         (ss', ws', ds', fs') =
             -- trace ("aExpand " ++ ppReadable ds) $
-            aExpDefs errh keepFires expnond expcheap aoptExpandTest
+            aExpDefs errh stable keepFires expnond expcheap aoptExpandTest
                      sigInfo os ios muxes (ss, ws, ds, fs)
     in
         pkg { aspkg_state_instances = ss',
@@ -145,14 +145,14 @@ expandASPackage errh keepFires expnond expcheap pkg =
 -- (7) Call "expand" on the ordered definitions, with the ExpandData
 
 
-aExpDefs :: ErrorHandle -> Bool -> Bool -> Bool -> ExpandTest [AForeignBlock] ->
+aExpDefs :: ErrorHandle -> Bool -> Bool -> Bool -> Bool -> ExpandTest [AForeignBlock] ->
             ASPSignalInfo -> [AOutput] -> [AInput] -> [AId] ->
             ([AVInst], [AId], [ADef], [AForeignBlock]) ->
             ([AVInst], [AId], [ADef], [AForeignBlock])
-aExpDefs errh keepFires expnond expcheap expTest sigInfo os ios muxes (ss', ws', ds', fs') =
+aExpDefs errh stable keepFires expnond expcheap expTest sigInfo os ios muxes (ss', ws', ds', fs') =
     let
         usemap = createUseMap muxes (ss', ws', ds', fs')
-        sorted_defs = tsortDefs errh ds'
+        sorted_defs = tsortDefs stable errh ds'
 
         -- compute the signal names to keep
         keepSchIds = if ( keepFires) then concat $ map snd (aspsi_rule_sched sigInfo) else []
@@ -184,9 +184,12 @@ aExpDefs errh keepFires expnond expcheap expTest sigInfo os ios muxes (ss', ws',
         expand edata M.empty sorted_defs []
 
 
--- Topologically sort defs
-tsortDefs :: ErrorHandle -> [ADef] -> [ADef]
-tsortDefs errh ds = sorted_defs
+-- Topologically sort defs.
+-- Under -stable-verilog (the Bool) the tie-break among ready nodes is
+-- the identifier's text, not Ord AId (SpeedyString intern order); see
+-- ASyntaxUtil.tsortADefs.
+tsortDefs :: Bool -> ErrorHandle -> [ADef] -> [ADef]
+tsortDefs stable errh ds = sorted_defs
   where
     -- compute the signal use edges for all defs
     uses :: [(AId,[AId])]
@@ -197,13 +200,21 @@ tsortDefs errh ds = sorted_defs
     --  the sorted ids back into sorted defs)
     def_ids :: S.Set AId -- the Ids which are defined on the LHS
     def_ids = S.fromList (map fst uses)
-    g = [(i, nub (filter (`S.member` def_ids) is)) | (i, is) <- uses]
-    sorted_def_ids =
-        case tsort g of
-        Left is ->
-            bsErrorUnsafe errh
-                [(noPosition, ECombCycle (map pfpString (concat is)))]
-        Right is -> is
+    edges = [(i, nub (filter (`S.member` def_ids) is)) | (i, is) <- uses]
+    key i = ((getIdBaseString i, getIdQualString i), i)
+    sorted_def_ids
+      | stable =
+          case tsort [ (key i, map key js) | (i, js) <- edges ] of
+            Left is ->
+                bsErrorUnsafe errh
+                    [(noPosition, ECombCycle (map (pfpString . snd) (concat is)))]
+            Right is -> map snd is
+      | otherwise =
+          case tsort edges of
+            Left is ->
+                bsErrorUnsafe errh
+                    [(noPosition, ECombCycle (map pfpString (concat is)))]
+            Right is -> is
     omap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
     sorted_defs = map (getDef omap) sorted_def_ids
 
@@ -235,8 +246,8 @@ createUseMap  muxes (ss', ws', ds', fs') = usemap
 -- which the expression depends.
 
 
-aSRemoveUnused :: Bool -> ASPackage -> ASPackage
-aSRemoveUnused keepfires pkg =
+aSRemoveUnused :: Bool -> Bool -> ASPackage -> ASPackage
+aSRemoveUnused stable keepfires pkg =
     let ds = aspkg_values pkg
         vused = aVars (aspkg_state_instances pkg)
         fused = aVars (aspkg_foreign_calls pkg) ++
@@ -244,7 +255,7 @@ aSRemoveUnused keepfires pkg =
                         | (_,fcs) <- aspkg_foreign_calls pkg
                         , fc <- fcs ])
         fires = if keepfires then [i | (ADef i _t _e _) <- ds, isFire i] else []
-        ds' = (collDefs (vused ++ fused ++ fires ) ds)
+        ds' = (collDefs stable (vused ++ fused ++ fires ) ds)
     in
         -- trace ("aSRemoveUnused \nds = " ++ ppReadable ds ++
         --        "\n ds' = " ++ ppReadable ds') $
@@ -263,13 +274,13 @@ aSRemoveUnused keepfires pkg =
 -- in state instances, rules, or methods.
 
 
-aRemoveUnused :: APackage -> APackage
-aRemoveUnused apkg =
+aRemoveUnused :: Bool -> APackage -> APackage
+aRemoveUnused stable apkg =
 --    trace ("aRemoveUnused:\n   vused " ++ ppReadable vused
 --    ++ "\n   rused: " ++ ppReadable rused
 --    ++ "\n   iused: " ++ ppReadable iused) $
         apkg { apkg_local_defs = ds' }
-  where ds' = collDefs (vused ++ rused ++ iused) (apkg_local_defs apkg)
+  where ds' = collDefs stable (vused ++ rused ++ iused) (apkg_local_defs apkg)
         vused = aVars (apkg_state_instances apkg)
         rused = aVars (apkg_rules apkg)
         iused = aVars (apkg_interface apkg)
@@ -291,8 +302,8 @@ aRemoveUnused apkg =
 
 
 -- collect used definitions (and everything they use)
-collDefs :: [AId] -> [ADef] -> [ADef]
-collDefs used ds = coll (S.fromList used) [] (reverse (tsortADefs ds))
+collDefs :: Bool -> [AId] -> [ADef] -> [ADef]
+collDefs stable used ds = coll (S.fromList used) [] (reverse (tsortADefs stable ds))
   where coll _    rs [] = rs
         coll used rs (d@(ADef i _ e _) : ds) =
                 if isLocalAId i
@@ -335,8 +346,8 @@ collDefs used ds = coll (S.fromList used) [] (reverse (tsortADefs ds))
 --   list.  Plus, xaSRemoveUnused takes keepFires as an argument.
 
 
-xaSRemoveUnused :: Bool -> ASPackage -> ASPackage
-xaSRemoveUnused keepFires pkg =
+xaSRemoveUnused :: Bool -> Bool -> ASPackage -> ASPackage
+xaSRemoveUnused stable keepFires pkg =
     -- trace ("xaSremoveUNused \nds = " ++ ppReadable ds ++
     --        "\n ds' = " ++ ppReadable ds' ++ "\n os = " ++ ppReadable os) $
     pkg { aspkg_values = ds' }
@@ -357,7 +368,7 @@ xaSRemoveUnused keepFires pkg =
               --traces("xasRemovedUnused fused: " ++ ppReadable fused ) $
               --traces("xasRemovedUnused vused: " ++ ppReadable vused ) $
               --traces("xasRemovedUnused defs: " ++ ppReadable ds ) $
-              xcollDefs keepFires (vused ++ oused ++ fused) ds
+              xcollDefs stable keepFires (vused ++ oused ++ fused) ds
         --
 
         stArgs :: AVInst -> [AId]
@@ -398,9 +409,9 @@ xaSRemoveUnused keepFires pkg =
 --    firing signals when the -keep-fires flag is on.
 --
 
-xcollDefs :: Bool -> [AId] -> [ADef] -> [ADef]
-xcollDefs keepFires used ds = --traces( "xCollDefs: " ++ ppReadable used ) $
-                              coll (S.fromList used) [] (reverse (tsortADefs ds))
+xcollDefs :: Bool -> Bool -> [AId] -> [ADef] -> [ADef]
+xcollDefs stable keepFires used ds = --traces( "xCollDefs: " ++ ppReadable used ) $
+                              coll (S.fromList used) [] (reverse (tsortADefs stable ds))
   where coll _    rs [] = rs
         coll used rs (d@(ADef i _ e _) : ds) =
             if (((not keepFires)  || (not (isFire i)))
@@ -740,9 +751,9 @@ aoptExpandTest edata i e =
 
 
 -- SERI version
-expandAPackage :: ErrorHandle -> APackage -> APackage
-expandAPackage errh apkg = apkgN
-    where sorted_defs = tsortDefs errh (apkg_local_defs apkg)
+expandAPackage :: ErrorHandle -> Bool -> APackage -> APackage
+expandAPackage errh stable apkg = apkgN
+    where sorted_defs = tsortDefs stable errh (apkg_local_defs apkg)
           -- generate a always used def map, since predicates are not yet generated
           usemap = M.fromList ([ (i,2) | (ADef i _ _ _) <- sorted_defs])
           --
@@ -762,7 +773,7 @@ expandAPackage errh apkg = apkgN
           -- do the expansion
           (_,_, defs, (rules,ifc)) = expand edata M.empty sorted_defs []
           -- rebuild the package
-          apkgN = aRemoveUnused $ apkg { apkg_local_defs = defs,
+          apkgN = aRemoveUnused stable $ apkg { apkg_local_defs = defs,
                                          apkg_rules = rules,
                                          apkg_interface = ifc}
 

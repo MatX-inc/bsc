@@ -241,6 +241,7 @@ library
         SystemCWrapper
         SystemCheck
         SystemVerilogKeywords
+        VStableRenumber
         DefProp
         ISimpDicts
         LiftDicts
