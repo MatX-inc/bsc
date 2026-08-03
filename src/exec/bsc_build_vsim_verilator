@@ -397,7 +397,17 @@ if [ "$BSC_COMMAND" = "check" ]; then
   {
     echo "# bsc verilator link manifest"
     echo "TOP $BSC_TOPLEVEL_MODULE"
-    echo "TOPFILE $TOP_VERFILE"
+    TOPFILE_OUT=$TOP_VERFILE
+    if [ -z "$TOPFILE_OUT" ]; then
+        # top was passed explicitly; name it for the manifest anyway
+        for f in $BSC_VERILOG_FILES_NO_MAIN ; do
+            if [ "`basename $f`" = "${BSC_TOPLEVEL_MODULE}.v" ] ; then
+                TOPFILE_OUT=$f
+                break
+            fi
+        done
+    fi
+    echo "TOPFILE $TOPFILE_OUT"
     echo "DPI $USEDPI"
     echo "NEEDS_TIMING $NEEDS_TIMING"
     echo "VLT_CONFIG $VLT_CONFIG"
