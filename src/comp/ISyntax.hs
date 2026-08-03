@@ -472,11 +472,11 @@ splitITAp t0 = go t0 []
 -- singleton directly, and a heap reference contributes nothing (the
 -- substitution machinery never enters IRefT -- see ISyntaxSubst).
 data IExpr a
-        = ILam_ !VarSet !VarSet Id IType (IExpr a) -- vanishes after IExpand
-        | IAps_ !VarSet !VarSet (IExpr a) [IType] [IExpr a]
+        = ILam_ VarSet VarSet Id IType (IExpr a) -- vanishes after IExpand
+        | IAps_ VarSet VarSet (IExpr a) [IType] [IExpr a]
         | IVar Id                        -- vanishes after IExpand
-        | ILAM_ !VarSet !VarSet Id IKind (IExpr a) -- vanishes after IExpand
-        | ICon_ !VarSet Id (IConInfo a)  -- free type vars only (see eFVarSet)
+        | ILAM_ VarSet VarSet Id IKind (IExpr a) -- vanishes after IExpand
+        | ICon_ VarSet Id (IConInfo a)   -- free type vars only (see eFVarSet)
         -- IRef is only used during reduction, it refers to a "heap" cell
         | IRefT IType !Int (S.Set Position) a -- vanishes after IExpand
 
@@ -512,36 +512,35 @@ efvCacheEnabled :: Bool
 efvCacheEnabled = not ("-hack-no-iexpr-fv-cache" `elem` progArgs)
 
 mkILam :: Id -> IType -> IExpr a -> IExpr a
-mkILam i t e = ILam_ fvs ftvs i t e
-  where fvs  | efvCacheEnabled = vsDelete i (eFVarSet e)
-             | otherwise       = vsEmpty
+mkILam i t e
+  | efvCacheEnabled = ILam_ fvs ftvs i t e
+  | otherwise       = ILam_ vsEmpty vsEmpty i t e
+  where fvs  = vsDelete i (eFVarSet e)
         -- unlike the historical ftVars, the binder's type is included:
         -- substitution rewrites it (ISyntaxSubst substitutes ILam
         -- types), so pruning needs its variables counted
-        ftvs | efvCacheEnabled = fTVarSet t `vsUnion` eFTVarSet e
-             | otherwise       = vsEmpty
+        ftvs = fTVarSet t `vsUnion` eFTVarSet e
 
 mkIAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
-mkIAps f ts es = IAps_ fvs ftvs f ts es
-  where fvs  | efvCacheEnabled = foldr (vsUnion . eFVarSet) (eFVarSet f) es
-             | otherwise       = vsEmpty
-        ftvs | efvCacheEnabled =
-                 foldr (vsUnion . eFTVarSet)
-                       (foldr (vsUnion . fTVarSet) (eFTVarSet f) ts)
-                       es
-             | otherwise       = vsEmpty
+mkIAps f ts es
+  | efvCacheEnabled = IAps_ fvs ftvs f ts es
+  | otherwise       = IAps_ vsEmpty vsEmpty f ts es
+  where fvs  = foldr (vsUnion . eFVarSet) (eFVarSet f) es
+        ftvs = foldr (vsUnion . eFTVarSet)
+                     (foldr (vsUnion . fTVarSet) (eFTVarSet f) ts)
+                     es
 
 mkILAM :: Id -> IKind -> IExpr a -> IExpr a
-mkILAM i k e = ILAM_ fvs ftvs i k e
-  where fvs  | efvCacheEnabled = eFVarSet e
-             | otherwise       = vsEmpty
-        ftvs | efvCacheEnabled = vsDelete i (eFTVarSet e)
-             | otherwise       = vsEmpty
+mkILAM i k e
+  | efvCacheEnabled = ILAM_ fvs ftvs i k e
+  | otherwise       = ILAM_ vsEmpty vsEmpty i k e
+  where fvs  = eFVarSet e
+        ftvs = vsDelete i (eFTVarSet e)
 
 mkICon :: Id -> IConInfo a -> IExpr a
-mkICon i ic = ICon_ ftvs i ic
-  where ftvs | efvCacheEnabled = conFTVarSet ic
-             | otherwise       = vsEmpty
+mkICon i ic
+  | efvCacheEnabled = ICon_ (conFTVarSet ic) i ic
+  | otherwise       = ICon_ vsEmpty i ic
 
 -- The free type variables reachable by substitution below an ICon:
 -- every type position ISyntaxSubst.etSubstIConInfo rewrites and every
@@ -1425,12 +1424,16 @@ instance NFData IAbstractInput where
 instance NFData (IDef a) where
     rnf (IDef i t e p) = rnf4 i t e p
 
+-- Matches the REAL constructors so the cached free-variable sets are
+-- forced too: hyper/rnf must normalize the whole node, and a match
+-- through the pattern synonyms would skip the cache fields (leaving
+-- thunks alive that the hyper discipline exists to kill).
 instance NFData (IExpr a) where
-    rnf (ILam i t e) = rnf3 i t e
-    rnf (IAps e ts es) = rnf3 e ts es
+    rnf (ILam_ fvs ftvs i t e) = rnf2 fvs ftvs `seq` rnf3 i t e
+    rnf (IAps_ fvs ftvs e ts es) = rnf2 fvs ftvs `seq` rnf3 e ts es
     rnf (IVar i) = rnf i
-    rnf (ILAM i k e) = rnf3 i k e
-    rnf (ICon i ic) = rnf2 i ic
+    rnf (ILAM_ fvs ftvs i k e) = rnf2 fvs ftvs `seq` rnf3 i k e
+    rnf (ICon_ ftvs i ic) = rnf ftvs `seq` rnf2 i ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where
