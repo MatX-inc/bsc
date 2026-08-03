@@ -686,6 +686,17 @@ aSchedule_step1 errh flags prefix pps amod = do
   let (ruleMethodUseMap, rulePCConflictUseMap) =
           makeRuleMethodUseMaps ncSetPC ruleUseMap
 
+  -- Inverted index from state instance to the rules which use it.
+  -- Only rules sharing an instance can have method-use conflicts, so
+  -- conflict-map construction and disjointness testing enumerate
+  -- candidate pairs from this index rather than all pairs of rules.
+  let objUserIndex :: M.Map AId (S.Set ARuleId)
+      objUserIndex =
+          M.fromListWith S.union
+              [ (obj, S.singleton r)
+                | (r, (_, usemap)) <- M.toList ruleMethodUseMap,
+                  obj <- M.keys usemap ]
+
   -- Check that the actions in a rule are parallel composable.
   -- This may throw an error
   disjointState1 <- verifySafeRuleActions flags userDefs rulePCConflictUseMap disjointState0
@@ -707,8 +718,22 @@ aSchedule_step1 errh flags prefix pps amod = do
   let cf_rules_test r1 r2 = ordPair (r1, r2) `S.member` cf_rules_set
 
   -- determine which rule conditions are disjoint
+  --
+  -- The verdicts are only consulted for pairs which share a state
+  -- instance (conflict analysis, resource allocation, mux exclusivity),
+  -- pairs where both rules use foreign functions (task-order checks),
+  -- and pairs asserted mutually_exclusive -- except by the
+  -- RuleRelationDB, which records a verdict for every pair.  So the
+  -- testing is restricted to the consulted pairs, unless this flow
+  -- generates a .ba file or answers schedule queries (the flows which
+  -- force the full RuleRelationDB).
+  let disjoint_pairs =
+          if (genABin flags || not (null (schedQueries flags)))
+          then uniquePairs ruleNames
+          else restrictedRulePairs ruleNames objUserIndex
+                   (rumRuleUsesFF ruleUseMap) schedPragmas
   (disjoint_set, disjointState2) <-
-      convIO $ genDisjointSet disjointState1 (map ruleName rules) schedPragmas
+      convIO $ genDisjointSet disjointState1 disjoint_pairs schedPragmas
 
   -- XXX use ordPair to reduce the set size?
   let rule_disjoint r1 r2 = if (r1 == r2)
@@ -731,7 +756,7 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   (cfConflictMap0, setToTestForStaticSchedule_cf, disjointState3) <-
       mkConflictMap flags disjointState2
-                    ruleMethodUseMap ncSetCF cf_or_disjoint
+                    ruleMethodUseMap objUserIndex ncSetCF cf_or_disjoint
 
   -- for better memory performance, force the computation
   deepseq (G.toList cfConflictMap0) $
@@ -750,7 +775,7 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   (pcConflictMap0, setToTestForStaticSchedule_pc, disjointState4) <-
       mkConflictMap flags disjointState3
-                    ruleMethodUseMap ncSetPC cf_map_test
+                    ruleMethodUseMap objUserIndex ncSetPC cf_map_test
 
   -- for better memory performance, force the computation
   deepseq (G.toList pcConflictMap0) $
@@ -774,7 +799,7 @@ aSchedule_step1 errh flags prefix pps amod = do
       -- for methods and rules (just the method conflict edges)
   (scConflictMap0, setToTestForStaticSchedule_sc, disjointState5) <-
       mkConflictMap flags disjointState4
-                    ruleMethodUseMap ncSetSC pc_map_test
+                    ruleMethodUseMap objUserIndex ncSetSC pc_map_test
 
   -- for better memory performance, force the computation
   deepseq (G.toList scConflictMap0) $
@@ -3906,10 +3931,54 @@ doQueries errh flags rule_names relationDB =
 --   RuleDisjointTest :: ARuleId -> ARuleId -> Bool
 --   RuleUsesMap      :: M.Map RuleId RuleUses
 
+-- Enumerate the rule pairs whose disjointness verdict can be consulted
+-- on this flow: pairs sharing a state instance, pairs where both rules
+-- use foreign functions, and pairs covered by a mutually_exclusive
+-- pragma.  The pairs are produced in the same relative order that
+-- "uniquePairs ruleNames" would produce them, so the SAT queries issued
+-- are a subsequence of the full sweep's queries.
+restrictedRulePairs :: [ARuleId] -> M.Map AId (S.Set ARuleId) ->
+                       (ARuleId -> Bool) -> [ASchedulePragma] ->
+                       [(ARuleId, ARuleId)]
+restrictedRulePairs ruleNames objUserIndex usesFF pragmas =
+    let
+        posMap = M.fromList (zip ruleNames [(0::Integer)..])
+        backMap = M.fromList (zip [(0::Integer)..] ruleNames)
+
+        addPair pset (r1, r2) =
+            case (M.lookup r1 posMap, M.lookup r2 posMap) of
+              (Just i, Just j) | i < j -> S.insert (i, j) pset
+                               | j < i -> S.insert (j, i) pset
+              _ -> pset
+        addGroup pset rs = foldl addPair pset (uniquePairs rs)
+
+        -- pairs of rules using the same state instance
+        pset1 = foldl addGroup S.empty
+                    (map S.toList (M.elems objUserIndex))
+        -- pairs of rules which both use foreign functions
+        pset2 = addGroup pset1 (filter usesFF ruleNames)
+        -- pairs covered by a mutually_exclusive pragma
+        -- (as in DisjointTest.addMEIds, rules are ME with the rules of
+        -- the other groups in the pragma, not within their own group)
+        groupPairs [] = []
+        groupPairs (g:gs) = [ (g, g') | g' <- gs ] ++ groupPairs gs
+        me_pairs = [ (r1, r2)
+                     | SPMutuallyExclusive gss <- pragmas,
+                       (g1, g2) <- groupPairs gss,
+                       r1 <- g1, r2 <- g2 ]
+        pset3 = foldl addPair pset2 me_pairs
+
+        cvt (i, j) = (lk i, lk j)
+        lk i = fromJustOrErr "restrictedRulePairs: bad index"
+                   (M.lookup i backMap)
+    in
+        map cvt (S.toAscList pset3)
+
 mkConflictMap :: Flags -> DisjointTestState ->
-                 RuleMethodUseMap -> NoConflictSet -> RuleDisjointTest ->
+                 RuleMethodUseMap -> M.Map AId (S.Set ARuleId) ->
+                 NoConflictSet -> RuleDisjointTest ->
                  SM (ConflictMap, S.Set (ARuleId, ARuleId), DisjointTestState)
-mkConflictMap flags dtstate rule_meth_map ncset ignore_conflicts =
+mkConflictMap flags dtstate rule_meth_map obj_user_index ncset ignore_conflicts =
     let
         checkOneUse :: AExpr -> AExpr ->
                        ([(MethodId, MethodId)], Bool, DisjointTestState) ->
@@ -3954,7 +4023,15 @@ mkConflictMap flags dtstate rule_meth_map ncset ignore_conflicts =
           (ARuleId, (AExpr, MethodIdMap)) ->
           SM ([(ARuleId, [(ARuleId, [Conflicts])])], S.Set (ARuleId, ARuleId), DisjointTestState)
         checkRule (ps, igns, dts) ru@(rule1, (p1, usemap1)) = do
-          (es, igns', dts') <- foldM (checkUses ru) ([], igns, dts) (M.toList rule_meth_map)
+          -- Only rules sharing a state instance with rule1 can produce
+          -- conflict edges, so enumerate those (in the same ascending
+          -- order that a scan of the full map would visit them).
+          let cands = S.unions [ M.findWithDefault S.empty obj obj_user_index
+                                 | obj <- M.keys usemap1 ]
+              cand_uses = [ (r2, uses)
+                            | r2 <- S.toAscList cands,
+                              (Just uses) <- [M.lookup r2 rule_meth_map] ]
+          (es, igns', dts') <- foldM (checkUses ru) ([], igns, dts) cand_uses
           let ps' = ((rule1, es):ps)
           return (ps', igns', dts')
     in
