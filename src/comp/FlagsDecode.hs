@@ -732,7 +732,8 @@ defaultFlags bluespecdir = Flags {
         verilogFilter = [],
         warnActionShadowing = True,
         warnMethodUrgency = True,
-        warnUndetPred = False
+        warnUndetPred = False,
+        semanticPortsComment = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1566,6 +1567,12 @@ externalFlags = [
          (Toggle (\f x -> f {schedDOT=x}) (showIfTrue schedDOT),
           "generate .dot files with schedule information", Visible)),
 
+        ("semantic-ports-comment",
+         (Toggle (\f x -> f {semanticPortsComment=x})
+                 (showIfTrue semanticPortsComment),
+          "derive the Verilog Ports comment from the APackage analysis",
+          Hidden)),
+
         ("show-compiles",
          (Toggle (\f x -> f {showUpds=x}) (showIfTrue showUpds),
           "show recompilations", Visible)),
@@ -2085,7 +2092,8 @@ showFlagsRaw flags =
           ("vsim", show (vsim flags)),
           ("warnActionShadowing", show (warnActionShadowing flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
-          ("warnUndetPred", show (warnUndetPred flags))
+          ("warnUndetPred", show (warnUndetPred flags)),
+          ("semanticPortsComment", show (semanticPortsComment flags))
          ]
         in "Flags {\n" ++
                (intercalate ",\n" (map render fields)) ++
