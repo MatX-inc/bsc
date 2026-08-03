@@ -227,14 +227,19 @@ removed.
 1. **(done, this branch)** The analysis exists behind
    `-dAPackageIOproperties`; golden tests compare both analyses.
 2. **(done, this branch)** The wrapper attributes (`veriPortProps` in
-   `bsc.hs`) and the Verilog "Ports:" comment are fed from the new
-   analysis, for every backend -- Bluesim compiles gain port properties
-   in their `.bo`s (the analysis needs only the `APackage` and the
-   schedule).  `getIOProps` remains, computed only when its comparison
-   dump (`-dIOproperties`) is requested.
-3. **(done, this branch)** Run the full testsuite.  The churn: golden
-   Verilog files' "Ports:" comments change where the new labels are
-   richer; behavioral differences in parent compiles are confined to
+   `bsc.hs`) are fed from the new analysis unconditionally, for every
+   backend -- Bluesim compiles gain port properties in their `.bo`s
+   (the analysis needs only the `APackage` and the schedule).  The
+   Verilog "Ports:" comment keeps the netlist-measured text by default,
+   so emitted Verilog is byte-identical; the hidden
+   `-semantic-ports-comment` flag selects the APackage-derived text.
+   `getIOProps` remains as the default comment's source and for the
+   comparison dump (`-dIOproperties`); both analyses are computed on
+   the Verilog path regardless of the flag.
+3. **(done, this branch)** Run the full testsuite.  With the default
+   comment unchanged there is no golden-Verilog churn; the portprops
+   tests exercise `-semantic-ports-comment` so the semantic text stays
+   covered.  Behavioral differences in parent compiles are confined to
    the 33 known lines (the main risk is a parent asserting
    `always_ready` against a child whose RDY `const` was
    optimizer-derived -- two designs in the testsuite exhibit the
@@ -279,9 +284,11 @@ Pending (deducible under the contract, not yet implemented):
 
 ## Open questions
 
-1. Should the Verilog "Ports:" comment show the richer structural labels
-   (churn in checked-in golden Verilog), or should the comment be kept
-   minimal while the `.bo` attributes carry the full set?
+1. **(resolved)** The Verilog "Ports:" comment keeps the netlist text by
+   default while the `.bo` attributes carry the semantic set; the hidden
+   `-semantic-ports-comment` flag opts a build into the richer labels.
+   Downstream consumers needing byte-identical generated Verilog are the
+   deciding constraint.
 2. Should the optimizer-derived `const`s be preserved during migration
    via the bounded validity check, or dropped as proposed?
 3. Naming: the dump flag, and whether `getIOPropsA` simply becomes
