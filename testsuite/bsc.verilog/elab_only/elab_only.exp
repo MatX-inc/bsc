@@ -4,8 +4,12 @@
 # later, from the .ba, by -c or by the linking stage.  For this design
 # that output is byte-identical to what the compile itself would have
 # written (the testsuite passes -no-show-timestamps -no-show-version, so
-# generated headers are deterministic); in general only deduced
-# port-property annotations in a parent's .v header comment can differ.
+# generated headers are deterministic).  The port properties are derived
+# from the APackage and recorded in the .bo even under -elab-only, so a
+# parent compiled against an -elab-only child deduces exactly what the
+# direct compile deduces -- the historical caveat about a parent's
+# port-property annotations no longer applies, and the identity holds
+# under -semantic-ports-comment too (checked below).
 #
 
 # Check that none of the listed files exist
@@ -145,3 +149,25 @@ compile_no_source_fail_error "elab_only_codegen" \
 
 # not with -no-elab (nothing would be generated at all)
 compile_fail_error ElabOnly.bsv S0101 1 {-verilog -elab-only -no-elab}
+
+# -------------------------
+# The staged flow is byte-identical under -semantic-ports-comment too:
+# the Ports comment's analysis (getIOPropsA) is recomputed from the .ba
+# itself when -c generates the .v, and the child properties a parent
+# deduces from ride the .bo in both flows.  (Flag effectiveness is
+# pinned separately in bsc.verilog/portprops; here we pin only
+# staged == direct.)
+
+erase mkESub.v
+erase sysETb.v
+elab_run "-c with -semantic-ports-comment" cgensem.bsc-out \
+    {-verilog -semantic-ports-comment -c mkESub -c sysETb}
+files_exist { mkESub.v sysETb.v }
+copy mkESub.v mkESub-from-c-sem.v
+copy sysETb.v sysETb-from-c-sem.v
+
+erase mkESub.v
+erase sysETb.v
+compile_verilog_pass ElabOnly.bsv sysETb {-semantic-ports-comment}
+compare_file mkESub.v mkESub-from-c-sem.v
+compare_file sysETb.v sysETb-from-c-sem.v
