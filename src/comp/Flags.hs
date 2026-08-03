@@ -175,7 +175,13 @@ data Flags = Flags {
         -- stop after the stage's checks without producing its artifact:
         -- at Verilog link, validate the link closure and have the
         -- simulator builder write a manifest instead of building
-        checkOnly :: Bool
+        checkOnly :: Bool,
+        -- deterministic Verilog emission: canonical counter numbering,
+        -- deterministic CSE-representative names, and canonical operand
+        -- ordering, so the same .ba yields byte-identical .v in any
+        -- compile (off by default: the emitted names then match what
+        -- this compiler has historically produced)
+        stableVerilog :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

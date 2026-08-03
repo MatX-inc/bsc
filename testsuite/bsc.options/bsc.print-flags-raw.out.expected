@@ -137,4 +137,5 @@ Flags {
 	warnUndetPred = False,
 	semanticPortsComment = False,
 	checkOnly = False
+	stableVerilog = False
 }
