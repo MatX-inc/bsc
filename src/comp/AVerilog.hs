@@ -62,6 +62,12 @@ import qualified GraphWrapper as G
 vNeedsTimingMarker :: String
 vNeedsTimingMarker = "This module instantiates delay-based clock or reset generators"
 
+-- Header marker for a module whose header keeps inout ports in
+-- port-expression form (grepped by bsc_build_vsim_verilator; keep in
+-- sync).
+vInoutExprsMarker :: String
+vInoutExprsMarker = "This module keeps inout ports in port-expression form"
+
 -- Whether an instantiated submodule is one of the library primitives
 -- whose simulation Verilog is delay-based -- code with active delays
 -- OUTSIDE translate_off regions, which only simulates under
@@ -106,11 +112,16 @@ instGensDelayClockOrReset avi =
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack ffmap =
-    do let link_facts =
+    do let mods' = map renameInoutPorts mods
+           link_facts =
                [ vNeedsTimingMarker
-               | any instGensDelayClockOrReset (aspkg_state_instances aspack) ]
-           vprog0 = VProgram (map renameInoutPorts mods) dpi_decls
-                        (comments ++ link_facts)
+               | any instGensDelayClockOrReset (aspkg_state_instances aspack) ] ++
+               [ vInoutExprsMarker
+               | or [ True | m <- mods', (as, _) <- vm_ports m
+                           , VAInout _ (Just _) _ <- as ] ||
+                 (not (removeInoutConnect flags) &&
+                  any isInoutConnect (aspkg_state_instances aspack)) ]
+           vprog0 = VProgram mods' dpi_decls (comments ++ link_facts)
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
        -- sound by the invariant documented at vModuleDeclVIds: every VId
@@ -967,6 +978,7 @@ renameInoutPorts vm =
             = VAInout i Nothing r
         plain a = a
     in  vm' { vm_ports = [ (map plain as, c) | (as, c) <- vm_ports vm' ] }
+
 
 computeInouts :: M.Map AId AId -> ASPackage -> [(Id, AType, Id)]
 computeInouts inout_rewire_map aspack =
