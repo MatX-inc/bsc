@@ -132,6 +132,10 @@ data Occ = None | One | Many
 
 
 countOcc :: Id -> IExpr a -> Int
+-- the cached free-variable set answers the common "no occurrence at
+-- all" case without a walk (sound: every IVar occurrence the walk
+-- below can count is in the cached set)
+countOcc i e | efvCacheEnabled, not (i `vsMember` fVars e) = 0
 countOcc i e = countOcc' i e 0
 
 countOcc' :: Id -> IExpr a -> Int -> Int

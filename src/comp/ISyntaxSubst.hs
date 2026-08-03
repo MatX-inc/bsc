@@ -67,8 +67,10 @@ class SubstContext ctx v | ctx -> v where
   ctxNorm :: ctx -> v -> Changed v
   -- True if no variable in the given free-variable set is in the
   -- substitution domain, i.e. substituting under a tree with these
-  -- free variables cannot change it.  Only type contexts answer
-  -- precisely; expression contexts conservatively say False.
+  -- free variables cannot change it.  Type contexts check against the
+  -- cached IType free-variable sets; expression contexts against the
+  -- cached IExpr sets (fed the value-variable set for the expression
+  -- domain and, on type contexts, the type-variable set).
   ctxAvoids :: VarSet -> ctx -> Bool
 
 -- Constraint synonyms for clarity
@@ -102,7 +104,7 @@ instance SubstContext (SingleExpr a) (IExpr a) where
   ctxAdd i' x' (SingleExpr i x fvs) =
     BatchExpr (M.fromList [(i,x), (i',x')]) (fvs `S.union` fVars x')
   ctxNorm _ _ = Unchanged
-  ctxAvoids _ _ = False
+  ctxAvoids vs (SingleExpr i _ _) = not (i `vsMember` vs)
 
 -- Batch substitution (size >= 2) - uses Map
 data BatchExpr a = BatchExpr !(M.Map Id (IExpr a)) !(S.Set Id)
@@ -121,7 +123,7 @@ instance SubstContext (BatchExpr a) (IExpr a) where
   ctxAdd i x (BatchExpr m fvs) =
     BatchExpr (M.insert i x m) (fvs `S.union` fVars x)
   ctxNorm _ _ = Unchanged
-  ctxAvoids _ _ = False
+  ctxAvoids vs (BatchExpr m _) = not (any (`vsMember` vs) (M.keys m))
 
 -- ============================================================
 -- Type substitution contexts
@@ -381,7 +383,28 @@ eSubstWith ectx tctx allIds e
       changed1 (changedOrId $ ctxNorm tctx) $ tSubstWith tctx allIds t
     -- sub needs to be polymorphic because the context type can change at
     -- ctxAdd (to batch) or ctxRemove (to single or empty) for both contexts
+    --
+    -- Pruning (mirroring tSubstWith): if a subtree's cached free value
+    -- variables are disjoint from the expression-substitution domain
+    -- AND its cached free type variables are disjoint from the
+    -- type-substitution domain, nothing under it can change; skip it.
+    -- (The cached sets cover everything substitution can reach,
+    -- including the type positions and nested wire/imVal expressions
+    -- inside ICons -- see the smart constructors in ISyntax.)  The
+    -- binder cases must ALSO check ctxContainsVar, exactly as the
+    -- ITForAll case in tSubstWith: when the binder collides with the
+    -- free variables of the substitution payloads, the original code
+    -- alpha-converts (renaming the binder) even when the body contains
+    -- no domain variable, and that rename is observable.  Falling
+    -- through preserves it exactly.  The guards are gated on the flag
+    -- itself, never on the cached sets: with the cache disabled the
+    -- fields hold dummy empty sets, which would otherwise prune
+    -- everything.
     sub :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
+    sub ectx tctx allIds ee@(ILam i _ _)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx, not (ctxContainsVar i ectx) =
+          Unchanged
     sub ectx tctx allIds ee@(ILam i t e) =
       case lookupVar i ectx of
         Just _ ->
@@ -402,6 +425,10 @@ eSubstWith ectx tctx allIds e
             in Changed $ ILam i' t' e'
           else -- No conflict: continue with same contexts
             changed2 (ILam i) t e (tSubWithNorm tctx allIds t) (sub ectx tctx allIds e)
+    sub ectx tctx allIds ee@(ILAM i _ _)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx, not (ctxContainsVar i tctx) =
+          Unchanged
     sub ectx tctx allIds ee@(ILAM i k e) =
       case lookupVar i tctx of
         Just _ ->
@@ -422,10 +449,18 @@ eSubstWith ectx tctx allIds e
           else -- No conflict: continue with same contexts
             changed1 (ILAM i k) (sub ectx tctx allIds e)
     sub ectx _    _      ee@(IVar i) = maybe Unchanged Changed (lookupVar i ectx)
-    sub ectx tctx allIds ee@(IAps f ts es) =
+    sub ectx tctx allIds ee@(IAps f ts es)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx =
+          Unchanged
+      | otherwise =
         changed3 IAps f ts es (sub ectx tctx allIds f) (mapChanged (tSubWithNorm tctx allIds) ts) (mapChanged (sub ectx tctx allIds) es)
     -- Use helper for IConInfo (handles both type and expression substitution)
-    sub ectx tctx allIds ee@(ICon i ii) =
+    sub ectx tctx allIds ee@(ICon i ii)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx =
+          Unchanged
+      | otherwise =
         changed1 (ICon i) (etSubstIConInfo (tSubWithNorm tctx allIds)
                                            (sub ectx tctx allIds) ii)
     sub _    _    _      ee@(IRefT _ _ _ _) = Unchanged  -- no free tyvar inside IRef
