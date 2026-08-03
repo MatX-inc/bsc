@@ -748,8 +748,6 @@ defaultFlags bluespecdir = Flags {
         warnMethodUrgency = True,
         warnUndetPred = False,
         semanticPortsComment = False,
-        semanticPortsComment = False,
-        checkOnly = False,
         stableVerilog = False
         }
 
@@ -1564,6 +1562,8 @@ externalFlags = [
          (Toggle (\f x -> f {semanticPortsComment=x})
                  (showIfTrue semanticPortsComment),
           "derive the Verilog Ports comment from the APackage analysis",
+          Hidden)),
+
         ("stable-verilog",
          (Toggle (\f x -> f {stableVerilog=x}) (showIfTrue stableVerilog),
           "deterministic Verilog emission (canonical names and ordering)",
@@ -2065,7 +2065,6 @@ showFlagsRaw flags =
           ("warnUndetPred", show (warnUndetPred flags)),
           ("semanticPortsComment", show (semanticPortsComment flags))
           ("semanticPortsComment", show (semanticPortsComment flags)),
-          ("checkOnly", show (checkOnly flags)),
           ("stableVerilog", show (stableVerilog flags))
          ]
         in "Flags {\n" ++

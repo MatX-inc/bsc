@@ -135,7 +135,5 @@ Flags {
 	warnMethodUrgency = True,
 	warnUndetPred = False,
 	semanticPortsComment = False,
-	semanticPortsComment = False,
-	checkOnly = False
 	stableVerilog = False
 }

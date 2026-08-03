@@ -1699,8 +1699,11 @@ getIOPropsA _flags pps mschedinfo apkg =
                            [(AId, AUse)])
         mkArmClassMaps si =
             let multMap = M.fromList (concatMap genMethodMult vs)
+                -- blob ORDER never reaches this analysis's results
+                -- (arm classes are keyed maps/sets), so the
+                -- -stable-verilog canonical ordering is not needed here
                 (expr_blobs, action_blobs) =
-                    ratToBlobs (asi_method_uses_map si) multMap
+                    ratToBlobs False (asi_method_uses_map si) multMap
                                (asi_resource_alloc_table si)
                 edb = asi_exclusive_rules_db si
                 (ASchedule _ rev_exec_order) = asi_schedule si
