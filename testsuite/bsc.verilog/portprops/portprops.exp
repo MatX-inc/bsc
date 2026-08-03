@@ -252,6 +252,23 @@ compile_verilog_pass APkgProps_SplitSel.bsv {} {-dAPackageIOproperties -dIOprope
 compare_file APkgProps_SplitSel.bsv.bsc-vcomp-out
 
 # ----------
+# The "Ports:" comment source is flag-gated: netlist-derived by default,
+# so the emitted Verilog is unchanged by this branch, and APackage-derived
+# under the hidden -semantic-ports-comment flag.  The RST_N label
+# distinguishes the two on this design: only the semantic analysis knows
+# RST_N is a reset (the netlist measurement reports it merely unused).
+# Both directions are pinned so the default cannot silently drift.
+# (APkgProps_PortsComment is APkgProps_WireExpr under another name, so
+# each direction gets a fresh compile -- -u would otherwise skip codegen
+# and leave the other direction's .v in place.)
+
+find_regexp sysAPkgProps_WireExpr.v {RST_N +I +1 unused}
+find_regexp_fail sysAPkgProps_WireExpr.v {RST_N +I +1 reset unused}
+
+compile_verilog_pass APkgProps_PortsComment.bsv {} {-semantic-ports-comment}
+find_regexp sysAPkgProps_PortsComment.v {RST_N +I +1 reset unused}
+
+# ----------
 
 }
 
