@@ -156,7 +156,11 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- stop after the stage's checks without producing its artifact:
+        -- at Verilog link, validate the link closure and have the
+        -- simulator builder write a manifest instead of building
+        checkOnly :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
