@@ -2063,7 +2063,6 @@ showFlagsRaw flags =
           ("warnActionShadowing", show (warnActionShadowing flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
           ("warnUndetPred", show (warnUndetPred flags)),
-          ("semanticPortsComment", show (semanticPortsComment flags))
           ("semanticPortsComment", show (semanticPortsComment flags)),
           ("stableVerilog", show (stableVerilog flags))
          ]
