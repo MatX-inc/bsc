@@ -273,12 +273,17 @@ fi
 # as it would for any hand-written file.)
 GENS_DELAY_CLOCKS="no"
 GENS_DELAY_REASON=""
+INOUT_EXPRS_FILE=""
 for f in $BSC_VERILOG_FILES_NO_MAIN $TOP_VERFILE ; do
     fbase=`basename $f`
     if [ "$GENS_DELAY_CLOCKS" = "no" ] && \
        grep -q "^// This module instantiates delay-based clock or reset generators" "$f" 2>/dev/null ; then
         GENS_DELAY_CLOCKS="yes"
         GENS_DELAY_REASON="$fbase instantiates delay-based clock or reset generators"
+    fi
+    if [ -z "$INOUT_EXPRS_FILE" ] && \
+       grep -q "^// This module keeps inout ports in port-expression form" "$f" 2>/dev/null ; then
+        INOUT_EXPRS_FILE="$fbase"
     fi
 done
 
@@ -305,6 +310,20 @@ fi
 if [ "$NEEDS_TIMING" = "no" ] && [ "$HAS_MAIN" = "0" ] ; then
     NEEDS_TIMING="yes"
     TIMING_REASON="it is linked without a main module (its top drives its own clock)"
+fi
+
+# bsc renders shorted inout ports (two or more ports on one net) as
+# Verilog port aliases (".X1(net), .X2(net)" in the module header),
+# which Verilator cannot parse -- nor does it support the alternative
+# renderings of a short (SystemVerilog 'alias' and the V1995 'tran'
+# primitive).  bsc records the fact in the generated .v header at
+# compile time; fail up front with a clear message rather than a
+# Verilator syntax error.
+if [ -n "$INOUT_EXPRS_FILE" ]; then
+    echo "ERROR: This design shorts inout ports ($INOUT_EXPRS_FILE), which its generated" >&2
+    echo "       Verilog renders as port aliases (.X1(net), .X2(net)).  Verilator cannot" >&2
+    echo "       parse these; use another Verilog simulator for this design." >&2
+    exit 1
 fi
 
 # Starting with version 5, zero-delay statements (like #0) require
