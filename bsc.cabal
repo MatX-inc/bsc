@@ -241,6 +241,12 @@ library
         SystemCWrapper
         SystemCheck
         SystemVerilogKeywords
+        DefProp
+        ISimpDicts
+        LiftDicts
+        StaleUtils
+        VFileUtils
+        WireAnalysis
         SystemVerilogPreprocess
         SystemVerilogScanner
         SystemVerilogTokens
@@ -359,6 +365,12 @@ executable tconcheck
     main-is: tconcheck.hs
     ghc-options: -main-is Main_tconcheck
 
+executable bo2bloogle
+    import: exe-deps
+    hs-source-dirs: src/comp
+    main-is: bo2bloogle.hs
+    ghc-options: -main-is Main_bo2bloogle
+
 executable fstscopes
     import: exe-deps
     hs-source-dirs: src/comp
@@ -377,8 +389,10 @@ executable fstcheck
     import: exe-deps
     hs-source-dirs: src/comp
     main-is: fstcheck.hs
+    other-modules: FSTRead, WaveCheck
     ghc-options: -main-is Main_fstcheck
     c-sources:
+        src/comp/fstscopes_hier.c
         src/vendor/libfst/src/fstapi.c
         src/vendor/libfst/src/fastlz.c
         src/vendor/libfst/src/lz4.c

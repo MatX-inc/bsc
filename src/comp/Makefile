@@ -135,7 +135,7 @@ PACKAGES = \
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-UTILEXES = fstcheck fstscopes
+UTILEXES = bo2bloogle fstcheck fstscopes
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
 CHECKEXES = tconcheck
@@ -166,8 +166,8 @@ bsc: $(TOP)/cabal.project.local
 
 # fstscopes, fstcheck and tconcheck are cabal executables (see bsc.cabal;
 # the FST pair compiles the src/vendor/libfst sources into the binary)
-.PHONY: fstscopes fstcheck tconcheck
-fstscopes fstcheck tconcheck: $(TOP)/cabal.project.local
+.PHONY: bo2bloogle fstscopes fstcheck tconcheck
+bo2bloogle fstscopes fstcheck tconcheck: $(TOP)/cabal.project.local
 	$(BUILDSTART)
 	cd $(TOP) && $(CABAL) build $(CABALFLAGS) exe:$@
 	cp -f `cd $(TOP) && $(CABAL) list-bin $(CABALFLAGS) $@` $@
