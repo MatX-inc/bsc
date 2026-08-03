@@ -214,3 +214,33 @@ compile deduces -- the staged flow has no annotation caveat.
     [lecture on MCD](https://github.com/BSVLang/Main/blob/master/Tutorials/BSV_Training/Reference/Lec12_Multiple_Clock_Domains.pdf)
 
 ---
+
+#### Verilator link tools: `-check-only` and hierarchical verilation
+
+At Verilog link time, `-check-only` makes the simulator builder actually
+check the link: it runs Verilator's front end (`--lint-only`) over
+exactly the closure the link would use, so every submodule must resolve
+and the design must elaborate -- failure means the link itself would
+fail, with the reason on stderr.  On success it writes a manifest to the
+`-o` filename instead of building:
+the top module and its file, the Verilog file closure, `-y` directories,
+defines, DPI objects, C libraries and link options, and per-module
+hierarchical-verilation eligibility.  Build systems that drive the
+simulator toolchain themselves (per-module, cached) consume the manifest
+rather than letting `bsc` run one monolithic build.  The builder script
+protocol gains a `check` command alongside `detect` and `link`; the
+Verilator builder implements it, and builders that do not are simply
+never asked (the flag is only honored where the script supports it).
+
+The Verilator builder can also verilate hierarchically: with
+`BSC_VSIM_HIER=1` in the environment, every generated module whose header
+comment says it has no combinational input-to-output paths (the
+`VPathInfo` blurb BSC prints in each generated file) is marked as a
+Verilator `hier_block` via a generated configuration file.  Eligibility
+matters: a module with through-paths would create false combinational
+loops (UNOPTFLAT) at the block boundary, so such modules are left to be
+verilated inside their parent, and no lint waiver is needed for the ones
+that are marked.  `BSC_VSIM_HIER_MIN_LINES` exempts small files where
+per-block overhead outweighs the benefit, and `BSC_VSIM_BUILD_JOBS`
+bounds the parallelism of both verilation phases (Verilator `-j`;
+unset means unbounded).

@@ -136,4 +136,5 @@ Flags {
 	warnMethodUrgency = True,
 	warnUndetPred = False,
 	semanticPortsComment = False
+	checkOnly = False
 }

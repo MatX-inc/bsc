@@ -756,7 +756,8 @@ defaultFlags bluespecdir = Flags {
         warnActionShadowing = True,
         warnMethodUrgency = True,
         warnUndetPred = False,
-        semanticPortsComment = False
+        semanticPortsComment = False,
+        checkOnly = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1213,6 +1214,11 @@ externalFlags = [
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
           "test assertions with the Assert library", Visible)),
+
+        ("check-only",
+         (Toggle (\f x -> f {checkOnly=x}) (showIfTrue checkOnly),
+          "at Verilog link, validate and write a manifest without building",
+          Hidden)),
 
         ("continue-after-errors",
          (Toggle (\f x -> f {enablePoisonPills=x}) (showIfTrue enablePoisonPills),
@@ -2118,7 +2124,8 @@ showFlagsRaw flags =
           ("warnActionShadowing", show (warnActionShadowing flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
           ("warnUndetPred", show (warnUndetPred flags)),
-          ("semanticPortsComment", show (semanticPortsComment flags))
+          ("semanticPortsComment", show (semanticPortsComment flags)),
+          ("checkOnly", show (checkOnly flags))
          ]
         in "Flags {\n" ++
                (intercalate ",\n" (map render fields)) ++
