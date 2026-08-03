@@ -1,0 +1,44 @@
+# Scheduling of modules with many rules.
+#
+# The scheduler's rule-pair work (conflict maps, disjointness testing,
+# the derived sequencing/urgency graphs, the Esposito blocker scan, and
+# the arbitrary-choice warning scans) is enumerated from the rules that
+# actually interact -- via shared state instances, conflict edges, and
+# foreign-function use -- rather than over all pairs of rules.
+
+if {$vtest == 1} {
+
+# Lock the computed schedule (blocker lists, urgency choices, and the
+# arbitrary-choice warnings) for a dense conflict clique, where every
+# rule pair genuinely interacts.
+compile_verilog_schedule_pass DenseRules.bsv mkDenseRules
+compare_file_filter_ids DenseRules.bsv.bsc-sched-out
+
+# Lock the schedule when rule predicates share support (bits of one
+# module parameter) without the rules sharing any state instance.
+compile_verilog_schedule_pass GuardedRules.bsv mkGuardedRules
+compare_file_filter_ids GuardedRules.bsv.bsc-sched-out
+
+# Scale guard: 16384 non-interacting rules, compiled under a cap on
+# CUMULATIVE heap allocation -- the total bytes ever allocated over
+# the run, almost all immediately garbage-collected, NOT resident
+# memory (peak residency here is ~0.6 GB either way, so a residency
+# cap cannot distinguish the two behaviors; lifetime allocation can,
+# and unlike wall-clock time it is deterministic).  With pair
+# enumeration driven by the shared-instance indexes, the front end
+# plus scheduler allocate ~233 GB over the run; with all-pairs
+# enumeration (the behavior this guards against) ~495 GB, and the
+# cap aborts the compile.  Measured with GHC 9.4; the 50%/41%
+# margins on either side of the cap absorb GHC-version drift.
+#
+# -KILLschedule stops compilation after scheduling so the (identical,
+# and large) allocation of the downstream backend phases does not
+# dilute the margins.  Plain -verilog is essential: -elab/-sim set
+# genABin, which deliberately reverts disjointness testing to the
+# full-pair sweep for RuleRelationDB completeness.
+# The -K accommodates elaboration recursion depth at this rule count.
+set env(BSC_ALLOC_LIMIT_MB) 350000
+compile_verilog_pass SparseRules.bsv mkSparseRules {-KILLschedule +RTS -K512m -RTS}
+unset env(BSC_ALLOC_LIMIT_MB)
+
+}
