@@ -464,21 +464,27 @@ joinDefs False True dsx = reverse (snd (foldl add (M.empty, []) dsx))
 -- pure function of the class, independent of traversal order -- instead
 -- of first-come-wins over the (interning-order-sensitive) def list.
 joinDefs True True dsx = map rewrite dsx
-  where eligible (ADef _ _ (ASInt _ _ _) _) = False
-        eligible (ADef _ _ (ASDef _ _) _)   = False
-        eligible (ADef _ _ (ASStr _ _ _) _) = False
-        eligible (ADef _ _ (ASPort _ _) _)  = False
-        eligible (ADef _ _ (ASParam _ _) _) = False
-        eligible (ADef _ _ (ASAny _ _) _)   = False
-        eligible (ADef ie _ _ props) =
-            not (hasIdProp ie IdP_enable) && not (defPropsHasNoCSE props)
+  where -- the RHS shapes joinDefs never touches (same as the fold above)
+        shapeOK (ASInt _ _ _)  = False
+        shapeOK (ASDef _ _)    = False
+        shapeOK (ASStr _ _ _)  = False
+        shapeOK (ASPort _ _)   = False
+        shapeOK (ASParam _ _)  = False
+        shapeOK (ASAny _ _)    = False
+        shapeOK _              = True
+        -- enable/NoCSE defs cannot BE the surviving name, but -- exactly
+        -- like the first-come fold, whose props guard only the map
+        -- INSERTION -- they are still rewritten as aliases of it
+        repCandidate (ADef ie _ e props) =
+            shapeOK e && not (hasIdProp ie IdP_enable)
+                      && not (defPropsHasNoCSE props)
         rank d = (idQuality (Just (adef_objid d)),
                   Down (getIdString (adef_objid d)))
         better d1 d2 = if rank d1 >= rank d2 then d1 else d2
         reps = M.fromListWith better
-                   [ (adef_expr d, d) | d <- dsx, eligible d ]
+                   [ (adef_expr d, d) | d <- dsx, repCandidate d ]
         rewrite d@(ADef ie _ e props)
-            | eligible d,
+            | shapeOK e,
               Just (ADef i t _ p) <- M.lookup e reps,
               i /= ie
             = ADef ie t (ASDef t i) p
