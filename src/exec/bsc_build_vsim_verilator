@@ -273,6 +273,19 @@ if [ "$TOP_IN_FILES" = "no" ]; then
     done
 fi
 
+# The manifest's TOPFILE must name the top's file however it reached the
+# command line; TOP_VERFILE is only the search-dir fallback above (empty
+# when bsc listed the top's .v itself, e.g. the reused-file link path).
+TOP_MANIFEST_FILE="$TOP_VERFILE"
+if [ -z "$TOP_MANIFEST_FILE" ]; then
+    for f in $BSC_VERILOG_FILES_NO_MAIN ; do
+	if [ "`basename $f`" = "${BSC_TOPLEVEL_MODULE}.v" ] ; then
+	    TOP_MANIFEST_FILE=$f
+	    break
+	fi
+    done
+fi
+
 # ---------------
 # Link-check facts: bsc records link-relevant facts in each generated
 # .v header at compile time (see AVerilog.hs; the marker texts must
@@ -397,7 +410,7 @@ if [ "$BSC_COMMAND" = "check" ]; then
   {
     echo "# bsc verilator link manifest"
     echo "TOP $BSC_TOPLEVEL_MODULE"
-    echo "TOPFILE $TOP_VERFILE"
+    echo "TOPFILE $TOP_MANIFEST_FILE"
     echo "DPI $USEDPI"
     echo "NEEDS_TIMING $NEEDS_TIMING"
     echo "VLT_CONFIG $VLT_CONFIG"

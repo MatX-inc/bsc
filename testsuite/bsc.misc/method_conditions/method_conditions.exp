@@ -291,13 +291,13 @@ find_regexp sysMethodConds_MultiplicityCond.v \
        COND\_RL\_r1\_s\_am2\_2,
        COND\_RL\_r2\_idx2\_write\_1;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r1\_FUNCTION\_\$display\_3 \= rf\$D\_OUT\_2 \;}
+    {assign COND\_RL\_r1\_FUNCTION\_\$display\_3 \= rf\$D\_OUT\_1 \;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r1\_s\_am1\_1 \= rf\$D\_OUT\_2 \;}
+    {assign COND\_RL\_r1\_s\_am1\_1 \= rf\$D\_OUT\_1 \;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r1\_s\_am2\_2 \= rf\$D\_OUT\_2 \;}
+    {assign COND\_RL\_r1\_s\_am2\_2 \= rf\$D\_OUT\_1 \;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r2\_idx2\_write\_1 \= rf\$D\_OUT\_1 \;}
+    {assign COND\_RL\_r2\_idx2\_write\_1 \= rf\$D\_OUT\_2 \;}
 # And that the COND signals are not mingled with the actual design
 find_n_strings sysMethodConds_MultiplicityCond.v {COND_RL_} 8
 # Check that bluetcl reports the appropriate positions

@@ -66,8 +66,12 @@ find_regexp_fail sysLinkCheck.manifest {mkLComb\.v HIER_ELIGIBLE}
 
 # The check is real: with a submodule missing from both the arguments
 # and the search path, Verilator's front end cannot resolve the
-# instantiation and the check fails.
+# instantiation and the check fails.  The .ba must go too: the link
+# stage regenerates a missing .v from its .ba, which would make this
+# case legitimately resolvable again.
 erase mkLSub.v
+erase mkLSub.ba
+erase bad.manifest
 lc_run_fail "check fails when a submodule is unresolvable" chkfail.bsc-out \
     {-verilog -vsim verilator -check-only -e sysLinkCheck -o bad.manifest mkLComb.v}
 find_regexp chkfail.bsc-out {verilator link check failed}
