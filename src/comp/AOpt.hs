@@ -446,8 +446,17 @@ joinDefs True dsx = reverse (snd (foldl add (M.empty, []) dsx))
                     | hasIdProp ie IdP_enable  -> (m, d:ds)
                     | defPropsHasNoCSE props   -> (m, d:ds)
                     | otherwise                -> (M.insert e d m, d:ds)
-                Just (ADef i t _ p) -> -- traces ("adding simple assignment: " ++ ppReadable (ie,i)) $
-                                     (m, (ADef ie t (ASDef t i) p) : ds)
+                -- a NoCSE def must not be merged in either direction:
+                -- it can neither BE the surviving name nor be rewritten
+                -- into an alias of one (-keep-method-conds relies on the
+                -- COND def keeping its own full expression); before this
+                -- guard, a NoCSE def whose twin happened to precede it
+                -- in (interning-order-sensitive) def order was silently
+                -- collapsed
+                Just (ADef i t _ p)
+                    | defPropsHasNoCSE props -> (m, d:ds)
+                    | otherwise -> -- traces ("adding simple assignment: " ++ ppReadable (ie,i)) $
+                                   (m, (ADef ie t (ASDef t i) p) : ds)
 
 -- if the expression is a primitive with 1-bit type, optimize it as
 -- a boolean expression
