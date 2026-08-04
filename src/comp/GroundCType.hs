@@ -1,4 +1,5 @@
-module GroundCType(groundCTypeEnabled, internGroundCType) where
+module GroundCType(groundCTypeEnabled, internGroundCType,
+                   isGroundNodeId) where
 
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
@@ -58,8 +59,19 @@ import PreStrings(fsEmpty)
 -- under zonking and context-free, so they need no invalidation and no
 -- scope tracking -- which is exactly why ground-only interning avoids
 -- the complexity of full CType interning (a separate, deferred
--- design).  Node ids are arrival-order identifiers and must never
--- influence anything observable; they may only be used for identity.
+-- design).  Node ids pack an arrival-order identifier with a
+-- groundness bit (gcMkId); the arrival component must never influence
+-- anything observable -- ids may only be used for identity (equality)
+-- and for the groundness certificate (isGroundNodeId).
+--
+-- Canonical and ground are two different claims.  A node id certifies
+-- identity -- this is the unique node for its structure -- and its
+-- low bit certifies groundness; only isGroundNodeId may stand in for
+-- "has no variables inside".  Every node interned today happens to be
+-- ground (the walk refuses every variable-bearing type outright), so
+-- the two coincide and every id is even; the separation exists so
+-- that interning a variable-bearing node cannot silently widen what a
+-- groundness-relying consumer skips.
 --
 -- Position policy: table keys carry no positions anywhere -- interior
 -- nodes are keyed on child node ids, TCon leaves on (qualifier, base)
@@ -112,6 +124,34 @@ data GCKey
         | GCNum !Integer
         | GCStr !FString
         deriving (Eq, Ord)
+
+-- Ids pack (arrival order, groundness) so the two properties a
+-- canonical node can certify stay separable.  They were fused while
+-- only ground nodes were ever interned; keeping them fused is what
+-- makes interning anything variable-bearing unsafe, because a single
+-- test then answers two different questions.
+gcMkId :: Int -> Bool -> Int
+gcMkId n grnd = 2 * n + (if grnd then 0 else 1)
+
+-- | Canonical AND ground: no TVar/TGen/TDefMonad anywhere inside the
+-- node this id names, so substitution, instantiation, zonking and
+-- free-variable collection are all the identity on it.  This is the
+-- certificate a ground guard must rely on, and the ONLY test that may
+-- stand in for "has no variables inside".
+--
+-- Today every interned node is ground, so this holds of every id the
+-- interner hands out; the distinction exists so that interning a
+-- variable-bearing node cannot silently widen what a ground guard
+-- skips.
+isGroundNodeId :: Int -> Bool
+isGroundNodeId i = i >= 0 && even i
+
+-- ground only if both children are: one variable-bearing child makes
+-- the whole spine non-ground.  A leaf that interns at all is ground
+-- (the walk refuses every variable-bearing leaf).
+keyIsGround :: GCKey -> Bool
+keyIsGround (GCAp k1 k2) = isGroundNodeId k1 && isGroundNodeId k2
+keyIsGround _            = True
 
 -- key -> (node id, canonical node); the canonical node is the
 -- first-arrival structure, its children already canonical
@@ -173,8 +213,8 @@ nodeEntry key cand = do
     go st@(GCTable m n) =
         case M.lookup key m of
           Just e  -> (st, (e, False))
-          Nothing -> (GCTable (M.insert key (n, cand) m) (n+1),
-                      ((n, cand), True))
+          Nothing -> let e = (gcMkId n (keyIsGround key), cand)
+                     in  (GCTable (M.insert key e m) (n+1), (e, True))
 
 -- the value view of an evaluated node, for primitive-type-function
 -- evaluation; derivable from the canonical node, which is normalized
