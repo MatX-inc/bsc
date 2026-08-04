@@ -22,9 +22,12 @@ other phase's metadata:
   - post-IExpand passes allocate fv-set thunks on every rebuilt node
     and hyper forces them (cheap empties, but ~+10s GC on a Toooba
     compile — the measured lazy-vs-strict tradeoff);
-  - IExpand allocates hash thunks per interior node (the rnf-forcing
-    half of that tax was removed by not forcing the hash at hyper
-    points; the allocation half remains).
+  - IExpand allocates hash thunks per interior node: +21 GB on a
+    Toooba compile, measured to be the thunk OBJECTS themselves, not
+    forced computation — the delta was unchanged by removing the
+    rnf-time forcing.  No forcing schedule can remove a field's
+    allocation; only a representation in which elaboration-phase nodes
+    have no hash slot can, which is this proposal.
 
 ## Non-solutions (and why): runtime phase signals miscompile
 
@@ -134,9 +137,11 @@ as already landed.
   - content hashing, rank-first: transform -18%, MUT -2.4%, wall
     -1.5%; expanded neutral; hash never consulted for leaf or
     cross-constructor comparisons.
-  - not forcing the hash at hyper points: removes the unpaid
-    elaboration-time hash computation (allocation delta measured
-    before/after on the branch history).
+  - not forcing the hash at hyper points: semantically the right
+    schedule (compute at first post-IExpand comparison), but measured
+    allocation-neutral — proving the residual elaboration-time tax is
+    thunk allocation, i.e. structural, removable only by this
+    proposal's phase-indexed representation.
   - predicate interning probe: 99.9% of pConj calls trivial, ~4K
     distinct predicates, no rework to cache — predicate-set redesigns
     are NOT part of this proposal's motivation.
