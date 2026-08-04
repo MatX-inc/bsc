@@ -1,10 +1,18 @@
 # locally mutually recursive let bindings
+# Letrect is the polymorphic case, which the tuple knot still cannot
+# express (S0066); the rest are monomorphic and must all work.
 compile_pass_bug Letrect.bs
 test_c_veri Letrec3
 test_c_veri Letrecbit
 test_c_veri Letrecmod
 test_c_veri Letrecmodx
-compile_fail_error Letrecmodbool.bs S0066
+# Same shape as Letrecmodx but over Bool, so there are no Literal/Arith
+# dictionaries and no letseq to hold them.  That letseq is what used to
+# bind the clause arguments in an inner temp and leave the outer
+# definition point-free, so this was rejected (S0066) where Letrecmodx
+# was accepted -- the same program, decided by whether dictionaries
+# happened to be involved.  IConvLet now does the wrapping itself.
+test_c_veri Letrecmodbool
 
 # recursive types trigger a recursive let binding
 test_c_veri_bsv List1
