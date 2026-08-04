@@ -25,19 +25,19 @@ mkTest
             x_1            	 -- RegUN Reg#(Int#(32))	x_1 
             x_2            	 -- RegUN Reg#(Int#(32))	x_2 
             x_3            	 -- RegUN Reg#(Int#(32))	x_3 
-        Loop           	 --  Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))	 
+        Loop_1         	 --  Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))	 
             Body_0         	 --  Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))	 
-                aa_0           	 -- RegUN Reg#(Int#(32))	aa_0 
-                bb_0           	 -- RegUN Reg#(Int#(32))	bb_0 
+                aa_0           	 -- RegUN Reg#(Int#(32))	aa_0_1 
+                bb_0           	 -- RegUN Reg#(Int#(32))	bb_0_1 
             Body_1         	 --  Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))	 
-                aa_1           	 -- RegUN Reg#(Int#(32))	aa_1 
-                bb_1           	 -- RegUN Reg#(Int#(32))	bb_1 
+                aa_1           	 -- RegUN Reg#(Int#(32))	aa_1_1 
+                bb_1           	 -- RegUN Reg#(Int#(32))	bb_1_1 
             Body_2         	 --  Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))	 
-                aa_2           	 -- RegUN Reg#(Int#(32))	aa_2 
-                bb_2           	 -- RegUN Reg#(Int#(32))	bb_2 
+                aa_2           	 -- RegUN Reg#(Int#(32))	aa_2_1 
+                bb_2           	 -- RegUN Reg#(Int#(32))	bb_2_1 
             Body_3         	 --  Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))	 
-                aa_3           	 -- RegUN Reg#(Int#(32))	aa_3 
-                bb_3           	 -- RegUN Reg#(Int#(32))	bb_3 
+                aa_3           	 -- RegUN Reg#(Int#(32))	aa_3_1 
+                bb_3           	 -- RegUN Reg#(Int#(32))	bb_3_1 
         subis          	 --  Vector::Vector#(2, Test2::Sub_Ifc)	 
             _element_0     	 -- mkSub Test2::Sub_Ifc	subis_0 
                 foo2           	 -- RegN Reg#(Int#(32))	subis_0.foo2 
@@ -56,7 +56,7 @@ Command: browseinst list 1
 3 zw {}
 4 xx {}
 5 Loop {}
-6 Loop {}
+6 Loop_1 {}
 7 subis {}
 ---------
 Command: browseinst detail 1
@@ -370,11 +370,11 @@ Command: browseinst list 6
 ---------
 Command: browseinst detail 6
 X(BSVModule) = mkTest
-X(BSVPath)   = Loop
-X(DEBUG)     = BINode Loop Just (Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
+X(BSVPath)   = Loop_1
+X(DEBUG)     = BINode Loop_1 Just (Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
 X(Interface) = Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))
-X(LocalPath) = Loop
-X(Name)      = Loop
+X(LocalPath) = Loop_1
+X(Name)      = Loop_1
 X(Node)      = Instance
 X(SynthPath) = 
 X(position)  = Test2.bsv 23 4
@@ -385,10 +385,10 @@ Command: browseinst list 23
 ---------
 Command: browseinst detail 23
 X(BSVModule) = mkTest
-X(BSVPath)   = Loop Body_0
+X(BSVPath)   = Loop_1 Body_0
 X(DEBUG)     = BINode Body_0 Just (Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
 X(Interface) = Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))
-X(LocalPath) = Loop Body_0
+X(LocalPath) = Loop_1 Body_0
 X(Name)      = Body_0
 X(Node)      = Instance
 X(SynthPath) = 
@@ -398,30 +398,30 @@ Command: browseinst list 27
 ---------
 Command: browseinst detail 27
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_0 aa_0
+X(BSVPath)    = Loop_1 Body_0 aa_0
 X(DEBUG)      = BLeaf aa_0 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = aa_0
 X(Node)       = Primitive
-X(SynthPath)  = aa_0
-X(UniqueName) = aa_0
+X(SynthPath)  = aa_0_1
+X(UniqueName) = aa_0_1
 X(position)   = Test2.bsv 24 6
 ---------
 Command: browseinst list 28
 ---------
 Command: browseinst detail 28
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_0 bb_0
+X(BSVPath)    = Loop_1 Body_0 bb_0
 X(DEBUG)      = BLeaf bb_0 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = bb_0
 X(Node)       = Primitive
-X(SynthPath)  = bb_0
-X(UniqueName) = bb_0
+X(SynthPath)  = bb_0_1
+X(UniqueName) = bb_0_1
 X(position)   = Test2.bsv 25 6
 ---------
 Command: browseinst list 24
@@ -430,10 +430,10 @@ Command: browseinst list 24
 ---------
 Command: browseinst detail 24
 X(BSVModule) = mkTest
-X(BSVPath)   = Loop Body_1
+X(BSVPath)   = Loop_1 Body_1
 X(DEBUG)     = BINode Body_1 Just (Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
 X(Interface) = Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))
-X(LocalPath) = Loop Body_1
+X(LocalPath) = Loop_1 Body_1
 X(Name)      = Body_1
 X(Node)      = Instance
 X(SynthPath) = 
@@ -443,30 +443,30 @@ Command: browseinst list 29
 ---------
 Command: browseinst detail 29
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_1 aa_1
+X(BSVPath)    = Loop_1 Body_1 aa_1
 X(DEBUG)      = BLeaf aa_1 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = aa_1
 X(Node)       = Primitive
-X(SynthPath)  = aa_1
-X(UniqueName) = aa_1
+X(SynthPath)  = aa_1_1
+X(UniqueName) = aa_1_1
 X(position)   = Test2.bsv 24 6
 ---------
 Command: browseinst list 30
 ---------
 Command: browseinst detail 30
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_1 bb_1
+X(BSVPath)    = Loop_1 Body_1 bb_1
 X(DEBUG)      = BLeaf bb_1 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = bb_1
 X(Node)       = Primitive
-X(SynthPath)  = bb_1
-X(UniqueName) = bb_1
+X(SynthPath)  = bb_1_1
+X(UniqueName) = bb_1_1
 X(position)   = Test2.bsv 25 6
 ---------
 Command: browseinst list 25
@@ -475,10 +475,10 @@ Command: browseinst list 25
 ---------
 Command: browseinst detail 25
 X(BSVModule) = mkTest
-X(BSVPath)   = Loop Body_2
+X(BSVPath)   = Loop_1 Body_2
 X(DEBUG)     = BINode Body_2 Just (Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
 X(Interface) = Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))
-X(LocalPath) = Loop Body_2
+X(LocalPath) = Loop_1 Body_2
 X(Name)      = Body_2
 X(Node)      = Instance
 X(SynthPath) = 
@@ -488,30 +488,30 @@ Command: browseinst list 31
 ---------
 Command: browseinst detail 31
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_2 aa_2
+X(BSVPath)    = Loop_1 Body_2 aa_2
 X(DEBUG)      = BLeaf aa_2 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = aa_2
 X(Node)       = Primitive
-X(SynthPath)  = aa_2
-X(UniqueName) = aa_2
+X(SynthPath)  = aa_2_1
+X(UniqueName) = aa_2_1
 X(position)   = Test2.bsv 24 6
 ---------
 Command: browseinst list 32
 ---------
 Command: browseinst detail 32
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_2 bb_2
+X(BSVPath)    = Loop_1 Body_2 bb_2
 X(DEBUG)      = BLeaf bb_2 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = bb_2
 X(Node)       = Primitive
-X(SynthPath)  = bb_2
-X(UniqueName) = bb_2
+X(SynthPath)  = bb_2_1
+X(UniqueName) = bb_2_1
 X(position)   = Test2.bsv 25 6
 ---------
 Command: browseinst list 26
@@ -520,10 +520,10 @@ Command: browseinst list 26
 ---------
 Command: browseinst detail 26
 X(BSVModule) = mkTest
-X(BSVPath)   = Loop Body_3
+X(BSVPath)   = Loop_1 Body_3
 X(DEBUG)     = BINode Body_3 Just (Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
 X(Interface) = Tuple2#(Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))
-X(LocalPath) = Loop Body_3
+X(LocalPath) = Loop_1 Body_3
 X(Name)      = Body_3
 X(Node)      = Instance
 X(SynthPath) = 
@@ -533,30 +533,30 @@ Command: browseinst list 33
 ---------
 Command: browseinst detail 33
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_3 aa_3
+X(BSVPath)    = Loop_1 Body_3 aa_3
 X(DEBUG)      = BLeaf aa_3 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = aa_3
 X(Node)       = Primitive
-X(SynthPath)  = aa_3
-X(UniqueName) = aa_3
+X(SynthPath)  = aa_3_1
+X(UniqueName) = aa_3_1
 X(position)   = Test2.bsv 24 6
 ---------
 Command: browseinst list 34
 ---------
 Command: browseinst detail 34
 X(BSVModule)  = mkTest
-X(BSVPath)    = Loop Body_3 bb_3
+X(BSVPath)    = Loop_1 Body_3 bb_3
 X(DEBUG)      = BLeaf bb_3 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
 X(LocalPath)  = 
 X(Module)     = RegUN
 X(Name)       = bb_3
 X(Node)       = Primitive
-X(SynthPath)  = bb_3
-X(UniqueName) = bb_3
+X(SynthPath)  = bb_3_1
+X(UniqueName) = bb_3_1
 X(position)   = Test2.bsv 25 6
 ---------
 Command: browseinst list 7
@@ -675,7 +675,7 @@ Command: browseinst debug
 3 zw
 4 xx
 5 Loop
-6 Loop
+6 Loop_1
 7 subis
 8 {_element_0  Reg#(Int#(32))}
 9 {_element_1  Reg#(Int#(32))}

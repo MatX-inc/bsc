@@ -1,11 +1,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE PatternSynonyms #-}
 module ISyntax(
         IPackage(..),
         IDef(..),
         IKind(..),
         IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll),
-        IExpr(..),
+        IExpr(ILam, IAps, IVar, ILAM, ICon, IRefT),
         ConTagInfo(..),
         IConInfo(..),
         IRules(..),
@@ -49,6 +50,11 @@ module ISyntax(
         fVars,
         ftVars,
         aVars,
+        eFVarSet,
+        eFTVarSet,
+        efvCacheEnabled,
+        eHash,
+        ehashEnabled,
         mkNumConT,
         showTypeless,
         showTypelessRules,
@@ -90,6 +96,10 @@ import qualified Data.Array as Array
 import IntLit
 import Undefined
 import Eval
+import FStringCompat(fsContentHash)
+import HashUtil(Hash, hashTag, hashMix, hashInt, hashInteger, hashString,
+                hashMaybe, hashList)
+import IOUtil(progArgs)
 import Id
 import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClockId, noDefaultResetId, WireProps)
 import IdPrint
@@ -432,14 +442,313 @@ splitITAp t0 = go t0 []
 -- a is a placeholder type for the actual data stored in heap cells
 -- so that all things that work on generic IExprs do not touch the heap
 -- and to prevent exposing evaluator implementation details in ISyntax
+--
+-- Interior nodes cache their free value variables and free type
+-- variables (VarSets) in strict fields computed at construction, the
+-- same posture as the interned IType nodes: the real constructors
+-- ILam_/IAps_/ILAM_/ICon_ are private to this module and construction
+-- goes through smart constructors behind the bidirectional pattern
+-- synonyms below, so every other module reads and writes the six
+-- historical constructor names unchanged.  The fields are metadata
+-- only: they never serialize, never print, and never participate in
+-- comparison.
+--
+-- The cached sets are SUPERSETS of everything the substitution
+-- machinery (ISyntaxSubst) can reach below a node -- that is what
+-- makes prune-on-avoid sound at ancestor nodes -- and they are
+-- computed WITHOUT entering the fields substitution never enters
+-- (ICDef's iConDef, ICValue's iValDef, ICStateVar's IStateVar, array
+-- cells, held-coercion payloads).  The latter is a hard requirement,
+-- not a shortcut: those are exactly the fields through which IExpr
+-- structures are knot-tied (FixupDefs/IConv tie top-level defs through
+-- iConDef; clock and reset wires can be recursive through ICStateVar),
+-- so a set that recursed into them would not terminate.
+--
+-- IVar and IRefT stay uncached leaves: a variable answers its
+-- singleton directly, and a heap reference contributes nothing (the
+-- substitution machinery never enters IRefT -- see ISyntaxSubst).
 data IExpr a
-        = ILam Id IType (IExpr a)        -- vanishes after IExpand
-        | IAps (IExpr a) [IType] [IExpr a]
+        = ILam_ VarSet VarSet Hash Id IType (IExpr a) -- vanishes after IExpand
+        | IAps_ VarSet VarSet Hash (IExpr a) [IType] [IExpr a]
         | IVar Id                        -- vanishes after IExpand
-        | ILAM Id IKind (IExpr a)        -- vanishes after IExpand
-        | ICon Id (IConInfo a)
+        | ILAM_ VarSet VarSet Hash Id IKind (IExpr a) -- vanishes after IExpand
+        | ICon_ VarSet Hash Id (IConInfo a) -- free type vars only (see eFVarSet)
         -- IRef is only used during reduction, it refers to a "heap" cell
         | IRefT IType !Int (S.Set Position) a -- vanishes after IExpand
+
+pattern ILam :: Id -> IType -> IExpr a -> IExpr a
+pattern ILam i t e <- ILam_ _ _ _ i t e
+  where ILam i t e = mkILam i t e
+
+pattern IAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
+pattern IAps f ts es <- IAps_ _ _ _ f ts es
+  where IAps f ts es = mkIAps f ts es
+
+pattern ILAM :: Id -> IKind -> IExpr a -> IExpr a
+pattern ILAM i k e <- ILAM_ _ _ _ i k e
+  where ILAM i k e = mkILAM i k e
+
+pattern ICon :: Id -> IConInfo a -> IExpr a
+pattern ICon i ic <- ICon_ _ _ i ic
+  where ICon i ic = mkICon i ic
+
+{-# COMPLETE ILam, IAps, IVar, ILAM, ICon, IRefT #-}
+
+-- The hidden flag -hack-no-iexpr-fv-cache (registered in
+-- FlagsDecode.traceflags like -hack-no-itype-ftv-cache) disables the
+-- IExpr free-variable cache and the eSubst pruning that consumes it:
+-- nodes store one shared empty set in the metadata fields and
+-- fVars/ftVars take the exact pre-cache code paths (full walks with
+-- the historical, narrower ICon/ILam semantics).  Absent the flag they
+-- are enabled (the default).  The switch lets the optimization be
+-- measured A/B on any workload with a single binary, and doubles as a
+-- diagnostic chicken switch.
+{-# NOINLINE efvCacheEnabled #-}
+efvCacheEnabled :: Bool
+efvCacheEnabled = not ("-hack-no-iexpr-fv-cache" `elem` progArgs)
+
+-- --------------------------------
+-- Content hashing (hash-first expression ordering)
+--
+-- Interior nodes cache a content hash (lazy, like the free-variable
+-- sets) and cmpE consults it FIRST: differing hashes decide the
+-- ordering in O(1), equal hashes fall back to the structural walk
+-- (which alone can distinguish true equality from a collision).  The
+-- hash observes EXACTLY the content the structural comparison
+-- observes -- under-observing a field only causes collisions (safe);
+-- over-observing one would order Eq-equal values apart (unsound).  In
+-- particular ILam types, ILAM kinds, ITCon payloads and binder kinds
+-- are skipped, and the ICon hash includes the inlined-position trails
+-- that refine ICon equality.
+--
+-- Hashes are computed from CONTENT (character hashes of names, literal
+-- values, structure) -- never intern uniques -- so they are
+-- deterministic for a given input and stable against unrelated input
+-- changes.  The one exception mirrors cmpE itself: IRefT hashes its
+-- heap-cell number, which is exactly what the structural comparison
+-- uses.
+--
+-- Consequence of hash-first ordering: Set/Map iteration orders over
+-- expressions change (implicit-condition conjunct order, CSE def
+-- order), producing equivalent but differently-ordered output than
+-- the historical structural order -- a one-time regold.  The hidden
+-- flag -hack-no-iexpr-hash restores the historical order exactly: all
+-- nodes then hash to 0, so the hash comparison always falls through
+-- to the structural walk.
+{-# NOINLINE ehashEnabled #-}
+ehashEnabled :: Bool
+ehashEnabled = not ("-hack-no-iexpr-hash" `elem` progArgs)
+
+-- an Id's content: base and qualifier character hashes
+idHash :: Hash -> Id -> Hash
+idHash h i = {-# SCC "idHash" #-} hashInt (hashInt h (fsContentHash (getIdBase i))) (fsContentHash (getIdQual i))
+
+posHash :: Hash -> Position -> Hash
+posHash h p = hashInt (hashInt (hashInt h (fsContentHash (pos_file p)))
+                               (getPositionLine p))
+                      (getPositionColumn p)
+
+posssHash :: Hash -> Maybe [Position] -> Hash
+posssHash = hashMaybe (hashList posHash)
+
+-- the hash of the node's cached field, or computed directly for the
+-- uncached leaves; 0 everywhere when disabled
+eHash :: IExpr a -> Hash
+eHash e0 | not ehashEnabled = 0
+         | otherwise = {-# SCC "eHash" #-} get e0
+  where get (ILam_ _ _ h _ _ _) = h
+        get (IAps_ _ _ h _ _ _) = h
+        get (ILAM_ _ _ h _ _ _) = h
+        get (ICon_ _ h _ _) = h
+        get (IVar i) = idHash (hashTag 23) i
+        -- the heap-cell number, matching cmpE's IRefT comparison
+        get (IRefT _ p _ _) = hashInt (hashTag 29) p
+
+-- Mirrors cmpC arm for arm: hash what it compares, skip what it skips.
+-- Payloads whose comparison is awkward to hash cheaply (VModInfo,
+-- IStateVar, clock/reset wires, rule pragmas, attributes, Pred) are
+-- deliberately under-observed: equal-tag nodes differing only there
+-- collide and fall back to the structural walk, which is the status
+-- quo for them.
+conHash :: Hash -> IConInfo a -> Hash
+conHash h0 ic0 = {-# SCC "conHash" #-} go (hashInt h0 (ordC ic0)) ic0
+  where
+    go h (ICForeign { fcallNo = n }) = hashMaybe hashInteger h n
+    go h (ICCon { iConType = t }) = hashMix h (tyHash t)
+    go h (ICIs { iConType = t }) = hashMix h (tyHash t)
+    go h (ICOut { iConType = t }) = hashMix h (tyHash t)
+    go h (ICTuple { iConType = t }) = hashMix h (tyHash t)
+    go h (ICSel { iConType = t }) = hashMix h (tyHash t)
+    go h (ICVerilog { iConType = t }) = hashMix h (tyHash t)
+    go h (ICUndet { iConType = t, imVal = mv }) =
+        hashMaybe (\ h' e -> hashMix h' (eHash e))
+                  (hashMix h (tyHash t)) mv
+    go h (ICInt { iConType = t, iVal = v }) =
+        hashInteger (hashMix h (tyHash t)) (ilValue v)
+    go h (ICReal { iConType = t, iReal = r }) =
+        hashString (hashMix h (tyHash t)) (show r)
+    go h (ICString { iConType = t, iStr = str }) =
+        hashString (hashMix h (tyHash t)) str
+    go h (ICChar { iChar = c }) = hashInt h (fromEnum c)
+    go h (ICLazyArray { iArray = arr }) =
+        hashList hashInt h (map ac_ptr (Array.elems arr))
+    go h (ICName { iName = n }) = idHash h n
+    go h (ICType { iType = t }) = hashMix h (tyHash t)
+    go h (ICMethod { iMethod = m }) = hashMix h (eHash m)
+    go h (ICPosition { iPosition = ps }) = hashList posHash h ps
+    -- ICDef, ICPrim, ICHandle, ICStateVar, ICValue, ICMethArg,
+    -- ICModPort, ICModParam, ICInout, ICIFace, ICRuleAssert,
+    -- ICSchedPragmas, ICClock, ICReset, ICAttrib, ICPred:
+    -- tag only (cmpC answers EQ or compares payloads we under-observe)
+    go h _ = h
+
+mkILam :: Id -> IType -> IExpr a -> IExpr a
+mkILam i t e
+  | efvCacheEnabled = ILam_ fvs ftvs h i t e
+  | otherwise       = ILam_ vsEmpty vsEmpty h i t e
+  where fvs  = vsDelete i (eFVarSet e)
+        -- unlike the historical ftVars, the binder's type is included:
+        -- substitution rewrites it (ISyntaxSubst substitutes ILam
+        -- types), so pruning needs its variables counted
+        ftvs = fTVarSet t `vsUnion` eFTVarSet e
+        -- the type is NOT hashed: cmpE ignores it (see hashing note)
+        h | ehashEnabled = {-# SCC "mkILamHash" #-} hashMix (idHash (hashTag 17) i) (eHash e)
+          | otherwise    = 0
+
+mkIAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
+mkIAps f ts es
+  | efvCacheEnabled = IAps_ fvs ftvs h f ts es
+  | otherwise       = IAps_ vsEmpty vsEmpty h f ts es
+  where fvs  = foldr (vsUnion . eFVarSet) (eFVarSet f) es
+        ftvs = foldr (vsUnion . eFTVarSet)
+                     (foldr (vsUnion . fTVarSet) (eFTVarSet f) ts)
+                     es
+        h | ehashEnabled = {-# SCC "mkIApsHash" #-}
+              hashList (\ h' t -> hashMix h' (tyHash t))
+                       (hashList (\ h' x -> hashMix h' (eHash x))
+                                 (hashMix (hashTag 21) (eHash f))
+                                 es)
+                       ts
+          | otherwise = 0
+
+mkILAM :: Id -> IKind -> IExpr a -> IExpr a
+mkILAM i k e
+  | efvCacheEnabled = ILAM_ fvs ftvs h i k e
+  | otherwise       = ILAM_ vsEmpty vsEmpty h i k e
+  where fvs  = eFVarSet e
+        ftvs = vsDelete i (eFTVarSet e)
+        -- the kind is NOT hashed: cmpE ignores it (see hashing note)
+        h | ehashEnabled = {-# SCC "mkILAMHash" #-} hashMix (idHash (hashTag 19) i) (eHash e)
+          | otherwise    = 0
+
+mkICon :: Id -> IConInfo a -> IExpr a
+mkICon i ic
+  | efvCacheEnabled = ICon_ (conFTVarSet ic) h i ic
+  | otherwise       = ICon_ vsEmpty h i ic
+  where h | ehashEnabled = {-# SCC "mkIConHash" #-}
+              conHash (ipossHash (idHash (hashTag 27) i) i) ic
+          | otherwise = 0
+
+-- hash the inlined-position trail without allocating the Maybe/list
+-- in the (overwhelmingly common) absent case
+ipossHash :: Hash -> Id -> Hash
+ipossHash h i | hasIdInlinedPositions i = posssHash h (getIdInlinedPositions i)
+              | otherwise = hashMix h 11
+
+-- The free type variables reachable by substitution below an ICon:
+-- every type position ISyntaxSubst.etSubstIConInfo rewrites and every
+-- expression it recurses into, nothing else.  In particular the
+-- constructors it leaves Unchanged (ICDef, ICValue) contribute
+-- nothing -- and must not be entered at all, since their payloads can
+-- be cyclic (knot-tied top-level defs, heap references).
+conFTVarSet :: IConInfo a -> VarSet
+conFTVarSet (ICDef {}) = vsEmpty
+conFTVarSet (ICValue {}) = vsEmpty
+-- iConType is always Bit 1 for clocks and resets; substitution
+-- recurses only into the wire expressions
+conFTVarSet (ICClock { iClock = c }) = eFTVarSet (ic_wires c)
+conFTVarSet (ICReset { iReset = r }) =
+    eFTVarSet (ic_wires (ir_clock r)) `vsUnion` eFTVarSet (ir_wire r)
+conFTVarSet ic@(ICInout { iInout = io }) =
+    fTVarSet (iConType ic) `vsUnion`
+    eFTVarSet (ic_wires (io_clock io)) `vsUnion`
+    eFTVarSet (ic_wires (ir_clock (io_reset io))) `vsUnion`
+    eFTVarSet (ir_wire (io_reset io)) `vsUnion`
+    eFTVarSet (io_wire io)
+conFTVarSet ic@(ICVerilog { vMethTs = tss }) =
+    foldr (vsUnion . fTVarSet) (fTVarSet (iConType ic)) (concat tss)
+-- iConType is always itType (no free variables), only iType matters
+conFTVarSet (ICType { iType = t }) = fTVarSet t
+conFTVarSet ic@(ICUndet { imVal = mv }) =
+    fTVarSet (iConType ic) `vsUnion` maybe vsEmpty eFTVarSet mv
+-- the array pointers are left alone by substitution; only the uninit
+-- expressions (and the con type) are rewritten
+conFTVarSet ic@(ICLazyArray { uninit = mu }) =
+    fTVarSet (iConType ic) `vsUnion`
+    maybe vsEmpty (\ (u1, u2) -> eFTVarSet u1 `vsUnion` eFTVarSet u2) mu
+conFTVarSet ic = fTVarSet (iConType ic)
+
+-- The free value variables reachable by substitution below an ICon.
+-- Not cached on the node (unlike the type variables): every arm is a
+-- bounded number of reads of the children's own cached sets, so a
+-- cached copy would buy nothing.
+conFVarSet :: IConInfo a -> VarSet
+conFVarSet (ICUndet { imVal = Just e }) = eFVarSet e
+conFVarSet (ICClock { iClock = c }) = eFVarSet (ic_wires c)
+conFVarSet (ICReset { iReset = r }) =
+    eFVarSet (ic_wires (ir_clock r)) `vsUnion` eFVarSet (ir_wire r)
+conFVarSet (ICInout { iInout = io }) =
+    eFVarSet (ic_wires (io_clock io)) `vsUnion`
+    eFVarSet (ic_wires (ir_clock (io_reset io))) `vsUnion`
+    eFVarSet (ir_wire (io_reset io)) `vsUnion`
+    eFVarSet (io_wire io)
+conFVarSet (ICLazyArray { uninit = Just (u1, u2) }) =
+    eFVarSet u1 `vsUnion` eFVarSet u2
+conFVarSet _ = vsEmpty
+
+-- Free value variables, answered from the cached fields (or from a
+-- one-level read for ICon).  When the cache is disabled the fields
+-- hold a shared dummy empty set, so this walks instead, with the exact
+-- historical semantics (ICon contributes only an ICUndet's imVal).
+eFVarSet :: IExpr a -> VarSet
+eFVarSet e0 | efvCacheEnabled = cached e0
+            | otherwise       = walk e0
+  where cached (ILam_ fvs _ _ _ _ _) = fvs
+        cached (IAps_ fvs _ _ _ _ _) = fvs
+        cached (ILAM_ fvs _ _ _ _ _) = fvs
+        cached (IVar i) = vsSingleton i
+        cached (ICon_ _ _ _ ic) = conFVarSet ic
+        cached (IRefT _ _ _ _) = vsEmpty
+        walk (ILam_ _ _ _ i _ e) = vsDelete i (walk e)
+        walk (IAps_ _ _ _ f _ es) = foldr (vsUnion . walk) (walk f) es
+        walk (ILAM_ _ _ _ _ _ e) = walk e
+        walk (IVar i) = vsSingleton i
+        walk (ICon_ _ _ _ (ICUndet {imVal = Just e})) = walk e
+        walk (ICon_ _ _ _ _) = vsEmpty
+        walk (IRefT _ _ _ _) = vsEmpty
+
+-- Free type variables, answered from the cached fields.  Same
+-- disabled-mode posture as eFVarSet: walk with the exact historical
+-- semantics (ILam types and ICon types not counted).
+eFTVarSet :: IExpr a -> VarSet
+eFTVarSet e0 | efvCacheEnabled = cached e0
+             | otherwise       = walk e0
+  where cached (ILam_ _ ftvs _ _ _ _) = ftvs
+        cached (IAps_ _ ftvs _ _ _ _) = ftvs
+        cached (ILAM_ _ ftvs _ _ _ _) = ftvs
+        cached (IVar _) = vsEmpty
+        cached (ICon_ ftvs _ _ _) = ftvs
+        cached (IRefT _ _ _ _) = vsEmpty
+        walk (ILam_ _ _ _ _ _ e) = walk e
+        walk (IAps_ _ _ _ f ts es) =
+            foldr (vsUnion . walk)
+                  (foldr (vsUnion . fTVarSet) (walk f) ts)
+                  es
+        walk (ILAM_ _ _ _ i _ e) = vsDelete i (walk e)
+        walk (IVar _) = vsEmpty
+        walk (ICon_ _ _ _ (ICUndet {imVal = Just e})) = walk e
+        walk (ICon_ _ _ _ _) = vsEmpty
+        walk (IRefT _ _ _ _) = vsEmpty
 
 instance Show (IExpr a) where
   show (ILam i t e)   = "(ILam " ++ show i ++ " " ++ show t ++ " " ++ show e ++ ")"
@@ -451,15 +760,51 @@ instance Show (IExpr a) where
   show (ICon i ic)    = "(ICon " ++ show i ++ " " ++ show ic ++ ")"
   show (IRefT t p _ _)  = "(IRefT " ++ show t ++ " " ++ "_" ++ show p ++ ")"
 
+-- Rank-first, then hash, then structural walk:
+--   1. Different constructors: decided by rank in O(1) -- no hash is
+--      ever needed to compare an IRefT (or any leaf) with anything
+--      else.  (This also fixes a latent cycle in the historical
+--      clause order, which encoded ILAM < ICon < IRefT < ILAM; it was
+--      harmless only because ILAM and IRefT never coexist live.)
+--   2. Same-constructor leaves: structural comparison is already O(1)
+--      (IRefT: heap-cell number; IVar: interned-name compare), so the
+--      hash is skipped there too.
+--   3. Same-constructor interior nodes: cached content hashes decide
+--      in O(1); equal hashes (true equality, a collision, or hashing
+--      disabled -- all nodes hash 0 under -hack-no-iexpr-hash) fall
+--      through to the structural walk, whose recursive child
+--      comparisons re-enter cmpE and are rank/hash-first as well.
 cmpE :: IExpr a -> IExpr a -> Ordering
-cmpE (ILam i1 _ e1)  (ILam i2 _ e2)  =
+cmpE x y =
+    case compare (rankE x) (rankE y) of
+    EQ -> cmpSameRank x y
+    o  -> o
+
+rankE :: IExpr a -> Int
+rankE (ILam _ _ _) = 0
+rankE (IAps _ _ _) = 1
+rankE (IVar _) = 2
+rankE (ILAM _ _ _) = 3
+rankE (ICon _ _) = 4
+rankE (IRefT _ _ _ _) = 5
+
+cmpSameRank :: IExpr a -> IExpr a -> Ordering
+cmpSameRank (IVar i1) (IVar i2) = compare i1 i2
+cmpSameRank (IRefT _ p1 _ _) (IRefT _ p2 _ _) = compare p1 p2
+cmpSameRank x y =
+    case {-# SCC "cmpE_hashcmp" #-} compare (eHash x) (eHash y) of
+    EQ -> {-# SCC "cmpE_walk" #-} cmpES x y
+    o  -> o
+
+cmpES :: IExpr a -> IExpr a -> Ordering
+cmpES (ILam i1 _ e1)  (ILam i2 _ e2)  =
         case compare i1 i2 of
         EQ -> cmpE e1 e2
         o  -> o
-cmpE (ILam _ _ _)    _               = LT
+cmpES (ILam _ _ _)    _               = LT
 
-cmpE (IAps _  _ _)   (ILam _ _ _)    = GT
-cmpE (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
+cmpES (IAps _  _ _)   (ILam _ _ _)    = GT
+cmpES (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
         case compare e1 e2 of
         EQ ->
                 case compare es1 es2 of
@@ -471,48 +816,54 @@ cmpE (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
                 o  -> o
 -}
         o  -> o
-cmpE (IAps _  _ _)   _               = LT
+cmpES (IAps _  _ _)   _               = LT
 
-cmpE (IVar _)        (ILam _ _ _)    = GT
-cmpE (IVar _)        (IAps _ _ _)    = GT
-cmpE (IVar i1)       (IVar i2)       = compare i1 i2
-cmpE (IVar _)        _               = LT
+cmpES (IVar _)        (ILam _ _ _)    = GT
+cmpES (IVar _)        (IAps _ _ _)    = GT
+cmpES (IVar i1)       (IVar i2)       = compare i1 i2
+cmpES (IVar _)        _               = LT
 
-cmpE (ILAM _ _ _)    (ILam _ _ _)    = GT
-cmpE (ILAM _ _ _)    (IAps _ _ _)    = GT
-cmpE (ILAM _ _ _)    (IVar _)        = GT
-cmpE (ILAM i1 _ e1)  (ILAM i2 _ e2)  =
+cmpES (ILAM _ _ _)    (ILam _ _ _)    = GT
+cmpES (ILAM _ _ _)    (IAps _ _ _)    = GT
+cmpES (ILAM _ _ _)    (IVar _)        = GT
+cmpES (ILAM i1 _ e1)  (ILAM i2 _ e2)  =
         case compare i1 i2 of
         EQ -> cmpE e1 e2
         o  -> o
-cmpE (ILAM _ _ _)    (IRefT _ _ _ _)   = GT -- ???????
+cmpES (ILAM _ _ _)    (IRefT _ _ _ _)   = GT -- ???????
 
-cmpE (ILAM _  _ _)   _               = LT
+cmpES (ILAM _  _ _)   _               = LT
 
-cmpE (ICon _ _)      (ILam _ _ _)    = GT
-cmpE (ICon _ _)      (IAps _ _ _)    = GT
-cmpE (ICon _ _)      (IVar _)        = GT
-cmpE (ICon i1 ic1) (ICon i2 ic2)     =
+cmpES (ICon _ _)      (ILam _ _ _)    = GT
+cmpES (ICon _ _)      (IAps _ _ _)    = GT
+cmpES (ICon _ _)      (IVar _)        = GT
+cmpES (ICon i1 ic1) (ICon i2 ic2)     =
         case compare i1 i2 of
         EQ -> case (cmpC ic1 ic2) of
-                -- inlined positions need to be considered in equality tests
-                EQ -> let mposs1 = getIdInlinedPositions i1
-                          mposs2 = getIdInlinedPositions i2
-                      in  compare mposs1 mposs2
+                -- inlined positions need to be considered in equality
+                -- tests; the presence test first keeps the common case
+                -- (neither side has the prop -- e.g. every literal
+                -- constant) free of the Maybe/list allocation
+                EQ -> if not (hasIdInlinedPositions i1) &&
+                         not (hasIdInlinedPositions i2)
+                      then EQ
+                      else let mposs1 = getIdInlinedPositions i1
+                               mposs2 = getIdInlinedPositions i2
+                           in  compare mposs1 mposs2
                 o  -> o
         o  -> o
-cmpE (ICon _ _)      _               = LT
+cmpES (ICon _ _)      _               = LT
 
-cmpE (IRefT _ _ _ _)   (ILam _ _ _)    = GT
-cmpE (IRefT _ _ _ _)   (IAps _ _ _)    = GT
-cmpE (IRefT _ _ _ _)   (IVar _)        = GT
-cmpE (IRefT _ _ _ _)   (ICon _ _)      = GT
-cmpE (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
+cmpES (IRefT _ _ _ _)   (ILam _ _ _)    = GT
+cmpES (IRefT _ _ _ _)   (IAps _ _ _)    = GT
+cmpES (IRefT _ _ _ _)   (IVar _)        = GT
+cmpES (IRefT _ _ _ _)   (ICon _ _)      = GT
+cmpES (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
 
-cmpE (IRefT _ _ _ _)     (ILAM _ _ _)  = LT -- ??????????
+cmpES (IRefT _ _ _ _)     (ILAM _ _ _)  = LT -- ??????????
 
 {- all cases are covered above, so the compiler complains about this line:
-cmpE e1              e2              = internalError ("not match in cmpE " ++ ppReadable (e1,e2))
+cmpES e1             e2              = internalError ("not match in cmpES " ++ ppReadable (e1,e2))
 -}
 
 instance Eq (IExpr a) where
@@ -948,15 +1299,13 @@ aVars (IRefT _ _ _ _) = S.empty
 
 -- --------------------
 
--- Free variables
+-- Free variables (answered from the sets cached on the nodes; see the
+-- comment at the IExpr definition).  With the cache enabled this is
+-- slightly wider than the historical walk: clock/reset/inout wires and
+-- lazy-array uninit expressions are counted, matching what expression
+-- substitution can actually reach.
 fVars :: IExpr a -> S.Set Id
-fVars (ILam i _ e) = S.delete i (fVars e)
-fVars (IVar i) = S.singleton i
-fVars (ILAM _ _ e) = fVars e
-fVars (IAps f ts es) = fVars f `S.union` (S.unions (map fVars es))
-fVars (ICon _ (ICUndet {imVal = Just e})) = fVars e
-fVars (ICon _ _) = S.empty
-fVars (IRefT _ _ _ _) = S.empty
+fVars = eFVarSet
 
 -- --------------------
 
@@ -977,16 +1326,13 @@ fdVars' (IRefT _ _ _ _) = S.empty
 
 -- --------------------
 
--- Free type variables
+-- Free type variables (answered from the sets cached on the nodes; see
+-- the comment at the IExpr definition).  With the cache enabled this
+-- is wider than the historical walk, which ignored ILam binder types
+-- and all ICon types: every type position that type substitution can
+-- rewrite is counted.
 ftVars :: IExpr a -> S.Set Id
-ftVars (ILam i _ e) = ftVars e
-ftVars (IVar i) = S.empty
-ftVars (ILAM i _ e) = S.delete i (ftVars e)
-ftVars (IAps f ts es) = (ftVars f) `S.union` (S.unions (map fTVars ts))
-                                     `S.union` (S.unions (map ftVars es))
-ftVars (ICon _ (ICUndet {imVal = Just e})) = ftVars e
-ftVars (ICon _ _) = S.empty                -- XXX
-ftVars (IRefT _ _ _ _) = S.empty
+ftVars = eFTVarSet
 
 -- ============================================================
 -- PPrint (for those instances not defined alongside the type, above)
@@ -1191,12 +1537,26 @@ instance NFData IAbstractInput where
 instance NFData (IDef a) where
     rnf (IDef i t e p) = rnf4 i t e p
 
+-- Matches the REAL constructors so the cached free-variable sets are
+-- forced too: hyper/rnf must normalize the whole node, and a match
+-- through the pattern synonyms would skip the cache fields (leaving
+-- thunks alive that the hyper discipline exists to kill).
+-- The free-variable sets are forced (they are consumed DURING
+-- elaboration by substitution pruning, so hyper-time computation is
+-- paid-for work, and unforced set thunks are the leak the hyper
+-- discipline exists to kill).  The hash is deliberately NOT forced:
+-- it is consumed only after IExpand (transform/CSE comparisons), so
+-- forcing it at elaboration-time hyper points would compute hashes
+-- for millions of transient heap nodes that no one ever compares.  A
+-- surviving node's hash thunk captures only the node's own fields --
+-- no retention beyond the node itself -- and resolves at its first
+-- post-IExpand comparison, where the work pays for itself.
 instance NFData (IExpr a) where
-    rnf (ILam i t e) = rnf3 i t e
-    rnf (IAps e ts es) = rnf3 e ts es
+    rnf (ILam_ fvs ftvs _h i t e) = rnf2 fvs ftvs `seq` rnf3 i t e
+    rnf (IAps_ fvs ftvs _h e ts es) = rnf2 fvs ftvs `seq` rnf3 e ts es
     rnf (IVar i) = rnf i
-    rnf (ILAM i k e) = rnf3 i k e
-    rnf (ICon i ic) = rnf2 i ic
+    rnf (ILAM_ fvs ftvs _h i k e) = rnf2 fvs ftvs `seq` rnf3 i k e
+    rnf (ICon_ ftvs _h i ic) = rnf ftvs `seq` rnf2 i ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where

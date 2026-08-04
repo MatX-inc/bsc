@@ -7,6 +7,7 @@ module IType(
   ,itArrow
   ,mkNumConT
   ,iTypeNodeId
+  ,tyHash
   ,fTVars
   ,VarSet
   ,fTVarSet
@@ -36,7 +37,10 @@ import GHC.Exts.Heap(Box, asBox, getBoxedClosureData,
                      GenClosure(..), allClosures)
 #endif
 
+import Data.Word(Word64)
+
 import ErrorUtil(internalError)
+import HashUtil(Hash, hashTag, hashMix, hashInt, hashInteger, hashString)
 import IOUtil(progArgs)
 import Id(Id, getIdBase, getIdQual, setIdPosition, setIdProps, setIdQual)
 import PreIds(idArrow, idId, idTNumToStr)
@@ -51,7 +55,7 @@ import PPrint
 import PFPrint
 import Position(noPosition)
 import Util(itos)
-import FStringCompat(FString, mkNumFString)
+import FStringCompat(FString, mkNumFString, fsContentHash)
 import PreStrings(fsEmpty)
 
 -- ==============================
@@ -91,8 +95,8 @@ data IKind
 -- never serializes, never prints, and never participates in
 -- comparison or intern keys.
 data IType
-        = ITForAll_ {-# UNPACK #-} !Int !VarSet !Id !IKind IType
-        | ITAp_ {-# UNPACK #-} !Int !VarSet IType IType
+        = ITForAll_ {-# UNPACK #-} !Int {-# UNPACK #-} !Word64 !VarSet !Id !IKind IType
+        | ITAp_ {-# UNPACK #-} !Int {-# UNPACK #-} !Word64 !VarSet IType IType
         | ITVar_ !Id
         | ITCon_ !Id !IKind !TISort
         | ITNum !Integer
@@ -101,11 +105,11 @@ data IType
         -- on WHNF == deep NF for every constructor)
 
 pattern ITForAll :: Id -> IKind -> IType -> IType
-pattern ITForAll i k t <- ITForAll_ _ _ i k t
+pattern ITForAll i k t <- ITForAll_ _ _ _ i k t
   where ITForAll i k t = mkITForAll i k t
 
 pattern ITAp :: IType -> IType -> IType
-pattern ITAp f a <- ITAp_ _ _ f a
+pattern ITAp f a <- ITAp_ _ _ _ f a
   where ITAp f a = mkITAp f a
 
 -- The Id-carrying leaves are sealed the same way: construction goes
@@ -204,11 +208,11 @@ vsNull = S.null
 fTVarSet :: IType -> VarSet
 fTVarSet t0 | ftvCacheEnabled = cached t0
             | otherwise       = walk t0
-  where cached (ITForAll_ _ fvs _ _ _) = fvs
-        cached (ITAp_ _ fvs _ _) = fvs
+  where cached (ITForAll_ _ _ fvs _ _ _) = fvs
+        cached (ITAp_ _ _ fvs _ _) = fvs
         cached l = leaf l
-        walk (ITForAll_ _ _ i _ b) = vsDelete i (walk b)
-        walk (ITAp_ _ _ f a) = walk f `vsUnion` walk a
+        walk (ITForAll_ _ _ _ i _ b) = vsDelete i (walk b)
+        walk (ITAp_ _ _ _ f a) = walk f `vsUnion` walk a
         walk l = leaf l
         leaf (ITVar i) = vsSingleton i
         leaf _ = vsEmpty
@@ -225,10 +229,41 @@ fTVars = fTVarSet
 -- sharing-map keys in BinData -- and must never be serialized or
 -- otherwise influence anything observable.
 iTypeNodeId :: IType -> Int
-iTypeNodeId (ITForAll_ u _ _ _ _) = u
-iTypeNodeId (ITAp_ u _ _ _) = u
+iTypeNodeId (ITForAll_ u _ _ _ _ _) = u
+iTypeNodeId (ITAp_ u _ _ _ _) = u
 iTypeNodeId t =
     internalError ("IType.iTypeNodeId: not an interior node: " ++ show t)
+
+-- --------------------------------
+-- Content hash
+--
+-- A hash of exactly the content cmpT observes (binder kinds and ITCon
+-- payloads are skipped, matching the comparison), computed from names
+-- and values -- never intern uniques -- so it is deterministic and
+-- stable against unrelated input changes.  Interior nodes carry it in
+-- a strict field filled at intern time; leaves answer directly.  It
+-- seeds the IExpr content hashes (ISyntax.eHash), which order
+-- expression comparisons hash-first.
+tyHash :: IType -> Hash
+tyHash (ITForAll_ _ h _ _ _ _) = h
+tyHash (ITAp_ _ h _ _ _) = h
+tyHash (ITVar_ i) = hashId (hashTag 3) i
+tyHash (ITCon_ i _ _) = hashId (hashTag 4) i
+tyHash (ITNum n) = hashInteger (hashTag 5) n
+tyHash (ITStr s) = hashInt (hashTag 6) (sHashF s)
+
+-- an Id's content: base and qualifier character hashes
+hashId :: Hash -> Id -> Hash
+hashId h i = hashInt (hashInt h (sHashF (getIdBase i))) (sHashF (getIdQual i))
+
+sHashF :: FString -> Int
+sHashF = fsContentHash
+
+tyHashForAll :: Id -> IType -> Hash
+tyHashForAll i t = hashMix (hashId (hashTag 1) i) (tyHash t)
+
+tyHashAp :: IType -> IType -> Hash
+tyHashAp f a = hashMix (hashMix (hashTag 2) (tyHash f)) (tyHash a)
 
 -- --------------------------------
 -- Id normalization for type embedding
@@ -395,8 +430,8 @@ data NodeKey
         deriving (Eq, Ord)
 
 tKey :: IType -> TKey
-tKey (ITForAll_ u _ _ _ _) = TKNode u
-tKey (ITAp_ u _ _ _)       = TKNode u
+tKey (ITForAll_ u _ _ _ _ _) = TKNode u
+tKey (ITAp_ u _ _ _ _)       = TKNode u
 tKey (ITCon_ i _ _)        = TKCon (getIdQual i) (getIdBase i)
 tKey (ITVar_ i)            = TKVar (getIdBase i)
 tKey (ITNum n)             = TKNum n
@@ -441,8 +476,11 @@ internAp f a = unsafePerformIO $ do
                          -- deep by induction), so NFData can stop at
                          -- interned nodes instead of re-walking the
                          -- shared DAG as a tree on every deepseq
+                         -- (the content hash is a strict unpacked word,
+                         -- forced by construction itself)
                          t = fvs `deepseq`
-                             assertConstructedNF "internAp" (ITAp_ n fvs f a)
+                             assertConstructedNF "internAp"
+                                 (ITAp_ n (tyHashAp f a) fvs f a)
                      in  (InternTable (M.insert key t m) (n+1), t)
 
 {-# NOINLINE mkITForAll #-}
@@ -464,7 +502,7 @@ mkITForAll i k t = unsafePerformIO $ do
                          -- deep NF at construction; see internAp
                          t' = fvs `deepseq` ti `deepseq` k `deepseq`
                               assertConstructedNF "mkITForAll"
-                                  (ITForAll_ n fvs ti k t)
+                                  (ITForAll_ n (tyHashForAll ti t) fvs ti k t)
                      in  (InternTable (M.insert key t' m) (n+1), t')
 
 -- The smart constructor behind the ITAp pattern synonym.  It first
@@ -482,13 +520,13 @@ mkITForAll i k t = unsafePerformIO $ do
 -- real constructors (ITAp_): the ITAp synonym's builder is this very
 -- function.
 mkITAp :: IType -> IType -> IType
-mkITAp (ITAp_ _ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
+mkITAp (ITAp_ _ _ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x]
-mkITAp (ITAp_ _ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
+mkITAp (ITAp_ _ _ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
     ITStr (fromJust res)
   where res = opStrT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
@@ -532,8 +570,8 @@ assertConstructedNF site t = unsafePerformIO $ do
     -- components forced deep at construction vs. IType children
     -- trusted by induction (WHNF check only)
     let (deep, whnf) = case t of
-          ITForAll_ _ fvs i k b -> ([asBox fvs, asBox i, asBox k], [asBox b])
-          ITAp_ _ fvs f a       -> ([asBox fvs], [asBox f, asBox a])
+          ITForAll_ _ _ fvs i k b -> ([asBox fvs, asBox i, asBox k], [asBox b])
+          ITAp_ _ _ fvs f a       -> ([asBox fvs], [asBox f, asBox a])
           ITVar_ i              -> ([asBox i], [])
           ITCon_ i k s          -> ([asBox i, asBox k, asBox s], [])
           ITNum n               -> ([asBox n], [])
@@ -581,10 +619,10 @@ assertConstructedNF _ t = t
 -- intern uniques, matching what the derived instance printed before
 -- hash-consing (so debug dumps are unchanged).
 instance Show IType where
-    showsPrec d (ITForAll_ _ _ i k t) = showParen (d > 10) $
+    showsPrec d (ITForAll_ _ _ _ i k t) = showParen (d > 10) $
         showString "ITForAll " . showsPrec 11 i . showString " " .
         showsPrec 11 k . showString " " . showsPrec 11 t
-    showsPrec d (ITAp_ _ _ f a) = showParen (d > 10) $
+    showsPrec d (ITAp_ _ _ _ f a) = showParen (d > 10) $
         showString "ITAp " . showsPrec 11 f . showString " " .
         showsPrec 11 a
     showsPrec d (ITVar i) = showParen (d > 10) $
@@ -640,7 +678,7 @@ instance Ord IType where
 -- Interned interior nodes short-circuit on equal uniques (same unique
 -- means the same node, hence EQ).  Uniques are never used for LT/GT.
 cmpT :: IType -> IType -> Ordering
-cmpT (ITForAll_ u1 _ i1 _ t1) (ITForAll_ u2 _ i2 _ t2)  -- binder kind comparison skipped (see above)
+cmpT (ITForAll_ u1 _ _ i1 _ t1) (ITForAll_ u2 _ _ i2 _ t2)  -- binder kind comparison skipped (see above)
         | u1 == u2  = EQ
         | otherwise =
             case compare i1 i2 of
@@ -649,7 +687,7 @@ cmpT (ITForAll_ u1 _ i1 _ t1) (ITForAll_ u2 _ i2 _ t2)  -- binder kind compariso
 cmpT (ITForAll _  _  _ ) _                   = LT
 
 cmpT (ITAp _ _)          (ITForAll _  _  _)  = GT
-cmpT (ITAp_ u1 _ f1 a1)  (ITAp_ u2 _ f2 a2)
+cmpT (ITAp_ u1 _ _ f1 a1)  (ITAp_ u2 _ _ f2 a2)
         | u1 == u2  = EQ
         | otherwise =
             case cmpT f1 f2 of
@@ -742,8 +780,8 @@ iToCT (ITStr s) = TCon (TyStr s noPosition)
 -- distinct nodes -- cmpT skips ITForAll binder kinds, so structural
 -- (==) is coarser than interning and must not stand in for identity.
 sameITypeNode :: IType -> IType -> Bool
-sameITypeNode (ITAp_ u _ _ _) (ITAp_ u' _ _ _) = u == u'
-sameITypeNode (ITForAll_ u _ _ _ _) (ITForAll_ u' _ _ _ _) = u == u'
+sameITypeNode (ITAp_ u _ _ _ _) (ITAp_ u' _ _ _ _) = u == u'
+sameITypeNode (ITForAll_ u _ _ _ _ _) (ITForAll_ u' _ _ _ _ _) = u == u'
 sameITypeNode _ _ = False
 
 -- | Does the type contain a TYPE-FUNCTION constructor anywhere -- an
@@ -767,8 +805,8 @@ itHasTFun (ITCon i _ _) = isPrimTFunName i || i == idId
 itHasTFun (ITNum _) = False
 itHasTFun (ITStr _) = False
 itHasTFun (ITVar _) = False
-itHasTFun (ITAp_ u _ f a) = itHasTFunOnce u (itHasTFun f || itHasTFun a)
-itHasTFun (ITForAll_ u _ _ _ t) = itHasTFunOnce u (itHasTFun t)
+itHasTFun (ITAp_ u _ _ f a) = itHasTFunOnce u (itHasTFun f || itHasTFun a)
+itHasTFun (ITForAll_ u _ _ _ _ t) = itHasTFunOnce u (itHasTFun t)
 
 itHasTFunOnce :: Int -> Bool -> Bool
 itHasTFunOnce u v = unsafeDupablePerformIO $ do
@@ -796,8 +834,8 @@ itHasATF (ITCon _ _ _) = False
 itHasATF (ITNum _) = False
 itHasATF (ITStr _) = False
 itHasATF (ITVar _) = False
-itHasATF (ITAp_ u _ f a) = itHasATFOnce u (itHasATF f || itHasATF a)
-itHasATF (ITForAll_ u _ _ _ t) = itHasATFOnce u (itHasATF t)
+itHasATF (ITAp_ u _ _ f a) = itHasATFOnce u (itHasATF f || itHasATF a)
+itHasATF (ITForAll_ u _ _ _ _ t) = itHasATFOnce u (itHasATF t)
 
 itHasATFOnce :: Int -> Bool -> Bool
 itHasATFOnce u v = unsafeDupablePerformIO $ do

@@ -67,8 +67,10 @@ class SubstContext ctx v | ctx -> v where
   ctxNorm :: ctx -> v -> Changed v
   -- True if no variable in the given free-variable set is in the
   -- substitution domain, i.e. substituting under a tree with these
-  -- free variables cannot change it.  Only type contexts answer
-  -- precisely; expression contexts conservatively say False.
+  -- free variables cannot change it.  Type contexts check against the
+  -- cached IType free-variable sets; expression contexts against the
+  -- cached IExpr sets (fed the value-variable set for the expression
+  -- domain and, on type contexts, the type-variable set).
   ctxAvoids :: VarSet -> ctx -> Bool
 
 -- Constraint synonyms for clarity
@@ -101,27 +103,32 @@ instance SubstContext (SingleExpr a) (IExpr a) where
     if i == i' then SomeCtx (EmptyExpr :: EmptyExpr a) else SomeCtx s
   ctxAdd i' x' (SingleExpr i x fvs) =
     BatchExpr (M.fromList [(i,x), (i',x')]) (fvs `S.union` fVars x')
+              (S.fromList [i, i'])
   ctxNorm _ _ = Unchanged
-  ctxAvoids _ _ = False
+  ctxAvoids vs (SingleExpr i _ _) = not (i `vsMember` vs)
 
 -- Batch substitution (size >= 2) - uses Map
-data BatchExpr a = BatchExpr !(M.Map Id (IExpr a)) !(S.Set Id)
+-- The third field is the substitution domain (the map's key set),
+-- kept as a Set so that ctxAvoids -- which runs at every node the
+-- substitution visits -- is a single non-allocating disjointness
+-- check instead of a per-key membership loop.
+data BatchExpr a = BatchExpr !(M.Map Id (IExpr a)) !(S.Set Id) !VarSet
 
 instance SubstContext (BatchExpr a) (IExpr a) where
-  lookupVar i (BatchExpr m _) = M.lookup i m
+  lookupVar i (BatchExpr m _ _) = M.lookup i m
   ctxIsEmpty _ = False  -- BatchExpr always has size >= 2
-  ctxContainsVar i (BatchExpr _ fvs) = i `S.member` fvs
-  ctxRemove i (BatchExpr m fvs) =
+  ctxContainsVar i (BatchExpr _ fvs _) = i `S.member` fvs
+  ctxRemove i (BatchExpr m fvs dom) =
     let m' = M.delete i m
     in case M.size m' of
          0 -> SomeCtx (EmptyExpr :: EmptyExpr a)
          1 -> let (j, x) = M.findMin m'
               in SomeCtx $ SingleExpr j x fvs
-         _ -> SomeCtx $ BatchExpr m' fvs
-  ctxAdd i x (BatchExpr m fvs) =
-    BatchExpr (M.insert i x m) (fvs `S.union` fVars x)
+         _ -> SomeCtx $ BatchExpr m' fvs (vsDelete i dom)
+  ctxAdd i x (BatchExpr m fvs dom) =
+    BatchExpr (M.insert i x m) (fvs `S.union` fVars x) (vsInsert i dom)
   ctxNorm _ _ = Unchanged
-  ctxAvoids _ _ = False
+  ctxAvoids vs (BatchExpr _ _ dom) = vs `S.disjoint` dom
 
 -- ============================================================
 -- Type substitution contexts
@@ -148,7 +155,8 @@ instance SubstContext SingleType IType where
   ctxRemove i' s@(SingleType i _ _) =
     if i == i' then SomeCtx EmptyType else SomeCtx s
   ctxAdd i' t' (SingleType i t fvs) =
-    BatchTypeNorm (M.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t') (\ _ -> Unchanged)
+    BatchTypeNorm (M.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t')
+                  (S.fromList [i, i']) (\ _ -> Unchanged)
   ctxNorm _ _ = Unchanged
   ctxAvoids fvs (SingleType i _ _) = not (i `vsMember` fvs)
 
@@ -162,47 +170,52 @@ instance SubstContext SingleTypeNorm IType where
   ctxRemove i' s@(SingleTypeNorm i _ _ _) =
     if i == i' then SomeCtx EmptyType else SomeCtx s
   ctxAdd i' t' (SingleTypeNorm i t fvs norm) =
-    BatchTypeNorm (M.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t') norm
+    BatchTypeNorm (M.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t')
+                  (S.fromList [i, i']) norm
   ctxNorm (SingleTypeNorm _ _ _ norm) = norm
   ctxAvoids fvs (SingleTypeNorm i _ _ _) = not (i `vsMember` fvs)
 
 -- Batch type substitution
-data BatchType = BatchType !(M.Map Id IType) !VarSet
+-- (third field: the substitution domain as a Set; see BatchExpr)
+data BatchType = BatchType !(M.Map Id IType) !VarSet !VarSet
 
 instance SubstContext BatchType IType where
-  lookupVar i (BatchType m _) = M.lookup i m
+  lookupVar i (BatchType m _ _) = M.lookup i m
   ctxIsEmpty _ = False
-  ctxContainsVar i (BatchType _ fvs) = i `vsMember` fvs
-  ctxRemove i (BatchType m fvs) =
+  ctxContainsVar i (BatchType _ fvs _) = i `vsMember` fvs
+  ctxRemove i (BatchType m fvs dom) =
     let m' = M.delete i m
     in case M.size m' of
          0 -> SomeCtx EmptyType
          1 -> let (j, t) = M.findMin m'
               in SomeCtx $ SingleType j t fvs
-         _ -> SomeCtx $ BatchType m' fvs
-  ctxAdd i t (BatchType m fvs) =
-    BatchTypeNorm (M.insert i t m) (fvs `vsUnion` fTVarSet t) (\ _ -> Unchanged)
+         _ -> SomeCtx $ BatchType m' fvs (vsDelete i dom)
+  ctxAdd i t (BatchType m fvs dom) =
+    BatchTypeNorm (M.insert i t m) (fvs `vsUnion` fTVarSet t)
+                  (vsInsert i dom) (\ _ -> Unchanged)
   ctxNorm _ _ = Unchanged
-  ctxAvoids fvs (BatchType m _) = not (any (`vsMember` fvs) (M.keys m))
+  ctxAvoids fvs (BatchType _ _ dom) = fvs `S.disjoint` dom
 
 -- Batch type substitution with normalization
-data BatchTypeNorm = BatchTypeNorm !(M.Map Id IType) !VarSet !(IType -> Changed IType)
+-- (third field: the substitution domain as a Set; see BatchExpr)
+data BatchTypeNorm = BatchTypeNorm !(M.Map Id IType) !VarSet !VarSet !(IType -> Changed IType)
 
 instance SubstContext BatchTypeNorm IType where
-  lookupVar i (BatchTypeNorm m _ _) = M.lookup i m
+  lookupVar i (BatchTypeNorm m _ _ _) = M.lookup i m
   ctxIsEmpty _ = False
-  ctxContainsVar i (BatchTypeNorm _ fvs _) = i `vsMember` fvs
-  ctxRemove i (BatchTypeNorm m fvs norm) =
+  ctxContainsVar i (BatchTypeNorm _ fvs _ _) = i `vsMember` fvs
+  ctxRemove i (BatchTypeNorm m fvs dom norm) =
     let m' = M.delete i m
     in case M.size m' of
          0 -> SomeCtx EmptyType
          1 -> let (j, t) = M.findMin m'
               in SomeCtx $ SingleTypeNorm j t fvs norm
-         _ -> SomeCtx $ BatchTypeNorm m' fvs norm
-  ctxAdd i t (BatchTypeNorm m fvs norm) =
-    BatchTypeNorm (M.insert i t m) (fvs `vsUnion` fTVarSet t) norm
-  ctxNorm (BatchTypeNorm _ _ norm) = norm
-  ctxAvoids fvs (BatchTypeNorm m _ _) = not (any (`vsMember` fvs) (M.keys m))
+         _ -> SomeCtx $ BatchTypeNorm m' fvs (vsDelete i dom) norm
+  ctxAdd i t (BatchTypeNorm m fvs dom norm) =
+    BatchTypeNorm (M.insert i t m) (fvs `vsUnion` fTVarSet t)
+                  (vsInsert i dom) norm
+  ctxNorm (BatchTypeNorm _ _ _ norm) = norm
+  ctxAvoids fvs (BatchTypeNorm _ _ dom _) = fvs `S.disjoint` dom
 
 -- ============================================================
 -- Type substitution
@@ -275,7 +288,7 @@ tSubstBatch typeMap t
       in tSubst i ty t
   | otherwise =
       let ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
-          tctx = BatchType typeMap ftxv
+          tctx = BatchType typeMap ftxv (M.keysSet typeMap)
           allIds = S.unions (map fTVars (M.elems typeMap)) `S.union` aTVars t
       in changedOr t (tSubstWith tctx allIds t)
 
@@ -377,7 +390,28 @@ eSubstWith ectx tctx allIds e
       changed1 (changedOrId $ ctxNorm tctx) $ tSubstWith tctx allIds t
     -- sub needs to be polymorphic because the context type can change at
     -- ctxAdd (to batch) or ctxRemove (to single or empty) for both contexts
+    --
+    -- Pruning (mirroring tSubstWith): if a subtree's cached free value
+    -- variables are disjoint from the expression-substitution domain
+    -- AND its cached free type variables are disjoint from the
+    -- type-substitution domain, nothing under it can change; skip it.
+    -- (The cached sets cover everything substitution can reach,
+    -- including the type positions and nested wire/imVal expressions
+    -- inside ICons -- see the smart constructors in ISyntax.)  The
+    -- binder cases must ALSO check ctxContainsVar, exactly as the
+    -- ITForAll case in tSubstWith: when the binder collides with the
+    -- free variables of the substitution payloads, the original code
+    -- alpha-converts (renaming the binder) even when the body contains
+    -- no domain variable, and that rename is observable.  Falling
+    -- through preserves it exactly.  The guards are gated on the flag
+    -- itself, never on the cached sets: with the cache disabled the
+    -- fields hold dummy empty sets, which would otherwise prune
+    -- everything.
     sub :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
+    sub ectx tctx allIds ee@(ILam i _ _)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx, not (ctxContainsVar i ectx) =
+          Unchanged
     sub ectx tctx allIds ee@(ILam i t e) =
       case lookupVar i ectx of
         Just _ ->
@@ -398,6 +432,10 @@ eSubstWith ectx tctx allIds e
             in Changed $ ILam i' t' e'
           else -- No conflict: continue with same contexts
             changed2 (ILam i) t e (tSubWithNorm tctx allIds t) (sub ectx tctx allIds e)
+    sub ectx tctx allIds ee@(ILAM i _ _)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx, not (ctxContainsVar i tctx) =
+          Unchanged
     sub ectx tctx allIds ee@(ILAM i k e) =
       case lookupVar i tctx of
         Just _ ->
@@ -418,10 +456,18 @@ eSubstWith ectx tctx allIds e
           else -- No conflict: continue with same contexts
             changed1 (ILAM i k) (sub ectx tctx allIds e)
     sub ectx _    _      ee@(IVar i) = maybe Unchanged Changed (lookupVar i ectx)
-    sub ectx tctx allIds ee@(IAps f ts es) =
+    sub ectx tctx allIds ee@(IAps f ts es)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx =
+          Unchanged
+      | otherwise =
         changed3 IAps f ts es (sub ectx tctx allIds f) (mapChanged (tSubWithNorm tctx allIds) ts) (mapChanged (sub ectx tctx allIds) es)
     -- Use helper for IConInfo (handles both type and expression substitution)
-    sub ectx tctx allIds ee@(ICon i ii) =
+    sub ectx tctx allIds ee@(ICon i ii)
+      | efvCacheEnabled, ctxAvoids (eFVarSet ee) ectx,
+        ctxAvoids (eFTVarSet ee) tctx =
+          Unchanged
+      | otherwise =
         changed1 (ICon i) (etSubstIConInfo (tSubWithNorm tctx allIds)
                                            (sub ectx tctx allIds) ii)
     sub _    _    _      ee@(IRefT _ _ _ _) = Unchanged  -- no free tyvar inside IRef
@@ -460,7 +506,7 @@ eSubstBatch norm exprMap typeMap e
                     in eSubstWith (EmptyExpr :: EmptyExpr a) (SingleTypeNorm i t (fTVarSet t) norm) (fTVars t `S.union` aVars e) e
           (0, _) -> let ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
                         ftx = S.unions (map fTVars (M.elems typeMap))
-                    in eSubstWith (EmptyExpr :: EmptyExpr a) (BatchTypeNorm typeMap ftxv norm) (ftx `S.union` aVars e) e
+                    in eSubstWith (EmptyExpr :: EmptyExpr a) (BatchTypeNorm typeMap ftxv (M.keysSet typeMap) norm) (ftx `S.union` aVars e) e
           (1, 0) -> let (i, x) = M.findMin exprMap
                         fvx = fVars x
                     in eSubstWith (SingleExpr i x fvx) EmptyType (fvx `S.union` aVars e) e
@@ -472,16 +518,16 @@ eSubstBatch norm exprMap typeMap e
                         fvx = fVars ex
                         ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
                         ftx = S.unions (map fTVars (M.elems typeMap))
-                    in eSubstWith (SingleExpr ei ex fvx) (BatchTypeNorm typeMap ftxv norm) (fvx `S.union` ftx `S.union` aVars e) e
+                    in eSubstWith (SingleExpr ei ex fvx) (BatchTypeNorm typeMap ftxv (M.keysSet typeMap) norm) (fvx `S.union` ftx `S.union` aVars e) e
           (_, 0) -> let fvx = S.unions $ M.elems $ M.map fVars exprMap
-                    in eSubstWith (BatchExpr exprMap fvx) EmptyType (fvx `S.union` aVars e) e
+                    in eSubstWith (BatchExpr exprMap fvx (M.keysSet exprMap)) EmptyType (fvx `S.union` aVars e) e
           (_, 1) -> let fvx = S.unions $ M.elems $ M.map fVars exprMap
                         (ti, tt) = M.findMin typeMap
-                    in eSubstWith (BatchExpr exprMap fvx) (SingleTypeNorm ti tt (fTVarSet tt) norm) (fvx `S.union` fTVars tt `S.union` aVars e) e
+                    in eSubstWith (BatchExpr exprMap fvx (M.keysSet exprMap)) (SingleTypeNorm ti tt (fTVarSet tt) norm) (fvx `S.union` fTVars tt `S.union` aVars e) e
           (_, _) -> let fvx = S.unions $ M.elems $ M.map fVars exprMap
                         ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
                         ftx = S.unions (map fTVars (M.elems typeMap))
-                    in eSubstWith (BatchExpr exprMap fvx) (BatchTypeNorm typeMap ftxv norm) (fvx `S.union` ftx `S.union` aVars e) e
+                    in eSubstWith (BatchExpr exprMap fvx (M.keysSet exprMap)) (BatchTypeNorm typeMap ftxv (M.keysSet typeMap) norm) (fvx `S.union` ftx `S.union` aVars e) e
 
 {-# INLINE mapChanged #-}
 mapChanged :: (a -> Changed a) -> [a] -> Changed [a]

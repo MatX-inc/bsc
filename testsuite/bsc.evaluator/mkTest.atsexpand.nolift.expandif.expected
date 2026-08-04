@@ -75,16 +75,16 @@ pred :: ABSTRACT:  Prelude.VReg = RegUN
 				  port types=D_IN -> Prelude.Bool
 					     Q_OUT -> Prelude.Bool
 -- AP rules
-rule RL_Rule_F_T_T_F "Rule_F_T_T_F":
+rule RL_Rule_F_T_T_T_F "Rule_F_T_T_T_F":
  when (ptr == 5'd0) && pred
   ==> { slots.write 1'd1; slots_1.write 1'd0; }
-rule RL_Rule_F_T_F_T "Rule_F_T_F_T":
+rule RL_Rule_F_T_T_F_T "Rule_F_T_T_F_T":
  when (ptr == 5'd1) && pred
   ==> { slots.write 1'd0; slots_1.write 1'd1; }
-rule RL_Rule_F_F_T "Rule_F_F_T":
+rule RL_Rule_F_T_F_T "Rule_F_T_F_T":
  when (ptr == 5'd0) && (! pred)
   ==> { slots.write 1'd1; }
-rule RL_Rule_F_F_F "Rule_F_F_F":
+rule RL_Rule_F_T_F_F "Rule_F_T_F_F":
  when (ptr == 5'd1) && (! pred)
   ==> { slots_1.write 1'd1; }
 -- AP scheduling pragmas

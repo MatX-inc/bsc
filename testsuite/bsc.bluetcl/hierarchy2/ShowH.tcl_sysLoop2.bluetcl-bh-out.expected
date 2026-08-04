@@ -3,7 +3,7 @@
             aaa_0          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	aaa_0 
             aaa_1          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	aaa_1 
             aaa_2          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	aaa_2 
-        Loop           	 --  Prelude.Integer	 
-            bbb_0          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	bbb_0 
-            bbb_1          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	bbb_1 
-            bbb_2          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	bbb_2 
+        Loop_1         	 --  Prelude.Integer	 
+            bbb_0          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	bbb_0_1 
+            bbb_1          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	bbb_1_1 
+            bbb_2          	 -- RegUN Prelude.Reg (Prelude.UInt 14)	bbb_2_1 
