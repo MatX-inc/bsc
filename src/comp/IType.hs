@@ -14,6 +14,7 @@ module IType(
   ,ftvCacheEnabled
   ,iToCT
   ,iToCK
+  ,sameITypeNode
    )
     where
 
@@ -662,6 +663,15 @@ iToCT (ITVar i) = internalError "IConv.iToCT: ITVar"
 iToCT (ITCon i k s) = TCon (TyCon i (Just (iToCK k)) s)
 iToCT (ITNum n) = TCon (TyNum n noPosition)
 iToCT (ITStr s) = TCon (TyStr s noPosition)
+
+-- | True node identity: the same interned interior node (equal
+-- uniques).  Unlike Eq IType (cmpT), this cannot conflate two
+-- distinct nodes -- cmpT skips ITForAll binder kinds, so structural
+-- (==) is coarser than interning and must not stand in for identity.
+sameITypeNode :: IType -> IType -> Bool
+sameITypeNode (ITAp_ u _ _ _) (ITAp_ u' _ _ _) = u == u'
+sameITypeNode (ITForAll_ u _ _ _ _) (ITForAll_ u' _ _ _ _) = u == u'
+sameITypeNode _ _ = False
 
 
 iToCK :: IKind -> Kind
