@@ -7,6 +7,9 @@ module IConv(
 import Data.List(union, findIndex)
 import Data.Maybe(catMaybes)
 import qualified Data.Map as M
+import qualified Data.IntMap.Strict as IM
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import System.IO.Unsafe(unsafePerformIO)
 import qualified Data.Set as S
 import qualified Data.List as List
 
@@ -31,10 +34,11 @@ import Assump
 import Pred
 import SymTab
 import Type(tPrimPair, tBit, HasKind(..))
-import CType(cTVarKind, typeclassId, cTVarNum)
+import CType(cTVarKind, typeclassId, cTVarNum, typeCanonId)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
+import GroundCType(groundCTypeEnabled, internGroundCType)
 import ATFRules(buildATFRules, atfReduceInType)
 import ISyntax
 import ISyntaxSubst
@@ -174,20 +178,78 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
 -- scope-relative reduction may apply; types reaching conversion have
 -- already been normalized by typechecking, so the fallback should be
 -- unreachable, and it is kept only until that is enforced.
+-- Conversions of internable ground types are memoized
+-- process-globally, keyed on their GroundCType node id: a repeated
+-- large type argument -- the dominant content of converted dictionary
+-- constructions and wrapper interface definitions -- costs one IntMap
+-- probe instead of a full normalization plus structural
+-- re-conversion; and a circulating canonical node costs one pointer
+-- probe inside the interner, no walk at all.  The memo is a bridge
+-- between the two intern tables: its keys are interned CType nodes
+-- and its values are interned ITypes.  Soundness: a type the walk
+-- interns is ground, synonym-expandable and type-function-evaluable
+-- purely, and free of associated type functions (the one
+-- symtab-dependent piece of the normalization below, which resolves
+-- them against the current instances) -- for exactly those types the
+-- conversion is independent of the Flags and SymTab arguments, so one
+-- process-wide entry serves every package.
+{-# NOINLINE convTMemo #-}
+convTMemo :: IORef (IM.IntMap IType)
+convTMemo = unsafePerformIO $ newIORef IM.empty
+
 iConvT :: Flags -> SymTab -> Type -> IType
-iConvT flags s t =
+iConvT flags s t
+  | groundCTypeEnabled, Just (nid, tc) <- internGroundCType t =
+      unsafePerformIO $ do
+        m0 <- readIORef convTMemo
+        case IM.lookup nid m0 of
+          Just it -> return it
+          Nothing -> do
+            -- convert the canonical node: it is already in normal
+            -- form (synonym- and ATF-free, so the normalization
+            -- passes below have nothing to do)
+            let it = iConvTUncached flags s tc
+            atomicModifyIORef' convTMemo (\ m -> (IM.insert nid it m, ()))
+            return it
+  | otherwise = iConvTUncached flags s t
+
+iConvTUncached :: Flags -> SymTab -> Type -> IType
+iConvTUncached flags s t =
     let it = iConvT' (expandSyn t)
     in  case atfReduceInType (buildATFRules s) it of
           Just it' -> it'
           Nothing  -> iConvT' (expandSynN flags s t)
 
+-- per-canonical-node conversion memo: iConvT' is a pure function of
+-- structure, and a canonical (cons-interned) CType may be an
+-- exponentially shared DAG -- without this the recursion below
+-- converts it once per PATH, re-probing IType's intern tables each
+-- time.  Keyed by the cons id (a DIFFERENT id space from convTMemo's
+-- GroundCType node ids -- the tables must stay separate).
+{-# NOINLINE convCanonMemo #-}
+convCanonMemo :: IORef (IM.IntMap IType)
+convCanonMemo = unsafePerformIO $ newIORef IM.empty
+
 iConvT' :: Type -> IType
-iConvT' (TVar (TyVar i _ _)) = ITVar i
-iConvT' (TCon (TyCon i (Just k) s)) = ITCon i (iConvK k) s
-iConvT' (TCon (TyNum n _)) = ITNum n
-iConvT' (TCon (TyStr s _)) = ITStr s
-iConvT' (TAp t1 t2) = ITAp (iConvT' t1) (iConvT' t2)
-iConvT' t = internalError("iConvT': " ++ ppReadable t)
+iConvT' t | i >= 0 = unsafePerformIO $ do
+    m0 <- readIORef convCanonMemo
+    case IM.lookup i m0 of
+      Just it -> return it
+      Nothing -> do
+        let it = iConvT'' t
+        _ <- return $! it
+        atomicModifyIORef' convCanonMemo (\ m -> (IM.insert i it m, ()))
+        return it
+  where i = typeCanonId t
+iConvT' t = iConvT'' t
+
+iConvT'' :: Type -> IType
+iConvT'' (TVar (TyVar i _ _)) = ITVar i
+iConvT'' (TCon (TyCon i (Just k) s)) = ITCon i (iConvK k) s
+iConvT'' (TCon (TyNum n _)) = ITNum n
+iConvT'' (TCon (TyStr s _)) = ITStr s
+iConvT'' (TAp t1 t2) = ITAp (iConvT' t1) (iConvT' t2)
+iConvT'' t = internalError("iConvT'': " ++ ppReadable t)
 
 iConvK :: Kind -> IKind
 iConvK KStar = IKStar
