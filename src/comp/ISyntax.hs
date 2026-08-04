@@ -773,14 +773,38 @@ instance Show (IExpr a) where
   show (ICon i ic)    = "(ICon " ++ show i ++ " " ++ show ic ++ ")"
   show (IRefT t p _ _)  = "(IRefT " ++ show t ++ " " ++ "_" ++ show p ++ ")"
 
--- Hash-first comparison: differing content hashes decide the order in
--- O(1); equal hashes (true equality, a collision, or hashing disabled
--- -- all nodes hash 0 under -hack-no-iexpr-hash, restoring the
--- historical structural order exactly) fall through to the structural
--- walk.  Recursive child comparisons inside the walk go through cmpE
--- again, so subtree comparisons are hash-first as well.
+-- Rank-first, then hash, then structural walk:
+--   1. Different constructors: decided by rank in O(1) -- no hash is
+--      ever needed to compare an IRefT (or any leaf) with anything
+--      else.  (This also fixes a latent cycle in the historical
+--      clause order, which encoded ILAM < ICon < IRefT < ILAM; it was
+--      harmless only because ILAM and IRefT never coexist live.)
+--   2. Same-constructor leaves: structural comparison is already O(1)
+--      (IRefT: heap-cell number; IVar: interned-name compare), so the
+--      hash is skipped there too.
+--   3. Same-constructor interior nodes: cached content hashes decide
+--      in O(1); equal hashes (true equality, a collision, or hashing
+--      disabled -- all nodes hash 0 under -hack-no-iexpr-hash) fall
+--      through to the structural walk, whose recursive child
+--      comparisons re-enter cmpE and are rank/hash-first as well.
 cmpE :: IExpr a -> IExpr a -> Ordering
 cmpE x y =
+    case compare (rankE x) (rankE y) of
+    EQ -> cmpSameRank x y
+    o  -> o
+
+rankE :: IExpr a -> Int
+rankE (ILam _ _ _) = 0
+rankE (IAps _ _ _) = 1
+rankE (IVar _) = 2
+rankE (ILAM _ _ _) = 3
+rankE (ICon _ _) = 4
+rankE (IRefT _ _ _ _) = 5
+
+cmpSameRank :: IExpr a -> IExpr a -> Ordering
+cmpSameRank (IVar i1) (IVar i2) = compare i1 i2
+cmpSameRank (IRefT _ p1 _ _) (IRefT _ p2 _ _) = compare p1 p2
+cmpSameRank x y =
     case {-# SCC "cmpE_hashcmp" #-} compare (eHash x) (eHash y) of
     EQ -> {-# SCC "cmpE_walk" #-} cmpES x y
     o  -> o
