@@ -20,42 +20,42 @@ mkExample
             z_0            	 -- RegN Prelude.Reg Prelude.Bool	z_0 
             z_1            	 -- RegN Prelude.Reg Prelude.Bool	z_1 
             z_2            	 -- RegN Prelude.Reg Prelude.Bool	z_2 
-        Loop           	 --  Prelude.Integer	 
+        Loop_1         	 --  Prelude.Integer	 
             Body_0         	 --  ()	 
-                x              	 -- RegN Prelude.Reg Prelude.Bool	x_0 
+                x              	 -- RegN Prelude.Reg Prelude.Bool	x_0_1 
                 Loop           	 --  Prelude.Integer	 
                     Body_0         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_0_0 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_0_0_1 
                         update         	 -- Rule 	RL_update 
                     Body_1         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_0_1 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_0_1_1 
                         update         	 -- Rule 	RL_update_1 
                     Body_2         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_0_2 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_0_2_1 
                         update         	 -- Rule 	RL_update_2 
             Body_1         	 --  ()	 
-                x              	 -- RegN Prelude.Reg Prelude.Bool	x_1 
+                x              	 -- RegN Prelude.Reg Prelude.Bool	x_1_1 
                 Loop           	 --  Prelude.Integer	 
                     Body_0         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_1_0 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_1_0_1 
                         update         	 -- Rule 	RL_update_3 
                     Body_1         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_1_1 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_1_1_1 
                         update         	 -- Rule 	RL_update_4 
                     Body_2         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_1_2 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_1_2_1 
                         update         	 -- Rule 	RL_update_5 
             Body_2         	 --  ()	 
-                x              	 -- RegN Prelude.Reg Prelude.Bool	x_2 
+                x              	 -- RegN Prelude.Reg Prelude.Bool	x_2_1 
                 Loop           	 --  Prelude.Integer	 
                     Body_0         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_2_0 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_2_0_1 
                         update         	 -- Rule 	RL_update_6 
                     Body_1         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_2_1 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_2_1_1 
                         update         	 -- Rule 	RL_update_7 
                     Body_2         	 --  ()	 
-                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_2_2 
+                        y              	 -- RegN Prelude.Reg Prelude.Bool	y_2_2_1 
                         update         	 -- Rule 	RL_update_8 
 Command: browseinst list 0
 1 mkExample synth
@@ -69,7 +69,7 @@ Command: browseinst list 1
 4 xx {}
 5 ww {}
 6 Loop {}
-7 Loop {}
+7 Loop_1 {}
 ---------
 Command: browseinst detail 1
 X(BSVModule)  = mkExample
@@ -316,11 +316,11 @@ Command: browseinst list 7
 ---------
 Command: browseinst detail 7
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop
-X(DEBUG)     = BINode Loop Just (Prelude.Integer)
+X(BSVPath)   = Loop_1
+X(DEBUG)     = BINode Loop_1 Just (Prelude.Integer)
 X(Interface) = Prelude.Integer
-X(LocalPath) = Loop
-X(Name)      = Loop
+X(LocalPath) = Loop_1
+X(Name)      = Loop_1
 X(Node)      = Instance
 X(SynthPath) = 
 X(position)  = Example.bsv 20 4
@@ -331,10 +331,10 @@ Command: browseinst list 18
 ---------
 Command: browseinst detail 18
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0
+X(BSVPath)   = Loop_1 Body_0
 X(DEBUG)     = BINode Body_0 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_0
+X(LocalPath) = Loop_1 Body_0
 X(Name)      = Body_0
 X(Node)      = Instance
 X(SynthPath) = 
@@ -344,15 +344,15 @@ Command: browseinst list 21
 ---------
 Command: browseinst detail 21
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_0 x
+X(BSVPath)    = Loop_1 Body_0 x
 X(DEBUG)      = BLeaf x RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = x
 X(Node)       = Primitive
-X(SynthPath)  = x_0
-X(UniqueName) = x_0
+X(SynthPath)  = x_0_1
+X(UniqueName) = x_0_1
 X(position)   = Example.bsv 23 21
 ---------
 Command: browseinst list 22
@@ -362,10 +362,10 @@ Command: browseinst list 22
 ---------
 Command: browseinst detail 22
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop
+X(BSVPath)   = Loop_1 Body_0 Loop
 X(DEBUG)     = BINode Loop Just (Prelude.Integer)
 X(Interface) = Prelude.Integer
-X(LocalPath) = Loop Body_0 Loop
+X(LocalPath) = Loop_1 Body_0 Loop
 X(Name)      = Loop
 X(Node)      = Instance
 X(SynthPath) = 
@@ -377,10 +377,10 @@ Command: browseinst list 23
 ---------
 Command: browseinst detail 23
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop Body_0
+X(BSVPath)   = Loop_1 Body_0 Loop Body_0
 X(DEBUG)     = BINode Body_0 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_0 Loop Body_0
+X(LocalPath) = Loop_1 Body_0 Loop Body_0
 X(Name)      = Body_0
 X(Node)      = Instance
 X(SynthPath) = 
@@ -390,24 +390,24 @@ Command: browseinst list 26
 ---------
 Command: browseinst detail 26
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_0 Loop Body_0 y
+X(BSVPath)    = Loop_1 Body_0 Loop Body_0 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_0_0
-X(UniqueName) = y_0_0
+X(SynthPath)  = y_0_0_1
+X(UniqueName) = y_0_0_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 27
 ---------
 Command: browseinst detail 27
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop Body_0 update
+X(BSVPath)   = Loop_1 Body_0 Loop Body_0 update
 X(DEBUG)     = BRule update (RL_update)
-X(LocalPath) = Loop Body_0 Loop Body_0 update
+X(LocalPath) = Loop_1 Body_0 Loop Body_0 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update
@@ -420,10 +420,10 @@ Command: browseinst list 24
 ---------
 Command: browseinst detail 24
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop Body_1
+X(BSVPath)   = Loop_1 Body_0 Loop Body_1
 X(DEBUG)     = BINode Body_1 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_0 Loop Body_1
+X(LocalPath) = Loop_1 Body_0 Loop Body_1
 X(Name)      = Body_1
 X(Node)      = Instance
 X(SynthPath) = 
@@ -433,24 +433,24 @@ Command: browseinst list 28
 ---------
 Command: browseinst detail 28
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_0 Loop Body_1 y
+X(BSVPath)    = Loop_1 Body_0 Loop Body_1 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_0_1
-X(UniqueName) = y_0_1
+X(SynthPath)  = y_0_1_1
+X(UniqueName) = y_0_1_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 29
 ---------
 Command: browseinst detail 29
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop Body_1 update
+X(BSVPath)   = Loop_1 Body_0 Loop Body_1 update
 X(DEBUG)     = BRule update (RL_update_1)
-X(LocalPath) = Loop Body_0 Loop Body_1 update
+X(LocalPath) = Loop_1 Body_0 Loop Body_1 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_1
@@ -463,10 +463,10 @@ Command: browseinst list 25
 ---------
 Command: browseinst detail 25
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop Body_2
+X(BSVPath)   = Loop_1 Body_0 Loop Body_2
 X(DEBUG)     = BINode Body_2 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_0 Loop Body_2
+X(LocalPath) = Loop_1 Body_0 Loop Body_2
 X(Name)      = Body_2
 X(Node)      = Instance
 X(SynthPath) = 
@@ -476,24 +476,24 @@ Command: browseinst list 30
 ---------
 Command: browseinst detail 30
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_0 Loop Body_2 y
+X(BSVPath)    = Loop_1 Body_0 Loop Body_2 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_0_2
-X(UniqueName) = y_0_2
+X(SynthPath)  = y_0_2_1
+X(UniqueName) = y_0_2_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 31
 ---------
 Command: browseinst detail 31
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_0 Loop Body_2 update
+X(BSVPath)   = Loop_1 Body_0 Loop Body_2 update
 X(DEBUG)     = BRule update (RL_update_2)
-X(LocalPath) = Loop Body_0 Loop Body_2 update
+X(LocalPath) = Loop_1 Body_0 Loop Body_2 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_2
@@ -506,10 +506,10 @@ Command: browseinst list 19
 ---------
 Command: browseinst detail 19
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1
+X(BSVPath)   = Loop_1 Body_1
 X(DEBUG)     = BINode Body_1 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_1
+X(LocalPath) = Loop_1 Body_1
 X(Name)      = Body_1
 X(Node)      = Instance
 X(SynthPath) = 
@@ -519,15 +519,15 @@ Command: browseinst list 32
 ---------
 Command: browseinst detail 32
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_1 x
+X(BSVPath)    = Loop_1 Body_1 x
 X(DEBUG)      = BLeaf x RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = x
 X(Node)       = Primitive
-X(SynthPath)  = x_1
-X(UniqueName) = x_1
+X(SynthPath)  = x_1_1
+X(UniqueName) = x_1_1
 X(position)   = Example.bsv 23 21
 ---------
 Command: browseinst list 33
@@ -537,10 +537,10 @@ Command: browseinst list 33
 ---------
 Command: browseinst detail 33
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop
+X(BSVPath)   = Loop_1 Body_1 Loop
 X(DEBUG)     = BINode Loop Just (Prelude.Integer)
 X(Interface) = Prelude.Integer
-X(LocalPath) = Loop Body_1 Loop
+X(LocalPath) = Loop_1 Body_1 Loop
 X(Name)      = Loop
 X(Node)      = Instance
 X(SynthPath) = 
@@ -552,10 +552,10 @@ Command: browseinst list 34
 ---------
 Command: browseinst detail 34
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop Body_0
+X(BSVPath)   = Loop_1 Body_1 Loop Body_0
 X(DEBUG)     = BINode Body_0 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_1 Loop Body_0
+X(LocalPath) = Loop_1 Body_1 Loop Body_0
 X(Name)      = Body_0
 X(Node)      = Instance
 X(SynthPath) = 
@@ -565,24 +565,24 @@ Command: browseinst list 37
 ---------
 Command: browseinst detail 37
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_1 Loop Body_0 y
+X(BSVPath)    = Loop_1 Body_1 Loop Body_0 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_1_0
-X(UniqueName) = y_1_0
+X(SynthPath)  = y_1_0_1
+X(UniqueName) = y_1_0_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 38
 ---------
 Command: browseinst detail 38
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop Body_0 update
+X(BSVPath)   = Loop_1 Body_1 Loop Body_0 update
 X(DEBUG)     = BRule update (RL_update_3)
-X(LocalPath) = Loop Body_1 Loop Body_0 update
+X(LocalPath) = Loop_1 Body_1 Loop Body_0 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_3
@@ -595,10 +595,10 @@ Command: browseinst list 35
 ---------
 Command: browseinst detail 35
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop Body_1
+X(BSVPath)   = Loop_1 Body_1 Loop Body_1
 X(DEBUG)     = BINode Body_1 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_1 Loop Body_1
+X(LocalPath) = Loop_1 Body_1 Loop Body_1
 X(Name)      = Body_1
 X(Node)      = Instance
 X(SynthPath) = 
@@ -608,24 +608,24 @@ Command: browseinst list 39
 ---------
 Command: browseinst detail 39
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_1 Loop Body_1 y
+X(BSVPath)    = Loop_1 Body_1 Loop Body_1 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_1_1
-X(UniqueName) = y_1_1
+X(SynthPath)  = y_1_1_1
+X(UniqueName) = y_1_1_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 40
 ---------
 Command: browseinst detail 40
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop Body_1 update
+X(BSVPath)   = Loop_1 Body_1 Loop Body_1 update
 X(DEBUG)     = BRule update (RL_update_4)
-X(LocalPath) = Loop Body_1 Loop Body_1 update
+X(LocalPath) = Loop_1 Body_1 Loop Body_1 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_4
@@ -638,10 +638,10 @@ Command: browseinst list 36
 ---------
 Command: browseinst detail 36
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop Body_2
+X(BSVPath)   = Loop_1 Body_1 Loop Body_2
 X(DEBUG)     = BINode Body_2 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_1 Loop Body_2
+X(LocalPath) = Loop_1 Body_1 Loop Body_2
 X(Name)      = Body_2
 X(Node)      = Instance
 X(SynthPath) = 
@@ -651,24 +651,24 @@ Command: browseinst list 41
 ---------
 Command: browseinst detail 41
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_1 Loop Body_2 y
+X(BSVPath)    = Loop_1 Body_1 Loop Body_2 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_1_2
-X(UniqueName) = y_1_2
+X(SynthPath)  = y_1_2_1
+X(UniqueName) = y_1_2_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 42
 ---------
 Command: browseinst detail 42
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_1 Loop Body_2 update
+X(BSVPath)   = Loop_1 Body_1 Loop Body_2 update
 X(DEBUG)     = BRule update (RL_update_5)
-X(LocalPath) = Loop Body_1 Loop Body_2 update
+X(LocalPath) = Loop_1 Body_1 Loop Body_2 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_5
@@ -681,10 +681,10 @@ Command: browseinst list 20
 ---------
 Command: browseinst detail 20
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2
+X(BSVPath)   = Loop_1 Body_2
 X(DEBUG)     = BINode Body_2 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_2
+X(LocalPath) = Loop_1 Body_2
 X(Name)      = Body_2
 X(Node)      = Instance
 X(SynthPath) = 
@@ -694,15 +694,15 @@ Command: browseinst list 43
 ---------
 Command: browseinst detail 43
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_2 x
+X(BSVPath)    = Loop_1 Body_2 x
 X(DEBUG)      = BLeaf x RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = x
 X(Node)       = Primitive
-X(SynthPath)  = x_2
-X(UniqueName) = x_2
+X(SynthPath)  = x_2_1
+X(UniqueName) = x_2_1
 X(position)   = Example.bsv 23 21
 ---------
 Command: browseinst list 44
@@ -712,10 +712,10 @@ Command: browseinst list 44
 ---------
 Command: browseinst detail 44
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop
+X(BSVPath)   = Loop_1 Body_2 Loop
 X(DEBUG)     = BINode Loop Just (Prelude.Integer)
 X(Interface) = Prelude.Integer
-X(LocalPath) = Loop Body_2 Loop
+X(LocalPath) = Loop_1 Body_2 Loop
 X(Name)      = Loop
 X(Node)      = Instance
 X(SynthPath) = 
@@ -727,10 +727,10 @@ Command: browseinst list 45
 ---------
 Command: browseinst detail 45
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop Body_0
+X(BSVPath)   = Loop_1 Body_2 Loop Body_0
 X(DEBUG)     = BINode Body_0 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_2 Loop Body_0
+X(LocalPath) = Loop_1 Body_2 Loop Body_0
 X(Name)      = Body_0
 X(Node)      = Instance
 X(SynthPath) = 
@@ -740,24 +740,24 @@ Command: browseinst list 48
 ---------
 Command: browseinst detail 48
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_2 Loop Body_0 y
+X(BSVPath)    = Loop_1 Body_2 Loop Body_0 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_2_0
-X(UniqueName) = y_2_0
+X(SynthPath)  = y_2_0_1
+X(UniqueName) = y_2_0_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 49
 ---------
 Command: browseinst detail 49
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop Body_0 update
+X(BSVPath)   = Loop_1 Body_2 Loop Body_0 update
 X(DEBUG)     = BRule update (RL_update_6)
-X(LocalPath) = Loop Body_2 Loop Body_0 update
+X(LocalPath) = Loop_1 Body_2 Loop Body_0 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_6
@@ -770,10 +770,10 @@ Command: browseinst list 46
 ---------
 Command: browseinst detail 46
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop Body_1
+X(BSVPath)   = Loop_1 Body_2 Loop Body_1
 X(DEBUG)     = BINode Body_1 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_2 Loop Body_1
+X(LocalPath) = Loop_1 Body_2 Loop Body_1
 X(Name)      = Body_1
 X(Node)      = Instance
 X(SynthPath) = 
@@ -783,24 +783,24 @@ Command: browseinst list 50
 ---------
 Command: browseinst detail 50
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_2 Loop Body_1 y
+X(BSVPath)    = Loop_1 Body_2 Loop Body_1 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_2_1
-X(UniqueName) = y_2_1
+X(SynthPath)  = y_2_1_1
+X(UniqueName) = y_2_1_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 51
 ---------
 Command: browseinst detail 51
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop Body_1 update
+X(BSVPath)   = Loop_1 Body_2 Loop Body_1 update
 X(DEBUG)     = BRule update (RL_update_7)
-X(LocalPath) = Loop Body_2 Loop Body_1 update
+X(LocalPath) = Loop_1 Body_2 Loop Body_1 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_7
@@ -813,10 +813,10 @@ Command: browseinst list 47
 ---------
 Command: browseinst detail 47
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop Body_2
+X(BSVPath)   = Loop_1 Body_2 Loop Body_2
 X(DEBUG)     = BINode Body_2 Just (())
 X(Interface) = ()
-X(LocalPath) = Loop Body_2 Loop Body_2
+X(LocalPath) = Loop_1 Body_2 Loop Body_2
 X(Name)      = Body_2
 X(Node)      = Instance
 X(SynthPath) = 
@@ -826,24 +826,24 @@ Command: browseinst list 52
 ---------
 Command: browseinst detail 52
 X(BSVModule)  = mkExample
-X(BSVPath)    = Loop Body_2 Loop Body_2 y
+X(BSVPath)    = Loop_1 Body_2 Loop Body_2 y
 X(DEBUG)      = BLeaf y RegN Just ((Prelude.Reg Prelude.Bool))
 X(Interface)  = Prelude.Reg Prelude.Bool
 X(LocalPath)  = 
 X(Module)     = RegN
 X(Name)       = y
 X(Node)       = Primitive
-X(SynthPath)  = y_2_2
-X(UniqueName) = y_2_2
+X(SynthPath)  = y_2_2_1
+X(UniqueName) = y_2_2_1
 X(position)   = Example.bsv 28 27
 ---------
 Command: browseinst list 53
 ---------
 Command: browseinst detail 53
 X(BSVModule) = mkExample
-X(BSVPath)   = Loop Body_2 Loop Body_2 update
+X(BSVPath)   = Loop_1 Body_2 Loop Body_2 update
 X(DEBUG)     = BRule update (RL_update_8)
-X(LocalPath) = Loop Body_2 Loop Body_2 update
+X(LocalPath) = Loop_1 Body_2 Loop Body_2 update
 X(Name)      = update
 X(Node)      = Rule
 X(RuleName)  = RL_update_8
@@ -858,7 +858,7 @@ Command: browseinst debug
 4 xx
 5 ww
 6 Loop
-7 Loop
+7 Loop_1
 8 {zow2  Prelude.Reg Prelude.Bool}
 9 {_element_1  Prelude.Reg (Prelude.Bit 5)}
 10 {_element_2  Prelude.Reg (Prelude.Bit 5)}
