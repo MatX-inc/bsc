@@ -1,11 +1,17 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE PatternSynonyms #-}
+-- profiling-only: without this, -fprof-auto pins cost centres on the
+-- GHC-generated pattern-synonym matchers ($mICon etc.), blocking their
+-- inlining; every IExpr pattern match in the compiler then becomes an
+-- out-of-line call and dominates any profile
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module ISyntax(
         IPackage(..),
         IDef(..),
         IKind(..),
         IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll),
-        IExpr(..),
+        IExpr(ILam, IAps, IVar, ILAM, ICon, IRefT),
         ConTagInfo(..),
         IConInfo(..),
         IRules(..),
@@ -47,6 +53,8 @@ module ISyntax(
         iAp,
         iAP,
         fVars,
+        eHash,
+        ehashEnabled,
         ftVars,
         aVars,
         mkNumConT,
@@ -91,6 +99,10 @@ import qualified Data.Array as Array
 import IntLit
 import Undefined
 import Eval
+import FStringCompat(fsContentHash)
+import HashUtil(Hash, hashTag, hashMix, hashInt, hashInteger, hashString,
+                hashMaybe, hashList)
+import IOUtil(progArgs)
 import Id
 import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClockId, noDefaultResetId, WireProps)
 import IdPrint
@@ -441,14 +453,160 @@ splitITAp t0 = go t0 []
 -- a is a placeholder type for the actual data stored in heap cells
 -- so that all things that work on generic IExprs do not touch the heap
 -- and to prevent exposing evaluator implementation details in ISyntax
+-- a is a placeholder type for the actual data stored in heap cells
+-- (see the comment that used to live here); the real constructors
+-- ILam_/IAps_/ILAM_/ICon_ are private to this module and carry a
+-- cached CONTENT HASH in a lazy metadata field.  Construction goes
+-- through smart constructors behind the bidirectional pattern synonyms
+-- below, so every other module reads and writes the six historical
+-- constructor names unchanged.  The field is metadata only: it never
+-- serializes, never prints, and never decides equality by itself.
+--
+-- cmpE consults the hash FIRST: differing hashes decide the ordering
+-- in O(1); equal hashes (true equality or a rare collision) fall back
+-- to the structural walk.  The hash observes EXACTLY the content the
+-- structural comparison observes -- under-observing a field only
+-- causes collisions (safe); over-observing one would order Eq-equal
+-- values apart (unsound).  ILam types, ILAM kinds and ITCon payloads
+-- are skipped, and the ICon hash includes the inlined-position trails
+-- that refine ICon equality.  Hashes are computed from content
+-- (character hashes of names, literal values, structure), never
+-- intern uniques, so they are deterministic for a given input and
+-- stable against unrelated input changes; the one exception mirrors
+-- cmpE itself: IRefT hashes its heap-cell number, which is exactly
+-- what the structural comparison uses.
+--
+-- Consequence of hash-first ordering: Set/Map iteration orders over
+-- expressions change (implicit-condition conjunct order, CSE def
+-- order, ISplitIf condition order), producing equivalent but
+-- differently-ordered output than the historical structural order --
+-- a one-time regold.  The hidden flag -hack-no-iexpr-hash restores
+-- the historical order exactly: all nodes then hash to 0, so the hash
+-- comparison always falls through to the structural walk.
 data IExpr a
-        = ILam Id IType (IExpr a)        -- vanishes after IExpand
-        | IAps (IExpr a) [IType] [IExpr a]
+        = ILam_ Hash Id IType (IExpr a)  -- vanishes after IExpand
+        | IAps_ Hash (IExpr a) [IType] [IExpr a]
         | IVar Id                        -- vanishes after IExpand
-        | ILAM Id IKind (IExpr a)        -- vanishes after IExpand
-        | ICon Id (IConInfo a)
+        | ILAM_ Hash Id IKind (IExpr a)  -- vanishes after IExpand
+        | ICon_ Hash Id (IConInfo a)
         -- IRef is only used during reduction, it refers to a "heap" cell
         | IRefT IType !Int (S.Set Position) a -- vanishes after IExpand
+
+pattern ILam :: Id -> IType -> IExpr a -> IExpr a
+pattern ILam i t e <- ILam_ _ i t e
+  where ILam i t e = ILam_ (lamHash i e) i t e
+
+pattern IAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
+pattern IAps f ts es <- IAps_ _ f ts es
+  where IAps f ts es = IAps_ (apsHash f ts es) f ts es
+
+pattern ILAM :: Id -> IKind -> IExpr a -> IExpr a
+pattern ILAM i k e <- ILAM_ _ i k e
+  where ILAM i k e = ILAM_ (lAMHash i e) i k e
+
+pattern ICon :: Id -> IConInfo a -> IExpr a
+pattern ICon i ic <- ICon_ _ i ic
+  where ICon i ic = ICon_ (iconHash i ic) i ic
+
+{-# COMPLETE ILam, IAps, IVar, ILAM, ICon, IRefT #-}
+
+{-# NOINLINE ehashEnabled #-}
+ehashEnabled :: Bool
+ehashEnabled = not ("-hack-no-iexpr-hash" `elem` progArgs)
+
+-- an Id's content: base and qualifier character hashes
+idHash :: Hash -> Id -> Hash
+idHash h i = hashInt (hashInt h (fsContentHash (getIdBase i)))
+                     (fsContentHash (getIdQual i))
+
+posHash :: Hash -> Position -> Hash
+posHash h p = hashInt (hashInt (hashInt h (fsContentHash (pos_file p)))
+                               (getPositionLine p))
+                      (getPositionColumn p)
+
+posssHash :: Hash -> Maybe [Position] -> Hash
+posssHash = hashMaybe (hashList posHash)
+
+-- the type is NOT hashed: cmpE ignores it
+lamHash :: Id -> IExpr a -> Hash
+lamHash i e | ehashEnabled = hashMix (idHash (hashTag 17) i) (eHash e)
+            | otherwise    = 0
+
+-- the kind is NOT hashed: cmpE ignores it
+lAMHash :: Id -> IExpr a -> Hash
+lAMHash i e | ehashEnabled = hashMix (idHash (hashTag 19) i) (eHash e)
+            | otherwise    = 0
+
+apsHash :: IExpr a -> [IType] -> [IExpr a] -> Hash
+apsHash f ts es
+  | ehashEnabled =
+      hashList (\ h t -> hashMix h (tyHash t))
+               (hashList (\ h x -> hashMix h (eHash x))
+                         (hashMix (hashTag 21) (eHash f))
+                         es)
+               ts
+  | otherwise = 0
+
+iconHash :: Id -> IConInfo a -> Hash
+iconHash i ic
+  | ehashEnabled =
+      conHash (posssHash (idHash (hashTag 27) i) (getIdInlinedPositions i)) ic
+  | otherwise = 0
+
+-- the hash of the node's cached field, or computed directly for the
+-- uncached leaves; 0 everywhere when disabled
+eHash :: IExpr a -> Hash
+eHash e0 | not ehashEnabled = 0
+         | otherwise = get e0
+  where get (ILam_ h _ _ _) = h
+        get (IAps_ h _ _ _) = h
+        get (ILAM_ h _ _ _) = h
+        get (ICon_ h _ _) = h
+        get (IVar i) = idHash (hashTag 23) i
+        -- the heap-cell number, matching cmpE's IRefT comparison
+        get (IRefT _ p _ _) = hashInt (hashTag 29) p
+
+-- Mirrors cmpC arm for arm: hash what it compares, skip what it skips.
+-- Payloads whose comparison is awkward to hash cheaply (VModInfo,
+-- IStateVar, clock/reset wires, rule pragmas, attributes, Pred) are
+-- deliberately under-observed: equal-tag nodes differing only there
+-- collide and fall back to the structural walk, which is the status
+-- quo for them.
+conHash :: Hash -> IConInfo a -> Hash
+conHash h0 ic0 = go (hashInt h0 (ordC ic0)) ic0
+  where
+    go h (ICForeign { fcallNo = n }) = hashMaybe hashInteger h n
+    go h (ICCon { iConType = t }) = hashMix h (tyHash t)
+    go h (ICIs { iConType = t }) = hashMix h (tyHash t)
+    go h (ICOut { iConType = t }) = hashMix h (tyHash t)
+    go h (ICTuple { iConType = t }) = hashMix h (tyHash t)
+    go h (ICSel { iConType = t }) = hashMix h (tyHash t)
+    go h (ICVerilog { iConType = t }) = hashMix h (tyHash t)
+    go h (ICUndet { iConType = t, imVal = mv }) =
+        hashMaybe (\ h' e -> hashMix h' (eHash e))
+                  (hashMix h (tyHash t)) mv
+    go h (ICInt { iConType = t, iVal = v }) =
+        hashInteger (hashMix h (tyHash t)) (ilValue v)
+    go h (ICReal { iConType = t, iReal = r }) =
+        hashString (hashMix h (tyHash t)) (show r)
+    go h (ICString { iConType = t, iStr = str }) =
+        hashString (hashMix h (tyHash t)) str
+    go h (ICChar { iChar = c }) = hashInt h (fromEnum c)
+    go h (ICLazyArray { iArray = arr }) =
+        hashList hashInt h (map ac_ptr (Array.elems arr))
+    go h (ICLazyPack { lzTa = ta, lzTn = tn, lzOrig = o }) =
+        hashMix (hashMix (hashMix h (tyHash ta)) (tyHash tn)) (eHash o)
+    go h (ICLazyUnpack { lzTa = ta, lzTn = tn, lzOrig = o }) =
+        hashMix (hashMix (hashMix h (tyHash ta)) (tyHash tn)) (eHash o)
+    go h (ICName { iName = n }) = idHash h n
+    go h (ICType { iType = t }) = hashMix h (tyHash t)
+    go h (ICMethod { iMethod = m }) = hashMix h (eHash m)
+    go h (ICPosition { iPosition = ps }) = hashList posHash h ps
+    -- ICDef, ICPrim, ICHandle, ICStateVar, ICValue, ICMethArg,
+    -- ICModPort, ICModParam, ICInout, ICIFace, ICRuleAssert,
+    -- ICSchedPragmas, ICClock, ICReset, ICAttrib, ICPred:
+    -- tag only (cmpC answers EQ or compares payloads we under-observe)
+    go h _ = h
 
 instance Show (IExpr a) where
   show (ILam i t e)   = "(ILam " ++ show i ++ " " ++ show t ++ " " ++ show e ++ ")"
@@ -460,15 +618,27 @@ instance Show (IExpr a) where
   show (ICon i ic)    = "(ICon " ++ show i ++ " " ++ show ic ++ ")"
   show (IRefT t p _ _)  = "(IRefT " ++ show t ++ " " ++ "_" ++ show p ++ ")"
 
+-- Hash-first comparison: differing content hashes decide the order in
+-- O(1); equal hashes (true equality, a collision, or hashing disabled
+-- -- all nodes hash 0 under -hack-no-iexpr-hash, restoring the
+-- historical structural order exactly) fall through to the structural
+-- walk.  Recursive child comparisons inside the walk go through cmpE
+-- again, so subtree comparisons are hash-first as well.
 cmpE :: IExpr a -> IExpr a -> Ordering
-cmpE (ILam i1 _ e1)  (ILam i2 _ e2)  =
+cmpE x y =
+    case compare (eHash x) (eHash y) of
+    EQ -> cmpES x y
+    o  -> o
+
+cmpES :: IExpr a -> IExpr a -> Ordering
+cmpES (ILam i1 _ e1)  (ILam i2 _ e2)  =
         case compare i1 i2 of
         EQ -> cmpE e1 e2
         o  -> o
-cmpE (ILam _ _ _)    _               = LT
+cmpES (ILam _ _ _)    _               = LT
 
-cmpE (IAps _  _ _)   (ILam _ _ _)    = GT
-cmpE (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
+cmpES (IAps _  _ _)   (ILam _ _ _)    = GT
+cmpES (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
         case compare e1 e2 of
         EQ ->
                 case compare es1 es2 of
@@ -480,28 +650,28 @@ cmpE (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
                 o  -> o
 -}
         o  -> o
-cmpE (IAps _  _ _)   _               = LT
+cmpES (IAps _  _ _)   _               = LT
 
-cmpE (IVar _)        (ILam _ _ _)    = GT
-cmpE (IVar _)        (IAps _ _ _)    = GT
-cmpE (IVar i1)       (IVar i2)       = compare i1 i2
-cmpE (IVar _)        _               = LT
+cmpES (IVar _)        (ILam _ _ _)    = GT
+cmpES (IVar _)        (IAps _ _ _)    = GT
+cmpES (IVar i1)       (IVar i2)       = compare i1 i2
+cmpES (IVar _)        _               = LT
 
-cmpE (ILAM _ _ _)    (ILam _ _ _)    = GT
-cmpE (ILAM _ _ _)    (IAps _ _ _)    = GT
-cmpE (ILAM _ _ _)    (IVar _)        = GT
-cmpE (ILAM i1 _ e1)  (ILAM i2 _ e2)  =
+cmpES (ILAM _ _ _)    (ILam _ _ _)    = GT
+cmpES (ILAM _ _ _)    (IAps _ _ _)    = GT
+cmpES (ILAM _ _ _)    (IVar _)        = GT
+cmpES (ILAM i1 _ e1)  (ILAM i2 _ e2)  =
         case compare i1 i2 of
         EQ -> cmpE e1 e2
         o  -> o
-cmpE (ILAM _ _ _)    (IRefT _ _ _ _)   = GT -- ???????
+cmpES (ILAM _ _ _)    (IRefT _ _ _ _)   = GT -- ???????
 
-cmpE (ILAM _  _ _)   _               = LT
+cmpES (ILAM _  _ _)   _               = LT
 
-cmpE (ICon _ _)      (ILam _ _ _)    = GT
-cmpE (ICon _ _)      (IAps _ _ _)    = GT
-cmpE (ICon _ _)      (IVar _)        = GT
-cmpE (ICon i1 ic1) (ICon i2 ic2)     =
+cmpES (ICon _ _)      (ILam _ _ _)    = GT
+cmpES (ICon _ _)      (IAps _ _ _)    = GT
+cmpES (ICon _ _)      (IVar _)        = GT
+cmpES (ICon i1 ic1) (ICon i2 ic2)     =
         case compare i1 i2 of
         EQ -> case (cmpC ic1 ic2) of
                 -- inlined positions need to be considered in equality tests
@@ -510,18 +680,18 @@ cmpE (ICon i1 ic1) (ICon i2 ic2)     =
                       in  compare mposs1 mposs2
                 o  -> o
         o  -> o
-cmpE (ICon _ _)      _               = LT
+cmpES (ICon _ _)      _               = LT
 
-cmpE (IRefT _ _ _ _)   (ILam _ _ _)    = GT
-cmpE (IRefT _ _ _ _)   (IAps _ _ _)    = GT
-cmpE (IRefT _ _ _ _)   (IVar _)        = GT
-cmpE (IRefT _ _ _ _)   (ICon _ _)      = GT
-cmpE (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
+cmpES (IRefT _ _ _ _)   (ILam _ _ _)    = GT
+cmpES (IRefT _ _ _ _)   (IAps _ _ _)    = GT
+cmpES (IRefT _ _ _ _)   (IVar _)        = GT
+cmpES (IRefT _ _ _ _)   (ICon _ _)      = GT
+cmpES (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
 
-cmpE (IRefT _ _ _ _)     (ILAM _ _ _)  = LT -- ??????????
+cmpES (IRefT _ _ _ _)     (ILAM _ _ _)  = LT -- ??????????
 
 {- all cases are covered above, so the compiler complains about this line:
-cmpE e1              e2              = internalError ("not match in cmpE " ++ ppReadable (e1,e2))
+cmpES e1             e2              = internalError ("not match in cmpES " ++ ppReadable (e1,e2))
 -}
 
 instance Eq (IExpr a) where
@@ -1239,12 +1409,16 @@ instance NFData IAbstractInput where
 instance NFData (IDef a) where
     rnf (IDef i t e p) = rnf4 i t e p
 
+-- Matches the REAL constructors so the cached hash is forced too:
+-- hyper/rnf must normalize the whole node, and a match through the
+-- pattern synonyms would skip the metadata field (leaving thunks alive
+-- that the hyper discipline exists to kill).
 instance NFData (IExpr a) where
-    rnf (ILam i t e) = rnf3 i t e
-    rnf (IAps e ts es) = rnf3 e ts es
+    rnf (ILam_ h i t e) = h `seq` rnf3 i t e
+    rnf (IAps_ h e ts es) = h `seq` rnf3 e ts es
     rnf (IVar i) = rnf i
-    rnf (ILAM i k e) = rnf3 i k e
-    rnf (ICon i ic) = rnf2 i ic
+    rnf (ILAM_ h i k e) = h `seq` rnf3 i k e
+    rnf (ICon_ h i ic) = h `seq` rnf2 i ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where

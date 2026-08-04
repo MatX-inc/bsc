@@ -1,6 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE BangPatterns #-}
-module SpeedyString(SString, toString, fromString, (++), concat, filter) where
+-- profiling-only: tiny leaf functions called at extreme frequency;
+-- an SCC here blocks their inlining (distorting -fprof-auto
+-- profiles) and their time belongs to callers
+{-# OPTIONS_GHC -fno-prof-auto #-}
+module SpeedyString(SString, toString, fromString, (++), concat, filter, sHash) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
@@ -32,6 +36,16 @@ toString (SString id) = unsafePerformIO $
                         do m <- readVar strings
                            return $ M.findWithDefault err id m
 
+-- The CONTENT hash of the string (hashStr of its characters), cached
+-- at intern time.  Unlike the unique id -- and unlike Ord SString --
+-- this is a pure function of the string's characters, so it is stable
+-- against unrelated input changes; it seeds the content hashes cached
+-- on IType/IExpr nodes.
+sHash :: SString -> Int
+sHash (SString id) = unsafePerformIO $
+                     do m <- readVar shashes
+                        return $ M.findWithDefault err id m
+
 fromString :: String -> SString
 fromString s = unsafePerformIO $
                do m <- readVar sstrings
@@ -54,11 +68,15 @@ newSString s = unsafePerformIO $
                   let ss = SString id
                   sm <- readVar strings
                   ssm <- readVar sstrings
-                  let !sm'  = M.insert id s sm
+                  hm <- readVar shashes
+                  let !h    = hashStr s
+                      !sm'  = M.insert id s sm
                       !ssm' = M.insertWith (Prelude.++)
-                                          (hashStr s) [(s,ss)] ssm
+                                          h [(s,ss)] ssm
+                      !hm'  = M.insert id h hm
                   writeVar strings sm'
                   writeVar sstrings ssm'
+                  writeVar shashes hm'
                   return ss
 
 err :: a
@@ -78,6 +96,10 @@ strings = unsafePerformIO $ newVar (M.empty)
 
 sstrings :: MutableVar (M.IntMap [(String, SString)])
 sstrings = unsafePerformIO $ newVar (M.empty)
+
+-- unique id -> content hash (see sHash)
+shashes :: MutableVar (M.IntMap Int)
+shashes = unsafePerformIO $ newVar (M.empty)
 
 
 -- string hash function, stolen from FString

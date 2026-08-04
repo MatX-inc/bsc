@@ -1,8 +1,12 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+-- profiling-only: tiny leaf functions called at extreme frequency;
+-- an SCC here blocks their inlining (distorting -fprof-auto
+-- profiles) and their time belongs to callers
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module FStringCompat(FString, getFString,
                      tmpFString, cloneFString, concatFString,
                      mkNumFString, mkStrFString, mkFString,
-                     filterFString
+                     filterFString, fsContentHash
                     ) where
 
 -- wrapper to make SStrings look like FStrings
@@ -33,6 +37,11 @@ instance PPrint FString where
 
 getFString :: FString -> String
 getFString = toString
+
+-- content hash (of the characters, not the intern id); see
+-- SpeedyString.sHash
+fsContentHash :: FString -> Int
+fsContentHash (FString s) = S.sHash s
 
 mkFString :: String -> FString
 mkFString s = fromString s
