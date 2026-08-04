@@ -56,6 +56,7 @@ module ATFRules(
     ATFRules,
     buildATFRules,
     atfReduceGround,
+    atfReduceGroundApp,
     atfReduceInType
 ) where
 
@@ -74,6 +75,10 @@ import Pred(Pred(..), Qual(..), Class(..), Inst(..), expandSyn,
 import StdPrel(isPreClass)
 import SymTab(SymTab, findSClass)
 import ISyntax(IType(..), IKind(..))
+import IType(iTypeNodeId)
+import qualified Data.IntMap.Strict as IM
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import ISyntaxSubst(tSubstBatch)
 
 -- The rules are views of the instance declarations already in the
@@ -90,6 +95,31 @@ buildATFRules = ATFRules
 -- sat stack would have looped on the same program).
 maxFuel :: Int
 maxFuel = 4096
+
+-- Ground reductions memoize per applied-node intern unique: a
+-- deep-type-keyed cache's amortization with a canonical-identity key
+-- instead, always active since IType interning is unconditional.
+-- Sound here because atfReduceGround always evaluates at the constant
+-- maxFuel (never cache a variable-fuel verdict: Nothing conflates
+-- no-equation with fuel-out).
+{-# NOINLINE atfRedMemo #-}
+atfRedMemo :: IORef (IM.IntMap (Maybe IType))
+atfRedMemo = unsafePerformIO $ newIORef IM.empty
+
+-- | 'atfReduceGround' through the memo, keyed on the intern unique of
+-- the applied node (@app@ must be the full application @f as@).
+atfReduceGroundApp :: ATFRules -> IType -> Id -> TISort -> [IType]
+                   -> Maybe IType
+atfReduceGroundApp rules app atfId so args = unsafeDupablePerformIO $ do
+    let u = iTypeNodeId app
+    m0 <- readIORef atfRedMemo
+    case IM.lookup u m0 of
+      Just r -> return r
+      Nothing -> do
+        let r = atfReduceGround rules atfId so args
+        _ <- return $! r
+        atomicModifyIORef' atfRedMemo (\ m -> (IM.insert u r m, ()))
+        return r
 
 -- | Reduce a fully-applied ATF application with ground arguments to
 -- its normal form.  The 'TISort' is the application head's; the
