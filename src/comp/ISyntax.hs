@@ -660,10 +660,14 @@ mkICon i ic
   | efvCacheEnabled = ICon_ (conFTVarSet ic) h i ic
   | otherwise       = ICon_ vsEmpty h i ic
   where h | ehashEnabled = {-# SCC "mkIConHash" #-}
-              conHash (posssHash (idHash (hashTag 27) i)
-                                 (getIdInlinedPositions i))
-                      ic
+              conHash (ipossHash (idHash (hashTag 27) i) i) ic
           | otherwise = 0
+
+-- hash the inlined-position trail without allocating the Maybe/list
+-- in the (overwhelmingly common) absent case
+ipossHash :: Hash -> Id -> Hash
+ipossHash h i | hasIdInlinedPositions i = posssHash h (getIdInlinedPositions i)
+              | otherwise = hashMix h 11
 
 -- The free type variables reachable by substitution below an ICon:
 -- every type position ISyntaxSubst.etSubstIConInfo rewrites and every
@@ -1593,12 +1597,22 @@ instance NFData (IDef a) where
 -- forced too: hyper/rnf must normalize the whole node, and a match
 -- through the pattern synonyms would skip the cache fields (leaving
 -- thunks alive that the hyper discipline exists to kill).
+-- The free-variable sets are forced (they are consumed DURING
+-- elaboration by substitution pruning, so hyper-time computation is
+-- paid-for work, and unforced set thunks are the leak the hyper
+-- discipline exists to kill).  The hash is deliberately NOT forced:
+-- it is consumed only after IExpand (transform/CSE comparisons), so
+-- forcing it at elaboration-time hyper points would compute hashes
+-- for millions of transient heap nodes that no one ever compares.  A
+-- surviving node's hash thunk captures only the node's own fields --
+-- no retention beyond the node itself -- and resolves at its first
+-- post-IExpand comparison, where the work pays for itself.
 instance NFData (IExpr a) where
-    rnf (ILam_ fvs ftvs h i t e) = rnf2 fvs ftvs `seq` h `seq` rnf3 i t e
-    rnf (IAps_ fvs ftvs h e ts es) = rnf2 fvs ftvs `seq` h `seq` rnf3 e ts es
+    rnf (ILam_ fvs ftvs _h i t e) = rnf2 fvs ftvs `seq` rnf3 i t e
+    rnf (IAps_ fvs ftvs _h e ts es) = rnf2 fvs ftvs `seq` rnf3 e ts es
     rnf (IVar i) = rnf i
-    rnf (ILAM_ fvs ftvs h i k e) = rnf2 fvs ftvs `seq` h `seq` rnf3 i k e
-    rnf (ICon_ ftvs h i ic) = rnf ftvs `seq` h `seq` rnf2 i ic
+    rnf (ILAM_ fvs ftvs _h i k e) = rnf2 fvs ftvs `seq` rnf3 i k e
+    rnf (ICon_ ftvs _h i ic) = rnf ftvs `seq` rnf2 i ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where
