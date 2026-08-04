@@ -65,3 +65,52 @@ compile_verilog_pass StableDpiName.bsv {} {-stable-verilog -use-dpi}
 find_regexp sysStableDpiName.v {f__h1}
 find_regexp_fail sysStableDpiName.v {f__h2}
 sv_regen_identical "BDPI name exclusion regen identical" sysStableDpiName
+
+# --- the disease itself (expected divergence) ---------------------------
+# Without the flag, direct-vs-regen output legitimately differs on
+# susceptible designs (interning-order-sensitive choices; ~19% of the
+# corpus).  Pin that the flag is not vacuous: under -no-stable-verilog
+# these two designs MUST diverge; regen inherits the recorded flag from
+# the .ba, so no flag is passed to -c.
+#   StableDivergeTasks:  foreign-block decl order + ___dN renumbering
+#                        (classes A + R2; from bsc.misc/fwrite/MCD_ops)
+#   StableDivergeResets: reset-domain always-block groups (class R1;
+#                        from bsc.names/portRenaming ResetPrefix1)
+
+proc sv_regen_diverges { testname mod } {
+    global srcdir subdir
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    if { ![file exists "$mod.v"] } {
+        fail "$testname: no direct $mod.v"
+        cd $here
+        return
+    }
+    file rename -force "$mod.v" "$mod.v.direct"
+    set opts "-no-show-timestamps -no-show-version -verilog -c $mod"
+    if [ gen_basic_output $opts "$mod.regen-out" ] {
+        if { ![file exists "$mod.v"] } {
+            fail "$testname: regen produced no $mod.v"
+        } elseif { [catch {exec cmp -s "$mod.v.direct" "$mod.v"}] } {
+            pass "$testname"
+        } else {
+            fail "$testname: expected divergence, but regen matched (did the compiler become accidentally deterministic, or did the design stop being susceptible?)"
+        }
+    } else {
+        fail "$testname: regen (-c) failed"
+    }
+    cd $here
+}
+
+compile_verilog_pass StableDivergeTasks.bsv {} {-no-stable-verilog}
+sv_regen_diverges "without the flag, tasks design diverges on regen" sysStableDivergeTasks
+
+compile_verilog_pass StableDivergeResets.bsv {} {-no-stable-verilog}
+sv_regen_diverges "without the flag, reset design diverges on regen" sysStableDivergeResets
+
+# and the same designs are byte-identical WITH the flag
+compile_verilog_pass StableDivergeTasks.bsv {} {-stable-verilog}
+sv_regen_identical "with the flag, tasks design regen identical" sysStableDivergeTasks
+
+compile_verilog_pass StableDivergeResets.bsv {} {-stable-verilog}
+sv_regen_identical "with the flag, reset design regen identical" sysStableDivergeResets
