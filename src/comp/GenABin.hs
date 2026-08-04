@@ -629,7 +629,7 @@ instance Bin Flags where
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
                 a_070 a_071 a_072 a_073 a_074 a_075 a_076 a_077 a_078 a_079
                 a_080 a_081 a_082 a_083 a_084 a_085 a_086 a_087 a_088 a_089
-                a_090 a_091 a_092 a_093 a_094 a_095 a_096 a_097 a_098 a_099
+                a_090 a_091 a_092 a_093 a_094 a_schedTransposed a_095 a_096 a_097 a_098 a_099
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_useApSubC a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
@@ -637,7 +637,7 @@ instance Bin Flags where
                 a_importHashes a_baDebugInfo) =
        do wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4; wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 145-field serialization is split into NOINLINE chunks so
+        -- The 146-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
@@ -672,7 +672,7 @@ instance Bin Flags where
              toBin a_085; toBin a_086; toBin a_087; toBin a_088; toBin a_089
         {-# NOINLINE wr_chunk6 #-}
         wr_chunk6 =
-          do toBin a_090; toBin a_091; toBin a_092; toBin a_093; toBin a_094;
+          do toBin a_090; toBin a_091; toBin a_092; toBin a_093; toBin a_094; toBin a_schedTransposed;
              toBin a_095; toBin a_096; toBin a_097; toBin a_098; toBin a_099;
              toBin a_100; toBin a_101; toBin a_102; toBin a_103; toBin a_104
         {-# NOINLINE wr_chunk7 #-}
@@ -702,7 +702,7 @@ instance Bin Flags where
            a_068, a_069, a_070, a_071, a_072, a_073, a_074) <- rd_chunk4
           (a_075, a_076, a_077, a_078, a_079, a_080, a_081, a_082,
            a_083, a_084, a_085, a_086, a_087, a_088, a_089) <- rd_chunk5
-          (a_090, a_091, a_092, a_093, a_094, a_095, a_096, a_097,
+          (a_090, a_091, a_092, a_093, a_094, a_schedTransposed, a_095, a_096, a_097,
            a_098, a_099, a_100, a_101, a_102, a_103, a_104) <- rd_chunk6
           (a_105, a_106, a_107, a_108, a_109, a_110, a_111, a_112,
            a_113, a_114, a_115, a_116, a_117, a_useApSubC, a_118, a_119) <- rd_chunk7
@@ -720,7 +720,7 @@ instance Bin Flags where
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
                 a_070 a_071 a_072 a_073 a_074 a_075 a_076 a_077 a_078 a_079
                 a_080 a_081 a_082 a_083 a_084 a_085 a_086 a_087 a_088 a_089
-                a_090 a_091 a_092 a_093 a_094 a_095 a_096 a_097 a_098 a_099
+                a_090 a_091 a_092 a_093 a_094 a_schedTransposed a_095 a_096 a_097 a_098 a_099
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_useApSubC a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
@@ -771,10 +771,10 @@ instance Bin Flags where
                      a_083, a_084, a_085, a_086, a_087, a_088, a_089)
         {-# NOINLINE rd_chunk6 #-}
         rd_chunk6 =
-          do a_090 <- fromBin; a_091 <- fromBin; a_092 <- fromBin; a_093 <- fromBin; a_094 <- fromBin;
+          do a_090 <- fromBin; a_091 <- fromBin; a_092 <- fromBin; a_093 <- fromBin; a_094 <- fromBin; a_schedTransposed <- fromBin;
              a_095 <- fromBin; a_096 <- fromBin; a_097 <- fromBin; a_098 <- fromBin; a_099 <- fromBin;
              a_100 <- fromBin; a_101 <- fromBin; a_102 <- fromBin; a_103 <- fromBin; a_104 <- fromBin
-             return (a_090, a_091, a_092, a_093, a_094, a_095, a_096, a_097,
+             return (a_090, a_091, a_092, a_093, a_094, a_schedTransposed, a_095, a_096, a_097,
                      a_098, a_099, a_100, a_101, a_102, a_103, a_104)
         {-# NOINLINE rd_chunk7 #-}
         rd_chunk7 =
