@@ -1125,7 +1125,10 @@ chkTAp = uncurry (chkTAp' [])  . splitTAp
           | let numArgs = genericLength as,
             numArgs < n = K.err (getPosition i, EPartialTypeApp (pfpString i) n numArgs)
           | otherwise = let (as1, as2) = genericSplitAt n as
-                            t' = setTypePosition (getIdPosition i) t
+                            -- canonical ground bodies stay shared and
+                            -- unstamped (cf. Pred.expandSyn)
+                            t' = if isCanonType t then t
+                                 else setTypePosition (getIdPosition i) t
                             (f', as') = splitTAp $ inst as1 t'
                         in chkTAp' (i:syns) f' (as' ++ as2)
         chkTAp' _ f as = do
