@@ -24,7 +24,7 @@ Compiler flags:
 -bdir dir               output directory for .bo and .ba files
 -c module               generate code for ``module'' from its elaborated .ba file
 -check-assert           test assertions with the Assert library
--check-only             stop after typechecking and write a signature-only .bc file; imports prefer .bc and fall back to .bo
+-check-only             when compiling, stop after typechecking and write a signature-only .bc file (imports prefer .bc and fall back to .bo); at Verilog link, validate and write a manifest without building
 -continue-after-errors  aggressively continue compilation after an error has been detected
 -cpp                    preprocess the source with the C preprocessor
 -demote-errors list     treat a list of errors as warnings (``:'' sep list of tags)
