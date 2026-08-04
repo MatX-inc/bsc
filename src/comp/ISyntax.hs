@@ -1,11 +1,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE PatternSynonyms #-}
 module ISyntax(
         IPackage(..),
         IDef(..),
         IKind(..),
         IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll),
-        IExpr(..),
+        IExpr(ILam, IAps, IVar, ILAM, ICon, IRefT),
         ConTagInfo(..),
         IConInfo(..),
         IRules(..),
@@ -49,6 +50,9 @@ module ISyntax(
         fVars,
         ftVars,
         aVars,
+        eFVarSet,
+        eFTVarSet,
+        efvCacheEnabled,
         mkNumConT,
         showTypeless,
         showTypelessRules,
@@ -90,6 +94,7 @@ import qualified Data.Array as Array
 import IntLit
 import Undefined
 import Eval
+import IOUtil(progArgs)
 import Id
 import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClockId, noDefaultResetId, WireProps)
 import IdPrint
@@ -432,14 +437,196 @@ splitITAp t0 = go t0 []
 -- a is a placeholder type for the actual data stored in heap cells
 -- so that all things that work on generic IExprs do not touch the heap
 -- and to prevent exposing evaluator implementation details in ISyntax
+--
+-- Interior nodes cache their free value variables and free type
+-- variables (VarSets) in strict fields computed at construction, the
+-- same posture as the interned IType nodes: the real constructors
+-- ILam_/IAps_/ILAM_/ICon_ are private to this module and construction
+-- goes through smart constructors behind the bidirectional pattern
+-- synonyms below, so every other module reads and writes the six
+-- historical constructor names unchanged.  The fields are metadata
+-- only: they never serialize, never print, and never participate in
+-- comparison.
+--
+-- The cached sets are SUPERSETS of everything the substitution
+-- machinery (ISyntaxSubst) can reach below a node -- that is what
+-- makes prune-on-avoid sound at ancestor nodes -- and they are
+-- computed WITHOUT entering the fields substitution never enters
+-- (ICDef's iConDef, ICValue's iValDef, ICStateVar's IStateVar, array
+-- cells, held-coercion payloads).  The latter is a hard requirement,
+-- not a shortcut: those are exactly the fields through which IExpr
+-- structures are knot-tied (FixupDefs/IConv tie top-level defs through
+-- iConDef; clock and reset wires can be recursive through ICStateVar),
+-- so a set that recursed into them would not terminate.
+--
+-- IVar and IRefT stay uncached leaves: a variable answers its
+-- singleton directly, and a heap reference contributes nothing (the
+-- substitution machinery never enters IRefT -- see ISyntaxSubst).
 data IExpr a
-        = ILam Id IType (IExpr a)        -- vanishes after IExpand
-        | IAps (IExpr a) [IType] [IExpr a]
+        = ILam_ VarSet VarSet Id IType (IExpr a) -- vanishes after IExpand
+        | IAps_ VarSet VarSet (IExpr a) [IType] [IExpr a]
         | IVar Id                        -- vanishes after IExpand
-        | ILAM Id IKind (IExpr a)        -- vanishes after IExpand
-        | ICon Id (IConInfo a)
+        | ILAM_ VarSet VarSet Id IKind (IExpr a) -- vanishes after IExpand
+        | ICon_ VarSet Id (IConInfo a)   -- free type vars only (see eFVarSet)
         -- IRef is only used during reduction, it refers to a "heap" cell
         | IRefT IType !Int (S.Set Position) a -- vanishes after IExpand
+
+pattern ILam :: Id -> IType -> IExpr a -> IExpr a
+pattern ILam i t e <- ILam_ _ _ i t e
+  where ILam i t e = mkILam i t e
+
+pattern IAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
+pattern IAps f ts es <- IAps_ _ _ f ts es
+  where IAps f ts es = mkIAps f ts es
+
+pattern ILAM :: Id -> IKind -> IExpr a -> IExpr a
+pattern ILAM i k e <- ILAM_ _ _ i k e
+  where ILAM i k e = mkILAM i k e
+
+pattern ICon :: Id -> IConInfo a -> IExpr a
+pattern ICon i ic <- ICon_ _ i ic
+  where ICon i ic = mkICon i ic
+
+{-# COMPLETE ILam, IAps, IVar, ILAM, ICon, IRefT #-}
+
+-- The hidden flag -hack-no-iexpr-fv-cache (registered in
+-- FlagsDecode.traceflags like -hack-no-itype-ftv-cache) disables the
+-- IExpr free-variable cache and the eSubst pruning that consumes it:
+-- nodes store one shared empty set in the metadata fields and
+-- fVars/ftVars take the exact pre-cache code paths (full walks with
+-- the historical, narrower ICon/ILam semantics).  Absent the flag they
+-- are enabled (the default).  The switch lets the optimization be
+-- measured A/B on any workload with a single binary, and doubles as a
+-- diagnostic chicken switch.
+{-# NOINLINE efvCacheEnabled #-}
+efvCacheEnabled :: Bool
+efvCacheEnabled = not ("-hack-no-iexpr-fv-cache" `elem` progArgs)
+
+mkILam :: Id -> IType -> IExpr a -> IExpr a
+mkILam i t e
+  | efvCacheEnabled = ILam_ fvs ftvs i t e
+  | otherwise       = ILam_ vsEmpty vsEmpty i t e
+  where fvs  = vsDelete i (eFVarSet e)
+        -- unlike the historical ftVars, the binder's type is included:
+        -- substitution rewrites it (ISyntaxSubst substitutes ILam
+        -- types), so pruning needs its variables counted
+        ftvs = fTVarSet t `vsUnion` eFTVarSet e
+
+mkIAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
+mkIAps f ts es
+  | efvCacheEnabled = IAps_ fvs ftvs f ts es
+  | otherwise       = IAps_ vsEmpty vsEmpty f ts es
+  where fvs  = foldr (vsUnion . eFVarSet) (eFVarSet f) es
+        ftvs = foldr (vsUnion . eFTVarSet)
+                     (foldr (vsUnion . fTVarSet) (eFTVarSet f) ts)
+                     es
+
+mkILAM :: Id -> IKind -> IExpr a -> IExpr a
+mkILAM i k e
+  | efvCacheEnabled = ILAM_ fvs ftvs i k e
+  | otherwise       = ILAM_ vsEmpty vsEmpty i k e
+  where fvs  = eFVarSet e
+        ftvs = vsDelete i (eFTVarSet e)
+
+mkICon :: Id -> IConInfo a -> IExpr a
+mkICon i ic
+  | efvCacheEnabled = ICon_ (conFTVarSet ic) i ic
+  | otherwise       = ICon_ vsEmpty i ic
+
+-- The free type variables reachable by substitution below an ICon:
+-- every type position ISyntaxSubst.etSubstIConInfo rewrites and every
+-- expression it recurses into, nothing else.  In particular the
+-- constructors it leaves Unchanged (ICDef, ICValue) contribute
+-- nothing -- and must not be entered at all, since their payloads can
+-- be cyclic (knot-tied top-level defs, heap references).
+conFTVarSet :: IConInfo a -> VarSet
+conFTVarSet (ICDef {}) = vsEmpty
+conFTVarSet (ICValue {}) = vsEmpty
+-- iConType is always Bit 1 for clocks and resets; substitution
+-- recurses only into the wire expressions
+conFTVarSet (ICClock { iClock = c }) = eFTVarSet (ic_wires c)
+conFTVarSet (ICReset { iReset = r }) =
+    eFTVarSet (ic_wires (ir_clock r)) `vsUnion` eFTVarSet (ir_wire r)
+conFTVarSet ic@(ICInout { iInout = io }) =
+    fTVarSet (iConType ic) `vsUnion`
+    eFTVarSet (ic_wires (io_clock io)) `vsUnion`
+    eFTVarSet (ic_wires (ir_clock (io_reset io))) `vsUnion`
+    eFTVarSet (ir_wire (io_reset io)) `vsUnion`
+    eFTVarSet (io_wire io)
+conFTVarSet ic@(ICVerilog { vMethTs = tss }) =
+    foldr (vsUnion . fTVarSet) (fTVarSet (iConType ic)) (concat tss)
+-- iConType is always itType (no free variables), only iType matters
+conFTVarSet (ICType { iType = t }) = fTVarSet t
+conFTVarSet ic@(ICUndet { imVal = mv }) =
+    fTVarSet (iConType ic) `vsUnion` maybe vsEmpty eFTVarSet mv
+-- the array pointers are left alone by substitution; only the uninit
+-- expressions (and the con type) are rewritten
+conFTVarSet ic@(ICLazyArray { uninit = mu }) =
+    fTVarSet (iConType ic) `vsUnion`
+    maybe vsEmpty (\ (u1, u2) -> eFTVarSet u1 `vsUnion` eFTVarSet u2) mu
+conFTVarSet ic = fTVarSet (iConType ic)
+
+-- The free value variables reachable by substitution below an ICon.
+-- Not cached on the node (unlike the type variables): every arm is a
+-- bounded number of reads of the children's own cached sets, so a
+-- cached copy would buy nothing.
+conFVarSet :: IConInfo a -> VarSet
+conFVarSet (ICUndet { imVal = Just e }) = eFVarSet e
+conFVarSet (ICClock { iClock = c }) = eFVarSet (ic_wires c)
+conFVarSet (ICReset { iReset = r }) =
+    eFVarSet (ic_wires (ir_clock r)) `vsUnion` eFVarSet (ir_wire r)
+conFVarSet (ICInout { iInout = io }) =
+    eFVarSet (ic_wires (io_clock io)) `vsUnion`
+    eFVarSet (ic_wires (ir_clock (io_reset io))) `vsUnion`
+    eFVarSet (ir_wire (io_reset io)) `vsUnion`
+    eFVarSet (io_wire io)
+conFVarSet (ICLazyArray { uninit = Just (u1, u2) }) =
+    eFVarSet u1 `vsUnion` eFVarSet u2
+conFVarSet _ = vsEmpty
+
+-- Free value variables, answered from the cached fields (or from a
+-- one-level read for ICon).  When the cache is disabled the fields
+-- hold a shared dummy empty set, so this walks instead, with the exact
+-- historical semantics (ICon contributes only an ICUndet's imVal).
+eFVarSet :: IExpr a -> VarSet
+eFVarSet e0 | efvCacheEnabled = cached e0
+            | otherwise       = walk e0
+  where cached (ILam_ fvs _ _ _ _) = fvs
+        cached (IAps_ fvs _ _ _ _) = fvs
+        cached (ILAM_ fvs _ _ _ _) = fvs
+        cached (IVar i) = vsSingleton i
+        cached (ICon_ _ _ ic) = conFVarSet ic
+        cached (IRefT _ _ _ _) = vsEmpty
+        walk (ILam_ _ _ i _ e) = vsDelete i (walk e)
+        walk (IAps_ _ _ f _ es) = foldr (vsUnion . walk) (walk f) es
+        walk (ILAM_ _ _ _ _ e) = walk e
+        walk (IVar i) = vsSingleton i
+        walk (ICon_ _ _ (ICUndet {imVal = Just e})) = walk e
+        walk (ICon_ _ _ _) = vsEmpty
+        walk (IRefT _ _ _ _) = vsEmpty
+
+-- Free type variables, answered from the cached fields.  Same
+-- disabled-mode posture as eFVarSet: walk with the exact historical
+-- semantics (ILam types and ICon types not counted).
+eFTVarSet :: IExpr a -> VarSet
+eFTVarSet e0 | efvCacheEnabled = cached e0
+             | otherwise       = walk e0
+  where cached (ILam_ _ ftvs _ _ _) = ftvs
+        cached (IAps_ _ ftvs _ _ _) = ftvs
+        cached (ILAM_ _ ftvs _ _ _) = ftvs
+        cached (IVar _) = vsEmpty
+        cached (ICon_ ftvs _ _) = ftvs
+        cached (IRefT _ _ _ _) = vsEmpty
+        walk (ILam_ _ _ _ _ e) = walk e
+        walk (IAps_ _ _ f ts es) =
+            foldr (vsUnion . walk)
+                  (foldr (vsUnion . fTVarSet) (walk f) ts)
+                  es
+        walk (ILAM_ _ _ i _ e) = vsDelete i (walk e)
+        walk (IVar _) = vsEmpty
+        walk (ICon_ _ _ (ICUndet {imVal = Just e})) = walk e
+        walk (ICon_ _ _ _) = vsEmpty
+        walk (IRefT _ _ _ _) = vsEmpty
 
 instance Show (IExpr a) where
   show (ILam i t e)   = "(ILam " ++ show i ++ " " ++ show t ++ " " ++ show e ++ ")"
@@ -948,15 +1135,13 @@ aVars (IRefT _ _ _ _) = S.empty
 
 -- --------------------
 
--- Free variables
+-- Free variables (answered from the sets cached on the nodes; see the
+-- comment at the IExpr definition).  With the cache enabled this is
+-- slightly wider than the historical walk: clock/reset/inout wires and
+-- lazy-array uninit expressions are counted, matching what expression
+-- substitution can actually reach.
 fVars :: IExpr a -> S.Set Id
-fVars (ILam i _ e) = S.delete i (fVars e)
-fVars (IVar i) = S.singleton i
-fVars (ILAM _ _ e) = fVars e
-fVars (IAps f ts es) = fVars f `S.union` (S.unions (map fVars es))
-fVars (ICon _ (ICUndet {imVal = Just e})) = fVars e
-fVars (ICon _ _) = S.empty
-fVars (IRefT _ _ _ _) = S.empty
+fVars = eFVarSet
 
 -- --------------------
 
@@ -977,16 +1162,13 @@ fdVars' (IRefT _ _ _ _) = S.empty
 
 -- --------------------
 
--- Free type variables
+-- Free type variables (answered from the sets cached on the nodes; see
+-- the comment at the IExpr definition).  With the cache enabled this
+-- is wider than the historical walk, which ignored ILam binder types
+-- and all ICon types: every type position that type substitution can
+-- rewrite is counted.
 ftVars :: IExpr a -> S.Set Id
-ftVars (ILam i _ e) = ftVars e
-ftVars (IVar i) = S.empty
-ftVars (ILAM i _ e) = S.delete i (ftVars e)
-ftVars (IAps f ts es) = (ftVars f) `S.union` (S.unions (map fTVars ts))
-                                     `S.union` (S.unions (map ftVars es))
-ftVars (ICon _ (ICUndet {imVal = Just e})) = ftVars e
-ftVars (ICon _ _) = S.empty                -- XXX
-ftVars (IRefT _ _ _ _) = S.empty
+ftVars = eFTVarSet
 
 -- ============================================================
 -- PPrint (for those instances not defined alongside the type, above)
@@ -1191,12 +1373,16 @@ instance NFData IAbstractInput where
 instance NFData (IDef a) where
     rnf (IDef i t e p) = rnf4 i t e p
 
+-- Matches the REAL constructors so the cached free-variable sets are
+-- forced too: hyper/rnf must normalize the whole node, and a match
+-- through the pattern synonyms would skip the cache fields (leaving
+-- thunks alive that the hyper discipline exists to kill).
 instance NFData (IExpr a) where
-    rnf (ILam i t e) = rnf3 i t e
-    rnf (IAps e ts es) = rnf3 e ts es
+    rnf (ILam_ fvs ftvs i t e) = rnf2 fvs ftvs `seq` rnf3 i t e
+    rnf (IAps_ fvs ftvs e ts es) = rnf2 fvs ftvs `seq` rnf3 e ts es
     rnf (IVar i) = rnf i
-    rnf (ILAM i k e) = rnf3 i k e
-    rnf (ICon i ic) = rnf2 i ic
+    rnf (ILAM_ fvs ftvs i k e) = rnf2 fvs ftvs `seq` rnf3 i k e
+    rnf (ICon_ ftvs i ic) = rnf ftvs `seq` rnf2 i ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where
