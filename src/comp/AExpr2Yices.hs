@@ -4,6 +4,7 @@ module AExpr2Yices(
        addADefToYState,
 
        checkDisjointExpr,
+       checkDisjointExprWithCtx,
        checkDisjointRulePair,
 
        checkBiImplication,
@@ -60,6 +61,7 @@ initYState str flags doHardFail ds avis rs = do
                    stateMap = M.fromList [(avi_vname avi, avi_vmi avi)
                                             | avi <- avis],
                    proofMap = M.empty,
+                   ctxProofMap = M.empty,
 
                    anyId = 0,
                    unknownId = 0,
@@ -120,6 +122,49 @@ checkDisjointExprM e1 e2 = withTraceTest $ do
         return sat_res
 
   memRes <- lookupProofMap e1 e2
+  sat_res <- case memRes of
+    Just r  -> return r
+    Nothing -> doProof
+
+  -- if the conditions can both be satisfied, then they are not ME
+  return $ case (cvtStatus sat_res) of
+              Just b -> Just (not b)
+              Nothing -> Nothing
+
+-- Disjointness of (ctx1 AND e1) vs (ctx2 AND e2), without ever building
+-- the composite expressions: the four conjuncts are asserted separately
+-- (logically identical) and the memo is keyed on the component tuple.
+checkDisjointExprWithCtx :: YState -> AExpr -> AExpr -> AExpr -> AExpr ->
+                            IO (Maybe Bool, YState)
+checkDisjointExprWithCtx s ctx1 ctx2 e1 e2 =
+    runStateT (checkDisjointExprWithCtxM ctx1 ctx2 e1 e2) s
+
+checkDisjointExprWithCtxM :: AExpr -> AExpr -> AExpr -> AExpr ->
+                             YM (Maybe Bool)
+checkDisjointExprWithCtxM ctx1 ctx2 e1 e2 = withTraceTest $ do
+  when traceTest $
+      traceM("comparing exprs with ctx: " ++ ppString ((ctx1, e1), (ctx2, e2)))
+
+  let doProof = do
+        (yctx1, _) <- convAExpr2YExpr_Force True ctx1
+        (yctx2, _) <- convAExpr2YExpr_Force True ctx2
+        (ye1, _) <- convAExpr2YExpr_Force True e1
+        (ye2, _) <- convAExpr2YExpr_Force True e2
+        ctx <- gets context
+
+        liftIO $ Y.ctxPush ctx
+        liftIO $ Y.assert ctx yctx1
+        liftIO $ Y.assert ctx yctx2
+        liftIO $ Y.assert ctx ye1
+        liftIO $ Y.assert ctx ye2
+
+        sat_res <- liftIO $ Y.ctxStatus ctx
+
+        liftIO $ Y.ctxPop ctx
+        addToCtxProofMap ctx1 ctx2 e1 e2 sat_res
+        return sat_res
+
+  memRes <- lookupCtxProofMap ctx1 ctx2 e1 e2
   sat_res <- case memRes of
     Just r  -> return r
     Nothing -> doProof
@@ -320,6 +365,12 @@ data YState =
                ruleMap       :: M.Map ARuleId RuleTriple,
                stateMap      :: M.Map AId VModInfo,
                proofMap      :: M.Map (AExpr, AExpr) Y.Status,
+               -- context-augmented disjointness results, keyed on the
+               -- four component exprs: composing "ctx AND e" per query
+               -- would allocate fresh trees whose deep-Ord comparison
+               -- and permanent retention here dominated the schedule
+               -- phase's GC time (they can never be pointer-equal)
+               ctxProofMap   :: M.Map (AExpr, AExpr, AExpr, AExpr) Y.Status,
 
                anyId         :: Integer,
                unknownId     :: Integer,
@@ -383,6 +434,19 @@ lookupProofMap :: AExpr -> AExpr -> YM (Maybe Y.Status)
 lookupProofMap e1 e2 = do
   rmap <- gets proofMap
   return $ M.lookup (e1,e2) rmap
+
+addToCtxProofMap :: AExpr -> AExpr -> AExpr -> AExpr -> Y.Status -> YM ()
+addToCtxProofMap ctx1 ctx2 e1 e2 res = do
+  rmap <- gets ctxProofMap
+  -- insert both orderings for expressions
+  let rmap1 = M.insert (ctx1, ctx2, e1, e2) res rmap
+      rmapX = M.insert (ctx2, ctx1, e2, e1) res rmap1
+  modify (\s -> s {ctxProofMap = rmapX})
+
+lookupCtxProofMap :: AExpr -> AExpr -> AExpr -> AExpr -> YM (Maybe Y.Status)
+lookupCtxProofMap ctx1 ctx2 e1 e2 = do
+  rmap <- gets ctxProofMap
+  return $ M.lookup (ctx1, ctx2, e1, e2) rmap
 
 
 -- -------------------------
