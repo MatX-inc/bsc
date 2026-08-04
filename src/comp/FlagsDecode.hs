@@ -561,6 +561,7 @@ defaultFlags bluespecdir = Flags {
         importHashes = True,
         enablePoisonPills = False,
         entry = Nothing,
+        baDebugInfo = False,
         expandATSlimit = 20,
         expandIf = False,
         fdir = Nothing,
@@ -1121,6 +1122,10 @@ externalFlags = [
         ("aggressive-conditions",
          (Toggle (\f x -> f {aggImpConds=x}) (showIfTrue aggImpConds),
           "construct implicit conditions aggressively", Visible)),
+
+        ("ba-debug-info",
+         (Toggle (\f x -> f {baDebugInfo=x}) (showIfTrue baDebugInfo),
+          "serialize full debug info into .ba files (all pairwise rule relations and the method-conflict dump); without it .ba files carry only what code generation needs", Visible)),
 
         ("bdir",
          (Arg "dir" (\f s -> Left (f {bdir = Just s}))
@@ -1883,6 +1888,7 @@ showFlagsRaw flags =
           ("extraVerbose", show (extraVerbose flags)),
           ("fdir", show (fdir flags)),
           ("finalcleanup", show (finalcleanup flags)),
+          ("baDebugInfo", show (baDebugInfo flags)),
           ("genABin", show (genABin flags)),
           ("genABinVerilog", show (genABinVerilog flags)),
           ("genName", show (genName flags)),
