@@ -36,6 +36,7 @@ import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
 import ATFRules(buildATFRules, atfReduceInType)
+import IType(itHasATF)
 import ISyntax
 import ISyntaxSubst
 import ISyntaxUtil
@@ -177,7 +178,10 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
 iConvT :: Flags -> SymTab -> Type -> IType
 iConvT flags s t =
     let it = iConvT' (expandSyn t)
-    in  case atfReduceInType (buildATFRules s) it of
+        -- ATF-free (memoized per unique): nothing to reduce, and the
+        -- reducer's walk must not descend an exponentially shared DAG
+    in  if not (itHasATF it) then it
+        else case atfReduceInType (buildATFRules s) it of
           Just it' -> it'
           Nothing  -> iConvT' (expandSynN flags s t)
 

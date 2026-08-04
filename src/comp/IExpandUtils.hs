@@ -94,6 +94,7 @@ import Id
 import PreIds
 import CSyntax(CExpr)
 import CType(TISort(..), StructSubType(..))
+import IType(itHasTFun)
 import VModInfo
 import ISyntax
 import ISyntaxUtil
@@ -2565,6 +2566,12 @@ updHeap tag (p, HeapData ref) e = do
 -- Type normalization function used in evaluation.
 -- Fully traverse and reduce all type function applications where possible.
 fullTypeNormalizer :: ATFRules -> IType -> Changed IType
+-- no ATF constructor anywhere inside (memoized per intern unique)
+-- means nothing can reduce: answer without descending -- the type may
+-- be an exponentially shared DAG, and this normalizer runs on every
+-- application node's computed type under iPCheck, four times per
+-- compile
+fullTypeNormalizer _ t | not (itHasTFun t) = Unchanged
 fullTypeNormalizer _ (ITCon _ _ _) = Unchanged
 fullTypeNormalizer _ (ITNum _)     = Unchanged
 fullTypeNormalizer _ (ITStr _)     = Unchanged
