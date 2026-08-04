@@ -35,7 +35,7 @@ doTraceCtxReduce = "-trace-ctxreduce" `elem` progArgs
 --    while solving contexts (merged with the cache from typecheck in
 --    bsc.hs and threaded through iConvPackage into elaboration)
 cCtxReduceIO :: ErrorHandle -> Flags -> SymTab -> CPackage ->
-               IO (CPackage, S.Set Id, CATFCache)
+               IO (CPackage, S.Set Id, S.Set (Id, Id), CATFCache)
 cCtxReduceIO errh flags s (CPackage mi exps imps impsigs fixs ds includes) = do
     -- The False argument to 'runTI' indicates that incoherent instances should not be matched at this time
     -- We want to preserve those contexts to be handled in typecheck (XXX why?)
@@ -44,7 +44,8 @@ cCtxReduceIO errh flags s (CPackage mi exps imps impsigs fixs ds includes) = do
     case tiResult ti_res of
       Left emsgs -> bsError errh emsgs
       Right ds' -> return (CPackage mi exps imps impsigs fixs ds' includes,
-                           tiUsedPackages ti_res, tiATFCache ti_res)
+                           tiUsedPackages ti_res,
+                           tiUsedDecls ti_res, tiATFCache ti_res)
 
 cCtxReduceDef :: Flags -> SymTab -> CDefn -> Either [EMsg] CDefn
 cCtxReduceDef flags s def =
