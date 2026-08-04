@@ -698,10 +698,16 @@ cmpES (ICon _ _)      (IVar _)        = GT
 cmpES (ICon i1 ic1) (ICon i2 ic2)     =
         case compare i1 i2 of
         EQ -> case (cmpC ic1 ic2) of
-                -- inlined positions need to be considered in equality tests
-                EQ -> let mposs1 = getIdInlinedPositions i1
-                          mposs2 = getIdInlinedPositions i2
-                      in  compare mposs1 mposs2
+                -- inlined positions need to be considered in equality
+                -- tests; the presence test first keeps the common case
+                -- (neither side has the prop -- e.g. every literal
+                -- constant) free of the Maybe/list allocation
+                EQ -> if not (hasIdInlinedPositions i1) &&
+                         not (hasIdInlinedPositions i2)
+                      then EQ
+                      else let mposs1 = getIdInlinedPositions i1
+                               mposs2 = getIdInlinedPositions i2
+                           in  compare mposs1 mposs2
                 o  -> o
         o  -> o
 cmpES (ICon _ _)      _               = LT
