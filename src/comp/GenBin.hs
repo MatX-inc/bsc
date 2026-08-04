@@ -26,7 +26,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260714-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260803-4"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -92,8 +92,8 @@ instance Bin CDefn where
     writeBytes (Cprimitive i cqt) = do putI 5; toBin i; toBin cqt
     writeBytes (CprimType ik) = do putI 6; toBin ik
     writeBytes (CIinstance i cqt) = do putI 7; toBin i; toBin cqt
-    writeBytes (CIclass incoh ps ik is deps ats poss) =
-        do putI 8; toBin incoh; toBin ps; toBin ik; toBin is; toBin deps; toBin ats; toBin poss
+    writeBytes (CIclass incoh ps ik is deps ats ms poss) =
+        do putI 8; toBin incoh; toBin ps; toBin ik; toBin is; toBin deps; toBin ats; toBin ms; toBin poss
     writeBytes (CIValueSign i cqt) = do putI 9; toBin i; toBin cqt
     writeBytes (CItype ik is poss) = do putI 10; toBin ik; toBin is; toBin poss
     writeBytes (CPragma p) = do putI 11; toBin p
@@ -150,8 +150,9 @@ instance Bin CDefn where
                               is <- fromBin
                               deps <- fromBin
                               ats <- fromBin
+                              ms <- fromBin
                               poss <- fromBin
-                              return (CIclass incoh ps ik is deps ats poss)
+                              return (CIclass incoh ps ik is deps ats ms poss)
                      9  -> do when doTrace $ traceM ("CIValueSign")
                               i <- fromBin; cqt <- fromBin
                               return (CIValueSign i cqt)
@@ -538,18 +539,15 @@ instance Bin (IPackage a) where
            toBin (ipkg_depends pkg)
            toBin (ipkg_pragmas pkg)
            toBin (ipkg_defs pkg)
-           toBin (ipkg_atf_cache pkg)
     readBytes = do when doTrace $ traceM("read IPackage")
                    name      <- fromBin
                    depends   <- fromBin
                    pragmas   <- fromBin
                    defs      <- fromBin
-                   atfCache  <- fromBin
                    return $ IPackage { ipkg_name      = name
                                      , ipkg_depends   = depends
                                      , ipkg_pragmas   = pragmas
                                      , ipkg_defs      = defs
-                                     , ipkg_atf_cache = atfCache
                                      }
 
 -- ----------

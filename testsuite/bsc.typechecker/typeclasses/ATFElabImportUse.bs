@@ -1,0 +1,19 @@
+package ATFElabImportUse where
+
+import ATFElabImportDef
+
+-- The pair-shaped EncSize ((UInt 5, UInt 5)) arms only during THIS
+-- package's elaboration of checkPair's imported body, so reducing it
+-- exercises the instance equations of a family defined entirely in
+-- an imported package.
+
+{-# verilog sysATFElabImportUse #-}
+sysATFElabImportUse :: Module Empty
+sysATFElabImportUse = module
+  r :: Reg (UInt 5) <- mkReg 7
+  rules
+    "test": when True ==>
+      action
+        let result = checkPair r
+        $display "result: %b" (pack result)
+        $finish 0
