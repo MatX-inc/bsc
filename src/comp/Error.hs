@@ -1118,6 +1118,7 @@ data ErrMsg =
         | ETooManyBackends
         | EDollarNoVerilog
         | EDollarLink
+        | ECheckOnlyConflict String
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -4250,6 +4251,13 @@ getErrorText EDollarNoVerilog =
 getErrorText EDollarLink =
     (System 57, empty,
      s2par ("The flag -remove-dollar in only supported for compiling source, not linking."))
+
+getErrorText (ECheckOnlyConflict fl) =
+    (System 102, empty,
+     s2par ("The flag -check-only cannot be combined with " ++ fl ++ ": " ++
+            "a check compile stops after typechecking and emits only a " ++
+            "signature (.bc), so no module can be elaborated, generated " ++
+            "or linked."))
 
 -- Removed System 58 ELicenseUnavailable, BSC is now open source
 -- Removed System 59 WLicenseExpires, BSC is now open source

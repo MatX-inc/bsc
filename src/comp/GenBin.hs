@@ -1,12 +1,15 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile) where
+module GenBin(genBinFile, readBinFile, genBcFile, readBcFile) where
 
 import Control.Monad(when)
+import Data.List(foldl')
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
+import Id(Id)
+import Util(hashInit, nextHashByte, showHash)
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
@@ -26,7 +29,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260804-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260804-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -40,11 +43,28 @@ headerBS = B.pack header
 pillByte :: Bool -> Byte
 pillByte p = if p then 1 else 0
 
+-- The identity a dependent records for a package, stored in both artifact
+-- kinds so that a .bo and a .bc built from the same source are
+-- interchangeable to mergeHashes.
+--
+-- It cannot be a hash of the file, nor of bi_sig's bytes within the file:
+-- BinData's sharing table is file-local, so an identical signature occupies
+-- different bytes inside a .bo than inside a .bc.  Hashing a standalone
+-- re-serialization is what makes the two agree.
+--
+-- Scope note: this hashes the signature, so it answers "was this compiled
+-- against a different interface".  A change confined to definition bodies no
+-- longer moves it, and fixupDefs does rewrite a package's defs against
+-- imported def bodies -- rebuild ordering (make/bazel) is what covers that.
+sigHash :: CSignature -> String
+sigHash sig = showHash (foldl' nextHashByte hashInit (encode sig))
+
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh fn bi_sig bo_sig ipkg =
     writeBinaryFileCatch errh fn
-        (header ++ pillByte (pkgHasPoisonPill ipkg) : encode (bi_sig, bo_sig, ipkg))
+        (header ++ pillByte (pkgHasPoisonPill ipkg) :
+             encode (sigHash bi_sig, (bi_sig, bo_sig, ipkg)))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String, Bool)
@@ -52,9 +72,47 @@ readBinFile errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS && B.length s > hlen
        then let pill = B.index s hlen /= 0
-                ((bi_sig, bo_sig, ipkg), hash) =
-                    decodeWithHash $ B.drop (hlen + 1) s
+                -- the writer stored the hash, so reading no longer walks the
+                -- payload to recompute one; decode still rejects trailing bytes
+                (hash, (bi_sig, bo_sig, ipkg)) = decode $ B.drop (hlen + 1) s
             in return (bi_sig, bo_sig, ipkg, hash, pill)
+       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- ----------
+-- .bc: the signature-only artifact written by -check-only.
+--
+-- A check compile exists to answer "does this package compile", and the only
+-- consumer of its output is another check compile, which typechecks against
+-- signatures.  bi_sig is what readImports feeds to the typechecker (mkCImp),
+-- and CSignature already carries the package's import list, so it is also all
+-- Depend needs to walk the graph.  bo_sig is deliberately absent: it is only
+-- consumed via replaceImportedSignatures, downstream of IConv, which
+-- -check-only never reaches.
+--
+-- Its own tag means the S0005 version guard rejects a .bc fed to a compile
+-- that wants definitions, rather than that compile silently finding none.
+bcHeader :: [Byte]
+bcHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bc-20260804-2"
+
+bcHeaderBS :: B.ByteString
+bcHeaderBS = B.pack bcHeader
+
+-- The dependency list is the same one a .bo records in "ipkg_depends": the
+-- whole transitive closure, topologically sorted, each paired with the hash
+-- of the file it was read from.  It cannot be recovered from the signature's
+-- own import list, which GenSign prunes to direct imports minus the Preludes.
+genBcFile :: ErrorHandle -> String -> [(Id, String)] -> CSignature -> IO ()
+genBcFile errh fn depends bi_sig =
+    writeBinaryFileCatch errh fn
+        (bcHeader ++ encode (sigHash bi_sig, (depends, bi_sig)))
+
+readBcFile :: ErrorHandle -> String -> B.ByteString ->
+              IO (([(Id, String)], CSignature), String)
+readBcFile errh nm s =
+    let hlen = B.length bcHeaderBS
+    in if B.take hlen s == bcHeaderBS
+       then let (hash, payload) = decode (B.drop hlen s)
+            in return (payload, hash)
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------

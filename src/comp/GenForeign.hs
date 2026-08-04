@@ -1,4 +1,4 @@
-module GenForeign (genForeign) where
+module GenForeign (genForeign, checkForeignFuncDuplicates) where
 
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import Util(headOrErr, findSame)
@@ -14,13 +14,12 @@ import Version(bscVersionStr)
 import FileNameUtil(mkAName, getRelativeFilePath)
 import TopUtils(putStrLnF)
 
-import Control.Monad(unless)
+import Control.Monad(unless, when)
 
--- For dumping purposes, this returns a list of
--- the foreign src IDs, and their corresponding ForeignFunctions
-genForeign :: ErrorHandle -> Flags -> String -> CPackage ->
-              IO [(Id, ForeignFunction)]
-genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
+-- The foreign imports a package declares.  Shared so that the duplicate check
+-- and .ba generation cannot disagree about what counts as a foreign import.
+foreignFuncInfos :: CPackage -> [(Id, ForeignFunction)]
+foreignFuncInfos (CPackage _ _ _ _ _ defs _) =
     let
         isPPforeignImport (PPforeignImport {}) = True
         isPPforeignImport _ = False
@@ -29,7 +28,33 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
                            any isPPforeignImport pps ]
         foreignDefs = [ d | d@(CValueSign (CDefT i _ _ _)) <- defs,
                             i `elem` foreignIds ]
-        foreignInfos = map extractForeignFuncInfo foreignDefs
+    in  map extractForeignFuncInfo foreignDefs
+
+-- Duplicate link names are a property of the source, not of code generation,
+-- so a -check-only compile can report them without generating any .ba.
+checkForeignFuncDuplicates :: ErrorHandle -> CPackage -> IO ()
+checkForeignFuncDuplicates errh cpkg =
+    let
+        foreignInfos = foreignFuncInfos cpkg
+        link_ids = map (ff_name . snd) foreignInfos
+        duplicates = findSame link_ids
+        mkDupErr dups =
+            let link_id = headOrErr "GenForeign mkDupErr link" dups
+                has_this_link (i,ff) = (ff_name ff == link_id)
+                src_ids = map fst (filter has_this_link foreignInfos)
+                src_ips = map (\i -> (getIdString i, getPosition i)) src_ids
+                link_name = getIdString link_id
+                pos = getPosition link_id
+            in  (pos, EForeignFuncDuplicates link_name src_ips)
+    in  when (not (null duplicates)) $ bsError errh (map mkDupErr duplicates)
+
+-- For dumping purposes, this returns a list of
+-- the foreign src IDs, and their corresponding ForeignFunctions
+genForeign :: ErrorHandle -> Flags -> String -> CPackage ->
+              IO [(Id, ForeignFunction)]
+genForeign errh flags prefix cpkg =
+    let
+        foreignInfos = foreignFuncInfos cpkg
 
         genABin info@(src_id, foreign_func) =
             let ffinfo = ABinForeignFuncInfo src_id foreign_func
@@ -48,22 +73,10 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
                    unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
                    -- return the info, for dumping
                    return info
-
-        -- check for duplicate imports and report an error
-        link_ids = map (ff_name . snd) foreignInfos
-        duplicates = findSame link_ids
-        mkDupErr dups =
-            let link_id = headOrErr "GenForeign mkDupErr link" dups
-                has_this_link (i,ff) = (ff_name ff == link_id)
-                src_ids = map fst (filter has_this_link foreignInfos)
-                src_ips = map (\i -> (getIdString i, getPosition i)) src_ids
-                link_name = getIdString link_id
-                pos = getPosition link_id
-            in  (pos, EForeignFuncDuplicates link_name src_ips)
-    in
-        if (not (null duplicates))
-        then bsError errh (map mkDupErr duplicates)
-        else mapM genABin foreignInfos
+    in  do
+           -- bsError does not return, so a duplicate still suppresses .ba
+           checkForeignFuncDuplicates errh cpkg
+           mapM genABin foreignInfos
 
 
 -- After typechecking, the import should contain a CForeignFuncCT expression
