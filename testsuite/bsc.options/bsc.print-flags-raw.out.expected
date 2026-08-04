@@ -20,6 +20,7 @@ Flags {
 	disableAssertions = False,
 	doICheck = True,
 	dumpAll = Nothing,
+	dumpFormats = ["vcd"],
 	dumps = [],
 	elabOnly = False,
 	enablePoisonPills = False,
@@ -110,7 +111,7 @@ Flags {
 	strictMethodSched = True,
 	suppressWarnings = SomeMsgs [],
 	synthesize = False,
-	systemVerilogTasks = False,
+	systemVerilogOutput = False,
 	tclShowHidden = False,
 	testAssert = False,
 	timeStamps = True,
@@ -135,5 +136,6 @@ Flags {
 	warnMethodUrgency = True,
 	warnUndetPred = False,
 	semanticPortsComment = False,
+	checkOnly = False,
 	stableVerilog = False
 }

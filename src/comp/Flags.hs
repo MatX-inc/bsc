@@ -47,6 +47,8 @@ data Flags = Flags {
         passThroughAssertions :: Bool,
         doICheck :: Bool,
         dumpAll :: Maybe (Maybe FilePath), -- maybe dump to file or stdout
+        dumpFormats :: [String], -- waveform dump formats compiled into the sim
+                                 -- (subset of vcd/fst/fsdb; [] means none)
         dumps :: [(DumpFlag, Maybe FilePath)], -- dump to file or stdout
         enablePoisonPills :: Bool,
         codegenNames :: [String],
@@ -134,7 +136,7 @@ data Flags = Flags {
         strictMethodSched :: Bool,
         suppressWarnings :: MsgListFlag,
         synthesize :: Bool,
-        systemVerilogTasks :: Bool,
+        systemVerilogOutput :: Bool,
         tclShowHidden :: Bool,
         timeStamps :: Bool,
         showVersion :: Bool,
@@ -167,6 +169,7 @@ data Flags = Flags {
         -- stop after the stage's checks without producing its artifact:
         -- at Verilog link, validate the link closure and have the
         -- simulator builder write a manifest instead of building
+        checkOnly :: Bool,
         -- deterministic Verilog emission: canonical counter numbering,
         -- deterministic CSE-representative names, and canonical operand
         -- ordering, so the same .ba yields byte-identical .v in any
