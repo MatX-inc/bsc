@@ -1,7 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 {-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE MagicHash #-}
 {-# OPTIONS_GHC -fno-prof-auto #-}
 module ISyntax(
         IPackage(..),
@@ -96,8 +95,6 @@ import qualified Data.Map as M
 import Data.List(intercalate)
 
 import qualified Data.Array as Array
-import GHC.Exts(reallyUnsafePtrEquality#, isTrue#)
-
 import IntLit
 import Undefined
 import Eval
@@ -790,17 +787,8 @@ instance Show (IExpr a) where
 --      disabled -- all nodes hash 0 under -hack-no-iexpr-hash) fall
 --      through to the structural walk, whose recursive child
 --      comparisons re-enter cmpE and are rank/hash-first as well.
---   0. The same heap object is trivially EQ (sound: pointer equality
---      has no false positives, only conservative false negatives).
---      Predicate-set algebra compares shared subterms against
---      themselves constantly; this witness skips the entire walk --
---      including the ICon inlined-position rescans that no hash can
---      shortcut, because equal hashes still need the walk to rule out
---      collisions.
 cmpE :: IExpr a -> IExpr a -> Ordering
-cmpE x y
-  | isTrue# (reallyUnsafePtrEquality# x y) = EQ
-  | otherwise =
+cmpE x y =
     case compare (rankE x) (rankE y) of
     EQ -> cmpSameRank x y
     o  -> o
