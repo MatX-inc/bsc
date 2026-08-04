@@ -549,9 +549,14 @@ apsHash f ts es
 
 iconHash :: Id -> IConInfo a -> Hash
 iconHash i ic
-  | ehashEnabled =
-      conHash (posssHash (idHash (hashTag 27) i) (getIdInlinedPositions i)) ic
+  | ehashEnabled = conHash (ipossHash (idHash (hashTag 27) i) i) ic
   | otherwise = 0
+
+-- hash the inlined-position trail without allocating the Maybe/list
+-- in the (overwhelmingly common) absent case
+ipossHash :: Hash -> Id -> Hash
+ipossHash h i | hasIdInlinedPositions i = posssHash h (getIdInlinedPositions i)
+              | otherwise = hashMix h 11
 
 -- the hash of the node's cached field, or computed directly for the
 -- uncached leaves; 0 everywhere when disabled
@@ -1443,12 +1448,19 @@ instance NFData (IDef a) where
 -- hyper/rnf must normalize the whole node, and a match through the
 -- pattern synonyms would skip the metadata field (leaving thunks alive
 -- that the hyper discipline exists to kill).
+-- The hash is deliberately NOT forced: it is consumed only after
+-- IExpand (transform/CSE comparisons), so forcing it at
+-- elaboration-time hyper points would compute hashes for millions of
+-- transient heap nodes that no one ever compares.  A surviving node's
+-- hash thunk captures only the node's own fields -- no retention
+-- beyond the node itself -- and resolves at its first post-IExpand
+-- comparison, where the work pays for itself.
 instance NFData (IExpr a) where
-    rnf (ILam_ h i t e) = h `seq` rnf3 i t e
-    rnf (IAps_ h e ts es) = h `seq` rnf3 e ts es
+    rnf (ILam_ _h i t e) = rnf3 i t e
+    rnf (IAps_ _h e ts es) = rnf3 e ts es
     rnf (IVar i) = rnf i
-    rnf (ILAM_ h i k e) = h `seq` rnf3 i k e
-    rnf (ICon_ h i ic) = h `seq` rnf2 i ic
+    rnf (ILAM_ _h i k e) = rnf3 i k e
+    rnf (ICon_ _h i ic) = rnf2 i ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where
