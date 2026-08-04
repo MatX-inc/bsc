@@ -10,6 +10,7 @@ module BinData ( Byte
                , Bin(..)
                , section
                , encode, decode, decodeWithHash
+               , binTypeStats
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -33,6 +34,9 @@ module BinData ( Byte
 -}
 
 import ErrorUtil(internalError)
+import Data.IORef(IORef, newIORef, readIORef, modifyIORef')
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
+import IOUtil(progArgs)
 
 import FStringCompat
 import PreIds(idDefaultClock)
@@ -250,6 +254,11 @@ data TypeKey = TKV IdKey Int Kind
   deriving (Eq, Ord, Show)
 
 type_key :: Type -> TypeKey
+-- NB the share map deliberately keys by deep structure, not by
+-- typeCanonId: canonical ids ignore positions, so id-keyed sharing
+-- would collapse position-distinct types onto the first-seen
+-- serialization (observable as wrong IfcPosition in bluetcl browse).
+-- Share-map identity must imply value identity.
 type_key (TVar (TyVar i n k))  = TKV (id_key i) n k
 type_key (TCon (TyCon i mk s)) = TKC (id_key i) mk s
 type_key (TCon (TyNum n p))    = TKN n p
@@ -1288,6 +1297,30 @@ instance Bin AStateLocPathComponent where
 -- AStateLocPathComponent contains CType
 -- ABinModInfo also contains a CQType
 
+-- counts Type nodes materialized from .bo files (one readBytes call
+-- per shared node): the reader-side share of the construction
+-- firehose, for the -trace-ctype-stats dump.  The count lands when
+-- the node is forced, matching what the compile actually built.
+{-# NOINLINE cnBinTypeRead #-}
+cnBinTypeRead :: IORef Int
+cnBinTypeRead = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE binStatsEnabled #-}
+binStatsEnabled :: Bool
+binStatsEnabled = "-trace-ctype-stats" `elem` progArgs
+
+{-# NOINLINE binBumpRet #-}
+binBumpRet :: a -> a
+binBumpRet x
+  | binStatsEnabled = unsafeDupablePerformIO (modifyIORef' cnBinTypeRead (+1) >> return x)
+  | otherwise = x
+
+-- | Counter snapshot for the -trace-ctype-stats dump.
+binTypeStats :: IO [(String, Int)]
+binTypeStats = do
+    n <- readIORef cnBinTypeRead
+    return [("bindata.type_read", n)]
+
 instance Bin Type where
     writeBytes (TVar tvar) = do putI 0; toBin tvar
     writeBytes (TCon tcon) = do putI 1; toBin tcon
@@ -1297,10 +1330,10 @@ instance Bin Type where
     readBytes =
         do i <- getI
            case i of
-             0 -> do tvar <- fromBin; return (TVar tvar)
-             1 -> do tcon <- fromBin; return (TCon tcon)
-             2 -> do t1 <- fromBin; t2 <- fromBin; return (TAp t1 t2)
-             3 -> do pos <- fromBin; i <- fromBin; return (TGen pos i)
+             0 -> do tvar <- fromBin; return (binBumpRet (TVar tvar))
+             1 -> do tcon <- fromBin; return (binBumpRet (TCon tcon))
+             2 -> do t1 <- fromBin; t2 <- fromBin; return (binBumpRet (TAp t1 t2))
+             3 -> do pos <- fromBin; i <- fromBin; return (binBumpRet (TGen pos i))
              n -> internalError $ "BinData.Bin(Type).readBytes: " ++ show n
 
     -- Type is shared
