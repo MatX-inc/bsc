@@ -5,7 +5,7 @@ module AExpand (
                 expandAPackage
                 ) where
 
-import Data.List(group, sort, nub, genericLength)
+import Data.List(foldl', group, sort, nub, genericLength)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import PFPrint
@@ -301,7 +301,11 @@ collDefs used ds = coll (S.fromList used) [] (reverse (tsortADefs ds))
                     --traces ("drop-coll " ++ ppString i) $
                     coll used rs ds
                 else
-                    coll (foldr S.insert used (aVars e)) (d:rs) ds
+                    -- forced: a run of kept defs never consults the set
+                    -- (the guard short-circuits on isLocalAId), so a lazy
+                    -- accumulator would chain one thunk per def
+                    let used' = foldl' (flip S.insert) used (aVars e)
+                    in  used' `seq` coll used' (d:rs) ds
 
 
 -- ==============================
@@ -410,7 +414,10 @@ xcollDefs keepFires used ds = --traces( "xCollDefs: " ++ ppReadable used ) $
                 --traces ("\n drop-coll " ++ ppString i ++ " " ++ ppReadable (hasIdProp i IdPCanFire)) $
                 coll used rs ds
                 else
-                    coll (foldr S.insert used (aVars e)) (d:rs) ds
+                    -- forced, like collDefs: keepFires fire defs can also
+                    -- skip the set consultation, so keep the accumulator strict
+                    let used' = foldl' (flip S.insert) used (aVars e)
+                    in  used' `seq` coll used' (d:rs) ds
 
 
 -- ==============================
