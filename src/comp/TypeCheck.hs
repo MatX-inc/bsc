@@ -15,7 +15,8 @@ import Id
 import Error(internalError, EMsg, WMsg, ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsErrorUnsafe, bsWarning)
 import ContextErrors
-import Flags(Flags, enablePoisonPills, allowIncoherentMatches)
+import Flags(Flags, enablePoisonPills, allowIncoherentMatches,
+             liftDicts, liftGroundDicts)
 import CSyntax
 import CType(isCanonType)
 import PoisonUtils
@@ -32,10 +33,16 @@ import CSubst(cSubstN)
 import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
 
-cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
+-- The extra [Id] is ids (beyond the package's own definitions) whose
+-- names the ground-dictionary pooling must not reuse for lifted
+-- definitions: the wrapper path passes the defs of the IPackage its
+-- results are spliced into (which include the main flow's lifted
+-- dictionaries); the main package flow passes none.
+cTypeCheck :: ErrorHandle -> Flags -> SymTab -> [Id] -> CPackage ->
              IO (CPackage, Bool, S.Set Id)
-cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
-    (typecheckedDefns, typeWarns, usedPkgs, haveErrors) <- tiDefns errh symtab flags defns
+cTypeCheck errh flags symtab extraTaken (CPackage name exports imports impsigs fixs defns includes) = do
+    (typecheckedDefns, typeWarns, usedPkgs, haveErrors)
+        <- tiDefns errh symtab flags name extraTaken defns
 
     -- Issue type warnings
     when (not (null typeWarns)) $ bsWarning errh typeWarns
@@ -46,17 +53,47 @@ cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns i
 
 
 -- type check top-level definitions in parallel (since they are independent)
-tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] ->
+--
+-- ...except when ground-dictionary pooling (-lift-ground-dicts) is
+-- active: the pool is an accumulator threaded through the
+-- per-definition typecheck runs in order, so a ground dictionary
+-- derived while checking one definition is reused by every later
+-- definition in the package.  Its lifted definitions are emitted at
+-- the front of the returned defs, in creation order (which is
+-- dependency order); the LiftDicts pass adopts them from there.
+tiDefns :: ErrorHandle -> SymTab -> Flags -> Id -> [Id] -> [CDefn] ->
            IO ([CDefn], [WMsg], S.Set Id, Bool)
-tiDefns errh s flags ds = do
+tiDefns errh s flags pkgName extraTaken ds = do
   let ai = allowIncoherentMatches flags
+  let mkDefErr ti_res = case tiResult ti_res of
+                          (Left emsgs)  -> Left emsgs
+                          (Right cdefn) -> rmFreeTypeVars cdefn
   let checkDef d = (defErr, warns, usedPkgs)
         where ti_res = runTI flags ai s $ tiOneDef d
               (warns, usedPkgs) = (tiWarnings ti_res, tiUsedPackages ti_res)
-              defErr = case tiResult ti_res of
-                          (Left emsgs)  -> Left emsgs
-                          (Right cdefn) -> rmFreeTypeVars cdefn
-  let (checks, wss, pkgss) = unzip3 (map checkDef ds)
+              defErr = mkDefErr ti_res
+  -- Ground-dictionary pooling: a hidden flag (off by default, for
+  -- full-scale A/B benchmarking that will decide the default).  It
+  -- presupposes the lifting infrastructure, so the liftDicts flag
+  -- must also be on (its default).
+  let pooling = liftDicts flags && liftGroundDicts flags
+      taken = S.fromList ([ getIdBase (getDName d) | CValueSign d <- ds ] ++
+                          map getIdBase extraTaken)
+      checkDefPool gd d = ((defErr, warns, usedPkgs), gd')
+        where (ti_res, gd') = runTIWithGroundPool flags ai s gd (tiOneDef d)
+              (warns, usedPkgs) = (tiWarnings ti_res, tiUsedPackages ti_res)
+              defErr = mkDefErr ti_res
+      foldDefs _  []       = ([], Nothing)
+      foldDefs gd [d]      = let (res, gd') = checkDefPool gd d
+                             in  ([res], Just gd')
+      foldDefs gd (d:rest) = let (res, gd') = checkDefPool gd d
+                                 (ress, mgdF) = foldDefs gd' rest
+                             in  (res:ress, mgdF)
+  let (results, mgdF) =
+          if pooling
+          then foldDefs (initGroundDictState pkgName taken) ds
+          else (map checkDef ds, Nothing)
+  let (checks, wss, pkgss) = unzip3 results
   let (errors, ds') = apFst concat $ separate checks
   let have_errors = not (null errors)
   let mkErrorDef (Left _)  (CValueSign (CDef i t _)) = Just (mkPoisonedCDefn i t)
@@ -73,7 +110,14 @@ tiDefns errh s flags ds = do
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
-  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors)
+  -- the pool's lifted ground dictionaries, first and in creation
+  -- (dependency) order (see the note on tiDefns)
+  let liftedDefns =
+          case mgdF of
+            Nothing -> []
+            Just gdF -> [ CValueSign (CDefT i [] (CQType [] t) [CClause [] [] e])
+                        | (i, t, e) <- reverse (gdLifted gdF) ]
+  return (liftedDefns ++ ds' ++ error_defs', concat wss, allUsedPkgs, have_errors)
 
 nullAssump :: [Assump]
 nullAssump = []

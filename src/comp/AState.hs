@@ -29,6 +29,7 @@ import PreStrings( fsUnderUnder,
                   fsMux, fsMuxPreSel, fsMuxSel, fsMuxVal)
 import Id
 import Pragma
+import DefProp
 import Prim
 import PFPrint
 

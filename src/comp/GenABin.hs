@@ -559,7 +559,7 @@ instance Bin Flags where
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
                 a_020 a_021 a_022 a_dumpFormats a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
-                a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
+                a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_liftDicts a_liftGroundDicts a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
                 a_070 a_071 a_072 a_073 a_074 a_075 a_076 a_077 a_078 a_079
@@ -571,7 +571,7 @@ instance Bin Flags where
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_checkOnly a_137) =
        do wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4; wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 137-field serialization is split into NOINLINE chunks so
+        -- The 142-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
@@ -591,7 +591,7 @@ instance Bin Flags where
              toBin a_040; toBin a_041; toBin a_042; toBin a_043; toBin a_044
         {-# NOINLINE wr_chunk3 #-}
         wr_chunk3 =
-          do toBin a_045; toBin a_046; toBin a_047; toBin a_048; toBin a_049;
+          do toBin a_045; toBin a_046; toBin a_liftDicts; toBin a_liftGroundDicts; toBin a_047; toBin a_048; toBin a_049;
              toBin a_050; toBin a_051; toBin a_052; toBin a_053; toBin a_054;
              toBin a_055; toBin a_056; toBin a_057; toBin a_058; toBin a_059
         {-# NOINLINE wr_chunk4 #-}
@@ -629,7 +629,7 @@ instance Bin Flags where
            a_023, a_024, a_025, a_026, a_027, a_028, a_029) <- rd_chunk1
           (a_030, a_031, a_032, a_033, a_034, a_035, a_036, a_037,
            a_038, a_039, a_040, a_041, a_042, a_043, a_044) <- rd_chunk2
-          (a_045, a_046, a_047, a_048, a_049, a_050, a_051, a_052,
+          (a_045, a_046, a_liftDicts, a_liftGroundDicts, a_047, a_048, a_049, a_050, a_051, a_052,
            a_053, a_054, a_055, a_056, a_057, a_058, a_059) <- rd_chunk3
           (a_060, a_061, a_062, a_063, a_064, a_065, a_066, a_067,
            a_068, a_069, a_070, a_071, a_072, a_073, a_074) <- rd_chunk4
@@ -647,7 +647,7 @@ instance Bin Flags where
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
                 a_020 a_021 a_022 a_dumpFormats a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
-                a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
+                a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_liftDicts a_liftGroundDicts a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
                 a_070 a_071 a_072 a_073 a_074 a_075 a_076 a_077 a_078 a_079
@@ -681,10 +681,10 @@ instance Bin Flags where
                      a_038, a_039, a_040, a_041, a_042, a_043, a_044)
         {-# NOINLINE rd_chunk3 #-}
         rd_chunk3 =
-          do a_045 <- fromBin; a_046 <- fromBin; a_047 <- fromBin; a_048 <- fromBin; a_049 <- fromBin;
+          do a_045 <- fromBin; a_046 <- fromBin; a_liftDicts <- fromBin; a_liftGroundDicts <- fromBin; a_047 <- fromBin; a_048 <- fromBin; a_049 <- fromBin;
              a_050 <- fromBin; a_051 <- fromBin; a_052 <- fromBin; a_053 <- fromBin; a_054 <- fromBin;
              a_055 <- fromBin; a_056 <- fromBin; a_057 <- fromBin; a_058 <- fromBin; a_059 <- fromBin
-             return (a_045, a_046, a_047, a_048, a_049, a_050, a_051, a_052,
+             return (a_045, a_046, a_liftDicts, a_liftGroundDicts, a_047, a_048, a_049, a_050, a_051, a_052,
                      a_053, a_054, a_055, a_056, a_057, a_058, a_059)
         {-# NOINLINE rd_chunk4 #-}
         rd_chunk4 =

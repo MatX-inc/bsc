@@ -45,6 +45,8 @@ Flags {
 	keepInlined = False,
 	kill = Nothing,
 	letGen = False,
+	liftDicts = True,
+	liftGroundDicts = False,
 	linkFlags = [],
 	maxTIStackDepth = 1000,
 	methodBVI = False,

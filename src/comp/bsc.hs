@@ -95,7 +95,9 @@ import GroundCType(groundCTypeStats)
 import BinData(binTypeStats)
 import IOUtil(progArgs)
 import Control.Exception(finally)
-import FixupDefs(fixupDefs, updDef)
+import LiftDicts(liftDictsPkg, liftDictsWrapper)
+import ISimpDicts(iSimpDicts)
+import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -447,7 +449,7 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
+    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt [] minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
@@ -479,11 +481,20 @@ compilePackage
     t <- dump errh flags t DFsimplified dumpnames mod'
     stats flags DFsimplified mod'
 
+    -- Lift dictionaries to top level (constructed directly as IDefs
+    -- over interned types; iConvPackage splices them into the package)
+    start flags DFliftdicts
+    let (mod_lifted, lifted_defs) =
+            if liftDicts flags then liftDictsPkg errh flags symt mod'
+            else (mod', [])
+    t <- dump errh flags t DFliftdicts dumpnames mod_lifted
+    stats flags DFliftdicts mod_lifted
+
     --------------------------------------------
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    imod <- iConvPackage errh flags symt mod'
+    imod <- iConvPackage errh flags symt lifted_defs mod_lifted
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
@@ -520,6 +531,14 @@ compilePackage
         -- so they can be put into the current IPackage for linking info
         binmods = zip (map (adjEnv env) binmods0) pkgsigs
 
+        -- The lifted-dictionary buckets used by "fixupDefs" and
+        -- "updDef" depend only on the imported packages ("binmods"),
+        -- which are fixed for the entire compile; so build them once
+        -- here and thread them through, rather than rebuilding them on
+        -- every call (once per compile plus once per synthesized
+        -- module, via "updDef").
+        dictBuckets = mkDictBuckets binmods
+
     t <- dump errh flags t DFbinary dumpnames binmods
 
     -- For "genModule" we construct a symbol table that includes all defs,
@@ -534,14 +553,24 @@ compilePackage
     t <- dump errh flags t DFsympostbinary dumpnames mint
 
     start flags DFfixup
-    let (imodf, alldefsList) = fixupDefs imod binmods
+    -- the canonical-dictionary redirect map, computed once for the
+    -- whole compile (see mkDictRedirects); "updDef" reuses it per
+    -- synthesized module instead of rebuilding the evidence map over
+    -- every imported def each time
+    let dictRedirects = mkDictRedirects dictBuckets imod binmods
+    let (imodf, alldefsList) = fixupDefs dictRedirects imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
+    start flags DFisimpdicts
+    let imodsd = iSimpDicts imodf
+    iPCheck flags symt imodsd "isimpdicts"
+    t <- dump errh flags t DFisimpdicts dumpnames imodsd
+
     start flags DFisimplify
     let imods :: IPackage HeapData
-        imods = iSimplify imodf
+        imods = iSimplify imodsd
     iPCheck flags symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
@@ -622,16 +651,30 @@ compilePackage
             -- but multiple-error-reporting chose to keep going;
             -- since it will already appear as a user error, no need for
             -- an internal error
-            (idef, ok2) <- compileCDefToIDef errh flags dumpnames' symt imods def
+            -- "im" (not "imods"): the accumulated package, so lifted
+            -- dictionaries minted for earlier wrappers are visible --
+            -- their names are not reused and references to them resolve.
+            -- "mod_lifted" supplies the package's typechecked defs, from
+            -- which the wrapper's dictionary lifting reads the
+            -- instance-def info (they are not in the symbol table).
+            let (CPackage _ _ _ _ _ host_ds _) = mod_lifted
+            (idef, wrap_lifted_defs, ok2)
+                <- compileCDefToIDef errh flags dumpnames' symt host_ds im def
 
             t <- getNow
             start flags DFwrapper_fixup
+            -- The wrapper's lifted dictionaries join the package's defs
+            -- (reaching the .bo like any other definition), before the
+            -- def update below re-ties the package's cyclic references
+            let im_lifted =
+                    if null wrap_lifted_defs then im
+                    else im { ipkg_defs = ipkg_defs im ++ wrap_lifted_defs }
             -- Replace the pre-synthesis definition for a module with its
             -- post-synthesis definition, and update the package's cyclic
             -- references
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
-            let im' = updDef idef im binmods
+            let im' = updDef dictRedirects idef im_lifted binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
@@ -2414,12 +2457,16 @@ missingUserFiles flags cSrcFiles = filterM cantFind cSrcFiles
 
 -- ===============
 
-compileCDefToIDef :: ErrorHandle -> Flags -> DumpNames -> SymTab ->
-                     IPackage a -> CDefn -> IO (IDef a, Bool)
-compileCDefToIDef errh flags dumpnames symt ipkg def =
+compileCDefToIDef :: ErrorHandle -> Flags -> DumpNames -> SymTab -> [CDefn] ->
+                     IPackage a -> CDefn -> IO (IDef a, [IDef a], Bool)
+compileCDefToIDef errh flags dumpnames symt host_ds ipkg def =
  do
     let pkgid = ipkg_name ipkg
     let cpkg0 = CPackage pkgid (Left []) [] [] [] [def] []
+    -- names already taken by the package's defs -- the main flow's
+    -- lifted dictionaries and those of previously compiled wrappers --
+    -- which freshly lifted dictionaries must avoid
+    let taken_ids = [ i | IDef i _ _ _ <- ipkg_defs ipkg ]
     t <- getNow
 
     start flags DFwrapper_ctxreduce
@@ -2427,21 +2474,36 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs) <- cTypeCheck errh flags symt cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs) <- cTypeCheck errh flags symt taken_ids cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified
     let cpkg_simp = simplify flags cpkg_chk
-        def' = case cpkg_simp of
-                 (CPackage _ _ _ _ _ [d] _) -> d
-                 _ -> internalError "compileCDefToIDef: unexpected number of defs"
     t <- dump errh flags t DFwrapper_simplified dumpnames cpkg_simp
 
+    -- Lift the wrapper's dictionaries before ISyntax conversion, as
+    -- the package flow does before iConvPackage, so that iConvDef
+    -- emits references to the lifted definitions instead of
+    -- re-expanding the full dictionary construction (duplicated per
+    -- use site by the typechecker) at every use.
+    start flags DFwrapper_liftdicts
+    let (cpkg_lift, lifted_defs) =
+            if liftDicts flags
+            then liftDictsWrapper errh flags symt taken_ids host_ds cpkg_simp
+            else (cpkg_simp, [])
+        def' = case cpkg_lift of
+                 (CPackage _ _ _ _ _ [d] _) -> d
+                 _ -> internalError "compileCDefToIDef: unexpected number of defs"
+    t <- dump errh flags t DFwrapper_liftdicts dumpnames cpkg_lift
+
     start flags DFwrapper_internal
-    let idef = iConvDef errh flags symt ipkg def'
+    -- the lifted defs join the conversion environment, so the
+    -- references to them in def' resolve
+    let ipkg' = ipkg { ipkg_defs = ipkg_defs ipkg ++ lifted_defs }
+        idef = iConvDef errh flags symt ipkg' def'
     t <- dump errh flags t DFwrapper_internal dumpnames idef
 
-    return (idef, not tcErrors)
+    return (idef, lifted_defs, not tcErrors)
 
 -- ===============
 

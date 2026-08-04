@@ -60,11 +60,15 @@ import IConvLet(docycles, reorderDs, unpoly)
 
 type Env a = M.Map Id (IExpr a)
 
+-- The lifted dictionaries accumulated by LiftDicts arrive as ready
+-- IDefs; they are appended to the package's definitions, and (through
+-- the env knot below) references to them from the ordinary definitions
+-- resolve exactly like references to any other top-level definition.
 iConvPackage :: ErrorHandle -> Flags -> SymTab ->
-               CPackage -> IO (IPackage a)
-iConvPackage errh flags r (CPackage pi _ _ _ _ ds _) =
+               [IDef a] -> CPackage -> IO (IPackage a)
+iConvPackage errh flags r liftedDefs (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds')
-  where ds' = concatMap (iConvD errh flags pi r env pvs) ds
+  where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
         env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
         pvs = map IVar tmpVarIds
         ps = [ qualP p | CPragma p <- ds ]

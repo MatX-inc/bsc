@@ -51,7 +51,7 @@ import ASyntaxUtil
 import AExpand(aExpand, xaSRemoveUnused, xaXExpand, expandAPackage)
 import BoolExp
 import Prim
-import Pragma(defPropsHasNoCSE)
+import DefProp(defPropsHasNoCSE)
 import Data.Maybe(fromMaybe)
 import Util(anySame)
 
