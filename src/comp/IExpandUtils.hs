@@ -96,6 +96,10 @@ import CSyntax(CExpr)
 import CType(TISort(..), StructSubType(..))
 import VModInfo
 import ISyntax
+-- ==== TEMPORARY PRED PROBE imports (do not commit) ====
+import Unsafe.Coerce(unsafeCoerce)
+import Data.Bits((.&.))
+import System.IO(hPutStrLn, stderr, hFlush)
 import ISyntaxUtil
 import Prim
 import Wires
@@ -178,9 +182,16 @@ pIf' c@(IRefT _ _ _ (HeapData r)) t e =
       _ -> pIf'' c t e
 pIf' c t e = pIf'' c t e
 
+{-# NOINLINE pIf'' #-}
 pIf'' :: HExpr -> HPred -> HPred -> HPred
-pIf'' (IAps (ICon _ (ICPrim _ PrimBNot)) [] [c]) t e = pIf' c e t
-pIf'' c t@(PConj ts) e@(PConj es) =
+pIf'' c0 t0 e0 = unsafePerformIO $ do
+    (n, t, i) <- readIORef probeCounts
+    writeIORef probeCounts (n, t, i + 1)
+    return (pIfPure c0 t0 e0)
+
+pIfPure :: HExpr -> HPred -> HPred -> HPred
+pIfPure (IAps (ICon _ (ICPrim _ PrimBNot)) [] [c]) t e = pIf' c e t
+pIfPure c t@(PConj ts) e@(PConj es) =
     let te = ts `S.intersection` es
         ts' = ts `S.difference` te
         es' = es `S.difference` te
@@ -196,8 +207,68 @@ pSel idx idx_sz es =
       then PConj common_ps
       else PConj (S.insert (PSel idx idx_sz (map PConj ps')) common_ps)
 
+-- ==== TEMPORARY PRED PROBE (do not commit) ====
+-- counters measuring rework in the predicate machinery, to bound the
+-- win of an elaboration-scoped Pred interning table + apply cache
+{-# NOINLINE probeCounts #-}
+probeCounts :: IORef (Int, Int, Int)  -- (pConj total, pConj trivial, pIf'' total)
+probeCounts = unsafePerformIO (newIORef (0, 0, 0))
+
+{-# NOINLINE probePairs #-}
+probePairs :: IORef (M.Map (Pred (), Pred ()) Int)
+probePairs = unsafePerformIO (newIORef M.empty)
+
+{-# NOINLINE probeResults #-}
+probeResults :: IORef (S.Set (Pred ()))
+probeResults = unsafePerformIO (newIORef S.empty)
+
+{-# NOINLINE probeNorm #-}
+probeNorm :: IORef (Int, M.Map (Pred ()) Int)
+probeNorm = unsafePerformIO (newIORef (0, M.empty))
+
+probeCap :: Int
+probeCap = 4000000
+
+probeRecordPConj :: Pred a -> Pred a -> Pred a -> IO ()
+probeRecordPConj p1 p2 r = do
+    (n, t, i) <- readIORef probeCounts
+    let triv (PConj ts) = S.null ts
+        isTriv = triv p1 || triv p2
+        n' = n + 1
+    writeIORef probeCounts (n', if isTriv then t+1 else t, i)
+    if isTriv then return () else do
+      m <- readIORef probePairs
+      let k = (unsafeCoerce p1 :: Pred (), unsafeCoerce p2 :: Pred ())
+      if M.size m < probeCap
+        then writeIORef probePairs (M.insertWith (+) k 1 m)
+        else return ()
+      rs <- readIORef probeResults
+      if S.size rs < probeCap
+        then writeIORef probeResults (S.insert (unsafeCoerce r :: Pred ()) rs)
+        else return ()
+    if n' >= 262144 && (n' .&. (n' - 1)) == 0
+      then do m <- readIORef probePairs
+              rs <- readIORef probeResults
+              (nn, nm) <- readIORef probeNorm
+              hPutStrLn stderr ("PREDPROBE pconj=" ++ show n' ++
+                                " trivial=" ++ show t ++
+                                " distinct_pairs=" ++ show (M.size m) ++
+                                " distinct_results=" ++ show (S.size rs) ++
+                                " pif=" ++ show i ++
+                                " norm=" ++ show nn ++
+                                " norm_distinct=" ++ show (M.size nm))
+              hFlush stderr
+      else return ()
+
+{-# NOINLINE pConj #-}
 pConj :: Pred a -> Pred a -> Pred a
-pConj p1@(PConj ts1) p2@(PConj ts2)
+pConj p1 p2 = unsafePerformIO $ do
+    let r = pConjPure p1 p2
+    probeRecordPConj p1 p2 r
+    return r
+
+pConjPure :: Pred a -> Pred a -> Pred a
+pConjPure p1@(PConj ts1) p2@(PConj ts2)
   | S.null ts1 && S.null ts2 = pTrue
   | S.null ts1 = p2
   | S.null ts2 = p1
@@ -226,8 +297,18 @@ listConj (x:xs) (y:ys) = (x `pConj` y) : listConj xs ys
 normPConj :: HPred -> G HPred
 normPConj p = return $ normPConj' p
 
+{-# NOINLINE normPConj' #-}
 normPConj' :: HPred -> HPred
-normPConj' (PConj ps) =
+normPConj' p0 = unsafePerformIO $ do
+    (nn, nm) <- readIORef probeNorm
+    let nm' = if M.size nm < probeCap
+              then M.insertWith (+) (unsafeCoerce p0 :: Pred ()) 1 nm
+              else nm
+    writeIORef probeNorm (nn + 1, nm')
+    return (normPConjPure p0)
+
+normPConjPure :: HPred -> HPred
+normPConjPure (PConj ps) =
     let
         un (PConj ps) = S.toList ps
 
