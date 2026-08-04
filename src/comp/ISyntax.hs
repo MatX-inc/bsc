@@ -551,7 +551,7 @@ ehashEnabled = not ("-hack-no-iexpr-hash" `elem` progArgs)
 
 -- an Id's content: base and qualifier character hashes
 idHash :: Hash -> Id -> Hash
-idHash h i = hashInt (hashInt h (fsContentHash (getIdBase i))) (fsContentHash (getIdQual i))
+idHash h i = {-# SCC "idHash" #-} hashInt (hashInt h (fsContentHash (getIdBase i))) (fsContentHash (getIdQual i))
 
 posHash :: Hash -> Position -> Hash
 posHash h p = hashInt (hashInt (hashInt h (fsContentHash (pos_file p)))
@@ -565,7 +565,7 @@ posssHash = hashMaybe (hashList posHash)
 -- uncached leaves; 0 everywhere when disabled
 eHash :: IExpr a -> Hash
 eHash e0 | not ehashEnabled = 0
-         | otherwise = get e0
+         | otherwise = {-# SCC "eHash" #-} get e0
   where get (ILam_ _ _ h _ _ _) = h
         get (IAps_ _ _ h _ _ _) = h
         get (ILAM_ _ _ h _ _ _) = h
@@ -581,7 +581,7 @@ eHash e0 | not ehashEnabled = 0
 -- collide and fall back to the structural walk, which is the status
 -- quo for them.
 conHash :: Hash -> IConInfo a -> Hash
-conHash h0 ic0 = go (hashInt h0 (ordC ic0)) ic0
+conHash h0 ic0 = {-# SCC "conHash" #-} go (hashInt h0 (ordC ic0)) ic0
   where
     go h (ICForeign { fcallNo = n }) = hashMaybe hashInteger h n
     go h (ICCon { iConType = t }) = hashMix h (tyHash t)
@@ -626,7 +626,7 @@ mkILam i t e
         -- types), so pruning needs its variables counted
         ftvs = fTVarSet t `vsUnion` eFTVarSet e
         -- the type is NOT hashed: cmpE ignores it (see hashing note)
-        h | ehashEnabled = hashMix (idHash (hashTag 17) i) (eHash e)
+        h | ehashEnabled = {-# SCC "mkILamHash" #-} hashMix (idHash (hashTag 17) i) (eHash e)
           | otherwise    = 0
 
 mkIAps :: IExpr a -> [IType] -> [IExpr a] -> IExpr a
@@ -637,7 +637,7 @@ mkIAps f ts es
         ftvs = foldr (vsUnion . eFTVarSet)
                      (foldr (vsUnion . fTVarSet) (eFTVarSet f) ts)
                      es
-        h | ehashEnabled =
+        h | ehashEnabled = {-# SCC "mkIApsHash" #-}
               hashList (\ h' t -> hashMix h' (tyHash t))
                        (hashList (\ h' x -> hashMix h' (eHash x))
                                  (hashMix (hashTag 21) (eHash f))
@@ -652,14 +652,14 @@ mkILAM i k e
   where fvs  = eFVarSet e
         ftvs = vsDelete i (eFTVarSet e)
         -- the kind is NOT hashed: cmpE ignores it (see hashing note)
-        h | ehashEnabled = hashMix (idHash (hashTag 19) i) (eHash e)
+        h | ehashEnabled = {-# SCC "mkILAMHash" #-} hashMix (idHash (hashTag 19) i) (eHash e)
           | otherwise    = 0
 
 mkICon :: Id -> IConInfo a -> IExpr a
 mkICon i ic
   | efvCacheEnabled = ICon_ (conFTVarSet ic) h i ic
   | otherwise       = ICon_ vsEmpty h i ic
-  where h | ehashEnabled =
+  where h | ehashEnabled = {-# SCC "mkIConHash" #-}
               conHash (posssHash (idHash (hashTag 27) i)
                                  (getIdInlinedPositions i))
                       ic
@@ -781,8 +781,8 @@ instance Show (IExpr a) where
 -- again, so subtree comparisons are hash-first as well.
 cmpE :: IExpr a -> IExpr a -> Ordering
 cmpE x y =
-    case compare (eHash x) (eHash y) of
-    EQ -> cmpES x y
+    case {-# SCC "cmpE_hashcmp" #-} compare (eHash x) (eHash y) of
+    EQ -> {-# SCC "cmpE_walk" #-} cmpES x y
     o  -> o
 
 cmpES :: IExpr a -> IExpr a -> Ordering
