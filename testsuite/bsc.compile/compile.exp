@@ -8,6 +8,14 @@ compile_pass MyProg2.bs
 compile_pass TopRec.bsv
 
 # test .bo file linking
+#
+# Six is compiled against FiveA, then Five is recompiled from FiveB --
+# same signature, different body -- which leaves Six.bo stale.  Whether
+# that must be caught depends on the build:
+#
+#   hashes on (the default, and any search-path or make-style build):
+#     a stale .bo genuinely can be sitting there, so it must be
+#     detected.  S0027.
 copy FiveA.bs Five.bs
 compile_pass Five.bs
 compile_pass Six.bs
@@ -17,6 +25,12 @@ after 1500
 copy FiveB.bs Five.bs
 
 compile_pass Five.bs
+# KNOWN FAILURE, deliberately left red: sigHash moved from content to
+# signature hashing (a .bo and a .bc can only agree over what they both
+# contain, and a .bc omits definitions), so a body-only change no longer
+# moves the hash.  Nothing detects the stale Six.bo and sysTest prints
+# Fail instead of Pass -- a silent wrong answer, not just a missing
+# diagnostic.  This is the only test pointing at that.
 compile_fail_error Test.bs S0027 1 "" 1
 
 
