@@ -201,6 +201,11 @@ class Types t where
   tv    :: t -> [TyVar]
 
 instance Types Type where
+  -- canonical (cons-interned) nodes are ground -- no TVar anywhere --
+  -- and normTAp-normal (mkTAp refuses redexes), so substitution is
+  -- the identity and there are no free variables; both answers are
+  -- O(1) where the walk over a huge ground dictionary type dominated
+  apSub _ t | isCanonType t = t
   apSub (S seo _) v@(TVar u) =
         case slookup u seo of
         Just t  ->
@@ -218,6 +223,7 @@ instance Types Type where
   apSub s (TAp l r) = normTAp (apSub s l) (apSub s r)
   apSub s t         = t
 
+  tv t | isCanonType t = []
   tv (TVar u)  = [u]
   tv (TAp l r) = tv l `union` tv r
   tv t         = []
