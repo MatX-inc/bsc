@@ -70,6 +70,7 @@ import ISyntax
 import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
+import ATFRules(buildATFRules)
 import IExpandUtils
 import Wires
 import IWireSet
@@ -240,17 +241,18 @@ iExpandPref = "__h"
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
            SymTab -> M.Map Id HExpr ->
-           IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
+  -- the type-function rewrite rules are a pure view of the symbol table
+  let atf_rules = buildATFRules symt
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps $
+  go <- runG errh flags symt alldefs atf_rules mi is_noinlined_func pps $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -264,7 +266,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 
   chkIfcPortNames errh args ifc vclockinfo vresetinfo
 
-  let norm = fullTypeNormalizer flags symt $ go_atfCache go
+  let norm = fullTypeNormalizer atf_rules
 
   -- turn heap into IDef definitions
   let
@@ -640,7 +642,6 @@ removeInlinedPositions flags imod0 =
         ief { ief_value = fmap (\ (e, t) -> (rmExpr e, t)) (ief_value ief),
               ief_body = fmap rmRules (ief_body ief) }
 
-
 -- -----
 
 -- After the evaluator has run and the heap pointers have been collected,
@@ -686,7 +687,10 @@ eqPtrs heap ptrs =
                         case IM.lookup i ptrm of
                         Nothing -> e
                         -- hd_ref errors because we don't use it once we have the iheap
-                        Just i' -> IRefT t i' (internalError "eqPtrs ref") (internalError "eqPtrs ref")
+                        -- poss must be a real value (S.empty): the position
+                        -- readers and NFData force it.  The ref payload is
+                        -- genuinely never touched, so it stays an error.
+                        Just i' -> IRefT t i' S.empty (internalError "eqPtrs ref")
                     sub e = e
                 in  case M.lookup e dsm of
                     Nothing -> (M.insert e p dsm, ptrm)
@@ -3088,7 +3092,9 @@ data Arg = E HExpr | T IType deriving (Eq, Show)
 
 getArgPosition :: Arg -> Position
 getArgPosition (E e) = getIExprPosition e
-getArgPosition (T t) = getITypePosition t
+-- type arguments have no positions: Ids embedded in ITypes carry
+-- noPosition by construction (IType normalizes them on entry)
+getArgPosition (T _) = noPosition
 
 evalArgUH :: Arg -> G Arg
 evalArgUH (T t) = return (T t)
@@ -5294,10 +5300,6 @@ cExprToIExpr tag ce it = do
   case TM.tiResult ti_res of
     Left errs -> internalError (err_tag ++ " errors: " ++ ppReadable errs)
     Right (ps, ce') -> do
-      let convT = iConvT flags r
-          newATFs = M.mapKeys (\(i, ts) -> (i, map convT ts))
-                              (M.map convT (TM.tiATFCache ti_res))
-      mergeATFCache newATFs
       when (not (null ps)) $ internalError (err_tag ++ " unreduced: " ++ ppReadable ps)
       env <- getDefEnv
       errh <- getErrHandle
