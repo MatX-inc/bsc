@@ -747,7 +747,8 @@ defaultFlags bluespecdir = Flags {
         warnActionShadowing = True,
         warnMethodUrgency = True,
         warnUndetPred = False,
-        semanticPortsComment = False
+        semanticPortsComment = False,
+        stableVerilog = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1563,6 +1564,11 @@ externalFlags = [
           "derive the Verilog Ports comment from the APackage analysis",
           Hidden)),
 
+        ("stable-verilog",
+         (Toggle (\f x -> f {stableVerilog=x}) (showIfTrue stableVerilog),
+          "deterministic Verilog emission (canonical names and ordering)",
+          Hidden)),
+
         ("show-compiles",
          (Toggle (\f x -> f {showUpds=x}) (showIfTrue showUpds),
           "show recompilations", Visible)),
@@ -2057,7 +2063,8 @@ showFlagsRaw flags =
           ("warnActionShadowing", show (warnActionShadowing flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
           ("warnUndetPred", show (warnUndetPred flags)),
-          ("semanticPortsComment", show (semanticPortsComment flags))
+          ("semanticPortsComment", show (semanticPortsComment flags)),
+          ("stableVerilog", show (stableVerilog flags))
          ]
         in "Flags {\n" ++
                (intercalate ",\n" (map render fields)) ++
