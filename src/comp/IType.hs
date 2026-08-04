@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternSynonyms #-}
 
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module IType(
   IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll)
   ,IKind(..)
