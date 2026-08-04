@@ -1,6 +1,11 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternSynonyms #-}
 
+-- profiling-only: the Eq/Ord instances funnel through cmpT, a tiny
+-- leaf comparison called at extreme frequency during elaboration; an
+-- SCC here blocks inlining of the instance wrappers (distorting
+-- -fprof-auto profiles) and their time belongs to callers
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module IType(
   IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll)
   ,IKind(..)
