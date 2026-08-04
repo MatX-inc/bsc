@@ -11,6 +11,7 @@ Flags:
      -aggressive-conditions
     -dump-formats   vcd
      -i   BLUESPECDIR
+     -import-hashes
      -lift
      -o   a.out
      -parallel-sim-link   1

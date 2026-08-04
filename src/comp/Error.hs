@@ -1123,6 +1123,7 @@ data ErrMsg =
         | EDollarLink
         | EElabOnlyNotSrcCompile
         | EElabOnlyNoElab
+        | ECheckOnlyConflict String
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -4300,6 +4301,13 @@ getErrorText EElabOnlyNoElab =
      s2par ("The flag -elab-only cannot be combined with -no-elab: " ++
             "suppressing both the .v and the .ba files would leave no " ++
             "generated output."))
+
+getErrorText (ECheckOnlyConflict fl) =
+    (System 102, empty,
+     s2par ("The flag -check-only cannot be combined with " ++ fl ++ ": " ++
+            "a check compile stops after typechecking and emits only a " ++
+            "signature (.bc), so no module can be elaborated, generated " ++
+            "or linked."))
 
 -- Removed System 58 ELicenseUnavailable, BSC is now open source
 -- Removed System 59 WLicenseExpires, BSC is now open source

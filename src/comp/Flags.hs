@@ -178,7 +178,18 @@ data Flags = Flags {
         -- ordering, so the same .ba yields byte-identical .v in any
         -- compile (off by default: the emitted names then match what
         -- this compiler has historically produced)
-        stableVerilog :: Bool
+        stableVerilog :: Bool,
+        -- Record the transitive-closure hashes in a package's depends list,
+        -- and run the consistency check they drive.  On by default.
+        --
+        -- Those hashes are what makes a dependent's bytes move when any
+        -- package anywhere in its closure changes signature, so -no-import-
+        -- hashes is what lets an unaffected dependent rebuild byte-identically
+        -- and its own dependents cache-hit.  Turning it off is only safe where
+        -- the build guarantees input consistency: bazel content-addresses its
+        -- inputs, a search path with a stale .bo does not.
+        importHashes :: Bool,
+        baDebugInfo :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

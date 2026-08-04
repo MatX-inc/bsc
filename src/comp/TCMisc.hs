@@ -1026,7 +1026,7 @@ findAssump i as =
         case findVar s i of
          Nothing -> errorAtId EUnboundVar i
          Just (VarInfo _ a d pkg) -> do
-            recordPackageUse pkg
+            recordDeclUse pkg i
             case d of
                 Nothing -> return ()
                 Just str -> twarn (getPosition i,

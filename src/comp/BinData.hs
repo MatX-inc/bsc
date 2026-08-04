@@ -5,11 +5,11 @@
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module BinData ( Byte
-               , putBs, putB, putI
-               , getN, getB, getI -- , getBytesRead
+               , putBs, putB, putI, putChunk
+               , getN, getB, getI, getBS -- , getBytesRead
                , Bin(..)
                , section
-               , encode, decode, decodeWithHash
+               , encode, encodeLazy, decode, decodeWithHash
                , binTypeStats
                ) where
 
@@ -56,7 +56,7 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash, hashInit, nextHashByte, showHash)
+import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(sort, intercalate)
 import Control.Monad(replicateM, liftM, ap)
@@ -66,6 +66,7 @@ import Data.Bits
 import Data.Word
 import GHC.Exts(IsList(..))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
@@ -122,6 +123,7 @@ type Byte = Word8
 -}
 
 data BinElem = B [Byte]
+             | BC !BS.ByteString  -- a pre-packed chunk of plain bytes
              -- shared types
              | S FString
              | I Id
@@ -137,6 +139,9 @@ data BinElem = B [Byte]
 instance Show BinElem where
   show (B bs)    = "[" ++
                    (intercalate "," [showHex b "" | b <- bs]) ++
+                   "]"
+  show (BC bs)   = "[" ++
+                   (intercalate "," [showHex b "" | b <- BS.unpack bs]) ++
                    "]"
   show (S s)     = getFString s
   show (I i)     = show i
@@ -323,6 +328,11 @@ putBs bs = Out [B bs] ()
 putB :: Byte -> Out ()
 putB b = putBs [b]
 
+-- Insert a pre-packed chunk of bytes (avoids the [Byte] detour for
+-- payloads that already exist as a ByteString)
+putChunk :: BS.ByteString -> Out ()
+putChunk bs = Out [BC bs] ()
+
 -- Insert an Int value (between 0 and 255) into the byte stream
 putI :: Int -> Out ()
 putI n = if (n >= 0) && (n < 256)
@@ -344,10 +354,16 @@ section s action = do { beginSection s; action; endSection }
 -- The In monad makes it easy to parse a byte stream
 
 -- The In monad state keeps tables for shared structures
--- in addition to unconsumed bytes and an optional hash of
--- consumed bytes.
+-- in addition to unconsumed bytes.
+--
+-- The .bo hash is deliberately NOT threaded through here.  The decoder
+-- consumes the stream strictly sequentially and decodeWithHash proves it
+-- consumed all of it, so folding over the raw bytes gives the identical
+-- value without a Maybe test and a box allocation on every getB.  .ba
+-- reads never hashed at all (GenABin.readABinFile), so they only ever
+-- paid the extra constructor width.
 
-data IS = IS !BinTable !BS.ByteString !Int !(Maybe Hash)
+data IS = IS !BinTable !BS.ByteString !Int
 
 -- In monad is a state transformer type monad
 newtype In a = In (IS -> (a,IS))
@@ -368,19 +384,40 @@ instance Applicative In where
 getN :: Int -> In [Byte]
 getN n = replicateM n getB
 
+-- Read n bytes as one slice of the input (no per-byte list cells).
+getBS :: Int -> In BS.ByteString
+getBS n = In $ \(IS bc bs off) ->
+  if off + n > BS.length bs
+  then internalError "BinData.getBS: unexpected end of byte stream"
+  else let sl = BS.take n (BS.drop off bs)
+           !off' = off + n
+       in (sl, IS bc bs off')
+
 getB :: In Byte
-getB = In $ \(IS bc bs off mh) ->
+getB = In $ \(IS bc bs off) ->
   case BS.indexMaybe bs off of
     Nothing -> internalError "BinData.getB: unexpected end of byte stream"
     Just b -> let !off' = off + 1
-              in case mh of
-                   Just h -> let !h' = nextHashByte h b
-                             in (b, IS bc bs off' (Just h'))
-                   Nothing -> (b, IS bc bs off' Nothing)
+              in (b, IS bc bs off')
 
 -- get an Int value (between 0 and 255)
 getI :: In Int
 getI = do { b <- getB; return (fromEnum b) }
+
+-- LEB128: little-endian 7-bit groups, high bit set on all but the last.
+-- Values below 128 cost one byte, below 16384 two, and so on.
+putVarint :: Int -> Out ()
+putVarint n
+    | n < 0     = internalError $ "BinData.putVarint: negative: " ++ show n
+    | n < 0x80  = putB (toEnum n)
+    | otherwise = do putB (toEnum ((n .&. 0x7f) .|. 0x80))
+                     putVarint (n `shiftR` 7)
+
+getVarint :: In Int
+getVarint = go 0 0
+  where go acc sh = do b <- getB
+                       let acc' = acc .|. ((fromEnum b .&. 0x7f) `shiftL` sh)
+                       if b < 0x80 then return acc' else go acc' (sh + 7)
 
 {-
 getBytesRead :: In Integer
@@ -429,10 +466,10 @@ mkNewVal :: (BinTable -> (Table v)) ->
             (BinTable -> (Table v) -> BinTable) ->
             In (Int,v)
 mkNewVal get set =
-  In $ \(IS bt bs off h) ->
+  In $ \(IS bt bs off) ->
           let (Known n m) = get bt
               bt' = set bt (Known (n+1) m)
-          in ((n, undefined), (IS bt' bs off h))
+          in ((n, undefined), (IS bt' bs off))
 
 -- get the right table, add a mapping from the index to the value,
 -- and put back the updated table while returning ()
@@ -440,17 +477,17 @@ mkRecordVal ::(BinTable -> (Table v)) ->
               (BinTable -> (Table v) -> BinTable) ->
               (Int -> v -> In ())
 mkRecordVal get set idx v =
-  In $ \(IS bt bs off h) ->
+  In $ \(IS bt bs off) ->
           let (Known n m) = get bt
               bt' = v `seq` set bt (Known n (M.insert idx v m))
-          in ((), (IS bt' bs off h))
+          in ((), (IS bt' bs off))
 
 
 -- get the right table and look up the value for the given index
 mkLookupIdx ::(BinTable -> (Table v)) ->
               (Int -> In v)
 mkLookupIdx get idx =
-  In $ \is@(IS bt _ _ _) ->
+  In $ \is@(IS bt _ _) ->
           let (Known _ m) = get bt
           in case (M.lookup idx m) of
                (Just v) -> (v, is)
@@ -470,15 +507,13 @@ mkLookupIdx get idx =
 -- indexes are assigned in the same top-down order as they are assigned
 -- during writing.  This particularly affects recursive types.
 readShared :: (Bin a, Shared k a) => In a
-readShared = do tag <- getI
+readShared = do tag <- getVarint
                 case tag of
                   0 -> do (idx, dummy) <- newVal
                           v <- readBytes
                           recordVal idx (v `asTypeOf` dummy)
                           return v
-                  1 -> do idx <- readBytes
-                          lookupIdx idx
-                  n -> internalError $ "BinData.readShared: invalid tag " ++ (show tag)
+                  n -> lookupIdx (n - 1)
 
 -- actual Shared instance definitions
 
@@ -679,10 +714,10 @@ instance Bin FString where
 instance {-# OVERLAPPABLE #-} Bin String where
     writeBytes fs = do let bs = TE.encodeUtf8 $ T.pack fs
                        toBin $ toInteger $ B.length bs
-                       putBs $ B.unpack bs
+                       putChunk $ B.toStrict bs
     readBytes     = do len <- fromBin
-                       bs <- getN len
-                       return (T.unpack $ TE.decodeUtf8 $ B.pack bs)
+                       bs <- getBS len
+                       return (T.unpack $ TE.decodeUtf8 $ B.fromStrict bs)
 
 instance Bin Position where
     writeBytes (Position fs l c is_stdlib) = section "Position" $ do
@@ -1521,6 +1556,8 @@ buildHistogram bes = snd (foldl build (["<UNCLAIMED>"], M.empty) bes)
   where build ([], _) _ = internalError "unbalanced accounting marks"
         build (sec, hist) (B b) =
           (sec, updateBytes sec (toInteger (length b)) hist)
+        build (sec, hist) (BC b) =
+          (sec, updateBytes sec (toInteger (BS.length b)) hist)
         build (sec, hist) (Start s) = ((s:sec), incrSection s hist)
         build ((_:sec), hist) End   = (sec, hist)
         build _ x = internalError $ "unexpected BinElem: " ++ (show x)
@@ -1544,17 +1581,23 @@ share (IT t)  bc = share' (itype_key t) t bc
 -- share (ASL l) bc = share' l l bc
 share be      bc = ([be], bc)
 
+-- A shared value is either new (payload follows) or a backreference.
+-- One varint carries both: 0 = new, v = a backref to index v-1.
+-- Interned values repeat constantly, so backref width dominates the
+-- stream: indices below 127 cost a single byte (the old encoding spent
+-- a discriminator byte plus a terminated base-254 integer, 2-4 bytes).
 share' :: (Bin v, Shared k v) => k -> v -> BinCache -> ([BinElem], BinCache)
 share' k x bc =
           case (knownAs k x bc) of
-            (Just idx) -> (out_data $ do { putI 1; writeBytes idx }, bc)
-            Nothing    -> (out_data $ do { putI 0; writeBytes x },
+            (Just idx) -> (out_data $ putVarint (idx + 1), bc)
+            Nothing    -> (out_data $ do { putVarint 0; writeBytes x },
                            addKey k x bc)
 
 
 compress :: [BinElem] -> [BinElem]
 compress bes = compress' (bes, unknownCache)
   where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
+        compress' ((x@(BC _):xs), cache) = x:(compress' (xs, cache))
         compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
         compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
         compress' ((x:xs), cache) =
@@ -1569,32 +1612,58 @@ compress bes = compress' (bes, unknownCache)
 
 runOut :: Out () -> [Byte]
 runOut (Out xs _) = let bes   = compress $ toList xs
-                        bytes = concat [ bs | B bs <- bes ]
+                        bytes = concat [ elemBytes e | e <- bes ]
+                        elemBytes (B bs)  = bs
+                        elemBytes (BC bs) = BS.unpack bs
+                        elemBytes _       = []
                     in -- trace ("xs = " ++ (show xs)) $
                        -- trace ("bytes = " ++ (show bytes)) $
                        if trace_bindata
                        then trace (showHist (buildHistogram bes)) $ bytes
                        else bytes
 
+-- Builder-backed variant of the same pipeline: the compressed element
+-- stream folds straight into Builder buffers (adjacent byte runs
+-- coalesce into ~4k chunks) instead of materializing a [Byte].  The
+-- element stream is consumed lazily exactly as above, so production
+-- stays demand-driven: nothing is forced that the traversal does not
+-- visit.
+runOutBuilder :: Out () -> BB.Builder
+runOutBuilder (Out xs _) =
+    let bes = compress $ toList xs
+        toB (B bs)  = foldMap BB.word8 bs
+        toB (BC bs) = BB.byteString bs
+        toB _       = mempty
+    in if trace_bindata
+       then trace (showHist (buildHistogram bes)) $ foldMap toB bes
+       else foldMap toB bes
+
 -- Convenience function for encoding structures in the Bin typeclass
 encode :: (Bin a) => a -> [Byte]
 encode x = runOut (toBin x)
 
-runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
-runIn (In f) bs do_hash =
-  let h0 = if do_hash then (Just hashInit) else Nothing
-      (x,(IS _ _ off h)) = f (IS unknownTable bs 0 h0)
-      hstr = maybe "" showHash h
-  in (x, off, hstr)
+-- lazy-ByteString encode: chunks stream to the consumer as they fill
+encodeLazy :: (Bin a) => a -> B.ByteString
+encodeLazy x = BB.toLazyByteString (runOutBuilder (toBin x))
+
+runIn :: In a -> BS.ByteString -> (a, Int)
+runIn (In f) bs =
+  let (x,(IS _ _ off)) = f (IS unknownTable bs 0)
+  in (x, off)
 
 decode :: (Bin a) => BS.ByteString -> a
-decode s = let (x, off, _) = runIn fromBin s False
+decode s = let (x, off) = runIn fromBin s
            in if off == BS.length s
               then x
               else internalError "BinData.decode: unused trailing bytes"
 
+-- The hash is a fold over the byte stream in consumption order.  getB
+-- advances strictly forward and never revisits a byte (shared structures are
+-- table indices, not byte offsets), and the offset check proves the decoder
+-- consumed exactly s -- so this is the same value the old
+-- threaded-through-IS hash produced, for every existing .bo.
 decodeWithHash :: (Bin a) => BS.ByteString -> (a,String)
-decodeWithHash s = let (x, off, hstr) = runIn fromBin s True
+decodeWithHash s = let (x, off) = runIn fromBin s
                    in if off == BS.length s
-                      then (x, hstr)
+                      then (x, showHash (BS.foldl' nextHashByte hashInit s))
                       else internalError "BinData.decodeWithHash: unused trailing bytes"

@@ -3,6 +3,7 @@
 module MakeSymTab(
                   mkSymTab,
                   getPackagesUsedInTypes,
+                  getDeclsUsedInTypes,
                   cConvInst,
                   convCQType, convCQTypeWithAssumps,
                   convCType,
@@ -238,6 +239,25 @@ getPackagesUsedInTypes :: SymTab -> CPackage -> S.Set Id
 getPackagesUsedInTypes symtab (CPackage _ _ _ _ _ ds _) =
     let directTyCons = S.unions (map getFTCDn ds)
     in  S.unions (map (getPackagesForType symtab) (S.toList directTyCons))
+
+-- As getPackagesUsedInTypes, but keeping the type constructor alongside its
+-- package.  The package-level set can only say "something from here was
+-- used"; cutoff needs to know which declaration, so that a change to an
+-- unused one does not invalidate this package.
+getDeclsUsedInTypes :: SymTab -> CPackage -> S.Set (Id, Id)
+getDeclsUsedInTypes symtab (CPackage _ _ _ _ _ ds _) =
+    let directTyCons = S.unions (map getFTCDn ds)
+    in  S.unions (map (getDeclsForType symtab) (S.toList directTyCons))
+
+getDeclsForType :: SymTab -> Id -> S.Set (Id, Id)
+getDeclsForType symtab tycon =
+    case findType symtab tycon of
+        Just (TypeInfo { ti_pkg = Just pkg, ti_sort = TItype _ rhs }) ->
+            let rhsTyCons = getFTyCons rhs
+                rec' = S.unions (map (getDeclsForType symtab) (S.toList rhsTyCons))
+            in  S.insert (pkg, tycon) rec'
+        Just (TypeInfo { ti_pkg = Just pkg }) -> S.singleton (pkg, tycon)
+        _ -> S.empty
 
 -- For a type constructor, get its source package and recursively expand
 -- if it's a type synonym. Non-synonym types (data, struct, abstract) are

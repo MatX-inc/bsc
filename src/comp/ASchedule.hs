@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module ASchedule(
                  aSchedule,
+                 aScheduleDenseRuleRelationDB,
                  extractCFPairsSP,
                  extractMEPairsSP,
                  errAction,
@@ -461,6 +462,35 @@ aSchedule errh flags prefix urgency_pairs pps amod = do
                          return (Right (schedule_info, amod'))
               _ -> internalError "aSchedule: missing info"
 
+
+-- Rederive the dense halves of the RuleRelationDB -- the disjointness
+-- set and the cf/sc conflict entries -- that writeABin omits from the
+-- default (thin) .ba.  Reruns the conflict analysis on the APackage
+-- exactly as the original scheduling run did; the analysis is
+-- deterministic, so the result matches what -ba-debug-info would have
+-- serialized.  The result carries no byproduct entries (those are
+-- always in the .ba); graft it onto the serialized DB with
+-- rrdbGraftDenseHalves.  Returns Nothing if the analysis reports
+-- errors (a module whose schedule already failed at compile time);
+-- the byproduct entries are all that is knowable then.
+aScheduleDenseRuleRelationDB :: ErrorHandle -> Flags -> APackage
+                             -> IO (Maybe RuleRelationDB)
+aScheduleDenseRuleRelationDB errh flags amod = do
+    let -- rederivation must not re-dump schedule DOT files
+        flags' = flags { schedDOT = False }
+        f = aSchedule_step1 errh flags' "" () amod
+    (result, _) <- runStateT (runExceptT f) initSState
+    case result of
+      Left _ -> return Nothing
+      Right ( scConflictMap0, cfConflictMap0, _, _, _
+            , _, _, userARules, _, _
+            , rule_disjoint, _, _, _, _
+            , _, _, _, _, _
+            , _, _, _ ) ->
+          let ruleNames = map ruleName (concatMap cvtIfc (apkg_interface amod))
+                          ++ map aRuleName userARules
+          in  return $ Just $ mkRuleRelationDB ruleNames rule_disjoint
+                                  cfConflictMap0 scConflictMap0 [] [] [] []
 
 aSchedule' :: ErrorHandle -> Flags ->
               String -> PathUrgencyPairs -> [PProp] -> APackage ->
@@ -3830,9 +3860,27 @@ mkRuleRelationDB rule_names rule_disjoint cf_map sc_map
                       else Nothing
           in ((rule1,rule2), rule1 `rule_disjoint` rule2, minfo)
 
-      infos = [ getPairInfo r1 r2 | r1 <- rule_names, r2 <- rule_names ]
+      -- the byproduct pairs are the scheduling run's own outcomes;
+      -- build their (complete) entries eagerly and WITHOUT touching
+      -- the all-pairs enumeration, so that serializing them never
+      -- forces the dense halves below
+      byproduct_keys =
+          S.fromList ( [ (r1,r2) | (r1,r2,_) <- res_drops ]
+                    ++ [ (r1,r2) | (r1,r2,_) <- cycle_drops ]
+                    ++ [ (r1,r2) | (r1,r2,_) <- sched_pragma_drops ]
+                    ++ M.keys arb_map )
+      byp_map = M.fromList [ (p, rri) | p@(r1,r2) <- S.toList byproduct_keys
+                                      , let (_, _, minfo) = getPairInfo r1 r2
+                                      , Just rri <- [minfo] ]
 
-  in rrdbFromList infos
+      -- dense halves: lazy, quadratic, and only ever forced by a
+      -- -ba-debug-info write or an explicit relation query (bluetcl)
+      infos = [ getPairInfo r1 r2 | r1 <- rule_names, r2 <- rule_names ]
+      dset = S.fromList [ p | (p, True, _) <- infos ]
+      dense_map = M.fromList [ (p, rri) | (p, _, Just rri) <- infos
+                                        , not (p `S.member` byproduct_keys) ]
+
+  in RuleRelationDB dset dense_map byp_map
 
 doQueries :: ErrorHandle -> Flags -> [ARuleId] -> RuleRelationDB -> IO ()
 doQueries errh flags rule_names relationDB =

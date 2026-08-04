@@ -67,7 +67,7 @@ type EvMap = M.Map Id (IType, Maybe DictEv)
 -- source, so the choice is deterministic.
 type DictBuckets = M.Map IType [Id]
 
-mkDictBuckets :: [(IPackage a, String)] -> DictBuckets
+mkDictBuckets :: [(IPackage a, Maybe String)] -> DictBuckets
 mkDictBuckets ipkgs =
     M.fromListWith (\ new old -> old ++ new)
         [ (t, [i])
@@ -109,7 +109,7 @@ type DictRedirects = M.Map Id Id
 -- match nothing (redirection is idempotent).  Recomputing it per call
 -- -- once per synthesized module via "updDef" -- rebuilt the evidence
 -- map over every imported def each time.
-mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
+mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, Maybe String)]
                 -> DictRedirects
 mkDictRedirects buckets (IPackage _ _ _ ds) ipkgs =
     let ads = concat (ds : [ ds' | (IPackage _ _ _ ds', _) <- ipkgs ])
@@ -200,7 +200,8 @@ redirectDictProps redirects d@(IDef i t e props)
 -- imported packages that are passed as the third argument (and this
 -- package's own defs; see mkDictRedirects on why one map serves every
 -- call).
-fixupDefs :: DictRedirects -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs :: DictRedirects -> IPackage a -> [(IPackage a, Maybe String)] ->
+             (IPackage a, [IDef a])
 fixupDefs redirects (IPackage mi _ ps ds) ipkgs =
     let
         (ms, _) = unzip ipkgs
@@ -242,7 +243,7 @@ fixupDefs redirects (IPackage mi _ ps ds) ipkgs =
 -- the post-synthesis definition.)
 -- The first argument must be "mkDictRedirects" computed from the same
 -- imported packages that are passed as the fourth argument.
-updDef :: DictRedirects -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef :: DictRedirects -> IDef a -> IPackage a -> [(IPackage a, Maybe String)] -> IPackage a
 updDef redirects d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list

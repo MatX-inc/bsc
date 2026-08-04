@@ -268,6 +268,19 @@ checkBSrcFlags flags filename =
         if (removeVerilogDollar flags && (backend flags /= Just Verilog))
         then DError [(cmdPosition, EDollarNoVerilog)]
         else
+        -- A check compile stops after typechecking, so a backend request
+        -- (which is a codegen request) cannot be honored
+        -- XXX -g is refused under -check-only only as collateral: it reads
+        -- XXX as a codegen request, so S0014 demands a backend.  Its other
+        -- XXX half declares a synthesis boundary, which a check compile
+        -- XXX could honour -- to check wrapping legality (the ENoInline*
+        -- XXX family) and to record the intended closure for downstream
+        -- XXX cutoff.  Blocked because bsc only wraps when generating
+        -- XXX (bsc.hs: generating = backend flags /= Nothing).  Revisit if
+        -- XXX wrapping moves after typechecking onto an asserted package.
+        if (checkOnly flags && (backend flags /= Nothing))
+        then DError [(cmdPosition, ECheckOnlyConflict "-sim/-verilog")]
+        else
         -- -elab-only stops compilation at the .ba; for Bluesim (or no
         -- backend) stopping there is already the behavior, so the flag
         -- is accepted with any backend.  Suppressing the .ba as well
@@ -312,6 +325,9 @@ checkLinkFlags flags names =
         then DError [(cmdPosition, EDollarLink)]
         else
         -- -elab-only applies to compiling source, not linking
+        -- (-check-only IS valid at link: it validates the link closure
+        -- and writes a manifest instead of building -- see AVerilogUtil/
+        -- the verilator line -- so no ECheckOnlyConflict guard here)
         if (elabOnly flags)
         then DError [(cmdPosition, EElabOnlyNotSrcCompile)]
         else
@@ -531,6 +547,7 @@ traceflags = [
           "trace-atf-rules",
           "trace-ctxreduce",
           "trace-debug",
+          "dump-usage",
           "trace-drop-dicts",
           "trace-eval-steps",
           "trace-eval-types",
@@ -632,8 +649,10 @@ defaultFlags bluespecdir = Flags {
         dumpFormats = ["vcd"],
         dumps = [],
         elabOnly = False,
+        importHashes = True,
         enablePoisonPills = False,
         entry = Nothing,
+        baDebugInfo = False,
         expandATSlimit = 20,
         expandIf = False,
         fdir = Nothing,
@@ -1203,6 +1222,9 @@ externalFlags = [
         ("apsubc",
          (Toggle (\f x -> f {useApSubC=x}) (showIfTrue useApSubC),
           "use change-tracking substitution (apSubC) in the typechecker", Hidden)),
+        ("ba-debug-info",
+         (Toggle (\f x -> f {baDebugInfo=x}) (showIfTrue baDebugInfo),
+          "serialize full debug info into .ba files (all pairwise rule relations and the method-conflict dump); without it .ba files carry only what code generation needs", Visible)),
 
         ("bdir",
          (Arg "dir" (\f s -> Left (f {bdir = Just s}))
@@ -1223,8 +1245,10 @@ externalFlags = [
 
         ("check-only",
          (Toggle (\f x -> f {checkOnly=x}) (showIfTrue checkOnly),
-          "at Verilog link, validate and write a manifest without building",
-          Hidden)),
+          "when compiling, stop after typechecking and write a " ++
+          "signature-only .bc file (imports prefer .bc and fall back " ++
+          "to .bo); at Verilog link, validate and write a manifest " ++
+          "without building", Visible)),
 
         ("continue-after-errors",
          (Toggle (\f x -> f {enablePoisonPills=x}) (showIfTrue enablePoisonPills),
@@ -1322,6 +1346,12 @@ externalFlags = [
         ("I",
          (Arg "path" (\f s -> Left (f {cIncPath = cIncPath f ++ [s]})) (Just (FRTListString cIncPath)),
           "include path for compiling foreign C/C++ source", Visible)),
+
+        ("import-hashes",
+         (Toggle (\f x -> f {importHashes=x}) (showIfTrue importHashes),
+          "record transitive-closure hashes in the depends list and check " ++
+          "them on import (default); -no-import-hashes omits them, which is " ++
+          "only safe when the build guarantees input consistency", Visible)),
 
         ("info-dir",
          (Arg "dir" (\f s -> Left (f {infoDir = Just s})) (Just (FRTMaybeString infoDir)),
@@ -2003,6 +2033,7 @@ showFlagsRaw flags =
           ("dumpFormats", show (dumpFormats flags)),
           ("dumps", show (dumps flags)),
           ("elabOnly", show (elabOnly flags)),
+          ("importHashes", show (importHashes flags)),
           ("enablePoisonPills", show (enablePoisonPills flags)),
           ("entry", show (entry flags)),
           ("expandATSlimit", show (expandATSlimit flags)),
@@ -2010,6 +2041,7 @@ showFlagsRaw flags =
           ("extraVerbose", show (extraVerbose flags)),
           ("fdir", show (fdir flags)),
           ("finalcleanup", show (finalcleanup flags)),
+          ("baDebugInfo", show (baDebugInfo flags)),
           ("genABin", show (genABin flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),

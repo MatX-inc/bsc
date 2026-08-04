@@ -20,7 +20,7 @@ module TIMonad(
         literalCls, realLiteralCls, sizedLiteralCls, stringLiteralCls,
         numEqCls,
         updAssumpPos,
-        recordPackageUse,
+        recordPackageUse, recordDeclUse,
         incrementSatStack, decrementSatStack, getSatStack, mkTSSatElement, TSSatElement,
               pushSatStackContext, popSatStackContext
         , tiRecoveringFromError
@@ -83,6 +83,10 @@ data TStatePersistent = TStatePersistent {
    tsAllowIncoherent :: Bool,
    tsWarns :: [WMsg], -- accumulated warning messages
    tsUsedPackages :: S.Set Id, -- packages from which symbols were used
+   -- the individual declarations resolved from imported packages; the
+   -- per-package set above cannot support cutoff, since any change to
+   -- any declaration of an import invalidates every dependent
+   tsUsedDecls :: S.Set (Id, Id),
    tsGroundDicts :: Maybe GroundDictState
 }
 
@@ -226,6 +230,7 @@ initPersistentState flags ai s = TStatePersistent {
     tsAllowIncoherent = ai,
     tsRecoveredErrors = [],
     tsUsedPackages = S.empty,
+    tsUsedDecls = S.empty,
     tsGroundDicts = Nothing
   }
 
@@ -240,14 +245,16 @@ initRecoverState = TStateRecover {
 data TIResult a = TIResult {
     tiResult       :: Either [EMsg] a,
     tiWarnings     :: [WMsg],
-    tiUsedPackages :: S.Set Id
+    tiUsedPackages :: S.Set Id,
+    tiUsedDecls    :: S.Set (Id, Id)
   }
 
 runTI :: Flags -> Bool -> SymTab -> TI a -> TIResult a
 runTI flags ai s m = TIResult {
     tiResult       = mkFinalResult result rec_errors,
     tiWarnings     = tsWarns pState,
-    tiUsedPackages = tsUsedPackages pState
+    tiUsedPackages = tsUsedPackages pState,
+    tiUsedDecls    = tsUsedDecls pState
   }
   where (result, pState) = runTIState flags ai s m
         rec_errors = tsRecoveredErrors pState
@@ -264,7 +271,8 @@ runTIWithGroundPool flags ai s gd m = (tires, gd')
   where tires = TIResult {
             tiResult       = mkFinalResult result (tsRecoveredErrors pState),
             tiWarnings     = tsWarns pState,
-            tiUsedPackages = tsUsedPackages pState
+            tiUsedPackages = tsUsedPackages pState,
+            tiUsedDecls    = tsUsedDecls pState
           }
         (result, pState) =
             runState (runExceptT (runStateT m initRecoverState))
@@ -369,6 +377,16 @@ recordPackageUse :: Maybe Id -> TI ()
 recordPackageUse Nothing = return ()  -- no package to record
 recordPackageUse (Just pkg) = lift (modify (addPackage pkg))
   where addPackage pkg s = s { tsUsedPackages = S.insert pkg (tsUsedPackages s) }
+
+-- Record both the package and the specific declaration resolved from it.
+-- Instance resolution has no named declaration to record and keeps using
+-- recordPackageUse: an instance applies without being mentioned, so it can
+-- only ever be tracked conservatively.
+recordDeclUse :: Maybe Id -> Id -> TI ()
+recordDeclUse Nothing _ = return ()
+recordDeclUse (Just pkg) d = lift (modify add)
+  where add s = s { tsUsedPackages = S.insert pkg (tsUsedPackages s)
+                  , tsUsedDecls    = S.insert (pkg, d) (tsUsedDecls s) }
 
 -- XXX maybe someday get rid of this function and replace with catchError
 handle :: TI a -> (EMsgs -> TI a) -> TI a
@@ -622,7 +640,7 @@ findCons ct i = do
     r <- getSymTab
     case findConVis r i of
      Just [ConInfo { ci_id = ti, ci_assump = a, ci_pkg = pkg }] -> do
-        recordPackageUse pkg
+        recordDeclUse pkg ti
         return (updAssumpPos i a, ti)
      Just cs -> do
         s <- getSubst
@@ -631,7 +649,7 @@ findCons ct i = do
          Nothing -> errorAtId (EConstrAmb (pfpString ct')) i
          Just di -> case [ (a, pkg) | ConInfo {ci_id = i', ci_assump = a, ci_pkg = pkg} <- cs, qualEq di i'] of
                    [(a, pkg)] -> do
-                       recordPackageUse pkg
+                       recordDeclUse pkg di
                        return (updAssumpPos i a, di)
                    []  -> errSuggest r i
                    _   -> internalError "findCons ambig"
@@ -650,7 +668,7 @@ findTyCon i = do
     r <- getSymTab
     case findType r i of
      Just (TypeInfo (Just i') k _ ts@(TItype _ t) pkg) -> do
-        recordPackageUse pkg
+        recordDeclUse pkg i'
         -- It's a type alias.  If the left element of the alias is a
         -- constructor, find the type of that constructor; otherwise,
         -- give up and return the info that's available.
@@ -658,7 +676,7 @@ findTyCon i = do
             Just aliased_i -> findTyCon aliased_i
             Nothing -> return (TyCon i' (Just k) ts)
      Just (TypeInfo (Just i') k _ ts pkg) -> do
-        recordPackageUse pkg
+        recordDeclUse pkg i'
         return (TyCon i' (Just k) ts)
      Just (TypeInfo Nothing _ _ _ _) ->
         internalError ("findTyCon: unexpected numeric or string type: " ++ ppReadable i)
@@ -669,7 +687,7 @@ findCls i = do
     r <- getSymTab
     case findSClass r i of
      Just cl -> do
-        recordPackageUse (pkg_src cl)
+        recordDeclUse (pkg_src cl) (typeclassId i)
         return cl
      Nothing -> errorAtId EUnboundTyCon (typeclassId i)
 
@@ -813,7 +831,7 @@ findFields struct_ty0 field_id = do
                                                       fi_pkg = pkg }) <- fs,
                                         i == qtc ] of
                   [(_, a, n, pkg)] -> do
-                      recordPackageUse pkg
+                      recordDeclUse pkg qtc
                       return (updAssumpPos field_id a, qtc, n)
                   [] -> errorAtId (ENotField (pfpString qtc)) field_id
                   xs -> internalError ("findFields ambig: " ++
@@ -828,7 +846,7 @@ findFields struct_ty0 field_id = do
                 -- there is only one struct with this field
                 -- if the expression is not that type, the user will get a
                 -- mismatch error later
-                recordPackageUse pkg
+                recordDeclUse pkg qtc
                 return (updAssumpPos field_id a, qtc, n)
             Just fs ->
                 let tis = map (pfpString . fi_id) fs

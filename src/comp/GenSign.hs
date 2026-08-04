@@ -1,4 +1,4 @@
-module GenSign(genUserSign, genEverythingSign) where
+module GenSign(genUserSign, genEverythingSign, getDeclsUsedByExports) where
 import Data.List((\\), sortBy, unionBy, groupBy, partition)
 import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
@@ -741,21 +741,29 @@ classToIClass i k (Class { csig=tvs, super=ps, funDeps2=bss2,
 -- tracked during type checking (Phase 2). For re-exports, only record the package
 -- of the item itself, not types within its definition.
 getPackagesUsedByExports :: Id -> CSignature -> S.Set Id
-getPackagesUsedByExports currentPkg (CSignature _ _ _ defns) =
-    let allPkgs = mapMaybe getPackageFromDefn defns
-        externalPkgs = filter (/= currentPkg) allPkgs
-    in  S.fromList externalPkgs
+getPackagesUsedByExports currentPkg sig =
+    S.map fst (getDeclsUsedByExports currentPkg sig)
+
+-- As getPackagesUsedByExports, but keeping the declaration.  Re-exporting a
+-- declaration is a dependency on it: this package's own interface changes
+-- when it does.  Recording only the package would leave a cutoff hole --
+-- nothing else in the re-exporting package need mention the declaration at
+-- all, so no other usage source sees it.
+getDeclsUsedByExports :: Id -> CSignature -> S.Set (Id, Id)
+getDeclsUsedByExports currentPkg (CSignature _ _ _ defns) =
+    S.fromList [ pd | Just pd <- map getPackageFromDefn defns
+                    , fst pd /= currentPkg ]
   where
-    -- Get the package qualifier from a qualified Id
-    getIdPackage :: Id -> Maybe Id
+    -- Get the package qualifier from a qualified Id, with the Id itself
+    getIdPackage :: Id -> Maybe (Id, Id)
     getIdPackage i =
         let qual = getIdQual i
         in  if qual == fsEmpty
             then Nothing
-            else Just (mk_no qual)
+            else Just (mk_no qual, i)
 
     -- Get the package of the item being exported (not types within its definition)
-    getPackageFromDefn :: CDefn -> Maybe Id
+    getPackageFromDefn :: CDefn -> Maybe (Id, Id)
     getPackageFromDefn (Ctype (IdKind i _) _ _) = getIdPackage i
     getPackageFromDefn (CItype (IdKind i _) _ _) = getIdPackage i
     getPackageFromDefn (Cdata { cd_name = IdKind i _ }) = getIdPackage i

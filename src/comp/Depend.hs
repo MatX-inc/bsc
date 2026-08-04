@@ -28,7 +28,7 @@ import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
-                    bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, binSuffix, bcSuffix, abinSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
@@ -119,6 +119,10 @@ getPkgInfo errh flags pname =
     let name = getIdString pname ++ "." ++ bscSrcSuffix
         bsvname = getIdString pname ++ "." ++ bsvSrcSuffix
         bname = getIdString pname ++ "." ++ binSuffix
+        bcname = getIdString pname ++ "." ++ bcSuffix
+        -- a source-less package can be satisfied by either artifact, and a
+        -- check compile prefers the signature-only one, as BinUtil.doImport does
+        binNames = if checkOnly flags then [bcname, bname] else [bname]
         path = ifcPath flags
         errPackageMissing = (getIdPosition pname,
                              EMissingPackage (pfpString pname))
@@ -133,10 +137,14 @@ getPkgInfo errh flags pname =
                 -- parseFile checks package name matches filename (fatal error)
                 return (Just pi)
         trybo :: IO (Maybe PkgInfo)
-        trybo = do
-          mfile <- readBinFilePath errh noPosition False bname path
+        trybo = tryBinNames binNames
+
+        tryBinNames :: [String] -> IO (Maybe PkgInfo)
+        tryBinNames [] = return Nothing
+        tryBinNames (nm:nms) = do
+          mfile <- readBinFilePath errh noPosition False nm path
           case mfile of
-            Nothing -> return Nothing
+            Nothing -> tryBinNames nms
             Just (file, fname) ->
                 -- this comparison forces evaluation to force close on the file
                 if file /= file then internalError "getPkgInfo" else do
@@ -170,11 +178,16 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     -- (like TopUtils::putInDir)
     let mkdname dir suf = dir ++ "/" ++ baseName (dropSuf fname) ++ "." ++ suf
 
-    -- find the mod time of the bo file (either in same dir or in the bdir)
-    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ binSuffix)
+    -- find the mod time of the output file (either in same dir or in the bdir)
+    -- Under -check-only that is the .bc: a .bo left by an ordinary build says
+    -- nothing about whether the check output exists or is current, and taking
+    -- it as the answer makes -u decide every package is up to date and emit
+    -- nothing at all.
+    let outSuffix = if checkOnly flags then bcSuffix else binSuffix
+    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ outSuffix)
     tbo_bdir <- case (bdir flags) of
                     Nothing -> return Nothing
-                    Just dir -> getModTime (mkdname dir binSuffix)
+                    Just dir -> getModTime (mkdname dir outSuffix)
     let tbo = if (isJust tbo_bdir) then tbo_bdir else tbo_samedir
 
     -- include the prelude to avoid failures when predule was updated.

@@ -137,7 +137,10 @@ data IPackage a
               -- package name
               ipkg_name :: Id,
               -- linked packages (name, signature)
-              ipkg_depends :: [(Id, String)],
+              -- Nothing where the producing compile omitted the hash
+              -- (-no-import-hashes); the name is always present, since
+              -- it is the graph shape that drives the load worklist
+              ipkg_depends :: [(Id, Maybe String)],
               -- pragmas
               ipkg_pragmas :: [Pragma],
               -- definition list
@@ -1338,8 +1341,9 @@ ftVars = eFTVarSet
 -- ============================================================
 -- PPrint (for those instances not defined alongside the type, above)
 
-pPrintLink :: PDetail -> Int -> (Id, String) -> Doc
-pPrintLink d i (mi, hash) = (ppId d mi) <+> (text hash)
+pPrintLink :: PDetail -> Int -> (Id, Maybe String) -> Doc
+pPrintLink d i (mi, hash) =
+    (ppId d mi) <+> (text (maybe "(no hash)" id hash))
 
 instance PPrint (IPackage a) where
  pPrint d p (IPackage mi lps ps ds) =

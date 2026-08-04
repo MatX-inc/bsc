@@ -1213,3 +1213,21 @@ emptyFmt = (IAps (ICon idFormat (ICForeign {fName    = getIdString(unQualId(idFo
    where e = iMkString ""
          t = iGetType e
          tt = (t `itFun` itFmt)
+
+-- Does an expression contain a poisoned definition?  A .bo carrying one was
+-- written by a compile that failed and continued under -enable-poison-pills,
+-- so importing it is an error unless the importer opted in too.  Computed at
+-- write time and recorded in the .bo header (GenBin) rather than rediscovered
+-- by every importer: the scan walks every IExpr of every package in the
+-- transitive closure, and with pills disabled -- the default, and MatX never
+-- enables them -- it can only ever return False.
+hasPoisonPill :: IExpr a -> Bool
+hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
+hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
+hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
+hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
+hasPoisonPill _ = False
+
+-- Does any definition in the package carry a poison pill?
+pkgHasPoisonPill :: IPackage a -> Bool
+pkgHasPoisonPill ipkg = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]

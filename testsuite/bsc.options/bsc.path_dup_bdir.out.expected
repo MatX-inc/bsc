@@ -14,6 +14,7 @@ Flags:
     -bdir bar
     -dump-formats   vcd
     -i BLUESPECDIR
+    -import-hashes
     -lift
     -o a.out
     -p foo:bar:baz
