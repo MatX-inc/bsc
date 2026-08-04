@@ -31,7 +31,7 @@ doTrace = elem "-trace-genbin" progArgs
 header :: [Byte]
 -- when a BinData-layer change bumps .bo and .ba together, move both
 -- format tags (see GenABin.hs)
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260803-4"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260804-5"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -95,7 +95,7 @@ readBinFile errh nm s =
 -- Its own tag means the S0005 version guard rejects a .bc fed to a compile
 -- that wants definitions, rather than that compile silently finding none.
 bcHeader :: [Byte]
-bcHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bc-20260804-3"
+bcHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bc-20260804-4"
 
 bcHeaderBS :: B.ByteString
 bcHeaderBS = B.pack bcHeader
