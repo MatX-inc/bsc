@@ -26,6 +26,10 @@ data Flags = Flags {
         backend :: Maybe Backend,
         bdir :: Maybe String,
         biasMethodScheduling :: Bool,
+        -- internal: set by the driver when in -c mode (generate a module's
+        -- code from its .ba, as a reusable block rather than a runnable top);
+        -- never settable from the command line -- see codegenNames
+        blockCodegen :: Bool,
         bluespecDir :: String,
         cIncPath :: [String],
         cLibPath :: [String],
@@ -45,13 +49,14 @@ data Flags = Flags {
         dumpAll :: Maybe (Maybe FilePath), -- maybe dump to file or stdout
         dumps :: [(DumpFlag, Maybe FilePath)], -- dump to file or stdout
         enablePoisonPills :: Bool,
+        codegenNames :: [String],
+        elabOnly :: Bool,
         entry :: Maybe String,
         expandATSlimit :: Int,
         expandIf :: Bool,
         fdir :: Maybe String,
         finalcleanup :: Int,
         genABin :: Bool,
-        genABinVerilog :: Bool,
         genName :: [String],
         genSysC :: Bool,
         ifcPathRaw :: [String],
@@ -154,7 +159,20 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- derive the Verilog "Ports:" comment from the APackage analysis
+        -- (getIOPropsA) instead of the netlist measurement; off by default
+        -- so the emitted Verilog is unchanged
+        semanticPortsComment :: Bool,
+        -- stop after the stage's checks without producing its artifact:
+        -- at Verilog link, validate the link closure and have the
+        -- simulator builder write a manifest instead of building
+        -- deterministic Verilog emission: canonical counter numbering,
+        -- deterministic CSE-representative names, and canonical operand
+        -- ordering, so the same .ba yields byte-identical .v in any
+        -- compile (off by default: the emitted names then match what
+        -- this compiler has historically produced)
+        stableVerilog :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
@@ -258,6 +276,7 @@ data DumpFlag
 
         -- Generate Verilog
         | DFforeignMap
+        | DFAPackageIOproperties
         | DFastate
         | DFrwire
         | DFcreg
