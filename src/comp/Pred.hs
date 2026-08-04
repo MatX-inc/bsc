@@ -4,6 +4,7 @@ module Pred(
             Qual(..), PredWithPositions(..), Pred(..), Class(..), Inst(..),
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
             expandSyn, predToType, qualToType, mkInst,
+            dictBaseName, hashType,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -13,7 +14,9 @@ module Pred(
 import Prelude hiding ((<>))
 #endif
 
-import Data.List(union, genericSplitAt, genericLength)
+import Data.List(union, genericSplitAt, genericLength, intersperse)
+import Util(Hash, hashInit, nextHashByte, nextHashString, showHash)
+import FStringCompat(getFString)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -238,6 +241,98 @@ instance PVPrint Inst where
     pvPrint d p (Inst e _ qp pkg) = text "(Inst" <+> pvPrint d 10 e <+> pvPrint d 10 qp <+> pvPrint d 10 pkg <> text ")"
 
 -----------------------------------------------------------------------------
+
+-- The base name for a lifted dictionary: its rendered type plus a hash of a
+-- discriminator.
+--
+-- Content-derived rather than counter-derived, so that adding an unrelated
+-- definition to a package does not renumber its dictionaries and move the
+-- bytes of every artifact that references them.  Readable, because these
+-- names reach the user in typechecker output and in dumped IR.
+--
+-- Callers pass whatever pins the dictionary down beyond its type: its evidence
+-- rendering where the type does not determine it (LiftDicts, where two
+-- dictionaries can share a type and differ in evidence); a pool keyed on the
+-- ground type alone would pass the type itself.
+--
+-- The discriminator is hashed in unconditionally, never only to break a tie.
+-- A tie-break would make the name depend on what else the package happens to
+-- contain, which is exactly the positional instability this exists to remove
+-- -- and it would do so intermittently, which is worse to diagnose than the
+-- systematic version.  The rendering below is therefore for readability only;
+-- distinctness rests on the hash, so nobody has to re-prove the rendering
+-- injective when type normalisation changes.
+dictBaseName :: Type -> Hash -> String
+dictBaseName t disc =
+    "_dict_" ++ dictRender (expandSyn t) ("_" ++ showHash disc)
+
+-- Hash a type by walking its structure, without rendering it.
+--
+-- The discriminator has only to be a deterministic, collision-resistant
+-- function of the type -- it is never read back.  Producing one by
+-- pretty-printing built a Doc and laid it out, which measured at 64% of
+-- IsaR2Tile's compile once the readable rendering itself was memoized: all
+-- of it to make a string that is hashed and immediately discarded.
+--
+-- A constructor tag per node keeps this at least as discriminating as the
+-- printed form, because the application SHAPE is in the tags: C (D E) and
+-- C D E fold differently even though their leaves agree.  Qualified names,
+-- so two classes of the same base name in different packages cannot
+-- collide -- pPrint showed the base name and relied on the shape around it.
+--
+-- Positions are excluded deliberately: they are not stable across builds
+-- and a dictionary name must be (that is what this whole scheme exists
+-- for).  Kinds and sorts are excluded because the printed form did not
+-- carry them either; adding them could only split a name, never merge two.
+hashType :: Type -> Hash
+hashType = go hashInit
+  where
+    go h (TAp f a)             = go (go (nextHashByte h 1) f) a
+    go h (TCon c)              = tycon (nextHashByte h 2) c
+    go h (TVar (TyVar i _ _))  = nextHashString (nextHashByte h 3) (getIdString i)
+    go h (TGen _ n)            = nextHashString (nextHashByte h 4) (show n)
+    go h (TDefMonad _)         = nextHashByte h 5
+    tycon h (TyCon i _ _)      = nextHashString h (getIdString i)
+    tycon h (TyNum n _)        = nextHashString h (show n)
+    tycon h (TyStr s _)        = nextHashString h (getFString s)
+
+-- Structure-preserving, unlike mkInstId's flattening: a nested application is
+-- bracketed, so C (D E) F does not read as C D (E F).
+--
+-- A ShowS, not a String, and that is the larger half of the fix: concatenating
+-- at every level of nesting is quadratic in depth, and these types nest deeply
+-- enough that the old rendering was 67% of IsaR2Tile's compile.  Difference
+-- lists make it linear, let a parent refer to its children instead of copying
+-- them, and leave only dictBaseName to flatten -- once, straight onto the hash
+-- suffix.  Caching flat strings instead costs 2.1x peak residency for the same
+-- speed, because every nested rendering is then duplicated at every level
+-- above it.
+dictRender :: Type -> ShowS
+dictRender ty = case dictSpine ty [] of
+                  (h, [])   -> dictLeaf h
+                  (h, args) -> foldr (.) id $
+                                 intersperse (showChar '~')
+                                             (dictLeaf h : map dictArg args)
+
+-- A bare leaf renders straight, bypassing the memo: routing leaves through it
+-- too measures identical (19.49s vs 19.52s over three rounds, 4MB of 55GB,
+-- same residency), the lookup costing about what rebuilding a leaf saves.
+-- Bypassing keeps the table smaller for no loss.
+dictArg :: Type -> ShowS
+dictArg a = case dictSpine a [] of
+              (h, []) -> dictLeaf h
+              _       -> showChar '(' . dictRender a . showChar ')'
+
+dictSpine :: Type -> [Type] -> (Type, [Type])
+dictSpine (TAp f x) acc = dictSpine f (x:acc)
+dictSpine h acc         = (h, acc)
+
+dictLeaf :: Type -> ShowS
+dictLeaf (TVar (TyVar i _ _)) = showString (getIdBaseString i)
+dictLeaf (TCon (TyCon i _ _)) = showString (getIdBaseString i)
+dictLeaf (TCon (TyNum n _))   = showString (getIdBaseString (mkNumId n))
+dictLeaf (TCon (TyStr s _))   = showString (getIdBaseString (mkStrId s))
+dictLeaf _                    = showString "_"
 
 expandSyn :: Type -> Type
 expandSyn t0 = exp [] f as
