@@ -155,6 +155,7 @@ import Verilog(VProgram(..), vGetMainModName, getVeriInsts)
 import Depend
 import Version(bscVersionStr, copyright, buildnum)
 import Classic(SyntaxMode(..), setSyntax)
+import Subst(setUseApSubC)
 import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
@@ -257,6 +258,9 @@ main' errh flags name =  do
     tStart <- getNow
 
     flags' <- checkSATFlags errh flags
+
+    -- propagate the -apsubc selection to the substitution machinery
+    setUseApSubC (useApSubC flags')
 
     -- check system requirements
     doSystemCheck errh

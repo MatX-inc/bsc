@@ -21,7 +21,7 @@ import CType
 import Assump
 import Pred
 import Scheme
-import Subst(mkSubst, Types(..))
+import Subst(mkSubst, apSub, Types(..))
 import Id
 import Position(Position, noPosition)
 import PPrint

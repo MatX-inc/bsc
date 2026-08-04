@@ -2,12 +2,14 @@
 module Subst(
              Subst,
              nullSubst, isNullSubst, (+->), mkSubst,
-             Types(..), (@@), merge, mergeWith, mergeListWith,
+             Types(..), apSub, setUseApSubC,
+             (@@), merge, mergeWith, mergeListWith,
              mergeAgreements,
              trimSubst, trimSubstByVars,
              {- removeFromSubst, -}
              apSubstToSubst,
              getSubstDomain, getSubstRange, sizeSubst,
+             substDomainDisjoint, substFVsUpdate,
              chkSubstOrder
              ) where
 
@@ -16,7 +18,11 @@ import CType
 import Type
 import Util(fromJustOrErr)
 import Data.List(nub,union)
+import Data.Maybe(fromMaybe)
+import Changed
 import Position
+import IOMutVar(MutableVar, newVar, readVar, writeVar)
+import System.IO.Unsafe(unsafePerformIO)
 
 import qualified Data.Set as Set
 import qualified Data.Map as Map
@@ -196,32 +202,109 @@ mergeAgreements s1 s2 = fj $ merge diff1 diff2
 
 -------
 
+-- Substitution comes in two selectable implementations, chosen by the
+-- -apsubc flag (default off):
+--
+--  * apSubO/apSubM: the pre-apsubc pair.  apSubO rebuilds the value;
+--    apSubM is Maybe-based change tracking (Nothing means the
+--    substitution provably left the value untouched).  Instances
+--    without a hand-written apSubM get the conservative "always
+--    changed" default.  These keep exactly the behavior that predates
+--    apSubC; internal recursion in the old-path instance bodies stays
+--    on apSubO/apSubM.
+--
+--  * apSubC: change-tracking substitution.  Unchanged means the
+--    substitution provably left the value untouched, so the caller
+--    keeps the original object (preserving sharing and skipping any
+--    rebuild).  ALL internal recursion goes through apSubC and
+--    combines child results with the Changed combinators, so
+--    unchanged-ness propagates bottom-up with no per-node wrapper
+--    allocation.
+--
+-- apSub (below, outside the class) is the consumer-facing entry point
+-- and dispatches on the flag.
 class Types t where
-  apSub :: Subst -> t -> t
-  tv    :: t -> [TyVar]
+  apSubO :: Subst -> t -> t
+  apSubO s t = fromMaybe t (apSubM s t)
+  apSubM :: Subst -> t -> Maybe t
+  apSubM s t = Just (apSubO s t)
+  apSubC :: Subst -> t -> Changed t
+  tv     :: t -> [TyVar]
+  {-# MINIMAL (apSubO | apSubM), apSubC, tv #-}
+
+-- The -apsubc switch: written once, from the decoded flags, before
+-- compilation starts (bsc.hs main'), and read through a function of ()
+-- so that GHC cannot cache the read as a CAF (same pattern as
+-- Classic.isClassic).
+useApSubCVar :: MutableVar Bool
+useApSubCVar = unsafePerformIO $ newVar False
+{-# NOINLINE useApSubCVar #-}
+
+setUseApSubC :: Bool -> IO ()
+setUseApSubC b = writeVar useApSubCVar b
+
+readUseApSubC :: () -> Bool
+readUseApSubC () = unsafePerformIO $ readVar useApSubCVar
+{-# NOINLINE readUseApSubC #-}
+
+apSub :: Types t => Subst -> t -> t
+apSub s t
+  | not (readUseApSubC ()) = apSubO s t
+  | isNullSubst s          = t
+  | otherwise              = changedOr t (apSubC s t)
+{-# INLINE apSub #-}
 
 instance Types Type where
-  -- canonical (cons-interned) nodes are ground -- no TVar anywhere --
-  -- and normTAp-normal (mkTAp refuses redexes), so substitution is
-  -- the identity and there are no free variables; both answers are
-  -- O(1) where the walk over a huge ground dictionary type dominated
-  apSub _ t | isCanonType t = t
-  apSub (S seo _) v@(TVar u) =
+  apSubO s t = fromMaybe t (apSubM s t)
+  apSubM s _ | isNullSubst s = Nothing
+  apSubM (S seo _) t0 = go t0
+    where
+      -- canonical (cons-interned) nodes are ground -- no TVar anywhere --
+      -- and normTAp-normal (mkTAp refuses redexes), so substitution is
+      -- the identity and there are no free variables; the answer is
+      -- O(1) where the walk over a huge ground dictionary type dominated
+      go t | isCanonType t = Nothing
+      go v@(TVar u) =
         case slookup u seo of
         Just t  ->
             case t of
-            (TGen _ _) -> t -- (kind (TGen _ _)) errors out -- don't check kind
+            (TGen _ _) -> Just t -- (kind (TGen _ _)) errors out -- don't check kind
             _ -> if isKVar (kind v) || kind t == kind v
-                 then t
+                 then Just t
                  else internalError ("Subst.Type.apSub: bad kind: " ++
                                      ppString t ++ "::" ++ ppString (kind t) ++
                                      "@" ++ ppString (getPosition t) ++
                                      " / " ++ ppString v ++ "::" ++
                                      ppString (kind v) ++ "@" ++
                                      ppString (getPosition v))
-        Nothing -> v
-  apSub s (TAp l r) = normTAp (apSub s l) (apSub s r)
-  apSub s t         = t
+        Nothing -> Nothing
+      go (TAp l r) =
+        case (go l, go r) of
+          (Nothing, Nothing) -> Nothing
+          (ml, mr) -> Just (normTAp (fromMaybe l ml) (fromMaybe r mr))
+      go _ = Nothing
+
+  apSubC (S seo _) t0 = go t0
+    where
+      -- canonical nodes are ground: substitution is the identity (see apSubM)
+      go t | isCanonType t = Unchanged
+      go v@(TVar u) =
+        case slookup u seo of
+        Just t  ->
+            case t of
+            (TGen _ _) -> Changed t -- (kind (TGen _ _)) errors out -- don't check kind
+            _ -> if isKVar (kind v) || kind t == kind v
+                 then Changed t
+                 else internalError ("Subst.Type.apSub: bad kind: " ++
+                                     ppString t ++ "::" ++ ppString (kind t) ++
+                                     "@" ++ ppString (getPosition t) ++
+                                     " / " ++ ppString v ++ "::" ++
+                                     ppString (kind v) ++ "@" ++
+                                     ppString (getPosition v))
+        Nothing -> Unchanged
+      -- normTAp re-runs only when a child actually changed
+      go (TAp l r) = changed2 normTAp l r (go l) (go r)
+      go _ = Unchanged
 
   tv t | isCanonType t = []
   tv (TVar u)  = [u]
@@ -229,8 +312,21 @@ instance Types Type where
   tv t         = []
 
 instance Types a => Types [a] where
-  apSub s ts = map (apSub s) ts
-  tv ts      = nub (concatMap tv ts)
+  -- NB deliberately lazy (and spine-rebuilding): consumers routinely
+  -- apply substitutions to long lists (assumption environments,
+  -- residual predicate sets) and force only part of the result, so an
+  -- eager changed-detection over the whole list here is a large
+  -- pessimization.  Element-level sharing still comes from each
+  -- element's own apSubO.  Short-list containers that want whole-value
+  -- sharing (Pred's class args, Qual's context) do their own local
+  -- detection.
+  apSubO s ts = map (apSubO s) ts
+  -- Same policy on the apSubC path (always Changed): an eager
+  -- whole-list detection here (mapChanged) is a measured 2x
+  -- pessimization.  Bounded containers that want whole-value sharing
+  -- use mapChanged directly in their own instances.
+  apSubC s ts = Changed (map (changedOrId (apSubC s)) ts)
+  tv ts       = nub (concatMap tv ts)
 
 slookup :: TyVar -> S_map -> Maybe Type
 slookup v xs = {-if length xs > 1300 then trace ("slookup " ++ unwords [itos x|(_,x,_)<-xs]) slookup' v xs else-} Map.lookup v xs
@@ -245,6 +341,34 @@ sizeSubst (S eo _) = (Map.size eo)
 
 getSubstDomain :: Subst -> [TyVar]
 getSubstDomain (S eo _) = (Map.keys eo)
+
+-- True when the substitution touches none of the given variables --
+-- the test behind the "return the value unchanged" fast paths.
+-- Probed per variable: the argument sets (predicate free vars) are
+-- tiny, while the substitution can hold thousands of entries, so
+-- materializing its key set (O(size) per call) must be avoided.
+substDomainDisjoint :: Subst -> Set.Set TyVar -> Bool
+substDomainDisjoint (S eo _) fvs
+  | Map.null eo = True
+  | otherwise   = not (any (`Map.member` eo) (Set.toAscList fvs))
+
+-- Incremental free-variable-cache maintenance: Nothing when the
+-- substitution domain is disjoint from the set (the substituted value
+-- is unchanged), otherwise the free variables of the substituted
+-- value, rebuilt from the old set plus the ranges of the entries that
+-- fired.  Sound because substitution is single-pass (range types are
+-- not re-substituted), so tv (apSub s t) = (tv t \\ dom) `union`
+-- tv (ranges hit).  O(|fvs| log n) set work per call -- never a walk
+-- of the substituted structure, so a cache can be kept current across
+-- substitution rounds at probe cost.
+substFVsUpdate :: Subst -> Set.Set TyVar -> Maybe (Set.Set TyVar)
+substFVsUpdate (S eo _) fvs
+  | Map.null eo   = Nothing
+  | Set.null hits = Nothing
+  | otherwise     = Just fvs'
+  where hits = Set.filter (`Map.member` eo) fvs
+        fvs' = Set.union (fvs Set.\\ hits)
+                         (Set.fromList (concatMap (tv . (eo Map.!)) (Set.toList hits)))
 
 getSubstRange :: Subst -> [TyVar]
 getSubstRange (S eo _ ) = concat (map tv (Map.elems eo))

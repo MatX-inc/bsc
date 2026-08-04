@@ -120,6 +120,7 @@ Flags {
 	unsafeAlwaysRdy = False,
 	unSpecTo = "A",
 	updCheck = False,
+	useApSubC = False,
 	useDPI = False,
 	useNegate = True,
 	usePrelude = True,

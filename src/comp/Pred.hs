@@ -3,7 +3,7 @@
 module Pred(
             Qual(..), PredWithPositions(..), Pred(..), Class(..), Inst(..),
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
-            expandSyn, predToType, qualToType, mkInst,
+            expandSyn, expandSynPred, predToType, qualToType, mkInst,
             dictBaseName, hashType,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
@@ -15,10 +15,12 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List(union, genericSplitAt, genericLength, intersperse)
+import Data.Maybe(fromMaybe, isNothing)
 import qualified Data.Map.Strict as M
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO)
 import Control.Monad(when)
+import Changed
 import Util(Hash, hashInit, nextHashByte, nextHashString, showHash)
 import FStringCompat(FString, getFString)
 import Eval
@@ -58,7 +60,22 @@ instance PVPrint t => PVPrint (Qual t) where
     pvPrint d p (ps :=> t) = pvparen (p>0) $ pvPrint d 0 t <+> pvPreds d (map removePredPositions ps)
 
 instance Types t => Types (Qual t) where
-    apSub s (ps :=> t) = apSub s ps :=> apSub s t
+    apSubO s q = fromMaybe q (apSubM s q)
+    -- local changed-detection: contexts are short, so forcing the
+    -- element results here is cheap and buys whole-value sharing
+    apSubM s (ps :=> t) =
+        let mps = map (apSubM s) ps
+            mt  = apSubM s t
+        in  if all isNothing mps && isNothing mt
+            then Nothing
+            else Just (zipWith fromMaybe ps mps :=> fromMaybe t mt)
+    -- NB deliberately lazy (always Changed): schemes are substituted
+    -- far more often than their contexts are consumed, so forcing the
+    -- context list here to detect unchanged-ness costs more than the
+    -- sharing it buys (measured +50% typecheck on a register-heavy
+    -- module).  Element-level sharing still comes from apSubC.
+    apSubC s (ps :=> t) =
+        Changed (map (changedOrId (apSubC s)) ps :=> changedOr t (apSubC s t))
     tv      (ps :=> t) = tv ps `union` tv t
 
 instance (NFData a) => NFData (Qual a) where
@@ -109,7 +126,13 @@ instance PVPrint PredWithPositions where
     pvPrint d p (PredWithPositions pred _) = pvPrint d p pred
 
 instance Types PredWithPositions where
-    apSub s (PredWithPositions p poss) = PredWithPositions (apSub s p) poss
+    apSubO s pwp = fromMaybe pwp (apSubM s pwp)
+    apSubM s (PredWithPositions p poss) =
+        case apSubM s p of
+          Nothing -> Nothing
+          Just p' -> Just (PredWithPositions p' poss)
+    apSubC s (PredWithPositions p poss) =
+        changed1 (\p' -> PredWithPositions p' poss) (apSubC s p)
     tv      (PredWithPositions p poss) = tv p
 
 instance NFData PredWithPositions where
@@ -128,7 +151,24 @@ instance PVPrint Pred where
     pvPrint d p (IsIn c ts) = pvparen (p>0) $ pvpId d (typeclassId $ name c) <> pvParameterTypes d ts
 
 instance Types Pred where
-    apSub s (IsIn c ts) = IsIn c $ expandSyn <$> apSub s ts
+    apSubO s p = fromMaybe p (apSubM s p)
+    -- expandSyn re-normalizes only when the substitution actually
+    -- introduced new structure; an untouched pred is already expanded
+    -- (preds are synonym-expanded at construction)
+    apSubM s (IsIn c ts) =
+        let mts = map (apSubM s) ts
+        in  if all isNothing mts
+            then Nothing
+            else Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
+    -- NB deliberately lazy (always Changed): substitution over a pred
+    -- must be an O(1) thunk -- the satisfy stream substitutes every
+    -- residual pred every round and demands types selectively, so
+    -- eager per-element detection walks far more type structure than
+    -- is consumed (measured +25% typecheck on a register-heavy
+    -- module).  Per-element sharing still comes from apSubC; expandSyn
+    -- re-normalizes lazily on rebuild exactly as it always has.
+    apSubC s (IsIn c ts) =
+        Changed (IsIn c (map (expandSyn . changedOrId (apSubC s)) ts))
     tv      (IsIn c ts) = tv ts
 
 instance NFData Pred where
@@ -226,10 +266,29 @@ instance NFData Inst where
     rnf (Inst x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
 
 mkInst :: CExpr -> Qual Pred -> Maybe Id -> Inst
-mkInst e i pkg = Inst e (tv i) i pkg
+-- The instance HEAD is synonym-expanded at construction: instance
+-- matching is structural, so a synonym in the head would never match
+-- an expanded solver predicate.  (Previously this was masked by apSub
+-- incidentally re-expanding every pred it touched.)  Context preds
+-- need no expansion here -- subgoals are minted through mkVPred*,
+-- which normalizes.
+mkInst e (ps :=> p) pkg = let i' = ps :=> expandSynPred p
+                          in  Inst e (tv i') i' pkg
+
+expandSynPred :: Pred -> Pred
+expandSynPred (IsIn c ts) = IsIn c (map expandSyn ts)
 
 instance Types Inst where
-    apSub s (Inst e _ i pkg) = Inst (apSub s e) [] (apSub s i) pkg
+    -- The tv cache is the freshening domain consumed by newInst BEFORE
+    -- substitution; the only apSub at this type is inside newInst
+    -- itself, and nothing ever reads the cache of a substituted Inst
+    -- (byInst and the fundep checks wildcard it).  [] is therefore the
+    -- cheapest correct value -- not a semantic signal.  (mkImpliedInst
+    -- constructs an empty cache deliberately, but that is a
+    -- construction-time choice independent of this instance.)
+    apSubO s (Inst e _ i pkg) = Inst (apSubO s e) [] (apSubO s i) pkg
+    apSubC s (Inst e _ i pkg) =
+        Changed (Inst (changedOrId (apSubC s) e) [] (changedOrId (apSubC s) i) pkg)
     tv (Inst _ vs _ _) = vs
 
 {-

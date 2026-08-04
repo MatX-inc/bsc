@@ -146,6 +146,7 @@ data Flags = Flags {
         unsafeAlwaysRdy :: Bool,
         unSpecTo :: String,
         updCheck :: Bool,
+        useApSubC :: Bool,
         useDPI :: Bool,
         useNegate :: Bool,
         usePrelude :: Bool,

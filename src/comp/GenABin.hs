@@ -566,12 +566,12 @@ instance Bin Flags where
                 a_080 a_081 a_082 a_083 a_084 a_085 a_086 a_087 a_088 a_089
                 a_090 a_091 a_092 a_093 a_094 a_095 a_096 a_097 a_098 a_099
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
-                a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
+                a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_useApSubC a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_checkOnly a_137) =
        do wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4; wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 142-field serialization is split into NOINLINE chunks so
+        -- The 143-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
@@ -613,7 +613,7 @@ instance Bin Flags where
         wr_chunk7 =
           do toBin a_105; toBin a_106; toBin a_107; toBin a_108; toBin a_109;
              toBin a_110; toBin a_111; toBin a_112; toBin a_113; toBin a_114;
-             toBin a_115; toBin a_116; toBin a_117; toBin a_118; toBin a_119
+             toBin a_115; toBin a_116; toBin a_117; toBin a_useApSubC; toBin a_118; toBin a_119
         {-# NOINLINE wr_chunk8 #-}
         wr_chunk8 =
           do toBin a_120; toBin a_121; toBin a_122; toBin a_123; toBin a_124;
@@ -638,7 +638,7 @@ instance Bin Flags where
           (a_090, a_091, a_092, a_093, a_094, a_095, a_096, a_097,
            a_098, a_099, a_100, a_101, a_102, a_103, a_104) <- rd_chunk6
           (a_105, a_106, a_107, a_108, a_109, a_110, a_111, a_112,
-           a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
+           a_113, a_114, a_115, a_116, a_117, a_useApSubC, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
           (a_135, a_136, a_checkOnly, a_137) <- rd_chunk9
@@ -654,7 +654,7 @@ instance Bin Flags where
                 a_080 a_081 a_082 a_083 a_084 a_085 a_086 a_087 a_088 a_089
                 a_090 a_091 a_092 a_093 a_094 a_095 a_096 a_097 a_098 a_099
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
-                a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
+                a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_useApSubC a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_checkOnly a_137)
       where
@@ -711,9 +711,9 @@ instance Bin Flags where
         rd_chunk7 =
           do a_105 <- fromBin; a_106 <- fromBin; a_107 <- fromBin; a_108 <- fromBin; a_109 <- fromBin;
              a_110 <- fromBin; a_111 <- fromBin; a_112 <- fromBin; a_113 <- fromBin; a_114 <- fromBin;
-             a_115 <- fromBin; a_116 <- fromBin; a_117 <- fromBin; a_118 <- fromBin; a_119 <- fromBin
+             a_115 <- fromBin; a_116 <- fromBin; a_117 <- fromBin; a_useApSubC <- fromBin; a_118 <- fromBin; a_119 <- fromBin
              return (a_105, a_106, a_107, a_108, a_109, a_110, a_111, a_112,
-                     a_113, a_114, a_115, a_116, a_117, a_118, a_119)
+                     a_113, a_114, a_115, a_116, a_117, a_useApSubC, a_118, a_119)
         {-# NOINLINE rd_chunk8 #-}
         rd_chunk8 =
           do a_120 <- fromBin; a_121 <- fromBin; a_122 <- fromBin; a_123 <- fromBin; a_124 <- fromBin;

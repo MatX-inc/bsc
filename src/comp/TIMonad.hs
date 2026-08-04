@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE PatternSynonyms #-}
 module TIMonad(
         TI,
         apSubTI,
@@ -10,7 +11,7 @@ module TIMonad(
         getSubst, clearSubst, extSubst, updSubst,
         newTVar, newTVarId, isNewTVar, newDict, newVar,
         freshInst,
-        VPred(..), getVPredPositions, expandSynVPred,
+        VPred(VPred), vpredFVs, getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
@@ -53,6 +54,9 @@ import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Maybe(fromMaybe)
+import Changed
+import Eval(NFData(..))
 import Util(headOrErr)
 
 -------
@@ -435,8 +439,12 @@ popExplPreds = modify dropPreds
   where dropPreds s = s { tsExplPreds = tail (tsExplPreds s) }
 
 mkEPred :: Pred -> TI EPred
+-- expandSynPred: givens must satisfy the same construction-time
+-- normalization invariant as goals (lookfor matches structurally, so
+-- an unexpanded synonym in a given would never match an expanded
+-- solver predicate).
 mkEPred p = do i <- newDict
-               return $ EPred (CVar i) p
+               return $ EPred (CVar i) (expandSynPred p)
 
 clearSubst :: TI ()
 clearSubst = modify (transSubst (const nullSubst))
@@ -513,12 +521,59 @@ freshInst msg x (Forall ks qt@(_ :=> t)) = do
 ------
 
 -- VPred is an unsolved predicate (at least in satisfy, satMany, sat...)
-data VPred = VPred Id PredWithPositions
-    deriving (Show)
+--
+-- The extra (lazy) field caches the predicate's free type variables as
+-- a set, so the solver's substitution application can skip untouched
+-- predicates with one set-disjointness test instead of walking the
+-- predicate (and split_rs can test "affected by substitution" the same
+-- way).  The bidirectional pattern synonym keeps every existing
+-- construction and match site source-compatible; the cache is rebuilt
+-- automatically whenever a new VPred is constructed.  Order-sensitive
+-- consumers keep using tv (traversal order); the set is only ever used
+-- for membership tests.
+data VPred = VPred_ Id PredWithPositions (S.Set TyVar)
+
+pattern VPred :: Id -> PredWithPositions -> VPred
+pattern VPred i p <- VPred_ i p _
+  where VPred i p = VPred_ i p (S.fromList (tv p))
+{-# COMPLETE VPred #-}
+
+vpredFVs :: VPred -> S.Set TyVar
+vpredFVs (VPred_ _ _ fvs) = fvs
+
+instance Show VPred where
+    showsPrec d (VPred_ i p _) = showParen (d > 10) $
+        showString "VPred " . showsPrec 11 i .
+        showString " " . showsPrec 11 p
 
 instance Types VPred where
-    apSub s (VPred i p) = VPred i (apSub s p)
-    tv (VPred _ p) = tv p
+    apSubO s vp = fromMaybe vp (apSubM s vp)
+    apSubM s vp@(VPred_ i p fvs)
+      | substDomainDisjoint s fvs = Nothing
+      | otherwise = case apSubM s p of
+                      Nothing -> Nothing
+                      Just p' -> Just (VPred i p')
+    -- The fv cache is maintained incrementally (substFVsUpdate): the
+    -- new set comes from the old one plus the substitution ranges
+    -- that fired, never from walking the (lazily substituted)
+    -- predicate.  This keeps all three consumers cheap at once:
+    -- apSub on an untouched pred is Unchanged (full sharing, cache
+    -- included), apSub on a touched pred is small set work plus an
+    -- O(1) pred thunk, and split_rs probes never force a substitution
+    -- tower.  Rebuilding the cache via the VPred builder here instead
+    -- (S.fromList . tv) is a measured ~20% regression on
+    -- proviso-heavy input.
+    -- A rebuilt pred is forced to NF immediately: Changed marks exactly
+    -- the values that would otherwise retain a substitution tower
+    -- across satisfy rounds (Unchanged preds are already in NF from
+    -- their last force), so deep-forcing here bounds residency at
+    -- tip-eager levels while untouched preds still pay nothing.
+    apSubC s (VPred_ i p fvs) =
+      case substFVsUpdate s fvs of
+        Nothing   -> Unchanged
+        Just fvs' -> let p' = changedOrId (apSubC s) p
+                     in rnf p' `seq` Changed (VPred_ i p' fvs')
+    tv (VPred_ _ p _) = tv p
 
 instance PPrint VPred where
 -- note that the colon (:) that gets printed here is NOT a list cons!
@@ -542,7 +597,8 @@ expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss)) = VPred i pwp'
 data EPred = EPred CExpr Pred
 
 instance Types EPred where
-    apSub s (EPred e p) = EPred e (apSub s p)
+    apSubO s (EPred e p) = EPred e (apSubO s p)
+    apSubC s (EPred e p) = changed1 (EPred e) (apSubC s p)
     tv (EPred _ p) = tv p
 
 instance PPrint EPred where
