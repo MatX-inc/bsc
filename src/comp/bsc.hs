@@ -306,6 +306,14 @@ compile_no_deps errh flags name = do
 
 -------------------------------------------------------------------------
 
+-- The hash a dependent records for an import, or Nothing under
+-- -no-import-hashes.  The name is recorded either way: it is the graph shape
+-- that drives the load worklist, while the hash only drives the consistency
+-- check -- and carrying the hash of every package in the transitive closure
+-- is what makes a dependent's bytes move when any of them changes signature.
+optHash :: Flags -> String -> Maybe String
+optHash flags h = if importHashes flags then Just h else Nothing
+
 compilePackage ::
     ErrorHandle ->
     Flags ->
@@ -501,7 +509,7 @@ compilePackage
             -- from.  Recomputed here because -check-only exits before fixup.
             findFn s = fromJustOrErr "bsc: binmap (check-only)" $
                            M.lookup s binmap
-            bc_depends = [ (i, h)
+            bc_depends = [ (i, optHash flags h)
                          | CImpSign _ _ (CSignature i _ _ _) <- impsigs
                          , let (_, _, _, _, h) = findFn (getIdString i) ]
         genBcFile errh bc_filename bc_depends bi_sig
@@ -577,7 +585,10 @@ compilePackage
      let
          -- adjust the "raw" packages and then add back their signatures
          -- so they can be put into the current IPackage for linking info
-         binmods = zip (map (adjEnv env) binmods0) pkgsigs
+         -- -no-import-hashes records the graph shape without the hashes:
+         -- the names still drive the load worklist, but a dependent's bytes
+         -- stop moving when an unrelated package in its closure changes
+         binmods = zip (map (adjEnv env) binmods0) (map (optHash flags) pkgsigs)
 
      t <- dump errh flags t DFbinary dumpnames binmods
 

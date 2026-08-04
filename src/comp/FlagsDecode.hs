@@ -558,6 +558,7 @@ defaultFlags bluespecdir = Flags {
         dumpAll = Nothing,
         dumps = [],
         checkOnly = False,
+        importHashes = True,
         enablePoisonPills = False,
         entry = Nothing,
         expandATSlimit = 20,
@@ -1235,6 +1236,12 @@ externalFlags = [
         ("I",
          (Arg "path" (\f s -> Left (f {cIncPath = cIncPath f ++ [s]})) (Just (FRTListString cIncPath)),
           "include path for compiling foreign C/C++ source", Visible)),
+
+        ("import-hashes",
+         (Toggle (\f x -> f {importHashes=x}) (showIfTrue importHashes),
+          "record transitive-closure hashes in the depends list and check " ++
+          "them on import (default); -no-import-hashes omits them, which is " ++
+          "only safe when the build guarantees input consistency", Visible)),
 
         ("info-dir",
          (Arg "dir" (\f s -> Left (f {infoDir = Just s})) (Just (FRTMaybeString infoDir)),

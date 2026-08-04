@@ -32,6 +32,7 @@ Compiler flags:
 -g module               generate code for ``module'' (requires -sim or -verilog)
 -help                   generate help message
 -i dir                  override `$BLUESPECDIR'
+-import-hashes          record transitive-closure hashes in the depends list and check them on import (default); -no-import-hashes omits them, which is only safe when the build guarantees input consistency
 -info-dir dir           output directory for informational files
 -keep-fires             preserve CAN_FIRE and WILL_FIRE signals
 -keep-inlined-boundaries preserve inlined register and wire boundaries

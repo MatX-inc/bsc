@@ -216,8 +216,8 @@ doImport errh flags hashmap i = do
         let impNames = map fst impHashes
         return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
-mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->
-               IO HashMap
+mergeHashes :: ErrorHandle -> HashMap -> Id -> String ->
+               [(Id, Maybe String)] -> IO HashMap
 mergeHashes errh hashmap binId binhash impHashes =
   let
       -- a package and its importer disagree about the hash
@@ -256,8 +256,12 @@ mergeHashes errh hashmap binId binhash impHashes =
           internalError ("mergeHashes: " ++ ppReadable new_val)
 
 
+      -- An absent hash records no claim, so there is nothing to merge and
+      -- nothing to disagree with: the producing compile ran with
+      -- -no-import-hashes.  Verification simply does not cover that edge.
       new_pairs = let mkImpPair (i,s) = (i, (s, [binId]))
-                      imp_pairs = map mkImpPair impHashes
+                      imp_pairs = map mkImpPair
+                                      [ (i, s) | (i, Just s) <- impHashes ]
                       bin_pair = (binId, (binhash, [binId]))
                   in  (bin_pair : imp_pairs)
   in

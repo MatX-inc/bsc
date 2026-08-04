@@ -4,6 +4,7 @@ bsc -i BLUESPECDIR -print-flags
 Flags:
     -aggressive-conditions
     -i BLUESPECDIR
+    -import-hashes
     -lift
     -o a.out
     -parallel-sim-link   1

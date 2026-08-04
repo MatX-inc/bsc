@@ -156,8 +156,18 @@ data Flags = Flags {
         warnMethodUrgency :: Bool,
         warnUndetPred :: Bool,
         -- appended last: the Bin Flags instance in GenABin.hs is
-        -- positional, so new fields go at the end (position a_134)
-        checkOnly :: Bool
+        -- positional, so new fields go at the end (position a_135)
+        checkOnly :: Bool,
+        -- Record the transitive-closure hashes in a package's depends list,
+        -- and run the consistency check they drive.  On by default.
+        --
+        -- Those hashes are what makes a dependent's bytes move when any
+        -- package anywhere in its closure changes signature, so -no-import-
+        -- hashes is what lets an unaffected dependent rebuild byte-identically
+        -- and its own dependents cache-hit.  Turning it off is only safe where
+        -- the build guarantees input consistency: bazel content-addresses its
+        -- inputs, a search path with a stale .bo does not.
+        importHashes :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
