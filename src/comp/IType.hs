@@ -14,6 +14,8 @@ module IType(
   ,ftvCacheEnabled
   ,iToCT
   ,iToCK
+  ,itHasTFun
+  ,itHasATF
   ,sameITypeNode
    )
     where
@@ -26,6 +28,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import qualified Data.IntSet as IS
+import qualified Data.IntMap.Strict as IM
 import System.IO.Unsafe(unsafeDupablePerformIO)
 import Data.Maybe(isJust, fromJust)
 import System.IO.Unsafe(unsafePerformIO)
@@ -673,6 +676,69 @@ sameITypeNode (ITAp_ u _ _ _) (ITAp_ u' _ _ _) = u == u'
 sameITypeNode (ITForAll_ u _ _ _ _) (ITForAll_ u' _ _ _ _) = u == u'
 sameITypeNode _ _ = False
 
+-- | Does the type contain a TYPE-FUNCTION constructor anywhere -- an
+-- associated type function (TIatf) or a primitive type function
+-- (TAdd, TLog, ...)?  Only such types have anything the normalizers
+-- can reduce, and BOTH kinds count: a dormant application over
+-- variables becomes a redex when instantiation makes its arguments
+-- literal, so mere ATF-absence is not sufficient to skip
+-- normalization (nested prim applications reduce during elaboration;
+-- cf. bsc.evaluator/primtcons TestTAdd_Nested).  Memoized per intern
+-- unique, so exponentially shared DAGs answer in O(distinct nodes).
+{-# NOINLINE itHasTFunMemo #-}
+itHasTFunMemo :: IORef (IM.IntMap Bool)
+itHasTFunMemo = unsafePerformIO $ newIORef IM.empty
+
+itHasTFun :: IType -> Bool
+itHasTFun (ITCon _ _ (TIatf {})) = True
+-- idId: the identity type operator, eliminated by mkITAp's reduction
+-- but absent from isPrimTFunName's op list
+itHasTFun (ITCon i _ _) = isPrimTFunName i || i == idId
+itHasTFun (ITNum _) = False
+itHasTFun (ITStr _) = False
+itHasTFun (ITVar _) = False
+itHasTFun (ITAp_ u _ f a) = itHasTFunOnce u (itHasTFun f || itHasTFun a)
+itHasTFun (ITForAll_ u _ _ _ t) = itHasTFunOnce u (itHasTFun t)
+
+itHasTFunOnce :: Int -> Bool -> Bool
+itHasTFunOnce u v = unsafeDupablePerformIO $ do
+    m0 <- readIORef itHasTFunMemo
+    case IM.lookup u m0 of
+      Just r -> return r
+      Nothing -> do
+        let r = v
+        _ <- return $! r
+        atomicModifyIORef' itHasTFunMemo (\ m -> (IM.insert u r m, ()))
+        return r
+
+-- Does an applied-type-function constructor occur anywhere inside?
+-- Narrower than itHasTFun: the equation reducers only rewrite ATF
+-- applications, so ATF-absence alone licenses skipping their walks.
+-- Memoized per intern unique, separately from itHasTFun (the
+-- predicates differ on prim-TFun-only types).
+{-# NOINLINE itHasATFMemo #-}
+itHasATFMemo :: IORef (IM.IntMap Bool)
+itHasATFMemo = unsafePerformIO $ newIORef IM.empty
+
+itHasATF :: IType -> Bool
+itHasATF (ITCon _ _ (TIatf {})) = True
+itHasATF (ITCon _ _ _) = False
+itHasATF (ITNum _) = False
+itHasATF (ITStr _) = False
+itHasATF (ITVar _) = False
+itHasATF (ITAp_ u _ f a) = itHasATFOnce u (itHasATF f || itHasATF a)
+itHasATF (ITForAll_ u _ _ _ t) = itHasATFOnce u (itHasATF t)
+
+itHasATFOnce :: Int -> Bool -> Bool
+itHasATFOnce u v = unsafeDupablePerformIO $ do
+    m0 <- readIORef itHasATFMemo
+    case IM.lookup u m0 of
+      Just r -> return r
+      Nothing -> do
+        let r = v
+        _ <- return $! r
+        atomicModifyIORef' itHasATFMemo (\ m -> (IM.insert u r m, ()))
+        return r
 
 iToCK :: IKind -> Kind
 iToCK (IKStar) = KStar

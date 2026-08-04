@@ -74,6 +74,7 @@ import Pred(Pred(..), Qual(..), Class(..), Inst(..), expandSyn,
 import StdPrel(isPreClass)
 import SymTab(SymTab, findSClass)
 import ISyntax(IType(..), IKind(..))
+import IType(itHasATF)
 import ISyntaxSubst(tSubstBatch)
 
 -- The rules are views of the instance declarations already in the
@@ -119,6 +120,9 @@ atfReduceGround rules atfId so args =
 atfReduceInType :: ATFRules -> IType -> Maybe IType
 atfReduceInType rules t0 = go maxFuel t0
   where
+    -- ATF-free subtrees (memoized per intern unique) are returned
+    -- unwalked: they may be exponentially shared DAGs
+    go _ t | not (itHasATF t) = Just t
     go fuel _ | fuel <= 0 = Nothing
     go fuel (ITForAll i k b) = ITForAll i k `fmap` go (fuel - 1) b
     go fuel t@(ITAp _ _) =
