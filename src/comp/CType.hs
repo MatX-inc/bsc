@@ -499,11 +499,11 @@ mkTCon tc
         Right (Just key) -> do
           CCState _ lm _ <- readIORef ccState
           case M.lookup key lm of
-            Just canon -> do bump cnConsConHit; return canon
+            Just canon -> do bump cnConsConHit; return (ccAtCaller canon tc)
             Nothing -> do
               (canon, isNew) <- atomicModifyIORef' ccState (insLeaf key)
               bump (if isNew then cnConsConNew else cnConsConHit)
-              return canon
+              return (ccAtCaller canon tc)
   where
     insLeaf key st@(CCState apm lm n) =
         case M.lookup key lm of
@@ -514,6 +514,28 @@ mkTCon tc
           -- there is nothing left for the payload-free key to conflate
           Nothing -> let c = TCon_ n (ccTidyTyCon tc)
                      in  (CCState apm (M.insert key c lm) (n+1), (c, True))
+
+-- Share by id, but hand back the CALLER's position.  A canonical leaf is
+-- one VALUE, not one occurrence: the key covers the value (and kind and
+-- sort tag) precisely because Eq TyCon does, and Eq ignores positions.
+-- Diagnostics do not -- they ask a type where it came from, and the
+-- first-arrival position answers for whichever occurrence happened to
+-- reach the table first.  That is how a kind error on one line came to
+-- name another, and an unused-import warning came to name another FILE.
+--
+-- The id and the normalized sort survive, so cmp's id shortcut, the
+-- groundness induction (typeCanonId >= 0) and the payload canonicality
+-- above are all unaffected; only "equal ids mean the same heap object"
+-- weakens to "equal ids mean the same value", which is what every
+-- consumer of an id actually relies on.
+ccAtCaller :: Type -> TyCon -> Type
+ccAtCaller (TCon_ n c) tc = TCon_ n (ccSetTyConPos c (getPosition tc))
+ccAtCaller t _ = t
+
+ccSetTyConPos :: TyCon -> Position -> TyCon
+ccSetTyConPos (TyCon i k s) p = TyCon (setIdPosition p i) k s
+ccSetTyConPos (TyNum v _)   p = TyNum v p
+ccSetTyConPos (TyStr v _)   p = TyStr v p
 
 ccConKey :: TyCon -> Maybe CCKey
 ccConKey (TyNum n _) = Just (CCNum n)
