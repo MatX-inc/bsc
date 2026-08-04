@@ -363,6 +363,44 @@ ccSortTag (TIstruct {})  = 2
 ccSortTag (TIabstract)   = 3
 ccSortTag (TIatf {})     = 4
 
+-- Canonicalize a leaf's sort payload before consing, exactly as
+-- IType.tidySort canonicalizes an ITCon payload: the payload's ENTITY
+-- Ids -- constructors, fields, wrapper names, all entities of the
+-- tycon's own package -- are re-qualified to the owning tycon, and
+-- lose positions and props.
+--
+-- Without this the leaf table conflates two spellings of one payload.
+-- A .bo carries constructors as the source package wrote them (local,
+-- so unqualified); MakeSymTab and IType.ownedId re-qualify them to the
+-- owner.  Same entity either way, but the leaf key deliberately
+-- excludes the payload, so whichever TyCon reached the table first won
+-- and the other caller silently got its payload -- which is what
+-- tconcheck's 8 Type-side DRIFT entries were reporting.  The IType
+-- side already normalizes and its 32 entries always passed.
+--
+-- Local names (PIArgNames dummies) and references to OTHER packages'
+-- entities keep their own qualification, as on the IType side.
+-- TItype and TIatf never reach here (ccConKey refuses both), so no
+-- synonym body is ever forced.
+ccTidySort :: FString -> TISort -> TISort
+ccTidySort q (TIdata cs enc)  = TIdata (map (ccOwnedId q) cs) enc
+ccTidySort q (TIstruct ss fs) = TIstruct (ccTidySST q ss) (map (ccOwnedId q) fs)
+ccTidySort _ s                = s
+
+ccTidySST :: FString -> StructSubType -> StructSubType
+ccTidySST q (SDataCon i nf)     = SDataCon (ccOwnedId q i) nf
+ccTidySST q (SPolyWrap a mc f)  = SPolyWrap (ccOwnedId q a) (fmap (ccOwnedId q) mc)
+                                            (ccOwnedId q f)
+ccTidySST _ ss                  = ss
+
+-- the owner is always qualified (ccConKey refuses unqualified tycons)
+ccOwnedId :: FString -> Id -> Id
+ccOwnedId q i = setIdQual (setIdPosition noPosition (setIdProps i [])) q
+
+ccTidyTyCon :: TyCon -> TyCon
+ccTidyTyCon (TyCon i mk sort) = TyCon i mk (ccTidySort (getIdQual i) sort)
+ccTidyTyCon tc                = tc
+
 -- ap-node keys fuse the two child ids into one Int (ids stay far
 -- below 2^31 in practice; the guard refuses consing rather than
 -- overflowing the fusion)
@@ -470,7 +508,11 @@ mkTCon tc
     insLeaf key st@(CCState apm lm n) =
         case M.lookup key lm of
           Just c  -> (st, (c, False))
-          Nothing -> let c = TCon_ n tc
+          -- the canonical node carries the NORMALIZED payload, so the
+          -- two spellings of one payload (source-form from a .bo,
+          -- re-qualified from the symtab) become the same value and
+          -- there is nothing left for the payload-free key to conflate
+          Nothing -> let c = TCon_ n (ccTidyTyCon tc)
                      in  (CCState apm (M.insert key c lm) (n+1), (c, True))
 
 ccConKey :: TyCon -> Maybe CCKey
