@@ -11,6 +11,7 @@ import qualified Data.Map as M
 import Flags(Flags,
              ifcPath,
              enablePoisonPills,
+             checkOnly,
              usePrelude,
              verbose)
 import Position(noPosition)
@@ -22,9 +23,9 @@ import Prim
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsWarning)
 import PFPrint
 import SCC
-import FileNameUtil(binSuffix)
+import FileNameUtil(binSuffix, bcSuffix)
 import FileIOUtil(readBinFilePath)
-import GenBin(readBinFile)
+import GenBin(readBinFile, readBcFile)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
@@ -172,28 +173,48 @@ doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
             IO (String, CSignature, CSignature, IPackage a, String,
                 HashMap, [Id])
 doImport errh flags hashmap i = do
-    let binname = getIdString i ++ "." ++ binSuffix
+    let boname = getIdString i ++ "." ++ binSuffix
+        bcname = getIdString i ++ "." ++ bcSuffix
         missingErr = (getIdPosition i,
-                      EMissingBinFile binname (pfpString i))
+                      EMissingBinFile boname (pfpString i))
         pillMsg = if (enablePoisonPills flags)
                   then bsWarning errh
                   else bsError errh
-    (file, name) <- fromMaybeM (bsError errh [missingErr]) $
-                      readBinFilePath errh (getIdPosition i)
-                          (verbose flags) binname (ifcPath flags)
-    (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash, pill)
-        <- readBinFile errh name file
-    when (pi /= i) $
-        bsError errh [(noPosition, EBinFilePkgNameMismatch name
-                                       (pfpString i) (pfpString pi))]
-    -- The writer recorded this in the header (GenBin.pillByte); the severity
-    -- is still the importer's call.  The message never named the offending
-    -- def, so the flag reproduces the old diagnostic exactly.
-    when pill $
-        pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
-    hashmap' <- mergeHashes errh hashmap pi hash impHashes
-    let impNames = map fst impHashes
-    return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
+        find nm = readBinFilePath errh (getIdPosition i)
+                      (verbose flags) nm (ifcPath flags)
+    -- Under -check-only prefer the signature-only artifact, but fall back to
+    -- a full .bo: the shipped Libraries are only ever .bo, so a check compile
+    -- must be able to import them.  Source still wins over both -- that is
+    -- Depend's business, not ours.
+    mbc <- if checkOnly flags then find bcname else return Nothing
+    case mbc of
+      Just (file, name) -> do
+        ((depends, bi_sig), hash) <- readBcFile errh name file
+        let CSignature pi _ _ _ = bi_sig
+        when (pi /= i) $
+            bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                           (pfpString i) (pfpString pi))]
+        -- "depends" plays the part "impHashes" plays for a .bo: the transitive
+        -- closure that drives both the load worklist and readImports' qualmap.
+        -- The signature's own import list cannot serve -- GenSign prunes it.
+        hashmap' <- mergeHashes errh hashmap pi hash depends
+        let ipkg = IPackage pi depends [] [] M.empty
+        return (name, bi_sig, bi_sig, ipkg, hash, hashmap', map fst depends)
+      Nothing -> do
+        (file, name) <- fromMaybeM (bsError errh [missingErr]) $ find boname
+        (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash, pill)
+            <- readBinFile errh name file
+        when (pi /= i) $
+            bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                           (pfpString i) (pfpString pi))]
+        -- The writer recorded this in the header (GenBin.pillByte); the
+        -- severity is still the importer's call.  The message never named the
+        -- offending def, so the flag reproduces the old diagnostic exactly.
+        when pill $
+            pillMsg [(getIdPosition pi, WPoisonedDefFile boname)]
+        hashmap' <- mergeHashes errh hashmap pi hash impHashes
+        let impNames = map fst impHashes
+        return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
 mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->
                IO HashMap

@@ -19,7 +19,7 @@ import Util(rTake)
 -- Names
 
 -- various suffixes
-bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, cSuffix,
+bscSrcSuffix, bsvSrcSuffix, binSuffix, bcSuffix, abinSuffix, cSuffix,
   cxxSuffix, cppSuffix, ccSuffix, hSuffix, comodSuffix, objSuffix, arSuffix,
   soSuffix, verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
   verSuffix6, vhdlSuffix, vhdlSuffix2, useSuffix, scheduleSuffix, dotSuffix,
@@ -27,6 +27,10 @@ bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, cSuffix,
 bscSrcSuffix = "bs"
 bsvSrcSuffix = "bsv"
 binSuffix = "bo"
+-- Check-only compiles (-check-only) emit a signature-only artifact with
+-- its own suffix, so a .bc can never be mistaken for a .bo by a compile
+-- that needs definitions.
+bcSuffix = "bc"
 abinSuffix = "ba"
 cSuffix   = "c"
 cxxSuffix = "cxx"

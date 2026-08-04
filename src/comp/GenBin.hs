@@ -1,12 +1,13 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile) where
+module GenBin(genBinFile, readBinFile, genBcFile, readBcFile) where
 
 import Control.Monad(when)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
+import Id(Id)
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
@@ -55,6 +56,41 @@ readBinFile errh nm s =
                 ((bi_sig, bo_sig, ipkg), hash) =
                     decodeWithHash $ B.drop (hlen + 1) s
             in return (bi_sig, bo_sig, ipkg, hash, pill)
+       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- ----------
+-- .bc: the signature-only artifact written by -check-only.
+--
+-- A check compile exists to answer "does this package compile", and the only
+-- consumer of its output is another check compile, which typechecks against
+-- signatures.  bi_sig is what readImports feeds to the typechecker (mkCImp),
+-- and CSignature already carries the package's import list, so it is also all
+-- Depend needs to walk the graph.  bo_sig is deliberately absent: it is only
+-- consumed via replaceImportedSignatures, downstream of IConv, which
+-- -check-only never reaches.
+--
+-- Its own tag means the S0005 version guard rejects a .bc fed to a compile
+-- that wants definitions, rather than that compile silently finding none.
+bcHeader :: [Byte]
+bcHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bc-20260804-1"
+
+bcHeaderBS :: B.ByteString
+bcHeaderBS = B.pack bcHeader
+
+-- The dependency list is the same one a .bo records in "ipkg_depends": the
+-- whole transitive closure, topologically sorted, each paired with the hash
+-- of the file it was read from.  It cannot be recovered from the signature's
+-- own import list, which GenSign prunes to direct imports minus the Preludes.
+genBcFile :: ErrorHandle -> String -> [(Id, String)] -> CSignature -> IO ()
+genBcFile errh fn depends bi_sig =
+    writeBinaryFileCatch errh fn (bcHeader ++ encode (depends, bi_sig))
+
+readBcFile :: ErrorHandle -> String -> B.ByteString ->
+              IO (([(Id, String)], CSignature), String)
+readBcFile errh nm s =
+    let hlen = B.length bcHeaderBS
+    in if B.take hlen s == bcHeaderBS
+       then return (decodeWithHash (B.drop hlen s))
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------
