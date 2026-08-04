@@ -16,6 +16,7 @@ import Id
 import PreIds
 import ISyntax
 import ISyntaxSubst(tSubst)
+import ATFRules(ATFRules, buildATFRules)
 import ISyntaxUtil
 import Changed(changedOrId)
 import IExpandUtils
@@ -23,6 +24,11 @@ import SymTab(SymTab, mustFindClass, findSClass, getAllTypes, TypeInfo(..))
 
 import Pred
 import CType
+import IType(fTVarSet, vsNull, ftvCacheEnabled, iTypeNodeId,
+             sameITypeNode)
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import qualified Data.IntMap.Strict as IM
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import TCMisc
 import TIMonad
 
@@ -38,6 +44,11 @@ trace_icheck = tracep doTraceICheck
 -----
 
 eqType :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+-- the same interned node (identity by intern unique -- NOT structural
+-- (==), whose cmpT skips ITForAll binder kinds) is equal without the
+-- alpha-renaming substitution below: the common iPCheck case, where
+-- the declared and recomputed types are the same node
+eqType _ _ _ t t' | sameITypeNode t t' = True
 eqType flags symt r (ITForAll i k t) (ITForAll i' k' t') =
     k == k' &&
     eqType flags symt (addK i k r) t (tSubst i' (ITVar i) t')
@@ -57,12 +68,18 @@ eqType0 flags symt r@(E _ _ eqs _) t t' =
                      ++ " result=" ++ show result) $
        result
 
+-- The commutative numeric type constructors, identified by name: Ids
+-- embedded in ITypes are normalized on entry to the intern layer and
+-- carry no props, so this must not be an IdProp test.
+commutativeTCons :: [Id]
+commutativeTCons = [idAdd, idMax, idMin, idMul, idNumEq]
+
 eqType1 :: Flags -> SymTab -> Env -> IType -> IType -> Bool
 
 -- hack to make commutative type constructors work
 eqType1 flags symt r (ITAp (ITAp (ITAp (ITCon i _ _) t1) t2) t3)
                      (ITAp (ITAp (ITAp (ITCon i' _ _) t1') t2') t3')
-    | (i == i') && (hasIdProp i IdPCommutativeTCon) =
+    | (i == i') && (i `elem` commutativeTCons) =
     eqType0 flags symt r t3 t3' &&
     (((eqType0 flags symt r t1 t1') && (eqType0 flags symt r t2 t2')) ||
      ((eqType0 flags symt r t1 t2') && (eqType0 flags symt r t2 t1')))
@@ -147,17 +164,17 @@ assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadab
 
 type EqTy = Env -> IType -> IType -> Bool
 
-tCheck :: Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
-tCheck flags symt cache r eqTy ec@(ILam i t e) =
+tCheck :: Flags -> SymTab -> ATFRules -> Env -> EqTy -> IExpr a -> IType
+tCheck flags symt rules r eqTy ec@(ILam i t e) =
     -- assert (kCheckErr r t == IKStar) "ILam" (ec, kCheckErr r t) $
         trace_icheck ("tCheck ILam: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-        itFun t (tCheck flags symt cache (addT symt i t r) eqTy e)
-tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
+        itFun t (tCheck flags symt rules (addT symt i t r) eqTy e)
+tCheck flags symt rules r eqTy ec@(IAps f0 ts [a]) =
         let f = iAps f0 ts []
-            norm = changedOrId $ fullTypeNormalizer flags symt cache
-            at = norm $ tCheck flags symt cache r eqTy a
+            norm = changedOrId $ fullTypeNormalizer rules
+            at = norm $ tCheck flags symt rules r eqTy a
             (rt, at') =
-                case norm $ tCheck flags symt cache r eqTy f of
+                case norm $ tCheck flags symt rules r eqTy f of
                     ITAp (ITAp arr at') rt | arr == itArrow -> (rt, at')
                     tt -> internalError ("tCheck IAp: " ++ ppReadable(ec, f, tt))
             eq_result = eqTy r at at'
@@ -166,13 +183,13 @@ tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
                           ++ " eq=" ++ show eq_result) $
             assert eq_result "IAp"
                (r, ec, a, (at, at') {-, (f,ft),(a,at)-}) (at, at') rt
-tCheck flags symt cache r eqTy (IAps f ts (e:es)) =
-    tCheck flags symt cache r eqTy (IAps (IAps f ts [e]) [] es)
+tCheck flags symt rules r eqTy (IAps f ts (e:es)) =
+    tCheck flags symt rules r eqTy (IAps (IAps f ts [e]) [] es)
 tCheck _ _ _ r _ (IVar i) = findT i r
-tCheck flags symt cache r eqTy (ILAM i k e) =
-    ITForAll i k (tCheck flags symt cache (addK i k r) eqTy e)
-tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
-        case tCheck flags symt cache r eqTy e of
+tCheck flags symt rules r eqTy (ILAM i k e) =
+    ITForAll i k (tCheck flags symt rules (addK i k r) eqTy e)
+tCheck flags symt rules r eqTy ec@(IAps e [t] []) =
+        case tCheck flags symt rules r eqTy e of
         ITForAll i k rt ->
             let kt = kCheckErr r t
                 rt'= tSubst i t rt
@@ -180,30 +197,51 @@ tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
                               ++ " k=" ++ ppReadable k ++ " kt=" ++ ppReadable kt) $
                 assert (k == kt) "IAP" (ec, (i,k,rt), kt) (k, kt) rt'
         tt -> internalError ("tCheck IAP: " ++ ppReadable (ec, tt))
-tCheck flags symt cache r eqTy (IAps f (t:ts) []) =
-    tCheck flags symt cache r eqTy (IAps (IAps f [t] []) ts [])
+tCheck flags symt rules r eqTy (IAps f (t:ts) []) =
+    tCheck flags symt rules r eqTy (IAps (IAps f [t] []) ts [])
 tCheck _ _ _ _ _ (ICon c ic) = iConType ic
-tCheck flags symt cache r eqTy (IAps f [] []) =
+tCheck flags symt rules r eqTy (IAps f [] []) =
     trace_icheck ("tCheck IAps []: " ++ show f) $
-    tCheck flags symt cache r eqTy f
+    tCheck flags symt rules r eqTy f
 tCheck _ _ _ _ _ (IRefT t _ _ _) = t
 --tCheck _ _ _ _ e = internalError ("no match in tCheck: " ++ ppReadable e)
+
+-- variable-free applications kind-check independently of the Env, so
+-- the result is memoized per intern unique: an exponentially shared
+-- DAG checks once per distinct node instead of once per path
+{-# NOINLINE kCheckMemo #-}
+kCheckMemo :: IORef (IM.IntMap (Maybe IKind))
+kCheckMemo = unsafePerformIO $ newIORef IM.empty
 
 kCheck :: Env -> IType -> Maybe IKind
 kCheck r (ITForAll i k t) = do
   kr <- kCheck (addK i k r) t
   return (IKFun k kr)
-kCheck r tc@(ITAp f a) = do
+kCheck r tc@(ITAp f a)
+  | ftvCacheEnabled, vsNull (fTVarSet tc) = unsafeDupablePerformIO $ do
+      let u = iTypeNodeId tc
+      m0 <- readIORef kCheckMemo
+      case IM.lookup u m0 of
+        Just k -> return k
+        Nothing -> do
+          let k = kCheckAp r tc f a
+          _ <- return $! k
+          atomicModifyIORef' kCheckMemo (\ m -> (IM.insert u k m, ()))
+          return k
+kCheck r tc@(ITAp f a) = kCheckAp r tc f a
+kCheck r (ITVar i) = findK i r
+kCheck r (ITCon _ k _) = return k
+kCheck r (ITNum _) = return IKNum
+kCheck r (ITStr _) = return IKStr
+
+kCheckAp :: Env -> IType -> IType -> IType -> Maybe IKind
+kCheckAp r tc f a = do
   kf <- kCheck r f
   case kf of
     IKFun ka kr ->
         do ka' <- kCheck r a
            assert (ka' == ka) "ITAp" (tc, (f, kf), (ka', ka)) (ka', ka) $ return kr
     k -> internalError ("kCheck " ++ ppReadable (tc, k))
-kCheck r (ITVar i) = findK i r
-kCheck r (ITCon _ k _) = return k
-kCheck r (ITNum _) = return IKNum
-kCheck r (ITStr _) = return IKStr
 
 iGetKind :: IType -> Maybe IKind
 iGetKind = kCheck emptyEnv
@@ -213,11 +251,12 @@ kCheckErr r t = fj $ kCheck r t
   where fj = fromJustOrErr ("findK: " ++ ppReadable (r, t))
 
 tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
-tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
+tCheckIPackage flags symt (IPackage pi _ _ ds) =
     let r  = emptyEnv
+        rules = buildATFRules symt
         defOK (IDef i t e _) =
             trace_icheck ("=== tCheckIPackage defOK: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-            let t' = tCheck flags symt atf_cache r (eqType flags symt) e
+            let t' = tCheck flags symt rules r (eqType flags symt) e
             in  assert (eqType flags symt r t' t) "defOK1"
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
@@ -230,7 +269,7 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
         let eqTy _ = (==) -- Just direct equality, no other manipulations.
             r = foldr (\ (i, k) r -> addK i k r) emptyEnv iks
             defOK (IDef i t e _) =
-                let t' = tCheck flags symt M.empty r eqTy e
+                let t' = tCheck flags symt (buildATFRules symt) r eqTy e
                 in  assert (t == t') "defOK2"
                         (i,e,(t,t')) (t, t') True
             ifcOK (IEFace i _ maybe_e maybe_r _ _) =
@@ -244,8 +283,8 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
 
             rulesOK (IRules sps rs) = all ruleOK rs
             ruleOK (IRule { irule_pred = p , irule_body = a }) =
-                let tp = tCheck flags symt M.empty r eqTy p
-                    ta = tCheck flags symt M.empty r eqTy a
+                let tp = tCheck flags symt (buildATFRules symt) r eqTy p
+                    ta = tCheck flags symt (buildATFRules symt) r eqTy a
                 in
                     assert (tp == itBit1) "ruleOK p"
                         (p, tp) (p, tp) True &&
@@ -299,16 +338,23 @@ atfEqsFromDict symt dictType =
     in case hd of
          ITCon cid _ _ ->
            [ (atfApp, targetArg)
-           | (atfId, TypeInfo _ atfK _ ti@(TIatf { atf_class_id = acId
-                                                 , atf_param_idxs = pIdxs
-                                                 , atf_target_idx = tIdx }) _)
+           -- The symtab type map contains one entry per visible alias
+           -- (qualified and unqualified) of each type, all sharing one
+           -- TypeInfo.  Build the ATF tycon from the canonical
+           -- qualified id (ti_qual_id) -- ITCon Ids must be qualified
+           -- (enforced by IType.mkITCon) -- and keep a single entry
+           -- per ATF by matching only the canonical alias.
+           | (atfId, TypeInfo (Just qatfId) atfK _ ti@(TIatf { atf_class_id = acId
+                                                             , atf_param_idxs = pIdxs
+                                                             , atf_target_idx = tIdx }) _)
                <- allTypes
+           , atfId == qatfId
            , acId == cid
            , tIdx < length classArgs
            , all (\idx -> idx >= 0 && idx < length classArgs) pIdxs
            , let paramArgs = [ classArgs !! idx | idx <- pIdxs ]
                  targetArg = classArgs !! tIdx
-                 atfTyCon = ITCon atfId (kToIK atfK) ti
+                 atfTyCon = ITCon qatfId (kToIK atfK) ti
                  atfApp = foldl ITAp atfTyCon paramArgs
            ]
          _ -> []

@@ -29,7 +29,6 @@ import System.Environment(getEnv)
 import System.Mem(performGC)
 import System.Posix.Signals
 import Text.Regex
-import Data.Generics (listify)
 import qualified Data.Map as M
 
 -- Bluespec imports
@@ -644,7 +643,7 @@ tclPackage ("load":args) = do
 
   -- update the CImports and symbol table
   let (CPackage pid exps cimps impsigs cf defs incs) = tp_cpack g
-      mkCImp (_, _, bo_sig, (IPackage iid _ _ _ _), _) =
+      mkCImp (_, _, bo_sig, (IPackage iid _ _ _), _) =
           -- XXX is False OK here?
           CImpSign (getIdString iid) False bo_sig
       impsigs' = sortImportedSignatures ((map mkCImp bininfos) ++ impsigs)
@@ -751,7 +750,7 @@ addNewImports ims (CPackage pid exps imps impsigs cf defs incs) =
     (CPackage pid exps imps impsigs' cf defs incs)
     where impsigs' = impsigs ++ map addOneImport ims
           addOneImport :: (CSignature, IPackage a, String, String) -> CImportedSignature
-          addOneImport (cs, (IPackage iid _ _ _ _), _, _) =
+          addOneImport (cs, (IPackage iid _ _ _), _, _) =
               -- XXX Bool var for qual names?
               CImpSign (getIdString iid) False cs
 
@@ -783,7 +782,7 @@ tclDefs ("module":args) =
   let getOneMods :: String -> IO [Id]
       getOneMods pnm = do
         imp <- lookupImport pnm
-        let (IPackage _ _ pragmas _ _) = ip_ipkg imp
+        let (IPackage _ _ pragmas _) = ip_ipkg imp
             getMods (Pnoinline fs) = fs
             getMods (Pproperties m pps) = if (PPverilog `elem` pps)
                                           then [m]
@@ -4204,12 +4203,27 @@ tclDepend ["recomp",fname]= do
 
 tclDepend xs = internalError $ "tclDepend: grammar mismatch: " ++ (show xs)
 
+-- VModInfo reaches an IPackage only through ICVerilog: the synthesis
+-- boundary re-abstracts every synthesized module as a Verilog wrapper
+-- (the same representation as a hand-written import "BVI"), and the
+-- richer elaboration products (ICStateVar, ICClock, ICReset, ...)
+-- flow to the .ba and never re-enter package vocabulary.
 find_vmodinfo :: (IPackage Id) -> [VModInfo]
-find_vmodinfo = listify
-                (let
-                    tagVMI :: VModInfo -> Bool
-                    tagVMI _ = True
-                 in tagVMI)
+find_vmodinfo ipkg = concatMap defVMIs (ipkg_defs ipkg)
+  where
+    defVMIs :: IDef Id -> [VModInfo]
+    defVMIs (IDef _ _ dbody _) = exprVMIs dbody
+
+    exprVMIs :: IExpr Id -> [VModInfo]
+    exprVMIs (ILam _ _ body) = exprVMIs body
+    exprVMIs (IAps fun _ args) = concatMap exprVMIs (fun:args)
+    exprVMIs (IVar _) = []
+    exprVMIs (ILAM _ _ body) = exprVMIs body
+    exprVMIs (ICon _ (ICVerilog { vInfo = vmi })) = [vmi]
+    exprVMIs (ICon _ (ICDef { iConDef = body })) = exprVMIs body
+    exprVMIs (ICon _ (ICUndet { imVal = Just body })) = exprVMIs body
+    exprVMIs (ICon _ _) = []
+    exprVMIs (IRefT {}) = []
 
 package_vsignals :: TclP -> [(Id,String)]
 package_vsignals tclp =

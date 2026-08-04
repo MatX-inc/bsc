@@ -1,10 +1,10 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, DeriveDataTypeable #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 module ISyntax(
         IPackage(..),
         IDef(..),
         IKind(..),
-        IType(..),
+        IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll),
         IExpr(..),
         ConTagInfo(..),
         IConInfo(..),
@@ -35,10 +35,12 @@ module ISyntax(
         iREmpty,
         uniquifyRules,
         fdVars,
-        normITAp,
         splitITAp,
         aTVars,
         fTVars,
+        VarSet, fTVarSet,
+        vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull,
+        ftvCacheEnabled,
         itArrow,
         iToCT,
         iToCK,
@@ -51,9 +53,7 @@ module ISyntax(
         showTypeless,
         showTypelessRules,
         getIExprPosition,
-        getITypePosition,
         getIExprPositionCross,
---        getITypePositionCross,
         getIRuleId,
         getIRuleStateLoc,
         sameClockDomain,
@@ -75,8 +75,7 @@ module ISyntax(
         getInoutClock,
         getInoutReset,
         getWireInfo,
-        isIConInt, isIConReal, isIConParam,
-        IATFCache, mergeIATFCaches
+        isIConInt, isIConReal, isIConParam
         ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -94,10 +93,9 @@ import Eval
 import Id
 import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClockId, noDefaultResetId, WireProps)
 import IdPrint
-import PreIds(idId, idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger, idTNumToStr)
+import PreIds(idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger)
 import Backend
 import Prim(PrimOp(..))
-import TypeOps
 import ConTagInfo
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
@@ -106,7 +104,6 @@ import Pragma(Pragma, PProp, RulePragma, ISchedulePragma,
               extractSchedPragmaIds, removeSchedPragmaIds, mapSPIds)
 import Position
 import Data.Maybe
-import FStringCompat(mkNumFString)
 
 import qualified Data.Set as S
 import Flags
@@ -114,7 +111,6 @@ import Error(internalError, EMsg, ErrMsg(..))
 import PFPrint
 import IStateLoc(IStateLoc)
 import IType
-import qualified Data.Generics as Generic
 
 -- ============================================================
 -- IPackage, IModule
@@ -134,16 +130,9 @@ data IPackage a
               -- pragmas
               ipkg_pragmas :: [Pragma],
               -- definition list
-              ipkg_defs :: [IDef a],
-              -- cache of resolved associated type function applications
-              ipkg_atf_cache :: IATFCache
+              ipkg_defs :: [IDef a]
           }
-     deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
-
-type IATFCache = M.Map (Id, [IType]) IType
-
-mergeIATFCaches :: IATFCache -> IATFCache -> IATFCache
-mergeIATFCaches = M.union
+     deriving (Eq, Ord, Show)
 
 -- An elaborated module
 -- * These are created during iExpand for each module to be synthesized
@@ -171,7 +160,7 @@ data IModule a
                 -- comments on submodule instantiations
                 imod_instance_comments :: [(Id, [String])]
           }
-         deriving (Show, Generic.Data, Generic.Typeable)
+         deriving (Show)
 
 getWireInfo :: IModule a -> VWireInfo
 getWireInfo = imod_external_wires
@@ -182,7 +171,7 @@ getWireInfo = imod_external_wires
 type PortTypeMap = M.Map (Maybe Id) (M.Map VName IType)
 
 data IDef a = IDef Id IType (IExpr a) [DefProp]
-        deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+        deriving (Eq, Ord, Show)
 
 data IAbstractInput =
         -- simple input using one port
@@ -193,7 +182,7 @@ data IAbstractInput =
         IAI_Inout Id Integer
         -- room to add other types here, like:
         --   IAI_Struct [(Id, IType)]
-    deriving (Eq, Show, Generic.Data, Generic.Typeable)
+    deriving (Eq, Show)
 
 -- One method argument, decomposed into the ports it occupies (one port for an
 -- unsplit argument, several for a split struct/tuple).  A method's arguments
@@ -218,7 +207,7 @@ data IEFace a = IEFace {
         ief_wireprops :: WireProps,
         ief_fieldinfo :: VFieldInfo
      }
-    deriving (Show, Generic.Data, Generic.Typeable)
+    deriving (Show)
 
 
 -- ---------------
@@ -239,7 +228,7 @@ data IStateVar a = IStateVar {
     isv_resets :: [(Id, IReset a)], -- named resets
     isv_isloc :: IStateLoc        -- instantiation path
 }
-    deriving (Show, Generic.Data, Generic.Typeable)
+    deriving (Show)
 
 getResetMap :: IStateVar a -> [(Id, IReset a)]
 getResetMap = isv_resets
@@ -280,7 +269,7 @@ data IRule a =
       -- Instantiation hierarchy
       irule_state_loc :: IStateLoc
       }
-    deriving (Show, Generic.Data, Generic.Typeable)
+    deriving (Show)
 
 instance NFData (IRule a) where
     rnf (IRule i ps s wp r1 r2 orig isl) = rnf8 i ps s wp r1 r2 orig isl
@@ -292,7 +281,7 @@ getIRuleStateLoc :: IRule a -> IStateLoc
 getIRuleStateLoc = irule_state_loc
 
 data IRules a = IRules [ISchedulePragma] [IRule a]
-    deriving (Show, Generic.Data, Generic.Typeable)
+    deriving (Show)
 
 instance NFData (IRules a) where
     rnf (IRules sps rs) = rnf2 sps rs
@@ -415,26 +404,9 @@ checkRUnionAttributes (IRules sps1 rs1) (IRules sps2 rs2) =
         (msgs, sps')
 
 
--- This function just handles special built-in type functions like TAdd and Id__,
--- would be nice to get rid of it if we can make those work via preds, as with
--- user-defined type functions, but that seems hard because we still need to
--- permit them in instance heads.
-normITAp :: IType -> IType -> IType
-normITAp (ITAp (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
-    mkNumConT (fromJust res)
-  where res = opNumT op [x, y]
-normITAp (ITCon op _ _) (ITNum x) | isJust (res) =
-    mkNumConT (fromJust res)
-  where res = opNumT op [x]
-normITAp (ITAp (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
-    ITStr (fromJust res)
-  where res = opStrT op [x, y]
-normITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
-    ITStr (mkNumFString x)
-
-normITAp f@(ITCon op _ _) a | op == idId = a
-
-normITAp f a = ITAp f a
+-- The type-function reduction that used to live here (normITAp) is
+-- now performed by the ITAp smart constructor itself; see
+-- IType.mkITAp.
 
 aTVars :: IType -> S.Set Id
 aTVars (ITForAll i _ t) = S.insert i (aTVars t)
@@ -444,13 +416,8 @@ aTVars (ITCon _ _ _) = S.empty
 aTVars (ITNum _) = S.empty
 aTVars (ITStr _) = S.empty
 
-fTVars :: IType -> S.Set Id
-fTVars (ITForAll i _ t) = S.delete i (fTVars t)
-fTVars (ITAp f a) = fTVars f `S.union` fTVars a
-fTVars (ITVar i) = S.singleton i
-fTVars (ITCon _ _ _) = S.empty
-fTVars (ITNum _) = S.empty
-fTVars (ITStr _) = S.empty
+-- fTVars now lives in IType (answered from the free-variable sets
+-- cached on interned nodes) and is re-exported here.
 
 
 splitITAp :: IType -> (IType, [IType])
@@ -473,7 +440,6 @@ data IExpr a
         | ICon Id (IConInfo a)
         -- IRef is only used during reduction, it refers to a "heap" cell
         | IRefT IType !Int (S.Set Position) a -- vanishes after IExpand
-          deriving (Generic.Data, Generic.Typeable)
 
 instance Show (IExpr a) where
   show (ILam i t e)   = "(ILam " ++ show i ++ " " ++ show t ++ " " ++ show e ++ ")"
@@ -565,7 +531,7 @@ data IClock a = IClock { ic_id      :: ClockId,      -- unique id
                          ic_wires   :: IExpr a       -- expression for clock wires
                                               -- will be ICSel of (ICStateVar) or ICTuple of ICModPorts / ICInt (1) for ungated clocks
                                               -- theoretically ICTuple (ICInt (0), ICInt (0)) for noClock, but should  not appear
-                     } deriving (Generic.Data, Generic.Typeable)
+                     }
 
 -- break recursion of wires so that showing a clock does not loop
 instance Show (IClock a) where
@@ -625,7 +591,7 @@ data IReset a = IReset { ir_id   :: ResetId, -- unique id
                          ir_wire :: IExpr a  -- expression for reset wire
                                              -- currently must be an ICModPort or 0,
                                              -- since we do not support reset output
-                       } deriving (Generic.Data, Generic.Typeable)
+                       }
 
 -- must break recursion of wire so showing a reset output does not loop
 instance Show (IReset a) where
@@ -671,7 +637,7 @@ data IInout a =
     IInout { io_clock :: IClock a, -- associated clock (may be noClock)
              io_reset :: IReset a, -- associated reset (may be noReset)
              io_wire :: IExpr a  -- expression for inout wire
-           } deriving (Generic.Data, Generic.Typeable)
+           }
 
 instance Show (IInout a) where
   show (IInout clock reset wire) =
@@ -707,7 +673,6 @@ getInoutWire = io_wire
 -- into application of PrimBuildArray to the element expressions.
 --
 data ArrayCell a = ArrayCell { ac_ptr :: Int, ac_ref :: a }
-                   deriving (Generic.Data, Generic.Typeable)
 
 instance Show (ArrayCell a) where
   show (ArrayCell i _) = "_" ++ show i
@@ -725,7 +690,7 @@ type ILazyArray a = Array.Array Integer (ArrayCell a)
 -- Predicates used for implicit conditions.
 -- most utility functions in IExpandUtils
 newtype Pred a = PConj (PSet (PTerm a))
-        deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+        deriving (Eq, Ord, Show)
 
 instance PPrint (Pred a) where
     pPrint d p (PConj ps) = pPrint d p (S.toList ps)
@@ -745,7 +710,7 @@ type PSet a = S.Set a
 data PTerm a = PAtom (IExpr a)
              | PIf (IExpr a) (Pred a) (Pred a)
              | PSel (IExpr a) Integer [Pred a]
-        deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+        deriving (Eq, Ord, Show)
 
 -- ==============================
 -- IConInfo
@@ -855,11 +820,9 @@ data IConInfo a =
         | ICPosition { iConType :: IType, iPosition :: [Position] }
         | ICType { iConType :: IType, iType :: IType }
         | ICPred { iConType :: IType, iPred :: Pred a }
-        deriving (Show, Generic.Data, Generic.Typeable)
+        deriving (Show)
 
 ordC :: IConInfo a -> Int
--- XXX This definition would be nice, but it imposes a (Data a) context
---ordC x = Generic.constrIndex (Generic.toConstr x)
 ordC (ICDef { }) = 0
 ordC (ICPrim { }) = 1
 ordC (ICForeign { }) = 2
@@ -1032,7 +995,7 @@ pPrintLink :: PDetail -> Int -> (Id, String) -> Doc
 pPrintLink d i (mi, hash) = (ppId d mi) <+> (text hash)
 
 instance PPrint (IPackage a) where
- pPrint d p (IPackage mi lps ps ds _) =
+ pPrint d p (IPackage mi lps ps ds) =
         (text "IPackage" <+> ppId d mi) $+$
         (text "  --linked packages") $+$
         foldr (($+$) . pPrintLink d 0) (text "") lps $+$
@@ -1210,7 +1173,7 @@ instance PPrint (IExpr a) where
 -- Hyper (for those instances not defined alongside the type, above)
 
 instance NFData (IPackage a) where
-    rnf (IPackage i lps ps ds atfCache) = rnf5 i ps lps ds atfCache
+    rnf (IPackage i lps ps ds) = rnf4 i ps lps ds
 
 instance NFData (IModule a) where
     rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16) =
@@ -1291,12 +1254,6 @@ getIExprPositionCross iexpr =
        then (getIExprPositionCrossInternal 0 iexpr)
        else noPosition
 
--- getITypePositionCross :: IType -> Position
--- getITypePositionCross itype =
---     if (True)
---        then (getITypePositionCrossInternal 0 itype)
---        else noPosition
-
 -- #############################################################################
 -- #
 -- #############################################################################
@@ -1318,9 +1275,6 @@ getIExprPositionCrossInternal n (ILAM i _ e) =
     let pos = (getIExprPositionCrossInternal (n + 1) e)
     in  firstPos [pos, getIdPosition i]
 
--- getIExprPositionCrossInternal n (ICon i (ICPrim t op)) =
---     getITypePositionCrossInternal (n + 1) t
-
 getIExprPositionCrossInternal _ (ICon i (ICSel _ _ _)) =
     if (isPassThroughOp i)
         then -- trace("DDD " ++ (pfpString i)) $
@@ -1330,27 +1284,11 @@ getIExprPositionCrossInternal _ (ICon i (ICSel _ _ _)) =
 
 
 getIExprPositionCrossInternal _ (ICon i _) = getIdPosition i
-getIExprPositionCrossInternal n (IRefT t _ _ _) = getITypePositionCrossInternal (n + 1) t
-
-
-getITypePositionCrossInternal :: Int -> IType -> Position
-getITypePositionCrossInternal 10 _ = noPosition
-
-getITypePositionCrossInternal n (ITForAll i _ t) =
-    let pos = (getIdPosition i)
-    in  firstPos [pos, (getITypePositionCrossInternal (n + 1) t)]
-
-getITypePositionCrossInternal n (ITAp t t') =
-    let t_pos = getITypePositionCrossInternal (n + 1) t
-        t'_pos = getITypePositionCrossInternal (n + 1) t'
-        pos_list = [t_pos, t'_pos]
-    in  firstPos pos_list
-
-getITypePositionCrossInternal _ (ITVar i) = getIdPosition i
-getITypePositionCrossInternal _ (ITCon i _ _) = getIdPosition i
-getITypePositionCrossInternal _ (ITNum _) = noPosition
-getITypePositionCrossInternal _ (ITStr _) = noPosition
-
+-- The positions stamped on the heap ref (collected out of band when
+-- expressions are rewritten).  There is no type fallback: Ids embedded
+-- in ITypes carry no positions (IType normalizes them on entry).
+getIExprPositionCrossInternal _ (IRefT _ _ poss _) =
+    firstPos (S.toAscList poss)
 
 
 -- #############################################################################
@@ -1377,40 +1315,30 @@ isPassThroughOp i = (i == idBit) ||
 -- #
 -- #############################################################################
 
+-- Types contribute no positions here: Ids embedded in ITypes carry
+-- noPosition by construction (IType normalizes them on entry), so
+-- only term-side Ids and heap-ref stamps are consulted.
 getIExprPosition :: IExpr a -> Position
 
-getIExprPosition (ILam i t e) =
-    let t_pos = getITypePosition t
-        i_pos = getIExprPosition e
-        pos_list = [getIdPosition i, t_pos, i_pos]
-    in  firstPos pos_list
+getIExprPosition (ILam i _ e) =
+    firstPos [getIdPosition i, getIExprPosition e]
 
-getIExprPosition (IAps e ts es) =
-    let t_pos_list = map getITypePosition ts
-        i_pos_list = map getIExprPosition es
-        pos_list = getIExprPosition e : t_pos_list ++ i_pos_list
-    in  firstPos pos_list
+getIExprPosition (IAps e _ es) =
+    firstPos (getIExprPosition e : map getIExprPosition es)
 
 getIExprPosition (IVar i) = getIdPosition i
 
 getIExprPosition (ILAM i _ e) = firstPos [getIdPosition i, getIExprPosition e]
--- getIExprPosition (ICon i (ICPrim t op)) = getITypePosition t
 getIExprPosition (ICon i _) = getIdPosition i
-getIExprPosition (IRefT t _ _ _) = getITypePosition t
-
-getITypePosition :: IType -> Position
-getITypePosition (ITForAll i _ t) = firstPos [getIdPosition i, getITypePosition t]
-
-getITypePosition (ITAp t t') =
-    let t_pos = getITypePosition t
-        t'_pos = getITypePosition t'
-        pos_list = [t_pos, t'_pos]
-    in  firstPos pos_list
-
-getITypePosition (ITVar i) = getIdPosition i
-getITypePosition (ITCon i _ _) = getIdPosition i
-getITypePosition (ITNum _) = noPosition
-getITypePosition (ITStr _) = noPosition
+-- The positions stamped on the heap ref (collected out of band when
+-- expressions are rewritten).
+-- When poss has several entries the pick is by Ord Position, whose
+-- FString file component compares by intern order.  Today every live
+-- poss is a singleton allocation seed, so the pick rule is moot; when
+-- issue #863 re-enables stamping at the evaluator sites, revisit it
+-- (recency is not representable in a set).
+getIExprPosition (IRefT _ _ poss _) =
+    firstPos (S.toAscList poss)
 
 --------
 
@@ -1425,13 +1353,6 @@ iAp f e = IAps f [] [e]
 iAps :: IExpr a -> [IExpr a] -> IExpr a
 iAps f [] = f
 iAps f es = IAps f [] es
-
-mkNumConT :: Integer -> IType
-mkNumConT i =
-    if i < 0 then
-        internalError ("mkNumCon: " ++ show i)
-    else
-        ITNum i
 
 --------
 
