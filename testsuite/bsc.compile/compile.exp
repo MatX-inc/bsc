@@ -16,6 +16,11 @@ compile_pass TopRec.bsv
 #   hashes on (the default, and any search-path or make-style build):
 #     a stale .bo genuinely can be sitting there, so it must be
 #     detected.  S0027.
+#   -no-import-hashes (what bazel builds pass): the hashes are omitted
+#     deliberately, because content-addressed action inputs mean the
+#     mismatch cannot arise.  No check, clean compile.
+#
+# Assert both, rather than picking whichever the default happens to be.
 copy FiveA.bs Five.bs
 compile_pass Five.bs
 compile_pass Six.bs
@@ -42,6 +47,18 @@ compile_pass Five.bs
 # would pass while checking nothing.
 setup_xfail $target_triplet
 compile_fail_error Test.bs S0027 1 "" 1
+
+# The same scenario with the hashes deliberately omitted: no detection
+# is the specified behaviour, so the compile must be clean.  This pins
+# that -no-import-hashes really does disable the check, which is the
+# property the bazel build depends on.
+copy FiveA.bs Five.bs
+compile_pass Five.bs "-no-import-hashes"
+compile_pass Six.bs "-no-import-hashes"
+after 1500
+copy FiveB.bs Five.bs
+compile_pass Five.bs "-no-import-hashes"
+compile_pass Test.bs "-no-import-hashes" 1
 
 
 
