@@ -1783,6 +1783,7 @@ flag)}
 \index{-Xv@\te{-Xv} (compiler flag)}
 \index{-verilog-filter@\te{-verilog-filter} (compiler flag)}
 \index{-use-dpi@\te{-use-dpi}}
+\index{-stable-verilog@\te{-stable-verilog} (compiler flag)}
 \begin{centerboxverbatim}
 -remove-unused-modules  remove unconnected modules from the Verilog
 -v95                    generate strict Verilog 95 code
@@ -1792,6 +1793,8 @@ flag)}
 -Xv arg                 pass argument to the Verilog link process
 -verilog-filter cmd     invoke a command to post-process the generated Verilog
 -use-dpi                use DPI instead of VPI in generated Verilog
+-stable-verilog         deterministic Verilog output (canonical names
+                         and ordering)
 \end{centerboxverbatim}
 
 The {\bf\tt -remove-unused-modules} flag will remove from the generated
@@ -1851,6 +1854,17 @@ in the generated Verilog;
 during linking, the flag controls how the C functions are provided
 to the simulator.
 By default, this flag is \emph{off} and VPI is used.
+
+The {\bf\tt -stable-verilog} flag makes the generated Verilog a pure
+function of the elaborated design: a module regenerates byte-identically
+(for example, from its \te{.ba} file with the \te{-c} codegen mode)
+regardless of what else was compiled in the same invocation or of the
+compilation history.  The names of compiler-introduced signals (for
+example \te{x\_\_h5} or \te{\_\_d7} suffixes) and the ordering of
+declarations and assignments no longer depend on compiler-internal
+state.  This flag is \emph{on} by default; \te{-no-stable-verilog}
+restores the historical behavior, in which those names and orderings
+could differ between otherwise-identical compiles.
 
 
 % -------------------------
