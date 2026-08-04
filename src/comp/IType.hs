@@ -1,6 +1,11 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternSynonyms #-}
 
+-- profiling-only: without this, -fprof-auto pins cost centres on the
+-- GHC-generated pattern-synonym matchers ($mITAp etc.), blocking
+-- their inlining; every IType pattern match in the compiler then
+-- becomes an out-of-line call and dominates any profile
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module IType(
   IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll)
   ,IKind(..)
