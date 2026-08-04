@@ -41,6 +41,7 @@ data Flags = Flags {
         cppFlags :: [String],
         linkFlags :: [String],
         cdir :: Maybe String,
+        checkOnly :: Bool,
         cpp :: Bool,
         defines :: [String],
         demoteErrors :: MsgListFlag,
@@ -231,6 +232,7 @@ data DumpFlag
         | DFisimpdicts
         | DFisimplify
         | DFwriteBin
+        | DFwriteBcheck
 
         -- module generation
         | DFexpanded

@@ -36,6 +36,7 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
+                    biSuffix, bcheckSuffix,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
@@ -99,7 +100,7 @@ import FixupDefs(fixupDefs, updDef, mkDictBuckets)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
-import GenBin(genBinFile)
+import GenBin(genBinFile, genBiFile, genBcheckFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
 import GenForeign(genForeign)
@@ -325,7 +326,9 @@ compilePackage ::
 compilePackage errh flags tStart binmap0 hashmap0 name_orig min = do
     cr <- ctxReducePackage errh flags tStart binmap0 hashmap0 name_orig min
     tc <- typeCheckPackage errh flags cr
-    compileTypeChecked errh flags cr tc
+    if checkOnly flags
+      then genCheckOnly errh flags cr tc
+      else compileTypeChecked errh flags cr tc
 
 -- The package after context reduction: what the front end of a compile
 -- (reading the imports through the symbol table rebuilt after ctxreduce)
@@ -503,6 +506,87 @@ typeCheckPackage
     return (TypeChecked { tc_pkg = mod, tc_errors = tcErrors,
                           tc_pkgsUsedInCode = pkgsUsedInCode,
                           tc_atfCache = ctypeATFCache, tc_time = t })
+
+-- The names of the packages in the transitive import closure, in the
+-- dependency order readImports produced: the list fixupDefs records (with
+-- hashes) in a .bo's ipkg_depends, which the .bi and the .bcheck record
+-- as names alone
+signatureDepends :: CtxReduced -> [Id]
+signatureDepends (CtxReduced { cr_impsigs = impsigs }) =
+    [ i | CImpSign _ _ (CSignature i _ _ _) <- impsigs ]
+
+-- -check-only: the package typechecked, which was the whole question.
+-- Write its interface as the .bi, the typechecked package as the .bcheck,
+-- and stop.
+--
+-- Everything in compileTypeChecked feeds iConvPackage and the IR pipeline.
+-- A check compile's dependents typecheck against signatures and import the
+-- .bi alone (BinUtil.doImport); the .bcheck is the witness that the
+-- package typechecked and the input of a tool that wants the typechecked
+-- form (an LSP), never an import, so an edit inside a body, which changes
+-- the .bcheck and leaves the .bi the same, reaches no dependent.  Of the
+-- passes skipped, Simplify and VPIWrappers have no bsError/bsWarning sites
+-- at all, and genVPI is a no-op without a backend; the single diagnostic
+-- given up is genForeign's EForeignFuncDuplicates, which a non-check
+-- compile of the same source still raises.  Skipping genForeign also stops
+-- a check emitting foreign .ba files as a side effect.
+--
+-- No .bcheck is written when the typecheck reported errors and recovered
+-- (-continue-after-errors): the file's existence means the package
+-- typechecked clean.  The .bi is written as it is in any case.
+--
+-- The package written is the typechecked package after Simplify and
+-- LiftDicts, the two passes compileTypeChecked runs on it before IConv
+-- (the same calls, in the same order), with the lifted dictionaries
+-- beside it: the form a full compile hands to iConvPackage.  The
+-- typechecker's dictionary bindings repeat one dictionary expression at
+-- every use and LiftDicts pools them, so the lifted package is the
+-- smaller one to store and to decode.
+--
+-- genUserSign needs only symt (sympostctxreduce) and mctx (ctxreduce).
+genCheckOnly :: ErrorHandle -> Flags -> CtxReduced -> TypeChecked ->
+                IO (Bool, BinMap HeapData, HashMap)
+genCheckOnly
+    errh
+    flags
+    cr@(CtxReduced { cr_name = name, cr_dumpnames = dumpnames,
+                     cr_binmap = binmap, cr_hashmap = hashmap,
+                     cr_pkg = mctx, cr_symt = symt })
+    (TypeChecked { tc_pkg = mod, tc_errors = tcErrors, tc_time = t }) = do
+    start flags DFwriteBin
+    (bi_sig, _) <- genUserSign errh symt mctx
+    let bi_filename = putInDir (bdir flags) name biSuffix
+        remapP = remapPositionFile (remapPathPrefix flags)
+        depends = signatureDepends cr
+    genBiFile errh remapP bi_filename depends bi_sig
+    when (verbose flags) $
+         putStrLnF ("Interface file created: " ++
+                    getRelativeFilePath bi_filename)
+    t <- dumpStr errh flags t DFwriteBin dumpnames bi_filename
+
+    unless tcErrors $ do
+        -- as compileTypeChecked (keep the two in step)
+        start flags DFsimplified
+        let mod' = simplify flags mod
+        t <- dump errh flags t DFsimplified dumpnames mod'
+        stats flags DFsimplified mod'
+        start flags DFliftdicts
+        let (mod_lifted, lifted_defs) =
+                if liftDicts flags then liftDictsPkg errh flags symt mod'
+                else (mod', [])
+        t <- dump errh flags t DFliftdicts dumpnames mod_lifted
+        stats flags DFliftdicts mod_lifted
+        start flags DFwriteBcheck
+        let bcheck_filename = putInDir (bdir flags) name bcheckSuffix
+        -- positions are the real ones, remapped as the .bo's are
+        genBcheckFile errh remapP bcheck_filename depends mod_lifted
+                      (lifted_defs :: [IDef ()])
+        when (verbose flags) $
+             putStrLnF ("Typechecked package file created: " ++
+                        getRelativeFilePath bcheck_filename)
+        _ <- dumpStr errh flags t DFwriteBcheck dumpnames bcheck_filename
+        return ()
+    return (not tcErrors, binmap, hashmap)
 
 -- From the typechecked package to the generated modules and the .bo file
 compileTypeChecked ::

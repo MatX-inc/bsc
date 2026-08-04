@@ -1387,6 +1387,27 @@ instance Bin Kind where
            4 -> return KStr
            n -> internalError $ "BinData.Bin(Kind).readBytes: " ++ show n
 
+-- A PartialKind is the kind a BSV declaration gives a type parameter
+-- ("numeric type n"; a plain "type a" is PKNoInfo).  It survives
+-- typechecking in the IdPKind of the package's own type and class
+-- definitions, which the typechecked package (.bcheck) writes; a signature
+-- holds inferred kinds (IdKind) and never a PartialKind.
+instance Bin PartialKind where
+  writeBytes PKNoInfo = putI 0
+  writeBytes PKStar = putI 1
+  writeBytes PKNum = putI 2
+  writeBytes PKStr = putI 3
+  writeBytes (PKfun k1 k2) = do putI 4; toBin k1; toBin k2
+  readBytes =
+      do i <- getI
+         case i of
+           0 -> return PKNoInfo
+           1 -> return PKStar
+           2 -> return PKNum
+           3 -> return PKStr
+           4 -> do k1 <- fromBin; k2 <- fromBin; return (PKfun k1 k2)
+           n -> internalError $ "BinData.Bin(PartialKind).readBytes: " ++ show n
+
 instance Bin CQType where
     writeBytes (CQType ps t) = do toBin ps; toBin t
     readBytes = do ps <- fromBin; t <- fromBin; return (CQType ps t)

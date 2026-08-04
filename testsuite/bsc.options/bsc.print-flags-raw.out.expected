@@ -11,6 +11,7 @@ Flags {
 	cLibPath = [],
 	cLibs = [],
 	cdir = Nothing,
+	checkOnly = False,
 	codegenNames = [],
 	cpp = False,
 	cppFlags = [],

@@ -261,6 +261,19 @@ checkBSrcFlags flags filename =
         if (removeVerilogDollar flags && (backend flags /= Just Verilog))
         then DError [(cmdPosition, EDollarNoVerilog)]
         else
+        -- A check compile stops after typechecking, so a backend request
+        -- (which is a codegen request) cannot be honored
+        -- XXX -g is refused under -check-only only as collateral: it reads
+        -- XXX as a codegen request, so S0014 demands a backend.  Its other
+        -- XXX half declares a synthesis boundary, which a check compile
+        -- XXX could honour -- to check wrapping legality (the ENoInline*
+        -- XXX family) and to record the intended closure for downstream
+        -- XXX cutoff.  Blocked because bsc only wraps when generating
+        -- XXX (bsc.hs: generating = backend flags /= Nothing).  Revisit if
+        -- XXX wrapping moves after typechecking onto an asserted package.
+        if (checkOnly flags && (backend flags /= Nothing))
+        then DError [(cmdPosition, ECheckOnlyConflict "-sim/-verilog")]
+        else
         -- If the user hasn't allowed Bluesim/Verilog to diverge,
         -- then don't-cares can only be 2-state values
         if (not (optUndet flags) &&
@@ -295,6 +308,13 @@ checkLinkFlags flags names =
         else
         if (removeVerilogDollar flags)
         then DError [(cmdPosition, EDollarLink)]
+        else
+        -- -check-only stops after typechecking a source file, so there is
+        -- nothing for it to do here.  Guarded on a backend being set: with
+        -- none, ENoBackendLinking below is the more useful diagnostic and
+        -- this combination was already invalid without -check-only.
+        if (checkOnly flags && backend flags /= Nothing)
+        then DError [(cmdPosition, ECheckOnlyConflict "linking")]
         else
         -- Verilog backend
         if (backend flags == Just Verilog)
@@ -353,6 +373,13 @@ checkCodeGenFlags flags names =
             -- SystemC generation has no per-module codegen mode
             if (genSysC flags)
             then DError [(cmdPosition, EGenWithSystemC)]
+            else
+            -- -check-only stops after typechecking a source file, so it has
+            -- nothing to do in -c mode either.  Guarded on a backend being
+            -- set, as for linking: without one, ENoBackendCodeGen below is
+            -- the more useful diagnostic.
+            if (checkOnly flags && backend flags /= Nothing)
+            then DError [(cmdPosition, ECheckOnlyConflict "-c")]
             else
             case (backend flags) of
               Nothing -> DError [(cmdPosition, ENoBackendCodeGen mods)]
@@ -600,6 +627,7 @@ defaultFlags bluespecdir = Flags {
         cppFlags = [],
         linkFlags = [],
         cdir = Nothing,
+        checkOnly = False,
         codegenNames = [],
         cpp = False,
         defines = [],
@@ -1176,7 +1204,7 @@ externalFlags = [
         ("bdir",
          (Arg "dir" (\f s -> Left (f {bdir = Just s}))
                                         (Just (FRTMaybeString bdir)),
-          "output directory for .bo and .ba files", Visible)),
+          "output directory for .bo, .ba, .bi and .bcheck files", Visible)),
 
         ("bias-method-scheduling",
          (Toggle (\f x -> f {biasMethodScheduling=x}) (showIfTrue biasMethodScheduling),
@@ -1189,6 +1217,12 @@ externalFlags = [
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
           "test assertions with the Assert library", Visible)),
+
+        ("check-only",
+         (Toggle (\f x -> f {checkOnly=x}) (showIfTrue checkOnly),
+          "stop after typechecking and write the package signature as a " ++
+          ".bi file and the typechecked package as a .bcheck file; " ++
+          "imports prefer .bi and fall back to .bo", Visible)),
 
         ("continue-after-errors",
          (Toggle (\f x -> f {enablePoisonPills=x}) (showIfTrue enablePoisonPills),
@@ -1962,6 +1996,7 @@ showFlagsRaw flags =
           ("cLibPath", show (cLibPath flags)),
           ("cLibs", show (cLibs flags)),
           ("cdir", show (cdir flags)),
+          ("checkOnly", show (checkOnly flags)),
           ("codegenNames", show (codegenNames flags)),
           ("cpp", show (cpp flags)),
           ("cppFlags", show (cppFlags flags)),

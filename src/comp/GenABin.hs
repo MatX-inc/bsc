@@ -561,15 +561,19 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137) =
+                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138) =
        do
           wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
           wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 138-field serialization is split into NOINLINE chunks so
+        -- The 139-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
+        -- a_016 (checkOnly) is not stored: a check compile refuses every
+        -- backend and stops before genForeign, so no .ba is ever written
+        -- with it set, and leaving it out keeps the bytes of every .ba
+        -- (the reader supplies the default)
         wr_chunk0 =
           do
              toBin a_000; toBin a_001; toBin a_002; toBin a_003; toBin a_004;
@@ -578,7 +582,7 @@ instance Bin Flags where
         {-# NOINLINE wr_chunk1 #-}
         wr_chunk1 =
           do
-             toBin a_015; toBin a_016; toBin a_017; toBin a_018; toBin a_019;
+             toBin a_015; toBin a_017; toBin a_018; toBin a_019;
              toBin a_020; toBin a_021; toBin a_022; toBin a_023; toBin a_024;
              toBin a_025; toBin a_026; toBin a_027; toBin a_028; toBin a_029
         {-# NOINLINE wr_chunk2 #-}
@@ -626,7 +630,7 @@ instance Bin Flags where
         {-# NOINLINE wr_chunk9 #-}
         wr_chunk9 =
           do
-             toBin a_135; toBin a_136; toBin a_137
+             toBin a_135; toBin a_136; toBin a_137; toBin a_138
     readBytes =
        do
           (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
@@ -647,7 +651,7 @@ instance Bin Flags where
            a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
-          (a_135, a_136, a_137) <- rd_chunk9
+          (a_135, a_136, a_137, a_138) <- rd_chunk9
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
@@ -662,7 +666,7 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137)
+                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =
@@ -675,9 +679,11 @@ instance Bin Flags where
         {-# NOINLINE rd_chunk1 #-}
         rd_chunk1 =
           do
-             a_015 <- fromBin; a_016 <- fromBin; a_017 <- fromBin; a_018 <- fromBin; a_019 <- fromBin;
+             a_015 <- fromBin; a_017 <- fromBin; a_018 <- fromBin; a_019 <- fromBin;
              a_020 <- fromBin; a_021 <- fromBin; a_022 <- fromBin; a_023 <- fromBin; a_024 <- fromBin;
              a_025 <- fromBin; a_026 <- fromBin; a_027 <- fromBin; a_028 <- fromBin; a_029 <- fromBin
+             -- a_016 (checkOnly) is not stored, see wr_chunk0
+             let a_016 = False
              return (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022,
                      a_023, a_024, a_025, a_026, a_027, a_028, a_029)
         {-# NOINLINE rd_chunk2 #-}
@@ -739,8 +745,8 @@ instance Bin Flags where
         {-# NOINLINE rd_chunk9 #-}
         rd_chunk9 =
           do
-             a_135 <- fromBin; a_136 <- fromBin; a_137 <- fromBin
-             return (a_135, a_136, a_137)
+             a_135 <- fromBin; a_136 <- fromBin; a_137 <- fromBin; a_138 <- fromBin
+             return (a_135, a_136, a_137, a_138)
 
 -- ----------
 

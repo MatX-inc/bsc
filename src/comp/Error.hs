@@ -1131,6 +1131,7 @@ data ErrMsg =
         | ETooManyBackends
         | EDollarNoVerilog
         | EDollarLink
+        | ECheckOnlyConflict String
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -4662,6 +4663,13 @@ getErrorText EGenVerilogNotSupported =
 getErrorText EGenWithSystemC =
     (System 99, empty,
      s2par ("The flag -c is not supported with -systemc; use -sim."))
+
+getErrorText (ECheckOnlyConflict fl) =
+    (System 100, empty,
+     s2par ("The flag -check-only cannot be combined with " ++ fl ++ ": " ++
+            "a check compile stops after typechecking and writes only " ++
+            "the package's signature and typechecked form, so no module " ++
+            "can be elaborated, generated or linked."))
 
 -- Runtime errors
 getErrorText (EMutuallyExclusiveRulesFire r1 r2) =
