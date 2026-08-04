@@ -31,8 +31,8 @@ module AVerilogUtil (
                      VConvtOpts(..)
                     ) where
 
-import Data.List(nub, partition, genericLength, genericIndex, union, intersect,
-                 (\\), uncons, sortBy)
+import Data.List(nub, partition, genericLength, genericIndex, union,
+                 uncons, sortBy)
 import Data.Ord(comparing)
 import Data.Maybe
 
@@ -159,7 +159,9 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
       av_depend_defs = getAVDependDefs rev_dep_map fcalls
       -- find the defs which fcalls depend on
       fcall_depend_defs = getFCallDependDefs dep_map fcalls
-      -- the intersection of these lists is the defs that we need to inline.
+      -- the intersection of these lists is the defs that we need to inline
+      -- (both lists are sorted, coming from Sets, so the Set round-trip
+      -- preserves the order that Data.List.intersect would produce).
       -- Under -stable-verilog the list is canonicalized by the ids' text:
       -- it arrives in Ord AId (interning) order from the closure Sets and
       -- becomes the foreign-block group's reg-declaration order.
@@ -167,7 +169,8 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
         | vco_stable vco = sortBy (comparing idKey) inline_def_ids0
         | otherwise      = inline_def_ids0
         where idKey i = (getIdBaseString i, getIdQualString i)
-      inline_def_ids0 = av_depend_defs `intersect` fcall_depend_defs
+      inline_def_ids0 = S.toList (S.intersection (S.fromList av_depend_defs)
+                                                 (S.fromList fcall_depend_defs))
 
       -- convert from the ids back to the defs
       inline_defs = map findDef inline_def_ids
@@ -444,12 +447,12 @@ tsortForeignCallsAndDefs stable ds fcalls =
 getAVDependDefs :: (M.Map AId [AId]) -> [AForeignCall] -> [AId]
 getAVDependDefs rev_dep_map fcalls =
     let avalues = concatMap afc_writes fcalls
+        avalue_set = S.fromList avalues
         all_ids = closeOverMap rev_dep_map avalues
     in  -- don't include the avalues themselves
-        all_ids \\ avalues
-        -- for efficiency, we could exploit knowledge that the avalues
-        -- are at the end of the list and do this:
-        --rDrop (length avalues) all_ids
+        -- (all_ids is duplicate-free, coming from a Set, so this is
+        -- equivalent to Data.List.\\ and keeps the sorted order)
+        filter (`S.notMember` avalue_set) all_ids
 
 getFCallDependDefs :: (M.Map AId [AId]) -> [AForeignCall] -> [AId]
 getFCallDependDefs dep_map fcalls =
