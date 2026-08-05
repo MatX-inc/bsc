@@ -116,24 +116,5 @@ compile_pass CExtendATFExplicit.bsv
 compile_pass ExpSizeOf_VectorIfc.bsv
 compile_verilog_fail_error ExpSizeOf_VectorIfc.bsv T0043 2
 
-# Plain type synonyms in an instance head are left unexpanded, so this compiles
-# without the explicit method types that bsc-contrib PR 46 previously needed.
-compile_pass CExtendSynonym.bsv
-
-# A type function (here a user-defined ATF) in the instance-head synonyms forces
-# the conditional expansion in ctxRedCQType', which re-introduces the dangling
-# parameter and still fails -- unless explicit method types are given.  This is
-# the case that remains broken (GitHub Issue #311).
-compile_fail_error CExtendATF.bsv T0035
-compile_pass CExtendATFExplicit.bsv
-
-# ---------------
-# SizeOf in the length of a Vector of subinterfaces (GitHub Issue #313,
-# Bluespec Inc Bug 1917).  This is not fixed by PR #916: the example typechecks,
-# but fails when synthesized, because GenWrap decides whether the field is a
-# method or a subinterface before typecheck and cannot reduce the SizeOf.
-compile_pass ExpSizeOf_VectorIfc.bsv
-compile_verilog_fail_error ExpSizeOf_VectorIfc.bsv T0043
-
 # ---------------
 

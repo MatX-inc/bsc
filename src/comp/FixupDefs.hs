@@ -86,7 +86,6 @@ fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
         (IPackage mi ipkg_sigs ps' ds'' own_atf_cache, ads')
 
 
-
 -- ===============
 
 -- Replace the definition for a top-level variable with a new definition.

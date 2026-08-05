@@ -598,9 +598,6 @@ aPathsPreSched errh flags apkg = do
       -- Per-port output names for a method (one Id per hardware output port).
       methodOutputIds iface = mkNamedOutputs (aif_fieldinfo iface)
 
-      num_outputs (ADef {adef_type = ATTuple ts}) = fromIntegral (length ts)
-      num_outputs _ = 1
-
       method_outputs =
           [(m, PNTopMethodRes m o) | iface@(AIDef { aif_name = m }) <- ifc,
                                      o <- methodOutputIds iface ] ++
