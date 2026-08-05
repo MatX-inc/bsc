@@ -53,7 +53,7 @@ import FStringCompat
 import PreStrings(fsUnderscore)
 import PreIds
 import Flags
-import SymTab(SymTab, findType, TypeInfo(..))
+import SymTab(SymTab)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle,
              recordHandleOpen, recordHandleClose)
 import Position
@@ -3275,9 +3275,27 @@ bldApUH' s f as = do
 -- consumers that need the real value (e.g. strict primitives), the
 -- applied form is forced instead, evaluated at most once via its heap
 -- cell.  Recurses because a method body can itself produce a coercion.
+-- The wrapper is non-recursive and INLINE so that the common no-coercion
+-- case costs its callers (notably the strict-prim argument loop) only
+-- the two constructor-tag tests, with no extra call; the recursive
+-- squeeze work lives out of line in squeezeHeld, entered only when a
+-- held node is actually present.
+{-# INLINE evalUHSqueezed #-}
 evalUHSqueezed :: HExpr -> G (HExpr, PExpr)
 evalUHSqueezed e = do
-    r@(_, P p e') <- evalUH e
+    r@(_, P _ e') <- evalUH e
+    case e' of
+      ICon _ (ICLazyPack { })   -> squeezeHeld r
+      ICon _ (ICLazyUnpack { }) -> squeezeHeld r
+      _ -> return r
+
+-- The out-of-line squeeze path of evalUHSqueezed: force the applied
+-- form of the held coercion, conjoining any predicates that surface,
+-- and squeeze again (via evalUHSqueezed, whose non-held arm terminates
+-- the recursion) because a method body can itself produce a coercion.
+{-# NOINLINE squeezeHeld #-}
+squeezeHeld :: (HExpr, PExpr) -> G (HExpr, PExpr)
+squeezeHeld r@(_, P p e') =
     case e' of
       ICon _ (ICLazyPack { lzApplied = a }) -> do
           (aee, P pa aw) <- evalUHSqueezed a
@@ -3290,21 +3308,25 @@ evalUHSqueezed e = do
 -- Build the ICSel selector for a Bits class method (pack or unpack), as
 -- IConv.iConvField would, with the field indices taken from the symbol
 -- table rather than hard-coded so that a change to the shape of the Bits
--- class cannot silently select the wrong dictionary field.  The
--- selector's type is the primitive's own type: (Bits a n) => a -> Bit n
--- converts (iConvSc/qualToType) to exactly the selector type that
+-- class cannot silently select the wrong dictionary field.  The indices
+-- are computed once per elaboration and cached in the evaluator state
+-- (IExpandUtils.findBitsSelInfo) rather than looked up per held-node
+-- creation; only the selector Id's position is per-site (stamped from
+-- the primitive's own Id, for diagnostics and xref).  The selector's
+-- type is the primitive's own type: (Bits a n) => a -> Bit n converts
+-- (iConvSc/qualToType) to exactly the selector type that
 -- IConv.lookupSelType produces for the method.
 mkBitsMethodSel :: Id -> IType -> Id -> G HExpr
 mkBitsMethodSel prim_i selty meth_i = do
-    symt <- getSymTab
-    case findType symt idBits of
-      Just (TypeInfo _ _ _ (TIstruct _ fs) _)
-        | Just k <- findIndex (qualEq meth_i) fs ->
-          return (ICon (setIdPosition (getIdPosition prim_i) meth_i)
-                       (ICSel { iConType = selty,
-                                selNo = toInteger k,
-                                numSel = toInteger (length fs) }))
-      ti -> internalError ("mkBitsMethodSel: " ++ ppReadable (meth_i, ti))
+    (k_pack, k_unpack, n) <- getBitsSelInfo
+    let k | qualEq meth_i idPack   = k_pack
+          | qualEq meth_i idUnpack = k_unpack
+          | otherwise = internalError ("mkBitsMethodSel: " ++
+                                       ppReadable meth_i)
+    return (ICon (setIdPosition (getIdPosition prim_i) meth_i)
+                 (ICSel { iConType = selty,
+                          selNo = k,
+                          numSel = n }))
 
 -- Unfold a primPack/primUnpack application into the underlying Bits class
 -- method, picked out of the dictionary argument (the primitives take the
