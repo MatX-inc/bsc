@@ -29,6 +29,23 @@ other phase's metadata:
     allocation; only a representation in which elaboration-phase nodes
     have no hash slot can, which is this proposal.
 
+## How to read flag-based A/B results against this proposal
+
+Each feature's chicken-flag cell measures its NET effect: the win in
+its consuming phase minus the structural tax it pays in the other
+phase.  Both wins are demonstrated (substitution pruning: -17% CPU on
+conflict_free_large; hash-first comparison: -18% transform on Toooba
+itself), and both taxes are structural.  This proposal deletes the
+taxes while keeping both wins simultaneously, so flag-cell results are
+LOWER BOUNDS on its value: a feature measuring a wash under its flag
+may still be a clear win phase-indexed.  Decision data should
+therefore include the per-phase breakdown (-v), not just totals, so
+the win and tax components are visible separately.  From Toooba data
+alone the estimate is: hash transform win (-8..13s) + fv tax refund
+(~+10s GC) + hash tax refund (+21 GB alloc, a few seconds of GC/MUT),
+i.e. order of -3..4% total, before counting designs that sit in the
+substitution-pruning corner.
+
 ## Non-solutions (and why): runtime phase signals miscompile
 
 Any runtime phase signal — a global "now hashing" flag flipped between
