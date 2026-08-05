@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/trs-ir",
+    "crates/trs-interp",
+    "crates/trs-kernel",
+    "crates/trs-rt",
+    "crates/trs-wave",
+    "crates/trs-codegen",
+    "crates/trs-capi",
+    "crates/trs",
+]
+# trs-codegen needs llvm-18-dev; everything else builds without it.
+default-members = [
+    "crates/trs-ir",
+    "crates/trs-interp",
+    "crates/trs-kernel",
+    "crates/trs-rt",
+    "crates/trs-wave",
+    "crates/trs-capi",
+    "crates/trs",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "BSD-3-Clause"
+repository = "https://github.com/B-Lang-org/bsc"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+ciborium = "0.2"
+bincode = "1"
+fst-writer = "0.3"
+
+[profile.release]
+debug = true

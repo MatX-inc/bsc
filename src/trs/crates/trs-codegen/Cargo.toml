@@ -1,0 +1,24 @@
+[package]
+name = "trs-codegen"
+description = "LLVM lowering of BIR: state layout, rule/segment functions, JIT and AOT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trs-ir = { path = "../trs-ir" }
+# LLVM 18 via inkwell; requires system llvm-18-dev and libzstd-dev.
+inkwell = { version = "0.9", features = ["llvm18-1"], optional = true }
+
+[dev-dependencies]
+# the aot_spike example dlopens its emitted .so
+libc = "0.2"
+
+[features]
+default = []
+llvm = ["dep:inkwell"]
+
+[[example]]
+name = "aot_spike"
+required-features = ["llvm"]

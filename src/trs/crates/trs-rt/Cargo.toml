@@ -1,0 +1,10 @@
+[package]
+name = "trs-rt"
+description = "Runtime primitives (FIFO, RegFile, BRAM, synchronizers) and system tasks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trs-kernel = { path = "../trs-kernel" }
