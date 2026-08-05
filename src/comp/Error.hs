@@ -1944,7 +1944,7 @@ getErrorText (EForeignNotBit i t) =
   (Type 12, empty, hdr $$ text "Type:" <+> nest 2 (text t))
   where hdr = s2par ("Foreign function " ++ ishow i ++ " has a non-Bit argument or result.")
 getErrorText (EForeignWidthNotBare i t) =
-  (Type 159, empty, hdr $$ text "Width:" <+> nest 2 (text t))
+  (Type 162, empty, hdr $$ text "Width:" <+> nest 2 (text t))
   where hdr = s2par ("Foreign function " ++ ishow i ++ " has a bit width" ++
                      " that is not a bare type variable or a literal." ++
                      " Widths are passed to the module as instance" ++
