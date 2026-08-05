@@ -306,33 +306,3 @@ genLiftCond flags cond otrue ofalse | isTrue otrue, isTrue ofalse = iTrue
                                     | isFalse cond                = ofalse
 genLiftCond flags cond otrue ofalse =
     (iTransBoolExpr flags) $ (cond `ieAndOpt` otrue) `ieOrOpt` ( (ieNot cond) `ieAndOpt` ofalse)
-
-
--- Merge one argument pair of two mutually exclusive calls to the same
--- method into (if c then argT else argF), distributing the mux over
--- PrimPair structure.  Since the port-splitting rework, tuple-typed
--- method arguments must remain tuple constructions all the way to the
--- backend (AVerilogUtil.vDefMpd only renders literal tuple defs), so a
--- whole-tuple mux def would be an internal error there.  Returns
--- Nothing when a tuple-typed argument does not expose a tuple literal
--- on both sides (looking through ICValue definition references); the
--- caller then skips lifting that call pair and leaves the two calls
--- for ACleanup, which merges per element at the ASyntax level where an
--- opaque tuple reference can be selected with ATupleSel.
-mergeLiftArg :: ErrorHandle -> IExpr a -> IExpr a -> IExpr a -> Maybe (IExpr a)
-mergeLiftArg errh c argT argF
-    | isPairType (iGetType argT) =
-        case (unwrap argT, unwrap argF) of
-          (IAps conT@(ICon i (ICTuple {})) tsT esT,
-           IAps      (ICon i' (ICTuple {})) _  esF)
-              | i == i' && length esT == length esF -> do
-                  es <- sequence (zipWith (mergeLiftArg errh c) esT esF)
-                  return (IAps conT tsT es)
-          _ -> Nothing
-    | otherwise =
-        Just $ fst $ iTransExpr errh $
-            ieIf (iGetType argT) c (fst (iTransExpr errh argT))
-                                   (fst (iTransExpr errh argF))
-  where
-    unwrap (ICon _ (ICValue { iValDef = e })) = unwrap e
-    unwrap e = e

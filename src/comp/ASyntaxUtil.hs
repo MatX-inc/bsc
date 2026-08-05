@@ -278,15 +278,6 @@ argInputPorts e = case aType e of
 
 -- ---------------
 
--- Return the AExprs that drive the input ports for a method argument.
-argInputPorts :: AExpr -> [AExpr]
-argInputPorts (ATuple _ es) = es
-argInputPorts e = case aType e of
-  ATTuple ts -> [ ATupleSel t e idx | (idx, t) <- zip [1..] ts ]
-  _          -> [e]
-
--- ---------------
-
 class AExprs a where
     mapAExprs :: (AExpr -> AExpr) -> a -> a
     mapMAExprs :: (Monad m) => (AExpr -> m AExpr) -> a -> m a
