@@ -9,7 +9,7 @@ module SolvedBinds(SolvedBind, mkSolvedBind, SolvedBinds, Bind,
                    markIncoherent, isIncoherent, solvedClass, addBindDeps,
                    DirectIncoherence(..), addDirectIncoherence,
                    sbsEmpty, fromSB, (<++), emptySBs,
-                   extractClosures,
+                   extractClosures, renameBinds, allBindIds,
                    recursiveBinds, nonRecursiveBinds,
                    bindClasses, bindTypes, directIncoherences,
                    getRecursiveDefls, getNonRecursiveDefls,
@@ -27,6 +27,7 @@ import Id
 import CSyntax
 import CSyntaxTypes()
 import CFreeVars(getFVE)
+import CSubst(cSubst)
 import PPrint
 import Position
 import Pred(Class, Pred)
@@ -172,8 +173,20 @@ new <++ old = SolvedBinds {
 -- binding cannot stay in the Cletseq; it is promoted to the recursive
 -- group here.
 normalizeSBs :: SolvedBinds -> ([Bind], [Bind])
-normalizeSBs sbs = (map fst recs, map fst (orderBinds nonrecs))
+normalizeSBs sbs = checkFVs `seq` (map fst recs, map fst (orderBinds nonrecs))
   where
+    -- debugging check: the recorded freeVars must cover the
+    -- expression's actual free variables, or orderBinds misses edges
+    checkFVs =
+        let bad = [ (b, S.toList missing, S.toList fv)
+                  | (b@(_, _, e), fv) <- recursiveBinds sbs ++
+                                         nonRecursiveBinds sbs,
+                    let missing = snd (getFVE e) `S.difference` fv,
+                    not (S.null missing) ]
+        in  if null bad
+              then ()
+              else internalError ("SolvedBinds.normalizeSBs: freeVars " ++
+                                  "out of date:\n" ++ ppReadable bad)
     dependsOn ids (_, fv) = not (S.disjoint fv ids)
     promote rids promoted rest =
         case partition (dependsOn rids) rest of
@@ -282,13 +295,42 @@ emptySBs = SolvedBinds {
              directIncoherences = M.empty
            }
 
+-- All binding ids in the collection
+allBindIds :: SolvedBinds -> S.Set Id
+allBindIds sbs = recursiveIds sbs `S.union` nonRecursiveIds sbs
+
+-- Rename binding ids -- definitions and references -- throughout the
+-- collection.  Used when depositing a copy of a solved closure whose
+-- source predicates keep flowing: the flow will re-solve those
+-- predicates and re-bind their original dictionary ids in an inner
+-- scope, so the deposited copy must not share them.
+renameBinds :: M.Map Id Id -> SolvedBinds -> SolvedBinds
+renameBinds m sbs | M.null m = sbs
+renameBinds m sbs = SolvedBinds {
+    recursiveBinds = map renB (recursiveBinds sbs),
+    nonRecursiveBinds = map renB (nonRecursiveBinds sbs),
+    recursiveIds = S.map ren (recursiveIds sbs),
+    nonRecursiveIds = S.map ren (nonRecursiveIds sbs),
+    incoherentIds = S.map ren (incoherentIds sbs),
+    bindClasses = M.mapKeys ren (bindClasses sbs),
+    bindTypes = M.mapKeys ren (bindTypes sbs),
+    directIncoherences = M.mapKeys ren (directIncoherences sbs)
+  }
+  where
+    ren i = M.findWithDefault i i m
+    env = (M.empty, M.empty,
+           M.fromList [ (i, CVar i') | (i, i') <- M.toList m ], M.empty)
+    renB ((i, t, e), fv) = ((ren i, t, cSubst env e), S.map ren fv)
+
 -- Extract the transitive closure of bindings reachable from the given
 -- root ids, for reuse elsewhere.  A root is accepted only if its
 -- closure never references an id in the forbidden set (the dictionary
--- of an unsolved predicate -- such a closure is incomplete).
--- References to ids bound nowhere in this collection (top-level
--- instance ids, lambda-bound given dictionaries) are permitted;
--- their validity is the caller's scoping concern.
+-- of an unsolved predicate -- such a closure is incomplete) and never
+-- passes through a binding marked incoherent (evidence from an
+-- incoherent instance match is information-dependent and must not be
+-- frozen for reuse).  References to ids bound nowhere in this
+-- collection (top-level instance ids, lambda-bound given dictionaries)
+-- are permitted; their validity is the caller's scoping concern.
 -- Returns the closure bindings of all accepted roots (each binding
 -- once) and the set of accepted roots.
 extractClosures :: S.Set Id -> [Id] -> SolvedBinds -> (SolvedBinds, S.Set Id)
@@ -297,7 +339,8 @@ extractClosures forbidden roots sbs = (closure_sbs, S.fromList ok_roots)
     tagged = [ (b, fv, True)  | (b, fv) <- recursiveBinds sbs ] ++
              [ (b, fv, False) | (b, fv) <- nonRecursiveBinds sbs ]
     bind_map = M.fromList [ (i, x) | x@((i, _, _), _, _) <- tagged ]
-    -- reachability check for one root: True if no forbidden id is reached
+    -- reachability check for one root: True if no forbidden id or
+    -- incoherent-marked binding is reached
     ok seen [] = True
     ok seen (i:is)
       | i `S.member` forbidden = False
@@ -305,7 +348,9 @@ extractClosures forbidden roots sbs = (closure_sbs, S.fromList ok_roots)
       | otherwise =
           case M.lookup i bind_map of
             Nothing -> ok (S.insert i seen) is
-            Just (_, fv, _) -> ok (S.insert i seen) (S.toList fv ++ is)
+            Just ((i', _, _), fv, _)
+              | hasIdProp i' IdPIncoherent -> False
+              | otherwise -> ok (S.insert i seen) (S.toList fv ++ is)
     ok_roots = [ r | r <- roots, ok S.empty [r] ]
     -- joint collection over the accepted roots (each binding once)
     collect seen [] acc = acc
@@ -317,11 +362,18 @@ extractClosures forbidden roots sbs = (closure_sbs, S.fromList ok_roots)
             Just x@(_, fv, _) ->
                 collect (S.insert i seen) (S.toList fv ++ is) (x : acc)
     collected = collect S.empty ok_roots []
+    collected_ids = S.fromList [ i | ((i, _, _), _, _) <- collected ]
     closure_sbs = SolvedBinds {
         recursiveBinds = [ (b, fv) | (b, fv, True) <- collected ],
         nonRecursiveBinds = [ (b, fv) | (b, fv, False) <- collected ],
         recursiveIds = S.fromList [ i | ((i, _, _), _, True) <- collected ],
-        nonRecursiveIds = S.fromList [ i | ((i, _, _), _, False) <- collected ]
+        nonRecursiveIds = S.fromList [ i | ((i, _, _), _, False) <- collected ],
+        -- the closure walk refuses incoherent-marked bindings, so the
+        -- extracted set is coherent by construction
+        incoherentIds = S.empty,
+        bindClasses = M.restrictKeys (bindClasses sbs) collected_ids,
+        bindTypes = M.restrictKeys (bindTypes sbs) collected_ids,
+        directIncoherences = M.empty
       }
 
 instance PPrint SolvedBinds where
