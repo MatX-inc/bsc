@@ -1,0 +1,31 @@
+-- Pin for the deferring half of the guarded given-check: guarding
+-- the gate with the bound set must NOT hide an enclosing frame's
+-- given from a metavariable-headed goal (a FREE variable may still
+-- bind to a RIGID one; only rigid-vs-structure is conclusive).
+--
+-- Inside `innerF' the goal is MyC m k with both positions still
+-- metavariables (the argument is unannotated): no clause can adopt
+-- it there, and `MyC s r' -- the enclosing frame's given, alive
+-- because no instance head matches a bare rigid input -- unifies
+-- with it by binding m := s, k := r.  The goal must defer whole
+-- across the local frame; the application `innerF x' then pins the
+-- variables and the given takes it.  Any judgment along that chain
+-- that treated free-vs-rigid as conclusive would break the pin: the
+-- goal either gets captured by the sole instance (m := T, k := Conc,
+-- clashing the rigid `s' with T at the application) or is orphaned
+-- from the given and reported as an unresolvable context.
+package MetaGivenDefers where
+
+data T = MkT
+data Conc = MkConc
+
+class MyC a b | a -> b where
+  toB :: a -> b
+
+instance MyC T Conc where
+  toB _ = MkConc
+
+outer :: (MyC s r) => s -> r
+outer x =
+  let innerF y = toB y
+  in  innerF x
