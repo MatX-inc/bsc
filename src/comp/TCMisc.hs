@@ -634,17 +634,14 @@ sat dvs ps solved pool p =
                           stack_eps <- getExplPreds
                           let p_pred = apSub s_final (toPred p)
                               givens = concatMap bySuperE (ps ++ stack_eps)
-                              -- Modal check, so unify unguarded ([]): a
-                              -- given from an enclosing frame quantifies
-                              -- over its own rigid variables, which are
-                              -- distinct TyVars from (but instantiable
-                              -- to) this definition's; the bound-variable
-                              -- guards would hide such a given and let
-                              -- the commit freeze an instance reduction
-                              -- the outer given was meant to discharge
-                              -- whole.
+                              -- Could a given still discharge this
+                              -- predicate whole, later in this definition's
+                              -- derivation? Its rigid variables are pinned
+                              -- until generalization, so judge the match with
+                              -- this definition's bound set. Meta-headed goals
+                              -- can still bind to an enclosing rigid given.
                               unifiable (EPred _ gp) =
-                                  predUnify [] p_pred gp
+                                  predUnify bound_tyvars p_pred gp
                           return (if any unifiable givens
                                   then Provisional else Committable)
                       when (commitment == Committable) $ recordPackageUse mpkg
