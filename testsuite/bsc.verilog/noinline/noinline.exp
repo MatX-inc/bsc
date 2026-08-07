@@ -79,6 +79,6 @@ compile_verilog_fail NoInline_Polymorphic.bsv T0111
 compile_verilog_pass ForeignCtxGood.bs
 find_regexp sysForeignCtxGood.v {Dup #\(8, 16\)}
 compile_verilog_fail ForeignCtxViolated.bs T0031
-compile_verilog_fail ForeignCtxBad.bs T0160
+compile_verilog_fail ForeignCtxBad.bs T0163
 }
 
