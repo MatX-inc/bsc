@@ -1,0 +1,36 @@
+-- Pin for the commitment gate's given-check being guarded (judged
+-- with the definition's bound variables).
+--
+-- Inside `readAll', repacking the Vector demands
+-- Bits (Vector (TDiv aSize 32) (Bit 32)) _sz, a coherent unique match
+-- of the Vector Bits instance.  The signature's given `Bits a aSize'
+-- is same-class but can never take that goal: `a' is rigid here, and
+-- a hypothesis's rigid variable is pinned for the whole derivation.
+-- Judged unguarded, the given LOOKS unifiable (a := Vector ...), the
+-- commit is barred, and the put-aside discards the reduction's queued
+-- numeric residual
+--   Mul (TDiv aSize 32) 32 (TAdd (TSub (TMul (TDiv aSize 32) 32) aSize) aSize)
+-- which is SAT-only (no instance or given can discharge it); the
+-- definition then fails T0030.  Judged guarded, the commit stands and
+-- the residual rides to the definition boundary, where the settlement
+-- batch proves it -- there is no per-site solver call.
+--
+-- The dual variant pins that the batch (not some other path) proves
+-- the residual: with the solver disabled the same file must fail.
+package RigidGivenCommit where
+
+import Vector
+
+struct Pad t n =
+  padding :: Bit n
+  value :: t
+ deriving (Bits)
+
+repack :: (Bits a x, Bits b x) => a -> b
+repack x = unpack (pack x)
+
+readAll :: (Bits a aSize) => Vector (TDiv aSize 32) (Bit 32) -> a
+readAll pieces =
+  let padded :: Pad a (TSub (TMul (TDiv aSize 32) 32) aSize)
+      padded = repack pieces
+  in padded.value

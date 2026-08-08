@@ -80,3 +80,40 @@ compile_pass DeferCommittedResidualTwoInstances.bs
 # true obligation (and the uncovered catch-all's T0160 is pinned too)
 compile_fail ModalCapture.bs
 compare_file ModalCapture.bs.bsc-out
+
+# --------------------
+# Pins for the guarded given-check in the commitment gate: a given is
+# a hypothesis of THIS definition's derivation, so its rigid variables
+# are judged pinned (unlike earlier-instance capture, which must range
+# over call-site instantiations).
+
+# an unreachable rigid same-class given must not bar a coherent
+# commit: the put-aside would discard the reduction's queued numeric
+# residual, which only the definition-boundary settlement batch can
+# prove (regression: a Vector read repacked through a padded struct)
+erase RigidGivenCommit.bo
+compile_pass RigidGivenCommit.bs
+
+# dual pin (as in ../../numeric-settle): the residual is provable
+# ONLY by the solver, so the same file must fail with the solver
+# disabled -- a variant that still passed would not be exercising
+# the settlement batch
+erase RigidGivenCommit.bo
+compile_fail_error RigidGivenCommit.bs T0030 1 {-no-use-proviso-sat}
+
+# the deferring half stays guarded, not blinded: a metavariable-headed
+# goal still sees the enclosing frame's given (free may bind rigid),
+# defers whole across the local frame, and the given takes it once the
+# application pins the variables
+erase MetaGivenDefers.bo
+compile_pass MetaGivenDefers.bs
+
+# a same-class given with mutually contradictory concrete arguments
+# (CC#(4,8)) is unreachable from any goal and must not disturb the
+# diagonal instance's discharge; today the instance's SAT-valid
+# proviso is proved and erased at the instance declaration, so the
+# use-site reduction is complete and the gate never fires -- pinned
+# so a change to proviso erasure or to the gate's deferred-equality
+# handling cannot turn an unreachable given into a rejection
+erase DualDirection.bo
+compile_pass DualDirection.bsv

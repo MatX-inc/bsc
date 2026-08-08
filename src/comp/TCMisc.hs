@@ -499,17 +499,31 @@ sat dvs ps p =
                         stack_eps <- getExplPreds
                         let p_pred = apSub s_final (toPred p)
                             givens = concatMap bySuperE (ps ++ stack_eps)
-                            -- Modal check, so unify unguarded ([]): a
-                            -- given from an enclosing frame quantifies
-                            -- over its own rigid variables, which are
-                            -- distinct TyVars from (but instantiable
-                            -- to) this definition's; the bound-variable
-                            -- guards would hide such a given and let
-                            -- the commit freeze an instance reduction
-                            -- the outer given was meant to discharge
-                            -- whole.
+                            -- Could a given still discharge this
+                            -- predicate whole, later in THIS
+                            -- definition's derivation?  Unlike
+                            -- earlierInstanceMayCapture, which must
+                            -- range over call-site instantiations of
+                            -- the rigid variables, a given is a
+                            -- hypothesis of the derivation in
+                            -- progress: its rigid variables are
+                            -- pinned until generalization, so a given
+                            -- that needs one to change can never take
+                            -- the goal here, and barring the commit
+                            -- on its account strands the reduction
+                            -- (and discards numeric residuals that
+                            -- only the settlement batch could prove).
+                            -- Guarding with the bound set still keeps
+                            -- an enclosing frame's given visible to a
+                            -- meta-headed goal -- varUnify binds the
+                            -- free variable to the rigid one -- so
+                            -- those goals still defer.  A call site
+                            -- that instantiates the rigid to match
+                            -- the given agrees with the commit too:
+                            -- for a coherent class the caller's
+                            -- dictionary is this same instance.
                             unifiable (EPred _ gp) =
-                                predUnify [] p_pred gp
+                                predUnify bound_tyvars p_pred gp
                         return (if any unifiable givens
                                 then Provisional else Committable)
                     when (commitment == Committable) $ recordPackageUse mpkg
