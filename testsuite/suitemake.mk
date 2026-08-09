@@ -125,7 +125,7 @@ localcheck: $(LOCALCHECKPREREQUISITES)
 
 # TESTDIRS (space-separated directory prefixes, e.g. "bsc.mcd
 # bsc.lib/BRAM") restricts the run to tests under those directories;
-# empty runs everything.  Used by CI to shard the suite across jobs.
+# empty runs everything.  This is useful for targeted local runs.
 TESTDIRS ?=
 export TESTDIRS
 

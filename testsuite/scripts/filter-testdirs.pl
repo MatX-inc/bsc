@@ -6,8 +6,7 @@
 # aware: "bsc.lib" matches bsc.lib/... but not bsc.libextra/...
 #
 # A pass-through no-op when TESTDIRS is unset or empty, so local runs
-# are unaffected.  Used by CI to shard the testsuite across parallel
-# jobs; the empty-list guard in suitemake.mk makes a TESTDIRS value
+# are unaffected.  The empty-list guard in suitemake.mk makes a TESTDIRS value
 # that matches nothing loudly fatal rather than a silent zero-test run.
 use strict;
 use warnings;

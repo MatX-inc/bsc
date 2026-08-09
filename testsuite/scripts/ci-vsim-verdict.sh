@@ -6,22 +6,23 @@
 #       Emit one classified line per noteworthy testrun.sum entry:
 #           <sumdir> :: <RESULT>: <test text>
 #       for RESULT in the fail class (FAIL XPASS KPASS UNRESOLVED ERROR)
-#       and for UNSUPPORTED (the skip-layer contract).  Shard jobs
-#       redirect this to observed-shard-N.txt.
+#       and for UNSUPPORTED (the skip-layer contract).  The full-suite
+#       job redirects this to observed.txt.
 #
 #   seed <testsuite-dir> <manifest-dir>
 #       Write fails-<platform>.txt and unsupported-<platform>.txt from a
 #       (local or CI) run's testrun.sum tree.  Entries should then be
 #       hand-annotated with '#'-comment dispositions before committing.
 #
-#   judge <mode> <manifest-dir> <fragments-dir> [testsuite-dir]
-#       Grade downloaded observed-shard-*.txt fragments against the
-#       manifests.  mode: observe | ratchet | gate (anything else: red).
-#       Red conditions by mode:
-#         observe: never (ledger only)
-#         ratchet: missing/incomplete fragments, scheduled-vs-in-tree
-#                  coverage hole, NEW fail-class entries not in the
-#                  manifest, or any UNSUPPORTED-set drift
+#   judge <mode> <manifest-dir> <results-dir> [testsuite-dir]
+#       Grade a full run's observed.txt, schedule.mk, and suite-rc.txt
+#       against the manifests.  mode: observe | ratchet | gate
+#       (anything else: red).  Missing/incomplete run artifacts and
+#       scheduled-vs-in-tree coverage holes are red in every mode.
+#       Additional red conditions by mode:
+#         observe: none (content ledger only)
+#         ratchet: NEW fail-class entries not in the manifest, or any
+#                  UNSUPPORTED-set drift
 #         gate:    as ratchet, plus stale manifest entries, any observed
 #                  fail-class entry at all, or a non-empty fails manifest
 #       The summary table and delta lines are ALWAYS published (to
@@ -36,7 +37,6 @@ export LC_ALL=C
 PLATFORM="${VSIM_PLATFORM:-linux-x86_64}"
 FAIL_RE='^(FAIL|XPASS|KPASS|UNRESOLVED|ERROR): '
 UNSUP_RE='^UNSUPPORTED: '
-SHARDS="${VSIM_SHARDS:-7}"
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/ci-vsim-verdict.XXXXXX")
 trap 'rm -rf -- "$workdir"' EXIT
 
@@ -80,7 +80,7 @@ seed)
     ;;
 
 judge)
-    mode="${2:?usage: $0 judge <mode> <manifest-dir> <fragments-dir> [testsuite-dir]}"
+    mode="${2:?usage: $0 judge <mode> <manifest-dir> <results-dir> [testsuite-dir]}"
     mdir="${3:?}"
     fdir="${4:?}"
     tsdir="${5:-testsuite}"
@@ -93,42 +93,54 @@ judge)
     red=0
     reasons=()
 
-    # --- completeness: every shard fragment present and non-trivial
+    # --- completeness: the full run returned and published its artifacts
     missing=0
-    for n in $(seq 1 "$SHARDS"); do
-        if [ ! -f "$fdir/observed-shard-$n.txt" ]; then
-            say "MISSING fragment: observed-shard-$n.txt"
+    for f in observed.txt schedule.mk suite-rc.txt; do
+        if [ ! -f "$fdir/$f" ]; then
+            say "MISSING result: $f"
             missing=1
         fi
     done
     if [ "$missing" -eq 1 ]; then
-        reasons+=("incomplete: missing shard fragment(s) — a shard died or never ran")
+        reasons+=("incomplete: missing full-suite result(s) — the run died or never completed")
         red=1
     fi
 
-    # --- coverage: union of scheduled tests vs in-tree .exp files
-    if ls "$fdir"/schedule-shard-*.mk >/dev/null 2>&1 && [ -d "$tsdir" ]; then
-        cat "$fdir"/schedule-shard-*.mk \
+    suite_rc=missing
+    if [ -f "$fdir/suite-rc.txt" ]; then
+        suite_rc=$(head -1 "$fdir/suite-rc.txt" | tr -d '[:space:]')
+        case "$suite_rc" in
+            0|2) ;;
+            *) reasons+=("infrastructure: testsuite command returned rc=$suite_rc")
+               red=1 ;;
+        esac
+    fi
+
+    # --- coverage: scheduled tests vs in-tree .exp files
+    if [ -f "$fdir/schedule.mk" ] && [ -d "$tsdir" ]; then
+        cat "$fdir/schedule.mk" \
             | tr ' ' '\n' | grep '\.exp$' | sed 's|^\./||' | sort -u > "$workdir/scheduled"
         ( cd "$tsdir" && find bsc.* -name '*.exp' 2>/dev/null ) \
             | grep -v '^bsc\.long_tests/' | sed 's|^\./||' | sort -u > "$workdir/intree"
         comm -13 "$workdir/scheduled" "$workdir/intree" > "$workdir/holes"
         if [ -s "$workdir/holes" ]; then
-            say "COVERAGE HOLES (in-tree tests no shard scheduled):"
+            say "COVERAGE HOLES (in-tree tests not scheduled):"
             head -50 "$workdir/holes" | sed 's/^/    /' | while read -r l; do say "$l"; done
-            reasons+=("coverage: $(wc -l < "$workdir/holes") in-tree .exp never scheduled by any shard")
+            reasons+=("coverage: $(wc -l < "$workdir/holes") in-tree .exp never scheduled")
             red=1
         fi
     else
-        say "note: schedule fragments or testsuite dir absent; coverage check skipped"
-        if [ "$mode" != "observe" ]; then
-            reasons+=("coverage: schedule fragments absent — cannot prove nothing was dropped")
-            red=1
-        fi
+        say "note: schedule or testsuite dir absent; coverage check skipped"
+        reasons+=("coverage: schedule or testsuite tree absent — cannot prove nothing was dropped")
+        red=1
     fi
 
     # --- observed sets
-    cat "$fdir"/observed-shard-*.txt 2>/dev/null | sort -u > "$workdir/observed"
+    if [ -f "$fdir/observed.txt" ]; then
+        sort -u "$fdir/observed.txt" > "$workdir/observed"
+    else
+        touch "$workdir/observed"
+    fi
     grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " "$workdir/observed" > "$workdir/obs-fails-raw" || true
     grep -E " :: UNSUPPORTED: " "$workdir/observed" > "$workdir/obs-unsup" || true
 
@@ -155,6 +167,8 @@ judge)
 
     # --- publish the ledger, always
     say "### MatX Verilator verdict (mode: $mode, platform: $PLATFORM)"
+    say ""
+    say "Testsuite command rc: $suite_rc"
     say ""
     say "| set | count |"
     say "|---|---|"
@@ -183,7 +197,7 @@ judge)
     # --- exit by mode
     case "$mode" in
         observe)
-            say "VERDICT: observe mode — ledger recorded, always green"
+            say "VERDICT: observe mode — content ledger recorded without content gating"
             ;;
         ratchet)
             if [ -s "$workdir/new-fails" ]; then
@@ -229,7 +243,7 @@ judge)
     ;;
 
 *)
-    echo "usage: $0 {collect <testsuite-dir> | seed <testsuite-dir> <manifest-dir> | judge <mode> <manifest-dir> <fragments-dir> [testsuite-dir]}" >&2
+    echo "usage: $0 {collect <testsuite-dir> | seed <testsuite-dir> <manifest-dir> | judge <mode> <manifest-dir> <results-dir> [testsuite-dir]}" >&2
     exit 2
     ;;
 esac
