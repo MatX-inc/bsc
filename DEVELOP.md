@@ -227,15 +227,17 @@ protocol gains a `check` command alongside `detect` and `link`; the
 Verilator builder implements it, and builders that do not are simply
 never asked (the flag is only honored where the script supports it).
 
-The Verilator builder can also verilate hierarchically: with
-`BSC_VSIM_HIER=1` in the environment, every generated module whose header
+The Verilator builder verilates hierarchically by default: every generated
+module whose header
 comment says it has no combinational input-to-output paths (the
 `VPathInfo` blurb BSC prints in each generated file) is marked as a
 Verilator `hier_block` via a generated configuration file.  Eligibility
 matters: a module with through-paths would create false combinational
 loops (UNOPTFLAT) at the block boundary, so such modules are left to be
 verilated inside their parent, and no lint waiver is needed for the ones
-that are marked.  `BSC_VSIM_HIER_MIN_LINES` exempts small files where
-per-block overhead outweighs the benefit, and `BSC_VSIM_BUILD_JOBS`
-bounds the parallelism of both verilation phases (Verilator `-j`;
-unset means unbounded).
+that are marked.  The top module is never made a hierarchical block. If
+Verilator rejects a design's partition, the builder retries that design
+flat. `BSC_VSIM_HIER=0` disables hierarchical partitioning, while
+`BSC_VSIM_HIER_MIN_LINES` exempts small files where per-block overhead
+outweighs the benefit. `VSIM_BUILD_JOBS` bounds both Verilator's workers
+and the generated C++ make (default 2).

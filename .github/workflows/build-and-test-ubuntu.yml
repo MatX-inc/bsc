@@ -448,10 +448,9 @@ jobs:
 
           trap ./testsuite/archive_logs.sh EXIT
 
-          # Keep each test's verilator C++ compile serial: the link
-          # script's inner make otherwise runs unbounded -j on top of
-          # the suite's own parallelism (N tests x M g++ on a 4-core
-          # 7GB runner is how memory starves).
+          # Keep each test's Verilator front end and C++ compile serial.
+          # The suite already runs several tests in parallel, so nested
+          # compiler workers only multiply memory pressure.
           export VSIM_BUILD_JOBS=1
 
           # Compensate at the test level: start at -j8 and ratchet down

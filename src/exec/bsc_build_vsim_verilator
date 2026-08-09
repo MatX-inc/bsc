@@ -242,6 +242,16 @@ VLT_CONFIG=$BLUESPECDIR/Verilator/verilator_config.vlt
 EXE_BASENAME=`basename ${BSC_SIM_EXECUTABLE}`
 OBJDIR="obj_dir_${EXE_BASENAME}_$$"
 
+# Bound both Verilator's code-generation workers and the generated C++
+# make.  Multiple tests may link concurrently, so an unbounded inner -j
+# multiplies across the testsuite and can exhaust memory.  Callers can dial
+# this down further (CI uses 1).
+VSIM_BUILD_JOBS=${VSIM_BUILD_JOBS:-2}
+case "$VSIM_BUILD_JOBS" in
+    *[!0-9]*|0) echo "ERROR: VSIM_BUILD_JOBS must be a positive integer" >&2
+                exit 1 ;;
+esac
+
 # If the directory happens to exit, delete it
 # to avoid accidentally reusing old files
 rm -rf $OBJDIR
@@ -433,14 +443,16 @@ if [ "$BSC_COMMAND" = "check" ]; then
 fi
 
 # ---------------
-# Hierarchical verilation (opt-in): mark every eligible generated
+# Hierarchical verilation (the default): mark every eligible generated
 # module as a hier_block via a generated configuration file, so
 # Verilator compiles it as a separate unit.  BSC_VSIM_HIER_MIN_LINES
-# can exempt small files, where per-block overhead outweighs the win.
+# can exempt small files, where per-block overhead outweighs the win;
+# BSC_VSIM_HIER=0 disables the attempt.  The top itself must never be a
+# hier_block.
 # No UNOPTFLAT waiver is needed: eligibility makes false loops
 # impossible, so any UNOPTFLAT is a real finding and should fail.
 VLT_HIER=""
-if [ "${BSC_VSIM_HIER:-0}" = "1" ]; then
+if [ "${BSC_VSIM_HIER:-1}" != "0" ]; then
     mkdir -p $OBJDIR
     HIER_VLT=$OBJDIR/hier.vlt
     echo '`verilator_config' > $HIER_VLT
@@ -453,12 +465,15 @@ if [ "${BSC_VSIM_HIER:-0}" = "1" ]; then
             fi
             fbase=`basename $vf`
             mod=${fbase%.*}
+            if [ "$mod" = "$BSC_TOPLEVEL_MODULE" ]; then
+                continue
+            fi
             echo "hier_block -module \"$mod\"" >> $HIER_VLT
             nhier=`expr $nhier + 1`
         fi
     done
     if [ "$nhier" -gt 0 ]; then
-        VLT_HIER="--hierarchical -j ${BSC_VSIM_BUILD_JOBS:-0} $HIER_VLT"
+        VLT_HIER="--hierarchical -j $VSIM_BUILD_JOBS $HIER_VLT"
     fi
 fi
 
@@ -471,9 +486,20 @@ else
   VLT_VERBOSE=""
 fi
 
-verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VLT_HIER $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
+run_verilator() {
+  verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VLT_HIER $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
+}
+
+run_verilator
 
 status=$?
+if [ "$status" != "0" ] && [ -n "$VLT_HIER" ]; then
+  echo "WARNING: hierarchical Verilator partitioning failed; retrying this design flat" >&2
+  rm -rf $OBJDIR
+  VLT_HIER=""
+  run_verilator
+  status=$?
+fi
 if [ "$status" != "0" ]; then
   echo "ERROR: cannot compile Verilog files" >&2
   exit $status
@@ -481,9 +507,8 @@ fi
 
 cp -p $BLUESPECDIR/Verilator/sim_main.cpp $OBJDIR/sim_main.cpp
 
-# VSIM_BUILD_JOBS bounds the parallelism of this compile (empty = unbounded).
-# CI sets it to 1: test-level parallelism already saturates the runner there,
-# and several tests' unbounded compiles together can starve its memory.
+# VSIM_BUILD_JOBS bounds this compile too.  CI sets it to 1: test-level
+# parallelism already saturates the runner there.
 make -C $OBJDIR -j$VSIM_BUILD_JOBS -f ${TOPCLASS}.mk ${TOPCLASS}
 
 status=$?
