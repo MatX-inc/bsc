@@ -31,7 +31,7 @@ doTrace = elem "-trace-genbin" progArgs
 header :: [Byte]
 -- when a BinData-layer change bumps .bo and .ba together, move both
 -- format tags (see GenABin.hs)
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260809-2"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260809-3"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -724,6 +724,10 @@ instance Bin (IConInfo a) where
         internalError "GenBin.Bin(IConInfo).writeBytes: ICInout"
     writeBytes (ICLazyArray _ _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyArray"
+    writeBytes (ICLazyPack {}) =
+        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyPack"
+    writeBytes (ICLazyUnpack {}) =
+        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyUnpack"
     writeBytes (ICPred _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICPred"
     writeBytes (ICHandle { }) =

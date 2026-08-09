@@ -203,12 +203,13 @@ if { $vtest == 1 } {
     # nested `inner` struct combined into one port
     find_regexp mkSub.v {input  \[7 : 0\] put_1_a;}
     find_regexp mkSub.v {input  \[15 : 0\] put_1_inner;}
-    # each split port is driven whole -- by a source net or a concatenation
-    # of source nets -- with no bit-select (with dictionary lifting the
-    # literal-tuple def no longer materializes per-element ..._1/_2 wires;
-    # the elements' sources drive the ports directly)
-    find_regexp sysSplitArgSlice.v {s[$]put_1_a = [A-Za-z0-9_$]+ ;}
-    find_regexp sysSplitArgSlice.v {s[$]put_1_inner = \{ [A-Za-z0-9_$]+, [A-Za-z0-9_$]+ \} ;}
+    # the Outer value is split into per-element wires (..._1 / ..._2) and each
+    # split port is driven directly by its element wire (no bit-select)
+    # pack/unpack cancellation resolves the arg slices directly: the a
+    # slice is the source register itself and the inner slice a direct
+    # concat -- no repacked _1/_2 intermediates survive.
+    find_regexp sysSplitArgSlice.v {s[$]put_1_a = c ;}
+    find_regexp sysSplitArgSlice.v {s[$]put_1_inner = \{ c_PLUS_1___d[0-9]+, inner_q__h[0-9]+ \} ;}
     find_regexp_fail sysSplitArgSlice.v {\[[0-9]+:[0-9]+\]}
 }
 
@@ -277,19 +278,19 @@ test_c_veri SplitVectorOps
 # ----------
 
 compile_verilog_fail_error TooManyArgNames.bs S0015
-if { $vtest == 1 } { compare_file TooManyArgNames.bs.bsc-vcomp-out }
+compare_file TooManyArgNames.bs.bsc-vcomp-out
 
 compile_verilog_fail_error PortNameConflict.bs G0055
-if { $vtest == 1 } { compare_file PortNameConflict.bs.bsc-vcomp-out }
+compare_file PortNameConflict.bs.bsc-vcomp-out
 
 compile_verilog_fail_error ArgNamesPragma_PortNameConflict.bs G0055
-if { $vtest == 1 } { compare_file ArgNamesPragma_PortNameConflict.bs.bsc-vcomp-out }
+compare_file ArgNamesPragma_PortNameConflict.bs.bsc-vcomp-out
 
 compile_verilog_fail_error BadSplitInst_PortNameConflict.bs G0055
-if { $vtest == 1 } { compare_file BadSplitInst_PortNameConflict.bs.bsc-vcomp-out }
+compare_file BadSplitInst_PortNameConflict.bs.bsc-vcomp-out
 
 compile_verilog_fail_error BadSplitInst_TooManyPortNames.bs S0015
-if { $vtest == 1 } { compare_file BadSplitInst_TooManyPortNames.bs.bsc-vcomp-out }
+compare_file BadSplitInst_TooManyPortNames.bs.bsc-vcomp-out
 
 # Two mutually exclusive calls to the same tuple-argument Action method in
 # ONE rule are merged into a single call (ILift under the default -lift,

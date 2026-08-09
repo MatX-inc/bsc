@@ -9,7 +9,11 @@
 # still proves what this directory cares about: bug 1490 made these
 # compiles exhaust memory EXPONENTIALLY in the sort depth, so any fixed
 # few-hundred-MB cap separates fixed from broken by orders of magnitude.
-set rtsflags {+RTS -M288M -Sstderr -RTS}
+#
+# The combined release tree allocates slightly more than any single
+# branch, and CI sat exactly at the edge of 288M once (Bug1490MyBool,
+# the sole failure of a release run), so the uniform cap here is 320M.
+set rtsflags {+RTS -M320M -Sstderr -RTS}
 
 # -----
 
