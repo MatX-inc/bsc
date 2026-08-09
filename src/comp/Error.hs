@@ -729,6 +729,7 @@ data ErrMsg =
 
         | EForeignNotBit String String
         | EForeignWidthNotBare String String
+        | EForeignCtxNotNumeric String String
         | EPartialTypeApp String Integer Integer -- synonym (# expected) (# given)
         | ENotStructId String
         | ENotStructUpd String
@@ -1977,6 +1978,14 @@ getErrorText (EForeignWidthNotBare i t) =
                      " Widths are passed to the module as instance" ++
                      " parameters named by the type variables, so a" ++
                      " derived width must be given its own variable.")
+getErrorText (EForeignCtxNotNumeric i p) =
+  (Type 163, empty, hdr $$ text "Proviso:" <+> nest 2 (text p))
+  where hdr = s2par ("Foreign function " ++ ishow i ++ " has a proviso" ++
+                     " that is not a numeric relationship." ++
+                     " Only Add, Mul, Div, Log, Max, Min and NumEq" ++
+                      " provisos are permitted on foreign functions:" ++
+                      " they are checked at each application and then" ++
+                      " erased.")
 getErrorText (EPartialTypeApp i expected given) =
     (Type 13, empty,
      s2par ("Partially applied type synonym: " ++ ishow i) $$
