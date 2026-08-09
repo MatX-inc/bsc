@@ -32,6 +32,7 @@ import Assump
 import CSubst(cSubstN)
 import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
+--import Debug.Trace(trace, traceM)
 
 -- The extra [Id] is ids (beyond the package's own definitions) whose
 -- names the ground-dictionary pooling must not reuse for lifted
@@ -187,12 +188,17 @@ checkTopPreds mid a ps = do
 -- returning any unsatisfied preds
 topExpr :: CType -> CExpr -> TI ([VPred], CExpr)
 topExpr td e = do
+  -- dictionaries pooled during checking (see propagateFunDeps) are
+  -- emitted with this expression's letseq
+  pool_frame <- pushSolvedPool
   (ps, e') <- tiExpr [] td e
   (ps', sbs0) <- satisfy [] ps
+  pool_sbs <- popSolvedPool pool_frame
   sbs <- warnTransitiveIncoherent sbs0
   s <- getSubst
-  let rec_defls    = getRecursiveDefls sbs
-      nonrec_defls = getNonRecursiveDefls sbs
+  let sbs' = pool_sbs <++ sbs
+      rec_defls    = getRecursiveDefls sbs'
+      nonrec_defls = getNonRecursiveDefls sbs'
   -- Generate code: nonrec outside (letseq), rec inside (letrec)
   return (apSub s (ps', cLetSeq nonrec_defls $ cLetRec rec_defls e'))
 
