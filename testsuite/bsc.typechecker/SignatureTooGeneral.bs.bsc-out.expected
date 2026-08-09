@@ -7,3 +7,4 @@ Error: "SignatureTooGeneral.bs", line 6, column 6: (T0020)
 
   Inferred type:
     Prelude.Integer
+

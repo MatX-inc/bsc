@@ -8,7 +8,7 @@ bsc_compile WireTypes.bsv {-verilog -elab}
 bsc_compile SplitPortsTest.bs {-verilog -elab}
 bsc_compile ClockTest.bsv {-verilog -elab}
 
-set sedPosition {-e /position.*%/s/\[0-9\]/N/g}
+set sedPosition {-e /\[Pp\]osition.*%/s/\[0-9\]/N/g}
 set sedCRegPosition { -e s/CReg\[0-9\]\+/CRegNNNN/g }
 
 # -------------------------

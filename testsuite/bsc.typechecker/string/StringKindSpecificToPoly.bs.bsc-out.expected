@@ -9,3 +9,4 @@ Error: "StringKindSpecificToPoly.bs", line 9, column 4: (T0020)
 
   Inferred type:
     StringKindSpecificToPoly.Foo "a"
+
