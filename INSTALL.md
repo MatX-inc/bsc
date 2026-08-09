@@ -119,7 +119,7 @@ ghcup install ghc 9.14.1
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
 cabal update
-cabal v1-install --allow-newer=cborg:base \
+cabal v1-install --allow-newer=cborg:base,cborg:containers \
    cborg regex-compat syb old-time split strict-concurrency
 ```
 
@@ -185,7 +185,7 @@ ghcup install ghc 9.14.1
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
 cabal update
-cabal v1-install --allow-newer=cborg:base \
+cabal v1-install --allow-newer=cborg:base,cborg:containers \
    cborg regex-compat syb old-time split strict-concurrency
 ```
 
@@ -269,7 +269,7 @@ ghcup install ghc 9.14.1
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
 cabal update
-cabal v1-install --allow-newer=cborg:base \
+cabal v1-install --allow-newer=cborg:base,cborg:containers \
    cborg regex-compat syb old-time split strict-concurrency
 ```
 

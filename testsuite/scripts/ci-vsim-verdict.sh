@@ -37,6 +37,8 @@ PLATFORM="${VSIM_PLATFORM:-linux-x86_64}"
 FAIL_RE='^(FAIL|XPASS|KPASS|UNRESOLVED|ERROR): '
 UNSUP_RE='^UNSUPPORTED: '
 SHARDS="${VSIM_SHARDS:-7}"
+workdir=$(mktemp -d "${TMPDIR:-/tmp}/ci-vsim-verdict.XXXXXX")
+trap 'rm -rf -- "$workdir"' EXIT
 
 say() {
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -66,12 +68,11 @@ seed)
     root="${2:?usage: $0 seed <testsuite-dir> <manifest-dir>}"
     mdir="${3:?usage: $0 seed <testsuite-dir> <manifest-dir>}"
     mkdir -p "$mdir"
-    collect_tree "$root" > /tmp/ci-vsim-seed.$$
-    grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " /tmp/ci-vsim-seed.$$ \
+    collect_tree "$root" > "$workdir/seed"
+    grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " "$workdir/seed" \
         | sort -u > "$mdir/fails-$PLATFORM.txt" || true
-    grep -E " :: UNSUPPORTED: " /tmp/ci-vsim-seed.$$ \
+    grep -E " :: UNSUPPORTED: " "$workdir/seed" \
         | sort -u > "$mdir/unsupported-$PLATFORM.txt" || true
-    rm -f /tmp/ci-vsim-seed.$$
     touch "$mdir/flaky-$PLATFORM.txt"
     echo "seeded: $(wc -l < "$mdir/fails-$PLATFORM.txt") fail entries," \
          "$(wc -l < "$mdir/unsupported-$PLATFORM.txt") unsupported entries"
@@ -108,17 +109,16 @@ judge)
     # --- coverage: union of scheduled tests vs in-tree .exp files
     if ls "$fdir"/schedule-shard-*.mk >/dev/null 2>&1 && [ -d "$tsdir" ]; then
         cat "$fdir"/schedule-shard-*.mk \
-            | tr ' ' '\n' | grep '\.exp$' | sed 's|^\./||' | sort -u > /tmp/scheduled.$$
+            | tr ' ' '\n' | grep '\.exp$' | sed 's|^\./||' | sort -u > "$workdir/scheduled"
         ( cd "$tsdir" && find bsc.* -name '*.exp' 2>/dev/null ) \
-            | grep -v '^bsc\.long_tests/' | sed 's|^\./||' | sort -u > /tmp/intree.$$
-        comm -13 /tmp/scheduled.$$ /tmp/intree.$$ > /tmp/holes.$$
-        if [ -s /tmp/holes.$$ ]; then
+            | grep -v '^bsc\.long_tests/' | sed 's|^\./||' | sort -u > "$workdir/intree"
+        comm -13 "$workdir/scheduled" "$workdir/intree" > "$workdir/holes"
+        if [ -s "$workdir/holes" ]; then
             say "COVERAGE HOLES (in-tree tests no shard scheduled):"
-            head -50 /tmp/holes.$$ | sed 's/^/    /' | while read -r l; do say "$l"; done
-            reasons+=("coverage: $(wc -l < /tmp/holes.$$) in-tree .exp never scheduled by any shard")
+            head -50 "$workdir/holes" | sed 's/^/    /' | while read -r l; do say "$l"; done
+            reasons+=("coverage: $(wc -l < "$workdir/holes") in-tree .exp never scheduled by any shard")
             red=1
         fi
-        rm -f /tmp/scheduled.$$ /tmp/intree.$$ /tmp/holes.$$
     else
         say "note: schedule fragments or testsuite dir absent; coverage check skipped"
         if [ "$mode" != "observe" ]; then
@@ -128,28 +128,28 @@ judge)
     fi
 
     # --- observed sets
-    cat "$fdir"/observed-shard-*.txt 2>/dev/null | sort -u > /tmp/observed.$$
-    grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " /tmp/observed.$$ > /tmp/obs-fails-raw.$$ || true
-    grep -E " :: UNSUPPORTED: " /tmp/observed.$$ > /tmp/obs-unsup.$$ || true
+    cat "$fdir"/observed-shard-*.txt 2>/dev/null | sort -u > "$workdir/observed"
+    grep -E " :: (FAIL|XPASS|KPASS|UNRESOLVED|ERROR): " "$workdir/observed" > "$workdir/obs-fails-raw" || true
+    grep -E " :: UNSUPPORTED: " "$workdir/observed" > "$workdir/obs-unsup" || true
 
     # manifests (drop whole-line comments and blanks; entries are exact
     # line keys, and reason strings may legitimately contain '#', so
     # trailing comments are NOT supported -- annotate on their own line)
     for f in fails unsupported flaky; do
         sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' \
-            "$mdir/$f-$PLATFORM.txt" 2>/dev/null | sort -u > "/tmp/man-$f.$$" || true
-        touch "/tmp/man-$f.$$"
+            "$mdir/$f-$PLATFORM.txt" 2>/dev/null | sort -u > "$workdir/man-$f" || true
+        touch "$workdir/man-$f"
     done
 
     # flaky entries are excused from the observed fail set (but counted)
-    grep -Fvxf /tmp/man-flaky.$$ /tmp/obs-fails-raw.$$ > /tmp/obs-fails.$$ || true
-    flaky_hits=$(grep -Fxf /tmp/man-flaky.$$ /tmp/obs-fails-raw.$$ | wc -l || true)
+    grep -Fvxf "$workdir/man-flaky" "$workdir/obs-fails-raw" > "$workdir/obs-fails" || true
+    flaky_hits=$(grep -Fxf "$workdir/man-flaky" "$workdir/obs-fails-raw" | wc -l || true)
 
-    comm -13 /tmp/man-fails.$$ /tmp/obs-fails.$$ > /tmp/new-fails.$$ || true
-    comm -23 /tmp/man-fails.$$ /tmp/obs-fails.$$ > /tmp/stale-fails.$$ || true
+    comm -13 "$workdir/man-fails" "$workdir/obs-fails" > "$workdir/new-fails" || true
+    comm -23 "$workdir/man-fails" "$workdir/obs-fails" > "$workdir/stale-fails" || true
 
     unsup_drift=0
-    if ! diff -u /tmp/man-unsupported.$$ /tmp/obs-unsup.$$ > /tmp/unsup-diff.$$ 2>&1; then
+    if ! diff -u "$workdir/man-unsupported" "$workdir/obs-unsup" > "$workdir/unsup-diff" 2>&1; then
         unsup_drift=1
     fi
 
@@ -158,26 +158,26 @@ judge)
     say ""
     say "| set | count |"
     say "|---|---|"
-    say "| observed fail-class (raw) | $(wc -l < /tmp/obs-fails-raw.$$) |"
+    say "| observed fail-class (raw) | $(wc -l < "$workdir/obs-fails-raw") |"
     say "| excused as flaky | $flaky_hits |"
-    say "| manifest fails | $(wc -l < /tmp/man-fails.$$) |"
-    say "| NEW fails (not in manifest) | $(wc -l < /tmp/new-fails.$$) |"
-    say "| stale manifest entries (now passing) | $(wc -l < /tmp/stale-fails.$$) |"
-    say "| observed UNSUPPORTED | $(wc -l < /tmp/obs-unsup.$$) |"
-    say "| manifest UNSUPPORTED | $(wc -l < /tmp/man-unsupported.$$) |"
+    say "| manifest fails | $(wc -l < "$workdir/man-fails") |"
+    say "| NEW fails (not in manifest) | $(wc -l < "$workdir/new-fails") |"
+    say "| stale manifest entries (now passing) | $(wc -l < "$workdir/stale-fails") |"
+    say "| observed UNSUPPORTED | $(wc -l < "$workdir/obs-unsup") |"
+    say "| manifest UNSUPPORTED | $(wc -l < "$workdir/man-unsupported") |"
     say "| UNSUPPORTED drift | $unsup_drift |"
     say ""
-    if [ -s /tmp/new-fails.$$ ]; then
+    if [ -s "$workdir/new-fails" ]; then
         say "NEW failures (first 100):"
-        head -100 /tmp/new-fails.$$ | while read -r l; do say "    $l"; done
+        head -100 "$workdir/new-fails" | while read -r l; do say "    $l"; done
     fi
-    if [ -s /tmp/stale-fails.$$ ]; then
+    if [ -s "$workdir/stale-fails" ]; then
         say "Stale manifest entries (first 100):"
-        head -100 /tmp/stale-fails.$$ | while read -r l; do say "    $l"; done
+        head -100 "$workdir/stale-fails" | while read -r l; do say "    $l"; done
     fi
     if [ "$unsup_drift" -eq 1 ]; then
         say "UNSUPPORTED drift (first 100 diff lines):"
-        head -100 /tmp/unsup-diff.$$ | while read -r l; do say "    $l"; done
+        head -100 "$workdir/unsup-diff" | while read -r l; do say "    $l"; done
     fi
 
     # --- exit by mode
@@ -186,28 +186,28 @@ judge)
             say "VERDICT: observe mode — ledger recorded, always green"
             ;;
         ratchet)
-            if [ -s /tmp/new-fails.$$ ]; then
-                reasons+=("$(wc -l < /tmp/new-fails.$$) NEW failure(s) vs manifest")
+            if [ -s "$workdir/new-fails" ]; then
+                reasons+=("$(wc -l < "$workdir/new-fails") NEW failure(s) vs manifest")
                 red=1
             fi
             if [ "$unsup_drift" -eq 1 ]; then
                 reasons+=("UNSUPPORTED set drifted from the committed skip contract")
                 red=1
             fi
-            if [ -s /tmp/stale-fails.$$ ]; then
-                say "::warning::$(wc -l < /tmp/stale-fails.$$) stale manifest entries now pass; shrink the manifest"
+            if [ -s "$workdir/stale-fails" ]; then
+                say "::warning::$(wc -l < "$workdir/stale-fails") stale manifest entries now pass; shrink the manifest"
             fi
             ;;
         gate)
-            if [ -s /tmp/obs-fails.$$ ]; then
-                reasons+=("gate mode: $(wc -l < /tmp/obs-fails.$$) fail-class result(s) observed")
+            if [ -s "$workdir/obs-fails" ]; then
+                reasons+=("gate mode: $(wc -l < "$workdir/obs-fails") fail-class result(s) observed")
                 red=1
             fi
-            if [ -s /tmp/man-fails.$$ ]; then
+            if [ -s "$workdir/man-fails" ]; then
                 reasons+=("gate mode: fails manifest is non-empty — burn it down before gating")
                 red=1
             fi
-            if [ -s /tmp/stale-fails.$$ ]; then
+            if [ -s "$workdir/stale-fails" ]; then
                 reasons+=("gate mode: stale manifest entries")
                 red=1
             fi
@@ -217,10 +217,6 @@ judge)
             fi
             ;;
     esac
-
-    rm -f /tmp/observed.$$ /tmp/obs-fails-raw.$$ /tmp/obs-fails.$$ /tmp/obs-unsup.$$ \
-          /tmp/man-fails.$$ /tmp/man-unsupported.$$ /tmp/man-flaky.$$ \
-          /tmp/new-fails.$$ /tmp/stale-fails.$$ /tmp/unsup-diff.$$
 
     if [ "$red" -eq 1 ]; then
         say ""

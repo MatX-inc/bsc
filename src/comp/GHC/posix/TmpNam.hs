@@ -1,10 +1,13 @@
 module TmpNam(tmpNam, localTmpNam) where
-import System.Posix
+import System.Directory (getTemporaryDirectory)
+import System.FilePath ((</>))
+import System.Posix (getProcessID)
 
 tmpNam :: IO String
 tmpNam = do
+         dir <- getTemporaryDirectory
          x <- localTmpNam
-         return $ "/tmp/bsc" ++ x
+         return $ dir </> ("bsc" ++ x)
 
 localTmpNam :: IO String
 localTmpNam = do
