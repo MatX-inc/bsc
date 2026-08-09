@@ -1,0 +1,12 @@
+[package]
+name = "trs-ir"
+description = "BIR: the portable post-scheduling IR exported by bsc for simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+ciborium = { workspace = true }
+bincode = { workspace = true }

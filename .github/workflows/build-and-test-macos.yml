@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           cabal update
-          cabal v1-install old-time regex-compat split strict-concurrency syb
+          cabal v1-install cborg old-time regex-compat split strict-concurrency syb
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every build,
       # and have the restore-key use the most recent.
@@ -85,6 +85,12 @@ jobs:
           export BSC_BUILD_PKGINFO=1
 
           make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-src
+
+          # Also build and install the extra utilities (vcdcheck,
+          # fstscopes, showrules, ...); the testsuite uses fstscopes,
+          # when available, to check FST waveform dumps
+          make -C src/comp -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-extra
+
           tar czf inst.tar.gz inst
       - name: CCache stats
         env:

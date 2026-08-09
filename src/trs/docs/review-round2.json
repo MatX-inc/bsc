@@ -1,0 +1,469 @@
+{
+ "range": "4dcea6d5..5c5b912c",
+ "date": "2026-07-09",
+ "agents": 109,
+ "confirmed": [
+  {
+   "finder": "concurrency",
+   "severity": "high",
+   "title": "Oracle engines share process-global BDPI/libc-RNG state: false divergence plus primary output pollution",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 211,
+   "description": "bk_init loads the SAME .bdpi.so into every oracle engine (dlopen of one path returns one refcounted handle, so C globals are shared), and the library BDPI imports rand32/srand are dispatched to process-global libc random()/srandom() (trs-interp/src/lib.rs:1809-1822). The oracle design assumes engines are isolated state machines ('state runs normally so lockstep compare is meaningful'), but any stateful foreign function is one shared mutable object visited by every engine. Engines advance sequentially per bk_advance segment (primary first, then each quiet secondary in the sync path at lib.rs:960-965, and serially in the async worker at 920-947), so each engine consumes a different slice of the shared sequence. The quiet flag suppresses output sinks only; it cannot suppress foreign side effects, and write-mode $fopen got a Sink precisely for this class of problem while BDPI/rand32 did not. The dual-engine BDPI probe in HANDOFF used only pure functions (ops.c c_mix/c_wide), so this was never exercised.",
+   "failure_scenario": "Design importing rand32 (the reference's libbsprim $random path) or any BDPI with a C static, run under the flagship oracle TRS_CAPI_ENGINES=interp,aot. 'sim step 10': primary draws r0..rk from the shared RNG, then the aot secondary catches up and draws rk+1..r2k+1 -> registers fed by the draws differ between engines -> oracle_check state compare reports 'trs oracle: divergence' and mark_fatal flips bk_fataled, so a correct design exits 1 at a phantom divergence. Worse, on the SECOND 'sim step' the primary continues from the RNG position the secondary advanced, so the primary's own stdout diverges from the single-engine/reference byte stream - the byte-parity doctrine breaks in the primary itself, not just the compare.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "concurrency",
+   "severity": "medium",
+   "title": "JitPlans::drop join waits for the entire background body compile: batch_size is one batch per worker, so the stop flag is nearly dead",
+   "file": "src/trs/crates/trs-interp/src/jit.rs",
+   "line": 297,
+   "description": "The teardown fix gives LazyJit a stop flag checked at the top of work()'s loop, and the Drop comment claims 'at most one in-flight class compile per worker delays the join (ms-scale)'. But batch_size is initialized to cchunk = nclasses.div_ceil(nworkers) (jit.rs:3021,3033) - exactly ONE batch per worker - and each batch is compiled by a single compile_execs() call over the whole rep slice (jit.rs:229-241) with no stop polling inside. Every worker claims its single batch within microseconds of spawn at prime(), so by the time drop() sets stop, all workers are already inside their only compile_execs call and the join must wait for the FULL background body compile of the design (the very work that was made asynchronous because it is slow). The stop check only helps a worker that has not yet claimed a batch or is about to exit anyway.",
+   "failure_scenario": "Large design (thousands of rule classes), default jit engine (bk_init picks Jit when the feature is compiled in). 'sim load; sim step 1; sim exit' - exactly the short session the fix targeted - blocks inside bk_shutdown -> drop(st) -> JitPlans::drop -> h.join() until every worker finishes LLVM-compiling its entire ~nclasses/nworkers share, i.e. the whole multi-second body compile, instead of the documented ms-scale delay. The 8/8-clean probe used a tiny design where the full compile IS ms-scale, masking this. Fix direction: small constant batch_size (the claim/comment then becomes true) or a stop check per class inside the batch.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "concurrency",
+   "severity": "medium",
+   "title": "Async oracle catch-up ignores bk_abort_now: sim stop / bk_sync / bk_shutdown block uninterruptibly for the secondaries' full serial replay",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 936,
+   "description": "In the async bk_advance worker, secondaries catch up to the primary's stop via a fresh StopCond built with ..Default::default() - deliberately without the shared abort flag (the comment explains aborting them early would fabricate divergence, which is true). But the secondaries also run serially AFTER the primary completes, so once bk_abort_now fires, bk_sync (bluetcl's 'sim stop' = bk_abort_now + bk_sync) and bk_shutdown's join must wait for every secondary to re-simulate the entire segment from its start to the primary's abort time with no interruption mechanism at all. The at_times contract itself is correct (I verified advance_until: abort is slice-aligned via the t != self.now check at lib.rs:3841, and at_times executes every slice <= tq then sets now = tq, so states match) - the problem is purely that the catch-up is unbounded, uninterruptible work sitting between the user's stop request and the join. The 'async stop+resume 5/5' probe ran on small designs where replay is instant.",
+   "failure_scenario": "TRS_CAPI_ENGINES=jit,interp (legitimate 'fast primary, full-fidelity checker' config) with a long-running design: 'sim run &', wait 60 wall-seconds, 'sim stop'. The jit primary aborts within one slice, then the interp secondary must replay 60 jit-seconds of simulation at interp speed (10-50x slower) with no abort path - bluetcl blocks unresponsive inside bk_sync for 10-50 minutes; a bk_shutdown during that window blocks identically on r.join.join(). Ctrl-C is the only escape and kills bluetcl mid-session. A fix must either advance secondaries in lockstep slices with the primary, or honor abort in the catch-up and skip oracle_check when the catch-up was itself aborted.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "parity",
+   "severity": "high",
+   "title": "ConfigReg::sym_read answers stale boxed value on arena-attached (jit/aot) engines \u2014 the one member of today's fixed staleness class left unfixed",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/prim.rs",
+   "line": 1901,
+   "description": "Today's commit 5c5b912c fixed 'arena-attached peek staleness' by adding refresh() to Fifo::sym_read_range, and Reg (load() through slot) and RegFile (arena_read) already read through the arena. ConfigReg is the remaining arena-attached prim (arena_kind at prim.rs:1984 attaches all sync-reset ConfigRegs; lower.rs compiles ConfigReg reads/writes INLINE against the slot per its own field doc 'compiled INLINE writes update the slots directly'), but ConfigReg::sym_read returns the boxed self.value without calling refresh(). value_method/action_method do refresh \u2014 only the symbol-read path was missed. bk_peek_symbol_value routes SymKind::PrimValue straight to prim_sym_read on any tier (capi lib.rs:499-504), and the new oracle state_divergence walk (interp lib.rs:4618) reads secondaries the same way. The oracleprims witness cannot catch it: prims.bsv has no ConfigReg (only Reg/FIFO/RegFile/Probe/Wire).",
+   "failure_scenario": "Design with `mkConfigReg` (sync reset), linked --interactive, loaded with TRS_CAPI_ENGINES unset (default = jit when the library carries LLVM) or =jit/aot. After JIT warm-up, compiled rules write the ConfigReg inline to the arena; `sim run; sim get <creg>` answers the value mirrored at arena_attach time (init/reset value) forever, while a reference Bluesim session shows the live value \u2014 wrong introspection answer in the shipped default config. Under the oracle config TRS_CAPI_ENGINES=interp,jit, the primary (boxed, live) and secondary (stale) disagree at the first stop after the first compiled write: state_divergence reports a FALSE divergence, mark_fatal flips, and a healthy session exits 1 with 'trs oracle: divergence' stderr spam.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "parity",
+   "severity": "medium",
+   "title": "$finish skips same-instant edges of other clocks: reference runs remaining PG_LOGIC events at the finish instant before the PG_FINAL yield",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/lib.rs",
+   "line": 3821,
+   "description": "The day's $finish edge-completion contract ('completes the in-flight edge schedule, yield preempts the PG_FINAL after-edge pass') is implemented per heap EVENT, but the loop top `while self.finished.is_none()` exits before popping the next event even when that event is at the SAME instant. In the reference, bk_finish_now (kernel.cxx:1585) schedules a UI yield at (sim_time, PG_FINAL, PS_UI); same-instant edge events of other clocks are PG_LOGIC and pop BEFORE the yield, so their schedules run to completion (state writes land, edge counters increment; only their output tasks are bk_finished-gated). trs runs only the finishing event's compositions and drops coincident other-clock events still in the heap (including derived-clock edges pushed at the same t via driver_clock, line 4126). When same_time is true it also skips that instant's flush_reset_pending. The FinishEdge/FinishPeek witnesses are single-clock, so they cannot see this.",
+   "failure_scenario": "Multi-clock design with coincident edges (e.g. a mkClockDivider-derived clock: its edge is pushed at the same t as the parent's). A rule on clock A (kernel index 0, pops first) calls $finish at an instant where derived clock B also has an edge, and a rule on B writes register r. Reference: B's schedule runs post-finish \u2014 r is written and B's edge count increments. trs: loop exits at the top; B's edge never runs. Under Tcl, `sim get r` and `sim clock` (cycle counts) after `sim run` diverge byte-wise from the reference bluetcl session; the same state gap is peek-visible on every engine tier.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "parity",
+   "severity": "medium",
+   "title": "Quiet-engine $fopen(write) unconditionally succeeds as Sink while the primary's open can fail \u2014 fd key divergence and permanent slot skew",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/lib.rs",
+   "line": 2106,
+   "description": "In foreign_value's $fopen arm, a quiet secondary takes `Ok(FSlot::Sink)` for every write-mode open, but the primary runs the real File::create, which can fail. The reference (dollar_display.cxx registerFile, line ~1604) returns key 0 on a NULL FILE* and pushes no slot \u2014 the trs primary matches (Value::zero, no push). The secondary instead pushes a Sink and returns a real key (0x8000_0000+idx or an MCD bit). The design-visible fd value now differs between engines, and because the secondary's fd_files/mcd_files table gained an extra slot, every SUBSEQUENT $fopen returns different keys on the two engines for the rest of the session.",
+   "failure_scenario": "Oracle config TRS_CAPI_ENGINES=interp,jit; design does `let fd <- $fopen(\"/nonexistent-dir/log.txt\", \"w\")` (or any path where create fails: permissions, missing directory) and stores fd in a register. Primary register = 0 (byte-identical to reference); secondary register = 0x8000_0004. At the next stop, state_divergence reports the register mismatch, mark_fatal fires, and the session exits 1 with divergence stderr \u2014 a false positive on a run the reference completes cleanly. Later successful $fopens keep diverging due to the skewed slot index.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "parity",
+   "severity": "medium",
+   "title": "bk_init loads the .bdpi.so into every oracle engine \u2014 one shared copy of user C globals, so stateful BDPI corrupts even the primary's reference parity",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-capi/src/lib.rs",
+   "line": 211,
+   "description": "New today: bk_init dladdr-locates <model>.bdpi.so and calls interp.load_bdpi(so) for EVERY engine in the set. dlopen of the same path returns the same library (refcounted), so all engines share one copy of the user C code's global/static state. The reference product has exactly one model instance calling each BDPI function once per logical event; in oracle mode each logical call happens once per engine against shared state. Unlike the output sinks (suppressed) and design files (Sink slots), BDPI side effects have no quiet-mode isolation at all. The BdpiMin witness only exercises pure functions (c_mix/c_wide), so this is invisible to the battery.",
+   "failure_scenario": "Oracle config TRS_CAPI_ENGINES=interp,jit; design imports `unsigned next_id(void){ static unsigned n = 0; return ++n; }` called once per cycle. First `sim step 10`: primary consumes 1..10, quiet secondary consumes 11..20. Second `sim step 10`: the PRIMARY now reads 21..30 where the single-engine reference reads 11..20 \u2014 the primary's registers and $display output diverge from reference Bluesim (not just an oracle false positive), and the engines also diverge from each other, flipping the fatal flag. Same failure shape for BDPI functions holding FILE*/handles or consuming streams.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "parity",
+   "severity": "low",
+   "title": "Quiet secondaries still print 'Output error:' lines for $fdisplay/$fwrite format errors \u2014 stdout leak duplicates the primary's error text",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/lib.rs",
+   "line": 1930,
+   "description": "The quiet gate at the top of foreign_action deliberately omits the $fdisplay/$fwrite family (their payload is suppressed inside write_fd), but the arm still calls format::format_args and then emit_output_errors(&errs), which print!s 'Output error: ...' to STDOUT unconditionally. The $display-family arms are fully gated (early return before formatting), so only the file-task family leaks. The reference prints each output error exactly once (single kernel, dollar_display.cxx Target error queue); a quiet oracle secondary must produce zero bytes.",
+   "failure_scenario": "Oracle config TRS_CAPI_ENGINES=interp,jit; design contains a malformed file write, e.g. $fwrite(fd, \"%d\") with a missing argument, executed each cycle. The primary emits the reference's single 'Output error:' line per call; the quiet secondary emits a second copy to stdout at each of its own executions. Session stdout gains duplicated error lines (in secondary-execution order, i.e. after the primary's whole advance window), breaking byte-identity with the single-engine reference \u2014 the exact property oracle mode promises to preserve.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "ffi",
+   "severity": "high",
+   "title": "Lean (no-jit) build: `trs link --interactive` now always hard-fails",
+   "file": "src/trs/crates/trs/src/main.rs",
+   "line": 81,
+   "description": "The new interactive-link aot-emit step (added in 96e29cf7) calls interp.aot_request_emit + prime, then treats Some(AotEmit::Failed(e)) as a hard failure (return ExitCode::FAILURE) before link_interactive ever runs. But the cfg(not(feature=\"jit\")) stub of aot_take_emit_result (trs-interp/src/lib.rs:4443-ish) unconditionally returns Some(AotEmit::Failed(\"this trs was built without JIT/AOT support\u2026\")). The lean build is an explicitly supported product \u2014 this same diff's Makefile change builds trs WITHOUT --features jit and builds/installs a lean libtrs_capi.a precisely so 'install-src stays lean-buildable'. The comment above the match even states the intent: 'designs the compiler cannot take stay interp/jit with a note, like plain link'. The no-jit case should take the note arm (like Ineligible/None), not the Failed arm. Before this diff the interactive branch went straight to link_interactive and worked on lean builds.",
+   "failure_scenario": "Build via the repo Makefile without LLVM_SYS_181_PREFIX set (the documented lean path), then run `trs link --interactive foo.bir`: aot_take_emit_result returns AotEmit::Failed from the no-jit stub, the command prints 'trs link: this trs was built without JIT/AOT support (feature `jit`)' and exits FAILURE. No model .so or wrapper is produced, so the entire interactive/bluetcl product is unusable on lean installs \u2014 a regression from the parent commit, where the same invocation produced a working interp-only model.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "ffi",
+   "severity": "medium",
+   "title": "Missing .bdpi.so companion is silent at bk_init, then a BDPI call panics across extern \"C\" and aborts the whole bluetcl process",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 205,
+   "description": "bk_init's new companion discovery (companion(\"bdpi.so\") filtered by Path::exists) silently yields None when the companion is absent \u2014 unlike the aot companion, which gets a stderr note. bk_init has everything needed to fail `sim load` cleanly (the design's foreign_funcs minus is_lib_bdpi imports, and bdpi_so==None), but instead the session loads fine and Interp.bdpi stays None. The first non-library BDPI call then hits bdpi_call's unwrap_or_else panic (trs-interp/src/lib.rs:1826-1830 \"BDPI function \u2026 but no .bdpi.so was found next to the .bir\"), which unwinds out of an extern \"C\" bk_advance (or out of JIT-compiled frames via jit_foreign_cb) \u2014 a guaranteed process abort that takes down the user's entire interactive bluetcl session. Note the discovery is also fragile: dladdr's dli_fname is the path handed to dlopen, so a symlinked model .so looks for the companion beside the symlink, not beside the real file; and `trs link --interactive` itself silently skips the copy when no .bdpi.so sits beside the .bir (main.rs:504-512), baking the failure in at link time. The reference tool chain fails at link with an undefined symbol instead.",
+   "failure_scenario": "Link a BDPI design with `trs link --interactive` and deploy the model .so + wrapper without the .bdpi.so (or `sim load` it through a symlink in another directory): `sim load` succeeds, symbol lookups work, then the first `sim run`/`sim step` that reaches the BDPI call panics inside extern \"C\" and SIGABRTs bluetcl \u2014 the whole interactive session (and any other loaded sims) dies with a Rust panic backtrace instead of a clean load-time error.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "ffi",
+   "severity": "medium",
+   "title": "Oracle mode: engines share process-global BDPI/libc state \u2014 false divergences (rand32) and unsuppressed C-side output",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 837,
+   "description": "Oracle secondaries must re-execute all state effects, including BDPI calls, and bk_init loads the same .bdpi.so into every engine \u2014 one shared mapping with one copy of any C statics. The quiet flag suppresses only Rust-side sinks (write_fd, FSlot::Sink, $display family); it cannot intercept C code that printfs or fopens on its own, so a printing/logging BDPI function emits its output once per engine, breaking the 'output must stay byte-identical to the single-engine reference' contract. Worse, the in-tree library BDPI rand32 is implemented via process-global libc random() (trs-interp/src/lib.rs:1808-1813): within one bk_advance the primary consumes draws r0..rk, then the secondary replaying the same slices consumes rk+1..r2k \u2014 different values feed its registers, so state_divergence reports a mismatch and oracle_check calls mark_fatal on a perfectly healthy design (unless the design happens to reseed via srand at reset, which resets the shared stream per engine replay). Neither HANDOFF.md nor docs/TCL-CAPI.md documents this restriction; the shipped probes (bdpi.cmd) only use pure functions, so it is currently untested.",
+   "failure_scenario": "Run TRS_CAPI_ENGINES=interp,jit on any design whose rule calls rand32 (`import \"BDPI\" rand32`) each cycle without an srand at reset: at the first `sim step`/`sim run` stop, the secondary's registers hold values from a disjoint segment of the shared libc PRNG stream, oracle_check prints 'engine 1: state top.acc: \u2026 vs primary \u2026', flips the fatal flag, and the script exits 1 \u2014 a false divergence on a correct design. Similarly, a BDPI function containing printf produces doubled stdout lines in oracle mode, destroying byte parity.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "oracle",
+   "severity": "high",
+   "title": "ConfigReg::sym_read skips refresh() \u2014 stale boxed value on arena-attached engines, deterministic oracle false positive",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/prim.rs",
+   "line": 1901,
+   "description": "ConfigReg is arena-mirrored (slot layout [old, cur, written_at]) and compiled writes are INLINE arena stores (lower.rs:4238-4249 store_val to base+words) that never touch the boxed self.value. Every interp-side use goes through refresh() (value_method line ~1929 refreshes first), but sym_read returns self.value.clone() without refresh(). This is exactly the class of bug this diff fixed for Fifo::sym_read_range (prim.rs:2575) \u2014 the fix missed ConfigReg. The new oracle state compare (state_divergence) reads ConfigReg via prim_sym_read on BOTH engines, so a quiet AOT/JIT secondary answers its construction-time 0xAA undet pattern (or last boxed-op value) forever while the interp primary answers the live value. Test coverage misses it: prims.bsv has only FIFO+RegFile, TbGCD has plain Regs.",
+   "failure_scenario": "TRS_CAPI_ENGINES=interp,aot (the flagship debug config) on any design containing a sync-reset mkConfigReg written by a rule. First `sim step` after the first compiled write: primary reads live value (e.g. 0x1), AOT secondary's sym_read returns stale 0xAA...A; oracle_check reports 'engine 1: state top.cfg.: aa vs primary 1', mark_fatal fires, bluesim.tcl exits 1 \u2014 a hard false divergence on a correct run.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "oracle",
+   "severity": "high",
+   "title": "oracle_check clock-edge compare vs central-loop negedge bookkeeping \u2014 false divergence on `sim run` with an AOT secondary",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-capi/src/lib.rs",
+   "line": 855,
+   "description": "oracle_check compares (cycles, neg_edges) per clock between engines, assuming both engines' bookkeeping paths count identically. They don't: the JIT/AOT central loop's exit bookkeeping (trs-interp/src/lib.rs:3809-3812) adds `neg_count += k` (one negedge per posedge iteration executed), which over-counts by one relative to the general event loop when the run stops on a posedge (a clock that starts low and $finishes on posedge N has processed only N-1 negedges in the general loop; central credits N, and sets neg_at = tn-period, a FUTURE instant). This is reachable: bluetcl's `sim run` (bluetcl.hs:2890) calls bk_advance sync with no limits; the sync-path cond {max_cycles: MAX, no edge_limits, no at_times, no abort/progress} is StopCond::trivial(), so the AOT secondary (fused eagerly from the artifact, jit.rs:3137) engages the central loop while the interp primary never can (no jit). All current oracle tests (gcd.cmd, prims.cmd) use `sim step` \u2014 non-trivial conds keep both engines in the general loop \u2014 so this is untested and latent. With interp,jit it is additionally flaky (depends on background fusion timing).",
+   "failure_scenario": "TRS_CAPI_ENGINES=interp,aot, script does `sim run` on a central-eligible design (single wave clock, all posedge comps fused, no VCD \u2014 e.g. the GCD/sudoku shape) that ends in $finish on a posedge: primary stops with neg_edges=k-1, secondary central loop reports neg_edges=k; oracle_check prints 'engine 1: clock 0 edges k+k vs primary k+k-1' and flips fatal \u2014 exit 1 on a byte-identical, correct run.",
+   "votes": [
+    "true/medium",
+    "true/high",
+    "true/medium"
+   ]
+  },
+  {
+   "finder": "oracle",
+   "severity": "medium",
+   "title": "Quiet flag does not gate prim-level println! output (FIFO guard warnings, mem-file load messages) \u2014 oracle secondary duplicates stdout",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/prim.rs",
+   "line": 2824,
+   "description": "The quiet mechanism covers write_fd, the $display family, and $fopen write-mode sinks \u2014 all inside Interp. But prims print directly with println!: Fifo guard warnings 'Warning: %s -- Enqueuing to a full fifo' (2824) / 'Dequeuing from empty fifo' (2848), and the RegFileLoad/BRAM file loaders' ~25 'Warning:/Error:' printlns (prim.rs 769-1113). Guarded FIFO ops stay boxed on every tier ('value methods stay on the trampoline (guard warnings...)'), so a quiet secondary executes the same warning path and prints. Prims have no access to the engine's quiet flag. This breaks ORACLE mode's core contract stated in oracle.cmd: 'Output must stay byte-identical to the single-engine reference'. Same family: emit_output_errors ('Output error: ...') in value-task paths like $swriteAV runs unguarded on secondaries, and a stdout-printing BDPI function (load_bdpi is done for ALL engines) doubles too.",
+   "failure_scenario": "TRS_CAPI_ENGINES=interp,aot on any design that enqueues to a full guarded FIFO (a testsuite-exercised warning path \u2014 e.g. bsc.bluesim fifo warning tests): the warning prints once from the primary during its advance and once more from the quiet secondary during its advance \u2014 the session output gains an extra 'Warning: top.fifo -- Enqueuing to a full fifo' line and the byte-parity diff vs the single-engine reference fails, with no actual divergence.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "oracle",
+   "severity": "medium",
+   "title": "$fgetc on stdin is executed by both oracle engines against the ONE shared process stdin \u2014 double consumption corrupts the primary and guarantees divergence",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/lib.rs",
+   "line": 2168,
+   "description": "The quiet design intentionally keeps reads real on secondaries ('file reads run normally so lockstep compare is meaningful'), which is sound for read-mode $fopen of regular files \u2014 each engine gets its own File handle at its own offset. But fd_files is seeded with FSlot::Stdin at key 0x8000_0000 (lib.rs:575), and $fgetc on Stdin reads std::io::stdin() directly \u2014 a single shared stream. Both engines executing the same design-level $fgetc each consume one byte: the primary sees bytes 0,2,4,... (its own behavior now differs from a single-engine run, so even the primary's output breaks byte parity) and the secondary sees bytes 1,3,5,..., after which its architectural state genuinely diverges and the oracle fatals \u2014 on a correct design. The same sharing applies to read-mode $fopen of FIFOs/pipes/character devices (both opens are real, but the underlying stream is consumed twice).",
+   "failure_scenario": "Design does `c <- $fgetc(32'h8000_0000)` in a rule (stdin-driven testbench) and the model is run under TRS_CAPI_ENGINES=interp,jit with input piped in: with input \"AB...\", primary reads 'A', quiet secondary reads 'B'; a register latching c differs at the next stop -> oracle divergence + fatal exit, and the primary's own printed transcript already differs from the single-engine reference.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "oracle",
+   "severity": "low",
+   "title": "Oracle state compare is blind to CReg, BRAM, DualPortRam and synchronizer state \u2014 real divergences can hide until they leak into a covered prim",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/prim.rs",
+   "line": 2259,
+   "description": "state_divergence walks only prims exposing sym_children: Probe, RegFile, Reg, ConfigReg, RWire (excluded as transient), Fifo. CReg (line 2259) holds genuine architectural state (value/value_reg) but exposes no sym_children; likewise Bram, DualPortRam, SyncFifo, SyncReg, etc. Notably, reference Bluesim DOES register BRAM contents as symbols (bs_prim_mod_bram.h init_symbols, SYM_RANGE over the data at line 328), so the trs symbol surface is narrower than the reference's \u2014 a pre-existing `sim lookup` parity gap that now also caps the new oracle's sensitivity. Since these prims are boxed on all tiers today the ops themselves are shared code, but a divergence upstream (mis-compiled rule writing a BRAM) is invisible at the stop where it happens and only surfaces cycles later when the bad value reaches a Reg/Fifo or output, defeating the oracle's purpose of stopping AT the divergence.",
+   "failure_scenario": "interp,aot oracle on a BRAM-buffered pipeline: a compiled body computes a wrong value that a rule writes into mkBRAM at t=100; `sim step` stops at t=100..900 all report clean (no BRAM symbols to compare); the divergence is first reported at t=1000 when the value is read back into a register \u2014 the 'stop AT the divergence' protocol points 900 cycles downstream of the root cause.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "oracle",
+   "severity": "low",
+   "title": "oracle_check shares the msgs accumulator across secondaries \u2014 a shape mismatch on one engine suppresses the state compare for every later engine",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-capi/src/lib.rs",
+   "line": 868,
+   "description": "The 'state compare only when the shape agrees' gate is `if msgs.is_empty()`, but msgs is declared once outside the `for (i, e) in rest` loop and accumulates across ALL secondaries. With 3+ engines (e.g. TRS_CAPI_ENGINES=interp,jit,aot), a time/edge/finished mismatch from engine 1 suppresses engine 2's state compare even when engine 2's shape agrees perfectly with the primary \u2014 the report loses exactly the per-prim state listing that would localize engine 2's independent divergence (or confirm its health). The verdict is unaffected (any msg still marks fatal and returns true), so this is a diagnostics-quality bug, but it undercuts the divergence-report protocol the mode exists for. Per-engine gating (checking only that engine's own shape msgs) matches the comment's stated intent of avoiding time-skew value noise.",
+   "failure_scenario": "interp,jit,aot with a jit bug causing a finished-flag mismatch on engine 1 and an unrelated aot state bug on engine 2: the report shows only 'engine 1: finished true vs primary false'; engine 2's state divergence (which shape-agrees and would list the exact register) is silently skipped, and the developer chases the wrong engine.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "teardown",
+   "severity": "medium",
+   "title": "JitPlans::drop can block for the entire background body compile; the 'ms-scale' comment is wrong",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/jit.rs",
+   "line": 295,
+   "description": "The teardown fix (commit 2898d22e) joins the body-compile workers in JitPlans::drop, gated by a stop flag that LazyJit::work checks only at the top of each batch claim (jit.rs:213). But batch_size is set to nclasses.div_ceil(nworkers) (jit.rs:3021,3033), so the entire cold set is claimed as ~nworkers batches within moments of prime(), and each batch is compiled by a single compile_execs call that lowers every representative into one LLVM module with no cancellation point (lower.rs:642-677). Once claimed, a batch runs to completion, so the stop flag only helps a worker that has not yet claimed anything - i.e., essentially never. The Drop comment's claim 'at most one in-flight class compile per worker delays the join (ms-scale)' is therefore false: the in-flight unit is a worker's whole 1/nworkers share of the design. A per-class stop check inside the batch loop (or batch_size 1 with finer claims) would deliver what the comment promises.",
+   "failure_scenario": "bluetcl session with the jit engine (the shipped default) on a large design (thousands of dedup classes): `sim load` primes the engine and spawns workers, each of which immediately claims its full share; the user runs `sim unload` or `exit` seconds later -> bk_shutdown drops SimState -> Interp -> Stepper -> JitPlans::drop joins workers mid-compile -> the process sits silent for the full remaining LLVM compile (tens of seconds to minutes) and looks hung. Same stall now hits plain `trs run` at process exit for any short-running design (Interp is dropped when main returns), where the previously-detached workers used to die with the process.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "teardown",
+   "severity": "low",
+   "title": "Oracle secondary's $fopen(w) Sink allocation cannot fail while the primary's File::create can, skewing fd keys and producing false divergence",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/lib.rs",
+   "line": 2106,
+   "description": "In the quiet-engine $fopen path, `self.quiet && write_mode` yields Ok(FSlot::Sink) unconditionally, whereas the primary performs a real std::fs::File::create that can fail (missing directory, permissions, read-only FS). On failure the primary returns key 0 and pushes NO slot (lib.rs:2137); the secondary always pushes a Sink slot and returns a nonzero key (0x8000_00NN, or 1<<n for MCD). The design-visible fd value diverges, and every subsequent $fopen on the secondary gets an index shifted by one, so later fd keys diverge too - defeating the exact stated purpose of the Sink slot ('fd values match the primary engine exactly'). The secondary's Sink allocation should mirror the primary's open outcome, e.g. by attempting the create-then-discard, or probing writability of the path.",
+   "failure_scenario": "Oracle session (TRS_CAPI_ENGINES=interp,jit) running a design that does `fd <- $fopen(\"/some/missing-dir/out.log\", \"w\")` and stores fd in a register: primary gets 0, secondary gets 0x8000_0003; at the next stop, oracle_check's state_divergence reports the register mismatch and mark_fatal flips the primary's fatal flag, so the Tcl script exits 1 reporting an engine divergence when the engines never actually diverged - the environment merely made one open fail on the (only) engine that really opens files.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "teardown",
+   "severity": "low",
+   "title": "bk_shutdown silently swallows a panicked async worker: no diagnostic and the VCD epilogue is skipped",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-capi/src/lib.rs",
+   "line": 596,
+   "description": "bk_shutdown's new join path does `if let Ok((engines, _)) = r.join.join() { st.engines = engines.0; }` and ignores the Err case entirely. bk_sync handles the identical situation by printing 'trs capi: async worker died; session is inert' (lib.rs:997), but shutdown prints nothing. Because st.engines stays empty on Err, the subsequent `st.engines.first_mut()` is None and Interp::finish() - the vcd_reset mirror this same commit added to guarantee 'the final stanzas of a Tcl-driven VCD ... land' - is skipped, so the very artifact the fix protects is truncated with zero indication of why. Also, unlike bk_sync, the joined rc is discarded (`_`), so a finish/fatal status from the run never reaches exit_status; harmless today since the state is dropped immediately, but worth noting if anything is ever added after the join. A stderr note on Err (matching bk_sync) is the minimal fix.",
+   "failure_scenario": "Tcl script: `sim vcd dump.vcd; sim run &; ... ; exit` where the worker thread hits a pure-Rust panic inside advance_until (e.g. an interp-engine assert) mid-run. bluetcl calls bk_shutdown at exit: join returns Err, engines are lost, finish() never runs -> dump.vcd is missing its final buffered stanzas, and the user gets no message at all that the simulation thread died (the panic text went to stderr possibly minutes earlier, interleaved with sim output).",
+   "votes": [
+    "true/high",
+    "true/medium",
+    "true/medium"
+   ]
+  },
+  {
+   "finder": "harness",
+   "severity": "high",
+   "title": "trs link --interactive always fails on the lean (no-LLVM) build the new Makefile ships",
+   "file": "src/trs/crates/trs/src/main.rs",
+   "line": 79,
+   "description": "Commit 96e29cf7 added an AOT-companion emit to the interactive link path: `interp.aot_request_emit(\"{base}.aot.so\"); interp.prime(); match interp.aot_take_emit_result() { ... Some(AotEmit::Failed(e)) => return ExitCode::FAILURE ... }`. But in the non-jit build, the `#[cfg(not(feature = \"jit\"))]` stub of `aot_take_emit_result()` (crates/trs-interp/src/lib.rs:4333 at 5c5b912c) unconditionally returns `Some(AotEmit::Failed(\"this trs was built without JIT/AOT support (feature `jit`)\"))`, so the `Failed` arm is always taken. Before this range, `trs link --interactive` on a lean build worked (old main.rs at 4dcea6d5 called `link_interactive` directly with no emit). The very same day's Makefile change (commit 2898d22e) advertises and installs exactly this lean configuration (`--no-default-features` capi, no `--features jit` trs) as the supported no-LLVM fallback for top-level install-src \u2014 whose only purpose is interp-tier interactive models. The lean case must be routed to the note/degrade arm (like `None`/`Ineligible`), not the fatal one.",
+   "failure_scenario": "Machine without LLVM_SYS_181_PREFIX (the default for most users): top-level `make install` succeeds and installs lean trs + lean libtrs_capi.a; user (or tests/interactive/run.sh) runs `trs link mkTop.bir --interactive -o trs_mkTop` -> stderr \"trs link: this trs was built without JIT/AOT support (feature `jit`)\" and exit 1. No interactive model can ever be produced from that install; the interactive battery fails every design at the `trs link --interactive` step, even though the interp engine and the just-installed lean capi library would serve every interp-tier .cmd session fine.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "harness",
+   "severity": "medium",
+   "title": "Makefile keys llvm-sys compilation on an ambient env var: `make install` newly fails with a stale LLVM_SYS_181_PREFIX",
+   "file": "src/trs/Makefile",
+   "line": 23,
+   "description": "`ifdef LLVM_SYS_181_PREFIX` now switches `cargo build -p trs --features jit` and full-featured capi on whenever the variable is present in the environment (src/Makefile:73 forwards to this Makefile unconditionally, and make imports env vars, so a top-level `make install`/install-src inherits it silently). Before this change no make path ever enabled the `llvm`/`jit` features (trs-codegen's inkwell dep is optional, `default = []`), so LLVM dev packages were never touched and install always succeeded. Now the mere presence of the variable \u2014 with no validation of what it points at \u2014 commits the build to llvm-sys 181. Secondary effect: two byte-identical `make install` invocations produce different products (jit vs lean) with no provenance marker, the exact mislabeled-binary hazard the project's gate-binary-provenance policy exists for. An `ifneq`-with-sanity-check (e.g. test for $(LLVM_SYS_181_PREFIX)/bin/llvm-config) or an explicit opt-in variable would be safer.",
+   "failure_scenario": "Developer has `export LLVM_SYS_181_PREFIX=/usr/lib/llvm-17` (or a since-uninstalled llvm-18 path) in .bashrc for another project. Top-level bsc `make install`, which succeeded at 4dcea6d5, now fails inside src/trs: llvm-sys's build script errors out (missing llvm-config / LLVM version mismatch), aborting the whole bsc install. Conversely, a CI/release machine that has LLVM 18 installed but not the env var silently ships the lean product with no indication anywhere in the artifacts.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "harness",
+   "severity": "medium",
+   "title": "finishpeek witness can pass vacuously: JIT warmth is an unpinned wall-clock race and nothing asserts the compiled path actually ran",
+   "file": "src/trs/tests/interactive/run.sh",
+   "line": 126,
+   "description": "The FinishPeek witness exists to prove the COMPILED path completes the $finish edge (post-finish writes land: mark=1000042). Warmth relies solely on the design running 1,000,000 cycles while background workers compile (jit.rs `LazyJit::work` compiles all bodies from t=0 with no hotness gate; cold cells fall back to interpreted bodies per-edge). FinishPeek.bsv's own comment admits the race (\"short runs may race compiled vs interp-fallback bodies... the witness wants the compiled one\") but the harness neither pins it with the existing TRS_JIT_SYNC knob (jit.rs blocks until fully warm when set) nor checks any compiled-path tell (the way tests/regress/run.sh's BdpiMin comment at least names \"the artifact note is the tell\"). Since ref and trs outputs are semantically identical on either tier, an interp-fallback run passes indistinguishably. `export TRS_JIT_SYNC=1` around this one check would make the witness deterministic at negligible cost.",
+   "failure_scenario": "A regression reintroduces the b8691ab4 bug class (compiled bodies abort mid-edge on $finish, leaving mark=0) while the interp path stays correct. The battery runs on a heavily loaded machine (e.g. this one, during a corpus sweep): the compile workers are starved past the ~0.1-1s the 1M interpreted cycles take, the finish edge at cycle 1,000,000 executes through the interp fallback, both sides print mark=1000042, and `PASS sysFinishPeek finishpeek.cmd` is reported \u2014 the compiled-path regression ships with a green witness. (finishpeekaot is immune: aot bodies are warm from t=0.)",
+   "votes": [
+    "true/high",
+    "false/medium",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "harness",
+   "severity": "low",
+   "title": "install copies a 420MB unstripped debug staticlib into bin/ on every install",
+   "file": "src/trs/Makefile",
+   "line": 40,
+   "description": "The workspace sets `[profile.release] debug = true`, and the built target/release/libtrs_capi.a on this machine is 420MB (trs itself 102MB, pre-existing). The new `$(INSTALL) -m 644 target/release/libtrs_capi.a $(BINDIR)/libtrs_capi.a` puts all of it into inst/bin on every `make install`, so every top-level install-src tree (and anything tarred from it for release) grows by ~420MB. The 303e1182 \".so diet\" (gc-sections + strip, 166MB -> 49MB) only slims the final model .so at `trs link --interactive` time \u2014 the installed archive itself stays debug-fat, and none of that debug info benefits the shipped product. An `objcopy --strip-debug` (or a split debug profile for the capi crate) at install time would cut it by roughly an order of magnitude without affecting model links.",
+   "failure_scenario": "A release or CI pipeline that tars the inst/ tree after top-level `make install` (the standard bsc packaging flow) on an LLVM-equipped machine ships a ~420MB larger artifact per platform; downstream consumers on disk-quota'd runners (or the Dockerfile image) hit space/transfer limits that the pre-change bsc install never approached.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "contract",
+   "severity": "high",
+   "title": "Lean (no-LLVM) build: `trs link --interactive` always fails",
+   "file": "src/trs/crates/trs/src/main.rs",
+   "line": 79,
+   "description": "The new AOT-companion emission in the interactive link branch treats AotEmit::Failed as fatal (eprintln + ExitCode::FAILURE). But the cfg(not(feature=\"jit\")) stub of Interp::aot_take_emit_result (trs-interp/src/lib.rs:4333-4337) unconditionally returns Some(AotEmit::Failed(\"this trs was built without JIT/AOT support (feature `jit`)\")). The trs crate does not enable `jit` by default, and the Makefile added in this same range explicitly supports a lean build (no LLVM_SYS_181_PREFIX => no --features jit, and CAPI_FLAGS=--no-default-features exists precisely so the lean interp-only capi staticlib stays buildable). On that supported configuration the entire interactive/bluetcl product is now unreachable: the model .so would work interpreted, but link errors out before link_interactive() is called. The fix implied by the code's own comment (\"designs the compiler cannot take stay interp/jit with a note, like plain link\") is to treat the no-jit case like Ineligible (note + continue), not Failed.",
+   "failure_scenario": "Build with `make` in src/trs without LLVM_SYS_181_PREFIX set (the documented lean fallback), then run `trs link foo.bir --interactive -o foo`. aot_request_emit is a no-op, aot_take_emit_result returns AotEmit::Failed, and link exits FAILURE with \"trs link: this trs was built without JIT/AOT support (feature `jit`)\" \u2014 no model .so, no wrapper, interactive mode entirely dead on lean builds (it worked before this range).",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "contract",
+   "severity": "medium",
+   "title": "Sync bk_advance runs oracle secondaries with the original unbounded cond \u2014 diverged secondary hangs bluetcl instead of reporting",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 960,
+   "description": "The async path was specifically restructured so secondaries catch up to the primary's ACTUAL stop via StopCond{at_times: vec![p.interp.now()]} (lib.rs:936-946). The sync path was not: it advances every engine with the same original `cond`. For bluetcl's plain `sim run` (bk_advance sync, no armed limits) that cond is unbounded (max_cycles=u64::MAX, empty at_times/edge_limits), so a secondary only stops when ITS OWN finished flag latches. Interp::advance_until loops `while self.finished.is_none()` and a periodic Wave clock re-pushes heap events forever. If a secondary diverges such that it never reaches $finish (a stuck condition, a gated clock wedged off \u2014 exactly the miscompile class oracle mode exists to catch), its advance_until never returns; oracle_check is never reached, so the divergence is never reported. The same applies when the primary stops via $fatal. The sync loop should mirror the async catch-up: run the primary with `cond`, then secondaries to at_times=[primary.now()].",
+   "failure_scenario": "TRS_CAPI_ENGINES=interp,aot (the flagship debug config), script `sim run`. Primary (interp) hits $finish at t=1000 and stops. The aot secondary has a miscompiled fire condition and never executes the finishing rule: its advance_until(&cond) with the unbounded cond spins forever on the periodic clock. bluetcl hangs inside bk_advance \u2014 no divergence report, no prompt, user must kill the process. The tool's failure mode on the exact bug it is built to detect is a hang.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "contract",
+   "severity": "medium",
+   "title": "VCD-under-Tcl is dead under the shipped default engine (jit), and bluetcl cannot see the failure",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 1080,
+   "description": "vcd_capable() requires the PRIMARY engine kind == Interp. But bk_init's default engine selection (lib.rs:174) picks EngineKind::Jit whenever the capi was built with feature `jit` \u2014 which is the shipped default (trs-capi Cargo.toml: default=[\"jit\"]; the Makefile builds it that way when LLVM is present). So in the out-of-the-box configuration every bk_set_VCD_file returns BK_ERROR and every bk_enable_VCD_dumping returns 0. bluetcl ignores both return values (bluetcl.hs:3052, 3061-3063: `_ <- bk_set_VCD_file`, `_ <- bk_enable_VCD_dumping`) and unconditionally records active_vcd_file, so at the Tcl level `sim vcd foo.vcd` \"succeeds\" and a later `sim vcd` query reports foo.vcd as the active dump file while no file was ever created \u2014 reference Bluesim always dumps here. Additionally, because both bk_set_VCD_file and bk_enable_VCD_dumping call vcd_capable, a single `sim vcd <file>` (including the wrapper's -V flag path in bluesim.tcl: `eval \"sim vcd $vcd_arg\"`) prints the identical remedy note to stderr TWICE, and any scripted vcd on/off toggling repeats it every iteration. The interactive battery masks all of this by pinning TRS_CAPI_ENGINES=interp for the vcdtcl test. Documented as a capability tier in TCL-CAPI.md, but the tier boundary lands on the DEFAULT config: reference parity for `model.so -V dump.vcd` is broken out of the box.",
+   "failure_scenario": "User builds the normal (LLVM-enabled) product, does `bluetcl> sim load model.so top; sim vcd waves.vcd; sim step 100; sim vcd`. trs: two identical stderr notes, no waves.vcd on disk, and `sim vcd` answers \"waves.vcd\" as if dumping were active. Reference Bluesim with the same commands produces waves.vcd. Same break through the generated wrapper's documented `-V waves.vcd` flag.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "contract",
+   "severity": "low",
+   "title": "Oracle divergence flips bk_fataled without setting finished \u2014 breaks the reference fatal=>finished invariant, scripts do not stop at the divergence",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 880,
+   "description": "In the reference kernel, bk_fatal_now() calls bk_finish_now() (kernel.cxx:1592-1596), so bk_fataled==1 always implies bk_finished==1, and bluetcl's run/step/nextedge guards (`fin <- bk_finished; when fin $ ioError \"...cannot advance\"`) hard-stop any script after a fatal. oracle_check's mark_fatal() (trs-interp/src/lib.rs:4357) sets only Interp::fataled, never finished, and capi's bk_fataled is `exit_status == 1` rather than the interp flag. Consequences: (a) after a reported divergence, bk_finished stays 0, so bluetcl scripts happily keep issuing `sim step`/`sim run` past the divergence \u2014 directly contradicting the function's own doc comment \"flips the primary's fatal flag so scripts stop AT the divergence\" (the final `exit [sim isfatal]` in bluesim.tcl does stay 1 only because the latched interp.fataled makes every later advance_until return 1); (b) the answer triple bk_fataled=1 / bk_finished=0 / bk_exit_status=1 is a state the reference API can never produce; (c) in the async path the divergence rc only reaches st.exit_status at bk_sync, so `sim isfatal` between worker completion and `sim sync` answers 0 where the reference reads the live fatal_called flag. Setting finished=Some(1) in mark_fatal (mirroring the $fatal arm) would restore the invariant and actually stop scripts.",
+   "failure_scenario": "engines=interp,jit, script: `sim step 10` in a loop of 100 iterations. Divergence detected at iteration 3: stderr report appears, but bk_finished is still 0 so all 97 remaining `sim step` commands execute (each re-printing the same divergence block \u2014 hundreds of duplicate stderr lines), running the simulation far past the instant the oracle flagged. A script that polls `sim isfatal` after `sim run async` completes but before `sim sync` reads 0 and concludes the run was clean.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  },
+  {
+   "finder": "contract",
+   "severity": "low",
+   "title": "VCD control during an in-flight async run fails silently (no note) while bluetcl records the file as active",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "line": 1091,
+   "description": "vcd_capable's `None => false` arm (engines moved to the async worker) makes bk_set_VCD_file return BK_ERROR and bk_enable_VCD_dumping return 0 with NO diagnostic \u2014 unlike the non-interp arm, which at least prints the remedy note. The reference kernel accepts bk_set_VCD_file/bk_enable_VCD_dumping at any time, including while the sim thread is running (vcd.cxx:36 has no running-state check), so `sim run async; sim vcd waves.vcd` starts dumping in reference Bluesim. In trs the call is dropped on the floor; bluetcl still records active_vcd_file=waves.vcd, so nothing downstream can tell it failed. Worse, a later `sim vcd on` (after bk_sync) calls Vcd::enable() with no file set and opens the default \"dump.vcd\" \u2014 a different file than the one the user named and bluetcl reports as active. A minimal fidelity fix is to stage the request in SimState and apply it at bk_sync (or at worst emit the note); the current behavior is byte-visible divergence with zero signal.",
+   "failure_scenario": "Script: `sim run async; sim vcd waves.vcd; sim stop; sim vcd on; sim step 50; sim quit`. Reference: waves.vcd is created and holds the dump. trs: the `sim vcd waves.vcd` no-ops silently during the async run; `sim vcd on` then creates dump.vcd instead; `sim vcd` reports \"waves.vcd\" while the actual bytes are in dump.vcd and waves.vcd does not exist.",
+   "votes": [
+    "true/high",
+    "true/high",
+    "true/high"
+   ]
+  }
+ ],
+ "rejected": [
+  {
+   "finder": "concurrency",
+   "severity": "low",
+   "title": "oracle_check panic paths are unarmored: sync path aborts bluetcl across extern \"C\", async path leaves bk_is_running stuck true forever",
+   "file": "src/trs/crates/trs-capi/src/lib.rs",
+   "reasons": [
+    "The structural observations are accurate (sync oracle_check at capi lib.rs:966 is inside extern \"C\" bk_advance with no catch_unwind; async oracle_check at :948 runs before running2.store(false) at :95",
+    "The claim's two mechanisms are abstractly correct (workspace has no panic=abort, so unwinding is live; a panic escaping extern \"C\" bk_advance would abort; a worker panic before running2.store(false) w",
+    "The structural facts are accurate (peeks are armored, oracle_check is not; the async worker stores running=false after oracle_check; a sync-path panic would abort across extern \"C\"), but the failure s"
+   ]
+  },
+  {
+   "finder": "parity",
+   "severity": "low",
+   "title": "Async oracle catch-up (at_times=[primary.now]) overshoots an edge-limit stop by one edge when the refused edge's instant has coincident earlier-popping events",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-capi/src/lib.rs",
+   "reasons": [
+    "The claim's surface facts are all true (async secondaries catch up with at_times=[primary.now] and no edge limits; the at_times filter processes the whole slice at tq; bluetcl `sim step N async` arms ",
+    "The claim's mechanism requires the primary to break by POPPING the (limit+1)-th edge (interp lib.rs:3862) mid-slice at time t. That path is unreachable in the claimed scenario. (1) bk_advance disarms ",
+    "Refuted. The claim assumes the primary's edge-limit stop occurs at the pop-time refusal (trs-interp/src/lib.rs:3862), which can indeed stop mid-slice. But that check is unreachable in the bk_advance"
+   ]
+  },
+  {
+   "finder": "ffi",
+   "severity": "low",
+   "title": "aot_load's mem::forget(lib) leaks one .aot.so mapping per sim load and leaves dangling callback globals after the model .so is dlclosed",
+   "file": "src/trs/crates/trs-interp/src/jit.rs",
+   "reasons": [
+    "Premises verified: the diff does make the capi a new aot_load caller (bk_init -> aot_request_code at trs-capi/src/lib.rs:226 -> prime -> aot_load at jit.rs:2852 -> mem::forget at jit.rs:1185), bluet",
+    "The mechanism is accurately described but the failure scenario does not survive. (1) The \"one permanently-mapped ~MB artifact per load\" leak is wrong: dlopen dedups by path/inode, so repeated sim load",
+    "The premises are accurate (mem::forget(lib) at jit.rs:1185; new interactive reachability via bk_init->aot_request_code at trs-capi/src/lib.rs:226; sim unload = bk_shutdown + dlclose per TCL-CAPI.md "
+   ]
+  },
+  {
+   "finder": "teardown",
+   "severity": "low",
+   "title": "aot_load leaks one dlopen mapping per load; the relink-reload debug loop accumulates leaked artifact mappings for the process lifetime",
+   "file": "/home/ravi/bluespec/trs/bsc/src/trs/crates/trs-interp/src/jit.rs",
+   "reasons": [
+    "The code facts check out but the failure mechanism does not. (1) `std::mem::forget(lib)` at jit.rs:1185 is real \u2014 but pre-existing at base 4dcea6d5 (old line 1155); this range only made it reachable p",
+    "The forget is real (jit.rs:1185) and never balanced by a dlclose, and aot_load does run repeatedly inside one long-lived bluetcl process (bk_init -> aot_request_code -> JitRequest::Load at prime). But"
+   ]
+  },
+  {
+   "finder": "harness",
+   "severity": "low",
+   "title": "vcdtcl block can judge against a stale ref_waves.vcd in a reused workdir (silent mv, no upfront clean)",
+   "file": "src/trs/tests/interactive/run.sh",
+   "reasons": [
+    "The mechanical premises are all true: run.sh (src/trs/tests/interactive/run.sh) supports reused workdirs (WK=${1:-$(mktemp -d)}), never removes ref_waves.vcd, and silences the mv (2>/dev/null); b",
+    "The code facts are accurate (no rm -f ref_waves.vcd, silent mv, reusable workdir per run.sh line 25), but the claimed failure scenario \u2014 the block printing PASS against a stale ref_waves.vcd \u2014 is unre",
+    "The mechanical reading is accurate (line 186 rm -f waves.vcd never cleans ref_waves.vcd; line 189 mv 2>/dev/null is silent; reused workdirs are documented at lines 15/25), but the claimed failure scen"
+   ]
+  }
+ ]
+}

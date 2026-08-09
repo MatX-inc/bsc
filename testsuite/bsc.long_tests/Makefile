@@ -76,6 +76,17 @@ verilog_foreign_inline_large:
 no-verilog_foreign_inline_large:
 	@rm verilog_foreign_inline_large/verilog_foreign_inline_large.exp
 
+### sudoku #######################################
+# The sudoku generator (mkGenerateTest3) lives in bsc.bsv_examples but
+# is a long-running simulation; its .exp is enable-gated from here like
+# the other long tests (the sources and golden stay in that directory).
+DIRS += sudoku
+.PHONY: sudoku no-sudoku
+sudoku:
+	ln -sf sudoku.exp.golden ../bsc.bsv_examples/sudoku/sudoku.exp
+no-sudoku:
+	@rm ../bsc.bsv_examples/sudoku/sudoku.exp
+
 ### ###############################################
 
 #### To add a testcase do the following:
@@ -111,4 +122,3 @@ realclean:
 
 #### This must be at the end ##############################
 include $(CONFDIR)/norealclean.mk
-

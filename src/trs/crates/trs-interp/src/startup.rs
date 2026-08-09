@@ -1,0 +1,127 @@
+//! Startup-path code (BIR loading, snapshot sidecar, phase timing),
+//! kept out of lib.rs for hygiene.
+//!
+//! DOCTRINE (2026-07-10 fence flags): never spawn a thread on the run
+//! startup path.  One short-lived thread permanently drops glibc
+//! malloc's single-threaded fast path, and the interpreter's
+//! Value-clone-heavy eval loop paid ~50% wall for it (dft64 22s->44s).
+//! Compiled/arena designs don't notice — the interp fallback does.
+
+use crate::{bir_fingerprint, Design, Interp, WaveFormat};
+
+/// TRS_STARTUP_TIME: wall-clock laps for the startup phases (decode,
+/// instance build, prime, plan) — the run-side counterpart of
+/// TRS_JIT_TIME's compile-phase brackets.
+pub(crate) struct StartupLap(Option<std::time::Instant>);
+impl StartupLap {
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn new() -> Self {
+        Self(
+            std::env::var_os("TRS_STARTUP_TIME")
+                .map(|_| std::time::Instant::now()),
+        )
+    }
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn lap(&mut self, phase: &str) {
+        if let Some(t) = &mut self.0 {
+            eprintln!("trs startup: {phase} {:?}", t.elapsed());
+            *t = std::time::Instant::now();
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub fn load_file(
+    path: &str,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    load_file_inner(path, plusargs, vcd_file, true)
+}
+
+/// `load_file` that ignores any snapshot sidecar.  `trs link` is the
+/// snapshot WRITER: it must decode the .bir source of truth, never a
+/// prior cache, so a gate-passing-but-wrong snapshot can never be
+/// laundered into a fresh artifact and re-persisted under a valid
+/// header (the relink pays ~the CBOR decode against a multi-second
+/// LLVM link — noise).
+#[cold]
+#[inline(never)]
+pub fn load_file_fresh(
+    path: &str,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    load_file_inner(path, plusargs, vcd_file, false)
+}
+
+#[cold]
+#[inline(never)]
+fn load_file_inner(
+    path: &str,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+    use_snap: bool,
+) -> Result<Interp, String> {
+    let mut sl = StartupLap::new();
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    // decoded-design snapshot beside the .bir (written by trs link):
+    // skip the CBOR parse when every snap_decode gate passes (all
+    // gates run BEFORE the payload deserialize, so a stale or corrupt
+    // snap costs a header read, not a decode).
+    let snap =
+        format!("{}.birsnap", path.strip_suffix(".bir").unwrap_or(path));
+    // NO threads here (or anywhere before the event loop): spawning
+    // even one short-lived thread permanently drops glibc malloc's
+    // single-threaded fast path, which cost interp-fallback designs
+    // (dft64) ~50% wall (2026-07-10 fence flags).
+    let hash = bir_fingerprint(&bytes);
+    let snapped = if use_snap {
+        std::fs::read(&snap)
+            .ok()
+            .and_then(|sb| Design::snap_decode(&sb, hash))
+    } else {
+        None
+    };
+    sl.lap("bir read+fingerprint+snap decode");
+    let design = match snapped {
+        Some(d) => {
+            sl.lap("design load (snapshot)");
+            d
+        }
+        None => {
+            let d = Design::decode(&bytes).map_err(|e| e.to_string())?;
+            sl.lap("design load (cbor)");
+            d
+        }
+    };
+    let mut interp = Interp::new(design);
+    sl.lap("interp build (instantiate)");
+    interp.bir_hash = hash;
+    interp.plusargs = plusargs.to_vec();
+    interp.wave_pending =
+        vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
+    // user BDPI code lives in a companion shared object next to the .bir
+    let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
+    if std::path::Path::new(&so).exists() {
+        // dlopen treats a bare filename as a library-search-path lookup;
+        // make the sibling path explicit
+        let so = if so.contains('/') { so } else { format!("./{so}") };
+        interp.load_bdpi(&so)?;
+    }
+    Ok(interp)
+}
+
+impl Interp {
+    /// Write the decoded-design snapshot sidecar (`Design::snap_encode`)
+    /// keyed by this interp's .bir fingerprint.
+    #[cold]
+    #[inline(never)]
+    pub fn write_snapshot(&self, path: &str) -> Result<(), String> {
+        let b = self.d.snap_encode(self.bir_hash)?;
+        std::fs::write(path, b).map_err(|e| format!("{path}: {e}"))
+    }
+}

@@ -104,6 +104,9 @@ files_exist { bfiles/mkDummyModule.ba }
 if {$ctest == 1} {
 mkdir simfiles
 link_objects_pass bfiles/mkDummyModule mkDummyModule "-simdir simfiles"
+# The generated C++ files and "object created" messages are specific
+# to the C++ Bluesim backend
+if { [cxx_codegen_tests] } {
 find_n_strings [make_bsc_ccomp_output_name mkDummyModule] \
                "Bluesim object created: simfiles/mkDummyModule.{h,o}" 1
 find_n_strings [make_bsc_ccomp_output_name mkDummyModule] \
@@ -114,6 +117,7 @@ files_exist { simfiles/mkDummyModule.cxx \
               simfiles/model_mkDummyModule.cxx \
               simfiles/model_mkDummyModule.h \
               simfiles/model_mkDummyModule.o }
+}
 # It is a design choice whether linking with -e outputs to the simdir/vdir.
 # One could insist that the user use -o to direct the output somewhere else.
 # Thus, commenting out this test:
@@ -151,7 +155,9 @@ mkdir srcfiles
 copy GCD.bsv srcfiles
 
 compile_verilog_pass srcfiles/GCD.bsv {} {-p srcfiles:+}
+if { $vtest == 1 } {
 files_exist {srcfiles/vpi_wrapper_my_time.h srcfiles/vpi_wrapper_my_time.c}
+}
 
 # ---
 # Test compile with vdir
@@ -168,7 +174,9 @@ copy GCD.bsv srcfiles
 mkdir vfiles
 
 compile_verilog_pass srcfiles/GCD.bsv {} {-vdir vfiles -p srcfiles:+}
+if { $vtest == 1 } {
 files_exist {vfiles/vpi_wrapper_my_time.h vfiles/vpi_wrapper_my_time.c}
+}
 
 # The above will have placed vpi wrappers in 'vfiles/'
 # so now we test that linking can find it,
@@ -181,7 +189,9 @@ nukedir vfiles_link
 mkdir vfiles_link
 
 link_verilog_pass {srcfiles/my_time.ba} {sysGCD} {-vsearch vfiles:+ -vdir vfiles_link}
+if { $vtest == 1 } {
 files_exist {vfiles/vpi_wrapper_my_time.o vfiles_link/vpi_startup_array.o}
+}
 
 # ---
 # Test link without vdir
@@ -189,7 +199,9 @@ files_exist {vfiles/vpi_wrapper_my_time.o vfiles_link/vpi_startup_array.o}
 erase_many {vfiles/vpi_*.o vpi_*.{c,h,o}}
 
 link_verilog_pass {srcfiles/my_time.ba} {sysGCD} {-vsearch vfiles:+}
+if { $vtest == 1 } {
 files_exist {vfiles/vpi_wrapper_my_time.o vpi_startup_array.o}
+}
 
 ###########
 #

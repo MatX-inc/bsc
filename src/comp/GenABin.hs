@@ -38,7 +38,7 @@ import Data.Word(Word8)
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260804-8"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260809-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -623,7 +623,7 @@ instance Bin Flags where
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
                 a_020 a_021 a_022 a_dumpFormats a_023 a_024 a_025 a_026 a_027 a_028 a_029
-                a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
+                a_030 a_031 a_032 a_genABinVerilog a_genBir a_genTrs a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_liftDicts a_liftGroundDicts a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
@@ -637,7 +637,7 @@ instance Bin Flags where
                 a_importHashes a_baDebugInfo) =
        do wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4; wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 146-field serialization is split into NOINLINE chunks so
+        -- The 149-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
@@ -652,7 +652,9 @@ instance Bin Flags where
              toBin a_025; toBin a_026; toBin a_027; toBin a_028; toBin a_029
         {-# NOINLINE wr_chunk2 #-}
         wr_chunk2 =
-          do toBin a_030; toBin a_031; toBin a_032; toBin a_033; toBin a_034;
+          do toBin a_030; toBin a_031; toBin a_032;
+             toBin a_genABinVerilog; toBin a_genBir; toBin a_genTrs;
+             toBin a_033; toBin a_034;
              toBin a_035; toBin a_036; toBin a_037; toBin a_038; toBin a_039;
              toBin a_040; toBin a_041; toBin a_042; toBin a_043; toBin a_044
         {-# NOINLINE wr_chunk3 #-}
@@ -694,7 +696,8 @@ instance Bin Flags where
            a_008, a_009, a_010, a_011, a_012, a_013, a_014) <- rd_chunk0
           (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022, a_dumpFormats,
            a_023, a_024, a_025, a_026, a_027, a_028, a_029) <- rd_chunk1
-          (a_030, a_031, a_032, a_033, a_034, a_035, a_036, a_037,
+          (a_030, a_031, a_032, a_genABinVerilog, a_genBir, a_genTrs,
+           a_033, a_034, a_035, a_036, a_037,
            a_038, a_039, a_040, a_041, a_042, a_043, a_044) <- rd_chunk2
           (a_045, a_046, a_liftDicts, a_liftGroundDicts, a_047, a_048, a_049, a_050, a_051, a_052,
            a_053, a_054, a_055, a_056, a_057, a_058, a_059) <- rd_chunk3
@@ -714,7 +717,7 @@ instance Bin Flags where
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
                 a_020 a_021 a_022 a_dumpFormats a_023 a_024 a_025 a_026 a_027 a_028 a_029
-                a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
+                a_030 a_031 a_032 a_genABinVerilog a_genBir a_genTrs a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_liftDicts a_liftGroundDicts a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
@@ -743,10 +746,13 @@ instance Bin Flags where
                      a_023, a_024, a_025, a_026, a_027, a_028, a_029)
         {-# NOINLINE rd_chunk2 #-}
         rd_chunk2 =
-          do a_030 <- fromBin; a_031 <- fromBin; a_032 <- fromBin; a_033 <- fromBin; a_034 <- fromBin;
+          do a_030 <- fromBin; a_031 <- fromBin; a_032 <- fromBin;
+             a_genABinVerilog <- fromBin; a_genBir <- fromBin; a_genTrs <- fromBin;
+             a_033 <- fromBin; a_034 <- fromBin;
              a_035 <- fromBin; a_036 <- fromBin; a_037 <- fromBin; a_038 <- fromBin; a_039 <- fromBin;
              a_040 <- fromBin; a_041 <- fromBin; a_042 <- fromBin; a_043 <- fromBin; a_044 <- fromBin
-             return (a_030, a_031, a_032, a_033, a_034, a_035, a_036, a_037,
+             return (a_030, a_031, a_032, a_genABinVerilog, a_genBir, a_genTrs,
+                     a_033, a_034, a_035, a_036, a_037,
                      a_038, a_039, a_040, a_041, a_042, a_043, a_044)
         {-# NOINLINE rd_chunk3 #-}
         rd_chunk3 =

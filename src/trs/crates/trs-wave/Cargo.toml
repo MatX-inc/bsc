@@ -1,0 +1,15 @@
+[package]
+name = "trs-wave"
+description = "Waveform capture and VCD/FST writers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trs-kernel = { path = "../trs-kernel" }
+fst-writer = { workspace = true, optional = true }
+
+[features]
+default = ["fst"]
+fst = ["dep:fst-writer"]

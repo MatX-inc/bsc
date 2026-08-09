@@ -1,0 +1,36 @@
+package CountShare (sysCountShare) where
+
+-- Chained-fold shared cone: countOnes over a wide register unfolds to
+-- d_k = If(bit_k, d_{k+1}+1, d_{k+1}) chains, and TWO consuming rules
+-- make the fold defs hoist-eligible — the exact shape whose EMITTED
+-- SIZE was order-dependent (2^k-1 arm re-expansion) before the
+-- topo-ordered hoist prelude.  determinism.exp links this repeatedly
+-- and byte-compares the pre-O3 IR and the artifact .so.
+
+{-# verilog sysCountShare #-}
+sysCountShare :: Module Empty
+sysCountShare =
+    module
+        r :: Reg (Bit 101)
+        r <- mkReg 0x123456789abcdef013579bdf0
+        c :: Reg (Bit 8)
+        c <- mkReg 0
+
+        let ones :: Bit 32
+            ones = zeroExtend (pack (countOnes r))
+
+        rules
+          "tick":
+            when True
+              ==> action
+                      c := c + 1
+                      r := r[99:0] ++ (r[100:100] ^ r[0:0])
+                      if c == 7 then $finish 0 else noAction
+
+          "useA":
+            when True
+              ==> $display "ones=%0d" ones
+
+          "useB":
+            when r[0:0] == 1
+              ==> $display "alt=%0d" (ones + 1)

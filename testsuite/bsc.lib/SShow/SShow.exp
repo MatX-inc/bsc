@@ -1,6 +1,7 @@
 
 # tests for elaboration-time classic-syntax show library
 
+if { $vtest == 1 } {
 compile_verilog_pass TestSShow.bs sysTestSShow
-
 compare_file sysTestSShow.out
+}

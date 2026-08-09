@@ -150,6 +150,8 @@ import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
+import SimExportIR(writeBirFile)
+import qualified Data.ByteString.Lazy as L
 import SimMakeCBlocks(simMakeCBlocks)
 import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
@@ -1535,6 +1537,45 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system_opt <- simPackageOpt errh flags sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
+       -- export the TRS IR when requested
+       when (genBir flags) $ do
+            -- the debug-tier symbol set: defs surviving as C++
+            -- members (post-SimCOpt public defs, isOkId-filtered) —
+            -- blocks are recomputed here (pure) so the export stays
+            -- decoupled from the C++ generation path below
+            let (sbs, sscheds, scgs, sgis, _sbtop) =
+                    simMakeCBlocks flags sim_system_opt
+                (sbs_opt, _, _, _) =
+                    simCOpt flags (ssys_instmap sim_system_opt)
+                            (sbs, sscheds, scgs, sgis)
+                symMap = M.fromListWith S.union
+                    [ (sb_name sb,
+                       S.fromList [ i | (_, i) <- sb_publicDefs sb
+                                      , isOkId i ])
+                    | sb <- sbs_opt ]
+            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags)
+                         symMap sim_system_opt
+
+       -- the -trs backend stops here: the .bir plus the user's C files
+       -- (compiled separately for dlopen) are the whole simulation
+       if (genTrs flags)
+        then do let TimeInfo _ t_TOD = time
+                _ <- return t_TOD
+                return (time, [], [], time)
+        else genModuleC_cxx errh flags dumpnames time toplevel prefix reused
+                            sim_system_opt
+
+genModuleC_cxx :: ErrorHandle
+               -> Flags
+               -> DumpNames
+               -> TimeInfo
+               -> String
+               -> String
+               -> [String]
+               -> SimSystem
+               -> IO (TimeInfo, [String], [String], TimeInfo)
+genModuleC_cxx errh flags dumpnames time toplevel prefix reused sim_system_opt =
+    do
        -- convert SimPackages and SimSchedules to SimCCBlocks and SimCCScheds
        start flags DFsimMakeCBlocks
        let (simblocks, simCCscheds, clk_groups, gate_info, top_id) =
@@ -1749,6 +1790,15 @@ simLink errh flags toplevel afilenames cfilenames = do
     tStart <- getNow
     let t = tStart
 
+    -- Bluesim can only dump waveforms in VCD and FST formats
+    let bad_fmts = filter (`notElem` ["vcd", "fst"]) (dumpFormats flags)
+    when (not (null bad_fmts)) $
+        bsError errh
+            [(cmdPosition,
+              EGeneric ("Bluesim does not support waveform dump format `" ++
+                        f ++ "' (supported: vcd, fst)"))
+            | f <- bad_fmts]
+
     -- XXX (file, package, module) names for %-substitution in dump filenames
     let dumpnames = (Nothing, Nothing, Nothing)
 
@@ -1812,14 +1862,27 @@ simLink errh flags toplevel afilenames cfilenames = do
     let ofiles = gen_ofiles ++
                  user_ofiles ++ compiled_user_ofiles ++
                  ofiles_reused
+
+    -- under -bir, also package the user's BDPI objects for the trs
+    -- runtime (dlopen), named next to the .bir
+    when (genBir flags && not (genTrs flags)
+          && not (null (user_ofiles ++ compiled_user_ofiles))) $ do
+        pwd3 <- getCurrentDirectory
+        let name3 = createEncodedFullFilePath "placeholder" pwd3
+            prefix3 = (dirName name3) ++ "/"
+            so3 = prefix3 ++ toplevel ++ ".bdpi.so"
+        cxxCompile errh flags (["-shared", "-fPIC", "-o", so3])
+                   (map show (user_ofiles ++ compiled_user_ofiles))
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
     -- if generating a SystemC model or only generating code,
     -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
-    when (not (genSysC flags) && not (blockCodegen flags)) $
-      cxxLink errh flags toplevel ofiles creation_time
+    if (genTrs flags)
+      then trsLink errh flags toplevel user_cfiles user_ofiles
+      else when (not (genSysC flags) && not (blockCodegen flags)) $
+             cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
     -- final verbose message
@@ -2159,7 +2222,10 @@ cxxLink errh flags toplevel names creation_time = do
                      ["-o", soFile]
         -- show is used for quoting
         opts = map show $ linkFlags flags
-        files = map show compile_names ++ ["-lm"] ++ userlibs
+        -- the FST waveform writer (pulled out of the kernel library when
+        -- the model is built with -dump-formats fst) requires zlib
+        fstlibs = if "fst" `elem` dumpFormats flags then ["-lz"] else []
+        files = map show compile_names ++ ["-lm"] ++ fstlibs ++ userlibs
     cxxCompile errh flags (opts ++ switches) files
     when (not (cDebug flags)) $ cleanseSharedLib errh flags soFile
     unless (quiet flags) $ putStrLnF ("Simulation shared library created: " ++ soFile)
@@ -2201,6 +2267,59 @@ cleanseSharedLib errh flags soFile = do
     case rc of
         ExitSuccess   -> return ()
         ExitFailure n -> exitFailWith errh n
+
+-- ===============
+-- trsLink: the TRS backend's link step.  The simulation is the
+-- exported .bir executed by the trs runtime; user BDPI C files are
+-- compiled into a companion shared object that the runtime dlopens.
+
+trsLink :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
+trsLink errh flags toplevel user_cfiles user_ofiles = do
+    pwd <- getCurrentDirectory
+    let name = createEncodedFullFilePath "placeholder" pwd
+        prefix = (dirName name) ++ "/"
+        birFile = prefix ++ toplevel ++ ".bir"
+        outFile = oFile flags
+        soFile = outFile ++ ".bdpi.so"
+    -- place the .bir next to the executable, where the wrapper (and the
+    -- runtime's .bdpi.so search) expect it
+    when (outFile ++ ".bir" /= birFile) $ do
+        contents <- L.readFile birFile
+        L.writeFile (outFile ++ ".bir") contents
+    -- compile the user's BDPI C files (with the C compiler, so symbols
+    -- keep C linkage) and link the objects into one dlopen-able object
+    when (not (null user_cfiles) || not (null user_ofiles)) $ do
+        cofs <- mapM (compileUserCFile errh flags False) user_cfiles
+        cxxCompile errh flags
+                   (["-shared", "-fPIC", "-o", soFile])
+                   (map show (cofs ++ user_ofiles))
+        unless (quiet flags) $
+            putStrLnF ("BDPI shared library created: " ++ soFile)
+    -- AOT: let the trs driver compile the design and write the
+    -- artifact (wrapper script + model .so + pinned options) — the
+    -- same amortization as the C++ backend's g++ link, at a fraction
+    -- of the cost.  Any failure (trs not on PATH, built without the
+    -- jit feature, infra error) falls back to the interpreter wrapper.
+    let linkCmd = "\"${TRS:-trs}\" link \"" ++ outFile ++ ".bir\" -o \""
+                  ++ outFile ++ "\""
+    rc <- system linkCmd
+    case rc of
+      ExitSuccess ->
+        unless (quiet flags) $
+            putStrLnF ("TRS simulation created (compiled): " ++ outFile)
+      _ -> do
+        writeFileCatch errh outFile $
+            unlines [ "#!/bin/sh"
+                    , ""
+                    , "TRS=${TRS:-trs}"
+                    , "exec \"$TRS\" run \"$0.bir\" \"$@\""
+                    ]
+        stat <- getFileStatus outFile
+        let mode = fileMode stat
+            mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
+        setFileMode outFile mode'
+        unless (quiet flags) $
+            putStrLnF ("TRS simulation created: " ++ outFile)
 
 -- ===============
 -- vLink
