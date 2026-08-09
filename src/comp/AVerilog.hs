@@ -73,12 +73,13 @@ vInoutExprsMarker = "This module keeps inout ports in port-expression form"
 -- OUTSIDE translate_off regions, which only simulates under
 -- Verilator's --timing:
 --   ClockGen      (mkAbsoluteClock: an initial/forever # oscillator)
---   ClockDiv      (mkClockDivider: #0 in its edge generator)
 --   GatedClockDiv (gated divider: #1 in its edge generator)
 --   InitialReset  (mkInitialReset: its whole body, flops included, is
 --                  translate_off -- sim-only by design, so Verilator
 --                  would leave OUT_RST undriven and silently never
 --                  reset the design)
+-- ClockDiv is also exempt: despite the #0 source delay, its generated
+-- designs run correctly with Verilator's cycle driver and --no-timing.
 -- Everything else in the library is exempt, verified by classifying
 -- every src/Verilog file's delay tokens against its translate_off
 -- regions: the clock muxes/selectors/inverters, MakeClock (and so
@@ -93,7 +94,7 @@ vInoutExprsMarker = "This module keeps inout ports in port-expression form"
 instGensDelayClockOrReset :: AVInst -> Bool
 instGensDelayClockOrReset avi =
     getVNameString (vName (avi_vmi avi))
-        `elem` ["ClockGen", "ClockDiv", "GatedClockDiv", "InitialReset"]
+        `elem` ["ClockGen", "GatedClockDiv", "InitialReset"]
 
 -- ==============================
 -- aVerilog

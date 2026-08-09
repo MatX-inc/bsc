@@ -12,8 +12,9 @@
 // recorded and nothing is refused.
 //
 // sysLCClockDiv uses mkClockDivider (ClockDiv.v, #0 in its edge
-// generator): recorded and refused.  sysLCDisClk clocks a register by
-// primMakeDisabledClock (MakeClock.v, delay-free): clean.
+// generator), which runs correctly with the cycle driver and is not
+// recorded.  sysLCDisClk clocks a register by primMakeDisabledClock
+// (MakeClock.v, delay-free): clean.
 //
 // sysLCInitRst uses mkInitialReset (InitialReset.v), whose whole body
 // is translate_off (sim-only): recorded and refused.

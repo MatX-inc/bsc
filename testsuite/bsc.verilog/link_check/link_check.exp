@@ -79,15 +79,14 @@ lc_files_dont_exist { bad.manifest }
 
 # --- link-time timing facts -------------------------------------------
 # bsc records "instantiates delay-based clock or reset generators" in
-# the .v header of any module whose state instances include a clock
-# generator (any output clock) or the InitialReset primitive; reset
-# synchronizers are deliberately exempt (two-state --no-timing verilator
-# simulates them exactly; traces verified identical to iverilog).
+# the .v header of modules that need event-driven timing.  ClockDiv and
+# reset synchronizers are deliberately exempt: two-state --no-timing
+# Verilator simulates them correctly (traces verified against iverilog).
 
 compile_verilog_pass LinkCheckTiming.bsv {} {}
 
 find_regexp sysLCTiming.v {// This module instantiates delay-based clock or reset generators}
-find_regexp sysLCClockDiv.v {// This module instantiates delay-based clock or reset generators}
+find_regexp_fail sysLCClockDiv.v {This module instantiates delay-based}
 find_regexp sysLCInitRst.v {// This module instantiates delay-based clock or reset generators}
 find_regexp_fail sysLCRstSync.v {This module instantiates delay-based}
 find_regexp_fail sysLCDisClk.v {This module instantiates delay-based}
@@ -99,7 +98,14 @@ lc_run "reset synchronizers pass the verilator check" lcrs.bsc-out \
     {-verilog -vsim verilator -check-only -e sysLCRstSync -o sysLCRstSync.manifest}
 find_regexp sysLCRstSync.manifest {NEEDS_TIMING no}
 
-# ...while delay-based generators are refused up front (unless the
+# ClockDiv also checks clean: its #0 edge-generator delay does not require
+# event-driven timing in a BSC cycle-driven simulation.
+erase sysLCClockDiv.manifest
+lc_run "a clock divider passes the verilator check" lccd.bsc-out \
+    {-verilog -vsim verilator -check-only -e sysLCClockDiv -o sysLCClockDiv.manifest}
+find_regexp sysLCClockDiv.manifest {NEEDS_TIMING no}
+
+# Event-driven generators are refused up front (unless the
 # BSC_VERILATOR_ENABLE_TIMING back door is set, which unlocks --timing).
 if { ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)] } {
     lc_run_fail "verilator check refuses a delay-based clock generator" lct.bsc-out \
@@ -107,11 +113,6 @@ if { ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)] } {
     find_regexp lct.bsc-out {needs Verilator --timing}
     find_regexp lct.bsc-out {sysLCTiming.v instantiates delay-based clock or reset generators}
     lc_files_dont_exist { sysLCTiming.manifest }
-
-    lc_run_fail "verilator check refuses a clock divider" lccd.bsc-out \
-        {-verilog -vsim verilator -check-only -e sysLCClockDiv -o sysLCClockDiv.manifest}
-    find_regexp lccd.bsc-out {needs Verilator --timing}
-    lc_files_dont_exist { sysLCClockDiv.manifest }
 
     lc_run_fail "verilator check refuses mkInitialReset" lcir.bsc-out \
         {-verilog -vsim verilator -check-only -e sysLCInitRst -o sysLCInitRst.manifest}

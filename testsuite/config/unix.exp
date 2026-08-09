@@ -633,12 +633,17 @@ proc verinorun_unsupported { what } {
 # NOTE: ClockDiv, GatedClock, MakeClock, ClockMux and ClockSelect are
 # deliberately NOT listed: measured against a full-suite baseline
 # (2026-07-13), designs using them mostly run correctly under Verilator.
-# Known-bad individual tests carry explicit `verinorun' spans instead,
+# GatedClockDiv and InitialReset are different primitives: the former
+# spins forever and the latter has no synthesizable reset behavior, so
+# the automatic design scan suppresses every affected simulation.
+# Known-bad individual tests can still carry explicit `verinorun' spans,
 # and vsim_run_timeout_prefix bounds any unknown runtime spinner.
 set verilator_unsupported_mods [list \
     ClockGen           "derived-clock generator needs --timing" \
+    GatedClockDiv      "gated clock divider simulation spins forever under verilator" \
     ClockInverter      "derived (inverted) clock generator needs --timing" \
     GatedClockInverter "derived (inverted) clock generator needs --timing" \
+    InitialReset       "simulation-only initial reset has no Verilator behavior" \
     InoutConnect       "two-port inout alias is Verilator-unsupported (complex ports)" \
 ]
 
