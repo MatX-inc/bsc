@@ -43,4 +43,13 @@ fi
 GHC_ENVIRONMENT="$ENVFILE" export GHC_ENVIRONMENT
 BLUESPECDIR="${BLUESPECDIR:-$REPO/inst/lib}" export BLUESPECDIR
 
-exec runghc "$SCRIPT" "$@"
+# Tell runghc which compiler to use instead of making it locate the sibling
+# ghc executable through /proc/self/exe (which is absent in some containers).
+GHC_BIN=${GHC:-ghc}
+GHC_PATH=$(command -v "$GHC_BIN")
+if [ -z "$GHC_PATH" ]; then
+    echo "bluehs: cannot find GHC executable: $GHC_BIN" >&2
+    exit 1
+fi
+
+exec runghc -f "$GHC_PATH" "$SCRIPT" "$@"
