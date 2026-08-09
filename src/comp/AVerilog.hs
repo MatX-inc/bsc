@@ -2315,7 +2315,7 @@ vModuleDeclVIds vmod =
     go (VMDecl d)            = declVIds d
     go (VMInst { vi_module_name = mn, vi_inst_name = inm,
                  vi_inst_params = iparams, vi_inst_ports = iports }) =
-        mn : inm : either (const []) (map fst) iparams ++ map fst iports
+        mn : inm : map fst iparams ++ map fst iports
     go (VMAssign _ _)        = []
     go (VMStmt {})           = []
     go (VMComment _ it)      = go it
@@ -2339,9 +2339,7 @@ mapRenameableVIds f items = map go items
                       vi_inst_ports = iports }) =
         inst { vi_inst_name = f inm,
                vi_inst_params =
-                   either (Left . map (\(ms, e) -> (ms, gen e)))
-                          (Right . map (\(pn, me) -> (pn, fmap gen me)))
-                          iparams,
+                   [ (pn, fmap gen me) | (pn, me) <- iparams ],
                vi_inst_ports = [ (pn, fmap gen me) | (pn, me) <- iports ] }
     go (VMComment c it)      = VMComment c (go it)
     go (VMRegGroup a b c it) = VMRegGroup (f a) b c (go it)
@@ -2358,9 +2356,7 @@ collectRenameableVIds items = concatMap go items
   where
     go (VMInst { vi_inst_name = inm, vi_inst_params = iparams,
                  vi_inst_ports = iports }) =
-        inm : either (concatMap (vids . snd))
-                     (concatMap (maybe [] vids . snd))
-                     iparams
+        inm : concatMap (maybe [] vids . snd) iparams
             ++ concatMap (maybe [] vids . snd) iports
     go (VMComment _ it)      = go it
     go (VMRegGroup a _ _ it) = a : go it
