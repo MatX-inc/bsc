@@ -16,3 +16,8 @@ vagrant-out/
 
 # Derived from each directory's checked-in depends.mk (see Libraries makefiles)
 src/Libraries/*/depends_bc.mk
+
+# cabal build artifacts (see bsc.cabal, util/bluehs/)
+dist-newstyle/
+.ghc.environment.*
+cabal.project.local

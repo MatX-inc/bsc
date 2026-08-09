@@ -1,0 +1,46 @@
+#!/bin/sh
+# Launcher for the util/bluehs tools that works from any directory.
+#
+# Invoke directly:            util/bluehs/bluehs dumpbo foo.bo
+# or via the bin/ symlinks:   util/bluehs/bin/dumpbo foo.bo
+# (the symlink name selects the tool, mirroring how inst/bin/wrapper.sh
+# dispatches on its own name)
+#
+# Sets up the environment the compiled binaries get from wrapper.sh:
+#   GHC_ENVIRONMENT - absolute path to the repo's GHC package environment,
+#                     so runghc finds the compiled bsc library from any cwd
+#   BLUESPECDIR     - defaulted to <repo>/inst/lib (showrules/vcdcheck use it
+#                     for %-expansion and default .ba search paths)
+
+SELF=$(readlink -f "$0")
+HSCRIPTS=$(dirname "$SELF")
+REPO=$(dirname "$(dirname "$HSCRIPTS")")
+
+NAME=$(basename "$0")
+if [ "$NAME" = "bluehs" ]; then
+    TOOL="$1"
+    shift
+else
+    TOOL="$NAME"
+fi
+
+# A named tool from this directory, or any user-supplied .hs script path
+case "$TOOL" in
+    *.hs) SCRIPT="$TOOL" ;;
+    *)    SCRIPT="$HSCRIPTS/$TOOL.hs" ;;
+esac
+if [ ! -f "$SCRIPT" ]; then
+    echo "bluehs: no such tool or script: $TOOL" >&2
+    exit 1
+fi
+
+ENVFILE=$(ls "$REPO"/.ghc.environment.* 2>/dev/null | head -1)
+if [ -z "$ENVFILE" ]; then
+    echo "bluehs: no .ghc.environment.* at $REPO — run util/bluehs/setup.sh first" >&2
+    exit 1
+fi
+
+GHC_ENVIRONMENT="$ENVFILE" export GHC_ENVIRONMENT
+BLUESPECDIR="${BLUESPECDIR:-$REPO/inst/lib}" export BLUESPECDIR
+
+exec runghc "$SCRIPT" "$@"

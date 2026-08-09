@@ -449,6 +449,10 @@ endif
 .PHONY: install
 install: $(BSCEXES) $(TCLEXES) $(CHECKEXES) install-bsc install-bluetcl install-checkers
 
+# NOTE: the utilities below are also provided as bluehs scripts (see
+# util/bluehs/), which ship in the bsc-bluehs distribution tarball.
+# Once that is a standard release artifact, this target (and the
+# compiled utility binaries) is a candidate for retirement.
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
 

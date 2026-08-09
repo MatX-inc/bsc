@@ -1,0 +1,314 @@
+cabal-version:      3.0
+-- Proof-of-concept cabalization of the bsc compiler internals.
+--
+-- The library below contains every module that feeds the bsc, bluetcl and
+-- utility executables (the same source pool that src/comp/Makefile compiles),
+-- so that GHCi can load the *compiled* compiler and utilities can be plain
+-- runghc scripts (see util/bluehs/).
+--
+-- Before building:
+--   * the vendored solver libraries must exist:
+--       make -C src/vendor/stp install PREFIX=$(pwd)/inst
+--       make -C src/vendor/yices install PREFIX=$(pwd)/inst
+--     (a normal `make install-src` build has already done this)
+--   * the generated modules must exist:
+--       (cd src/comp && ./update-build-version.sh && ./update-build-system.sh)
+--
+-- The exposed-modules list is generated; regenerate with
+--   util/bluehs/gen-cabal-modules.py
+name:               bsc
+version:            2026.1
+synopsis:           Bluespec Compiler internals as a library
+license:            BSD-3-Clause
+license-file:       COPYING
+build-type:         Simple
+
+library
+    default-language: GHC2021
+    hs-source-dirs:
+        src/comp
+        src/comp/Libs
+        src/comp/GHC/posix
+        src/Parsec
+        src/vendor/stp/HaskellIfc
+        src/vendor/yices/v2.6/HaskellIfc
+        src/vendor/htcl
+    exposed-modules:
+        AAddSchedAssumps
+        AAddScheduleDefs
+        ABin
+        ABinUtil
+        ACheck
+        ACleanup
+        AConv
+        ADropDefs
+        ADropUndet
+        ADumpSchedule
+        ADumpScheduleInfo
+        AExpand
+        AExpr2STP
+        AExpr2Util
+        AExpr2Yices
+        ANoInline
+        AOpt
+        APaths
+        APrims
+        AProofs
+        ARankMethCalls
+        ARemoveAssumps
+        ARenameIO
+        ASchedule
+        AScheduleInfo
+        AState
+        ASyntax
+        ASyntaxUtil
+        ATaskSplice
+        AUses
+        AVeriQuirks
+        AVerilog
+        AVerilogUtil
+        Assump
+        BDD
+        BExpr
+        Backend
+        BackendNamingConventions
+        Bag
+        Balanced
+        BinData
+        BinParse
+        BinUtil
+        BluesimLoader
+        BoolExp
+        BoolOpt
+        BuildSystem
+        BuildVersion
+        CCSyntax
+        CFreeVars
+        CPPLineDirectives
+        CSubst
+        CSyntax
+        CSyntaxTypes
+        CSyntaxUtil
+        CType
+        CVPrint
+        Changed
+        Classic
+        ConTagInfo
+        CondTree
+        ContextErrors
+        CtxRed
+        DOT
+        DPIWrappers
+        Depend
+        Deriving
+        DisjointTest
+        DynamicMap
+        EquivalenceClass
+        Error
+        ErrorMonad
+        ErrorUtil
+        Eval
+        Exceptions
+        FStringCompat
+        FileIOUtil
+        FileNameUtil
+        Fixity
+        FixupDefs
+        Flags
+        FlagsDecode
+        ForeignFunctions
+        GHCPretty
+        GenABin
+        GenBin
+        GenForeign
+        GenFuncWrap
+        GenSign
+        GenWrap
+        GenWrapUtils
+        GlobPattern
+        GraphMap
+        GraphPaths
+        GraphUtil
+        GraphWrapper
+        HTcl
+        IConv
+        IConvLet
+        IDropRules
+        IExpand
+        IExpandUtils
+        IInline
+        IInlineFmt
+        IInlineUtil
+        ILift
+        IOMutVar
+        IOUtil
+        IPrims
+        ISimplify
+        ISplitIf
+        IStateLoc
+        ISyntax
+        ISyntaxCheck
+        ISyntaxSubst
+        ISyntaxUtil
+        ISyntaxXRef
+        ITransform
+        IType
+        IWireSet
+        Id
+        IdPrint
+        IfcBetterInfo
+        InferKind
+        InlineCReg
+        InlineReg
+        InlineWires
+        InstNodes
+        IntLit
+        IntegerUtil
+        Intervals
+        KIMisc
+        LambdaCalc
+        LambdaCalcUtil
+        Lex
+        ListMap
+        ListUtil
+        Literal
+        Log2
+        MVarStrict
+        MakeSymTab
+        PFPrint
+        PPrint
+        PVPrint
+        Params
+        Parse
+        ParseOp
+        Parsec
+        ParsecChar
+        ParsecCombinator
+        ParsecExpr
+        ParsecPrim
+        Parser.BSV
+        Parser.BSV.CVParser
+        Parser.BSV.CVParserAssertion
+        Parser.BSV.CVParserCommon
+        Parser.BSV.CVParserImperative
+        Parser.BSV.CVParserUtil
+        Parser.Classic
+        Parser.Classic.CParser
+        Parser.Classic.Warnings
+        PoisonUtils
+        Position
+        Pragma
+        PragmaCheck
+        PreIds
+        PreStrings
+        Pred
+        Pred2STP
+        Pred2Yices
+        PredTrie
+        Pretty
+        Prim
+        ProofObligation
+        RSchedule
+        RealUtil
+        SAL
+        SAT
+        SATPred
+        SCC
+        SEMonad
+        STP
+        STPFFI
+        SchedInfo
+        Scheme
+        SignalNaming
+        SimBlocksToC
+        SimCCBlock
+        SimCOpt
+        SimDomainInfo
+        SimExpand
+        SimFileUtils
+        SimMakeCBlocks
+        SimPackage
+        SimPackageOpt
+        SimPrimitiveModules
+        Simplify
+        SolvedBinds
+        Sort
+        SpeedyString
+        StdPrel
+        Subst
+        SymTab
+        Synthesize
+        SystemCWrapper
+        SystemCheck
+        SystemVerilogKeywords
+        SystemVerilogPreprocess
+        SystemVerilogScanner
+        SystemVerilogTokens
+        TCMisc
+        TCPat
+        TCheck
+        TIMonad
+        TclParseUtils
+        TclUtils
+        TmpNam
+        TopUtils
+        Type
+        TypeAnalysis
+        TypeAnalysisTclUtil
+        TypeCheck
+        TypeOps
+        Undefined
+        Unify
+        Util
+        VCD
+        VFileName
+        VFinalCleanup
+        VIOProps
+        VModInfo
+        VPIWrappers
+        VPrims
+        VVerilogDollar
+        Verilog
+        Version
+        Wires
+        Yices
+        YicesFFI
+    build-depends:
+        base,
+        containers,
+        array,
+        mtl,
+        unix,
+        regex-compat,
+        bytestring,
+        directory,
+        process,
+        filepath,
+        time,
+        old-time,
+        old-locale,
+        split,
+        syb,
+        integer-gmp,
+        text,
+        deepseq,
+        strict-concurrency
+    -- SAT solver shared libraries (built by src/vendor/{stp,yices}/Makefile)
+    -- NOTE: the -L directories for these are machine-absolute and live in
+    -- cabal.project.local (ghc-pkg rejects relative library-dirs at registration)
+    extra-libraries: stp yices
+    -- Tcl: HTcl.hs uses CApiFFI against tcl.h; haskell.c provides the two
+    -- C helpers HTcl.hs ccall-imports (normally in vendor/htcl/libhtcl.a)
+    pkgconfig-depends: tcl >= 8.5
+    c-sources: src/vendor/htcl/haskell.c
+    -- Mirrors src/comp/Makefile GHCFLAGS (GHC 9.x branch).
+    -- CAUTION: do not add extra -W flags here; six modules carry in-file
+    -- blanket {-# OPTIONS_GHC -Werror #-} (GenBin, GenABin, BinData, Error,
+    -- AVerilogUtil, HTcl), so new warnings become build failures.
+    ghc-options:
+        -Wall
+        -Wno-orphans
+        -Wno-name-shadowing
+        -Wno-unused-matches
+        -Wtabs
+        -fmax-pmcheck-models=800
