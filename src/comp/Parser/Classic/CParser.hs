@@ -9,7 +9,7 @@ import Data.List(nub)
 import Parse
 import IntLit
 import FStringCompat
-import PreStrings(fsBar, fsStar, fsHash, fsDollar, fsLT, fsLTGT, fsLsh, fsNoinline,
+import PreStrings(fsBar, fsStar, fsHash, fsDollar, fsLT, fsLTGT, fsLsh, fsNoinline, fsMinus,
                   fsASSERT, fsFire, fsEnabled, fsNo, fsImplicit, fsConditions,
                   fsCan, fsSchedule, fsFirst, fsClockCrossing, fsRule,
                   fsEmpty, fsConfOp, fsHide, fsHideAll,
@@ -90,8 +90,8 @@ exp0 :: CParser CExpr
 exp0 = exp00                          >>- (\x->case x of [CRand e] -> e; _ -> COper x)
 
 exp00 :: CParser [COp]
-exp00 =   {-negat +.+ expX +.+ exp01  >>- (\ (u,(e,es)) -> CRator 1 u : CRand e : es)
-        ||! -} expX +.+ exp01                >>- (\ (e, es) -> CRand e : es)
+exp00 =   negat +.+ expX +.+ exp01  >>- (\ (u,(e,es)) -> CRator 1 u : CRand e : es)
+        ||! expX +.+ exp01                >>- (\ (e, es) -> CRand e : es)
 exp01 :: CParser [COp]
 exp01 =   pOper +.+ exp00             >>- (\ (o, es) -> CRator 2 o : es)
         ||! succeed                             []
@@ -228,6 +228,7 @@ aexp' =     pAny                           >>- anyExprAt
         ||! numericLit
         ||! string
         ||! char
+        ||! unbasedUnsized
         ||! blkexp -- XXX maybe it should be expX
 
 pQType :: CParser CQType
@@ -532,9 +533,19 @@ pSummand' = pSummandConIds `into` \ constr_names ->
             blockBrOf pQField                                                >>- (\ fs -> (constr_names, Right fs))
         ||! many atyp                                                        >>- (\ ts -> (constr_names, Left (map (CQType []) ts)))
 
-pDer :: CParser [CTypeclass]
-pDer = l L_deriving ..+ lp ..+ sepBy pTypeclass cm +.. rp
-   ||! succeed []
+pDeriving :: CParser CDeriving
+pDeriving = l L_deriving ..+
+          ( pDerivingStock
+        ||! pDerivingVia)
+
+pDerivingStock :: CParser CDeriving
+pDerivingStock = lp ..+ sepBy pTypeclass cm +.. rp         >>- CStock
+
+pDerivingVia :: CParser CDeriving
+pDerivingVia = pTypeclass +.+ l L_via ..+ pTyConId          >>> CVia
+
+pDer :: CParser [CDeriving]
+pDer = many pDeriving
 
 opt :: CParser a -> CParser (Maybe a)
 opt p = p >>- Just ||! succeed Nothing
@@ -609,6 +620,7 @@ pAPat =     pVarIdOrU `into` (\ mi ->
         ||! pConId                                                        >>- (\i -> CPCon i [])
         ||! lp +.+ sepBy pPat (l L_comma) +.. rp                        >>> pMkTuple
         ||! numericLit                                                        >>- litToPLit
+        ||! lcp "'0" (\p x -> case x of L_unbasedUnsized False -> Just (CPLit (CLiteral p (LInt (ilDec 0)))); _ -> Nothing)
   where
     litToPLit (CLit l) = CPLit l
     litToPLit _ = internalError "CParser.pAPat: litToPLit"
@@ -680,6 +692,10 @@ qconop = con +.+ dot ..+ conop                                        >>> qualId
 
 pOper :: CParser Id
 pOper = pAnySym ||! l L_bquote ..+ pAnyId +.. l L_bquote
+
+negat :: CParser Id
+negat = testp "-" (\i -> getIdFString i == fsMinus) varop
+        >>- \i -> idNegateAt (getPosition i)
 
 pConOper :: CParser Id
 pConOper = pConOp ||! l L_bquote ..+ pConId +.. l L_bquote
@@ -1002,6 +1018,12 @@ pStringAsId = lcp "<string>"  (\p x->case x of L_string  s     -> Just (mkId p (
 
 char :: CParser CExpr
 char = lcp "<char>" (\p x -> case x of L_char c -> Just (CLit (CLiteral p (LChar c))); _ -> Nothing)
+
+unbasedUnsized :: CParser CExpr
+unbasedUnsized = lcp "<unbased-unsized>" (\p x -> case x of
+    L_unbasedUnsized True  -> Just (cVar (idConstAllBitsSetAt p))
+    L_unbasedUnsized False -> Just (cVar (idConstAllBitsUnsetAt p))
+    _                      -> Nothing)
 
 hide :: CParser ()
 hide = literal fsHide
