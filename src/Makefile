@@ -10,7 +10,7 @@ CC_TOOLS=$(CC) $(CXX) $(LD)
 BSC_TOOLS=ghc ghc-pkg
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
-TRS_TOOLS=cargo
+TRS_TOOLS=cargo rustc
 
 TOOLS=$(CC_TOOLS) \
       $(BSC_TOOLS) \
@@ -72,4 +72,3 @@ install clean full_clean:
 	$(MAKE)  -C bluesim    PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C trs   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Verilator  PREFIX=$(PREFIX)  $@
-

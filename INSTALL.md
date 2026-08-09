@@ -53,13 +53,15 @@ symlinks in `/usr/bin/` that point to the executables in
 
 To build a complete release of BSC, you will need:
  - The standard Haskell compiler [GHC]. The recommended version is
-   9.6.7, which is the primary version built and tested by this
-   project's continuous integration (CI); newer versions are also
+   9.14.1, which is the primary version built and tested by this
+   project's continuous integration (CI); other recent versions are also
    tested (see the [CI workflow] for the exact set).  Older versions
    are untested and may not work.  We recommend installing GHC via
    the popular installer [GHCup].
- - A few additional Haskell libraries: `regex-compat`, `syb`,
+ - A few additional Haskell libraries: `cborg`, `regex-compat`, `syb`,
    `old-time`, `split`, and `strict-concurrency`.
+ - A current stable Rust toolchain (`cargo` and `rustc`) to build the TRS
+   simulation backend. We recommend installing it with [rustup].
  - The GNU Multiple Precision Arithmetic Library (GMP). `libgmp` is
    used to implement integers in Haskell and may already be a
    dependency of installing GHC.
@@ -86,6 +88,7 @@ The following dependencies are optional, though recommended:
 [CI workflow]: .github/workflows/ci.yml
 [GHC]: https://www.haskell.org/ghc/
 [GHCUp]: https://www.haskell.org/ghcup/
+[rustup]: https://rustup.rs/
 [Icarus Verilog]: https://steveicarus.github.io/iverilog/
 [Asciidoctor]: https://asciidoctor.org
 
@@ -112,13 +115,16 @@ sudo apt-get install \
    texlive-fonts-extra
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-ghcup install ghc 9.6.7
+ghcup install ghc 9.14.1
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
+cabal v1-install --allow-newer=cborg:base \
+   cborg regex-compat syb old-time split strict-concurrency
 ```
 
-Those final four commands install the recommended GHC compiler version
-and libraries. If you would prefer to install GHC via the system's
+The GHCup, rustup, and Cabal commands install the recommended compilers
+and Haskell libraries. If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
 substitute the following command.  Note well that the version of `ghc`
 tested for building the Bluespec toolchain is the version specified in
@@ -175,13 +181,16 @@ sudo dnf install \
    texlive-subfigure
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-ghcup install ghc 9.6.7
+ghcup install ghc 9.14.1
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
+cabal v1-install --allow-newer=cborg:base \
+   cborg regex-compat syb old-time split strict-concurrency
 ```
 
-Those final four commands install the recommended GHC compiler version
-and libraries. If you would prefer to install GHC via the system's
+The GHCup, rustup, and Cabal commands install the recommended compilers
+and Haskell libraries. If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
 substitute the following command.  Note well that the version of `ghc`
 tested for building the Bluespec toolchain is the version specified in
@@ -256,13 +265,16 @@ brew install \
    texlive
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-ghcup install ghc 9.6.7
+ghcup install ghc 9.14.1
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
+cabal v1-install --allow-newer=cborg:base \
+   cborg regex-compat syb old-time split strict-concurrency
 ```
 
-Those final four commands install the recommended GHC compiler version
-and libraries.
+The GHCup, rustup, and Cabal commands install the recommended compilers
+and Haskell libraries.
 
 ### GHC Haskell compiler
 
@@ -273,14 +285,13 @@ recommended version of GHC. The package manager for your OS may
 provide a package for GHC, however it may be for an older version of
 GHC.  This is fine, as the BSC source code has been written with
 extensive preprocessor macros to support every minor release of GHC
-since 7.10, through 9.12. Any releases in that range should be fine;
+since 7.10, through 9.14. Any releases in that range should be fine;
 however, newer versions may be more efficient.
 GHC releases older than 7.10.3 are not supported.
 
 BSC releases are tested and built with the recommended stable version
-of GHC, currently 9.6.7.  The source is also tested with a range of
-newer GHC versions (currently 9.8, 9.10, and 9.12) any of which are
-also fine.
+of GHC, currently 9.14.1.  The source is also tested with GHC 9.8,
+9.10, and 9.12, any of which are also fine.
 
 ### Haskell libraries via Cabal
 
