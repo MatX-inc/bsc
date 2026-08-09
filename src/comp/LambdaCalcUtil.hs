@@ -26,8 +26,8 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad(when)
 import Control.Monad.State(State, runState, gets, get, put)
-import Data.Maybe(isJust, catMaybes)
-import Data.List(intercalate, partition, union, nub)
+import Data.Maybe(isJust, catMaybes, fromJust)
+import Data.List(intercalate, partition, union, nub, sortOn)
 
 import Util(makePairs, flattenPairs, allSame, fst2of3)
 import SCC(tsort)
@@ -435,6 +435,27 @@ tsortActionsAndDefs mmap defmap uses acts =
         -- Convert the graph to the format expected by tsort.
         g_edges = M.toList g
 
+        -- tsort breaks ties by node Ord.  AId's Ord includes its internal
+        -- unique, so independent defs can otherwise move between compiler
+        -- runs.  Rank the def nodes by their printed names before sorting,
+        -- then map them back; action nodes retain their source positions.
+        g_def_ids :: [AId]
+        g_def_ids = S.toList $ S.fromList [ i | (n,ns) <- g_edges, Left i <- n:ns ]
+        rank_map :: M.Map AId Integer
+        rank_map = M.fromList $
+                     zip (sortOn getIdString g_def_ids)
+                         [(0::Integer)..]
+        unrank_map :: M.Map Integer AId
+        unrank_map = M.fromList [ (r,i) | (i,r) <- M.toList rank_map ]
+        encNode :: Node -> EncNode
+        encNode (Left i)  = Left (fromJust (M.lookup i rank_map))
+        encNode (Right n) = Right n
+        decNode :: EncNode -> Node
+        decNode (Left r)  = Left (fromJust (M.lookup r unrank_map))
+        decNode (Right n) = Right n
+        enc_edges :: [EncEdge]
+        enc_edges = [ (encNode n, map encNode ns) | (n,ns) <- g_edges ]
+
     in
       if (not (null bad_acts))
       then internalError ("tsortActionsAndDefs: unexpected inlining:\n" ++ ppReadable bad_acts)
@@ -444,12 +465,12 @@ tsortActionsAndDefs mmap defmap uses acts =
         -- the lower valued nodes first.  Thus, we have chosen the node
         -- representation to put Defs first, followed by Actions in the
         -- order that they were give by the user.)
-        case (tsort g_edges) of
+        case (tsort enc_edges) of
             Left is -> internalError ("tsortActionsAndDefs: cyclic " ++
-                                      ppReadable is)
+                                      ppReadable (map (map decNode) is))
             Right is ->
                 let -- lookup def and action nodes
-                    xs = map (either (Left . lookupDef defmap) (Right . getAct)) is
+                    xs = map ((either (Left . lookupDef defmap) (Right . getAct)) . decNode) is
                 in
                    (xs, av_meth_local_vars)
 
@@ -457,6 +478,10 @@ tsortActionsAndDefs mmap defmap uses acts =
 
 type Node = Either AId Integer
 type Edge = (Node, [Node])
+
+-- Stable representation used only for tsort's Ord-based tie-breaking.
+type EncNode = Either Integer Integer
+type EncEdge = (EncNode, [EncNode])
 
 -- -----
 

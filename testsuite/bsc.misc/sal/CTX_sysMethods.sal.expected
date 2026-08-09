@@ -13,10 +13,10 @@ BEGIN
      #) ;
   
   rule_RL_flip (state0 : STATE) : [ BOOLEAN, STATE ] =
-    LET def_y___d2 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_y)
-    IN LET def_y_EQ_0___d5 : BOOLEAN = Prim1{51}!primEQ(def_y___d2, Bit{51}!mkConst(0))
-    IN LET def_x___d1 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_x)
+    LET def_x___d1 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_x)
+    IN LET def_y___d2 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_y)
     IN LET def_x_ULE_y___d3 : BOOLEAN = Prim1{51}!primULE(def_x___d1, def_y___d2)
+    IN LET def_y_EQ_0___d5 : BOOLEAN = Prim1{51}!primEQ(def_y___d2, Bit{51}!mkConst(0))
     IN LET def_NOT_x_ULE_y_AND_NOT_y_EQ_0___d7 : BOOLEAN =
 	     (NOT def_x_ULE_y___d3) AND (NOT def_y_EQ_0___d5)
     IN LET act1 : [ CTX_RegN{51}!STATE, Unit!T ] = CTX_RegN{51}!meth_write(def_y___d2, state0.inst_x)
@@ -26,10 +26,10 @@ BEGIN
     IN ( def_NOT_x_ULE_y_AND_NOT_y_EQ_0___d7, state2 ) ;
   
   rule_RL_sub (state0 : STATE) : [ BOOLEAN, STATE ] =
-    LET def_y___d2 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_y)
-    IN LET def_y_EQ_0___d5 : BOOLEAN = Prim1{51}!primEQ(def_y___d2, Bit{51}!mkConst(0))
-    IN LET def_x___d1 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_x)
+    LET def_x___d1 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_x)
+    IN LET def_y___d2 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_y)
     IN LET def_x_ULE_y___d3 : BOOLEAN = Prim1{51}!primULE(def_x___d1, def_y___d2)
+    IN LET def_y_EQ_0___d5 : BOOLEAN = Prim1{51}!primEQ(def_y___d2, Bit{51}!mkConst(0))
     IN LET def_x_ULE_y_AND_NOT_y_EQ_0___d8 : BOOLEAN = def_x_ULE_y___d3 AND (NOT def_y_EQ_0___d5)
     IN LET def_y_MINUS_x___d9 : Bit{51}!T = Prim1{51}!primSub(def_y___d2, def_x___d1)
     IN LET act1 : [ CTX_RegN{51}!STATE, Unit!T ] =

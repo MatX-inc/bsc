@@ -64,8 +64,11 @@ sortRatList :: [(MethodId, [(UniqueUse, Integer)])] -> [(MethodId, [(UniqueUse, 
 sortRatList = sortBy cmp
     where cmp x y = compare (ppString x) (ppString y)
 
+sortRatUses :: [(UniqueUse, Integer)] -> [(UniqueUse, Integer)]
+sortRatUses = sortBy (comparing (ppString . fst))
+
 ratToNestedLists :: RAT -> [(MethodId, [(UniqueUse, Integer)])]
-ratToNestedLists = sortRatList . M.toList . M.map M.toList
+ratToNestedLists = sortRatList . M.toList . M.map (sortRatUses . M.toList)
 
 instance PPrint RAT where
   pPrint d p = pPrint d p . ratToNestedLists

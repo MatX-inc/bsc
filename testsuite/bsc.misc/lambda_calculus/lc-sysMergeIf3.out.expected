@@ -59,10 +59,10 @@ rule_RL_r2_sysMergeIf3 =
     (\ (state0 :: MOD_sysMergeIf3) ->
      let { (def_c3__h371 :: Bit #1) = meth_read_RegN (inst_c3__sysMergeIf3 state0)
 	 ; (def_c4__h387 :: Bit #1) = meth_read_RegN (inst_c4__sysMergeIf3 state0)
+	 ; (def_c3_AND_c4___d9 :: Bool) = (bitToBool def_c3__h371) && (bitToBool def_c4__h387)
 	 ; (def_c5__h411 :: Bit #1) = meth_read_RegN (inst_c5__sysMergeIf3 state0)
 	 ; (def_c4_AND_c5___d7 :: Bool) = (bitToBool def_c4__h387) && (bitToBool def_c5__h411)
 	 ; (def_c3_AND_c4_AND_c5___d8 :: Bool) = (bitToBool def_c3__h371) && def_c4_AND_c5___d7
-	 ; (def_c3_AND_c4___d9 :: Bool) = (bitToBool def_c3__h371) && (bitToBool def_c4__h387)
 	 ; (act1 :: (Bool, MOD_RegN #17, ())) = meth_write_RegN (0 :: Bit #17) (inst_x__sysMergeIf3 state0)
 	 ; (guard1 :: Bool) = if def_c3_AND_c4_AND_c5___d8 then fst3 act1 else True
 	 ; (state1 :: MOD_sysMergeIf3) =
