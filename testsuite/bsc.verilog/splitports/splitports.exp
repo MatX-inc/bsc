@@ -20,6 +20,10 @@ if { $vtest == 1 } {
 
     find_regexp mkShallowSplitTest.v {\(getBar_1_x, getBar_1_y\) -> GET_BAR_z}
     find_regexp mkShallowSplitTest.v {update_1_x -> update_v}
+    # Sign-extending a selected Int field by one bit preserves its numeric
+    # value and avoids a Verilator 5.048 lowering bug that reads the width of
+    # the unsliced source vector.
+    find_regexp mkShallowSplitTest.v {[$]signed\(\{ PUT_BAR_1_z\[15\], PUT_BAR_1_z\[15:8\] \}\)}
 }
 
 test_c_veri DeepSplit
@@ -52,6 +56,9 @@ if { $vtest == 1 } {
     find_regexp mkDeepSplitTest.v {getBar_1_x -> GET_BAR_z_x}
     find_regexp mkDeepSplitTest.v {getBar_1_y -> GET_BAR_z_y}
     find_regexp mkDeepSplitTest.v {update_1_x -> update_v_0}
+    # The same workaround must survive an 8-bit alias that Verilator can
+    # otherwise fold back into its wider source.
+    find_regexp sysDeepSplit.v {[$]signed\(\{ s[$]update_z_y\[7\], s[$]update_z_y \}\)}
 }
 
 test_c_veri InstanceSplit

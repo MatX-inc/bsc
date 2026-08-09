@@ -813,7 +813,22 @@ vExpr vco (AFunCall t _ n isC es) =
                     then dpiMonoCallName vco n (Just (aSize t)) (map (aSize . aType) es)
                     else vNameToTask False n
       name = if isC then foreignName else n
-  in VEFctCall (mkVId name) (map (vExpr vco) es)
+      ves = map (vExpr vco) es
+      -- Sign-extend a direct select by one bit before applying $signed.
+      -- This preserves its signed numeric value, while preventing Verilator
+      -- 5.048 from lowering $signed(reg[hi:lo]) with the width of reg and
+      -- reading bits outside the part-select.  A singleton concatenation or
+      -- explicit mask is optimized back into the broken form.
+      protectSignedArg _ e@(VESelect base hi _) =
+          VEConcat [VESelect1 base hi, e]
+      protectSignedArg _ e@(VESelect1 _ _) = VEConcat [e, e]
+      protectSignedArg ae e@(VEVar _)
+          | w > 0 = VEConcat [VESelect1 e (VEConst (w - 1)), e]
+        where w = aSize (aType ae)
+      protectSignedArg _ e = e
+      ves' | not isC && n == "$signed" = zipWith protectSignedArg es ves
+           | otherwise = ves
+  in VEFctCall (mkVId name) ves'
 vExpr vco (ASInt idt (ATBit w) (IntLit _ b i))  = VEWConst (idToVId idt) w b i
 vExpr vco (ASReal _ _ r)                        = VEReal r
 vExpr vco (ASStr _ _ s)                         = VEString s
