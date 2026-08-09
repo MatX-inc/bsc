@@ -328,6 +328,7 @@ aVerilog errh flags pps aspack ffmap =
             other_decls_group
 
         module_defs =
+            signed_width_function_group ++
             special_def_groups ++
             method_def_groups ++
             -- depending on flag, either empty or the submod instantiations
@@ -336,6 +337,40 @@ aVerilog errh flags pps aspack ffmap =
             mux_defs_group ++
             submod_def_groups ++
             other_defs_group
+
+        -- Verilator 5.048 can miscompile $signed applied to a part-select or
+        -- to a same-width alias of one.  Emit one width-preserving identity
+        -- function for every affected operand width in this module; vExpr
+        -- routes the corresponding cast arguments through these functions.
+        signed_width_function_group =
+            vGroupWithComment False
+                (map mkSignedWidthFunction signed_width_function_widths)
+                ["signed-cast width preservation functions"]
+
+        signed_width_function_widths =
+            S.toAscList $ S.fromList $
+                findAExprs (exprFold collectSignedWidth []) aspack
+
+        collectSignedWidth (AFunCall { ae_funname = "$signed",
+                                       ae_isC = False,
+                                       ae_args = call_args }) widths =
+            [ w
+            | arg <- call_args
+            , Just w <- [signedWidthFunctionWidth arg (vExpr vco arg)]
+            ] ++ widths
+        collectSignedWidth _ widths = widths
+
+        mkSignedWidthFunction w =
+            let function_name = signedWidthFunctionName w
+                argument_name = mkVId "__bsc$signed_arg"
+                function_range = Just (VEConst (w - 1), VEConst 0)
+                argument_decl =
+                    VVDecl VDInput function_range [VVar argument_name]
+                function_body =
+                    VSeq [VAssign (VLId function_name) (VEVar argument_name)]
+            in  VMFunction
+                    (VFunction function_name function_range
+                               [argument_decl] function_body)
 
 
         -- The main module

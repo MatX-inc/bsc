@@ -6,6 +6,8 @@ module AVerilogUtil (
                      -- basic conversion functions
                      vId,
                      vExpr,
+                     signedWidthFunctionName,
+                     signedWidthFunctionWidth,
                      vMethId,
                      vNameToTask,
 
@@ -814,18 +816,16 @@ vExpr vco (AFunCall t _ n isC es) =
                     else vNameToTask False n
       name = if isC then foreignName else n
       ves = map (vExpr vco) es
-      -- Sign-extend a direct select by one bit before applying $signed.
-      -- This preserves its signed numeric value, while preventing Verilator
-      -- 5.048 from lowering $signed(reg[hi:lo]) with the width of reg and
-      -- reading bits outside the part-select.  A singleton concatenation or
-      -- explicit mask is optimized back into the broken form.
-      protectSignedArg _ e@(VESelect base hi _) =
-          VEConcat [VESelect1 base hi, e]
-      protectSignedArg _ e@(VESelect1 _ _) = VEConcat [e, e]
-      protectSignedArg ae e@(VEVar _)
-          | w > 0 = VEConcat [VESelect1 e (VEConst (w - 1)), e]
-        where w = aSize (aType ae)
-      protectSignedArg _ e = e
+      -- Verilator 5.048 can lower $signed(reg[hi:lo]) (and even a same-width
+      -- alias of that select) using the width of the original reg, reading
+      -- bits outside the selected value.  Passing the value through a
+      -- width-specific identity function defeats that incorrect folding.
+      -- Unlike sign-extending the expression, the function preserves the
+      -- operand's width, which matters for $display's %b/%o/%h formats.
+      protectSignedArg ae ve =
+          case signedWidthFunctionWidth ae ve of
+            Just w  -> VEFctCall (signedWidthFunctionName w) [ve]
+            Nothing -> ve
       ves' | not isC && n == "$signed" = zipWith protectSignedArg es ves
            | otherwise = ves
   in VEFctCall (mkVId name) ves'
@@ -855,6 +855,26 @@ vExpr _ (ATupleSel _ e _) =
     internalError ("vExpr: ATupleSel over non-literal/non-def base: " ++ ppReadable e)
 
 vExpr vco e = internalError ("vExpr vco " ++ ppReadable e)
+
+-- A name in the compiler-generated '$' namespace keeps these helpers away
+-- from ordinary source identifiers.  The width suffix makes one function
+-- reusable by every affected cast of that width in a module.
+signedWidthFunctionName :: Integer -> VId
+signedWidthFunctionName w = mkVId ("__bsc$signed_width_" ++ itos w)
+
+-- Return the width of an expression which must cross the identity-function
+-- boundary before $signed.  Constants and compound expressions do not exhibit
+-- the Verilator bug; direct selects and variables (which can alias selects) do.
+signedWidthFunctionWidth :: AExpr -> VExpr -> Maybe Integer
+signedWidthFunctionWidth ae ve
+    | needsBoundary ve && w > 0 = Just w
+    | otherwise                 = Nothing
+  where
+    w = aSize (aType ae)
+    needsBoundary (VESelect _ _ _) = True
+    needsBoundary (VESelect1 _ _)  = True
+    needsBoundary (VEVar _)        = True
+    needsBoundary _                = False
 
 vXor :: VExpr -> VExpr -> VExpr
 vXor (VEWConst id_t s b i1) (VEWConst _ _ _ i2) = VEWConst id_t s b (integerXor i1 i2)
