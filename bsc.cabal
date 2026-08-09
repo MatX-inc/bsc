@@ -62,6 +62,7 @@ library
         AState
         ASyntax
         ASyntaxUtil
+        ATFRules
         ATaskSplice
         AUses
         AVeriQuirks
@@ -99,6 +100,7 @@ library
         CtxRed
         DOT
         DPIWrappers
+        DefProp
         Depend
         Deriving
         DisjointTest
@@ -109,6 +111,7 @@ library
         ErrorUtil
         Eval
         Exceptions
+        FSTRead
         FStringCompat
         FileIOUtil
         FileNameUtil
@@ -130,7 +133,9 @@ library
         GraphPaths
         GraphUtil
         GraphWrapper
+        GroundCType
         HTcl
+        HashUtil
         IConv
         IConvLet
         IDropRules
@@ -143,6 +148,7 @@ library
         IOMutVar
         IOUtil
         IPrims
+        ISimpDicts
         ISimplify
         ISplitIf
         IStateLoc
@@ -169,6 +175,7 @@ library
         LambdaCalc
         LambdaCalcUtil
         Lex
+        LiftDicts
         ListMap
         ListUtil
         Literal
@@ -225,6 +232,7 @@ library
         SimCOpt
         SimDomainInfo
         SimExpand
+        SimExportIR
         SimFileUtils
         SimMakeCBlocks
         SimPackage
@@ -234,6 +242,7 @@ library
         SolvedBinds
         Sort
         SpeedyString
+        StaleUtils
         StdPrel
         Subst
         SymTab
@@ -262,14 +271,18 @@ library
         Util
         VCD
         VFileName
+        VFileUtils
         VFinalCleanup
         VIOProps
         VModInfo
         VPIWrappers
         VPrims
+        VStableRenumber
         VVerilogDollar
         Verilog
         Version
+        WaveCheck
+        WireAnalysis
         Wires
         Yices
         YicesFFI
@@ -292,7 +305,8 @@ library
         integer-gmp,
         text,
         deepseq,
-        strict-concurrency
+        strict-concurrency,
+        cborg
     -- SAT solver shared libraries (built by src/vendor/{stp,yices}/Makefile)
     -- NOTE: the -L directories for these are machine-absolute and live in
     -- cabal.project.local (ghc-pkg rejects relative library-dirs at registration)
