@@ -6,6 +6,9 @@
 *.o
 *.so
 *.bexe
+*.bir
+*.birsnap
+*.texe
 *.v
 *.vexe
 *.vcd
@@ -14,6 +17,7 @@
 *.log
 smoke_test_verilog.out
 smoke_test_bluesim.out
+smoke_test_trs.out
 csrc
 INCA_libs
 simv.daidir
