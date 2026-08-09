@@ -22,7 +22,7 @@ module IExpandUtils(
         addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getErrHandle, getModuleName,
         getBNotCache, updBNotCache, getBitsSelInfo,
-        getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer, mergeATFCache,
+        getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer,
         instFunType,
         getNewRuleSuffix, updNewRuleSuffix,
         mapPExprPosition,
