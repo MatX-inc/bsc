@@ -1,10 +1,10 @@
 # bsc verilator link manifest
 TOP sysLCDisClk
-TOPFILE /home/ravi/bluespec/upstream/wt-assembly/testsuite/bsc.verilog/link_check/sysLCDisClk.v
+TOPFILE /tmp/claude-0/-home-user/479505d0-892c-56ea-9dfc-87992de50d52/scratchpad/fixwt/testsuite/bsc.verilog/link_check/sysLCDisClk.v
 DPI no
 NEEDS_TIMING no
-VLT_CONFIG /home/ravi/bluespec/upstream/wt-assembly/inst/lib/Verilator/verilator_config.vlt
+VLT_CONFIG /home/user/bsc/inst/lib/Verilator/verilator_config.vlt
 VDIR .
-VDIR /home/ravi/bluespec/upstream/wt-assembly/inst/lib/Libraries
-VDIR /home/ravi/bluespec/upstream/wt-assembly/inst/lib/Verilog
-VFILE /home/ravi/bluespec/upstream/wt-assembly/testsuite/bsc.verilog/link_check/sysLCDisClk.v HIER_ELIGIBLE
+VDIR /home/user/bsc/inst/lib/Libraries
+VDIR /home/user/bsc/inst/lib/Verilog
+VFILE /tmp/claude-0/-home-user/479505d0-892c-56ea-9dfc-87992de50d52/scratchpad/fixwt/testsuite/bsc.verilog/link_check/sysLCDisClk.v HIER_ELIGIBLE

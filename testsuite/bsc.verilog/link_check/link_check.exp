@@ -1,13 +1,22 @@
 #
 # Tests for "bsc -verilog -e top -check-only": the simulator builder's
 # "check" command validates the link's inputs and writes a manifest to
-# the -o filename instead of building.  The check never runs the
-# simulator itself, so this works wherever the builder script exists.
+# the -o filename instead of building.  The check never runs a
+# simulation, but it is real: it runs Verilator's front end over the
+# link's file list, so the verilator binary itself must be on PATH.
 # The manifest records per-module hierarchical-verilation eligibility,
 # read from the combinational-path comment BSC prints in each generated
 # Verilog file: mkLSub is registered (eligible), mkLComb has an
 # argument-to-result path (not eligible).
 #
+
+# Every test here drives `-vsim verilator`; skip the directory cleanly
+# on installations without the tool (mirroring bsc.trs/determinism's
+# probe) rather than failing in the builder script.
+if { [catch {exec sh -c "command -v verilator"}] } {
+    unsupported "link_check: verilator not found on PATH"
+    return
+}
 
 proc lc_run { testname output options } {
     set opts "-no-show-timestamps -no-show-version $options"
