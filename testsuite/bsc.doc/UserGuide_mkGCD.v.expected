@@ -71,7 +71,7 @@ module mkGCD(CLK,
   wire WILL_FIRE_RL_flip, WILL_FIRE_RL_sub;
 
   // inputs to muxes for submodule ports
-  wire [50 : 0] MUX_reg_2$write_1__VAL_3;
+  wire [50 : 0] MUX_reg_2$write_1__VAL_2;
 
   // remaining internal signals
   wire reg_1_ULE_reg_2___d3;
@@ -90,26 +90,26 @@ module mkGCD(CLK,
   assign WILL_FIRE_RL_sub = reg_1_ULE_reg_2___d3 && reg_2 != 51'd0 ;
 
   // inputs to muxes for submodule ports
-  assign MUX_reg_2$write_1__VAL_3 = reg_2 - reg_1 ;
+  assign MUX_reg_2$write_1__VAL_2 = reg_2 - reg_1 ;
 
   // register reg_1
-  assign reg_1$D_IN = EN_start ? start_num1 : reg_2 ;
-  assign reg_1$EN = EN_start || WILL_FIRE_RL_flip ;
+  assign reg_1$D_IN = WILL_FIRE_RL_flip ? reg_2 : start_num1 ;
+  assign reg_1$EN = WILL_FIRE_RL_flip || EN_start ;
 
   // register reg_2
-  always@(EN_start or
-	  start_num2 or
-	  WILL_FIRE_RL_flip or
-	  reg_1 or WILL_FIRE_RL_sub or MUX_reg_2$write_1__VAL_3)
+  always@(WILL_FIRE_RL_flip or
+	  reg_1 or
+	  WILL_FIRE_RL_sub or
+	  MUX_reg_2$write_1__VAL_2 or EN_start or start_num2)
   begin
     case (1'b1) // synopsys parallel_case
-      EN_start: reg_2$D_IN = start_num2;
       WILL_FIRE_RL_flip: reg_2$D_IN = reg_1;
-      WILL_FIRE_RL_sub: reg_2$D_IN = MUX_reg_2$write_1__VAL_3;
+      WILL_FIRE_RL_sub: reg_2$D_IN = MUX_reg_2$write_1__VAL_2;
+      EN_start: reg_2$D_IN = start_num2;
       default: reg_2$D_IN = 51'h2AAAAAAAAAAAA /* unspecified value */ ;
     endcase
   end
-  assign reg_2$EN = EN_start || WILL_FIRE_RL_flip || WILL_FIRE_RL_sub ;
+  assign reg_2$EN = WILL_FIRE_RL_flip || WILL_FIRE_RL_sub || EN_start ;
 
   // remaining internal signals
   assign reg_1_ULE_reg_2___d3 = reg_1 <= reg_2 ;

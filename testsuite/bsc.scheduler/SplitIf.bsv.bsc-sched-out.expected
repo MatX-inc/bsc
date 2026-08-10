@@ -21,11 +21,11 @@ order: [RL_toggle2, xfer_T, xfer_F, RL_toggle1]
 
 === resources (SplitIf mkSplitIf_Test):
 [(r1.read, [(r1.read, 1)]),
- (r1.write, [(r1.write xfer_sel, 1), (r1.write NOT_r1___d2, 1)]),
+ (r1.write, [(r1.write NOT_r1___d2, 1), (r1.write xfer_sel, 1)]),
  (r2.read, [(r2.read, 1)]),
- (r2.write, [(r2.write xfer_sel, 1), (r2.write NOT_r2___d4, 1)]),
+ (r2.write, [(r2.write NOT_r2___d4, 1), (r2.write xfer_sel, 1)]),
  (w.whas, [(w.whas, 1)]),
- (w.wset, [(w.wset r2__h256, 1)])]
+ (w.wset, [(w.wset r2__h218, 1)])]
 
 -----
 

@@ -15,8 +15,8 @@ order: [readCount, RL_driveCounter, incCount]
 === resources (SBRCount mkSBRCount):
 [(counter.read, [(counter.read, 1)]),
  (counter.write,
-  [(counter.write IF_counterWire_whas_THEN_counterWire_wget_ELSE_ETC___d5, 1),
-   (counter.write 26'd0, 1)]),
+  [(counter.write 26'd0, 1),
+   (counter.write IF_counterWire_whas_THEN_counterWire_wget_ELSE_ETC___d5, 1)]),
  (counterWire.wget, [(counterWire.wget, 1)]),
  (counterWire.whas, [(counterWire.whas, 1)]),
  (counterWire.wset, [(counterWire.wset counter___d1, 1)])]
