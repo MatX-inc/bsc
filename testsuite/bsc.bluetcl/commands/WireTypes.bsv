@@ -4,6 +4,8 @@ import Vector::*;
 import FIFOF::*;
 import BRAM::*;
 import Clocks::*;
+import Probe::*;
+import Counter::*;
 
 // ---- Interesting type fixtures ----------------------------------
 
@@ -118,6 +120,18 @@ module mkWireTypes (WireTypeIfc);
     PixelStash              leafA <- mkPixelStash;
     PixelStash              leafB <- mkPixelStash;
 
+    // Probe primitives -- specifically for VCD inspection. Bluesim
+    // dumps them as `<inst>$PROBE`; Verilog instantiates ProbeWire
+    // with an IN port (covered by the standard candidate path).
+    Probe#(Pixel)           pxProbe   <- mkProbe;
+    Probe#(Maybe#(Pixel))   mpxProbe  <- mkProbe;
+
+    // Counter primitive -- like a register but with a bare-name VCD
+    // alias and a `q_state` alias inside its sub-scope. The data type
+    // here is Bit#(12), so `loopCnt` correlates as Bit#(12) at the
+    // parent scope (bare name) and `loopCnt.q_state` (Bluesim sub-scope).
+    Counter#(12)            loopCnt   <- mkCounter(0);
+
     // BRAM with a tagged-union data type (polymorphic primitive: addr +
     // data, both interesting). Address type is Bit#(6) -> 64 entries.
     BRAM_Configure cfg = defaultValue;
@@ -203,6 +217,9 @@ module mkWireTypes (WireTypeIfc);
             address: truncate(pack(p.x)), datain: tagged Px p });
         leafA.push(p);
         leafB.push(Pixel { x: p.x + 1, y: p.y, color: p.color });
+        pxProbe  <= p;
+        mpxProbe <= tagged Valid p;
+        loopCnt.up;
     endmethod
 
     method Pixel         topPixel    () = px;

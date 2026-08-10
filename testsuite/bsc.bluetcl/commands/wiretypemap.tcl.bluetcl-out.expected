@@ -164,12 +164,23 @@ leafB.depth Bit#(8)
 leafB.push_p WireTypes::Pixel
 leafB.top WireTypes::Pixel
 loadPixel_p WireTypes::Pixel
+loopCnt Bit#(12)
+loopCnt.CLK Clock
+loopCnt.DATA_A Bit#(12)
+loopCnt.DATA_B Bit#(12)
+loopCnt.DATA_C Bit#(12)
+loopCnt.DATA_F Bit#(12)
+loopCnt.Q_OUT Bit#(12)
+loopCnt.RST Reset
+loopCnt.q_state Bit#(12)
 maybePixel Maybe#(WireTypes::Pixel)
 mpx Maybe#(WireTypes::Pixel)
 mpx.CLK Clock
 mpx.D_IN Maybe#(WireTypes::Pixel)
 mpx.Q_OUT Maybe#(WireTypes::Pixel)
 mpx.RST Reset
+mpxProbe.CLK Clock
+mpxProbe.PROBE Maybe#(WireTypes::Pixel)
 pal {Vector::Vector#(4, WireTypes::Color)}
 pal.CLK Clock
 pal.D_IN {Vector::Vector#(4, WireTypes::Color)}
@@ -203,6 +214,8 @@ px.CLK Clock
 px.D_IN WireTypes::Pixel
 px.Q_OUT WireTypes::Pixel
 px.RST Reset
+pxProbe.CLK Clock
+pxProbe.PROBE WireTypes::Pixel
 setPalette_cs {Vector::Vector#(4, WireTypes::Color)}
 syncfifo.dCLK Clock
 syncfifo.dD_OUT Maybe#(WireTypes::Pixel)
@@ -323,10 +336,20 @@ topPixel WireTypes::Pixel
 {leafB$depth} Bit#(8)
 {leafB$push_p} WireTypes::Pixel
 {leafB$top} WireTypes::Pixel
+{loopCnt$CLK} Clock
+{loopCnt$DATA_A} Bit#(12)
+{loopCnt$DATA_B} Bit#(12)
+{loopCnt$DATA_C} Bit#(12)
+{loopCnt$DATA_F} Bit#(12)
+{loopCnt$Q_OUT} Bit#(12)
+{loopCnt$RST} Reset
 {mpx$CLK} Clock
 {mpx$D_IN} Maybe#(WireTypes::Pixel)
 {mpx$Q_OUT} Maybe#(WireTypes::Pixel)
 {mpx$RST} Reset
+{mpxProbe$CLK} Clock
+{mpxProbe$PROBE_VALID} Bool
+{mpxProbe$PROBE} Maybe#(WireTypes::Pixel)
 {pal$CLK} Clock
 {pal$D_IN} {Vector::Vector#(4, WireTypes::Color)}
 {pal$Q_OUT} {Vector::Vector#(4, WireTypes::Color)}
@@ -352,6 +375,9 @@ topPixel WireTypes::Pixel
 {px$D_IN} WireTypes::Pixel
 {px$Q_OUT} WireTypes::Pixel
 {px$RST} Reset
+{pxProbe$CLK} Clock
+{pxProbe$PROBE_VALID} Bool
+{pxProbe$PROBE} WireTypes::Pixel
 {syncfifo$dCLK} Clock
 {syncfifo$dD_OUT} Maybe#(WireTypes::Pixel)
 {syncfifo$dEMPTY_N} Bool
