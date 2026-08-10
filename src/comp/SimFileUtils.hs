@@ -35,7 +35,10 @@ codeGenOptionDescr :: Flags -> Bool -> String
 codeGenOptionDescr flags is_top =
     unwords $ [ "Generation options:" ] ++
               (if (keepFires flags) then ["keep-fires"] else []) ++
-              (if (is_top && (genSysC flags)) then ["sysc-top"] else [])
+              (if (is_top && (genSysC flags)) then ["sysc-top"] else []) ++
+              -- Remaining ASAny values are lowered during Bluesim codegen,
+              -- so changing -unspecified-to changes the generated object.
+              [ "unspec-" ++ unSpecTo flags ]
 
 readCodeGenOptionDescr :: FilePath -> IO (Maybe String)
 readCodeGenOptionDescr f =

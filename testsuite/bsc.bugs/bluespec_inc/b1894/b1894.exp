@@ -28,15 +28,13 @@ if { $ctest == 1 } {
     move mkTop.cxx mkTop.A.cxx
     find_regexp mkTop.A.cxx {if \(DEF_cond__h\d+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)2u;}
 
-    # workaround BSC's failure to recompile due to flags
-    erase mkTop.o
+    # Changing -unspecified-to must invalidate the Bluesim object.
     # Test with 0
     link_objects_pass {} mkTop {-unspecified-to 0}
     move mkTop.cxx mkTop.0.cxx
     find_regexp mkTop.0.cxx {if \(DEF_cond__h\d+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)0u;}
 
-    # workaround BSC's failure to recompile due to flags
-    erase mkTop.o
+    # Changing it again must invalidate the replacement object.
     # Test with 1
     link_objects_pass {} mkTop {-unspecified-to 1}
     move mkTop.cxx mkTop.1.cxx
