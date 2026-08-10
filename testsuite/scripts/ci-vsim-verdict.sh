@@ -135,6 +135,28 @@ judge)
         red=1
     fi
 
+    # --- execution: every scheduled directory must have produced results.
+    # collect only emits noteworthy lines, so an all-PASS directory and a
+    # directory whose runtest never ran (crashed, or killed by the job
+    # timeout) look identical in observed.txt; the testrun.sum files are
+    # the only witness that a directory actually executed.  A missing one
+    # is infrastructure-red in every mode -- silence must never grade green.
+    if [ -f "$fdir/schedule.mk" ] && [ -d "$tsdir" ]; then
+        cat "$fdir/schedule.mk" \
+            | tr ' ' '\n' | grep '\.exp$' | sed 's|^\./||' | xargs -r -n1 dirname \
+            | sort -u > "$workdir/sched-dirs"
+        : > "$workdir/missing-sums"
+        while read -r d; do
+            [ -f "$tsdir/$d/testrun.sum" ] || echo "$d" >> "$workdir/missing-sums"
+        done < "$workdir/sched-dirs"
+        if [ -s "$workdir/missing-sums" ]; then
+            say "EXECUTION HOLES (scheduled dirs with no testrun.sum):"
+            head -50 "$workdir/missing-sums" | sed 's/^/    /' | while read -r l; do say "$l"; done
+            reasons+=("execution: $(wc -l < "$workdir/missing-sums") scheduled dir(s) produced no testrun.sum")
+            red=1
+        fi
+    fi
+
     # --- observed sets
     if [ -f "$fdir/observed.txt" ]; then
         sort -u "$fdir/observed.txt" > "$workdir/observed"

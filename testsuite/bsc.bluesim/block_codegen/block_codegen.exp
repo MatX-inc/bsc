@@ -1,6 +1,14 @@
 #
 # Tests for the -c codegen mode
 #
+# Every test in this file inspects the C++ backend's per-module
+# artifacts (.cxx/.h files and "Bluesim object created" logs), which
+# the -trs backend does not produce.
+if { ![cxx_codegen_tests] } {
+    verbose "Skipping C++-codegen inspection tests under [sim_backend_flag]" 1
+    return
+}
+#
 # "bsc -sim -c M" writes M's Bluesim C++ to the simdir and stops: it does
 # not compile or link, it does not require the codegen root to be a runnable
 # Bluesim top, and it generates the module exactly as it would appear as a
