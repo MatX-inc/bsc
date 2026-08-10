@@ -111,7 +111,9 @@ library
         ErrorUtil
         Eval
         Exceptions
-        FSTRead
+        -- FSTRead is deliberately NOT exposed: it foreign-imports the
+        -- vendored libfst C reader (and -lz), which this library does
+        -- not compile in; only the fstcheck tool links those objects.
         FStringCompat
         FileIOUtil
         FileNameUtil
