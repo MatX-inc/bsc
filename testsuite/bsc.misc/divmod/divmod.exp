@@ -1,22 +1,17 @@
 # Due to bugs in iverilog, we must use -no-use-negate and cannot do
 # wide division.
 
-# Verilator 5.048 mis-evaluates $display("%d", $signed(bus[31:16])) when
-# bus is a 64-bit submodule output carrying a runtime value: the 16-bit
-# part-selects in the lower 32-bit word print as unsigned 32-bit windows
-# (e.g. 4293656577 = {d,q} instead of q).  The hardware itself computes
-# correctly (the design's own check prints OK/PASSED); only the display
-# arguments are corrupted.  Confirmed a Verilator bug with a standalone
-# non-BSC repro; upstream-report candidate.  iverilog and Bluesim agree
-# with the golden.
-set verilator_signed_sel_bug {}
-if { $verilog_compiler == "verilator" } {
-    set verilator_signed_sel_bug $verilog_compiler
-}
+# The DivMod compare was XFAILed under verilator for a signed
+# part-select $display misprint (Verilator 5.048 printed 16-bit
+# part-selects of a 64-bit submodule output as unsigned 32-bit
+# windows).  "verilator: preserve signed part-select values" changed
+# the emitted Verilog so the trigger no longer appears in generated
+# code, and the test passes under verilator; the XFAIL key is retired
+# so an XPASS does not trip the CI verdict.
 
 test_c_veri_bsv SimpleTest sysSimpleTest.out.expected
 
-test_c_veri_bsv_modules_options DivMod {} "-no-use-negate" {} {} $verilator_signed_sel_bug
+test_c_veri_bsv_modules_options DivMod {} "-no-use-negate" {}
 
 test_c_veri_bsv_modules_options DivModWide {} "-no-use-negate" sysDivModWide.out.expected
 

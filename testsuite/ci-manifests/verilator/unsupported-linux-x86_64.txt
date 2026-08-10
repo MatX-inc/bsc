@@ -309,10 +309,22 @@ bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullSyncTest.v' link to executable `sys
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullSyncTest.v.out' matches `sysNullSyncTest.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullSyncTest2.v' link to executable `sysNullSyncTest2': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/NullCrossing :: UNSUPPORTED: `sysNullSyncTest2.v.out' matches `sysNullSyncTest2.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
+bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysInitialResetTest' executes with VCD dump: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysInitialResetTest' executes: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
 bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysMakeReset0' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysMakeReset0' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
+bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysMultipleResetsForRule' executes with VCD dump: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysMultipleResetsForRule' executes: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysOutputReset' executes with VCD dump: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: Verilog simulation `sysOutputReset' executes: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: `sysInitialResetTest.v' link to executable `sysInitialResetTest': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: `sysInitialResetTest.v.out' matches `sysInitialResetTest.out.expected': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
 bsc.mcd/Reset :: UNSUPPORTED: `sysMakeReset0.v' link to executable `sysMakeReset0': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/Reset :: UNSUPPORTED: `sysMakeReset0.v.out' matches `sysMakeReset0.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
+bsc.mcd/Reset :: UNSUPPORTED: `sysMultipleResetsForRule.v' link to executable `sysMultipleResetsForRule': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: `sysMultipleResetsForRule.v.out' matches `sysMultipleResetsForRule.out.expected': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: `sysOutputReset.v mkOutputReset_Sub.v' link to executable `sysOutputReset': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.mcd/Reset :: UNSUPPORTED: `sysOutputReset.v.out' matches `sysInitialResetTest.out.expected': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
 bsc.mcd/SyncReset :: UNSUPPORTED: Verilog simulation `sysRstTest' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/SyncReset :: UNSUPPORTED: Verilog simulation `sysRstTest' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.mcd/SyncReset :: UNSUPPORTED: Verilog simulation `sysRstTest_V1' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
@@ -559,10 +571,22 @@ bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockDiv.v' lin
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockDiv.v.out' matches `sysGatedClockDiv.v.out.expected': not run under verilator: gated clock divider simulation spins forever under verilator
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v' link to executable `sysGatedClockInv': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/ClockDividers :: UNSUPPORTED: `sysGatedClockInv.v.out' matches `sysGatedClockInv.v.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysInitialResetTest' executes with VCD dump: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysInitialResetTest' executes: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
 bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysMakeReset0' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysMakeReset0' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysMultipleResetsForRule' executes with VCD dump: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysMultipleResetsForRule' executes: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysOutputReset' executes with VCD dump: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: Verilog simulation `sysOutputReset' executes: not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysInitialResetTest.v' link to executable `sysInitialResetTest': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysInitialResetTest.v.out' matches `sysInitialResetTest.out.expected': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
 bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysMakeReset0.v' link to executable `sysMakeReset0': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysMakeReset0.v.out' matches `sysMakeReset0.out.expected': not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysMultipleResetsForRule.v' link to executable `sysMultipleResetsForRule': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysMultipleResetsForRule.v.out' matches `sysMultipleResetsForRule.out.expected': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysOutputReset.v mkOutputReset_Sub.v' link to executable `sysOutputReset': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
+bsc.verilog/positivereset/Reset :: UNSUPPORTED: `sysOutputReset.v.out' matches `sysInitialResetTest.out.expected': not run under verilator: instantiates InitialReset: simulation-only initial reset has no Verilator behavior
 bsc.verilog/positivereset/SyncReset :: UNSUPPORTED: Verilog simulation `sysRstTest' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/SyncReset :: UNSUPPORTED: Verilog simulation `sysRstTest' executes: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
 bsc.verilog/positivereset/SyncReset :: UNSUPPORTED: Verilog simulation `sysRstTest_V1' executes with VCD dump: not run under verilator: instantiates ClockGen: derived-clock generator needs --timing
