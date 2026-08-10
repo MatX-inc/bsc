@@ -81,6 +81,13 @@ bsc.bluetcl/*_correlation/bo_*/
 bsc.bluetcl/*_correlation/veri_*/
 bsc.bluetcl/*_correlation/sim/
 
+# generated DPI wrapper C files (bsc -use-dpi at compile/link)
+dpi_wrapper_*.c
+
+# per-machine LPT scheduling snapshot; CI copies
+# ci-manifests/verilator/timing-ci.txt here (deliberately untracked)
+timing.txt
+
 # ModelSim/Questa output
 transcript
 work_*
