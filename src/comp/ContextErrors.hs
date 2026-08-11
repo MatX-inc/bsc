@@ -15,7 +15,7 @@ import PFPrint
 
 import Pred
 
-import Subst(Types(..))
+import Subst(Types(..), apSub)
 import TIMonad
 import TCMisc
 import Unify

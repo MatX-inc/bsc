@@ -638,6 +638,7 @@ defaultFlags bluespecdir = Flags {
         unsafeAlwaysRdy = False,
         unSpecTo = "A",
         updCheck = False,
+        useApSubC = False,
         useDPI = False,
         useNegate = True,
         usePrelude = True,
@@ -1099,6 +1100,10 @@ externalFlags = [
         ("aggressive-conditions",
          (Toggle (\f x -> f {aggImpConds=x}) (showIfTrue aggImpConds),
           "construct implicit conditions aggressively", Visible)),
+
+        ("apsubc",
+         (Toggle (\f x -> f {useApSubC=x}) (showIfTrue useApSubC),
+          "use change-tracking substitution (apSubC) in the typechecker", Hidden)),
 
         ("bdir",
          (Arg "dir" (\f s -> Left (f {bdir = Just s}))
@@ -1939,6 +1944,7 @@ showFlagsRaw flags =
           ("unsafeAlwaysRdy", show (unsafeAlwaysRdy flags)),
           ("unSpecTo", show (unSpecTo flags)),
           ("updCheck", show (updCheck flags)),
+          ("useApSubC", show (useApSubC flags)),
           ("useDPI", show (useDPI flags)),
           ("useNegate", show (useNegate flags)),
           ("usePrelude", show (usePrelude flags)),
