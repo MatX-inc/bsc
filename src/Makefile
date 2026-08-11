@@ -10,15 +10,17 @@ CC_TOOLS=$(CC) $(CXX) $(LD)
 BSC_TOOLS=ghc ghc-pkg
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
+TRS_TOOLS=cargo
 
 TOOLS=$(CC_TOOLS) \
       $(BSC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
+      $(TRS_TOOLS) \
 
 GHC_PKGS=regex-compat syb old-time split strict-concurrency
 
-SUBMODS=vendor/yices/v2.6/yices2
+SUBMODS=vendor/yices/v2.6/yices2 vendor/libfst
 
 # Check all the necessary build tools are present
 pathsearch=$(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH)))))
@@ -68,5 +70,6 @@ install clean full_clean:
 	$(MAKE)  -C Verilog.Vivado   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C bluetcl    PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C bluesim    PREFIX=$(PREFIX)  $@
+	$(MAKE)  -C trs   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Verilator  PREFIX=$(PREFIX)  $@
 

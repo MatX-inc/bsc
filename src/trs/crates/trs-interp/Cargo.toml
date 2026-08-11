@@ -12,6 +12,10 @@ trs-codegen = { path = "../trs-codegen", optional = true }
 libloading = "0.8"
 libc = "0.2"
 
+[build-dependencies]
+# vendored libfst (FST wave sink; see build.rs)
+cc = "1"
+
 [features]
 # hybrid JIT: eligible rules run as LLVM-compiled functions inside the
 # interpreter's event loop (TRS_JIT=1 at runtime; needs llvm-18-dev)

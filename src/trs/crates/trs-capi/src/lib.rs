@@ -85,6 +85,9 @@ pub struct SimState {
     /// bk_peek_* word buffer (valid until the next peek, like the
     /// reference's internal storage)
     peek_buf: Vec<u32>,
+    /// bk_get_VCD_file_name return storage (valid until the next
+    /// call, like the reference's c_str())
+    vcd_name_buf: CString,
 }
 
 /// The engines while they live on the async worker thread.  Interp
@@ -287,6 +290,7 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
         runner: None,
         syms: Vec::new(),
         peek_buf: Vec::new(),
+        vcd_name_buf: CString::default(),
     });
     // one-time event-loop setup: clocks resolved, kernel reset
     // protocol seeded — `sim clock` works right after `sim load`
@@ -1244,6 +1248,69 @@ pub extern "C" fn bk_disable_VCD_dumping(hdl: *mut c_void) {
     }
     // disable is a no-op when dumping never started — no tier note
     st.primary().vcd_disable();
+}
+
+/// `bk_get_VCD_file_name`: "" when no file is set, never NULL (the
+/// reference returns its C++ string's c_str()).  The FST-era loader
+/// dlsyms this UNCONDITIONALLY — without it `sim load` fails.
+#[no_mangle]
+pub extern "C" fn bk_get_VCD_file_name(hdl: *mut c_void) -> *const c_char {
+    let st = state(hdl);
+    let name = if st.engines.is_empty() {
+        String::new() // async run in flight
+    } else {
+        st.primary().vcd_file_name().to_string()
+    };
+    st.vcd_name_buf = CString::new(name).unwrap_or_default();
+    st.vcd_name_buf.as_ptr()
+}
+
+/// `bk_set_waveform_format` (bluesim_kernel_api.h, FST era): select
+/// "vcd" or "fst" — the trs interp tier carries BOTH writers (the
+/// reference's -dump-formats gates which writers a C++ model was
+/// COMPILED with; an interpreter has no codegen to elide).  Unknown
+/// formats answer in the reference's exact vocabulary.  Waveforms
+/// need the interp tier like every other VCD control.
+#[no_mangle]
+pub extern "C" fn bk_set_waveform_format(
+    hdl: *mut c_void,
+    format: *const c_char,
+) -> i32 {
+    let st = state(hdl);
+    let name = if format.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(format) }.to_str().unwrap_or("")
+    };
+    let fmt = match name {
+        "vcd" => trs_interp::WaveFormat::Vcd,
+        "fst" => trs_interp::WaveFormat::Fst,
+        other => {
+            eprintln!(
+                "Error: unknown waveform format '{other}' \
+                 (supported: vcd, fst)"
+            );
+            return BK_ERROR;
+        }
+    };
+    if !vcd_capable(st) {
+        return BK_ERROR;
+    }
+    st.primary().wave_set_format(fmt);
+    BK_SUCCESS
+}
+
+/// `bk_get_waveform_format`: the active format.
+#[no_mangle]
+pub extern "C" fn bk_get_waveform_format(hdl: *mut c_void) -> *const c_char {
+    let st = state(hdl);
+    let fst = !st.engines.is_empty()
+        && st.primary().wave_format() == trs_interp::WaveFormat::Fst;
+    if fst {
+        b"fst\0".as_ptr() as *const c_char
+    } else {
+        b"vcd\0".as_ptr() as *const c_char
+    }
 }
 
 /// External clock definition: master-mode models (bluetcl always
