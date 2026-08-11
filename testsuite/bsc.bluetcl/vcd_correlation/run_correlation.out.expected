@@ -1,7 +1,7 @@
 ########## variant: default (Verilog default flags; Bluesim is flag-agnostic) ##########
 ##### module: mkWireTypes  @  main.top.dut #####
 === Verilog ===
-  hits:    156
+  hits:    183
   matched wires (sorted):
     CLK : Clock
     EN_loadPixel : Bool
@@ -65,6 +65,17 @@
     leafB.push_p : WireTypes::Pixel
     leafB.top : WireTypes::Pixel
     loadPixel_p : WireTypes::Pixel
+    loopCnt.ADDA : Bool
+    loopCnt.ADDB : Bool
+    loopCnt.DATA_A : Bit#(12)
+    loopCnt.DATA_B : Bit#(12)
+    loopCnt.DATA_C : Bit#(12)
+    loopCnt.DATA_F : Bit#(12)
+    loopCnt.Q_OUT : Bit#(12)
+    loopCnt.RST : Reset
+    loopCnt.SETC : Bool
+    loopCnt.SETF : Bool
+    loopCnt.q_state : Bit#(12)
     maybePixel : Maybe#(WireTypes::Pixel)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
@@ -74,6 +85,7 @@
     pulseTick : Bit#(2)
     px : WireTypes::Pixel
     setPalette_cs : Vector::Vector#(4, WireTypes::Color)
+    simpleCount : UInt#(4)
     syncfifo.dCLK : Clock
     syncfifo.dDEQ : Bool
     syncfifo.dD_OUT : Maybe#(WireTypes::Pixel)
@@ -127,8 +139,18 @@
     leafB$EN_push : Bool
     leafB$RDY_push : Bool
     leafB$push_p : WireTypes::Pixel
+    loopCnt$ADDA : Bool
+    loopCnt$ADDB : Bool
+    loopCnt$DATA_A : Bit#(12)
+    loopCnt$DATA_B : Bit#(12)
+    loopCnt$DATA_C : Bit#(12)
+    loopCnt$DATA_F : Bit#(12)
+    loopCnt$SETC : Bool
+    loopCnt$SETF : Bool
     mpx$D_IN : Maybe#(WireTypes::Pixel)
     mpx$EN : Bool
+    mpxProbe$PROBE_VALID : Bool
+    mpxProbe$PROBE : Maybe#(WireTypes::Pixel)
     pal$D_IN : Vector::Vector#(4, WireTypes::Color)
     pal$EN : Bool
     pulse$whas : Bool
@@ -140,13 +162,17 @@
     pulseTick$EN : Bool
     px$D_IN : WireTypes::Pixel
     px$EN : Bool
+    pxProbe$PROBE_VALID : Bool
+    pxProbe$PROBE : WireTypes::Pixel
+    simpleCount$D_IN : UInt#(4)
+    simpleCount$EN : Bool
     syncfifo$dDEQ : Bool
     syncfifo$dEMPTY_N : Bool
     syncfifo$sD_IN : Maybe#(WireTypes::Pixel)
     syncfifo$sENQ : Bool
     syncfifo$sFULL_N : Bool
 === Bluesim ===
-  hits:    71
+  hits:    86
   matched wires (sorted):
     CLK : Clock
     RST_N : Reset
@@ -199,6 +225,17 @@
     creg.Q_OUT_2 : WireTypes::Pixel
     creg.Q_OUT_3 : WireTypes::Pixel
     creg.Q_OUT_4 : WireTypes::Pixel
+    loopCnt : Bit#(12)
+    loopCnt.ADDA : Bool
+    loopCnt.ADDB : Bool
+    loopCnt.DATA_A : Bit#(12)
+    loopCnt.DATA_B : Bit#(12)
+    loopCnt.DATA_C : Bit#(12)
+    loopCnt.DATA_F : Bit#(12)
+    loopCnt.Q_OUT : Bit#(12)
+    loopCnt.SETC : Bool
+    loopCnt.SETF : Bool
+    loopCnt.q_state : Bit#(12)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
     pixelBypass : Maybe#(WireTypes::Pixel)
@@ -207,6 +244,10 @@
     pulseHistory : Bit#(8)
     pulseTick : Bit#(2)
     px : WireTypes::Pixel
+    simpleCount : UInt#(4)
+    simplePulse : Bool
+    mpxProbe$PROBE : Maybe#(WireTypes::Pixel)
+    pxProbe$PROBE : WireTypes::Pixel
 
 ##### module: mkPixelStash  @  main.top.dut.leafA #####
 === Verilog ===
@@ -356,7 +397,7 @@
     ticks : Bit#(8)
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 356
+  total VCD hits across all (module, scope) pairs: 398
 RESULT: PASS
 
 ##### module: mkSplitPortsTest  @  main.top.dut #####
@@ -428,7 +469,7 @@ RESULT: PASS
 ########## variant: kib (Verilog -keep-inlined-boundaries; Bluesim is flag-agnostic) ##########
 ##### module: mkWireTypes  @  main.top.dut #####
 === Verilog ===
-  hits:    186
+  hits:    214
   matched wires (sorted):
     CLK : Clock
     EN_loadPixel : Bool
@@ -492,6 +533,17 @@ RESULT: PASS
     leafB.push_p : WireTypes::Pixel
     leafB.top : WireTypes::Pixel
     loadPixel_p : WireTypes::Pixel
+    loopCnt.ADDA : Bool
+    loopCnt.ADDB : Bool
+    loopCnt.DATA_A : Bit#(12)
+    loopCnt.DATA_B : Bit#(12)
+    loopCnt.DATA_C : Bit#(12)
+    loopCnt.DATA_F : Bit#(12)
+    loopCnt.Q_OUT : Bit#(12)
+    loopCnt.RST : Reset
+    loopCnt.SETC : Bool
+    loopCnt.SETF : Bool
+    loopCnt.q_state : Bit#(12)
     maybePixel : Maybe#(WireTypes::Pixel)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
@@ -501,6 +553,7 @@ RESULT: PASS
     pulseTick : Bit#(2)
     px : WireTypes::Pixel
     setPalette_cs : Vector::Vector#(4, WireTypes::Color)
+    simpleCount : UInt#(4)
     syncfifo.dCLK : Clock
     syncfifo.dDEQ : Bool
     syncfifo.dD_OUT : Maybe#(WireTypes::Pixel)
@@ -583,8 +636,18 @@ RESULT: PASS
     leafB$EN_push : Bool
     leafB$RDY_push : Bool
     leafB$push_p : WireTypes::Pixel
+    loopCnt$ADDA : Bool
+    loopCnt$ADDB : Bool
+    loopCnt$DATA_A : Bit#(12)
+    loopCnt$DATA_B : Bit#(12)
+    loopCnt$DATA_C : Bit#(12)
+    loopCnt$DATA_F : Bit#(12)
+    loopCnt$SETC : Bool
+    loopCnt$SETF : Bool
     mpx$D_IN : Maybe#(WireTypes::Pixel)
     mpx$EN : Bool
+    mpxProbe$PROBE_VALID : Bool
+    mpxProbe$PROBE : Maybe#(WireTypes::Pixel)
     pal$D_IN : Vector::Vector#(4, WireTypes::Color)
     pal$EN : Bool
     pixelBypass$wget : Maybe#(WireTypes::Pixel)
@@ -597,13 +660,18 @@ RESULT: PASS
     pulseTick$EN : Bool
     px$D_IN : WireTypes::Pixel
     px$EN : Bool
+    pxProbe$PROBE_VALID : Bool
+    pxProbe$PROBE : WireTypes::Pixel
+    simpleCount$D_IN : UInt#(4)
+    simpleCount$EN : Bool
+    simplePulse$whas : Bool
     syncfifo$dDEQ : Bool
     syncfifo$dEMPTY_N : Bool
     syncfifo$sD_IN : Maybe#(WireTypes::Pixel)
     syncfifo$sENQ : Bool
     syncfifo$sFULL_N : Bool
 === Bluesim ===
-  hits:    71
+  hits:    86
   matched wires (sorted):
     CLK : Clock
     RST_N : Reset
@@ -656,6 +724,17 @@ RESULT: PASS
     creg.Q_OUT_2 : WireTypes::Pixel
     creg.Q_OUT_3 : WireTypes::Pixel
     creg.Q_OUT_4 : WireTypes::Pixel
+    loopCnt : Bit#(12)
+    loopCnt.ADDA : Bool
+    loopCnt.ADDB : Bool
+    loopCnt.DATA_A : Bit#(12)
+    loopCnt.DATA_B : Bit#(12)
+    loopCnt.DATA_C : Bit#(12)
+    loopCnt.DATA_F : Bit#(12)
+    loopCnt.Q_OUT : Bit#(12)
+    loopCnt.SETC : Bool
+    loopCnt.SETF : Bool
+    loopCnt.q_state : Bit#(12)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
     pixelBypass : Maybe#(WireTypes::Pixel)
@@ -664,6 +743,10 @@ RESULT: PASS
     pulseHistory : Bit#(8)
     pulseTick : Bit#(2)
     px : WireTypes::Pixel
+    simpleCount : UInt#(4)
+    simplePulse : Bool
+    mpxProbe$PROBE : Maybe#(WireTypes::Pixel)
+    pxProbe$PROBE : WireTypes::Pixel
 
 ##### module: mkPixelStash  @  main.top.dut.leafA #####
 === Verilog ===
@@ -813,7 +896,7 @@ RESULT: PASS
     ticks : Bit#(8)
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 386
+  total VCD hits across all (module, scope) pairs: 429
 RESULT: PASS
 
 ##### module: mkSplitPortsTest  @  main.top.dut #####

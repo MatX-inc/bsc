@@ -197,6 +197,19 @@ leafB.depth Bit#(8)
 leafB.push_p WireTypes::Pixel
 leafB.top WireTypes::Pixel
 loadPixel_p WireTypes::Pixel
+loopCnt Bit#(12)
+loopCnt.ADDA Bool
+loopCnt.ADDB Bool
+loopCnt.CLK Clock
+loopCnt.DATA_A Bit#(12)
+loopCnt.DATA_B Bit#(12)
+loopCnt.DATA_C Bit#(12)
+loopCnt.DATA_F Bit#(12)
+loopCnt.Q_OUT Bit#(12)
+loopCnt.RST Reset
+loopCnt.SETC Bool
+loopCnt.SETF Bool
+loopCnt.q_state Bit#(12)
 maybePixel Maybe#(WireTypes::Pixel)
 mpx Maybe#(WireTypes::Pixel)
 mpx.CLK Clock
@@ -204,6 +217,9 @@ mpx.D_IN Maybe#(WireTypes::Pixel)
 mpx.EN Bool
 mpx.Q_OUT Maybe#(WireTypes::Pixel)
 mpx.RST Reset
+mpxProbe.CLK Clock
+mpxProbe.PROBE Maybe#(WireTypes::Pixel)
+mpxProbe.PROBE_VALID Bool
 pal {Vector::Vector#(4, WireTypes::Color)}
 pal.CLK Clock
 pal.D_IN {Vector::Vector#(4, WireTypes::Color)}
@@ -243,6 +259,9 @@ px.D_IN WireTypes::Pixel
 px.EN Bool
 px.Q_OUT WireTypes::Pixel
 px.RST Reset
+pxProbe.CLK Clock
+pxProbe.PROBE WireTypes::Pixel
+pxProbe.PROBE_VALID Bool
 setPalette_cs {Vector::Vector#(4, WireTypes::Color)}
 syncfifo.dCLK Clock
 syncfifo.dDEQ Bool
@@ -398,11 +417,25 @@ topPixel WireTypes::Pixel
 {leafB$depth} Bit#(8)
 {leafB$push_p} WireTypes::Pixel
 {leafB$top} WireTypes::Pixel
+{loopCnt$ADDA} Bool
+{loopCnt$ADDB} Bool
+{loopCnt$CLK} Clock
+{loopCnt$DATA_A} Bit#(12)
+{loopCnt$DATA_B} Bit#(12)
+{loopCnt$DATA_C} Bit#(12)
+{loopCnt$DATA_F} Bit#(12)
+{loopCnt$Q_OUT} Bit#(12)
+{loopCnt$RST} Reset
+{loopCnt$SETC} Bool
+{loopCnt$SETF} Bool
 {mpx$CLK} Clock
 {mpx$D_IN} Maybe#(WireTypes::Pixel)
 {mpx$EN} Bool
 {mpx$Q_OUT} Maybe#(WireTypes::Pixel)
 {mpx$RST} Reset
+{mpxProbe$CLK} Clock
+{mpxProbe$PROBE_VALID} Bool
+{mpxProbe$PROBE} Maybe#(WireTypes::Pixel)
 {pal$CLK} Clock
 {pal$D_IN} {Vector::Vector#(4, WireTypes::Color)}
 {pal$EN} Bool
@@ -434,6 +467,9 @@ topPixel WireTypes::Pixel
 {px$EN} Bool
 {px$Q_OUT} WireTypes::Pixel
 {px$RST} Reset
+{pxProbe$CLK} Clock
+{pxProbe$PROBE_VALID} Bool
+{pxProbe$PROBE} WireTypes::Pixel
 {syncfifo$dCLK} Clock
 {syncfifo$dDEQ} Bool
 {syncfifo$dD_OUT} Maybe#(WireTypes::Pixel)

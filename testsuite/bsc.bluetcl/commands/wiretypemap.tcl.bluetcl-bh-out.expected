@@ -197,6 +197,19 @@ leafB.depth {Prelude.Bit 8}
 leafB.push_p WireTypes.Pixel
 leafB.top WireTypes.Pixel
 loadPixel_p WireTypes.Pixel
+loopCnt {Prelude.Bit 12}
+loopCnt.ADDA Prelude.Bool
+loopCnt.ADDB Prelude.Bool
+loopCnt.CLK Prelude.Clock
+loopCnt.DATA_A {Prelude.Bit 12}
+loopCnt.DATA_B {Prelude.Bit 12}
+loopCnt.DATA_C {Prelude.Bit 12}
+loopCnt.DATA_F {Prelude.Bit 12}
+loopCnt.Q_OUT {Prelude.Bit 12}
+loopCnt.RST Prelude.Reset
+loopCnt.SETC Prelude.Bool
+loopCnt.SETF Prelude.Bool
+loopCnt.q_state {Prelude.Bit 12}
 maybePixel {Prelude.Maybe WireTypes.Pixel}
 mpx {Prelude.Maybe WireTypes.Pixel}
 mpx.CLK Prelude.Clock
@@ -204,6 +217,9 @@ mpx.D_IN {Prelude.Maybe WireTypes.Pixel}
 mpx.EN Prelude.Bool
 mpx.Q_OUT {Prelude.Maybe WireTypes.Pixel}
 mpx.RST Prelude.Reset
+mpxProbe.CLK Prelude.Clock
+mpxProbe.PROBE {Prelude.Maybe WireTypes.Pixel}
+mpxProbe.PROBE_VALID Prelude.Bool
 pal {Vector.Vector 4 WireTypes.Color}
 pal.CLK Prelude.Clock
 pal.D_IN {Vector.Vector 4 WireTypes.Color}
@@ -243,6 +259,9 @@ px.D_IN WireTypes.Pixel
 px.EN Prelude.Bool
 px.Q_OUT WireTypes.Pixel
 px.RST Prelude.Reset
+pxProbe.CLK Prelude.Clock
+pxProbe.PROBE WireTypes.Pixel
+pxProbe.PROBE_VALID Prelude.Bool
 setPalette_cs {Vector.Vector 4 WireTypes.Color}
 syncfifo.dCLK Prelude.Clock
 syncfifo.dDEQ Prelude.Bool
@@ -398,11 +417,25 @@ topPixel WireTypes.Pixel
 {leafB$depth} {Prelude.Bit 8}
 {leafB$push_p} WireTypes.Pixel
 {leafB$top} WireTypes.Pixel
+{loopCnt$ADDA} Prelude.Bool
+{loopCnt$ADDB} Prelude.Bool
+{loopCnt$CLK} Prelude.Clock
+{loopCnt$DATA_A} {Prelude.Bit 12}
+{loopCnt$DATA_B} {Prelude.Bit 12}
+{loopCnt$DATA_C} {Prelude.Bit 12}
+{loopCnt$DATA_F} {Prelude.Bit 12}
+{loopCnt$Q_OUT} {Prelude.Bit 12}
+{loopCnt$RST} Prelude.Reset
+{loopCnt$SETC} Prelude.Bool
+{loopCnt$SETF} Prelude.Bool
 {mpx$CLK} Prelude.Clock
 {mpx$D_IN} {Prelude.Maybe WireTypes.Pixel}
 {mpx$EN} Prelude.Bool
 {mpx$Q_OUT} {Prelude.Maybe WireTypes.Pixel}
 {mpx$RST} Prelude.Reset
+{mpxProbe$CLK} Prelude.Clock
+{mpxProbe$PROBE_VALID} Prelude.Bool
+{mpxProbe$PROBE} {Prelude.Maybe WireTypes.Pixel}
 {pal$CLK} Prelude.Clock
 {pal$D_IN} {Vector.Vector 4 WireTypes.Color}
 {pal$EN} Prelude.Bool
@@ -434,6 +467,9 @@ topPixel WireTypes.Pixel
 {px$EN} Prelude.Bool
 {px$Q_OUT} WireTypes.Pixel
 {px$RST} Prelude.Reset
+{pxProbe$CLK} Prelude.Clock
+{pxProbe$PROBE_VALID} Prelude.Bool
+{pxProbe$PROBE} WireTypes.Pixel
 {syncfifo$dCLK} Prelude.Clock
 {syncfifo$dDEQ} Prelude.Bool
 {syncfifo$dD_OUT} {Prelude.Maybe WireTypes.Pixel}

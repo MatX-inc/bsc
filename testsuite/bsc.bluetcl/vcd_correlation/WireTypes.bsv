@@ -4,6 +4,8 @@ import Vector::*;
 import FIFOF::*;
 import BRAM::*;
 import Clocks::*;
+import Probe::*;
+import Counter::*;
 
 // ---- Interesting type fixtures ----------------------------------
 
@@ -146,6 +148,15 @@ module mkWireTypes (WireTypeIfc);
     Reg#(Bit#(8))           pulseHistory <- mkReg(0);
     Reg#(Bit#(2))           pulseTick    <- mkReg(0);
 
+    // A second PulseWire used with a simple, single-consumer pattern
+    // -- aOpt aggressively folds `simplePulse._read` into the rule
+    // predicate, eliminating the literal `simplePulse$whas` wire from
+    // the Verilog VCD. With `-keep-inlined-boundaries`, the wire is
+    // preserved. This is a deliberate negative-then-positive test of
+    // the flag's effect.
+    PulseWire               simplePulse  <- mkPulseWire;
+    Reg#(UInt#(4))          simpleCount  <- mkReg(0);
+
     // Two instances of a separately-synthesized leaf, so the VCD has
     // sub-scopes `leafA` and `leafB` (each instantiating a Reg#(Pixel)
     // and a FIFOF#(Pixel)). The same mkPixelStash wiretypemap covers
@@ -158,6 +169,18 @@ module mkWireTypes (WireTypeIfc);
     // set differs per method, pinning the wiretypemap's emission.
     AnnotStash              annot <- mkAnnotStash;
     Reg#(Bit#(8))           annotSeen <- mkReg(0);
+
+    // Probe primitives -- specifically for VCD inspection. Bluesim
+    // dumps them as `<inst>$PROBE`; Verilog instantiates ProbeWire
+    // with an IN port (covered by the standard candidate path).
+    Probe#(Pixel)           pxProbe   <- mkProbe;
+    Probe#(Maybe#(Pixel))   mpxProbe  <- mkProbe;
+
+    // Counter primitive -- like a register but with a bare-name VCD
+    // alias and a `q_state` alias inside its sub-scope. The data type
+    // here is Bit#(12), so `loopCnt` correlates as Bit#(12) at the
+    // parent scope (bare name) and `loopCnt.q_state` (Bluesim sub-scope).
+    Counter#(12)            loopCnt   <- mkCounter(0);
 
     // BRAM with a tagged-union data type (polymorphic primitive: addr +
     // data, both interesting). Address type is Bit#(6) -> 64 entries.
@@ -245,6 +268,17 @@ module mkWireTypes (WireTypeIfc);
         pulseHistory <= { pulseHistory[6:0], pack(pulse) };
     endrule
 
+    // Drive simplePulse unconditionally and consume in exactly one
+    // rule with a trivial predicate -- the canonical pattern that aOpt
+    // folds away. Without -keep-inlined-boundaries: simplePulse$whas
+    // disappears from the Verilog VCD. With the flag: it survives.
+    rule poke_simple;
+        simplePulse.send;
+    endrule
+    rule count_simple (simplePulse);
+        simpleCount <= simpleCount + 1;
+    endrule
+
     method Action loadPixel (Pixel p);
         px <= p;
         mpx <= tagged Valid p;
@@ -255,6 +289,9 @@ module mkWireTypes (WireTypeIfc);
             address: truncate(pack(p.x)), datain: tagged Px p });
         leafA.push(p);
         leafB.push(Pixel { x: p.x + 1, y: p.y, color: p.color });
+        pxProbe  <= p;
+        mpxProbe <= tagged Valid p;
+        loopCnt.up;
     endmethod
 
     method Pixel         topPixel    () = px;
