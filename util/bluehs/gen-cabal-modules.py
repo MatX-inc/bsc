@@ -37,7 +37,11 @@ EXCLUDE_FILES = {
 
 # Dead code in the vendored Parsec fork: unreachable from any tool and
 # uncompilable with modern base (Haskell98 'Char'/'List' imports, stale API).
-EXCLUDE_MODULES = {"ParsecToken", "ParsecLanguage", "ParsecPerm"}
+# FSTRead (when present in the tree) foreign-imports the vendored libfst C
+# reader (and -lz), which the cabal library does not compile in; only the
+# fstcheck tool links those objects, so exposing it would ship dangling
+# symbols.
+EXCLUDE_MODULES = {"ParsecToken", "ParsecLanguage", "ParsecPerm", "FSTRead"}
 
 MOD_RE = re.compile(r"^(?:> )?module\s+([A-Za-z0-9_.']+)", re.M)
 

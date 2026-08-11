@@ -27,8 +27,14 @@ for f in src/vendor/stp/lib/libstp.so src/vendor/yices/lib/libyices.so; do
     fi
 done
 
-# Generated modules (same scripts the make build runs)
-(cd src/comp && ./update-build-version.sh && ./update-build-system.sh)
+# Generated modules (same scripts the make build runs).
+# update-build-version.sh runs under `set -u` and reads NOGIT and
+# NOUPDATEBUILDVERSION from the environment; the make build exports
+# them with defaults (src/comp/Makefile), so default them here too.
+(cd src/comp && \
+     NOGIT="${NOGIT:-0}" NOUPDATEBUILDVERSION="${NOUPDATEBUILDVERSION:-0}" \
+     ./update-build-version.sh && \
+     ./update-build-system.sh)
 
 # Machine-local cabal configuration: ghc-pkg requires ABSOLUTE library dirs
 # at registration time, so these cannot live in the committed bsc.cabal.
