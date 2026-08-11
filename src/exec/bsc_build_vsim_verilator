@@ -25,7 +25,18 @@
 #   ofiles   - any VPI object files to link in
 # exits with status 0 if it successfully built the simulator, 1 otherwise
 
-BSC_COMMAND=$1           # "detect" or "link"
+BSC_COMMAND=$1           # "detect", "link", or "check"
+#
+# "check" (from bsc's -check-only at link time) runs the same argument
+# validation as "link", then runs Verilator's front end (--lint-only)
+# over exactly the closure the link would use -- so failure means the
+# link itself would fail -- and, instead of building, writes a manifest
+# of everything the link would consume to the output filename: the top
+# module and its file, the Verilog file closure, search directories,
+# defines, DPI objects, C libraries and link options, and per-module
+# hierarchical-verilation eligibility (from the combinational-path
+# comment BSC prints in each generated file).  Build systems consume
+# the manifest to drive their own Verilator invocations.
 
 if [ "$BSC_COMMAND" = "detect" ]; then
 # detect whether the command "verilator" is in the path
@@ -41,8 +52,8 @@ if [ "$BSC_COMMAND" = "detect" ]; then
   fi
 fi
 
-# the only remaining command is "link"
-if [ "$BSC_COMMAND" != "link" ]; then
+# the remaining commands are "link" and "check"
+if [ "$BSC_COMMAND" != "link" ] && [ "$BSC_COMMAND" != "check" ]; then
   echo "ERROR: unknown command: $BSC_COMMAND" >&2
   exit 1
 fi
@@ -326,6 +337,14 @@ if [ -n "$INOUT_EXPRS_FILE" ]; then
     exit 1
 fi
 
+# Both "link" and "check" need the verilator front end from here on;
+# fail with a clear message rather than letting an empty version melt
+# into "[: Illegal number" arithmetic below.
+if ! command -v verilator > /dev/null 2>&1 ; then
+    echo "ERROR: verilator was not found on PATH" >&2
+    exit 1
+fi
+
 # Starting with version 5, zero-delay statements (like #0) require
 # a flag to specify how they should be handled (--timing or --no-timing).
 # Designs that generate a clock/reset additionally require --timing, which
@@ -359,17 +378,95 @@ else
 fi
 
 
+# ---------------
+# Hierarchical-verilation eligibility: a module whose generated file
+# carries BSC's "No combinational paths from inputs to outputs" header
+# comment has no input-to-output combinational path, so verilating it
+# as a hierarchical block cannot create a false combinational loop at
+# the boundary.  Modules with paths (or hand-written files without the
+# marker) are left to be verilated inside their parent.
+hier_eligible() {
+    grep -q "^// No combinational paths from inputs to outputs" "$1" 2>/dev/null
+}
+
+# "check": the check is real -- run Verilator's front end over exactly
+# the closure the link would use.  --lint-only elaborates the design,
+# resolving every submodule through the same files and -y path, without
+# generating any C++; failure here means the link itself would fail,
+# with the reason on stderr.  Then write the manifest.
+if [ "$BSC_COMMAND" = "check" ]; then
+  if ! verilator --lint-only $VLT_WARN $VLT_TOP $VLT_TOPINST $VLT_PREFIX \
+          $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE \
+          $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS \
+          $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN ; then
+      echo "ERROR: verilator link check failed for '${BSC_TOPLEVEL_MODULE}'" >&2
+      exit 1
+  fi
+  {
+    echo "# bsc verilator link manifest"
+    echo "TOP $BSC_TOPLEVEL_MODULE"
+    echo "TOPFILE $TOP_VERFILE"
+    echo "DPI $USEDPI"
+    echo "NEEDS_TIMING $NEEDS_TIMING"
+    echo "VLT_CONFIG $VLT_CONFIG"
+    for d in $VERDIRS ; do echo "VDIR $d" ; done
+    for x in $BSC_VERILOG_DEFS ; do echo "DEFINE ${x#-D}" ; done
+    for f in $BSC_VERILOG_FILES_NO_MAIN ; do
+        if hier_eligible $f ; then
+            echo "VFILE $f HIER_ELIGIBLE"
+        else
+            echo "VFILE $f"
+        fi
+    done
+    for f in $VPI_FILES ; do echo "DPIOBJ $f" ; done
+    for x in $BSC_C_LIB_PATH ; do echo "CLIBPATH ${x#-L}" ; done
+    for x in $BSC_C_LIBS ; do echo "CLIB ${x#-l}" ; done
+    for x in $BSC_CLINK_OPTS ; do echo "LINKOPT $x" ; done
+    for x in $BSC_VERILOG_OPTS ; do echo "VOPT $x" ; done
+  } > $BSC_SIM_EXECUTABLE
+  exit 0
+fi
+
+# ---------------
+# Hierarchical verilation (opt-in): mark every eligible generated
+# module as a hier_block via a generated configuration file, so
+# Verilator compiles it as a separate unit.  BSC_VSIM_HIER_MIN_LINES
+# can exempt small files, where per-block overhead outweighs the win.
+# No UNOPTFLAT waiver is needed: eligibility makes false loops
+# impossible, so any UNOPTFLAT is a real finding and should fail.
+VLT_HIER=""
+if [ "${BSC_VSIM_HIER:-0}" = "1" ]; then
+    mkdir -p $OBJDIR
+    HIER_VLT=$OBJDIR/hier.vlt
+    echo '`verilator_config' > $HIER_VLT
+    nhier=0
+    for vf in $BSC_VERILOG_FILES_NO_MAIN ; do
+        if hier_eligible $vf ; then
+            minlines=${BSC_VSIM_HIER_MIN_LINES:-0}
+            if [ "$minlines" -gt 0 ] && [ `wc -l < $vf` -lt "$minlines" ]; then
+                continue
+            fi
+            fbase=`basename $vf`
+            mod=${fbase%.*}
+            echo "hier_block -module \"$mod\"" >> $HIER_VLT
+            nhier=`expr $nhier + 1`
+        fi
+    done
+    if [ "$nhier" -gt 0 ]; then
+        VLT_HIER="--hierarchical -j ${BSC_VSIM_BUILD_JOBS:-0} $HIER_VLT"
+    fi
+fi
 
 # compile Verilog files
 if [ "$VERBOSE" = "yes" ]; then
   # XXX Verilator doesn't have a verbosity flag?
   VLT_VERBOSE=""
-  echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
+  echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VLT_HIER $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
 else
   VLT_VERBOSE=""
 fi
 
-verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
+verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VLT_HIER $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
 
 status=$?
 if [ "$status" != "0" ]; then

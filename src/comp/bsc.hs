@@ -2015,7 +2015,10 @@ vSimLink errh flags toplevel prefix vfiles ofiles = do
         linkerflags = map ("-Xl "++) (linkFlags flags)
         verboseflag = if (verbose flags) then ["-verbose"] else []
         dpiflag = if (useDPI flags) then ["-dpi"] else []
-        args = (["link"
+        -- with -check-only, the builder validates its arguments and
+        -- writes a manifest of the link's inputs instead of building
+        buildcmd = if (checkOnly flags) then "check" else "link"
+        args = ([buildcmd
                 , outFile
                 , toplevel ] ++
                 verboseflag ++
@@ -2038,8 +2041,11 @@ vSimLink errh flags toplevel prefix vfiles ofiles = do
               unwords (build_script : args)
     when (verbose flags) $ putStrLnF ("exec: " ++ cmd)
     rc <- system cmd
+    let done_msg = if (checkOnly flags)
+                   then "Verilog link manifest created: "
+                   else "Verilog binary file created: "
     case rc of
-        ExitSuccess -> unless (quiet flags) $ putStrLnF ("Verilog binary file created: " ++ outFile)
+        ExitSuccess -> unless (quiet flags) $ putStrLnF (done_msg ++ outFile)
         ExitFailure n -> exitFailWith errh n
 
 veriFiles :: String -> [String]
