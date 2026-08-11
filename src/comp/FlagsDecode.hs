@@ -545,6 +545,7 @@ defaultFlags bluespecdir = Flags {
         genABin = False,
         genABinVerilog = False,
         genBir = False,
+        genTrs = False,
         genName = [],
         genSysC = False,
         -- The ifcPath value will be produced from the raw value,
@@ -1612,6 +1613,15 @@ externalFlags = [
          (Toggle (\f x -> f {tclShowHidden=x}) (showIfTrue tclShowHidden),
           "show hidden levels of instance hierarchy in bluetcl", Hidden)),
 
+        ("trs",
+         let setFn f = case setBackend f Bluesim of
+                         Left f' -> Left f' { genABin = True, genBir = True,
+                                              genTrs = True }
+                         Right e -> Right e
+             getFn f = genTrs f
+         in  (NoArg setFn (Just getFn),
+              "compile BSV generating a TRS simulation", Visible)),
+
         ("u",
          (Toggle (\f x -> f {updCheck=x}) (showIfTrue updCheck),
           "check and recompile packages that are not up to date", Visible)),
@@ -1857,6 +1867,7 @@ showFlagsRaw flags =
           ("genABin", show (genABin flags)),
           ("genABinVerilog", show (genABinVerilog flags)),
           ("genBir", show (genBir flags)),
+          ("genTrs", show (genTrs flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),
           ("ifLift", show (ifLift flags)),

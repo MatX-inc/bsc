@@ -30,6 +30,7 @@ Flags {
 	genABin = False,
 	genABinVerilog = False,
 	genBir = False,
+	genTrs = False,
 	genName = [],
 	genSysC = False,
 	ifLift = True,
