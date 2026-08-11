@@ -1,0 +1,92 @@
+# trs emission determinism: linking the same .bir must produce
+# byte-identical pre-O3 LLVM IR (TRS_JIT_DUMP_PRE) and a
+# byte-identical model .so on every invocation — HashMap iteration
+# order must never reach emission (jit.rs pinned corder +
+# topo-ordered hoist preludes + en_slots sort; the mechanism and
+# history are in src/trs/docs/CPHASE-PLAN.md, increment 0).
+#
+# CountShare is the chained-fold shared-cone shape whose EMITTED SIZE
+# was order-dependent before the topo fix (2^k-1 arm re-expansion of
+# countOnes-style folds); HoistDivTrap covers guarded hoisted
+# division (the trap guard must survive prelude reordering).  Each
+# artifact also runs once against a golden .out.expected so the
+# specimen designs stay honest.
+#
+# The trs binary comes from $TRS or the PATH; UNSUPPORTED when
+# absent (the trs backend is optional tooling).
+
+proc trs_det_test { trs name top } {
+    global srcdir subdir bsc
+
+    bsc_initialize
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set nlinks 3
+    set log "$name.det-out"
+    set flags "-no-show-timestamps -no-show-version"
+
+    if { [catch {exec sh -c "$bsc $flags -sim -u -g $top $name.bs > $log 2>&1 && $bsc $flags -sim -bir -e $top -o $top.ref >> $log 2>&1"}] } {
+        fail "trs determinism compile/export of $name (log `$log')"
+        cd $here
+        return
+    }
+
+    for {set i 1} {$i <= $nlinks} {incr i} {
+        if { [catch {exec sh -c "TRS_JIT_DUMP_PRE=1 $trs link $top.bir -o $name.art$i > /dev/null 2> $name.ir$i"}] } {
+            fail "trs determinism link of $name (run `$i')"
+            cd $here
+            return
+        }
+    }
+
+    set ok 1
+    for {set i 2} {$i <= $nlinks} {incr i} {
+        if { [catch {exec cmp -s $name.ir1 $name.ir$i}] } {
+            fail "pre-O3 IR identical across links of $name (run `$i' differs)"
+            set ok 0
+        }
+        if { [catch {exec cmp -s $name.art1.so $name.art$i.so}] } {
+            fail "artifact .so identical across links of $name (run `$i' differs)"
+            set ok 0
+        }
+    }
+    if { $ok } {
+        pass "pre-O3 IR and artifact .so identical across links of $name"
+    }
+
+    # artifact honesty: one run against the golden output
+    if { [catch {exec sh -c "TRS=$trs ./$name.art1 > $name.trs-run-out 2>&1"}] } {
+        fail "trs artifact run of $name"
+    } else {
+        compare_file $name.trs-run-out $top.out.expected "trs_determinism"
+    }
+
+    # scratch cleanup; keep the IR dumps when they differed (evidence)
+    set scratch [glob -nocomplain $name.art* $top.ref* $top.bir*]
+    if { $ok } {
+        set scratch [concat $scratch [glob -nocomplain $name.ir*]]
+    }
+    foreach f $scratch { file delete -force $f }
+    cd $here
+}
+
+global env
+set trs_cmd "trs"
+if { [info exists env(TRS)] } { set trs_cmd $env(TRS) }
+
+if { [catch {exec sh -c "command -v $trs_cmd"}] } {
+    unsupported "trs emission determinism (trs not installed)"
+} elseif { [catch {exec sh -c "$trs_cmd features | grep -qw jit"}] } {
+    # `trs link` emits the model .so (and the TRS_JIT_DUMP_PRE IR the
+    # identity checks compare) only when trs was built with the jit
+    # feature (LLVM_SYS_181_PREFIX at build time).  A plain
+    # `make install-src` installs the interpreter-only trs, whose links
+    # produce a wrapper and no .so at all -- so probe the feature set
+    # and mark the directory UNSUPPORTED rather than failing on absent
+    # files.
+    unsupported "trs emission determinism (trs built without the jit feature)"
+} else {
+    trs_det_test $trs_cmd CountShare sysCountShare
+    trs_det_test $trs_cmd HoistDivTrap sysHoistDivTrap
+}

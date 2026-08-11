@@ -11,7 +11,9 @@ mkdir sd
 compile_object_pass Top.bsv {} {-bdir bd}
 link_objects_pass {} mkTop {-bdir bd -simdir sd}
 move mkTop.bsc-ccomp-out bsim_build.out
+if { [cxx_codegen_tests] } {
 compare_file bsim_build.out
+}
 sim_output mkTop {}
 move mkTop.out bsim_sim.out
 compare_file bsim_sim.out

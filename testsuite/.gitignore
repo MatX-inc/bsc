@@ -42,6 +42,8 @@ module_*.cxx
 
 # Simulation executables
 *.cexe
+*.bir
+*.bdpi.so
 *.vexe
 *.syscexe
 

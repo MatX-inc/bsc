@@ -20,6 +20,15 @@ fn usage() -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        // trs features: print the compiled-in feature set, one per line
+        // (the testsuite probes for "jit" to decide whether link-artifact
+        // checks are supported)
+        ["features"] => {
+            if cfg!(feature = "jit") {
+                println!("jit");
+            }
+            ExitCode::SUCCESS
+        }
         ["ir", "dump", path] => match std::fs::read(path) {
             Ok(bytes) => match trs_ir::Design::decode(&bytes) {
                 Ok(design) => {

@@ -1968,9 +1968,17 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
                   ++ outFile ++ "\""
     rc <- system linkCmd
     case rc of
-      ExitSuccess ->
+      ExitSuccess -> do
+        -- `trs link` exits 0 in both modes: with the jit feature it
+        -- emits a compiled model artifact, without it an interpreter
+        -- wrapper of its own.  Probe the feature set so the message
+        -- reports which one was just created.
+        jitRc <- system "\"${TRS:-trs}\" features 2>/dev/null | grep -qw jit"
+        let how = case jitRc of
+                    ExitSuccess -> " (compiled)"
+                    _           -> " (interpreted)"
         unless (quiet flags) $
-            putStrLnF ("TRS simulation created (compiled): " ++ outFile)
+            putStrLnF ("TRS simulation created" ++ how ++ ": " ++ outFile)
       _ -> do
         writeFileCatch errh outFile $
             unlines [ "#!/bin/sh"

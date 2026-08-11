@@ -7,7 +7,9 @@ if { $ctest == 1 } {
 
 compile_object_pass MERulesInSubmod.bsv
 link_objects_pass {sysMERulesInSubmod mkMERulesInSubmod_Sub} sysMERulesInSubmod {-keep-fires}
+if { [cxx_codegen_tests] } {
 find_regexp model_sysMERulesInSubmod.cxx {INST\_top\.INST\_x\.DEF\_CAN\_FIRE\_RL\_r2 \= (.*) \&\& \!\(INST\_top\.INST\_x\.DEF\_CAN\_FIRE\_RL\_r1\)}
+}
 
 # =========================
 # Test that ME rules in different parts of the hierarchy (via method call)
@@ -15,7 +17,9 @@ find_regexp model_sysMERulesInSubmod.cxx {INST\_top\.INST\_x\.DEF\_CAN\_FIRE\_RL
 
 compile_object_pass MERuleAndMethodInSubmod.bsv
 link_objects_pass {sysMERuleAndMethodInSubmod mkMERuleAndMethodInSubmod_Sub1 mkMERuleAndMethodInSubmod_Sub2} sysMERuleAndMethodInSubmod {-keep-fires}
+if { [cxx_codegen_tests] } {
 find_regexp model_sysMERuleAndMethodInSubmod.cxx {INST\_top\.INST\_x\.INST\_s\.DEF\_CAN\_FIRE\_RL\_r2 \= (.*) \&\& \!\(INST\_top\.INST\_x\.DEF\_CAN\_FIRE\_RL\_r1}
+}
 
 # =========================
 # Bug 1422:
@@ -40,7 +44,9 @@ link_objects_pass {sysMEValueMethod} sysMEValueMethod
 # inhibitors due to value methods (also part of bug 1515).
 # Test that there is no inhibitor:
 
+if { [cxx_codegen_tests] } {
 find_n_strings model_sysMEValueMethod.cxx {DEF_CAN_FIRE_get} 0
+}
 
 # =========================
 

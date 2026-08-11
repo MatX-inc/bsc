@@ -275,19 +275,19 @@ test_c_veri SplitVectorOps
 # ----------
 
 compile_verilog_fail_error TooManyArgNames.bs S0015
-compare_file TooManyArgNames.bs.bsc-vcomp-out
+if { $vtest == 1 } { compare_file TooManyArgNames.bs.bsc-vcomp-out }
 
 compile_verilog_fail_error PortNameConflict.bs G0055
-compare_file PortNameConflict.bs.bsc-vcomp-out
+if { $vtest == 1 } { compare_file PortNameConflict.bs.bsc-vcomp-out }
 
 compile_verilog_fail_error ArgNamesPragma_PortNameConflict.bs G0055
-compare_file ArgNamesPragma_PortNameConflict.bs.bsc-vcomp-out
+if { $vtest == 1 } { compare_file ArgNamesPragma_PortNameConflict.bs.bsc-vcomp-out }
 
 compile_verilog_fail_error BadSplitInst_PortNameConflict.bs G0055
-compare_file BadSplitInst_PortNameConflict.bs.bsc-vcomp-out
+if { $vtest == 1 } { compare_file BadSplitInst_PortNameConflict.bs.bsc-vcomp-out }
 
 compile_verilog_fail_error BadSplitInst_TooManyPortNames.bs S0015
-compare_file BadSplitInst_TooManyPortNames.bs.bsc-vcomp-out
+if { $vtest == 1 } { compare_file BadSplitInst_TooManyPortNames.bs.bsc-vcomp-out }
 
 # Two mutually exclusive calls to the same tuple-argument Action method in
 # ONE rule are merged into a single call (ILift under the default -lift,

@@ -45,7 +45,7 @@ if { $vtest == 1 } {
 # Check that complete switch statements are generated in Bluesim
 # (The fact that this compiles already signals that duplicate case arms
 # are being properly reduced.)
-if { $ctest == 1 } {
+if { $ctest == 1 && [cxx_codegen_tests] } {
     find_regexp sysIfElseCase_Func.cxx {
   switch \(DEF_idx__h[0-9]+\) \{
   case \(tUInt8\)0u\:
@@ -96,8 +96,12 @@ find_n_strings_bug sysNoOp_SameSize.v {case} 0
 find_n_strings_bug sysNoOp_LargerRes.v {case} 0
 
 # Bluesim
+if { [cxx_codegen_tests] } {
 find_n_strings_bug sysNoOp_SameSize.cxx {switch} 0
+}
+if { [cxx_codegen_tests] } {
 find_n_strings_bug sysNoOp_LargerRes.cxx {switch} 0
+}
 
 # ---------------
 # Test that multiple case arms with the same value are combined in the output
@@ -125,7 +129,7 @@ if { $vtest == 1 } {
 
 # Bluesim
 # (The arm for index 5 has been merged with the default.)
-if { $ctest == 1 } {
+if { $ctest == 1 && [cxx_codegen_tests] } {
     find_regexp sysDupResult.cxx {
   switch \(DEF_r_idx___d[0-9]+\) \{
   case \(tUInt8\)0u\:

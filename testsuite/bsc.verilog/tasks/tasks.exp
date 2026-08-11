@@ -168,8 +168,10 @@ test_c_veri_bsv_separately LogicBetweenTasks3 sysLogicBetweenTasks3.out.expected
 # Check that the Verilog output fails in the way that we expected,
 # so that we can be alerted if it changes (but still fails the above test).
 #
-copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out 
+if { $vtest == 1 } {
+copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out
 compare_file sysLogicBetweenTasks3.v-bug.out
+}
 
 # The above examples are about logic between tasks in the same module.
 # That situation can be made to work, with proper inserting of zero-delay.
