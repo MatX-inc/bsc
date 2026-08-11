@@ -337,6 +337,14 @@ if [ -n "$INOUT_EXPRS_FILE" ]; then
     exit 1
 fi
 
+# Both "link" and "check" need the verilator front end from here on;
+# fail with a clear message rather than letting an empty version melt
+# into "[: Illegal number" arithmetic below.
+if ! command -v verilator > /dev/null 2>&1 ; then
+    echo "ERROR: verilator was not found on PATH" >&2
+    exit 1
+fi
+
 # Starting with version 5, zero-delay statements (like #0) require
 # a flag to specify how they should be handled (--timing or --no-timing).
 # Designs that generate a clock/reset additionally require --timing, which
