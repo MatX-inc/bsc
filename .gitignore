@@ -14,3 +14,6 @@ dist-newstyle/
 
 .vagrant/
 vagrant-out/
+.direnv/
+result
+result-*
