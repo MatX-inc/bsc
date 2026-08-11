@@ -2553,15 +2553,18 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
 
     ---- End: Section which Lennart marked with XXXX
 
-    -- This definition's SINGLE settlement point: the satisfy passes
-    -- above stream their numeric residuals here unsolved (see the
-    -- satisfy/satisfyStream contract in TCMisc); prove them now, in
-    -- one batch, before defaulting sees them.  Retained preds (rs2)
-    -- and deferred preds (ds0) both settle: a deferred pred that is
-    -- only provable at an enclosing binding survives its batch
-    -- untouched and defers exactly as before, while ground ones must
-    -- settle here or be misreported as unsatisfiable (uds).
-    s_stl <- getSubst
+    -- This definition's SINGLE settlement point.  A deferred predicate
+    -- can become ground after a sibling predicate extends the substitution
+    -- in the second satisfy pass.  Re-enter those newly-ground predicates
+    -- into the ordinary reduction loop here, while this definition still
+    -- owns their evidence, rather than treating the stale earlier verdict
+    -- as a context-reduction failure below.  Keep the returned bindings;
+    -- this is a real solve, not a report-site satisfiability probe.
+    --
+    -- Numeric residuals from all three ordinary passes then settle in the
+    -- existing single batch (see the satisfy/satisfyStream contract in
+    -- TCMisc), before defaulting sees them.
+    s_before_stl <- getSubst
     -- Deferred debt belongs to its owner: a non-ground deferred pred
     -- (its variables are fixed by an enclosing binding) rides upward
     -- UNQUERIED and settles once, at the binding that owns its
@@ -2580,11 +2583,15 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     --     proves identically -- deferral is lossless, and the
     --     given-free desugared locals are exactly where the session
     --     explosion lived.
-    let ds0' = apSub s_stl ds0
-        (ds_ground, ds_open) = partition (null . tv) ds0'
+    let ds0' = apSub s_before_stl ds0
+        (ds_ground, ds_open0) = partition (null . tv) ds0'
+    (ds_ground', sbs_ground) <-
+        satisfyStream (apSub s_before_stl eqs) ds_ground
+    s_stl <- getSubst
+    let ds_open = apSub s_stl ds_open0
         has_num_givens = any (\ (EPred _ (IsIn c _)) -> isPreClass c) eqs
-        ds_here | has_num_givens = ds_ground ++ ds_open
-                | otherwise      = ds_ground
+        ds_here | has_num_givens = ds_ground' ++ ds_open
+                | otherwise      = ds_ground'
         ds_up   | has_num_givens = []
                 | otherwise      = ds_open
         dsh_ids = S.fromList [ w | VPred w _ <- ds_here ]
@@ -2635,7 +2642,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     s <- getSubst
 
     -- Consolidate the bindings under one final name
-    let sbs1 = sbs4 <++ sbs_stl <++ sbs23
+    let sbs1 = sbs4 <++ sbs_stl <++ sbs_ground <++ sbs23
 
     -- The final remaining constraints are now named "rs"
     --trace ("tiExpl''': rs, rs2: " ++ ppReadable (rs,rs2)) $ return ()

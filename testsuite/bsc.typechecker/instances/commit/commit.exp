@@ -59,6 +59,21 @@ compile_pass PartialOutputCommit.bsv
 compile_fail WeakChainRoot.bsv
 compare_file WeakChainRoot.bsv.bsc-out
 
+# a committed match's residual context can become reducible only after a
+# sibling predicate grounds the associated type function's input
+erase DeferCommittedResidual.bo
+compile_pass DeferCommittedResidual.bs
+
+# the same result type has two possible tags, proving that success comes
+# from forward structural refinement rather than reverse output lookup
+erase DeferCommittedResidualTwoInstances.bo
+compile_pass DeferCommittedResidualTwoInstances.bs
+
+# exact negative twin: a grounded residual with no matching instance remains
+# a context-reduction failure after settlement revisits it
+erase RejectCommittedResidual.bo
+compile_fail_error RejectCommittedResidual.bs T0032
+
 # the earlier-instance-may-capture judgment is modal: with the pred's
 # variable rigid, a guarded judgment would call the output conflict at
 # the less specific clause conclusive and name that clause as selected;
