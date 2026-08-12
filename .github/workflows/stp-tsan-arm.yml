@@ -12,8 +12,7 @@ name: STP TSan ARM
 # SOP-size loop runs forever.  This branch carries a 'signed char' fix
 # for it (same intent as stp/stp@69ed087a).  This workflow:
 #
-#   build-bsc:   builds bsc once on an arm64 runner (yices stubbed, so
-#                STP is the only real SMT library) and shares inst/.
+#   build-bsc:   builds bsc once on an arm64 runner and shares inst/.
 #                bsc links libstp.so dynamically, so the jobs below can
 #                swap in differently-built libstp.so.1 without
 #                rebuilding the compiler.
@@ -46,6 +45,13 @@ on:
     branches:
       - claude/amy/stp-tsan-arm
   workflow_dispatch:
+
+# 'shell: bash' gives -o pipefail (the default run shell does not),
+# which the rc-capture around the tee'd build commands and the
+# 'ldd | grep' link checks all rely on
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build-bsc:
@@ -82,9 +88,12 @@ jobs:
           CORES=$(nproc)
           echo "Cores: ${CORES}"
 
-          # Yices is not the target of this investigation; stub it out
-          # so the only real SMT library in the build is STP.
-          export YICES_STUB=1
+          # Yices is built for real (not YICES_STUB=1): bsc's default
+          # SAT solver is yices and the stdlib build aborts with S0081
+          # when the default solver's library is a stub, so stubbing
+          # yices breaks 'make install-src'.  Upstream's arm CI builds
+          # real yices too.  STP remains the investigation target: the
+          # test runs below force it with -sat-stp.
 
           # On failure, surface the error context as annotations: the
           # raw logs are not always reachable from where this run is
@@ -184,33 +193,52 @@ jobs:
           mkdir -p micro && cd micro
           cp ../testsuite/bsc.scheduler/sat/AddTest.bsv .
           set +e
-          timeout -k 10 180 ../inst/bin/bsc -verilog -sat-stp AddTest.bsv
+          timeout -k 10 180 ../inst/bin/bsc -verilog -sat-stp AddTest.bsv > bsc-out.log 2>&1
           rc=$?
           set -e
           echo "bsc exit code: ${rc}"
+          cat bsc-out.log
           echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          # Surface the compiler's own words where the API can serve
+          # them (job logs are not always reachable from the watcher)
+          msg=$(head -c 700 bsc-out.log | tr '\n\r%' '  ')
+          echo "::warning title=micro-test rc=${rc} (${{ matrix.variant }})::${msg:-<no output>}"
 
       - name: "Verdict: vendored code must hang"
         if: matrix.variant == 'vendored-unfixed'
         run: |
           rc='${{ steps.micro.outputs.rc }}'
           if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
-            echo "REPRODUCED: bsc -sat-stp hung with the vendored (plain char) STP code, as hypothesized." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          elif [ "$rc" = "0" ]; then
-            echo "HYPOTHESIS FALSIFIED: the vendored STP code completed on this runner (expected a hang)." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo "::notice title=hang-repro verdict::REPRODUCED: bsc -sat-stp hung with the vendored (plain char) STP code, as hypothesized."
+            echo "REPRODUCED: bsc -sat-stp hung with the vendored (plain char) STP code." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$rc" = "139" ] || [ "$rc" = "134" ]; then
             # The runaway loop reads past the allocation, so on some
             # heap layouts it faults instead of spinning; either way
             # the vendored code did not complete.
-            echo "::warning::vendored STP crashed (rc=${rc}) rather than hanging; still consistent with the char-signedness UB"
-            echo "REPRODUCED (as a crash, rc=${rc}): the vendored STP code did not complete." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=hang-repro verdict::REPRODUCED (as a crash, rc=${rc}): the vendored STP code did not complete; consistent with the char-signedness UB."
+          elif [ "$rc" = "0" ]; then
+            # The micro test may simply not reach Cnf_ReadMsops;
+            # escalate to the testsuite directory that hung the
+            # upstream ARM runners before calling the hypothesis
+            # falsified.
+            echo "micro test completed; escalating to bsc.scheduler/sat (bounded)"
+            set +e
+            timeout -k 60 1500 make -j "$(nproc)" -C testsuite checkparallel \
+                 TESTDIRS=bsc.scheduler/sat TEST_BSC_OPTIONS=-sat-stp
+            rc2=$?
+            set -e
+            if [ "$rc2" = "124" ] || [ "$rc2" = "137" ]; then
+              echo "::notice title=hang-repro verdict::REPRODUCED at suite level: bsc.scheduler/sat with -sat-stp overran its 25-minute window on the vendored code (micro test alone was too small to reach the bug)."
+            elif [ "$rc2" = "0" ]; then
+              echo "::error title=hang-repro verdict::HYPOTHESIS FALSIFIED: vendored STP completed the micro test AND bsc.scheduler/sat on this runner (expected a hang)."
+              exit 1
+            else
+              echo "::error title=hang-repro verdict::INCONCLUSIVE: vendored STP did not hang; bsc.scheduler/sat completed with failures (rc=${rc2}). Inspect the logs artifact."
+              ./testsuite/archive_logs.sh || true
+              exit 1
+            fi
           else
-            echo "UNEXPECTED: bsc exited ${rc} (neither success, timeout, nor a fault); see log." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error title=hang-repro verdict::UNEXPECTED: bsc exited ${rc} (neither success, timeout, nor a fault); see the micro-test annotation for its output."
             exit 1
           fi
 
@@ -219,11 +247,10 @@ jobs:
         run: |
           rc='${{ steps.micro.outputs.rc }}'
           if [ "$rc" = "0" ]; then
-            echo "PASS: bsc -sat-stp completed with the signed-char fix." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=fixed-leg verdict::PASS: bsc -sat-stp completed with the signed-char fix."
+            echo "PASS: bsc -sat-stp completed with the signed-char fix." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "FAIL: bsc -sat-stp exited ${rc} even with the signed-char fix." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error title=fixed-leg verdict::FAIL: bsc -sat-stp exited ${rc} even with the signed-char fix; see the micro-test annotation for its output."
             exit 1
           fi
 
@@ -288,6 +315,7 @@ jobs:
       # If this step fails, the rest of the job would silently test
       # nothing.
       - name: TSan sanity check
+        id: sanity
         env:
           LIBTSAN: ${{ steps.tsan.outputs.libtsan }}
         run: |
@@ -324,7 +352,25 @@ jobs:
           cat sanity.log
           grep -q 'WARNING: ThreadSanitizer: data race' sanity.log
           test "$rc" -eq 42
-          echo "PASS: TSan is live for an uninstrumented main calling an instrumented DSO"
+          echo "PASS: TSan is live for an uninstrumented main calling an instrumented DSO (preload mode)"
+
+          # Also probe whether TSan detects the race WITHOUT the
+          # preload, i.e. with libtsan only in the DT_NEEDED closure.
+          # This decides whether "no preload" is an acceptable fallback
+          # for running bsc if the GHC RTS cannot start under the
+          # preloaded runtime.
+          set +e
+          TSAN_OPTIONS="exitcode=42" ./racy_main > sanity-dtneeded.log 2>&1
+          rc=$?
+          set -e
+          cat sanity-dtneeded.log
+          if [ "$rc" -eq 42 ] && grep -q 'WARNING: ThreadSanitizer: data race' sanity-dtneeded.log; then
+            echo "dtneeded_ok=1" >> "$GITHUB_OUTPUT"
+            echo "DT_NEEDED-only mode also detects races on this platform"
+          else
+            echo "dtneeded_ok=0" >> "$GITHUB_OUTPUT"
+            echo "DT_NEEDED-only mode does NOT reliably detect races (rc=${rc}); only preload mode is trustworthy"
+          fi
 
       - name: Build libstp with ThreadSanitizer
         timeout-minutes: 30
@@ -368,21 +414,68 @@ jobs:
           rm -f bsc-ldd.txt
           echo "PASS: bsc dynamically links the instrumented libstp (libtsan in closure)"
 
-      # Fail fast if the GHC runtime cannot live with the TSan runtime
-      # preloaded (shadow-memory layout conflicts would show up here as
-      # a startup fatal), and prove an actual -sat-stp query works.
-      - name: Smoke bsc under TSan with -sat-stp
-        timeout-minutes: 15
+      # Find a mode in which bsc can actually run with the TSan runtime
+      # loaded.  The GHC RTS and TSan's shadow memory can collide (the
+      # RTS reserves ~1TB of address space at startup); bsc is linked
+      # -rtsopts, so GHCRTS=-xr8g shrinks that reservation.  Ladder:
+      #   1. plain LD_PRELOAD
+      #   2. LD_PRELOAD + GHCRTS=-xr8g
+      #   3. LD_PRELOAD + GHCRTS=-xr8g + ASLR disabled (setarch -R)
+      #   4. no preload, libtsan via DT_NEEDED only -- accepted only if
+      #      the sanity step proved that mode detects races
+      # The first mode that compiles an -sat-stp case is exported (via
+      # GITHUB_ENV) for the long testsuite run; if none works the job
+      # fails here, loudly, instead of silently testing nothing.
+      - name: Smoke bsc under TSan with -sat-stp (mode ladder)
+        timeout-minutes: 30
         env:
           LIBTSAN: ${{ steps.tsan.outputs.libtsan }}
+          DTNEEDED_OK: ${{ steps.sanity.outputs.dtneeded_ok }}
         run: |
           mkdir -p smoke-stp && cd smoke-stp
           cp ../testsuite/bsc.scheduler/sat/AddTest.bsv .
-          export LD_PRELOAD="$LIBTSAN"
           export TSAN_OPTIONS="halt_on_error=0 exitcode=0 abort_on_error=0 log_path=$TSAN_REPORT_DIR/tsan"
-          timeout -k 10 600 ../inst/bin/bsc -verilog -sat-stp AddTest.bsv
-          test -f sysAddTest.v
-          echo "PASS: bsc compiled with -sat-stp under the TSan runtime"
+
+          try_mode() {  # $1=name $2=preload $3=ghcrts $4=noaslr
+            rm -f sysAddTest.v
+            local cmd=(timeout -k 10 600 ../inst/bin/bsc -verilog -sat-stp AddTest.bsv)
+            if [ -n "$4" ]; then
+              cmd=(setarch "$(uname -m)" -R "${cmd[@]}")
+            fi
+            local rc
+            set +e
+            LD_PRELOAD="$2" GHCRTS="$3" "${cmd[@]}" > "bsc-$1.log" 2>&1
+            rc=$?
+            set -e
+            local msg
+            msg=$(head -c 400 "bsc-$1.log" | tr '\n\r%' '  ')
+            echo "::warning title=tsan mode ${1} rc=${rc}::${msg:-<no output>}"
+            [ "$rc" -eq 0 ] && [ -f sysAddTest.v ]
+          }
+
+          MODE=""; PRELOAD=""; RTS=""; NOASLR=""
+          if try_mode preload "$LIBTSAN" "" ""; then
+            MODE=preload; PRELOAD="$LIBTSAN"
+          elif try_mode preload-xr "$LIBTSAN" "-xr8g" ""; then
+            MODE=preload-xr; PRELOAD="$LIBTSAN"; RTS="-xr8g"
+          elif try_mode preload-xr-noaslr "$LIBTSAN" "-xr8g" yes; then
+            MODE=preload-xr-noaslr; PRELOAD="$LIBTSAN"; RTS="-xr8g"; NOASLR=1
+          elif [ "$DTNEEDED_OK" = "1" ] && try_mode dtneeded "" "" ""; then
+            MODE=dtneeded
+          fi
+
+          if [ -z "$MODE" ]; then
+            echo "::error title=tsan smoke::bsc could not run with the TSan runtime in any mode; see the per-mode annotations for exit codes and output"
+            exit 1
+          fi
+
+          echo "::notice title=tsan smoke::bsc compiled AddTest.bsv with -sat-stp under TSan in mode '${MODE}'"
+          {
+            echo "TSAN_RUN_MODE=${MODE}"
+            echo "TSAN_RUN_PRELOAD=${PRELOAD}"
+            echo "TSAN_RUN_GHCRTS=${RTS}"
+            echo "TSAN_RUN_NOASLR=${NOASLR}"
+          } >> "$GITHUB_ENV"
 
       - name: Run STP-exercising testsuite under TSan
         env:
@@ -395,7 +488,14 @@ jobs:
           # query in these runs goes through the instrumented STP.
           TESTDIRS: bsc.scheduler bsc.typechecker/numeric-settle
         run: |
-          export LD_PRELOAD="$LIBTSAN"
+          # Run in the mode the smoke step proved viable
+          echo "TSan run mode: ${TSAN_RUN_MODE}"
+          if [ -n "${TSAN_RUN_PRELOAD}" ]; then
+            export LD_PRELOAD="${TSAN_RUN_PRELOAD}"
+          fi
+          if [ -n "${TSAN_RUN_GHCRTS}" ]; then
+            export GHCRTS="${TSAN_RUN_GHCRTS}"
+          fi
           # halt_on_error=0/exitcode=0: keep bsc's exit codes and
           # output clean (reports go to log files, not stderr) so the
           # suite keeps running and race reports don't masquerade as
@@ -413,14 +513,19 @@ jobs:
           CORES=$(nproc)
           echo "Cores: ${CORES}"
 
-          # Test failures are content, not infrastructure: with yices
-          # stubbed and everything forced through -sat-stp, some
-          # expected outputs will not match.  This job is graded on
-          # the TSan reports, so a nonzero suite exit is recorded and
-          # tolerated.  A hang is bounded by 'timeout' so the
-          # report-collection steps still run.
+          # Test failures are content, not infrastructure: with
+          # everything forced through -sat-stp, some expected outputs
+          # will not match.  This job is graded on the TSan reports,
+          # so a nonzero suite exit is recorded and tolerated.  A hang
+          # is bounded by 'timeout' so the report-collection steps
+          # still run.
+          SETARCH=""
+          if [ -n "${TSAN_RUN_NOASLR}" ]; then
+            SETARCH="setarch $(uname -m) -R"
+          fi
+
           set +e
-          timeout -k 60 9000 make -j ${CORES} -C testsuite checkparallel
+          ${SETARCH} timeout -k 60 9000 make -j ${CORES} -C testsuite checkparallel
           rc=$?
           set -e
           echo "testsuite exit code: ${rc} (informational)"
