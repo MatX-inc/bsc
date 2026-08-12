@@ -289,7 +289,11 @@ tclSetupHooks = noSetupHooks {configureHooks}
             _ -> ioError (userError ("unsupported Tcl version: " <> tclVersion))
           let includeDirs = makeSymbolicPath <$> getArgs "-I" tclInc
               extraLibDirs = makeSymbolicPath <$> getArgs "-L" tclLibs
-              extraLibs = getArgs "-l" tclLibs
+              -- Some platforms (e.g. NixOS) also list the Tcl stubs
+              -- library, which we don't use (it only exists as a static
+              -- archive, which GHCi cannot load, breaking the REPL/HLS).
+              extraLibs =
+                filter (not . ("tclstub" `isPrefixOf`)) (getArgs "-l" tclLibs)
 
           pure $
             PreConfComponentOutputs
