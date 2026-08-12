@@ -4539,7 +4539,13 @@ void Cnf_ReadMsops( char ** ppSopSizes, char *** ppSops )
         { 0x0F0F, 0xF0F0 },
         { 0x00FF, 0xFF00 }
     };
-    char Map[256], * pPrev, * pMemory;
+    // These must be explicitly signed: they hold a -1 sentinel, and on
+    // some platforms (e.g. Linux on AArch64) plain 'char' is unsigned,
+    // so 'pMemory[k] == -1' below would never be true and the loop that
+    // computes the SOP sizes would run forever (reading past the end of
+    // the allocation).  See stp/stp@69ed087a and bitblaze-fuzzball
+    // 308c97b for the same fix in later versions of this code.
+    signed char Map[256], * pPrev, * pMemory;
     char * pSopSizes, ** pSops;
     int i, k, b, Size;
 
@@ -4554,7 +4560,7 @@ void Cnf_ReadMsops( char ** ppSopSizes, char *** ppSops )
     assert( Size < 100000 );
 
     // allocate memory
-    pMemory = ALLOC( char, Size * 75 );
+    pMemory = ALLOC( signed char, Size * 75 );
     // copy the array into memory
     for ( i = 0; i < Size; i++ )
         for ( k = 0; k < 75; k++ )
@@ -4572,8 +4578,8 @@ void Cnf_ReadMsops( char ** ppSopSizes, char *** ppSops )
     for ( k = 0, i = 1; i < 65536; k++ )
         if ( pMemory[k] == -1 )
         {
-            pSopSizes[i] = pMemory + k - pPrev; 
-            pSops[i++] = pPrev;
+            pSopSizes[i] = pMemory + k - pPrev;
+            pSops[i++] = (char *)pPrev;
             pPrev = pMemory + k + 1;
         }
     *ppSopSizes = pSopSizes;
