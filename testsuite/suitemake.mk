@@ -60,6 +60,10 @@ STATS_FILE ?= $(CONFDIR)/time.out
 # The default test options should match what the user uses -- NOTHING
 TEST_BSC_OPTIONS ?=
 
+# Note that PATH gets the directory of TEST_BLUETCL first: generated Bluesim
+# executables are scripts that exec 'bluetcl' from PATH, so this keeps their
+# bluetcl consistent with the one under test (e.g. a cabal-built one),
+# falling back to the bin directory of the installation under test.
 RUNTESTENV = MAKEFLAGS= BSCTEST=1 \
 	BSC=$(TEST_BSC) BSC_OPTIONS="${TEST_BSC_OPTIONS}" BSDIR=$(TEST_BSDIR) \
 	DUMPBO=$(TEST_DUMPBO) DUMPBA=$(TEST_DUMPBA) BSC2BSV=$(TEST_BSC2BSV) \
@@ -74,7 +78,7 @@ RUNTESTENV = MAKEFLAGS= BSCTEST=1 \
 	SYSTEMC_INC=$(TEST_SYSTEMC_INC) \
 	SYSTEMC_LIB=$(TEST_SYSTEMC_LIB) \
 	SYSTEMC_CXXFLAGS=$(TEST_SYSTEMC_CXXFLAGS) \
-	PATH="$(BLUESPECDIR)/../bin:$(PATH)"
+	PATH="$(dir $(abspath $(TEST_BLUETCL))):$(BLUESPECDIR)/../bin:$(PATH)"
 
 
 ## Track the overall time it took to run  runtest.  Make sure this command is the same as in unix.exp.

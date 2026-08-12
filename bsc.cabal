@@ -390,7 +390,10 @@ executable vcdcheck
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
 
-test-suite bluetcl-tests
+-- The test-suites all share one driver (testsuite/RunTests.hs), which
+-- dispatches on the suite name and shells out to the dejagnu harness in
+-- testsuite/. They need the runtime built by 'make install-src' in ./inst.
+common common_tests
   build-depends:
     base      ^>=4.18.3.0,
     directory ^>=1.3.8.5,
@@ -399,29 +402,33 @@ test-suite bluetcl-tests
   build-tool-depends: bsc:bsc, bsc:bluetcl
   default-language: GHC2021
   hs-source-dirs: testsuite
+
+test-suite bluetcl-tests
+  import: common_tests
+  build-tool-depends: bsc:bsc, bsc:bluetcl
   main-is: RunTests.hs
   type: exitcode-stdio-1.0
 
 test-suite smoke
-  build-depends:
-    base      ^>=4.18.3.0,
-    directory ^>=1.3.8.5,
-    filepath  ^>=1.4.301.0,
-    process   ^>=1.6.28.0,
+  import: common_tests
   build-tool-depends: bsc:bsc, bsc:bluetcl
-  default-language: GHC2021
-  hs-source-dirs: testsuite
   main-is: RunTests.hs
   type: exitcode-stdio-1.0
 
 test-suite utils
-  build-depends:
-    base      ^>=4.18.3.0,
-    directory ^>=1.3.8.5,
-    filepath  ^>=1.4.301.0,
-    process   ^>=1.6.28.0,
-  build-tool-depends: bsc:bsc, bsc:bluetcl, bsc:showrules, bsc:vcdcheck, bsc:dumpbo
-  default-language: GHC2021
-  hs-source-dirs: testsuite
+  import: common_tests
+  build-tool-depends:
+    bsc:bsc, bsc:bluetcl, bsc:showrules, bsc:vcdcheck,
+    bsc:dumpbo, bsc:dumpba, bsc:bsc2bsv
+  main-is: RunTests.hs
+  type: exitcode-stdio-1.0
+
+-- The whole testsuite, run in parallel; pass --full (through cabal's
+-- --test-options) to also enable the long tests.
+test-suite testsuite
+  import: common_tests
+  build-tool-depends:
+    bsc:bsc, bsc:bluetcl, bsc:showrules, bsc:vcdcheck,
+    bsc:dumpbo, bsc:dumpba, bsc:bsc2bsv
   main-is: RunTests.hs
   type: exitcode-stdio-1.0
