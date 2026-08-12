@@ -1,4 +1,4 @@
-module Lex(Token(..), LexItem(..), LFlags(..), prLexItem,
+module Lex(Token(..), LexItem(..), LexError(..), LFlags(..), prLexItem,
            lexStart, lexStartWithPos,
            isIdChar, isSym, convLexErrorToErrMsg) where
 -- Bluespec lexical analysis.  Written for speed, not beauty!
