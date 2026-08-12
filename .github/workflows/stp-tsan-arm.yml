@@ -1,0 +1,443 @@
+name: STP TSan ARM
+
+# Investigates the STP hang on Linux/AArch64 CI runners that led
+# upstream PR #973 to stub STP out on the ARM legs
+# (".github/workflows/build-and-test-ubuntu.yml": STP_STUB=1 for *-arm).
+#
+# Working hypothesis (verified locally with -funsigned-char): the hang
+# is char-signedness UB, not a race.  On Linux/AArch64 plain 'char' is
+# unsigned, and STP's bundled ABC (extlib-abc/aig/cnf/cnfData.c,
+# Cnf_ReadMsops) stores -1 sentinels in plain 'char' arrays and
+# compares 'pMemory[k] == -1', which is never true there, so the
+# SOP-size loop runs forever.  This branch carries a 'signed char' fix
+# for it (same intent as stp/stp@69ed087a).  This workflow:
+#
+#   build-bsc:   builds bsc once on an arm64 runner (yices stubbed, so
+#                STP is the only real SMT library) and shares inst/.
+#                bsc links libstp.so dynamically, so the jobs below can
+#                swap in differently-built libstp.so.1 without
+#                rebuilding the compiler.
+#
+#   hang-repro:  the decisive experiment.  Two legs:
+#                  vendored-unfixed: libstp built from the code as it
+#                    was before the fix -- expected to HANG (bounded by
+#                    'timeout'; the leg fails if it does NOT hang).
+#                  signed-char-fix: libstp built from this branch --
+#                    expected to complete, and the previously hanging
+#                    STP testsuite directory must run.
+#
+#   stp-tsan:    cross-check for actual data races on top of the UB:
+#                libstp built with ThreadSanitizer, the STP-exercising
+#                testsuite directories run with -sat-stp under the TSan
+#                runtime, reports uploaded as an artifact.
+#
+# TSan-with-Haskell-FFI note: bsc is an uninstrumented GHC-compiled
+# binary that calls libstp through the FFI, so the TSan runtime is not
+# linked into the main executable.  libstp is built shared with
+# -fsanitize=thread (gcc records a libtsan DT_NEEDED on the DSO), and
+# bsc is run with LD_PRELOAD=libtsan so the runtime is loaded first
+# and its interceptors (malloc, pthread_create, ...) win symbol
+# resolution.  The "TSan sanity check" step proves this exact shape
+# (uninstrumented main + instrumented DSO + preload) really detects
+# races before any time is spent on the long parts.
+
+on:
+  push:
+    branches:
+      - claude/amy/stp-tsan-arm
+  workflow_dispatch:
+
+jobs:
+  build-bsc:
+    name: "Build bsc: ubuntu-24.04-arm"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        shell: bash
+        run: sudo .github/workflows/install_dependencies_ubuntu.sh
+
+      # Don't rely on the VM to pick the GHC version
+      # (and don't assume that GHCup is already installed on the runner)
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.6.7
+          cabal: recommended
+
+      # Until BSC uses cabal to build, pre-install these packages
+      - name: Install Haskell dependencies
+        shell: bash
+        run: |
+          cabal update
+          cabal v1-install old-time regex-compat split strict-concurrency syb
+
+      - name: Build
+        timeout-minutes: 70
+        run: |
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+
+          # Yices is not the target of this investigation; stub it out
+          # so the only real SMT library in the build is STP.
+          export YICES_STUB=1
+
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+
+          # bsc must link libstp dynamically for the solver-swap
+          # scheme used by the other jobs to work at all
+          LD_LIBRARY_PATH=$PWD/inst/lib/SAT ldd inst/bin/core/bsc | grep 'libstp\.so'
+
+          tar czf inst.tar.gz inst
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: stp-tsan bsc arm build
+          path: inst.tar.gz
+
+  # The decisive experiment: same bsc binary, two libstp builds.
+  hang-repro:
+    name: "Hang repro: ${{ matrix.variant }}"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    needs: build-bsc
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ vendored-unfixed, signed-char-fix ]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+          sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+
+      - name: Re-introduce the vendored char-signedness bug
+        if: matrix.variant == 'vendored-unfixed'
+        run: |
+          # Precisely reverse the signed-char fix carried by this
+          # branch, restoring the code as vendored (the harmless
+          # (char *) cast is left in place).
+          f=src/vendor/stp/src/extlib-abc/aig/cnf/cnfData.c
+          sed -i \
+            -e 's/signed char Map\[256\], \* pPrev, \* pMemory;/char Map[256], * pPrev, * pMemory;/' \
+            -e 's/ALLOC( signed char, Size \* 75 )/ALLOC( char, Size * 75 )/' \
+            "$f"
+          if grep -q 'signed char Map' "$f"; then
+            echo "sed failed to reverse the fix" >&2
+            exit 1
+          fi
+          git diff --stat
+
+      - name: Build libstp
+        timeout-minutes: 30
+        run: |
+          make -j $(nproc) -C src/vendor/stp install
+
+      - name: Download bsc
+        uses: actions/download-artifact@v8
+        with:
+          name: stp-tsan bsc arm build
+      - name: Install bsc (with this leg's libstp swapped in)
+        run: |
+          tar xzf inst.tar.gz
+          # overwrite the shipped solver with this leg's build
+          install -m 644 src/vendor/stp/lib/libstp.so.1 inst/lib/SAT/libstp.so.1
+          LD_LIBRARY_PATH=$PWD/inst/lib/SAT ldd inst/bin/core/bsc | grep 'libstp\.so'
+
+      - name: Compile an STP testsuite case with -sat-stp (bounded)
+        id: micro
+        run: |
+          mkdir -p micro && cd micro
+          cp ../testsuite/bsc.scheduler/sat/AddTest.bsv .
+          set +e
+          timeout -k 10 180 ../inst/bin/bsc -verilog -sat-stp AddTest.bsv
+          rc=$?
+          set -e
+          echo "bsc exit code: ${rc}"
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+
+      - name: "Verdict: vendored code must hang"
+        if: matrix.variant == 'vendored-unfixed'
+        run: |
+          rc='${{ steps.micro.outputs.rc }}'
+          if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
+            echo "REPRODUCED: bsc -sat-stp hung with the vendored (plain char) STP code, as hypothesized." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$rc" = "0" ]; then
+            echo "HYPOTHESIS FALSIFIED: the vendored STP code completed on this runner (expected a hang)." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          elif [ "$rc" = "139" ] || [ "$rc" = "134" ]; then
+            # The runaway loop reads past the allocation, so on some
+            # heap layouts it faults instead of spinning; either way
+            # the vendored code did not complete.
+            echo "::warning::vendored STP crashed (rc=${rc}) rather than hanging; still consistent with the char-signedness UB"
+            echo "REPRODUCED (as a crash, rc=${rc}): the vendored STP code did not complete." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "UNEXPECTED: bsc exited ${rc} (neither success, timeout, nor a fault); see log." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: "Verdict: fixed code must complete"
+        if: matrix.variant == 'signed-char-fix'
+        run: |
+          rc='${{ steps.micro.outputs.rc }}'
+          if [ "$rc" = "0" ]; then
+            echo "PASS: bsc -sat-stp completed with the signed-char fix." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "FAIL: bsc -sat-stp exited ${rc} even with the signed-char fix." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # With the fix in place, the testsuite directory that hung the
+      # upstream ARM runners must now run to completion.
+      - name: Run the STP scheduler tests (fixed leg only)
+        if: matrix.variant == 'signed-char-fix'
+        timeout-minutes: 40
+        run: |
+          trap ./testsuite/archive_logs.sh EXIT
+          make -j $(nproc) -C testsuite checkparallel \
+               TESTDIRS=bsc.scheduler/sat TEST_BSC_OPTIONS=-sat-stp
+          echo "PASS: bsc.scheduler/sat ran to completion with -sat-stp" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive test logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: hang-repro-logs-${{ matrix.variant }}
+          path: logs.tar.gz
+          if-no-files-found: warn
+
+  # Race cross-check: even with the UB fixed, Amy asked for TSan
+  # coverage of STP on aarch64 (weak memory ordering).
+  stp-tsan:
+    name: "STP + TSan: ubuntu-24.04-arm"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    needs: build-bsc
+    env:
+      TSAN_REPORT_DIR: ${{ github.workspace }}/tsan-reports
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+          sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+
+      - name: Locate libtsan runtime
+        id: tsan
+        run: |
+          LIBTSAN=$(gcc -print-file-name=libtsan.so)
+          if [ ! -e "$LIBTSAN" ]; then
+            LIBTSAN=$(ldconfig -p | awk '/libtsan\.so/ { print $NF; exit }')
+          fi
+          LIBTSAN=$(readlink -f "$LIBTSAN")
+          if [ ! -e "$LIBTSAN" ]; then
+            echo "libtsan runtime not found" >&2
+            exit 1
+          fi
+          echo "Using libtsan runtime: $LIBTSAN"
+          echo "libtsan=$LIBTSAN" >> "$GITHUB_OUTPUT"
+          mkdir -p "$TSAN_REPORT_DIR"
+
+      # Prove that the linking scheme detects races AT ALL before
+      # investing in the long run: an uninstrumented main calling a
+      # deliberately racy TSan-instrumented DSO, run under LD_PRELOAD,
+      # must produce a data-race report and the configured exit code.
+      # If this step fails, the rest of the job would silently test
+      # nothing.
+      - name: TSan sanity check
+        env:
+          LIBTSAN: ${{ steps.tsan.outputs.libtsan }}
+        run: |
+          mkdir tsan-sanity && cd tsan-sanity
+          cat > racy.c <<'EOF'
+          #include <pthread.h>
+          static int counter;
+          static void *worker(void *arg) {
+            (void)arg;
+            for (int i = 0; i < 100000; i++) counter++;
+            return 0;
+          }
+          int racy_run(void) {
+            pthread_t a, b;
+            pthread_create(&a, 0, worker, 0);
+            pthread_create(&b, 0, worker, 0);
+            pthread_join(a, 0);
+            pthread_join(b, 0);
+            return counter;
+          }
+          EOF
+          cat > main.c <<'EOF'
+          extern int racy_run(void);
+          int main(void) { return racy_run() == 0; }
+          EOF
+          # DSO instrumented, main NOT instrumented: same shape as bsc+libstp
+          gcc -g -O1 -fPIC -fsanitize=thread -shared -o libracy.so racy.c
+          gcc -g -O1 -o racy_main main.c -L. -lracy -Wl,-rpath,'$ORIGIN'
+          ldd ./racy_main
+          set +e
+          LD_PRELOAD="$LIBTSAN" TSAN_OPTIONS="exitcode=42" ./racy_main > sanity.log 2>&1
+          rc=$?
+          set -e
+          cat sanity.log
+          grep -q 'WARNING: ThreadSanitizer: data race' sanity.log
+          test "$rc" -eq 42
+          echo "PASS: TSan is live for an uninstrumented main calling an instrumented DSO"
+
+      - name: Build libstp with ThreadSanitizer
+        timeout-minutes: 30
+        run: |
+          # CFLAGS_BASE on the make command line replaces the vendored
+          # Makefile's "-O3 -DNDEBUG -fomit-frame-pointer -fPIC"
+          # default with a debug-friendly instrumented build.  The
+          # flags reach the minisat subtree too (CFLAGS is exported by
+          # platform.mk, so the computed value flows into the
+          # sub-makes' environment).
+          make -j $(nproc) -C src/vendor/stp install \
+              CFLAGS_BASE="-O1 -g -fno-omit-frame-pointer -fPIC -fsanitize=thread"
+          echo "--- instrumentation check ---"
+          ldd src/vendor/stp/lib/libstp.so.1
+          ldd src/vendor/stp/lib/libstp.so.1 | grep -q libtsan
+          nm -D src/vendor/stp/lib/libstp.so.1 | grep -q ' U __tsan_'
+          echo "PASS: libstp.so.1 is TSan-instrumented and depends on libtsan"
+
+      - name: Download bsc
+        uses: actions/download-artifact@v8
+        with:
+          name: stp-tsan bsc arm build
+      - name: Install bsc (instrumented libstp swapped in)
+        run: |
+          tar xzf inst.tar.gz
+          install -m 644 src/vendor/stp/lib/libstp.so.1 inst/lib/SAT/libstp.so.1
+          LD_LIBRARY_PATH=$PWD/inst/lib/SAT ldd inst/bin/core/bsc | tee bsc-ldd.txt
+          grep -q 'libstp\.so' bsc-ldd.txt
+          grep -q 'libtsan' bsc-ldd.txt
+          rm -f bsc-ldd.txt
+          echo "PASS: bsc dynamically links the instrumented libstp (libtsan in closure)"
+
+      # Fail fast if the GHC runtime cannot live with the TSan runtime
+      # preloaded (shadow-memory layout conflicts would show up here as
+      # a startup fatal), and prove an actual -sat-stp query works.
+      - name: Smoke bsc under TSan with -sat-stp
+        timeout-minutes: 15
+        env:
+          LIBTSAN: ${{ steps.tsan.outputs.libtsan }}
+        run: |
+          mkdir -p smoke-stp && cd smoke-stp
+          cp ../testsuite/bsc.scheduler/sat/AddTest.bsv .
+          export LD_PRELOAD="$LIBTSAN"
+          export TSAN_OPTIONS="halt_on_error=0 exitcode=0 abort_on_error=0 log_path=$TSAN_REPORT_DIR/tsan"
+          timeout -k 10 600 ../inst/bin/bsc -verilog -sat-stp AddTest.bsv
+          test -f sysAddTest.v
+          echo "PASS: bsc compiled with -sat-stp under the TSan runtime"
+
+      - name: Run STP-exercising testsuite under TSan
+        env:
+          LIBTSAN: ${{ steps.tsan.outputs.libtsan }}
+          # bsc.scheduler contains the SAT-solver tests proper
+          # (bsc.scheduler/sat runs its cases with an explicit
+          # -sat-stp) plus the scheduling-disjointness tests, and
+          # bsc.typechecker/numeric-settle exercises the proviso SAT
+          # path; with TEST_BSC_OPTIONS=-sat-stp below, every SAT
+          # query in these runs goes through the instrumented STP.
+          TESTDIRS: bsc.scheduler bsc.typechecker/numeric-settle
+        run: |
+          export LD_PRELOAD="$LIBTSAN"
+          # halt_on_error=0/exitcode=0: keep bsc's exit codes and
+          # output clean (reports go to log files, not stderr) so the
+          # suite keeps running and race reports don't masquerade as
+          # test failures.
+          export TSAN_OPTIONS="halt_on_error=0 exitcode=0 abort_on_error=0 log_path=$TSAN_REPORT_DIR/tsan history_size=7 second_deadlock_stack=1"
+
+          export TEST_BSC_OPTIONS=-sat-stp
+
+          # Use -O0 for significantly faster C++ compiles
+          export CXXFLAGS="-O0"
+
+          # Always archive logs, even if make fails
+          trap ./testsuite/archive_logs.sh EXIT
+
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+
+          # Test failures are content, not infrastructure: with yices
+          # stubbed and everything forced through -sat-stp, some
+          # expected outputs will not match.  This job is graded on
+          # the TSan reports, so a nonzero suite exit is recorded and
+          # tolerated.  A hang is bounded by 'timeout' so the
+          # report-collection steps still run.
+          set +e
+          timeout -k 60 9000 make -j ${CORES} -C testsuite checkparallel
+          rc=$?
+          set -e
+          echo "testsuite exit code: ${rc} (informational)"
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "::warning::testsuite overran its 150-minute window (possible STP hang)"
+          fi
+
+          # Guard against a hollow run: some dejagnu results must exist
+          if ! find testsuite -name '*.sum' | grep -q .; then
+            echo "No dejagnu results were produced; the run tested nothing" >&2
+            exit 1
+          fi
+
+      - name: Collect and surface TSan reports
+        if: always()
+        run: |
+          count=$(find "$TSAN_REPORT_DIR" -name 'tsan.*' -type f 2>/dev/null | wc -l)
+          echo "TSan report files: ${count}"
+          {
+            echo "## ThreadSanitizer results"
+            echo ""
+            echo "Report files: ${count}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -gt 0 ]; then
+            echo "::warning::ThreadSanitizer produced ${count} report file(s); see the tsan-reports artifact"
+            echo "### Unique report signatures" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -rh 'SUMMARY: ThreadSanitizer' "$TSAN_REPORT_DIR" \
+              | sort | uniq -c | sort -rn \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "===== first few full reports ====="
+            find "$TSAN_REPORT_DIR" -name 'tsan.*' -type f | head -5 | while read -r f; do
+              echo "--- ${f} ---"
+              cat "$f"
+            done
+          else
+            echo "No ThreadSanitizer reports were produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload TSan reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tsan-reports-ubuntu-24.04-arm
+          path: ${{ github.workspace }}/tsan-reports
+          if-no-files-found: warn
+
+      # Save test logs so failures/hangs can be diagnosed
+      - name: Archive test logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: stp-tsan-test-logs-ubuntu-24.04-arm
+          path: logs.tar.gz
+          if-no-files-found: warn
