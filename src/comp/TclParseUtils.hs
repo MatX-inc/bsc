@@ -11,8 +11,7 @@ import Depend(outlaw_sv_kws_as_classic_ids)
 
 import Parser.Classic.CParser(CParser, pType, qcon, eof, errSyntax)
 import Parse(parse, (+..))
-import Lex(LFlags(..))
-import LexAlex(lexAlexStart)
+import Lex(lexStart, LFlags(..))
 import CType(CType)
 import qualified Data.Text as T
 
@@ -38,7 +37,7 @@ classicStringWrapper flags parser s = fullParse $ lex s
             Right []       -> internalError $ "TclParseUtils: Successful no parse: " ++ show s
             Right [(p,[])] -> return $ Right p
             Right ps       -> internalError $ "TclParseUtils: multiple parses: " ++ show ps ++ "\n" ++ show s
-        lex = lexAlexStart lflags (mkFString "Commandline") . T.pack
+        lex = lexStart lflags (mkFString "Commandline") . T.pack
         lflags = LFlags { lf_is_stdlib = stdlibNames flags,
                           lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
 

@@ -1,15 +1,16 @@
 {
 {-# LANGUAGE BangPatterns #-}
 {-# OPTIONS_GHC -fno-warn-unused-imports -fno-warn-unused-binds -fno-warn-missing-signatures -fno-warn-tabs #-}
--- Alex-generated lexer for the Bluespec Classic syntax, taking strict
--- Text input (the UTF-8-decoded contents of the source file).
+-- The Bluespec Classic lexer (Alex-generated, taking strict Text input:
+-- the UTF-8-decoded contents of the source file), together with the
+-- Token/LexItem definitions shared with the parsers.
 --
--- Produces exactly the token stream of the hand-written Lex.hs: same
--- Token/LexItem constructors and same Positions, including Lex.hs's
--- column-accounting quirks (which are replicated here bug-for-bug, see
--- lexLitChar' and the "package" rule).  The private helpers of Lex.hs
--- that affect token values (lexLitChar', readN, nextTab, the SV keyword
--- sets) are ported verbatim below so behavior cannot drift silently.
+-- Produces exactly the token stream of the previous hand-written String
+-- lexer: same Token/LexItem constructors and same Positions, including
+-- its column-accounting quirks (which are replicated here bug-for-bug,
+-- see lexLitChar' and the "package" rule).  The helpers of the hand
+-- lexer that affect token values (lexLitChar', readN, nextTab, the SV
+-- keyword sets) were ported verbatim so behavior cannot drift silently.
 --
 -- The DFA is fed one byte per source *character*: ASCII characters as
 -- themselves, non-ASCII characters collapsed to one of five pseudo-bytes
@@ -18,9 +19,11 @@
 -- GHC's own lexer does.  Hence token lengths reported by alexScan are in
 -- characters.
 --
--- The build system runs alex on this file (see the LexAlex.hs rule in
--- the Makefile); to regenerate by hand: alex -g LexAlex.x -o LexAlex.hs
-module LexAlex(lexAlexStart, lexAlexStartWithPos) where
+-- The build system runs alex on this file (see the Lex.hs rule in
+-- the Makefile); to regenerate by hand: alex -g Lex.x -o Lex.hs
+module Lex(Token(..), LexItem(..), LexError(..), LFlags(..), prLexItem,
+           lexStart, lexStartWithPos,
+           isIdChar, isSym, convLexErrorToErrMsg) where
 
 import Data.Char
 import Data.Word(Word8)
@@ -28,11 +31,11 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import Numeric(readFloat)
 
-import Lex(Token(..), LexItem(..), LexError(..), LFlags(..), isIdChar, isSym)
+import Util(itos)
 import Position
-import FStringCompat(FString, mkFString)
+import FStringCompat
 import PreStrings(fsEmpty)
-import ErrorUtil(internalError)
+import Error(internalError, ErrMsg(..))
 import SystemVerilogKeywords
 }
 
@@ -52,15 +55,15 @@ tokens :-
 -- (preprocessor line directives `# <n> "<file>"` are handled by the driver
 -- loop before calling alexScan, since they are only recognized at column 0)
 
--- whitespace (Lex.hs lx; \r \v \f reset the column to 0)
+-- whitespace (hand lexer's lx; \r \v \f reset the column to 0)
 \ +          { wsSpaces }
 \n+          { wsNewlines }
 \t+          { wsTabs }
 [\r\v\f]+    { wsCRs }
 
 -- line comments: "--" then any number of '-', then EOL, '@', or a non-symbol
--- char (Lex.hs isComm); a comment without a trailing newline at EOF
--- is a LexMissingNL error (Lex.hs skipToEOL)
+-- char (hand lexer's isComm); a comment without a trailing newline at
+-- EOF is a LexMissingNL error (hand lexer's skipToEOL)
 "--" \-* $commstart [^\n]* \n   { lineCommentNL }
 "--" \-* \n                     { lineCommentNL }
 "--" \-* $commstart [^\n]*      { lineCommentEOF }
@@ -84,18 +87,18 @@ tokens :-
 "]"          { fixTok L_rbra }
 "."          { fixTok L_dot }
 
--- character and string literals (escape forms per Lex.hs lexLitChar')
+-- character and string literals (escape forms per lexLitChar' below)
 \' ([^\\\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig*) \'        { charTok }
 \" ([^\\\"\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig*)* \"     { stringTok }
 
 -- unbased unsized bit literals '0 / '1 with no closing quote (the quoted
 -- forms '0' / '1' are char literals: the rule above is a longer match).
--- Lex.hs goes through lexLitChar' here, so a hex escape decoding to '0'
+-- The hand lexer went through lexLitChar' here, so a hex escape decoding to '0'
 -- or '1' (e.g. '\x30) also counts; anything else is LexBadCharLit.
 \' [01]           { uubTok }
 \' \\ x $hexdig*  { uubTok }
 
--- integer and real literals (Lex.hs lInteger, lReal);
+-- integer and real literals (hand lexer's lInteger, lReal);
 -- underscores are digit separators everywhere except in float/exponent
 -- parts and sized-literal widths (quirks of the hand lexer, replicated)
 0 [xX] $hexdig [$hexdig \_]*                 { basedTok 16 }
@@ -167,12 +170,180 @@ $digit [$digit \_]*                          { decTok }
 $symstart $symall*                           { symTok }
 $idstart $idchar*                            { idTok }
 
--- fallbacks: unterminated/bad literals, bad characters (Lex.hs lexerr)
+-- fallbacks: unterminated/bad literals, bad characters (hand lexer's lexerr)
 \'           { badCharTok }
 \"           { badStringTok }
 .            { badChar }
 {
 type Stream = T.Text
+
+-- import Debug.Trace
+
+-- data structure for lexical errors
+-- so raw error messages are not in LexItem
+data LexError = LexBadCharLit
+              | LexBadStringLit
+              | LexBadLexChar Char
+              | LexUntermComm Position
+              | LexMissingNL
+              deriving(Eq)
+
+convLexErrorToErrMsg :: LexError -> ErrMsg
+convLexErrorToErrMsg (LexBadCharLit) = EBadCharLit
+convLexErrorToErrMsg (LexBadStringLit) = EBadStringLit
+convLexErrorToErrMsg (LexBadLexChar c) = EBadLexChar c
+convLexErrorToErrMsg (LexUntermComm p) = EUntermComm p
+convLexErrorToErrMsg (LexMissingNL) = EMissingNL
+
+data LexItem =
+          L_varid FString
+        | L_conid FString
+        | L_varsym FString
+        | L_consym FString
+        | L_integer (Maybe Integer) Integer Integer                -- bit size (if specified), base, value
+        | L_float Rational
+        | L_char Char
+        | L_string String
+        | L_lpar
+        | L_rpar
+        | L_semi
+        | L_uscore
+        | L_bquote
+        | L_lcurl
+        | L_rcurl
+        | L_lbra
+        | L_rbra
+        -- reserved words
+        | L_action | L_case | L_class | L_data | L_deriving | L_do | L_else | L_foreign
+        | L_if | L_import | L_in
+        | L_infix | L_infixl | L_infixr
+        | L_interface | L_instance
+        | L_let | L_letseq | L_package | L_of
+        | L_primitive | L_qualified | L_rules | L_signature | L_struct
+        | L_then | L_module | L_type | L_valueOf | L_stringOf | L_verilog | L_via | L_synthesize | L_when | L_where
+        | L_coherent | L_incoherent
+        -- reserved ops
+        | L_dcolon | L_colon | L_eq | L_at | L_lam | L_bar
+        | L_rarrow | L_larrow | L_dot | L_comma | L_drarrow | L_irarrow
+        -- layout items
+        | L_lcurl_o | L_rcurl_o | L_semi_o
+        -- pragma
+        | L_lpragma | L_rpragma
+        -- unbased unsized bit literals ('0 all-zeros, '1 all-ones)
+        | L_unbasedUnsized Bool
+        -- pseudo items
+        | L_eof
+        | L_error LexError
+        deriving (Eq)
+
+prLexItem :: LexItem -> String
+prLexItem (L_varid s) = getFString s
+prLexItem (L_conid s) = getFString s
+prLexItem (L_varsym s) = getFString s
+prLexItem (L_consym s) = getFString s
+prLexItem (L_integer _ _ i) = itos i
+prLexItem (L_float r) = show r
+prLexItem (L_char c) = show c
+prLexItem (L_string s) = show s
+prLexItem L_lpar = "("
+prLexItem L_rpar = ")"
+prLexItem L_semi = ";"
+prLexItem L_uscore = "_"
+prLexItem L_bquote = "`"
+prLexItem L_lcurl = "{"
+prLexItem L_rcurl = "}"
+prLexItem L_lbra = "["
+prLexItem L_rbra = "]"
+prLexItem L_action = "action"
+prLexItem L_case = "case"
+prLexItem L_class = "class"
+prLexItem L_data = "data"
+prLexItem L_deriving = "deriving"
+prLexItem L_via = "via"
+prLexItem L_do = "do"
+prLexItem L_else = "else"
+prLexItem L_foreign = "foreign"
+prLexItem L_if = "if"
+prLexItem L_import = "import"
+prLexItem L_in = "in"
+prLexItem L_coherent = "coherent"
+prLexItem L_incoherent = "incoherent"
+prLexItem L_infix = "infix"
+prLexItem L_infixl = "infixl"
+prLexItem L_infixr = "infixr"
+prLexItem L_interface = "interface"
+prLexItem L_instance = "instance"
+prLexItem L_let = "let"
+prLexItem L_letseq = "letseq"
+prLexItem L_package = "package"
+prLexItem L_of = "of"
+prLexItem L_primitive = "primitive"
+prLexItem L_qualified = "qualified"
+prLexItem L_rules = "rules"
+prLexItem L_signature = "signature"
+prLexItem L_struct = "struct"
+prLexItem L_module = "module"
+prLexItem L_then = "then"
+prLexItem L_type = "type"
+prLexItem L_valueOf = "valueOf"
+prLexItem L_stringOf = "stringOf"
+prLexItem L_verilog = "verilog"
+prLexItem L_synthesize = "synthesize"
+prLexItem L_when = "when"
+prLexItem L_where = "where"
+prLexItem L_dcolon = "::"
+prLexItem L_colon = ":"
+prLexItem L_eq = "="
+prLexItem L_at = "@"
+prLexItem L_lam = "\\"
+prLexItem L_bar = "|"
+prLexItem L_rarrow = "->"
+prLexItem L_larrow = "<-"
+prLexItem L_dot = "."
+prLexItem L_comma = ","
+prLexItem L_drarrow = "==>"
+prLexItem L_irarrow = "=>"
+prLexItem L_lcurl_o = "{ from layout"
+prLexItem L_rcurl_o = "} from layout"
+prLexItem L_semi_o = "; from layout"
+prLexItem L_lpragma = "{-#"
+prLexItem L_rpragma = "#-}"
+prLexItem (L_unbasedUnsized False) = "'0"
+prLexItem (L_unbasedUnsized True)  = "'1"
+prLexItem L_eof = "<EOF>"
+prLexItem (L_error s) = "Lexical error: " ++ show (convLexErrorToErrMsg s)
+
+data Token = Token Position LexItem deriving (Eq)
+
+instance Show Token where
+    showsPrec _ (Token p l) = showString ("(Token " ++ prPosition p ++ " " ++ prLexItem l ++ ")")
+
+
+data LFlags = LFlags {
+    lf_is_stdlib :: Bool,   -- parsing a stdlib file, annotate positions
+    lf_allow_sv_kws :: Bool -- allow SV keywords as identifiers
+}
+
+isSym :: Char -> Bool
+isSym '!' = True; isSym '@' = True; isSym '#' = True; isSym '$' = True
+isSym '%' = True; isSym '&' = True; isSym '*' = True; isSym '+' = True
+isSym '.' = True; isSym '/' = True; isSym '<' = True; isSym '=' = True
+isSym '>' = True; isSym '?' = True; isSym '\\' = True; isSym '^' = True
+isSym '|' = True; isSym ':' = True; isSym '-' = True; isSym '~' = True
+isSym ',' = True
+isSym c | c >= '\x80' = c `elem` ['\162', '\163', '\164', '\165', '\166',
+                                  '\167', '\168', '\169', '\170', '\171',
+                                  '\172', '\173', '\174', '\175', '\176',
+                                  '\177', '\178', '\179', '\180', '\181',
+                                  '\183', '\184', '\185', '\186', '\187',
+                                  '\188', '\189', '\190', '\191', '\215',
+                                  '\247' ] || (isSymbol c && not (isIdChar c))
+isSym _ = False
+
+isIdChar :: Char -> Bool
+isIdChar '\'' = True
+isIdChar '_' = True
+isIdChar c = isAlphaNum c
 
 -- ---------------------------------------------------------------------------
 -- Input stream: yield one Char at a time.
@@ -199,7 +370,7 @@ spanG p s = case unconsChar s of
 -- Byte classification for the DFA.  ASCII chars are themselves; non-ASCII
 -- chars collapse to one of five pseudo-bytes according to exactly the
 -- predicates the hand-written lexer applies (and in its testing order:
--- isSym is checked before isAlpha in Lex.hs).
+-- isSym is checked before isAlpha in the hand lexer).
 
 uSymOnly, uSymId, uAlpha, uIdCont, uOther :: Word8
 uSymOnly = 0xF1  -- isSym && not isIdChar
@@ -229,10 +400,10 @@ alexGetByte s = case unconsChar s of
 {-# INLINE alexGetByte #-}
 
 alexInputPrevChar :: AlexInput -> Char
-alexInputPrevChar = internalError "LexAlex: alexInputPrevChar not used"
+alexInputPrevChar = internalError "Lex: alexInputPrevChar not used"
 
 -- ---------------------------------------------------------------------------
--- Verbatim ports of Lex.hs private helpers.
+-- Verbatim ports of the hand lexer's private helpers.
 
 tabStop :: Int
 tabStop = 8
@@ -249,7 +420,7 @@ readN radix s =
      foldl1 (\n d -> n * radix + d)
             (map (toInteger . digitToInt) s)
 
--- exact copy of Lex.hs lexLitChar' (note: n undercounts simple escapes by
+-- exact copy of the hand lexer's lexLitChar' (note: n undercounts simple escapes by
 -- one, which is why the hand lexer's columns drift on them; we replicate it)
 lexLitChar' :: String -> Maybe (Char, Int, String)
 lexLitChar' ('\\':s)     = lexEsc s
@@ -276,7 +447,7 @@ decodeCharLit lexeme =
     Nothing -> internalError ("decodeCharLit: " ++ show lexeme)
 
 -- string literal: lexeme includes both quotes; returns (value, column advance)
--- replicates Lex.hs lexString's column accounting (c+1 for the opening
+-- replicates the hand lexer's lexString column accounting (c+1 for the opening
 -- quote, +n per char, +1 for the closing quote)
 decodeStringLit :: String -> (String, Int)
 decodeStringLit lexeme = go (drop 1 lexeme) 1 []
@@ -287,7 +458,7 @@ decodeStringLit lexeme = go (drop 1 lexeme) 1 []
                           Nothing -> internalError ("decodeStringLit: " ++ show lexeme)
 
 -- `# <line> "<file>"` preprocessor line directive, recognized only at
--- column 0 (checked by the caller).  Replicates Lex.hs lx exactly:
+-- column 0 (checked by the caller).  Replicates the hand lexer's lx exactly:
 -- requires the prefix '#', ' ', digit; consumes through the newline.
 -- Returns Nothing when the prefix does not match (caller falls through to
 -- the DFA, where '#' lexes as a symbol char).
@@ -337,7 +508,7 @@ mkFloat s =
 
 -- comment skipping ------------------------------------------------------------
 
--- replicates Lex.hs skipComm: nested brace-dash comments, only \n and \t
+-- replicates the hand lexer's skipComm: nested brace-dash comments, only \n and \t
 -- treated specially inside.  Returns Right (line, col, rest) on close,
 -- Left (line, col at EOF) when unterminated.  (The braces are written as
 -- numeric escapes because Alex's code-fragment scanner counts every brace
@@ -357,7 +528,7 @@ skipCommG !n !l !c s
       Just ('\t', s1) -> skipCommG n l (nextTab (c+1)) s1
       Just (_, s1)    -> skipCommG n l (c+1) s1
 
--- SystemVerilog keyword/symbol sets (copies of Lex.hs private sets) ----------
+-- SystemVerilog keyword/symbol sets (as in the hand lexer) -----------------
 
 isSvKeyword :: String -> Bool
 isSvKeyword str = str `S.member` svKeywordSet
@@ -378,16 +549,16 @@ svSymbolSet = S.fromList [str | (_, str, _) <- svSymbolTable]
 
 type Action = LFlags -> FString -> Int -> Int -> Stream -> Stream -> Int -> [Token]
 
-lexAlexStart :: LFlags -> FString -> Stream -> [Token]
-lexAlexStart lf f s = go lf f 1 0 s
+lexStart :: LFlags -> FString -> Stream -> [Token]
+lexStart lf f s = go lf f 1 0 s
 
 -- start lexing at a given position (used for Classic text embedded in
--- BSV source); replicates Lex.hs lexStartWithPos, including its
+-- BSV source); replicates the hand lexer, including its
 -- rejection of unknown positions
-lexAlexStartWithPos :: LFlags -> Position -> Stream -> [Token]
-lexAlexStartWithPos lf pos s
+lexStartWithPos :: LFlags -> Position -> Stream -> [Token]
+lexStartWithPos lf pos s
   | getPositionLine pos == -1 || getPositionColumn pos == -1 =
-      internalError "LexAlex.lexAlexStartWithPos: unknown position"
+      internalError "Lex.lexStartWithPos: unknown position"
   | otherwise =
       go lf (mkFString (getPositionFile pos)) (getPositionLine pos)
          (getPositionColumn pos) s
@@ -401,11 +572,11 @@ go lf f !l !c s
         -- defensive; every byte is covered by some rule, so this is unreachable
         case unconsChar s' of
           Just (ch, _) -> lexErrTokens f l c (LexBadLexChar ch)
-          Nothing -> internalError "LexAlex: scan error at EOF"
+          Nothing -> internalError "Lex: scan error at EOF"
       AlexSkip s' _ -> go lf f l c s'
       AlexToken s' len act -> act lf f l c s s' len
 
--- error token stream, exactly Lex.hs lexerr (infinite L_eof tail)
+-- error token stream, exactly the hand lexer's lexerr (infinite L_eof tail)
 lexErrTokens :: FString -> Int -> Int -> LexError -> [Token]
 lexErrTokens f l c err = map (Token (mkPosition f l c)) (L_error err : repeat L_eof)
 
@@ -414,7 +585,8 @@ fixTok :: LexItem -> Action
 fixTok li lf f l c _ s' len =
   Token (mkPositionFull f l c (lf_is_stdlib lf)) li : go lf f l (c+len) s'
 
--- "package" is emitted at column c-1 (multiple-packages hack in Lex.hs)
+-- A hack to allow multiple packages in one file: the layout pass needs
+-- to generate a closing '}', so "package" is emitted at column c-1
 pkgTok :: Action
 pkgTok lf f l c _ s' len =
   Token (mkPositionFull f l (c-1) (lf_is_stdlib lf)) L_package : go lf f l (c+len) s'
@@ -446,7 +618,7 @@ stringTok lf f l c s s' len =
   in  Token (mkPositionFull f l c (lf_is_stdlib lf)) (L_string str) : go lf f l (c+w) s'
 
 -- unbased unsized literal: '0 / '1, or a hex escape decoding to '0'/'1'
--- (the lexeme has no closing quote; Lex.hs advances by 1 + lexLitChar's
+-- (the lexeme has no closing quote; the hand lexer advanced by 1 + lexLitChar's
 -- count, which for both lexeme shapes equals the lexeme length in chars)
 uubTok :: Action
 uubTok lf f l c s s' len =
@@ -502,5 +674,5 @@ badStringTok _ f l c _ _ _ = lexErrTokens f l c LexBadStringLit
 badChar      _ f l c s _ _ =
   case unconsChar s of
     Just (ch, _) -> lexErrTokens f l c (LexBadLexChar ch)
-    Nothing -> internalError "LexAlex: badChar at EOF"
+    Nothing -> internalError "Lex: badChar at EOF"
 }

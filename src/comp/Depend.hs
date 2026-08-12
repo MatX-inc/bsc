@@ -27,7 +27,6 @@ import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError,
 import PFPrint
 import FStringCompat
 import Lex
-import LexAlex(lexAlexStart)
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
                     bscSrcSuffix, bsvSrcSuffix, binSuffix,
@@ -413,7 +412,7 @@ parseSrc True errh flags filename inp = do
   start flags DFparsed
   let lflags = LFlags { lf_is_stdlib = stdlibNames flags,
                         lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
-  case chkParse pPackage (lexAlexStart lflags (mkFString filename) inp) of
+  case chkParse pPackage (lexStart lflags (mkFString filename) inp) of
       Right pkg -> do t <- dump errh flags t DFparsed dumpnames pkg
                       let ws = classicWarnings pkg
                       return (pkg, t, ws)

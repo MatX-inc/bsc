@@ -12,7 +12,6 @@ import Parser.Classic(pPackage, errSyntax)
 import PVPrint
 import CVPrint()
 import Lex
-import LexAlex(lexAlexStart)
 import Error(internalError, showErrorList)
 
 main :: IO ()
@@ -34,7 +33,7 @@ bsc2bsv :: String -> T.Text -> IO ()
 bsc2bsv filename text =
     do let lflags = LFlags { lf_is_stdlib = False,
                              lf_allow_sv_kws = True }
-           tokens = lexAlexStart lflags (mkFString filename) text
+           tokens = lexStart lflags (mkFString filename) text
        case parse pPackage tokens of
          Left  (ss, tokens') -> let es = [errSyntax [s | s@(_:_) <- ss] tokens']
                                 in  CE.throw $ CE.ErrorCall (showErrorList es)

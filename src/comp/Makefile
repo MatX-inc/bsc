@@ -66,7 +66,7 @@ HTCL_LIB_FLAGS = -lhtcl
 HTCL_INC_FLAGS += $(addprefix -D,$(TCL_DEFS))
 
 # -----
-# Alex (generates the Classic lexer, LexAlex.hs, from LexAlex.x)
+# Alex (generates the Classic lexer, Lex.hs, from Lex.x)
 
 ALEX ?= alex
 
@@ -259,7 +259,7 @@ SOURCES_WO_EXTRA_BUILDVERSION = \
 	$(YICES_HS)/*.hs \
 	$(HTCL_HS)/*.hs
 
-SOURCES = BuildVersion.hs BuildSystem.hs LexAlex.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
+SOURCES = BuildVersion.hs BuildSystem.hs Lex.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
@@ -281,7 +281,7 @@ BuildVersion.hs:
 BuildSystem.hs:
 	./update-build-system.sh
 
-LexAlex.hs: LexAlex.x
+Lex.hs: Lex.x
 	$(ALEX) -g $< -o $@
 
 # Common among all targets
@@ -517,7 +517,7 @@ clean:
 
 .PHONY: full_clean
 full_clean: clean
-	$(RM) -f BuildSystem.hs BuildVersion.hs LexAlex.hs
+	$(RM) -f BuildSystem.hs BuildVersion.hs Lex.hs
 	$(RM) tags TAGS
 
 # -----
