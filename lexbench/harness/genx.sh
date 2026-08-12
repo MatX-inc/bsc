@@ -30,3 +30,13 @@ sed -e "s|@@STREAMTYPE@@|T.Text|" alexparts/footerSTF.part >> gen/LexAlexSTF.x
 alex -g gen/LexAlexSTF.x -o gen/LexAlexSTF.hs
 
 echo "alex generation OK"
+
+# strict Text + fast path + single-pass identifier interning: STFI
+sed -e "s/@@MODNAME@@/LexAlexSTFI/" -e "s|@@STREAMTYPE@@|T.Text|" \
+    -e "s/@@VARIANTCOMMENT@@/strict Text, ASCII-identifier fast path, single-pass interning/" \
+    -e "s/^import LexAlexShared$/import LexAlexShared\nimport LexAlexFastPath\nimport qualified Data.Text.Internal as TI\nimport qualified Data.Text.Array as TA/" \
+    alexparts/header.template > gen/LexAlexSTFI.x
+cat alexparts/rules.part >> gen/LexAlexSTFI.x
+sed -e "s|@@STREAMTYPE@@|T.Text|" alexparts/footerSTFI.part >> gen/LexAlexSTFI.x
+alex -g gen/LexAlexSTFI.x -o gen/LexAlexSTFI.hs
+echo "STFI OK"

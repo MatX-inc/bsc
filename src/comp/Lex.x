@@ -34,7 +34,9 @@ import qualified Data.Text as T
 import qualified Data.Text.Internal as TI
 import qualified Data.Text.Array as TA
 import Numeric(readFloat)
+import System.IO.Unsafe(unsafePerformIO)
 
+import IOMutVar(MutableVar, newVar, readVar, writeVar)
 import Util(itos)
 import Position
 import FStringCompat
@@ -685,6 +687,43 @@ kwMap = M.fromList
   ]
 {-# NOINLINE kwMap #-}
 
+-- Single-pass interning: a Text-slice-keyed cache in FRONT of mkFString.
+--
+-- mkFString (SpeedyString.fromString) rebuilds a String from the lexeme,
+-- hashes it char-by-char, and walks an IntMap bucket -- for every
+-- occurrence of every identifier.  This cache maps the (zero-copy) Text
+-- slice of an already-scanned ASCII identifier directly to its FString,
+-- so each occurrence after the first is a single Map lookup on the bytes.
+--
+-- FString semantics are preserved exactly: SpeedyString assigns unique
+-- ids in first-intern order (and its Eq/Ord compare ids), so all that
+-- matters is that cache misses call mkFString in the same sequence the
+-- uncached lexer would -- they do, since the first occurrence of every
+-- identifier is a miss that calls mkFString at exactly the point the
+-- uncached code would, and hits return the FString that call produced.
+-- The cache key is T.copy'd on insert so it doesn't retain the source
+-- file's buffer.  Same benign unsafePerformIO/MutableVar pattern as
+-- SpeedyString itself.
+
+idCache :: MutableVar (M.Map T.Text FString)
+idCache = unsafePerformIO $ newVar M.empty
+{-# NOINLINE idCache #-}
+
+-- n ASCII chars at the head of s (the fast-scanned identifier): its FString
+internId :: T.Text -> Int -> FString
+internId s@(TI.Text arr off _) n = unsafePerformIO $ do
+  m <- readVar idCache
+  let key = TI.Text arr off n
+  case M.lookup key m of
+    Just fs -> return fs
+    Nothing -> do
+      let !fs = mkFString (asciiStr s n)
+          !key2 = T.copy key
+          !m2 = M.insert key2 fs m
+      writeVar idCache m2
+      return fs
+{-# NOINLINE internId #-}
+
 -- ---------------------------------------------------------------------------
 -- Driver and actions.
 -- Action args: flags, file, line, col (token start), stream at token start,
@@ -731,21 +770,21 @@ go lf f !l !c s
 -- otherwise the conid/varid logic of idTok verbatim.  n is both the char
 -- count and the column advance (all chars are single-byte ASCII).
 fastIdTok :: LFlags -> FString -> Int -> Int -> Stream -> Int -> Stream -> [Token]
-fastIdTok lf f !l !c s n s' =
+fastIdTok lf f !l !c s@(TI.Text arr off _) n s' =
   case kwLookup s n of
     Just L_package ->
       Token (mkPositionFull f l (c-1) (lf_is_stdlib lf)) L_package : go lf f l (c+n) s'
     Just li ->
       Token (mkPositionFull f l c (lf_is_stdlib lf)) li : go lf f l (c+n) s'
     Nothing ->
-      let str = asciiStr s n
-          p = mkPositionFull f l c (lf_is_stdlib lf)
+      let p = mkPositionFull f l c (lf_is_stdlib lf)
           rest = go lf f l (c+n) s'
-      in  if not (lf_allow_sv_kws lf) && isSvKeyword str
-          then internalError ("SystemVerilog keyword forbidden: " ++ str)
-          else if isUpper (head str)
-               then Token p (L_conid (mkFString str)) : rest
-               else Token p (L_varid (mkFString str)) : rest
+          b0 = TA.unsafeIndex arr off
+      in  if not (lf_allow_sv_kws lf) && isSvKeyword (asciiStr s n)
+          then internalError ("SystemVerilog keyword forbidden: " ++ asciiStr s n)
+          else if b0 >= 65 && b0 <= 90    -- 'A'-'Z': conid
+               then Token p (L_conid (internId s n)) : rest
+               else Token p (L_varid (internId s n)) : rest
 
 -- error token stream, exactly the hand lexer's lexerr (infinite L_eof tail)
 lexErrTokens :: FString -> Int -> Int -> LexError -> [Token]

@@ -352,3 +352,62 @@ the next DFA-bypass candidate.
 Repro: `./genx.sh` now also emits `gen/LexAlexSTF.x`; engine name `alex-stf`.
 Fast path source: `harness/LexAlexFastPath.hs` + `harness/alexparts/
 footerSTF.part`. Dumps: `harness/dumps/gen/LexAlexST{,F}.dump-{asm,simpl}`.
+
+## (e) Single-pass identifiers (alex-stfi): interning fused into the fast path
+
+The (d) fast path scans an ASCII identifier byte-by-byte and then pays for
+the lexeme twice more anyway: `asciiStr` rebuilds a `String` (n cons cells)
+and `mkFString` (SpeedyString.fromString) traverses it again to hash it and
+walk its IntMap bucket -- on *every* occurrence.  `alex-stfi` adds a
+Text-slice-keyed cache in front of `mkFString`
+(`harness/LexAlexFastPath.hs` `internId`, driver in
+`alexparts/footerSTFI.part`): after the byte scan, the zero-copy slice of
+the identifier is looked up in a global `Map Text FString`; a hit returns
+the FString with no String build and no re-hash, a miss falls through to
+`mkFString` and inserts a `T.copy`'d key (so the cache never retains a
+source buffer).
+
+FString semantics are preserved exactly: SpeedyString assigns unique ids in
+first-intern order (its Eq/Ord compare ids), and cache misses call
+`mkFString` in precisely the sequence the uncached lexer would -- the first
+occurrence of each identifier is always a miss at the same program point.
+The conid/varid split comes from the first byte (`A`-`Z`), and the
+SV-keyword guard still evaluates per occurrence.  The byte-identical bsc
+build is the referee (it passed; see the commit).
+
+### Equivalence
+
+`compare` mode: **1047/1047** corpus files + `tests/t1-t13`, all engines
+including `alex-stfi`, token-identical, zero deviations
+(`equiv_stfi_corpus.txt`).
+
+### Lex-only, 66.5 MB corpus (interleaved, median of 5, `bench/big4_*`)
+
+| engine | median | MB/s | vs alex-stf | alloc in lex region |
+|---|---|---|---|---|
+| alex-st | 2.966 s | 22.4 | 0.91x | 10.89 GB |
+| alex-stf | 2.706 s | 24.6 | 1.00x | 8.43 GB |
+| **alex-stfi** | **2.181 s** | **30.5** | **1.24x** | **6.29 GB** |
+
+(hash asserted identical across engines: 9,047,095 tokens,
+2170315049108700862; alloc -2.14 GB = -25.4% vs alex-stf, -42% vs alex-st)
+
+### End-to-end hyperfine (warmup 2, 10 runs; `bench/hyperfine_e2e_stfi.*`)
+
+| engine | mean +/- sigma | vs alex-stfi |
+|---|---|---|
+| alex-st | 3.117 +/- 0.132 s | 1.33 +/- 0.13 |
+| alex-stf | 2.811 +/- 0.133 s | 1.20 +/- 0.12 |
+| **alex-stfi** | **2.338 +/- 0.202 s** | 1.00 |
+
+### Read
+
+The win is almost pure allocation/traversal removal on repeat occurrences
+(the common case: the corpus has ~7.7M identifier runs but far fewer
+distinct names).  A `Map Text` lookup compares bytes directly
+(`memcmp`-style) against O(log n) keys, vs building n cons cells + a 17x+c
+rolling hash + an assoc-list string compare in SpeedyString.  Misses are
+slightly *more* expensive than before (extra failed lookup + `T.copy` +
+insert), which real corpora amortize away immediately.
+
+Repro: engine name `alex-stfi`; `./genx.sh` emits `gen/LexAlexSTFI.x`.

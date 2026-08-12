@@ -1,0 +1,16 @@
+Benchmark 1: alex-st
+  Time (mean ± σ):      3.117 s ±  0.132 s    [User: 2.969 s, System: 0.151 s]
+  Range (min … max):    3.017 s …  3.448 s    10 runs
+ 
+Benchmark 2: alex-stf
+  Time (mean ± σ):      2.811 s ±  0.133 s    [User: 2.690 s, System: 0.125 s]
+  Range (min … max):    2.677 s …  3.167 s    10 runs
+ 
+Benchmark 3: alex-stfi
+  Time (mean ± σ):      2.338 s ±  0.202 s    [User: 2.153 s, System: 0.185 s]
+  Range (min … max):    2.213 s …  2.856 s    10 runs
+ 
+Summary
+  alex-stfi ran
+    1.20 ± 0.12 times faster than alex-stf
+    1.33 ± 0.13 times faster than alex-st

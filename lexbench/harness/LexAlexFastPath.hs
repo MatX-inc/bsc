@@ -24,7 +24,7 @@
 --     reproduces them.  The lookup is keyed on a zero-copy Text slice and
 --     pre-filtered: no keyword starts with an uppercase letter, and none is
 --     longer than 10 chars, so most identifiers skip the Map entirely.
-module LexAlexFastPath(FastScan(..), fastScanId, kwLookup, asciiStr) where
+module LexAlexFastPath(FastScan(..), fastScanId, kwLookup, asciiStr, internId) where
 
 import qualified Data.Text as T
 import qualified Data.Text.Internal as TI
@@ -33,7 +33,10 @@ import qualified Data.Map.Strict as M
 import Data.Bits(unsafeShiftR, (.&.))
 import Data.Word(Word8, Word64)
 import Data.Char(chr)
+import System.IO.Unsafe(unsafePerformIO)
 
+import IOMutVar(MutableVar, newVar, readVar, writeVar)
+import FStringCompat(FString, mkFString)
 import Lex(LexItem(..))
 
 -- result of scanning at a token start
@@ -150,3 +153,39 @@ kwMap = M.fromList
   , (T.pack "where",      L_where)
   ]
 {-# NOINLINE kwMap #-}
+
+-- ---------------------------------------------------------------------------
+-- Single-pass interning: a Text-slice-keyed cache in FRONT of mkFString.
+--
+-- mkFString (SpeedyString.fromString) rebuilds a String from the lexeme,
+-- hashes it char-by-char, and walks an IntMap bucket -- for every
+-- occurrence of every identifier.  This cache maps the (zero-copy) Text
+-- slice of an already-scanned ASCII identifier directly to its FString.
+--
+-- FString semantics are preserved exactly: SpeedyString assigns unique ids
+-- in first-intern order (and Eq/Ord compare ids), so all that matters is
+-- that cache misses call mkFString in the same sequence the uncached lexer
+-- would -- they do, since the first occurrence of every identifier is a
+-- miss that calls mkFString at exactly the point the uncached code would,
+-- and hits return the FString that call produced.  The cache key is
+-- T.copy'd on insert so it doesn't retain the source file's buffer.
+-- Same benign unsafePerformIO/MutableVar pattern as SpeedyString itself.
+
+idCache :: MutableVar (M.Map T.Text FString)
+idCache = unsafePerformIO $ newVar M.empty
+{-# NOINLINE idCache #-}
+
+-- n ASCII chars at the head of s (the fast-scanned identifier): its FString
+internId :: T.Text -> Int -> FString
+internId s@(TI.Text arr off _) n = unsafePerformIO $ do
+  m <- readVar idCache
+  let key = TI.Text arr off n
+  case M.lookup key m of
+    Just fs -> return fs
+    Nothing -> do
+      let !fs = mkFString (asciiStr s n)
+          !key2 = T.copy key
+          !m2 = M.insert key2 fs m
+      writeVar idCache m2
+      return fs
+{-# NOINLINE internId #-}
