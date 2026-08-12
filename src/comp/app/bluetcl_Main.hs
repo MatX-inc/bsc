@@ -13,12 +13,17 @@ import Foreign.C.Types (CInt (..))
 import Foreign.Marshal.Array (newArray0)
 import Foreign.Ptr (Ptr, nullPtr)
 import System.Environment (getArgs, getProgName)
+import TopUtils (getBluespecDir)
+import Data.Functor (void)
 
 foreign import ccall "run_bluetcl"
   c_run_bluetcl :: CInt -> Ptr CString -> IO ()
 
 main :: IO ()
 main = do
+  -- The Tcl side reads $BLUESPECDIR, so call getBluespecDir for its setenv side
+  -- effect.
+  void getBluespecDir
   prog <- getProgName
   args <- getArgs
   let argList = prog : args
