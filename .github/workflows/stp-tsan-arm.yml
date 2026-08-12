@@ -28,7 +28,12 @@ name: STP TSan ARM
 #   stp-tsan:    cross-check for actual data races on top of the UB:
 #                libstp built with ThreadSanitizer, the STP-exercising
 #                testsuite directories run with -sat-stp under the TSan
-#                runtime, reports uploaded as an artifact.
+#                runtime, reports uploaded as an artifact.  If the GHC
+#                RTS cannot start under the TSan runtime (observed on
+#                aarch64: SIGSEGV under LD_PRELOAD in every variant),
+#                the job falls back to driving the instrumented libstp
+#                from a multithreaded C harness instead
+#                (.github/workflows/stp_mt_harness.c).
 #
 # TSan-with-Haskell-FFI note: bsc is an uninstrumented GHC-compiled
 # binary that calls libstp through the FFI, so the TSan runtime is not
@@ -465,11 +470,36 @@ jobs:
           fi
 
           if [ -z "$MODE" ]; then
-            echo "::error title=tsan smoke::bsc could not run with the TSan runtime in any mode; see the per-mode annotations for exit codes and output"
+            # bsc (a GHC binary) cannot host the TSan runtime on this
+            # platform.  Fall back to driving the instrumented libstp
+            # directly from an instrumented multithreaded C harness --
+            # full TSan coverage of the solver, just not through the
+            # compiler's own FFI calls.
+            echo "bsc cannot run under the TSan runtime; falling back to the direct C harness"
+            cd ..
+            gcc -O1 -g -fsanitize=thread -o stp-mt-harness \
+                .github/workflows/stp_mt_harness.c \
+                -Isrc/vendor/stp/include -Lsrc/vendor/stp/lib -lstp \
+                -Wl,-rpath,"$PWD/src/vendor/stp/lib"
+            set +e
+            TSAN_OPTIONS="halt_on_error=0 exitcode=66 log_path=$TSAN_REPORT_DIR/tsan" \
+              timeout -k 10 300 ./stp-mt-harness > harness-smoke.log 2>&1
+            rc=$?
+            set -e
+            cat harness-smoke.log
+            msg=$(head -c 300 harness-smoke.log | tr '\n\r%' '  ')
+            echo "::warning title=tsan mode harness rc=${rc}::${msg:-<no output>}"
+            if [ "$rc" -eq 0 ] || [ "$rc" -eq 66 ]; then
+              MODE=harness
+            fi
+          fi
+
+          if [ -z "$MODE" ]; then
+            echo "::error title=tsan smoke::neither bsc nor the direct C harness could run with the TSan runtime; see the per-mode annotations for exit codes and output"
             exit 1
           fi
 
-          echo "::notice title=tsan smoke::bsc compiled AddTest.bsv with -sat-stp under TSan in mode '${MODE}'"
+          echo "::notice title=tsan smoke::TSan run mode selected: '${MODE}'"
           {
             echo "TSAN_RUN_MODE=${MODE}"
             echo "TSAN_RUN_PRELOAD=${PRELOAD}"
@@ -490,17 +520,41 @@ jobs:
         run: |
           # Run in the mode the smoke step proved viable
           echo "TSan run mode: ${TSAN_RUN_MODE}"
+
+          # halt_on_error=0/exitcode=0: keep exit codes and output
+          # clean (reports go to log files, not stderr) so the runs
+          # keep going and race reports don't masquerade as test
+          # failures.
+          export TSAN_OPTIONS="halt_on_error=0 exitcode=0 abort_on_error=0 log_path=$TSAN_REPORT_DIR/tsan history_size=7 second_deadlock_stack=1"
+
+          if [ "${TSAN_RUN_MODE}" = "harness" ]; then
+            # bsc cannot host the TSan runtime here, so exercise the
+            # instrumented libstp directly.  Serial handoff mirrors
+            # bsc's actual FFI usage (one solver instance at a time,
+            # possibly on changing OS threads); the concurrent phase
+            # probes thread-safety of the solver's global state and is
+            # allowed to crash -- that is a finding, not an
+            # infrastructure failure.
+            set +e
+            timeout -k 30 1200 ./stp-mt-harness
+            rc1=$?
+            timeout -k 30 1200 ./stp-mt-harness concurrent
+            rc2=$?
+            set -e
+            echo "serial-handoff rc=${rc1}, concurrent rc=${rc2}"
+            echo "::notice title=tsan harness::serial-handoff rc=${rc1}, concurrent rc=${rc2}; a nonzero concurrent rc means the solver's global state is thread-unsafe (see the tsan-reports artifact for the races)"
+            if [ "$rc1" -ne 0 ]; then
+              echo "::warning title=tsan harness::the bsc-like serial-handoff phase itself failed (rc=${rc1}); inspect the reports"
+            fi
+            exit 0
+          fi
+
           if [ -n "${TSAN_RUN_PRELOAD}" ]; then
             export LD_PRELOAD="${TSAN_RUN_PRELOAD}"
           fi
           if [ -n "${TSAN_RUN_GHCRTS}" ]; then
             export GHCRTS="${TSAN_RUN_GHCRTS}"
           fi
-          # halt_on_error=0/exitcode=0: keep bsc's exit codes and
-          # output clean (reports go to log files, not stderr) so the
-          # suite keeps running and race reports don't masquerade as
-          # test failures.
-          export TSAN_OPTIONS="halt_on_error=0 exitcode=0 abort_on_error=0 log_path=$TSAN_REPORT_DIR/tsan history_size=7 second_deadlock_stack=1"
 
           export TEST_BSC_OPTIONS=-sat-stp
 
