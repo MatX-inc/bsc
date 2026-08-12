@@ -18,10 +18,9 @@
 -- GHC's own lexer does.  Hence token lengths reported by alexScan are in
 -- characters.
 --
--- To regenerate: alex -g LexAlex.x -o LexAlex.hs
---
--- This module is not yet wired into the build; nothing imports it.
-module LexAlex(lexAlexStart) where
+-- The build system runs alex on this file (see the LexAlex.hs rule in
+-- the Makefile); to regenerate by hand: alex -g LexAlex.x -o LexAlex.hs
+module LexAlex(lexAlexStart, lexAlexStartWithPos) where
 
 import Data.Char
 import Data.Word(Word8)
@@ -381,6 +380,17 @@ type Action = LFlags -> FString -> Int -> Int -> Stream -> Stream -> Int -> [Tok
 
 lexAlexStart :: LFlags -> FString -> Stream -> [Token]
 lexAlexStart lf f s = go lf f 1 0 s
+
+-- start lexing at a given position (used for Classic text embedded in
+-- BSV source); replicates Lex.hs lexStartWithPos, including its
+-- rejection of unknown positions
+lexAlexStartWithPos :: LFlags -> Position -> Stream -> [Token]
+lexAlexStartWithPos lf pos s
+  | getPositionLine pos == -1 || getPositionColumn pos == -1 =
+      internalError "LexAlex.lexAlexStartWithPos: unknown position"
+  | otherwise =
+      go lf (mkFString (getPositionFile pos)) (getPositionLine pos)
+         (getPositionColumn pos) s
 
 go :: LFlags -> FString -> Int -> Int -> Stream -> [Token]
 go lf f !l !c s

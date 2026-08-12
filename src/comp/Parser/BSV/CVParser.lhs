@@ -45,8 +45,10 @@ for preprocessor and token dumping
 > import FileNameUtil
 
 > import qualified Lex
+> import qualified LexAlex
 > import qualified Parse
 > import qualified Parser.Classic.CParser as CParser
+> import qualified Data.Text as T
 
 keep all identifiers regardless of (* keep *)?
 
@@ -1292,7 +1294,8 @@ TYPE CLASSES AND INSTANCES
 >     | getIdString name == "bluespec_classic_def" =
 >     do let lflags = Lex.LFlags { Lex.lf_is_stdlib = False,
 >                                  Lex.lf_allow_sv_kws = False }
->            classicTokens = Lex.lexStartWithPos lflags pos classicText
+>            classicTokens = LexAlex.lexAlexStartWithPos lflags pos
+>                                (T.pack classicText)
 >            lexErrs = [(errpos, Lex.convLexErrorToErrMsg err)
 >                       | Lex.Token errpos (Lex.L_error err) <- classicTokens]
 >        case (lexErrs, Parse.parse CParser.pDefnsAndEOF classicTokens) of

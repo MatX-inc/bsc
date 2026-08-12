@@ -9,11 +9,12 @@ import System.Process(system)
 import System.Exit(ExitCode(..))
 import System.Directory(getModificationTime, getCurrentDirectory)
 import System.Time -- XXX: in old-time package
-import System.IO.Error(ioeGetErrorType)
-import GHC.IO.Exception(IOErrorType(..))
 import Data.Time.Clock.POSIX(utcTimeToPOSIXSeconds)
 import qualified Control.Exception as CE
 import qualified Data.Map as DM
+import qualified Data.ByteString as BS
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 
 import TmpNam(tmpNam, localTmpNam)
 import SCC(tsort)
@@ -26,13 +27,14 @@ import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError,
 import PFPrint
 import FStringCompat
 import Lex
+import LexAlex(lexAlexStart)
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
                     bscSrcSuffix, bsvSrcSuffix, binSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
-import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
-                  removeFileCatch)
+import FileIOUtil(readFilesPath, readBinFilePath, readBinaryFileCatch,
+                  writeFileCatch, removeFileCatch)
 import Id
 import PreIds(idPrelude, idPreludeBSV)
 import Parser.Classic(pPackage, errSyntax, classicWarnings)
@@ -310,7 +312,10 @@ getModTime f = CE.catch (getModificationTime' f >>= return . Just) handler
 
 -----
 
-doCPP :: ErrorHandle -> Flags -> String -> IO String
+-- Returns the raw bytes of the (possibly preprocessed) source file;
+-- the caller decodes them (see parseFile), so that a UTF-8 error is
+-- reported at the original file's position in either case.
+doCPP :: ErrorHandle -> Flags -> String -> IO BS.ByteString
 doCPP errh flags name =
     if cpp flags
     then do
@@ -341,7 +346,7 @@ flags in the CC variable, for example CC="cc -g", then it will work.
         rc <- system cmd
         case rc of
          ExitSuccess -> do
-                file <- readFileCatch errh noPosition tmpNameOut
+                file <- readBinaryFileCatch errh noPosition tmpNameOut
                 removeFileCatch errh topName
                 removeFileCatch errh tmpNameOut
                 return file
@@ -349,7 +354,7 @@ flags in the CC variable, for example CC="cc -g", then it will work.
                 removeFileCatch errh topName
                 removeFileCatch errh tmpNameOut
                 exitFailWith errh n
-    else readFileCatch errh noPosition name
+    else readBinaryFileCatch errh noPosition name
 
 -- Parse a file: run CPP, dump CPP output, parse, check name, dump CSyntax, stats
 -- Returns CPackage, TimeInfo, and warnings for passing to compilation
@@ -367,8 +372,14 @@ parseFile errh flags fatal_name_mismatch fname = do
     let fname_encoded = createEncodedFullFilePath fname pwd
 
     start flags DFcpp
-    file <- doCPP errh flags fname_encoded
-    _ <- dumpStr errh flags t DFcpp dumpnames file
+    bytes <- doCPP errh flags fname_encoded
+    -- decode the source to Text up front (the lexers take Text);
+    -- invalid UTF-8 is an error, reported at the original file's position
+    file <- case TE.decodeUtf8' bytes of
+              Right txt -> return txt
+              Left _ -> bsError errh
+                            [(filePosition $ mkFString fname_encoded, ENotUTF8)]
+    _ <- dumpStr errh flags t DFcpp dumpnames (T.unpack file)
 
     -- parseSrc handles its own dump stages (DFparsed, DFvpp, etc.)
     (pkg@(CPackage i _ _ _ _ _ _), t', warns) <- parseSrc isClassic errh flags fname_encoded file
@@ -391,32 +402,25 @@ parseFile errh flags fatal_name_mismatch fname = do
 
     return (pkg, t', warns)
 
--- wrapper to detect file encoding errors (which are detected lazily)
-parseSrc :: Bool -> ErrorHandle -> Flags -> String -> String ->
+-- the input Text is already decoded (encoding errors are handled up
+-- front, in parseFile)
+parseSrc :: Bool -> ErrorHandle -> Flags -> String -> T.Text ->
             IO (CPackage, TimeInfo, [WMsg])
-parseSrc classic errh flags filename inp = CE.handleJust isEncErr handleErr $ parseSrc' classic errh flags filename inp
-    where isEncErr :: CE.IOException -> Maybe CE.IOException
-          isEncErr e | InvalidArgument <- ioeGetErrorType e = Just e
-                     | otherwise = Nothing
-          handleErr _ = bsError errh [(filePosition $ mkFString filename, ENotUTF8)]
-
-parseSrc' :: Bool -> ErrorHandle -> Flags -> String -> String ->
-            IO (CPackage, TimeInfo, [WMsg])
-parseSrc' True errh flags filename inp = do
+parseSrc True errh flags filename inp = do
   -- Classic parser
   t <- getNow
   let dumpnames = (Just (baseName (dropSuf filename)), Nothing, Nothing)
   start flags DFparsed
   let lflags = LFlags { lf_is_stdlib = stdlibNames flags,
                         lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
-  case chkParse pPackage (lexStart lflags (mkFString filename) inp) of
+  case chkParse pPackage (lexAlexStart lflags (mkFString filename) inp) of
       Right pkg -> do t <- dump errh flags t DFparsed dumpnames pkg
                       let ws = classicWarnings pkg
                       return (pkg, t, ws)
       Left errs -> bsError errh errs
-parseSrc' False errh flags filename inp =
+parseSrc False errh flags filename inp =
   -- BSV parser
-  bsvParseString errh flags filename (baseName $ dropSuf filename) inp
+  bsvParseString errh flags filename (baseName $ dropSuf filename) (T.unpack inp)
 
 chkParse :: Parser [Token] a -> [Token] -> Either [EMsg] a
 chkParse p ts =
