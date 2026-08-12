@@ -36,6 +36,10 @@ and the strict-Text-vs-String discussion.
     single-pass identifiers (`alex-stfi` engine; RESULTS.md section (e)):
     a Text-slice-keyed cache in front of mkFString, ported into
     `src/comp/Lex.x` in the single-pass-identifiers commit.
+  - `alexparts/footerSTFW.part` (+ `wsScan` in `LexAlexFastPath.hs`) —
+    whitespace and `--` line-comment run-scan (`alex-stfw` engine;
+    RESULTS.md section (f)), ported into `src/comp/Lex.x` in the
+    ws/comment-run-scan commit.
   - `LexAlexShared.hs`, `SmokeTest.hs` — shared support code and a tiny
     build smoke test.
 - `bench/hyperfine_e2e*.{json,md,raw.txt}` — hyperfine exports for the
@@ -46,11 +50,13 @@ and the strict-Text-vs-String discussion.
   to a bsc checkout): all UTF-8-valid `.bs` files used for equivalence
   (1047) and the concat-safe subset (1041) used to build the big input.
 - `error_files.txt` — the excluded non-UTF-8 (Latin-1) testsuite files.
-- `tests/t*.bs` — 13 synthetic edge-case files (Unicode ident/symbol
+- `tests/t*.bs` — 16 synthetic edge-case files (Unicode ident/symbol
   classes, tab/CR column rules, line directives, comment forms,
   literal/underscore quirks, escape-position drift; t11–t13 are
   fast-path-adversarial: identifiers continued by non-ASCII idchars,
-  keyword-prefix identifiers, keyword at EOF without newline).
+  keyword-prefix identifiers, keyword at EOF without newline; t14–t16 are
+  ws/comment-adversarial: `--` operator-vs-comment forms, comment at EOF
+  without newline, CRLF and mid-line CR, directives after CR).
 
 ## Re-running
 
@@ -81,7 +87,7 @@ ghc -O2 -ishims -i$BSC/src/comp -i$BSC/src/comp/Libs -igen \
 
 # 5. lex-only benchmark (input pre-built outside the timed region)
 ./harness bench ENGINE ../big.bs 1
-#   ENGINE = hand | alex-string | alex-sbs | alex-lbs | alex-lt | alex-st | alex-stf | alex-stfi
+#   ENGINE = hand | alex-string | alex-sbs | alex-lbs | alex-lt | alex-st | alex-stf | alex-stfi | alex-stfw
 
 # 6. end-to-end (whole process) via hyperfine
 hyperfine --warmup 1 --export-markdown e2e.md --export-json e2e.json \

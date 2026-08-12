@@ -724,6 +724,107 @@ internId s@(TI.Text arr off _) n = unsafePerformIO $ do
       return fs
 {-# NOINLINE internId #-}
 
+-- Whitespace and `--` line-comment run-scan.
+--
+-- Whitespace and line comments are, like identifiers, byte-scannable: no
+-- byte of a UTF-8 multi-byte sequence equals 0x0A, so "scan to newline"
+-- over bytes is character-correct, and all the column arithmetic involves
+-- ASCII (single-byte) characters only.  wsScan consumes, per call, one
+-- maximal whitespace run or one complete `--` comment (through its
+-- newline), tracking line/column exactly like the whitespace rules above:
+--   space: c+1;  tab: nextTab (c+1);  newline: (l+1, 0);  CR VT FF: (l, 0).
+--
+-- `--` only starts a comment when, after all consecutive dashes, the next
+-- char is EOL/EOF, '@', or NOT a symbol char (the hand lexer's isComm
+-- quirk, same as the line-comment rules above) -- otherwise the whole run
+-- is one operator token (e.g. `-->`), which is left to the DFA (WsNone,
+-- nothing consumed).  A non-ASCII byte after the dashes could be a
+-- non-ASCII symbol char, so that also bails to the DFA, which classifies
+-- it with the full isSym.
+--
+-- `# <line> "<file>"` directives are recognized by the driver only at
+-- column 0, so whenever a scanned byte resets the column to 0 (newline,
+-- CR, VT, FF -- including a comment's terminating newline) and the next
+-- byte is '#', wsScan stops and returns, letting the driver's directive
+-- check run before anything else is consumed.
+--
+-- A comment (or bare `--`/`---...`) that reaches EOF without a newline is
+-- the LexMissingNL error, reported at column 0 of its line.
+
+data WsScan
+  = WsNone                                -- nothing consumed: not ws/comment
+  | WsSome !Int !Int !T.Text              -- new line, column, rest
+  | WsMissingNL !Int                      -- comment hit EOF; error line
+
+-- ASCII bitmask for isSym restricted to ASCII:
+--   ! @ # $ % & * + . / < = > ? \ ^ | : - ~ ,
+symMaskLo, symMaskHi :: Word64
+symMaskLo = 0xF400FC7A00000000
+symMaskHi = 0x5000000050000001
+
+isSymAsciiB :: Word8 -> Bool
+isSymAsciiB w
+  | w < 64    = maskMember symMaskLo w
+  | w < 128   = maskMember symMaskHi w
+  | otherwise = False
+{-# INLINE isSymAsciiB #-}
+
+wsScan :: Int -> Int -> T.Text -> WsScan
+wsScan !l0 !c0 (TI.Text arr off len)
+  | len <= 0 = WsNone
+  | otherwise = start (TA.unsafeIndex arr off)
+  where
+    !end = off + len
+    byte :: Int -> Word8
+    byte i = TA.unsafeIndex arr i
+    {-# INLINE byte #-}
+
+    start :: Word8 -> WsScan
+    start 32 = wsLoop l0 (c0+1) (off+1)              -- space
+    start  9 = wsLoop l0 (nextTab (c0+1)) (off+1)    -- tab
+    start 10 = afterZero (l0+1) (off+1)              -- newline
+    start 13 = afterZero l0 (off+1)                  -- CR
+    start 11 = afterZero l0 (off+1)                  -- VT
+    start 12 = afterZero l0 (off+1)                  -- FF
+    start 45 | off+1 < end, byte (off+1) == 45 = dashes (off+2)  -- "--"
+    start _  = WsNone
+
+    -- generic whitespace loop; i = next byte to examine
+    wsLoop :: Int -> Int -> Int -> WsScan
+    wsLoop !l !c !i
+      | i >= end = WsSome l c (TI.Text arr i 0)
+      | otherwise = case byte i of
+          32 -> wsLoop l (c+1) (i+1)
+          9  -> wsLoop l (nextTab (c+1)) (i+1)
+          10 -> afterZero (l+1) (i+1)
+          13 -> afterZero l (i+1)
+          11 -> afterZero l (i+1)
+          12 -> afterZero l (i+1)
+          _  -> WsSome l c (TI.Text arr i (end - i))
+
+    -- the column just reset to 0: stop if '#' follows (possible directive)
+    afterZero :: Int -> Int -> WsScan
+    afterZero !l !i
+      | i < end, byte i == 35 = WsSome l 0 (TI.Text arr i (end - i))
+      | otherwise = wsLoop l 0 i
+
+    -- inside the leading dash run of a potential comment
+    dashes :: Int -> WsScan
+    dashes !j
+      | j >= end = WsMissingNL l0           -- "--" then EOF: comment, no NL
+      | b == 45 = dashes (j+1)
+      | b >= 0x80 = WsNone                  -- could be a non-ASCII symbol: DFA
+      | b /= 64 && isSymAsciiB b = WsNone   -- longer operator (not '@'): DFA
+      | otherwise = eol j                   -- comment: scan to end of line
+      where b = byte j
+
+    -- consume the comment body through its newline
+    eol :: Int -> WsScan
+    eol !j
+      | j >= end = WsMissingNL l0
+      | byte j == 10 = afterZero (l0+1) (j+1)
+      | otherwise = eol (j+1)
+
 -- ---------------------------------------------------------------------------
 -- Driver and actions.
 -- Action args: flags, file, line, col (token start), stream at token start,
@@ -748,22 +849,31 @@ lexStartWithPos lf pos s
 go :: LFlags -> FString -> Int -> Int -> Stream -> [Token]
 go lf f !l !c s
   | c == 0, Just (fn, n, s') <- checkDirective s = go lf fn n 0 s'
-  -- FAST PATH: all-ASCII identifier/keyword at the token start.  fastScanId
-  -- byte-scans the Text's underlying array ([A-Za-z_][A-Za-z0-9_']*); it
-  -- returns FastNo (nothing consumed) when the head is not an ASCII idstart
-  -- OR when the run is terminated by a byte >= 0x80 (which could be a
-  -- non-ASCII idchar continuation), so those cases take the DFA verbatim.
-  | otherwise = case fastScanId s of
-      FastId n s' -> fastIdTok lf f l c s n s'
-      FastNo -> case alexScan s 0 of
-        AlexEOF -> [Token (mkPositionFull f (l+1) (-1) (lf_is_stdlib lf)) L_eof]
-        AlexError s' ->
-          -- defensive; every byte is covered by some rule, so this is unreachable
-          case unconsChar s' of
-            Just (ch, _) -> lexErrTokens f l c (LexBadLexChar ch)
-            Nothing -> internalError "Lex: scan error at EOF"
-        AlexSkip s' _ -> go lf f l c s'
-        AlexToken s' len act -> act lf f l c s s' len
+  -- WS/COMMENT RUN-SCAN: one maximal whitespace run or one complete `--`
+  -- line comment per call, byte-scanned with exact line/column tracking;
+  -- `--` that is really a longer operator (or is followed by a non-ASCII
+  -- char) is left to the DFA with nothing consumed, and a column-0 '#'
+  -- after any newline returns here first so the directive check runs.
+  | otherwise = case wsScan l c s of
+      WsSome l' c' s' -> go lf f l' c' s'
+      WsMissingNL le -> lexErrTokens f le 0 LexMissingNL
+      -- FAST PATH: all-ASCII identifier/keyword at the token start.
+      -- fastScanId byte-scans the Text's underlying array
+      -- ([A-Za-z_][A-Za-z0-9_']*); it returns FastNo (nothing consumed)
+      -- when the head is not an ASCII idstart OR when the run is
+      -- terminated by a byte >= 0x80 (which could be a non-ASCII idchar
+      -- continuation), so those cases take the DFA verbatim.
+      WsNone -> case fastScanId s of
+        FastId n s' -> fastIdTok lf f l c s n s'
+        FastNo -> case alexScan s 0 of
+          AlexEOF -> [Token (mkPositionFull f (l+1) (-1) (lf_is_stdlib lf)) L_eof]
+          AlexError s' ->
+            -- defensive; every byte is covered by some rule, so this is unreachable
+            case unconsChar s' of
+              Just (ch, _) -> lexErrTokens f l c (LexBadLexChar ch)
+              Nothing -> internalError "Lex: scan error at EOF"
+          AlexSkip s' _ -> go lf f l c s'
+          AlexToken s' len act -> act lf f l c s s' len
 
 -- emit the fast-scanned identifier: exact keyword lookup first (reserved
 -- words are exact-match DFA rules, incl. the `package` column-(c-1) hack),

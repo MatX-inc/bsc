@@ -40,3 +40,13 @@ cat alexparts/rules.part >> gen/LexAlexSTFI.x
 sed -e "s|@@STREAMTYPE@@|T.Text|" alexparts/footerSTFI.part >> gen/LexAlexSTFI.x
 alex -g gen/LexAlexSTFI.x -o gen/LexAlexSTFI.hs
 echo "STFI OK"
+
+# STFW: STFI + whitespace / line-comment run-scan
+sed -e "s/@@MODNAME@@/LexAlexSTFW/" -e "s|@@STREAMTYPE@@|T.Text|" \
+    -e "s/@@VARIANTCOMMENT@@/strict Text, fast path, interning, ws-comment run-scan/" \
+    -e "s/^import LexAlexShared$/import LexAlexShared\nimport LexAlexFastPath\nimport qualified Data.Text.Internal as TI\nimport qualified Data.Text.Array as TA/" \
+    alexparts/header.template > gen/LexAlexSTFW.x
+cat alexparts/rules.part >> gen/LexAlexSTFW.x
+sed -e "s|@@STREAMTYPE@@|T.Text|" alexparts/footerSTFW.part >> gen/LexAlexSTFW.x
+alex -g gen/LexAlexSTFW.x -o gen/LexAlexSTFW.hs
+echo "STFW OK"

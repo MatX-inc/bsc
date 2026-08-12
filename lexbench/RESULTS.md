@@ -411,3 +411,68 @@ slightly *more* expensive than before (extra failed lookup + `T.copy` +
 insert), which real corpora amortize away immediately.
 
 Repro: engine name `alex-stfi`; `./genx.sh` emits `gen/LexAlexSTFI.x`.
+
+## (f) Whitespace and `--` line-comment run-scan (alex-stfw)
+
+After (e), whitespace and line comments are the biggest remaining DFA
+customers, and both are byte-scannable: no byte of a UTF-8 multi-byte
+sequence equals 0x0A, so "scan to newline" over raw bytes is
+character-correct, and all column arithmetic involves single-byte ASCII.
+`alex-stfw` adds `wsScan` (in `LexAlexFastPath.hs`, driver in
+`alexparts/footerSTFW.part`): per driver iteration it consumes one maximal
+whitespace run or one complete `--` comment through its newline, in a tight
+byte loop with exact position tracking (space: c+1; tab: nextTab (c+1);
+newline: line+1/col 0; CR/VT/FF: col 0).
+
+Quirks replicated exactly:
+
+- **`--` operator-vs-comment disambiguation** (the hand lexer's `isComm`):
+  after all consecutive dashes, the run is a comment only if the next char
+  is EOL/EOF, `@`, or not a symbol char; otherwise (e.g. `-->`, `--,`,
+  `---=`) nothing is consumed and the DFA lexes the whole run as one
+  operator.  A non-ASCII byte after the dashes could be a non-ASCII symbol
+  char, so it also bails to the DFA (full `isSym` decides).
+- **`# <line> "<file>"` directives** are only recognized at column 0:
+  whenever a scanned byte resets the column (newline/CR/VT/FF, including a
+  comment's terminating newline) and the next byte is `#`, wsScan returns
+  to the driver so its directive check runs first.
+- **Missing trailing newline**: a comment (or bare `--`/`---`) reaching EOF
+  is the LexMissingNL error stream at column 0 of its line.
+- Block comments `{- -}` are untouched (DFA + skipCommG as before).
+
+### Equivalence
+
+`compare` mode: **1047/1047** corpus files + `tests/t1-t16`, all engines
+including `alex-stfw`, token-identical, zero deviations
+(`equiv_stfw_corpus.txt`).  New adversarial files: `t14.bs` (`-->`,
+`--@`, `--,`, `---=`, `---`, bare `--`, `--` + non-ASCII, `--{-`, tab
+columns, indented comments), `t15.bs` (comment at EOF without newline),
+`t16.bs` (CRLF line endings, mid-line CR, CRLF-terminated comment,
+directives after CR and after blank lines, space-indented non-directive
+`#`).
+
+### Lex-only, 66.5 MB corpus (interleaved, median of 5, `bench/big5_*`)
+
+| engine | median | MB/s | vs alex-stfi | alloc in lex region |
+|---|---|---|---|---|
+| alex-st | 3.028 s | 22.0 | 0.72x | 10.89 GB |
+| alex-stf | 2.780 s | 23.9 | 0.79x | 8.43 GB |
+| alex-stfi | 2.195 s | 30.3 | 1.00x | 6.29 GB |
+| **alex-stfw** | **1.711 s** | **38.9** | **1.28x** | **4.52 GB** |
+
+(hash asserted identical across engines: 9,047,095 tokens,
+2170315049108700862; alloc -1.77 GB = -28.2% vs alex-stfi)
+
+### End-to-end hyperfine (warmup 2, 10 runs; `bench/hyperfine_e2e_stfw.*`)
+
+| engine | mean +/- sigma | vs alex-stfw |
+|---|---|---|
+| alex-st | 3.169 +/- 0.046 s | 1.72 +/- 0.03 |
+| alex-stf | 2.885 +/- 0.085 s | 1.57 +/- 0.05 |
+| alex-stfi | 2.310 +/- 0.019 s | 1.25 +/- 0.02 |
+| **alex-stfw** | **1.843 +/- 0.025 s** | 1.00 |
+
+Cumulative over the plain strict-Text DFA build (alex-st): **1.72x**
+end-to-end, **1.77x** lex-only, allocation **-58%**.
+
+Repro: engine name `alex-stfw`; `./genx.sh` emits `gen/LexAlexSTFW.x`.

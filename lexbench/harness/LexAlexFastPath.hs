@@ -24,7 +24,8 @@
 --     reproduces them.  The lookup is keyed on a zero-copy Text slice and
 --     pre-filtered: no keyword starts with an uppercase letter, and none is
 --     longer than 10 chars, so most identifiers skip the Map entirely.
-module LexAlexFastPath(FastScan(..), fastScanId, kwLookup, asciiStr, internId) where
+module LexAlexFastPath(FastScan(..), fastScanId, kwLookup, asciiStr, internId,
+                       WsScan(..), wsScan) where
 
 import qualified Data.Text as T
 import qualified Data.Text.Internal as TI
@@ -189,3 +190,108 @@ internId s@(TI.Text arr off _) n = unsafePerformIO $ do
       writeVar idCache m2
       return fs
 {-# NOINLINE internId #-}
+
+-- ---------------------------------------------------------------------------
+-- Whitespace and `--` line-comment run-scan.
+--
+-- Whitespace and line comments are, like identifiers, byte-scannable: no
+-- byte of a UTF-8 multi-byte sequence equals 0x0A, so "scan to newline" over
+-- bytes is character-correct, and all the column arithmetic involves ASCII
+-- (single-byte) characters only.  wsScan consumes, per call, one maximal
+-- whitespace run or one complete `--` comment (through its newline),
+-- tracking line/column exactly like the hand lexer:
+--   space: c+1;  tab: nextTab (c+1);  \n: (l+1, 0);  \r \v \f: (l, 0).
+--
+-- `--` only starts a comment when, after all consecutive dashes, the next
+-- char is EOL/EOF, '@', or NOT a symbol char (the hand lexer's isComm
+-- quirk) -- otherwise the whole run is one operator token (e.g. `-->`),
+-- which is left to the DFA (WsNone, nothing consumed).  A non-ASCII byte
+-- after the dashes could be a non-ASCII symbol char, so that also bails
+-- to the DFA, which classifies it with the full isSym.
+--
+-- `# <line> "<file>"` directives are recognized by the driver only at
+-- column 0, so whenever a scanned byte resets the column to 0 (newline,
+-- CR, VT, FF -- including a comment's terminating newline) and the next
+-- byte is '#', wsScan stops and returns, letting the driver's directive
+-- check run before anything else is consumed.
+--
+-- A comment (or bare `--`/`---...`) that reaches EOF without a newline is
+-- the hand lexer's LexMissingNL error, reported at column 0 of its line.
+
+data WsScan
+  = WsNone                                -- nothing consumed: not ws/comment
+  | WsSome !Int !Int !T.Text              -- new line, column, rest
+  | WsMissingNL !Int                      -- comment hit EOF; error line
+
+-- ASCII bitmask for the hand lexer's isSym restricted to ASCII:
+--   ! @ # $ % & * + . / < = > ? \ ^ | : - ~ ,
+symMaskLo, symMaskHi :: Word64
+symMaskLo = 0xF400FC7A00000000
+symMaskHi = 0x5000000050000001
+
+isSymAsciiB :: Word8 -> Bool
+isSymAsciiB w
+  | w < 64    = maskMember symMaskLo w
+  | w < 128   = maskMember symMaskHi w
+  | otherwise = False
+{-# INLINE isSymAsciiB #-}
+
+nextTabB :: Int -> Int
+nextTabB c = ((c + 8 - 1) `div` 8) * 8
+{-# INLINE nextTabB #-}
+
+wsScan :: Int -> Int -> T.Text -> WsScan
+wsScan !l0 !c0 (TI.Text arr off len)
+  | len <= 0 = WsNone
+  | otherwise = start (TA.unsafeIndex arr off)
+  where
+    !end = off + len
+    byte :: Int -> Word8
+    byte i = TA.unsafeIndex arr i
+    {-# INLINE byte #-}
+
+    start :: Word8 -> WsScan
+    start 32 = wsLoop l0 (c0+1) (off+1)               -- ' '
+    start  9 = wsLoop l0 (nextTabB (c0+1)) (off+1)    -- \t
+    start 10 = afterZero (l0+1) (off+1)               -- \n
+    start 13 = afterZero l0 (off+1)                   -- \r
+    start 11 = afterZero l0 (off+1)                   -- \v
+    start 12 = afterZero l0 (off+1)                   -- \f
+    start 45 | off+1 < end, byte (off+1) == 45 = dashes (off+2)  -- "--"
+    start _  = WsNone
+
+    -- generic whitespace loop; i = next byte to examine
+    wsLoop :: Int -> Int -> Int -> WsScan
+    wsLoop !l !c !i
+      | i >= end = WsSome l c (TI.Text arr i 0)
+      | otherwise = case byte i of
+          32 -> wsLoop l (c+1) (i+1)
+          9  -> wsLoop l (nextTabB (c+1)) (i+1)
+          10 -> afterZero (l+1) (i+1)
+          13 -> afterZero l (i+1)
+          11 -> afterZero l (i+1)
+          12 -> afterZero l (i+1)
+          _  -> WsSome l c (TI.Text arr i (end - i))
+
+    -- the column just reset to 0: stop if '#' follows (possible directive)
+    afterZero :: Int -> Int -> WsScan
+    afterZero !l !i
+      | i < end, byte i == 35 = WsSome l 0 (TI.Text arr i (end - i))
+      | otherwise = wsLoop l 0 i
+
+    -- inside the leading dash run of a potential comment
+    dashes :: Int -> WsScan
+    dashes !j
+      | j >= end = WsMissingNL l0            -- "--" then EOF: comment, no NL
+      | b == 45 = dashes (j+1)
+      | b >= 0x80 = WsNone                   -- could be a non-ASCII symbol: DFA
+      | b /= 64 && isSymAsciiB b = WsNone    -- longer operator (not '@'): DFA
+      | otherwise = eol j                    -- comment: scan to end of line
+      where b = byte j
+
+    -- consume the comment body through its newline
+    eol :: Int -> WsScan
+    eol !j
+      | j >= end = WsMissingNL l0
+      | byte j == 10 = afterZero (l0+1) (j+1)
+      | otherwise = eol (j+1)

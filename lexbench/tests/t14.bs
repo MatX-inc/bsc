@@ -1,0 +1,12 @@
+a --> b --@ still a comment
+c ---> d
+e --, f
+g ---= h
+i -- plain comment with -- inside
+--
+---
+j --é non-ascii after dashes
+k --{- not a block comment
+l		m  	 n
+  -- indented comment
+q
