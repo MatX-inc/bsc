@@ -246,13 +246,13 @@
   {\center
    \small
    \boxedverbatim}
-  {\endboxedverbatim 
+  {\endboxedverbatim
   {\endcenter} }
 
 \newenvironment{centerboxverbatim}
   {\center
    \boxedverbatim}
-  {\endboxedverbatim 
+  {\endboxedverbatim
   {\endcenter }}
 
 
@@ -1617,10 +1617,7 @@ can be used for convenience.
 	      {\alt} \term{§}
 	      {\alt} \term{¨}
 	      {\alt} \term{©}
-	      {\alt} \term{ª}
-	      {\alt} \term{«}
 	      {\alt} $\term{¬}$
-%T1	      {\alt} \term{­}
 	      {\alt} \term{®}
 	      {\alt} \term{¯}
 	      {\alt} \term{°}
@@ -1628,23 +1625,22 @@ can be used for convenience.
 	      {\alt}
 	} \\
 \grammore{
-	             $\term{²}$
-	      {\alt} $\term{³}$
-	      {\alt} \term{´}
-	      {\alt} $\term{µ}$
+	             \term{´}
 	      {\alt} \term{¶}
 	      {\alt} \term{·}
 	      {\alt} \term{¸}
-	      {\alt} $\term{¹}$
-	      {\alt} \term{º}
-	      {\alt} \term{»}
-	      {\alt} \term{¼}
-	      {\alt} \term{½}
-	      {\alt} \term{¾}
 	      {\alt} \term{¿}
 	      {\alt} $\term{×}$
 	      {\alt} $\term{÷}$
         }
+
+Some ISO 8859-1 symbol characters that older versions of {\BH} accepted
+(ª, «, ², ³, µ, ¹, º, », ¼, ½ and ¾) are no longer valid, as part of
+unifying {\BH}'s lexical syntax with Haskell's: an operator containing a
+character that GHC's lexer does not accept is rejected with error P0225.
+(In particular, the stream-combining operator of the \te{Pull},
+\te{Push}, and \te{RPush} libraries, formerly », is now the character
+U+2A20, Z NOTATION SCHEMA PIPING.)
 
 \index{infix operators!predefined}
 \index{infix operators!precedence}

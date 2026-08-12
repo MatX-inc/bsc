@@ -1,16 +1,18 @@
 module Lex(Token(..), LexItem(..), LFlags(..), prLexItem,
            lexStart, lexStartWithPos,
            isIdChar, isSym, convLexErrorToErrMsg,
+           nonHaskellOperatorErrors,
            Representable(..), checkRepresentable) where
 -- Bluespec lexical analysis.  Written for speed, not beauty!
 import Numeric(readFloat)
 import Data.Char
+import Data.List(nub)
 -- import Data.Ratio
 import qualified Data.Set as S
 
 import Util(itos)
 import Position
-import Error(internalError, ErrMsg(..))
+import Error(internalError, ErrMsg(..), EMsg)
 import FStringCompat
 import PreStrings(fsEmpty)
 import SystemVerilogKeywords
@@ -500,23 +502,6 @@ checkRepresentable name
     isSmallOrLarge ch = isLowerCase ch || isUpperCase ch || ch == '_'
     isUnicodeDigit :: Char -> Bool
     isUnicodeDigit ch = generalCategory ch == DecimalNumber
-    -- Despite what the Haskell 2010 Report says, the 'otherwise' case is _not_
-    -- 'isPunctuation ch || isSymbol ch'; GHC has its own split based on general
-    -- category.
-    isHsSymbol :: Char -> Bool
-    isHsSymbol ch
-      | ch `elem` ("(),;[]`{}_\"'" :: [Char]) = False
-      | otherwise = generalCategory ch `elem` hsSymbolCategories
-    hsSymbolCategories :: [GeneralCategory]
-    hsSymbolCategories =
-      [ ConnectorPunctuation,
-        DashPunctuation,
-        OtherPunctuation,
-        MathSymbol,
-        CurrencySymbol,
-        ModifierSymbol,
-        OtherSymbol
-      ]
 
     isVarIdOrConIdOrReservedId :: String -> Bool
     isVarIdOrConIdOrReservedId [] = False
@@ -566,3 +551,40 @@ checkRepresentable name
         "~",
         "=>"
       ]
+
+-- Despite what the Haskell 2010 Report says, the test for a symbol character
+-- is _not_ 'isPunctuation ch || isSymbol ch'; GHC has its own split based on
+-- general category.
+isHsSymbol :: Char -> Bool
+isHsSymbol ch
+  | ch `elem` ("(),;[]`{}_\"'" :: [Char]) = False
+  | otherwise = generalCategory ch `elem` hsSymbolCategories
+  where
+    hsSymbolCategories :: [GeneralCategory]
+    hsSymbolCategories =
+      [ ConnectorPunctuation,
+        DashPunctuation,
+        OtherPunctuation,
+        MathSymbol,
+        CurrencySymbol,
+        ModifierSymbol,
+        OtherSymbol
+      ]
+
+-- Errors for operator tokens containing characters that GHC's lexer
+-- would not accept (see isHsSymbol and GitHub issue #970).
+-- The token list may end with an infinite tail of L_eof (after a lexical
+-- error), so stop at the first L_eof or L_error.
+nonHaskellOperatorErrors :: [Token] -> [EMsg]
+nonHaskellOperatorErrors ts = concatMap err (takeWhile (not . isEnd) ts)
+  where
+    isEnd (Token _ L_eof) = True
+    isEnd (Token _ (L_error _)) = True
+    isEnd _ = False
+    err (Token pos (L_varsym fs)) = opErr pos (getFString fs)
+    err (Token pos (L_consym fs)) = opErr pos (getFString fs)
+    err _ = []
+    opErr pos op =
+        case nub (filter (not . isHsSymbol) op) of
+          [] -> []
+          cs -> [(pos, ENonHaskellOperator op cs)]
