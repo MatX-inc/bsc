@@ -27,3 +27,8 @@ override BSCFLAGS += $(BSCFLAGS_EXT)
 
 BSC ?= $(BINDIR)/bsc
 
+# The installed bsc is no longer a wrapper script that sets BLUESPECDIR;
+# point it at the runtime being assembled in $(PREFIX)/lib (unconditionally,
+# as the wrapper did, so a stray environment setting can't leak in).
+export BLUESPECDIR = $(LIBDIR)
+

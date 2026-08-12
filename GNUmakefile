@@ -9,14 +9,17 @@ help:
 	@echo 'This Makefile will create an installation of the Bluespec Compiler tools,'
 	@echo 'in a directory named "inst".  This directory can be moved anywhere, but'
 	@echo 'the contents should remain in the same relative locations.  Intermediate'
-	@echo 'files are stored in a directory named "build".  The "clean" target will'
-	@echo 'delete the "build" directory; the "full_clean" target will delete both'
-	@echo 'the "build" and "inst" directories.'
+	@echo 'files are stored in directories named "build" and "dist-newstyle".  The'
+	@echo '"clean" target will delete those; the "full_clean" target will also'
+	@echo 'delete the "inst" directory.'
 	@echo
 	@echo '    make  release      Build a release dir with the tools and docs'
 	@echo
 	@echo '    make  install-src  Build and install just the tools'
 	@echo '    make  install-doc  Build and install just the documentation'
+	@echo '    make  install-extra'
+	@echo '                       Also install the extra utilities'
+	@echo '                       (bsc2bsv, bsv2bsc, dumpbo, dumpba, showrules, vcdcheck)'
 	@echo
 	@echo '    make  check-smoke  Run a quick smoke test'
 	@echo '    make  check-suite  Run the test suite (this will take time!)'
@@ -39,12 +42,17 @@ rem_inst:
 .PHONY: rem_build
 rem_build:
 	rm -fr $(BUILDDIR)
+	rm -fr $(TOP)/dist-newstyle
 
 # -------------------------
 
 .PHONY: install-src
 install-src:
 	$(MAKE)  -C src  PREFIX=$(PREFIX)  install
+
+.PHONY: install-extra
+install-extra:
+	$(MAKE)  -C src  PREFIX=$(PREFIX)  install-extra
 
 .PHONY: install-doc
 install-doc:

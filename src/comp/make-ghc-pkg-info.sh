@@ -65,7 +65,10 @@ DELIM='-------------------------'
 #
 STRIP_HASH_REGEX='^([-[:lower:]]+[[:digit:]]+.[[:digit:]][.[:digit:]]*)-[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]]+$'
 
-# Function to add a package to the database and follow its dependencies
+# Function to add a package to the database and follow its dependencies.
+# Takes a unit id (as found in cabal's build plan and in 'depends' fields),
+# which stays unambiguous even when a package db carries several instances
+# of the same package version; the hash is only stripped for display.
 #
 add_pkg() {
     local PKG_ID
@@ -77,7 +80,7 @@ add_pkg() {
 
     #echo "Looking up $1"
 
-    PKG_ID=`ghc-pkg field $1 id --simple-output`
+    PKG_ID=`ghc-pkg field --unit-id $1 id --simple-output`
 
     if [[ ${PKG_ID} =~ ${STRIP_HASH_REGEX} ]] ; then
 	#echo "stripping ${PKG_ID} => ${BASH_REMATCH[1]}"
@@ -90,10 +93,10 @@ add_pkg() {
 
     aget arr_id "${PKG_NAME}" i_id
     if [ -z ${i_id+x} ] ; then
-	PKG_VER=`ghc-pkg field $1 version --simple-output`
-	PKG_LIC=`ghc-pkg field $1 license --simple-output`
-	PKG_COPYR=`ghc-pkg field $1 copyright --simple-output`
-	PKG_DEPS=`ghc-pkg field $1 depends --simple-output`
+	PKG_VER=`ghc-pkg field --unit-id $1 version --simple-output`
+	PKG_LIC=`ghc-pkg field --unit-id $1 license --simple-output`
+	PKG_COPYR=`ghc-pkg field --unit-id $1 copyright --simple-output`
+	PKG_DEPS=`ghc-pkg field --unit-id $1 depends --simple-output`
 
 	if [ "${PKG_LIC}" != "BSD-3-Clause" ] ; then
 	    if [ "${PKG_LIC}" != "BSD-2-Clause" ] ; then
@@ -111,10 +114,6 @@ add_pkg() {
 	for dep in ${PKG_DEPS}
 	do
 	    #echo "Following dep: $dep"
-	    if [[ ${dep} =~ ${STRIP_HASH_REGEX} ]] ; then
-		#echo "stripping ${dep} => ${BASH_REMATCH[1]}"
-		dep=${BASH_REMATCH[1]}
-	    fi
 	    add_pkg "${dep}"
 	done
     fi

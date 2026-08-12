@@ -133,8 +133,13 @@ $(LIB_KERNEL): version $(KERNEL_OBJS)
 	$(RM) $(LIB_KERNEL)
 	$(AR) cr $(LIB_KERNEL) $(KERNEL_OBJS)
 
+# BuildVersion.hs is (re)generated in the source tree here, since this
+# Makefile can run before (or without) a cabal build having done so.
 .PHONY: version
 version:
+	cd $(COMPDIR) && \
+		NOGIT=$${NOGIT:-0} NOUPDATEBUILDVERSION=$${NOUPDATEBUILDVERSION:-0} \
+		./update-build-version.sh
 	./gen_version_h $(COMPDIR)/BuildVersion.hs > version.h
 
 # Static check of the header files before releasing them.
