@@ -171,6 +171,13 @@ makeStaticLib OSX out libs objs = do
   callProcess "libtool" (["-static", "-o", out] <> libs <> objs)
 makeStaticLib os _ _ _ = ioError (userError ("unsupported OS: " <> show os))
 
+-- | Whether the named solver-stub variable (STP_STUB or YICES_STUB) is
+-- enabled. Like the vendor Makefiles, any non-empty value counts.
+-- Note that the choice is only consulted when the bundled library is (re)built;
+-- run @make -C src full_clean@ and @cabal clean@ when toggling it.
+stubEnabled :: String -> IO Bool
+stubEnabled var = maybe False (not . null) <$> lookupEnv var
+
 -- | The hooks to build STP.
 stpSetupHooks :: SetupHooks
 stpSetupHooks = noSetupHooks {buildHooks}
@@ -186,17 +193,26 @@ stpSetupHooks = noSetupHooks {buildHooks}
       let path = interpretSymbolicPathCWD (location out)
       let Platform _ os = hostPlatform env.localBuildInfo
       when (isMainLib (targetComponent env.targetInfo)) $ do
-        needing [path] $ do
-          needing (stpLibs <> stpObjs) $ do
-            callProcess "make" (["-C", stpDir] <> stpLibs <> stpObjs)
-          makeStaticLib
-            os
-            path
-            ((stpDir </>) <$> stpLibs)
-            ((stpDir </>) <$> stpObjs)
+        stub <- stubEnabled "STP_STUB"
+        needing [path] $
+          if stub
+            then do
+              let obj = stpStubDir </> "stp_stub.o"
+              needing [obj] $ do
+                callProcess "make" ["-C", stpStubDir, "stp_stub.o"]
+              makeStaticLib os path [] [obj]
+            else do
+              needing (((stpDir </>) <$> stpLibs) <> ((stpDir </>) <$> stpObjs)) $ do
+                callProcess "make" (["-C", stpDir] <> stpLibs <> stpObjs)
+              makeStaticLib
+                os
+                path
+                ((stpDir </>) <$> stpLibs)
+                ((stpDir </>) <$> stpObjs)
 
-    stpDir :: FilePath
+    stpDir, stpStubDir :: FilePath
     stpDir = "src/vendor/stp/src"
+    stpStubDir = "src/vendor/stp/src_stub"
     stpLibs :: [FilePath]
     stpLibs =
       [ "AST/libast.a",
@@ -230,15 +246,24 @@ yicesSetupHooks = noSetupHooks {buildHooks}
       let path = interpretSymbolicPathCWD (location out)
       let Platform _ os = hostPlatform env.localBuildInfo
       when (isMainLib (targetComponent env.targetInfo)) $ do
-        needing [path] $ do
-          needing [yicesLib] $ do
-            callProcess "make" ["-C", yicesDir, "LDCONFIG=ldconfig"]
-          copyFile yicesLib path
+        stub <- stubEnabled "YICES_STUB"
+        needing [path] $
+          if stub
+            then do
+              needing [yicesStubLib] $ do
+                callProcess "make" ["-C", yicesStubDir, "libyices.a"]
+              copyFile yicesStubLib path
+            else do
+              needing [yicesLib] $ do
+                callProcess "make" ["-C", yicesDir, "LDCONFIG=ldconfig"]
+              copyFile yicesLib path
 
-    yicesDir :: FilePath
+    yicesDir, yicesStubDir :: FilePath
     yicesDir = "src/vendor/yices/v2.6"
-    yicesLib :: FilePath
+    yicesStubDir = "src/vendor/yices/v2.6/stub"
+    yicesLib, yicesStubLib :: FilePath
     yicesLib = "src/vendor/yices/v2.6/yices2-inst/lib/libyices.a"
+    yicesStubLib = "src/vendor/yices/v2.6/stub/libyices.a"
 
 -- | The hooks to link to Tcl.
 tclSetupHooks :: SetupHooks
