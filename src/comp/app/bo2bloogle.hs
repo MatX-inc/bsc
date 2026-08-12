@@ -7,7 +7,6 @@ module Main_bo2bloogle (main) where
 
 import CSyntax
 import CType (isTConArrow, isTConPair)
-import Control.Applicative (liftA2)
 import Control.Category ((>>>))
 import Control.Monad (forM_, void)
 import Control.Monad.Except (ExceptT (..), MonadError (..), runExceptT)
@@ -16,17 +15,12 @@ import Control.Monad.Reader (MonadReader (..), ReaderT, asks, runReaderT)
 import Control.Monad.Trans (lift)
 import Data.Bifunctor (Bifunctor (..))
 import qualified Data.ByteString as BS
-import Data.Char
-  ( GeneralCategory (..),
-    generalCategory,
-    isLowerCase,
-    isUpperCase,
-  )
 import Data.String (IsString (..))
 import Error (initErrorHandle)
 import GenBin (readBinFile)
 import ISyntax (IPackage)
 import Id (Id, getIdBaseString)
+import Lex (Representable (..), checkRepresentable)
 import PPrint (pp80)
 import PreIds (idPrimUnit)
 import System.Environment (getArgs)
@@ -157,90 +151,6 @@ hsPrintWords :: [M ShowS] -> M ()
 hsPrintWords ws = do
   str <- ($ []) <$> hsUnwords ws
   printIndented str
-
-data Representable = Id | Sym
-
--- | Returns whether a name can be represented at all in Hoogle's Haskell
--- syntax. This essentially just checks if the string parses as @varid@,
--- @conid@, @varsym@, or @consym@ from the Haskell 2010 report.
-checkRepresentable :: String -> Maybe Representable
-checkRepresentable name
-  | name `elem` reserved = Nothing
-  | length name >= 2 && all (== '-') name = Nothing
-  | isVarIdOrConIdOrReservedId name = Just Id
-  | isVarSymOrConSymOrReservedOpOrDashes name = Just Sym
-  | otherwise = Nothing
-  where
-    isSmallOrLarge :: Char -> Bool
-    isSmallOrLarge ch = isLowerCase ch || isUpperCase ch || ch == '_'
-    isDigit :: Char -> Bool
-    isDigit ch = generalCategory ch == DecimalNumber
-    -- Despite what the Haskell 2010 Report says, the 'otherwise' case is _not_
-    -- 'isPunctuation ch || isSymbol ch'; GHC has its own split based on general
-    -- category.
-    isHsSymbol :: Char -> Bool
-    isHsSymbol ch
-      | ch `elem` ("(),;[]`{}_\"'" :: [Char]) = False
-      | otherwise = generalCategory ch `elem` hsSymbolCategories
-    hsSymbolCategories :: [GeneralCategory]
-    hsSymbolCategories =
-      [ ConnectorPunctuation,
-        DashPunctuation,
-        OtherPunctuation,
-        MathSymbol,
-        CurrencySymbol,
-        ModifierSymbol,
-        OtherSymbol
-      ]
-
-    isVarIdOrConIdOrReservedId :: String -> Bool
-    isVarIdOrConIdOrReservedId [] = False
-    isVarIdOrConIdOrReservedId (hd : tl) = isSmallOrLarge hd && all isIdRest tl
-      where
-        isIdRest :: Char -> Bool
-        isIdRest ch = isSmallOrLarge ch || isDigit ch || ch == '\''
-    isVarSymOrConSymOrReservedOpOrDashes :: String -> Bool
-    isVarSymOrConSymOrReservedOpOrDashes [] = False
-    isVarSymOrConSymOrReservedOpOrDashes s = all isHsSymbol s
-
-    -- The list of strings that are @reservedid@ and @reservedop@.
-    reserved :: [String]
-    reserved =
-      [ "case",
-        "class",
-        "data",
-        "default",
-        "deriving",
-        "do",
-        "else",
-        "foreign",
-        "if",
-        "import",
-        "in",
-        "infix",
-        "infixl",
-        "infixr",
-        "instance",
-        "let",
-        "module",
-        "newtype",
-        "of",
-        "then",
-        "type",
-        "where",
-        "_",
-        "..",
-        ":",
-        "::",
-        "=",
-        "\\",
-        "|",
-        "<-",
-        "->",
-        "@",
-        "~",
-        "=>"
-      ]
 
 instance AsHaskell Id where
   asHS i =
