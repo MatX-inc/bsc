@@ -1,0 +1,7 @@
+-- comment
+--@ ann
+x = a .&. b
+y = ".." ++ f 1_2.5 -- t
+z = '\n' : "a\x41b\t"
+{- {- nested -} -}
+w = c--}

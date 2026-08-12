@@ -1,0 +1,6 @@
+bsc/testsuite/bsc.interra/messages/EBadLexChar/EBadLexChar1.bs
+bsc/testsuite/bsc.interra/messages/EBadLexChar/EBadLexChar2.bs
+bsc/testsuite/bsc.interra/messages/EBadStringLit/EBadStringLit.bs
+bsc/testsuite/bsc.interra/messages/EBadStringLit/EBadStringLit2.bs
+bsc/testsuite/bsc.interra/messages/EMissingNL/EMissingNL.bs
+bsc/testsuite/bsc.interra/messages/EUntermComm/EUntermComm1.bs

@@ -1,0 +1,6 @@
+package T where
+{-# verilog mkFoo #-}
+mkFoo :: Module Empty
+mkFoo = module
+  rules
+    "r": when True ==> $display "%d" (12'h5A + 0x1_F - 1.5e-2)

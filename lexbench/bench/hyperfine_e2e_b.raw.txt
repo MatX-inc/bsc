@@ -1,0 +1,31 @@
+Benchmark 1: hand
+  Time (mean ± σ):     10.618 s ±  0.918 s    [User: 6.444 s, System: 4.180 s]
+  Range (min … max):    9.562 s … 12.513 s    10 runs
+ 
+Benchmark 2: alex-string
+  Time (mean ± σ):      9.032 s ±  0.690 s    [User: 5.302 s, System: 3.735 s]
+  Range (min … max):    8.143 s … 10.251 s    10 runs
+ 
+Benchmark 3: alex-sbs
+  Time (mean ± σ):      3.068 s ±  0.080 s    [User: 3.015 s, System: 0.056 s]
+  Range (min … max):    2.956 s …  3.216 s    10 runs
+ 
+Benchmark 4: alex-lbs
+  Time (mean ± σ):      3.618 s ±  0.083 s    [User: 3.569 s, System: 0.053 s]
+  Range (min … max):    3.516 s …  3.804 s    10 runs
+ 
+Benchmark 5: alex-lt
+  Time (mean ± σ):      3.674 s ±  0.094 s    [User: 3.581 s, System: 0.096 s]
+  Range (min … max):    3.548 s …  3.818 s    10 runs
+ 
+Benchmark 6: alex-st
+  Time (mean ± σ):      3.181 s ±  0.088 s    [User: 3.094 s, System: 0.091 s]
+  Range (min … max):    3.090 s …  3.388 s    10 runs
+ 
+Summary
+  alex-sbs ran
+    1.04 ± 0.04 times faster than alex-st
+    1.18 ± 0.04 times faster than alex-lbs
+    1.20 ± 0.04 times faster than alex-lt
+    2.94 ± 0.24 times faster than alex-string
+    3.46 ± 0.31 times faster than hand

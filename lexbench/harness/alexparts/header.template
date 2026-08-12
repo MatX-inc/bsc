@@ -1,0 +1,34 @@
+{
+{-# LANGUAGE BangPatterns #-}
+{-# OPTIONS_GHC -fno-warn-unused-imports -fno-warn-unused-binds -fno-warn-missing-signatures -fno-warn-tabs #-}
+-- Alex-generated Bluespec Classic lexer, @@VARIANTCOMMENT@@ input.
+-- Produces exactly the token stream of bsc's hand-written src/comp/Lex.hs
+-- (same Token/LexItem constructors, same Positions, including its quirks).
+module @@MODNAME@@(lexAlexStart) where
+
+import Data.Char(isUpper)
+import Data.Word(Word8)
+import qualified Data.ByteString as SB
+import qualified Data.ByteString.Lazy as LB
+import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+
+import Lex(Token(..), LexItem(..), LexError(..), LFlags(..))
+import Position
+import FStringCompat(FString, mkFString)
+import PreStrings(fsEmpty)
+import ErrorUtil(internalError)
+import LexAlexShared
+}
+
+%encoding "latin1"
+
+$digit     = [0-9]
+$hexdig    = [0-9a-fA-F]
+$octdig    = [0-7]
+$bindig    = [01]
+$idstart   = [a-zA-Z_\xF3]
+$idchar    = [a-zA-Z0-9_'\xF2\xF3\xF4]
+$symall    = [\!\@\#\$\%\&\*\+\.\/\<\=\>\?\\\^\|\:\-\~\,\xF1\xF2]
+$symstart  = [\!\@\#\$\%\&\*\+\/\<\=\>\?\\\^\|\:\-\~\xF1\xF2]
+$commstart = [^\!\#\$\%\&\*\+\.\/\<\=\>\?\\\^\|\:\-\~\,\xF1\xF2\n]

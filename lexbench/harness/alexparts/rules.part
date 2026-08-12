@@ -1,0 +1,117 @@
+tokens :-
+
+-- (preprocessor line directives `# <n> "<file>"` are handled by the driver
+-- loop before calling alexScan, since they are only recognized at column 0)
+
+-- whitespace (Lex.hs:200-205; \r \v \f reset the column to 0)
+\ +          { wsSpaces }
+\n+          { wsNewlines }
+\t+          { wsTabs }
+[\r\v\f]+    { wsCRs }
+
+-- line comments: "--" then any number of '-', then EOL, '@', or a non-symbol
+-- char (Lex.hs:206-210 isComm); a comment without a trailing newline at EOF
+-- is a LexMissingNL error (Lex.hs skipToEOL)
+"--" \-* $commstart [^\n]* \n   { lineCommentNL }
+"--" \-* \n                     { lineCommentNL }
+"--" \-* $commstart [^\n]*      { lineCommentEOF }
+"--" \-*                        { lineCommentEOF }
+
+-- pragma brackets and nested block comments (Lex.hs:211-213)
+"{-#"        { fixTok L_lpragma }
+"#-}"        { fixTok L_rpragma }
+"{-"         { blockComment }
+
+-- single-char punctuation (Lex.hs:214-223); note '.' and ',' are matched
+-- before the symbol rule, so they never *start* an operator run
+"("          { fixTok L_lpar }
+")"          { fixTok L_rpar }
+","          { fixTok L_comma }
+";"          { fixTok L_semi }
+"`"          { fixTok L_bquote }
+"{"          { fixTok L_lcurl }
+"}"          { fixTok L_rcurl }
+"["          { fixTok L_lbra }
+"]"          { fixTok L_rbra }
+"."          { fixTok L_dot }
+
+-- character and string literals (escape forms per Lex.hs lexLitChar')
+\' ([^\\\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig*) \'        { charTok }
+\" ([^\\\"\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig*)* \"     { stringTok }
+
+-- integer and real literals (Lex.hs:236-280, lInteger, lReal);
+-- underscores are digit separators everywhere except in float/exponent
+-- parts and sized-literal widths (quirks of the hand lexer, replicated)
+0 [xX] $hexdig [$hexdig \_]*                 { basedTok 16 }
+0 [bB] $bindig [$bindig \_]*                 { basedTok 2 }
+0 [oO] $octdig [$octdig \_]*                 { basedTok 8 }
+$digit+ \' h $hexdig [$hexdig \_]*           { sizedTok 16 }
+$digit+ \' d $digit  [$digit \_]*            { sizedTok 10 }
+$digit+ \' b $bindig [$bindig \_]*           { sizedTok 2 }
+$digit+ \' o $octdig [$octdig \_]*           { sizedTok 8 }
+$digit+ \. $digit+ ([eE] [\+\-]? $digit+)?   { floatTok }
+$digit+ [eE] [\+\-]? $digit+                 { floatTok }
+$digit [$digit \_]*                          { decTok }
+
+-- task/system identifiers: $ followed by an identifier char (Lex.hs:281-286)
+\$ $idchar [$idchar \$]*                     { dollarTok }
+
+-- reserved operators (Lex.hs:294-303); listed before the generic symbol
+-- rule so they win ties
+"::"         { fixTok L_dcolon }
+":"          { fixTok L_colon }
+"="          { fixTok L_eq }
+"@"          { fixTok L_at }
+\\           { fixTok L_lam }
+"->"         { fixTok L_rarrow }
+"==>"        { fixTok L_drarrow }
+"=>"         { fixTok L_irarrow }
+"<-"         { fixTok L_larrow }
+
+-- reserved words (Lex.hs:326-368); before the generic identifier rule
+"_"          { fixTok L_uscore }
+"action"     { fixTok L_action }
+"case"       { fixTok L_case }
+"class"      { fixTok L_class }
+"data"       { fixTok L_data }
+"deriving"   { fixTok L_deriving }
+"do"         { fixTok L_do }
+"else"       { fixTok L_else }
+"foreign"    { fixTok L_foreign }
+"if"         { fixTok L_if }
+"import"     { fixTok L_import }
+"in"         { fixTok L_in }
+"coherent"   { fixTok L_coherent }
+"incoherent" { fixTok L_incoherent }
+"infix"      { fixTok L_infix }
+"infixl"     { fixTok L_infixl }
+"infixr"     { fixTok L_infixr }
+"interface"  { fixTok L_interface }
+"instance"   { fixTok L_instance }
+"let"        { fixTok L_let }
+"letseq"     { fixTok L_letseq }
+"module"     { fixTok L_module }
+"of"         { fixTok L_of }
+"package"    { pkgTok }
+"primitive"  { fixTok L_primitive }
+"qualified"  { fixTok L_qualified }
+"rules"      { fixTok L_rules }
+"signature"  { fixTok L_signature }
+"struct"     { fixTok L_struct }
+"then"       { fixTok L_then }
+"type"       { fixTok L_type }
+"valueOf"    { fixTok L_valueOf }
+"stringOf"   { fixTok L_stringOf }
+"verilog"    { fixTok L_verilog }
+"synthesize" { fixTok L_synthesize }
+"when"       { fixTok L_when }
+"where"      { fixTok L_where }
+
+-- generic operator runs and identifiers (Lex.hs:287-324)
+$symstart $symall*                           { symTok }
+$idstart $idchar*                            { idTok }
+
+-- fallbacks: unterminated/bad literals, bad characters (Lex.hs lexerr)
+\'           { badCharTok }
+\"           { badStringTok }
+.            { badChar }
