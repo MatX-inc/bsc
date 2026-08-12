@@ -51,12 +51,31 @@ The following is a running list of those writings.
 ### Compiling
 
 * See [INSTALL.md](./INSTALL.md) for info on building and installing
-* TBD: Any info on tools, dependencies, and compiling options
-  * e.g. individual SMT libraries can be omitted using `STP_STUB=1` or `YICES_STUB=1`
+* The Haskell tools are an ordinary Cabal package (`bsc.cabal`), so
+  the usual commands work at the root of the repository:
+  * `cabal build` builds the `bsc` library and all of the executables
+  * `cabal repl lib:bsc` loads the library in GHCi (for tools like
+    `ghcid`, and editor integration)
+  * `cabal test` runs the testsuite (see Testing below)
+  * Note that `cabal` version 3.14 or newer is required, because the
+    package uses the `Hooks` build type: `SetupHooks.hs` hooks the
+    build to generate the `BuildSystem`/`BuildVersion` modules, build
+    the vendored SMT solvers (statically linked, via
+    `extra-bundled-libraries`), and discover the Tcl configuration
+    for `bluetcl`
+  * Individual SMT libraries can be omitted by setting `STP_STUB=1`
+    or `YICES_STUB=1` in the environment (see INSTALL.md)
+* The non-Haskell parts of an installation (the standard library,
+  Bluesim kernel, Verilog primitives, etc.) are built by the Makefiles
+  under `src/`; `make install-src` drives both halves
 
 ### Testing
 
 * See the test suite's own [README file](./testsuite/README.md)
+* The suite can be run through cabal: `cabal test smoke` (quick),
+  `cabal test testsuite` (everything, in parallel), and a few focused
+  suites (`bluetcl-tests`, `utils`); the runtime in `./inst` must have
+  been built first (`make install-src`)
 
 ### Formal verification
 

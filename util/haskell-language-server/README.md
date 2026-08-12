@@ -1,10 +1,16 @@
 # Haskell Language Server
-The following instructions are helpful if you wish to develop on the haskell sources for bluespec.
 
-Once you've got ``bsc`` compiled, usually by running ``make install-src`` at the root of this repository, you can run ``python3 util/haskell-language-server/gen_hie.py`` which should generate and place a proper ``hie.yaml`` in ``./src/comp``.
+The following instructions are helpful if you wish to develop on the
+Haskell sources for bluespec.
 
-You can then open up ``src/comp`` as a workspace in your favorite IDE or editor that has [HLS](https://github.com/haskell/haskell-language-server) support.
+Since the Haskell tools are built as an ordinary Cabal package
+(`bsc.cabal` at the root of the repository),
+[HLS](https://github.com/haskell/haskell-language-server) works out of
+the box: open the root of the repository as a workspace in your
+favorite IDE or editor with HLS support, and HLS will discover the
+project through the Cabal cradle.
 
-# Dependencies
-
-``pip3 install pyyaml``
+The one requirement is that the `cabal` on your PATH is version 3.14
+or newer, because the package uses Cabal's `Hooks` build type; the
+Cabal library that HLS bundles for GHC 9.6 predates that, so with an
+older `cabal` the build works but HLS does not.

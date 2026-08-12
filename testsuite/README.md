@@ -78,12 +78,33 @@ implicitly assign `TEST_RELEASE` if you have omitted it:
 If you omit `TEST_RELEASE` and there is no `inst` subdirectory of the
 parent `bsc` repo, the Makefile will report an error.
 
+### Running through cabal
+
+The suite can also be driven by `cabal test`, from the root of the
+repository, which points the harness at the freshly cabal-built tools
+instead of the ones in the installation under test.  The runtime
+libraries (`../inst/lib`, built with `make install-src`) are still
+required.  The available suites are:
+
+  - `cabal test smoke` -- a quick, SystemC-free spread
+  - `cabal test testsuite` -- the whole suite, run in parallel; pass
+    `--test-options=--full` to also enable the long tests
+  - `cabal test bluetcl-tests` -- the `bsc.bluetcl` tree
+  - `cabal test utils` -- the directories exercising the utility
+    executables, with the internal checks (see below) enabled
+
+The driver skips tests whose tools are missing on this machine
+(setting `VTEST=0` without a Verilog simulator, `CTEST=0` without a
+C++ compiler, and `SYSTEMCTEST=0` without SystemC headers) unless
+those variables are already set in the environment.  Add
+`--test-show-details=streaming` to watch the harness output live.
+
 ### Extra tools
 
-By default, the Makefile in `bsc/src/comp/` will not build and install
-the tool `showrules` or the developer tools.  These tools can all be
-installed with the `install-extra` target in `bsc/src/comp/` (or
-separately with `install-showrules` and `install-utils`).
+By default, `make install-src` will not install the tool `showrules`
+or the developer tools.  They are all built by cabal regardless, and
+can be installed into the `inst` directory with the `install-extra`
+target at the root of the repository.
 
 #### showrules
 
