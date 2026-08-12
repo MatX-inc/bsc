@@ -45,13 +45,13 @@ jobs:
         uses: haskell/ghcup-setup@v1
         with:
           ghc: ${{ inputs.ghc_version }}
-          cabal: recommended
-      # Until BSC uses cabal to build, pre-install these packages
-      - name: Install Haskell dependencies
+          # build-type: Hooks needs cabal-install 3.14 or newer
+          cabal: 3.16.1.0
+      # The Haskell dependencies are resolved by cabal itself; it just needs
+      # a package index
+      - name: Update Hackage index
         shell: bash
-        run: |
-          cabal update
-          cabal v1-install old-time regex-compat split strict-concurrency syb
+        run: cabal update
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every build,
       # and have the restore-key use the most recent.
@@ -92,37 +92,20 @@ jobs:
         run: ccache --show-stats
       - name: Smoketest
         run: "make check-smoke"
-      # if this step fails, it may mean you need to update
-      # util/haskell-language-server/gen_hie.py to
-      # reflect the locations of any new haskell sources
+      # HLS discovers the build through the cabal cradle at the repo root
+      # (this needs the cabal-install pinned above on PATH, since the one
+      # HLS bundles for this GHC predates build-type: Hooks)
       - name: Test Haskell Language Server
         if: ${{ inputs.hls_version != '' }}
         run: |
           ghcup install hls ${{ inputs.hls_version }}
-          macos_ver=$(sw_vers -productVersion | cut -d '.' -f 1)
-          if [ "$macos_ver" -ge "14" ]; then
-              python3 -m venv ./venv
-              source ./venv/bin/activate
-              python3 -m pip install pyyaml
-            else
-              pip3 install pyyaml
-            fi
-          python3 util/haskell-language-server/gen_hie.py
-          pushd src/comp
-          haskell-language-server-${{ inputs.ghc_version }} bsc.hs
-          popd
-      # Check that .ghci has all the right flags to load the source.
+          haskell-language-server-${{ inputs.ghc_version }} src/comp/app/bsc.hs
+      # Check that the library loads in the REPL.
       # This is important for text editor integration & tools like ghcid
-      # NB stp, yices and htcl must be built first, so do this after Build.
-      - name: Check GHCI :load
+      - name: Check cabal repl
         run: |
-          cd src/comp
-          export NOGIT=0
-          export NOUPDATEBUILDVERSION=0
-          ./update-build-version.sh
-          ./update-build-system.sh
-          echo ':load bsc.hs' | ghci 2>&1 | tee ghci.log
-          if grep '\(Failed\|error:\)' ghci.log
+          echo ':quit' | cabal repl lib:bsc 2>&1 | tee repl.log
+          if grep '\(Failed\|error:\)' repl.log
           then
             echo "GHCi reported errors."
             exit 1
