@@ -31,6 +31,7 @@ import qualified LexAlexSBS as ASB
 import qualified LexAlexLBS as ALB
 import qualified LexAlexLT as ALT
 import qualified LexAlexST as AST
+import qualified LexAlexSTF as ASTF
 
 lflags :: LFlags
 lflags = LFlags { lf_is_stdlib = False, lf_allow_sv_kws = True }
@@ -138,6 +139,10 @@ runAlexLT fname t = forceTokens (ALT.lexAlexStart lflags (mkFString fname) t)
 runAlexST :: String -> T.Text -> (Int, Int)
 runAlexST fname t = forceTokens (AST.lexAlexStart lflags (mkFString fname) t)
 
+{-# NOINLINE runAlexSTF #-}
+runAlexSTF :: String -> T.Text -> (Int, Int)
+runAlexSTF fname t = forceTokens (ASTF.lexAlexStart lflags (mkFString fname) t)
+
 -- ---------------------------------------------------------------------------
 
 decodeOrDie :: FilePath -> SB.ByteString -> IO String
@@ -167,7 +172,7 @@ main = do
     ["compare", file]              -> compareMain file
     _ -> do
       hPutStrLn stderr "usage: harness bench ENGINE FILE ITERS | dump ENGINE FILE | compare FILE"
-      hPutStrLn stderr "  ENGINE = hand | alex-string | alex-sbs | alex-lbs | alex-lt | alex-st"
+      hPutStrLn stderr "  ENGINE = hand | alex-string | alex-sbs | alex-lbs | alex-lt | alex-st | alex-stf"
       exitWith (ExitFailure 2)
 
 benchMain :: String -> FilePath -> Int -> IO ()
@@ -200,6 +205,11 @@ benchMain engine file iters = do
       Right t -> do
         _ <- evaluate (T.length t)
         return (\i -> evaluate (runAlexST ("it" ++ show i) t))
+    "alex-stf" -> case TE.decodeUtf8' bs of
+      Left _ -> hPutStrLn stderr ("NONUTF8 " ++ file) >> exitWith (ExitFailure 3)
+      Right t -> do
+        _ <- evaluate (T.length t)
+        return (\i -> evaluate (runAlexSTF ("it" ++ show i) t))
     _ -> hPutStrLn stderr ("bad engine " ++ engine) >> exitWith (ExitFailure 2)
   times <- newIORef []
   forM_ [1..iters] $ \i -> do
@@ -236,6 +246,8 @@ dumpMain engine file = do
                     return (ALT.lexAlexStart lflags (mkFString file) (TL.pack s))
     "alex-st" -> do s <- decodeOrDie file bs
                     return (AST.lexAlexStart lflags (mkFString file) (T.pack s))
+    "alex-stf" -> do s <- decodeOrDie file bs
+                     return (ASTF.lexAlexStart lflags (mkFString file) (T.pack s))
     _ -> hPutStrLn stderr ("bad engine " ++ engine) >> exitWith (ExitFailure 2)
   mapM_ print (cutTokens toks)
 
@@ -251,7 +263,8 @@ compareMain file = do
                      , ("alex-sbs",    cutTokens (ASB.lexAlexStart lflags (mkFString file) bs))
                      , ("alex-lbs",    cutTokens (ALB.lexAlexStart lflags (mkFString file) (LB.fromStrict bs)))
                      , ("alex-lt",     cutTokens (ALT.lexAlexStart lflags (mkFString file) (TL.fromStrict t)))
-                     , ("alex-st",     cutTokens (AST.lexAlexStart lflags (mkFString file) t)) ]
+                     , ("alex-st",     cutTokens (AST.lexAlexStart lflags (mkFString file) t))
+                     , ("alex-stf",    cutTokens (ASTF.lexAlexStart lflags (mkFString file) t)) ]
       results <- mapM (\(nm, toks) -> do
                           r <- try (evaluate (firstDiff 0 hand toks)) :: IO (Either SomeException (Maybe (Int, Maybe Token, Maybe Token)))
                           return (nm, r))

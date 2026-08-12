@@ -1,0 +1,8 @@
+package P where
+fooλbar = 1
+x→y = 2
+abcλ = 3
+doo iff lett _ _x x_ f' f'h3 x2 Con Conλ
+where'λwhere
+package q = valueOf stringOf
+ident

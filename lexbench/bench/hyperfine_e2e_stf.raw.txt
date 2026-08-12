@@ -1,0 +1,16 @@
+Benchmark 1: hand
+  Time (mean ± σ):     11.174 s ±  1.371 s    [User: 6.170 s, System: 5.014 s]
+  Range (min … max):    9.318 s … 13.112 s    10 runs
+ 
+Benchmark 2: alex-st
+  Time (mean ± σ):      3.104 s ±  0.041 s    [User: 3.003 s, System: 0.105 s]
+  Range (min … max):    3.059 s …  3.188 s    10 runs
+ 
+Benchmark 3: alex-stf
+  Time (mean ± σ):      2.765 s ±  0.046 s    [User: 2.676 s, System: 0.092 s]
+  Range (min … max):    2.687 s …  2.828 s    10 runs
+ 
+Summary
+  alex-stf ran
+    1.12 ± 0.02 times faster than alex-st
+    4.04 ± 0.50 times faster than hand

@@ -18,4 +18,15 @@ mkvariant LexAlexSBS    "SB.ByteString" "strict ByteString"
 mkvariant LexAlexLBS    "LB.ByteString" "lazy ByteString"
 mkvariant LexAlexLT     "TL.Text"       "lazy Text"
 mkvariant LexAlexST     "T.Text"        "strict Text"
+
+# strict Text + ASCII-identifier fast path: same header/rules, custom footer
+# (modified driver `go` + fastIdTok), plus an extra import of LexAlexFastPath.
+sed -e "s/@@MODNAME@@/LexAlexSTF/" -e "s|@@STREAMTYPE@@|T.Text|" \
+    -e "s/@@VARIANTCOMMENT@@/strict Text with ASCII-identifier fast path/" \
+    -e "s/^import LexAlexShared$/import LexAlexShared\nimport LexAlexFastPath/" \
+    alexparts/header.template > gen/LexAlexSTF.x
+cat alexparts/rules.part >> gen/LexAlexSTF.x
+sed -e "s|@@STREAMTYPE@@|T.Text|" alexparts/footerSTF.part >> gen/LexAlexSTF.x
+alex -g gen/LexAlexSTF.x -o gen/LexAlexSTF.hs
+
 echo "alex generation OK"

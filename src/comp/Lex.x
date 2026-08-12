@@ -26,9 +26,13 @@ module Lex(Token(..), LexItem(..), LexError(..), LFlags(..), prLexItem,
            isIdChar, isSym, convLexErrorToErrMsg) where
 
 import Data.Char
-import Data.Word(Word8)
+import Data.Word(Word8, Word64)
+import Data.Bits(unsafeShiftR, (.&.))
 import qualified Data.Set as S
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified Data.Text.Internal as TI
+import qualified Data.Text.Array as TA
 import Numeric(readFloat)
 
 import Util(itos)
@@ -543,6 +547,145 @@ svSymbolSet :: S.Set String
 svSymbolSet = S.fromList [str | (_, str, _) <- svSymbolTable]
 
 -- ---------------------------------------------------------------------------
+-- ASCII-identifier fast path.
+--
+-- In the generated DFA every identifier character costs a boxed
+-- accept-array read, three transition-table reads, a UTF-8 iter, and --
+-- because every identifier state is accepting -- a fresh AlexLastAcc and
+-- Text record allocation.  Since identifiers dominate real source (over
+-- half the bytes of the repo corpus sit in ASCII identifier-shaped runs),
+-- the driver first scans for an all-ASCII identifier with one byte load
+-- plus one immediate-bitmask test per character over the Text's
+-- underlying ByteArray, allocating nothing until the token is emitted.
+--
+-- Semantics are exactly the DFA's for the tokens it handles:
+--   * start char: ASCII [A-Za-z_]; continue: ASCII [A-Za-z0-9_'].
+--   * If the byte terminating the run is >= 0x80 it could continue the
+--     identifier with a non-ASCII idchar, so we BAIL to the DFA with
+--     nothing consumed.  Bytes < 0x80 failing the mask are never idchars,
+--     so the token is definitely complete.
+--   * Reserved words are exact-match DFA rules (longest-match otherwise
+--     prefers the longer identifier), so an exact-lexeme Map lookup
+--     reproduces them, including the "package" column-(c-1) hack.
+--   * Columns: n bytes = n chars = n columns (all ASCII).
+
+-- result of scanning at a token start
+data FastScan
+  = FastNo                    -- not an all-ASCII identifier: use the DFA
+  | FastId {-# UNPACK #-} !Int !T.Text
+                              -- ^ n chars (== n bytes == n columns) matched;
+                              --   the remaining input after the identifier
+
+-- bitmasks over ASCII codes 0-63 / 64-127 for [A-Za-z0-9_'].
+-- Literal constants so they inline into the scan loop as immediates:
+--   lo: bit 39 = '; bits 48-57 = 0-9
+--   hi: bits 1-26 = A-Z; bit 31 = _; bits 33-58 = a-z
+idCharMaskLo, idCharMaskHi :: Word64
+idCharMaskLo = 0x03FF008000000000
+idCharMaskHi = 0x07FFFFFE87FFFFFE
+
+-- the start set [A-Za-z_] is exactly the hi half (digits and ' are < 64)
+idStartMaskHi :: Word64
+idStartMaskHi = idCharMaskHi
+
+maskMember :: Word64 -> Word8 -> Bool
+maskMember m w = (m `unsafeShiftR` (fromIntegral w .&. 63)) .&. 1 /= 0
+{-# INLINE maskMember #-}
+
+isIdStartB :: Word8 -> Bool
+isIdStartB w = w >= 64 && w < 128 && maskMember idStartMaskHi w
+{-# INLINE isIdStartB #-}
+
+isIdCharB :: Word8 -> Bool
+isIdCharB w
+  | w < 64    = maskMember idCharMaskLo w
+  | w < 128   = maskMember idCharMaskHi w
+  | otherwise = False
+{-# INLINE isIdCharB #-}
+
+-- scan an ASCII identifier at the head of the input (text-2.x: Text is
+-- UTF-8 bytes in a ByteArray, so ASCII chars are single bytes and byte
+-- offsets == char offsets == column widths within the run)
+fastScanId :: T.Text -> FastScan
+fastScanId (TI.Text arr off len)
+  | len <= 0 || not (isIdStartB (TA.unsafeIndex arr off)) = FastNo
+  | otherwise = loop (off + 1)
+  where
+    !end = off + len
+    loop :: Int -> FastScan
+    loop !i
+      | i >= end  = FastId (i - off) (TI.Text arr i 0)
+      | isIdCharB w = loop (i + 1)
+      | w >= 0x80 = FastNo   -- may continue with a non-ASCII idchar: DFA decides
+      | otherwise = FastId (i - off) (TI.Text arr i (end - i))
+      where w = TA.unsafeIndex arr i
+{-# INLINE fastScanId #-}
+
+-- the lexeme (n ASCII chars at the head of the given Text) as a String,
+-- lazily, for mkFString (same shape idTok's takeStr produces)
+asciiStr :: T.Text -> Int -> String
+asciiStr (TI.Text arr off _) n = go2 off
+  where
+    !end = off + n
+    go2 !i | i >= end  = []
+           | otherwise = chr (fromIntegral (TA.unsafeIndex arr i)) : go2 (i + 1)
+
+-- exact-match keyword recognition on the scanned lexeme; Nothing => plain
+-- identifier.  Keyword list == the reserved-word rules above (the caller
+-- applies L_package's column hack).  The lookup is keyed on a zero-copy
+-- Text slice and pre-filtered: no keyword starts with an uppercase letter,
+-- and none is longer than 10 chars, so most identifiers skip the Map.
+kwLookup :: T.Text -> Int -> Maybe LexItem
+kwLookup (TI.Text arr off _) n
+  | n > 10 = Nothing                      -- longest keyword: "incoherent"/"synthesize"
+  | b0 /= 95 && (b0 < 97 || b0 > 122) = Nothing  -- keywords start [a-z_]
+  | otherwise = M.lookup (TI.Text arr off n) kwMap
+  where b0 = TA.unsafeIndex arr off
+{-# INLINE kwLookup #-}
+
+kwMap :: M.Map T.Text LexItem
+kwMap = M.fromList
+  [ (T.pack "_",          L_uscore)
+  , (T.pack "action",     L_action)
+  , (T.pack "case",       L_case)
+  , (T.pack "class",      L_class)
+  , (T.pack "data",       L_data)
+  , (T.pack "deriving",   L_deriving)
+  , (T.pack "do",         L_do)
+  , (T.pack "else",       L_else)
+  , (T.pack "foreign",    L_foreign)
+  , (T.pack "if",         L_if)
+  , (T.pack "import",     L_import)
+  , (T.pack "in",         L_in)
+  , (T.pack "coherent",   L_coherent)
+  , (T.pack "incoherent", L_incoherent)
+  , (T.pack "infix",      L_infix)
+  , (T.pack "infixl",     L_infixl)
+  , (T.pack "infixr",     L_infixr)
+  , (T.pack "interface",  L_interface)
+  , (T.pack "instance",   L_instance)
+  , (T.pack "let",        L_let)
+  , (T.pack "letseq",     L_letseq)
+  , (T.pack "module",     L_module)
+  , (T.pack "of",         L_of)
+  , (T.pack "package",    L_package)
+  , (T.pack "primitive",  L_primitive)
+  , (T.pack "qualified",  L_qualified)
+  , (T.pack "rules",      L_rules)
+  , (T.pack "signature",  L_signature)
+  , (T.pack "struct",     L_struct)
+  , (T.pack "then",       L_then)
+  , (T.pack "type",       L_type)
+  , (T.pack "valueOf",    L_valueOf)
+  , (T.pack "stringOf",   L_stringOf)
+  , (T.pack "verilog",    L_verilog)
+  , (T.pack "synthesize", L_synthesize)
+  , (T.pack "when",       L_when)
+  , (T.pack "where",      L_where)
+  ]
+{-# NOINLINE kwMap #-}
+
+-- ---------------------------------------------------------------------------
 -- Driver and actions.
 -- Action args: flags, file, line, col (token start), stream at token start,
 -- stream after token, token length in chars.
@@ -566,15 +709,43 @@ lexStartWithPos lf pos s
 go :: LFlags -> FString -> Int -> Int -> Stream -> [Token]
 go lf f !l !c s
   | c == 0, Just (fn, n, s') <- checkDirective s = go lf fn n 0 s'
-  | otherwise = case alexScan s 0 of
-      AlexEOF -> [Token (mkPositionFull f (l+1) (-1) (lf_is_stdlib lf)) L_eof]
-      AlexError s' ->
-        -- defensive; every byte is covered by some rule, so this is unreachable
-        case unconsChar s' of
-          Just (ch, _) -> lexErrTokens f l c (LexBadLexChar ch)
-          Nothing -> internalError "Lex: scan error at EOF"
-      AlexSkip s' _ -> go lf f l c s'
-      AlexToken s' len act -> act lf f l c s s' len
+  -- FAST PATH: all-ASCII identifier/keyword at the token start.  fastScanId
+  -- byte-scans the Text's underlying array ([A-Za-z_][A-Za-z0-9_']*); it
+  -- returns FastNo (nothing consumed) when the head is not an ASCII idstart
+  -- OR when the run is terminated by a byte >= 0x80 (which could be a
+  -- non-ASCII idchar continuation), so those cases take the DFA verbatim.
+  | otherwise = case fastScanId s of
+      FastId n s' -> fastIdTok lf f l c s n s'
+      FastNo -> case alexScan s 0 of
+        AlexEOF -> [Token (mkPositionFull f (l+1) (-1) (lf_is_stdlib lf)) L_eof]
+        AlexError s' ->
+          -- defensive; every byte is covered by some rule, so this is unreachable
+          case unconsChar s' of
+            Just (ch, _) -> lexErrTokens f l c (LexBadLexChar ch)
+            Nothing -> internalError "Lex: scan error at EOF"
+        AlexSkip s' _ -> go lf f l c s'
+        AlexToken s' len act -> act lf f l c s s' len
+
+-- emit the fast-scanned identifier: exact keyword lookup first (reserved
+-- words are exact-match DFA rules, incl. the `package` column-(c-1) hack),
+-- otherwise the conid/varid logic of idTok verbatim.  n is both the char
+-- count and the column advance (all chars are single-byte ASCII).
+fastIdTok :: LFlags -> FString -> Int -> Int -> Stream -> Int -> Stream -> [Token]
+fastIdTok lf f !l !c s n s' =
+  case kwLookup s n of
+    Just L_package ->
+      Token (mkPositionFull f l (c-1) (lf_is_stdlib lf)) L_package : go lf f l (c+n) s'
+    Just li ->
+      Token (mkPositionFull f l c (lf_is_stdlib lf)) li : go lf f l (c+n) s'
+    Nothing ->
+      let str = asciiStr s n
+          p = mkPositionFull f l c (lf_is_stdlib lf)
+          rest = go lf f l (c+n) s'
+      in  if not (lf_allow_sv_kws lf) && isSvKeyword str
+          then internalError ("SystemVerilog keyword forbidden: " ++ str)
+          else if isUpper (head str)
+               then Token p (L_conid (mkFString str)) : rest
+               else Token p (L_varid (mkFString str)) : rest
 
 -- error token stream, exactly the hand lexer's lexerr (infinite L_eof tail)
 lexErrTokens :: FString -> Int -> Int -> LexError -> [Token]

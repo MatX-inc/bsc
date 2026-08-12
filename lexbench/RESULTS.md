@@ -219,3 +219,136 @@ Corpus lists: `corpus_utf8.txt` (1047 equivalence files), `corpus_clean.txt`
 equivalence log `equiv_out2.txt`. bsc source: `main` @ 941eecfe (fetched via
 Go-module-proxy zip; GitHub direct was blocked in this environment). The only
 bsc modification is the `LexError(..)` export in `src/comp/Lex.hs`.
+
+## (d) ASCII-identifier fast path (alex-stf) — asm inspection + hack + measurement
+
+Question (Amy): does the generated machine code have a specialized all-ASCII
+identifier path, or does every identifier char walk the DFA?
+
+### Asm/Core verdict: NO fast path — every char walks the full DFA
+
+Compiled `gen/LexAlexST.hs` (alex 3.3.0 `-g`, GHC 9.4.7 `-O2`) with
+`-ddump-simpl`/`-ddump-asm` (dumps in `harness/dumps/gen/`). The whole lexer
+funnels through one inner loop, `$s$walex_scan_tkn` (Core line ~8549), and
+per input **character** — identifier or not — it does:
+
+1. **a boxed accept-array read**: `indexArray# arr# state` (the `AlexAcc`
+   array; alex `-g` unboxes the transition tables but NOT the accept array),
+   plus a pointer-tag test/eval check on the result;
+2. because every identifier state is accepting, **two heap allocations**:
+   a fresh `AlexLastAcc` record *and* a fresh 4-word `Data.Text.Internal.Text`
+   slice, per identifier character (asm: `movq $LexAlexST.AlexLastAcc_con_info
+   ,-16(%r12)` / `movq $Data.Text.Internal.Text_con_info,-24(%r12)` inside the
+   loop, with heap-check `cmpq 856(%r13),%r12` each time);
+3. the text-2.0 UTF-8 iter: `indexWord8Array#` + `clz8#` (asm `bsr`) to
+   compute the char and its byte length — even for ASCII;
+4. the classify step (ASCII passes the raw byte through: `ltChar# c '\128'`,
+   non-ASCII calls `Lex.$wisSym` / ccall `u_iswalpha`);
+5. **three unboxed table reads**: `indexInt32OffAddr# alex_base state`,
+   `indexInt16OffAddr# alex_check offset`, then `alex_table` (or `alex_deflt`)
+   — asm:
+
+   ```
+   movslq alex_base_r7DS_bytes(%rcx),%rcx
+   movswq alex_check_r7DU_bytes(%rdx),%rdx
+   movswq alex_table_r7DT_bytes(%rcx),%rax
+   ```
+
+There is no byte-scan loop anywhere in the object code; keywords are ordinary
+DFA states. So an ASCII identifier of length n costs n×(1 boxed array read +
+3 table reads + UTF-8 iter + 2 allocations) before the token is even built.
+
+### The hack: `alex-stf` (`gen/LexAlexSTF.x` = same rules, custom driver)
+
+New variant, strict Text input. At each token start the driver first calls
+`fastScanId` (`harness/LexAlexFastPath.hs`): if the head byte is ASCII
+`[A-Za-z_]`, scan forward over the Text's underlying `ByteArray#` while bytes
+are ASCII `[A-Za-z0-9_']` (exactly Lex.hs's `isIdChar` ∩ ASCII; one
+`indexWord8Array#` + two compares + an immediate-bitmask shift/test per char
+— the compiled loop is ~11 instructions, zero allocation, masks are inline
+constants `0x03FF008000000000`/`0x07FFFFFE87FFFFFE`):
+
+```
+_blk_cbyH:  cmpq %rcx,%rdi              ; i >= end?
+            jge  _blk_cbzY
+            movb (%r9,%rdi,1),%r9b      ; byte
+            cmpb $64,%r9b               ; lo/hi half
+            jae  _blk_cbzs
+            movq $287949450930814976,%r10   ; idCharMaskLo
+            movzbl %r9b,%ecx ; andl $63,%ecx
+            shrq %cl,%r10 ; testb $1,%r10b  ; bit test
+            je   _blk_cbzR
+            incq %rdi ; jmp _blk_cbyH       ; next char
+```
+
+- The token is emitted directly: exact-match keyword lookup on a zero-copy
+  Text slice (`Map Text LexItem`, 37 keywords + `_`→`L_uscore`, pre-filtered
+  to first-byte `[a-z_]` and length ≤ 10 so most identifiers skip it; keywords
+  are exact-match DFA rules, longest-match otherwise prefers the longer
+  identifier, so exact lookup reproduces them, incl. the `package`
+  column-(c−1) hack), else `L_conid`/`L_varid` with the same
+  `mkFString`/SV-keyword logic as `idTok`.
+- **Bail-outs** (nothing consumed, generic DFA proceeds verbatim): head not
+  an ASCII idstart, or the run is terminated by a byte ≥ 0x80 — that byte
+  could start a non-ASCII idchar (e.g. `fooλ` continues the identifier), so
+  the DFA must decide. Bytes < 0x80 failing the mask are never idchars, so
+  the token is complete. Columns: n bytes = n chars = n columns (all ASCII).
+- Position tracking, `# line` directives (col 0, checked before the fast
+  path), and all non-identifier tokens are untouched.
+
+### Equivalence
+
+`compare` mode (now 6 variants): **1047/1047** corpus files token-identical,
+plus edge files `tests/t1–t10` and three new fast-path-adversarial files
+`tests/t11–t13` (identifier continued by non-ASCII idchar `fooλbar`/`abcλ`,
+non-ASCII symbol after identifier `x→y`, `λstart`/`füü`, keyword-prefix
+identifiers `doo`/`iff`/`lett`, `_`/`_x`/`x_`, primes `f'`/`f'h3`, `Conλ`,
+`package` position quirk, keyword at EOF with no newline). **Zero
+deviations** (`equiv_stf_corpus.txt`).
+
+### Numbers (same machine/methodology as (a)–(c); re-run 2026-08-12, all
+three engines re-measured back-to-back interleaved, median of 5)
+
+Lex-only, 66.5 MB corpus (`bench/big3_*`):
+
+| engine | median | MB/s | vs hand | vs alex-st | alloc in lex region |
+|---|---|---|---|---|---|
+| hand (Lex.hs, String) | 3.318 s | 20.1 | 1.00x | — | 4.13 GB |
+| alex-st (strict Text) | 3.095 s | 21.5 | 1.07x | 1.00x | 10.89 GB |
+| **alex-stf (fast path)** | **2.833 s** | **23.5** | **1.17x** | **1.09x** | **8.43 GB** |
+
+(hash asserted identical: 9,047,095 tokens, 2170315049108700862; alloc
+−2.46 GB = −22.6% vs alex-st)
+
+hyperfine end-to-end, whole process incl. read+decode (warmup 2, 10 runs,
+`bench/hyperfine_e2e_stf.*`):
+
+| engine | mean ± σ | vs alex-stf |
+|---|---|---|
+| hand | 11.174 ± 1.371 s | 4.04 ± 0.50 |
+| alex-st | 3.104 ± 0.041 s | 1.12 ± 0.02 |
+| **alex-stf** | **2.765 ± 0.046 s** | 1.00 |
+
+p25 file (221 B, 30,000 iterations, iter 1 dropped, `bench/p25c_*`):
+
+| engine | median / file | p90 |
+|---|---|---|
+| hand | 7.49 µs | 8.17 µs |
+| alex-st | 5.94 µs | 7.84 µs |
+| **alex-stf** | **5.12 µs** | **6.46 µs** |
+
+### Read
+
+56.3% of corpus bytes sit in ASCII identifier-shaped runs (7.7M runs, avg
+4.9 chars), and the fast path removes ~7 ns/char (~15 cycles @2.1 GHz) on
+those — consistent with the ~0.26 s saved. The remaining cost is the shared
+per-token tail (mkFString interning through the global IntMap, Position/
+Token/list construction, forcing) plus the DFA on the other 44% of bytes —
+the ceiling noted in the Take still binds: identifiers get ~2x cheaper to
+*scan*, but scanning was only ~1/4 of lex time. A String-building-free
+FString (Text-keyed interning) is the next multiplier; whitespace runs are
+the next DFA-bypass candidate.
+
+Repro: `./genx.sh` now also emits `gen/LexAlexSTF.x`; engine name `alex-stf`.
+Fast path source: `harness/LexAlexFastPath.hs` + `harness/alexparts/
+footerSTF.part`. Dumps: `harness/dumps/gen/LexAlexST{,F}.dump-{asm,simpl}`.
