@@ -86,8 +86,24 @@ jobs:
           # so the only real SMT library in the build is STP.
           export YICES_STUB=1
 
-          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+          # On failure, surface the error context as annotations: the
+          # raw logs are not always reachable from where this run is
+          # being watched, but annotations are served by the API.
+          set +e
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src \
+            2>&1 | tee build.log
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            grep -nE '\*\*\*|Error [0-9]|error:|undefined reference|No rule to make|cannot find|ghc: |panic|Segmentation' build.log \
+              | tail -30 | cut -c1-500 | while read -r line; do
+                echo "::error title=bsc build failed::${line}"
+              done
+            exit "$rc"
+          fi
 
+      - name: Check dynamic linking and pack
+        run: |
           # bsc must link libstp dynamically for the solver-swap
           # scheme used by the other jobs to work at all
           LD_LIBRARY_PATH=$PWD/inst/lib/SAT ldd inst/bin/core/bsc | grep 'libstp\.so'
@@ -139,7 +155,17 @@ jobs:
       - name: Build libstp
         timeout-minutes: 30
         run: |
-          make -j $(nproc) -C src/vendor/stp install
+          set +e
+          make -j $(nproc) -C src/vendor/stp install 2>&1 | tee stp-build.log
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            grep -nE '\*\*\*|Error [0-9]|error:|No rule to make' stp-build.log \
+              | tail -30 | cut -c1-500 | while read -r line; do
+                echo "::error title=libstp build failed::${line}"
+              done
+            exit "$rc"
+          fi
 
       - name: Download bsc
         uses: actions/download-artifact@v8
@@ -309,8 +335,19 @@ jobs:
           # flags reach the minisat subtree too (CFLAGS is exported by
           # platform.mk, so the computed value flows into the
           # sub-makes' environment).
+          set +e
           make -j $(nproc) -C src/vendor/stp install \
-              CFLAGS_BASE="-O1 -g -fno-omit-frame-pointer -fPIC -fsanitize=thread"
+              CFLAGS_BASE="-O1 -g -fno-omit-frame-pointer -fPIC -fsanitize=thread" \
+            2>&1 | tee stp-tsan-build.log
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            grep -nE '\*\*\*|Error [0-9]|error:|No rule to make' stp-tsan-build.log \
+              | tail -30 | cut -c1-500 | while read -r line; do
+                echo "::error title=TSan libstp build failed::${line}"
+              done
+            exit "$rc"
+          fi
           echo "--- instrumentation check ---"
           ldd src/vendor/stp/lib/libstp.so.1
           ldd src/vendor/stp/lib/libstp.so.1 | grep -q libtsan
