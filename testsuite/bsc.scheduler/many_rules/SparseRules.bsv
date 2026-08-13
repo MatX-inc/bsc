@@ -12,8 +12,8 @@ import Vector::*;
 
 (* synthesize *)
 module mkSparseRules(Empty);
-  Vector#(16384, Reg#(UInt#(16))) rs <- replicateM(mkReg(0));
-  for (Integer i = 0; i < 16384; i = i + 1)
+  Vector#(8192, Reg#(UInt#(16))) rs <- replicateM(mkReg(0));
+  for (Integer i = 0; i < 8192; i = i + 1)
     rule incr;
       rs[i] <= rs[i] + 1;
     endrule

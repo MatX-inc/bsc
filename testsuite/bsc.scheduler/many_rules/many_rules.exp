@@ -36,26 +36,33 @@ compare_file_filter_ids GuardedRules.bsv.bsc-sched-out
 compile_verilog_schedule_pass GridRules.bsv mkGridRules "-no-sched-transposed"
 compare_file_filter_ids GridRules.bsv.bsc-sched-out
 
-# Scale guard: 16384 non-interacting rules, compiled under a cap on
+# Scale guard: 8192 non-interacting rules, compiled under a cap on
 # CUMULATIVE heap allocation -- the total bytes ever allocated over
 # the run, almost all immediately garbage-collected, NOT resident
 # memory (peak residency here is ~0.6 GB either way, so a residency
 # cap cannot distinguish the two behaviors; lifetime allocation can,
 # and unlike wall-clock time it is deterministic).  With pair
 # enumeration driven by the shared-instance indexes, the front end
-# plus scheduler allocate ~233 GB over the run; with all-pairs
-# enumeration (the behavior this guards against) ~495 GB, and the
-# cap aborts the compile.  Measured with GHC 9.4; the 50%/41%
-# margins on either side of the cap absorb GHC-version drift.
+# plus scheduler allocate ~60 GB over the run; with all-pairs
+# enumeration (the behavior this guards against) ~133 GB, and the
+# cap aborts the compile.  Measured with GHC 9.10; the cap sits 48%
+# above the intended cost and 50% below the regressed one, and those
+# margins absorb GHC-version drift.
+#
+# The rule count is what the margins are made of: the all-pairs term
+# has to outgrow the linear front-end work before the two behaviors
+# separate, so halving this count again would narrow both margins to
+# ~41% and halving it twice to ~31%.  At 8192 the two paths differ by
+# a factor of 2.2, against 2.4 at 16384 -- nearly all of the
+# separation for a quarter of the run time.
 #
 # -KILLschedule stops compilation after scheduling so the (identical,
 # and large) allocation of the downstream backend phases does not
 # dilute the margins.  Plain -verilog is essential: -elab/-sim set
 # genABin, which deliberately reverts disjointness testing to the
 # full-pair sweep for RuleRelationDB completeness.
-# The -K accommodates elaboration recursion depth at this rule count.
-set env(BSC_ALLOC_LIMIT_MB) 350000
-compile_verilog_pass SparseRules.bsv mkSparseRules {-KILLschedule +RTS -K512m -RTS}
+set env(BSC_ALLOC_LIMIT_MB) 91000
+compile_verilog_pass SparseRules.bsv mkSparseRules {-KILLschedule}
 unset env(BSC_ALLOC_LIMIT_MB)
 
 }
