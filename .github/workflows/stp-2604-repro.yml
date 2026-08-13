@@ -1,0 +1,88 @@
+name: STP ubuntu-26.04 repro
+
+# Reproduces the "Build: ubuntu-26.04-arm ghc-9.6.7" CI failure on
+# claude/amy/arm-stp by building ONLY the vendored STP
+# (src/vendor/stp, STP_STUB unset) the same way `make install-src`
+# does, on the failing runner image.  The suspicion is that
+# ubuntu-26.04's newer GCC/libstdc++ breaks the vendored STP compile
+# (upstream B-Lang-org PR #973 mentioned the same), which needs no GHC
+# at all -- so this workflow skips the Haskell setup entirely.
+#
+# Three legs to separate compiler-version from architecture effects:
+#   ubuntu-26.04-arm : the failing leg
+#   ubuntu-26.04     : same toolchain, x86-64 (header-hygiene errors
+#                      should reproduce here too if arch-independent)
+#   ubuntu-24.04-arm : control, expected to pass
+#
+# On failure the error-context lines are emitted as ::error
+# annotations (pattern from stp-tsan-arm.yml, commit 8ac95575), since
+# annotations are reachable via the API even when raw logs are not.
+
+on:
+  push:
+    branches:
+      - claude/amy/arm-stp-2604-repro
+  workflow_dispatch:
+
+# 'shell: bash' gives -o pipefail (the default run shell does not),
+# which the rc-capture around the tee'd build command relies on
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-stp:
+    strategy:
+      matrix:
+        os: [ ubuntu-26.04-arm, ubuntu-26.04, ubuntu-24.04-arm ]
+      fail-fast: false
+    name: "Build vendored STP: ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      # Same dependency set as the failing job, to match its apt state
+      - name: Install dependencies
+        run: sudo .github/workflows/install_dependencies_ubuntu.sh
+
+      - name: Report toolchain versions
+        run: |
+          uname -m
+          gcc --version | head -1
+          g++ --version | head -1
+          dpkg -l | grep -E 'libstdc\+\+|^ii  (gcc|g\+\+) ' || true
+          echo "::notice title=toolchain ${{ matrix.os }}::$(uname -m) $(g++ --version | head -1)"
+
+      - name: Build vendored STP
+        run: |
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+
+          # This is exactly how the full build reaches STP:
+          # src/Makefile does 'make -C vendor/stp install' with
+          # STP_STUB unset (a29372e5 removed the arm stub).
+          set +e
+          make -j ${CORES} -C src/vendor/stp install \
+            2>&1 | tee stp-build.log
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            # Surface the error context as annotations: the raw logs
+            # are not always reachable from where this run is being
+            # watched, but annotations are served by the API.
+            grep -nE 'error:|Error [0-9]|\*\*\*|undefined reference|No rule to make|cannot find|note: .*(include|declared)' stp-build.log \
+              | head -40 | cut -c1-500 | while read -r line; do
+                echo "::error title=STP build failed on ${{ matrix.os }}::${line}"
+              done
+            exit "$rc"
+          fi
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: stp-build-log-${{ matrix.os }}
+          path: stp-build.log
