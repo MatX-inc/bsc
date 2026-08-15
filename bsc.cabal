@@ -42,7 +42,7 @@ library
     text         ^>=2.0.2,
     time         ^>=1.12.2,
     unix         ^>=2.8.6.0,
-  default-language: Haskell2010
+  default-language: GHC2021
   default-extensions:
     BangPatterns,
     FlexibleContexts,
@@ -310,7 +310,7 @@ common common_exes
   build-depends:
     base ^>=4.18.3.0,
     bsc,
-  default-language: Haskell2010
+  default-language: GHC2021
   ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
   hs-source-dirs: src/comp/app
 
@@ -397,7 +397,7 @@ test-suite bluetcl-tests
     filepath  ^>=1.4.301.0,
     process   ^>=1.6.28.0,
   build-tool-depends: bsc:bsc, bsc:bluetcl
-  default-language: Haskell2010
+  default-language: GHC2021
   hs-source-dirs: testsuite
   main-is: RunTests.hs
   type: exitcode-stdio-1.0
@@ -409,7 +409,7 @@ test-suite smoke
     filepath  ^>=1.4.301.0,
     process   ^>=1.6.28.0,
   build-tool-depends: bsc:bsc, bsc:bluetcl
-  default-language: Haskell2010
+  default-language: GHC2021
   hs-source-dirs: testsuite
   main-is: RunTests.hs
   type: exitcode-stdio-1.0
@@ -421,7 +421,7 @@ test-suite utils
     filepath  ^>=1.4.301.0,
     process   ^>=1.6.28.0,
   build-tool-depends: bsc:bsc, bsc:bluetcl, bsc:showrules, bsc:vcdcheck, bsc:dumpbo
-  default-language: Haskell2010
+  default-language: GHC2021
   hs-source-dirs: testsuite
   main-is: RunTests.hs
   type: exitcode-stdio-1.0
