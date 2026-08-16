@@ -1,0 +1,8 @@
+package ZeroArgGuard where
+
+en :: Bool
+en = True
+
+-- a guard-only definition has no patterns to report
+val :: Bit 8
+val when en = 5
