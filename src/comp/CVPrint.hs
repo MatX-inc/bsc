@@ -70,7 +70,7 @@ import CSyntax
 import CSyntaxUtil
 import IntLit
 import IntegerUtil(integerFormat)
-import Util(itos, quote, log2, fromJustOrErr, unconsOrErr)
+import Util(itos, quote, fromJustOrErr, unconsOrErr)
 
 --------
 
@@ -1150,9 +1150,8 @@ instance PVPrint CPat where
     pvPrint d p (CPAny _) = text ".*"
     pvPrint d p (CPLit l) = pvPrint d p l
     pvPrint d p (CPMixedLit _ base ps) =
-        let digitBits = log2 base
-            f (len, Just val) = integerFormat (len `div` digitBits) base val
-            f (len, Nothing)  = genericReplicate (len `div` digitBits) '?'
+        let f (len, Just val) = integerFormat len base val
+            f (len, Nothing)  = genericReplicate len '?'
             pref  2 = "'b"
             pref  8 = "'o"
             pref 10 = "'d"
