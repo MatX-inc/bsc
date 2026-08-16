@@ -1,0 +1,11 @@
+package GuardPlaceAgree where
+
+data WG = WG Bool
+  deriving (Eq, Bits)
+
+-- The guard agrees with the value the as-pattern already requires: the
+-- fold leaves the pattern unchanged, the clause covers exactly (WG True),
+-- and the pair of clauses is exhaustive with no redundancy.
+agreesPattern :: WG -> Bit 2
+agreesPattern (WG b@True) when b = 0
+agreesPattern (WG False) = 1

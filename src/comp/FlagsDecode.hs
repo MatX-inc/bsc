@@ -678,6 +678,7 @@ defaultFlags bluespecdir = Flags {
         optSched = True,
         optUndet = False,
         parallelSimLink = 1,
+        patternCheckFuel = 100000,
         printFlags = False,
         printFlagsHidden = False,
         printFlagsRaw = False,
@@ -747,7 +748,9 @@ defaultFlags bluespecdir = Flags {
         verilogDeclareAllFirst = True,
         verilogFilter = [],
         warnActionShadowing = True,
+        warnIncompletePatterns = True,
         warnMethodUrgency = True,
+        warnOverlappingPatterns = True,
         warnUndetPred = False,
         ecoOptions = defaultECOOptions
         }
@@ -1448,6 +1451,15 @@ externalFlags = [
               (Just (FRTString (show . parallelSimLink))),
           "specify the # of simultaneous jobs when linking Bluesim", Visible)),
 
+        ("pattern-check-fuel",
+         (Arg "n"
+              (\f s -> case (mread s) of
+                         Just n | n > 0 -> Left (f {patternCheckFuel=n})
+                         _ -> Right (cmdPosition,
+                                     EPositiveIntegerArgFlag "-pattern-check-fuel"))
+              (Just (FRTString (show . patternCheckFuel))),
+          "maximum pattern-matrix operations per analysis", Visible)),
+
         ("print-flags",
          (Toggle (\f x -> f {printFlags=x}) (showIfTrue printFlags),
           "print flag values after command-line parsing", Visible)),
@@ -1857,9 +1869,17 @@ externalFlags = [
          (Toggle (\f x -> f {warnActionShadowing=x}) (showIfTrue warnActionShadowing),
           "warn when a rule's action is overwritten by a later rule", Visible)),
 
+        ("warn-incomplete-patterns",
+         (Toggle (\f x -> f {warnIncompletePatterns=x}) (showIfTrue warnIncompletePatterns),
+          "warn when pattern matching does not cover all possible values", Visible)),
+
         ("warn-method-urgency",
          (Toggle (\f x -> f {warnMethodUrgency=x}) (showIfTrue warnMethodUrgency),
           "warn when a method's urgency is arbitrarily chosen", Visible)),
+
+        ("warn-overlapping-patterns",
+         (Toggle (\f x -> f {warnOverlappingPatterns=x}) (showIfTrue warnOverlappingPatterns),
+          "warn when a pattern can never match (shadowed by earlier patterns)", Visible)),
 
         ("warn-undet-predicate",
          (Toggle (\f x -> f {warnUndetPred=x}) (showIfTrue warnUndetPred),
@@ -2037,6 +2057,7 @@ showFlagsRaw flags =
           ("optSched", show (optSched flags)),
           ("optUndet", show (optUndet flags)),
           ("parallelSimLink", show (parallelSimLink flags)),
+          ("patternCheckFuel", show (patternCheckFuel flags)),
           ("passThroughAssertions", show (passThroughAssertions flags)),
           ("preprocessOnly", show (preprocessOnly flags)),
           ("printFlags", show (printFlags flags)),
@@ -2102,7 +2123,9 @@ showFlagsRaw flags =
           ("vpp", show (vpp flags)),
           ("vsim", show (vsim flags)),
           ("warnActionShadowing", show (warnActionShadowing flags)),
+          ("warnIncompletePatterns", show (warnIncompletePatterns flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
+          ("warnOverlappingPatterns", show (warnOverlappingPatterns flags)),
           ("warnUndetPred", show (warnUndetPred flags))
          ]
         in "Flags {\n" ++

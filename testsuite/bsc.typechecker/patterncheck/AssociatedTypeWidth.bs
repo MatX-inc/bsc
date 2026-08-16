@@ -1,0 +1,21 @@
+package AssociatedTypeWidth where
+
+class HasWidth f n | f -> n where
+  type Width f = n
+
+data One = One
+
+instance HasWidth One 1 where { }
+
+data Box f = Box (Bit (Width f))
+
+-- Width One reduces to 1, so these clauses are exhaustive.
+completeATF :: Box One -> Bool
+completeATF (Box 0) = False
+completeATF (Box 1) = True
+
+-- An open associated width must be treated as opaque, not as an infinite
+-- literal domain (which would produce a false non-exhaustiveness warning).
+unresolvedATF :: (HasWidth f n) => Box f -> Bool
+unresolvedATF (Box 0) = False
+unresolvedATF (Box 1) = True

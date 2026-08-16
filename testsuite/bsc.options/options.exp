@@ -30,6 +30,21 @@ test_basic_options -print-flags-raw bsc.print-flags-raw.out bsc.print-flags-raw.
 test_basic_options "-print-flags -split-if" bsc.print-flags.split-if.out bsc.print-flags.split-if.out.expected.post-m4
 test_basic_options "-print-flags -expand-if" bsc.print-flags.expand-if.out bsc.print-flags.expand-if.out.expected.post-m4
 
+# The pattern checker operation budget must be a positive integer.
+# A leading-dash argument (including a negative number) is taken as a
+# flag, so a negative budget is reported as a missing argument.
+compile_no_source_fail_error pattern-check-fuel-zero \
+    {-pattern-check-fuel 0} S0083
+compile_no_source_fail_error pattern-check-fuel-negative \
+    {-pattern-check-fuel -1} S0012
+compile_no_source_fail_error pattern-check-fuel-nonnumeric \
+    {-pattern-check-fuel abc} S0083
+
+# Every one-argument flag treats a following negative number as a flag,
+# not as its value (numeric flags must not silently store negatives).
+compile_no_source_fail_error steps-negative \
+    {-steps -100} S0012
+
 
 # Test that the expected file has not been accidentally corrupted.
 find_n_strings bsc.print-flags.out.expected BLUESPECDIR 2
