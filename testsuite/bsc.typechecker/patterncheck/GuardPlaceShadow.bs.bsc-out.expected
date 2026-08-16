@@ -1,0 +1,11 @@
+checking package dependencies
+compiling GuardPlaceShadow.bs
+Warning: "GuardPlaceShadow.bs", line 11, column 18: (T0166)
+  This pattern in the clauses for `complementShadow' can never match, because
+  the preceding patterns cover all of its cases:
+    Valid _
+Warning: "GuardPlaceShadow.bs", line 18, column 15: (T0166)
+  This pattern in the clauses for `literalShadow' can never match, because the
+  preceding patterns cover all of its cases:
+    Valid (True)
+All packages are up to date.

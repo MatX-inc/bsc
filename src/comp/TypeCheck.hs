@@ -85,6 +85,8 @@ tiOneDef d@(CValueSign (CDef i t s)) = do
         --trace ("TC " ++ ppReadable i) $ return ()
         (rs, ~(CLValueSign d' _)) <- tiExpl nullAssump (i, t, s, [])
         checkTopPreds (Just i) d rs
+        -- report pattern-match warnings, now that the types are resolved
+        flushPatObligations expandSynN
         s <- getSubst'
         clearSubst
         return (CValueSign (apSub s d'))
@@ -107,6 +109,8 @@ tiOneDef d@(Cclass incoh cps ik is fd ats fs) = do
           clearSubst
           return (f { cf_default = fcs' })
     fs' <- mapM tiF fs
+    -- report pattern-match warnings from the field defaults
+    flushPatObligations expandSynN
     -- XXX We could return the mangled typechecked clauses here if
     -- XXX * we typecheck Cclass first and re-insert into the symt
     -- XXX * typecheck the rest of the pkg (which may use those defaults)

@@ -34,6 +34,8 @@ import SolvedBinds
 import Assump
 import TIMonad
 import TCPat
+import TCPatCheck(PatMatchContext(..), PatMatchTypedRow(..),
+                  isGeneratedScrutinee)
 import TCMisc
 import StdPrel(isPreClass)
 import CtxRed
@@ -361,7 +363,14 @@ tiExpr as td exp@(Ccase pos e arms) =
     let clause_type = e_type `fn` td
     let clauses = [CClause [cca_pattern arm] (cca_filters arm)
                    (cca_consequent arm) | arm <- arms]
-    (ps', clauses') <- tiClauses as clause_type clauses
+    -- Reserve source order before checking the arms; attach their typed
+    -- sidecars only after every arm succeeds.  Compiler-generated cases (for
+    -- example BSV's statement encoding on unit) are not coverage obligations.
+    pat_token <- if isGeneratedScrutinee e
+                 then return Nothing
+                 else beginPatObligation PMCase pos clause_type clauses
+    (ps', clauses', pat_rows) <- tiClauses as clause_type clauses
+    finishPatObligation pat_token pat_rows
     s <- getSubst
     -- traceM("substitution: " ++ ppReadable s)
     -- bvs <- getBoundTVs
@@ -2178,7 +2187,8 @@ tiClause as ts t cl@(CClause pats quals e) = do
 
 -- tiClauses should always be called with at least one clause
 -- otherwise generate an error at the call site (because it has the position for the error message)
-tiClauses :: CheckT [CClause]
+tiClauses :: [Assump] -> Type -> [CClause]
+          -> TI ([VPred], [CClause], [PatMatchTypedRow])
 tiClauses as td alts@(CClause ps _ _ : ralts) = do
 --    trace (ppReadable (alts, td)) $ return ()
     let np = length ps
@@ -2186,36 +2196,48 @@ tiClauses as td alts@(CClause ps _ _ : ralts) = do
         c : _ -> err (getPosition c, EWrongArity)
         [] -> return ()
     pstcs <- mapM (tiClause as td) alts
-    let (pss, cs) = unzip pstcs
+    let (pss, cs, patRows) = unzip3 pstcs
     --trace ("tiClauses " ++ ppReadable (zip pss alts)) $return ()
-    return (concat pss, cs)
+    return (concat pss, cs, patRows)
 
 tiClauses as td [] = internalError("tiClauses: no clauses\n")
 
 -- XXX use less tyvars
-tiClause :: CheckT CClause
+tiClause :: [Assump] -> Type -> CClause
+         -> TI ([VPred], CClause, PatMatchTypedRow)
 tiClause as td cl@(CClause pats quals e) = do
     --trace ("tiClause: " ++ ppReadable (td, cl)) $ return ()
     ts                 <- mapM (\ p -> newTVar "tiClause ts" KStar p) pats
     t                  <- newTVar "tiClause t" KStar e
     --trace ("tiClause " ++ ppReadable (e, td, t)) $ return ()
     eq_ps <- unify cl (foldr fn t ts) td
-    (ps, as', pats', quals') <- tiPatsQuals as ts pats quals
+    (ps, as', pats', quals', patRow) <- tiPatsQuals as ts pats quals
     --s <- getSubst; trace (ppReadable (td,foldr fn t ts,s)) $ return ()
     (qs, e')           <- tiExpr as' t e
     --trace ("tiClause " ++ ppReadable (e', td)) $ return ()
     --s <- getSubst; trace (ppReadable s) $ return ()
-    return (eq_ps++ps++qs, CClause pats' quals' e')
+    return (eq_ps++ps++qs, CClause pats' quals' e', patRow)
 
-tiPatsQuals :: [Assump] -> [Type] -> [CPat] -> [CQual] -> TI ([VPred], [Assump], [CPat], [CQual])
+tiPatsQuals :: [Assump] -> [Type] -> [CPat] -> [CQual]
+            -> TI ([VPred], [Assump], [CPat], [CQual], PatMatchTypedRow)
 tiPatsQuals as ts pats0 quals0 = do
     pqs                <- mapM rmPatLit pats0
     let (pats, pqualss) = unzip pqs
     qualss             <- mapM rmQualLit quals0
-    let quals = concat pqualss ++ concat qualss
+    let patQuals = concat pqualss
+        quals = patQuals ++ concat qualss
     (ps, as', pats')   <- tiPats ts pats
     (qs, as'', quals') <- tiQuals (as' ++ as) [] [] quals
-    return (ps++qs, as'', pats', quals')
+    let (_, typedSourceQuals) = splitAt (length patQuals) quals'
+        qualGroups = splitQualGroups (map length qualss) typedSourceQuals
+        patRow = PatMatchTypedRow pats' qualGroups
+    return (ps++qs, as'', pats', quals', patRow)
+  where
+    splitQualGroups [] [] = []
+    splitQualGroups (n:ns) qs =
+        let (group, rest) = splitAt n qs
+        in  group : splitQualGroups ns rest
+    splitQualGroups _ _ = internalError "TCheck.tiPatsQuals: qualifier grouping"
 
 tiQuals :: [Assump] -> [VPred] -> [CQual] -> [CQual] -> TI ([VPred], [Assump], [CQual])
 tiQuals as ps r [] = return (ps, as, reverse r)
@@ -2362,6 +2384,10 @@ tiExpl'' as0 i sc alts me oqtvts = do
     --when (length (getSubstDomain s) > 100) $
     --    traceM (show (length (getSubstDomain s)) ++ "\n" ++ ppReadable s)
 
+    -- resolve the types in any pattern-match obligations before the
+    -- variables they mention are trimmed away
+    apSubPatObligations s
+
     -- Trim the substitution back to the recorded point
     updSubst (trimSubst trim_point)
 
@@ -2392,7 +2418,8 @@ tiExpl'' as0 i sc alts me oqtvts = do
 -- vts        variables used to instantiate sc to oqt
 tiExpl''' :: [Assump] -> Id -> Scheme -> [CClause] -> [CQual] ->
              (Qual Type, [Type]) -> TI ([VPred], CDefl)
-tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
+tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) =
+  withPatObligationOwner i $ do
 
     etrace ("tiExpl: " ++ ppReadable (i, getIdPosition i, length as0, sc)) $
         return ()
@@ -2406,7 +2433,9 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     -- Typecheck the definition clauses
     -- ps    = introduced predicates (VPred)
     -- alts' = the clauses after checking
-    (ps0, alts') <- tiClauses as ot alts
+    pat_token <- beginPatObligation (PMDef i) (getPosition i) ot alts
+    (ps0, alts', pat_rows) <- tiClauses as ot alts
+    finishPatObligation pat_token pat_rows
 
     satTraceM ("tiExpl " ++ ppReadable i ++ " ps0: " ++ ppReadable ps0)
 
@@ -2899,7 +2928,8 @@ type Impl   = (Id, ([CClause], [CQual]))
 --               (an empty list if the def is not for a method)
 tiImpl :: [Assump] -> Type -> (Id, ([CClause], [CQual]))
        -> TI ([VPred], ([CClause], [CQual]))
-tiImpl type_env type_var (_, (clauses, quals)) = do
+tiImpl type_env type_var (i, (clauses, quals)) =
+  withPatObligationOwner i $ do
         -- Typecheck the implicit condition (only for interfaces)
         -- pqs = introduced predicates (VPred)
         -- type_env_quals = type_env plus new assumptions from quals
@@ -2909,8 +2939,11 @@ tiImpl type_env type_var (_, (clauses, quals)) = do
         -- Typecheck the definition clauses
         -- provisos_clauses = introduced predicates (VPred)
         -- rewritten_clauses = the clauses after checking
-        (provisos_clauses, rewritten_clauses)
+        pat_token <- beginPatObligation (PMDef i) (getPosition i)
+                                          type_var clauses
+        (provisos_clauses, rewritten_clauses, pat_rows)
             <- tiClauses type_env_quals type_var clauses
+        finishPatObligation pat_token pat_rows
         -- return the predicates and the new defs
         return (provisos_quals ++ provisos_clauses,
                 (rewritten_clauses, rewritten_quals))
@@ -3491,7 +3524,8 @@ findFieldDefault td c c' qf = do
       then return []
       else do
         -- make the name for the Defl
-        new_i <- newVar (getPosition c) "findFieldDefault"
+        new_i0 <- newVar (getPosition c) "findFieldDefault"
+        let new_i = setInternal new_i0
         -- make the type for the Defl (if possible)
         -- (this is like what "convInst" does)
         td' <- expandFullType td

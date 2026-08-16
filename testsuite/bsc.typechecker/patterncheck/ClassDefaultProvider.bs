@@ -1,0 +1,7 @@
+package ClassDefaultProvider (MyClass(..)) where
+
+-- The provider reports this incomplete default at its declaration.
+class MyClass a where
+  conv :: a -> Maybe Bool -> Bool
+  conv _ m = case m of
+               Just x -> x

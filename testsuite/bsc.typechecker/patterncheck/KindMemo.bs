@@ -1,0 +1,44 @@
+package KindMemo where
+
+-- The analysis caches the resolved column kind per column type.  These
+-- matches ask for the same type's kind many times -- across sibling
+-- constructor specializations, across columns, and across rows -- so a
+-- wrong or stale cache hit would flip their verdicts.  All of them are
+-- exhaustive and must not warn.
+
+-- Three constructors sharing one payload type: the payload's kind is
+-- resolved under the first constructor and hit in the cache under the
+-- other two.
+data Trip = MA (Maybe Bool)
+          | MB (Maybe Bool)
+          | MC (Maybe Bool)
+  deriving (Eq, Bits)
+
+tripComplete :: Trip -> Bit 3
+tripComplete (MA (Valid _)) = 0
+tripComplete (MA Invalid) = 1
+tripComplete (MB (Valid _)) = 2
+tripComplete (MB Invalid) = 3
+tripComplete (MC (Valid _)) = 4
+tripComplete (MC Invalid) = 5
+
+-- Two columns of the same enum type: the second column's kind is a cache
+-- hit inside every specialization of the first.
+data K = KA | KB | KC
+  deriving (Eq, Bits)
+
+pairComplete :: K -> K -> Bit 2
+pairComplete KA _ = 0
+pairComplete KB _ = 1
+pairComplete KC KA = 2
+pairComplete KC KB = 3
+pairComplete KC KC = 0
+
+-- A synonym and its expansion side by side: they may cache under distinct
+-- keys, but both must resolve to the same union kind.
+type MBool = Maybe Bool
+
+synComplete :: MBool -> Maybe Bool -> Bit 2
+synComplete (Valid _) _ = 0
+synComplete Invalid (Valid _) = 1
+synComplete Invalid Invalid = 2

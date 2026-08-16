@@ -1,0 +1,14 @@
+checking package dependencies
+compiling GuardSafety.bs
+Warning: "GuardSafety.bs", line 10, column 22: (P0102)
+  Declaration of `g' shadows previous declaration at "GuardSafety.bs", line 6,
+  column 0
+Warning: "GuardSafety.bs", line 10, column 17: (T0165)
+  Pattern matching in the clauses for `boundVersusFree' is not exhaustive. The
+  following pattern is not covered:
+    Valid False
+Warning: "GuardSafety.bs", line 22, column 5: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  pattern is not covered:
+    OtherwiseA
+All packages are up to date.

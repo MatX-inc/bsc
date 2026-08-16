@@ -1,0 +1,7 @@
+checking package dependencies
+compiling GuardCustomNot.bs
+Warning: "GuardCustomNot.bs", line 12, column 18: (T0165)
+  Pattern matching in the clauses for `customNotIsOpaque' is not exhaustive.
+  The following pattern is not covered:
+    CustomNotA False
+All packages are up to date.

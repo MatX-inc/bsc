@@ -101,6 +101,7 @@ data Flags = Flags {
         optSched :: Bool,
         optUndet :: Bool,
         parallelSimLink :: Integer,
+        patternCheckFuel :: Int,
         printFlags :: Bool,
         printFlagsHidden :: Bool,
         printFlagsRaw :: Bool,
@@ -166,7 +167,9 @@ data Flags = Flags {
         verilogDeclareAllFirst :: Bool,
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
+        warnIncompletePatterns :: Bool,
         warnMethodUrgency :: Bool,
+        warnOverlappingPatterns :: Bool,
         warnUndetPred :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
