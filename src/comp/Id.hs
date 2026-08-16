@@ -433,9 +433,12 @@ getFixity i =
     "|>"  -> FInfixr 15
 -}
     _     -> defaultFixity
--- Prepends "_" to id name
+-- Prepends "_" to id name, recording the unprefixed source spelling as
+-- the display name so diagnostics can report the name the user wrote
 mkUId :: Id -> Id
-mkUId a = setIdBase a (concatFString [fsUnderscore, getIdBase a])
+mkUId a =
+    setIdDisplayName (setIdBase a (concatFString [fsUnderscore, getIdBase a]))
+                     (getIdBase a)
 
 -- Join Ids
 join2ids :: Id -> Id -> FString -> Id -> Id
