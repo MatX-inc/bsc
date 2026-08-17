@@ -15,6 +15,9 @@
 \DeclareUnicodeCharacter{00B9}{\ensuremath{^1}}
 \DeclareUnicodeCharacter{00D7}{\ensuremath{\times}}
 \DeclareUnicodeCharacter{00F7}{\ensuremath{\div}}
+\DeclareUnicodeCharacter{226A}{\ensuremath{\ll}}
+\DeclareUnicodeCharacter{226B}{\ensuremath{\gg}}
+\DeclareUnicodeCharacter{2A20}{\ensuremath{\gg}}
 \usepackage[T1]{fontenc}
 \usepackage{latexsym}
 \usepackage{makeidx}
@@ -1638,9 +1641,27 @@ Some ISO 8859-1 symbol characters that older versions of {\BH} accepted
 (ª, «, ², ³, µ, ¹, º, », ¼, ½ and ¾) are no longer valid, as part of
 unifying {\BH}'s lexical syntax with Haskell's: an operator containing a
 character that GHC's lexer does not accept is rejected with error P0225.
-(In particular, the stream-combining operator of the \te{Pull},
-\te{Push}, and \te{RPush} libraries, formerly », is now the character
-U+2A20, Z NOTATION SCHEMA PIPING.)
+The following table suggests replacements for the removed characters:
+\begin{center}
+  \begin{tabular}[t]{|c|p{3.4in}|}
+    \hline
+    removed & suggested replacement \\
+    \hline
+    « & ≪ (U+226A, MUCH LESS-THAN) \\
+    » & ≫ (U+226B, MUCH GREATER-THAN) \\
+    » & ⨠ (U+2A20, Z NOTATION SCHEMA PIPING), as adopted by the
+        \te{Pull}, \te{Push} and \te{RPush} libraries \\
+    ª, µ, º & none needed as operators; these are letters in Unicode,
+        and remain valid in identifiers \\
+    ¹, ², ³ & ordinary digits, in identifiers (superscript digits are
+        not valid in Haskell identifiers either) \\
+    ¼, ½, ¾ & no close equivalent (÷ remains a valid operator
+        character) \\
+    \hline
+  \end{tabular}
+\end{center}
+(Due to font limitations, the U+2A20 character is rendered above with
+an approximate glyph; the code point is authoritative.)
 
 \index{infix operators!predefined}
 \index{infix operators!precedence}
