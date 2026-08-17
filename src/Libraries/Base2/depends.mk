@@ -34,6 +34,7 @@ $(BUILDDIR)/SRAM.bo:	SRAM.bs $(BUILDDIR)/Vector.bo $(BUILDDIR)/FIFOF.bo $(BUILDD
 $(BUILDDIR)/SRAMFile.bo:	SRAMFile.bs $(BUILDDIR)/RegFile.bo $(BUILDDIR)/GetPut.bo $(BUILDDIR)/ClientServer.bo $(BUILDDIR)/SyncSRAM.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/STRAM.bo:	STRAM.bs $(BUILDDIR)/FIFOF.bo $(BUILDDIR)/Connectable.bo $(BUILDDIR)/GetPut.bo $(BUILDDIR)/ClientServer.bo $(BUILDDIR)/RAM.bo $(BUILDDIR)/SyncSRAM.bo $(BUILDDIR)/SRAM.bo $(BUILDDIR)/TRAM.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/SVA.bo:	SVA.bsv $(BUILDDIR)/List.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
+$(BUILDDIR)/SVAProp.bo:	SVAProp.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/SplitTRAM.bo:	SplitTRAM.bs $(BUILDDIR)/GetPut.bo $(BUILDDIR)/ClientServer.bo $(BUILDDIR)/TRAM.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/StmtFSM.bo:	StmtFSM.bs $(BUILDDIR)/ClientServer.bo $(BUILDDIR)/ConfigReg.bo $(BUILDDIR)/DReg.bo $(BUILDDIR)/FIFO.bo $(BUILDDIR)/GetPut.bo $(BUILDDIR)/List.bo $(BUILDDIR)/TurboFIFO.bo $(BUILDDIR)/ToString.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/SyncSRAM.bo:	SyncSRAM.bs $(BUILDDIR)/ClientServer.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo

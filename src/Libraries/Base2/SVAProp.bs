@@ -1,0 +1,543 @@
+package SVAProp(
+        SvaSeq, SvaProp,
+        sExpr, sTrue,
+        sConcat, sFuse, sNext,
+        sDelay, sDelayRange, sDelayUnbound,
+        sRepeat, sRepeatRange, sRepeatUnbound,
+        sRepeatNonconsec, sRepeatNonconsecRange,
+        sRepeatGoto, sRepeatGotoRange,
+        sOr, sAnd, sIntersect, sFirstMatch,
+        sRose, sFell, sStable,
+        pSeq, pNot, pAnd, pOr, pImplies, pImpliesNext,
+        renderProp,
+        mkSvaAssert, mkSvaAssertAction,
+        mkSvaAssertDisable, mkSvaAssertDisableAction
+       ) where
+
+import List
+
+--@ \subsubsection{SVAProp}
+--@
+--@ \index{SVAProp@\te{SVAProp} (package)|textbf}
+--@ The \te{SVAProp} package provides combinators for building
+--@ SystemVerilog Assertion (SVA) sequences and properties, and module
+--@ constructors that emit them as concurrent \te{assert property}
+--@ statements in the generated Verilog.
+--@
+--@ Unlike the experimental SVA statement syntax of the BSV frontend
+--@ (which requires the hidden \te{-passthrough-assertions} flag), these
+--@ combinators are ordinary library functions: they work from both the
+--@ BSV and BH (Classic) frontends, need no compiler flags, and the
+--@ property structure is checked by the type system rather than being
+--@ written as free text.
+--@
+--@ A property is built from boolean expressions of the design with the
+--@ sequence and property combinators below, and instantiated with one of
+--@ the \te{mkSvaAssert} module constructors.  All delay and repetition
+--@ counts are compile-time \te{Integer} values, as required by SVA.  The
+--@ assertion is emitted only by the Verilog backend; in Bluesim the
+--@ module constructors are a no-op, since Bluesim cannot evaluate SVA.
+--@
+--@ Notes and restrictions:
+--@ \begin{itemize}
+--@ \item This version supports \te{assert property} only.  \te{assume},
+--@ \te{cover} and \te{expect} need further compiler support.
+--@ \item The label given to \te{mkSvaAssert} becomes a Verilog block
+--@ label, so it must be unique within the enclosing synthesized module.
+--@ \item The assertion is clocked by the module's clock
+--@ (\te{@(posedge CLK)}) and, like the BSV assertion-passthrough path,
+--@ is not gated by reset or by rule firing conditions: it is evaluated
+--@ on every clock edge.  Use the \te{mkSvaAssertDisable} variants to add
+--@ a \te{disable iff} guard.
+--@ \item The emitted assertion is wrapped in
+--@ \te{synopsys translate\_off/on} pragmas (simulation-only), matching
+--@ the existing assertion-passthrough behavior.
+--@ \item A property may reference at most 16 distinct boolean operand
+--@ expressions.
+--@ \end{itemize}
+
+--@ \index{SvaSeq@\te{SvaSeq} (type)|textbf}
+--@ An SVA sequence.  Built with the \te{s*} combinators; the
+--@ constructors are not exported.
+data SvaSeq
+  = SExpr Bool
+  | SConcat SvaSeq SvaSeq
+  | SFuse SvaSeq SvaSeq
+  | SDelay Integer SvaSeq SvaSeq
+  | SDelayRange Integer Integer SvaSeq SvaSeq
+  | SDelayUnbound Integer SvaSeq SvaSeq
+  | SRep SvaRepKind SvaRep SvaSeq
+  | SOr SvaSeq SvaSeq
+  | SAnd SvaSeq SvaSeq
+  | SIntersect SvaSeq SvaSeq
+  | SFirstMatch SvaSeq
+  | SRose Bool
+  | SFell Bool
+  | SStable Bool
+
+data SvaRepKind = RepCons | RepNonCons | RepGoto
+
+data SvaRep
+  = RExact Integer
+  | RRange Integer Integer
+  | RUnbound Integer
+
+--@ \index{SvaProp@\te{SvaProp} (type)|textbf}
+--@ An SVA property.  Built with the \te{p*} combinators; the
+--@ constructors are not exported.
+data SvaProp
+  = PSeq SvaSeq
+  | PNot SvaProp
+  | PAnd SvaProp SvaProp
+  | POr SvaProp SvaProp
+  | PImplies SvaSeq SvaProp
+  | PImpliesNext SvaSeq SvaProp
+
+-- ----------------------------------------------------------------
+-- validation helpers (all counts are elaboration-time constants)
+
+checkNat :: String -> Integer -> Integer
+checkNat who n =
+  if n < 0
+  then error ("SVAProp." +++ who +++ ": negative count " +++ integerToString n)
+  else n
+
+checkRange :: String -> Integer -> Integer -> (Integer, Integer)
+checkRange who a b =
+  if a < 0 || b < a
+  then error ("SVAProp." +++ who +++ ": bad range [" +++ integerToString a +++
+              ":" +++ integerToString b +++ "]")
+  else (a, b)
+
+-- ----------------------------------------------------------------
+-- sequence combinators
+
+--@ \index{sExpr@\te{sExpr} (\te{SVAProp} function)|textbf}
+--@ The sequence consisting of a boolean expression of the design.
+--@ \begin{libverbatim}
+--@ function SvaSeq sExpr(Bool b);
+--@ \end{libverbatim}
+sExpr :: Bool -> SvaSeq
+sExpr = SExpr
+
+--@ \index{sTrue@\te{sTrue} (\te{SVAProp} function)|textbf}
+--@ The always-true sequence, useful as the start of a leading delay.
+--@ \begin{libverbatim}
+--@ SvaSeq sTrue;
+--@ \end{libverbatim}
+sTrue :: SvaSeq
+sTrue = SExpr True
+
+--@ \index{sConcat@\te{sConcat} (\te{SVAProp} function)|textbf}
+--@ Sequence concatenation: \te{s1 \#\#1 s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sConcat(SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sConcat :: SvaSeq -> SvaSeq -> SvaSeq
+sConcat = SConcat
+
+--@ \index{sFuse@\te{sFuse} (\te{SVAProp} function)|textbf}
+--@ Sequence fusion: \te{s1 \#\#0 s2} (the second sequence starts in the
+--@ cycle in which the first ends).
+--@ \begin{libverbatim}
+--@ function SvaSeq sFuse(SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sFuse :: SvaSeq -> SvaSeq -> SvaSeq
+sFuse = SFuse
+
+--@ \index{sDelay@\te{sDelay} (\te{SVAProp} function)|textbf}
+--@ Fixed delay between two sequences: \te{s1 \#\#n s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sDelay(Integer n, SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sDelay :: Integer -> SvaSeq -> SvaSeq -> SvaSeq
+sDelay n = SDelay (checkNat "sDelay" n)
+
+--@ \index{sNext@\te{sNext} (\te{SVAProp} function)|textbf}
+--@ Leading fixed delay: \te{\#\#n s}, i.e.,
+--@ \te{sDelay(n, sTrue, s)}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sNext(Integer n, SvaSeq s);
+--@ \end{libverbatim}
+sNext :: Integer -> SvaSeq -> SvaSeq
+sNext n s = sDelay n sTrue s
+
+--@ \index{sDelayRange@\te{sDelayRange} (\te{SVAProp} function)|textbf}
+--@ Bounded delay range between two sequences: \te{s1 \#\#[a:b] s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sDelayRange(Integer a, Integer b, SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sDelayRange :: Integer -> Integer -> SvaSeq -> SvaSeq -> SvaSeq
+sDelayRange a b =
+  case checkRange "sDelayRange" a b of
+    (a', b') -> SDelayRange a' b'
+
+--@ \index{sDelayUnbound@\te{sDelayUnbound} (\te{SVAProp} function)|textbf}
+--@ Unbounded delay range between two sequences: \te{s1 \#\#[a:\$] s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sDelayUnbound(Integer a, SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sDelayUnbound :: Integer -> SvaSeq -> SvaSeq -> SvaSeq
+sDelayUnbound a = SDelayUnbound (checkNat "sDelayUnbound" a)
+
+--@ \index{sRepeat@\te{sRepeat} (\te{SVAProp} function)|textbf}
+--@ Consecutive repetition: \te{s [*n]}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeat(Integer n, SvaSeq s);
+--@ \end{libverbatim}
+sRepeat :: Integer -> SvaSeq -> SvaSeq
+sRepeat n = SRep RepCons (RExact (checkNat "sRepeat" n))
+
+--@ \index{sRepeatRange@\te{sRepeatRange} (\te{SVAProp} function)|textbf}
+--@ Consecutive repetition range: \te{s [*a:b]}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeatRange(Integer a, Integer b, SvaSeq s);
+--@ \end{libverbatim}
+sRepeatRange :: Integer -> Integer -> SvaSeq -> SvaSeq
+sRepeatRange a b =
+  case checkRange "sRepeatRange" a b of
+    (a', b') -> SRep RepCons (RRange a' b')
+
+--@ \index{sRepeatUnbound@\te{sRepeatUnbound} (\te{SVAProp} function)|textbf}
+--@ Unbounded consecutive repetition: \te{s [*a:\$]}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeatUnbound(Integer a, SvaSeq s);
+--@ \end{libverbatim}
+sRepeatUnbound :: Integer -> SvaSeq -> SvaSeq
+sRepeatUnbound a = SRep RepCons (RUnbound (checkNat "sRepeatUnbound" a))
+
+--@ \index{sRepeatNonconsec@\te{sRepeatNonconsec} (\te{SVAProp} function)|textbf}
+--@ Non-consecutive repetition: \te{b [=n]}.  Per the SVA standard this
+--@ form (and its range and goto variants) applies to boolean
+--@ expressions, not general sequences.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeatNonconsec(Integer n, Bool b);
+--@ \end{libverbatim}
+sRepeatNonconsec :: Integer -> Bool -> SvaSeq
+sRepeatNonconsec n b = SRep RepNonCons (RExact (checkNat "sRepeatNonconsec" n)) (SExpr b)
+
+--@ \index{sRepeatNonconsecRange@\te{sRepeatNonconsecRange} (\te{SVAProp} function)|textbf}
+--@ Non-consecutive repetition range: \te{b [=a:b]}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeatNonconsecRange(Integer a, Integer b, Bool bx);
+--@ \end{libverbatim}
+sRepeatNonconsecRange :: Integer -> Integer -> Bool -> SvaSeq
+sRepeatNonconsecRange a b bx =
+  case checkRange "sRepeatNonconsecRange" a b of
+    (a', b') -> SRep RepNonCons (RRange a' b') (SExpr bx)
+
+--@ \index{sRepeatGoto@\te{sRepeatGoto} (\te{SVAProp} function)|textbf}
+--@ Goto repetition: \te{b [->n]}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeatGoto(Integer n, Bool b);
+--@ \end{libverbatim}
+sRepeatGoto :: Integer -> Bool -> SvaSeq
+sRepeatGoto n b = SRep RepGoto (RExact (checkNat "sRepeatGoto" n)) (SExpr b)
+
+--@ \index{sRepeatGotoRange@\te{sRepeatGotoRange} (\te{SVAProp} function)|textbf}
+--@ Goto repetition range: \te{b [->a:b]}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRepeatGotoRange(Integer a, Integer b, Bool bx);
+--@ \end{libverbatim}
+sRepeatGotoRange :: Integer -> Integer -> Bool -> SvaSeq
+sRepeatGotoRange a b bx =
+  case checkRange "sRepeatGotoRange" a b of
+    (a', b') -> SRep RepGoto (RRange a' b') (SExpr bx)
+
+--@ \index{sOr@\te{sOr} (\te{SVAProp} function)|textbf}
+--@ Sequence disjunction: \te{s1 or s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sOr(SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sOr :: SvaSeq -> SvaSeq -> SvaSeq
+sOr = SOr
+
+--@ \index{sAnd@\te{sAnd} (\te{SVAProp} function)|textbf}
+--@ Sequence conjunction: \te{s1 and s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sAnd(SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sAnd :: SvaSeq -> SvaSeq -> SvaSeq
+sAnd = SAnd
+
+--@ \index{sIntersect@\te{sIntersect} (\te{SVAProp} function)|textbf}
+--@ Sequence intersection: \te{s1 intersect s2}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sIntersect(SvaSeq s1, SvaSeq s2);
+--@ \end{libverbatim}
+sIntersect :: SvaSeq -> SvaSeq -> SvaSeq
+sIntersect = SIntersect
+
+--@ \index{sFirstMatch@\te{sFirstMatch} (\te{SVAProp} function)|textbf}
+--@ First match of a sequence: \te{first\_match(s)}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sFirstMatch(SvaSeq s);
+--@ \end{libverbatim}
+sFirstMatch :: SvaSeq -> SvaSeq
+sFirstMatch = SFirstMatch
+
+--@ \index{sRose@\te{sRose} (\te{SVAProp} function)|textbf}
+--@ Sampled-value rising edge: \te{\$rose(b)}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sRose(Bool b);
+--@ \end{libverbatim}
+sRose :: Bool -> SvaSeq
+sRose = SRose
+
+--@ \index{sFell@\te{sFell} (\te{SVAProp} function)|textbf}
+--@ Sampled-value falling edge: \te{\$fell(b)}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sFell(Bool b);
+--@ \end{libverbatim}
+sFell :: Bool -> SvaSeq
+sFell = SFell
+
+--@ \index{sStable@\te{sStable} (\te{SVAProp} function)|textbf}
+--@ Sampled-value stability: \te{\$stable(b)}.
+--@ \begin{libverbatim}
+--@ function SvaSeq sStable(Bool b);
+--@ \end{libverbatim}
+sStable :: Bool -> SvaSeq
+sStable = SStable
+
+-- ----------------------------------------------------------------
+-- property combinators
+
+--@ \index{pSeq@\te{pSeq} (\te{SVAProp} function)|textbf}
+--@ Promote a sequence to a property.
+--@ \begin{libverbatim}
+--@ function SvaProp pSeq(SvaSeq s);
+--@ \end{libverbatim}
+pSeq :: SvaSeq -> SvaProp
+pSeq = PSeq
+
+--@ \index{pNot@\te{pNot} (\te{SVAProp} function)|textbf}
+--@ Property negation: \te{not p}.
+--@ \begin{libverbatim}
+--@ function SvaProp pNot(SvaProp p);
+--@ \end{libverbatim}
+pNot :: SvaProp -> SvaProp
+pNot = PNot
+
+--@ \index{pAnd@\te{pAnd} (\te{SVAProp} function)|textbf}
+--@ Property conjunction: \te{p1 and p2}.
+--@ \begin{libverbatim}
+--@ function SvaProp pAnd(SvaProp p1, SvaProp p2);
+--@ \end{libverbatim}
+pAnd :: SvaProp -> SvaProp -> SvaProp
+pAnd = PAnd
+
+--@ \index{pOr@\te{pOr} (\te{SVAProp} function)|textbf}
+--@ Property disjunction: \te{p1 or p2}.
+--@ \begin{libverbatim}
+--@ function SvaProp pOr(SvaProp p1, SvaProp p2);
+--@ \end{libverbatim}
+pOr :: SvaProp -> SvaProp -> SvaProp
+pOr = POr
+
+--@ \index{pImplies@\te{pImplies} (\te{SVAProp} function)|textbf}
+--@ Overlapped implication: \te{s |-> p}.
+--@ \begin{libverbatim}
+--@ function SvaProp pImplies(SvaSeq s, SvaProp p);
+--@ \end{libverbatim}
+pImplies :: SvaSeq -> SvaProp -> SvaProp
+pImplies = PImplies
+
+--@ \index{pImpliesNext@\te{pImpliesNext} (\te{SVAProp} function)|textbf}
+--@ Non-overlapped implication: \te{s |=> p}.
+--@ \begin{libverbatim}
+--@ function SvaProp pImpliesNext(SvaSeq s, SvaProp p);
+--@ \end{libverbatim}
+pImpliesNext :: SvaSeq -> SvaProp -> SvaProp
+pImpliesNext = PImpliesNext
+
+-- ----------------------------------------------------------------
+-- rendering to the $SVA format string
+--
+-- The $SVA pseudo system task (see consAssertion in
+-- src/comp/Parser/BSV/CVParserAssertion.lhs and ppAssert in
+-- src/comp/Verilog.hs) takes a label string, a format string with %b
+-- holes, one boolean operand per hole, and a final pass/fail register.
+-- All numeric parameters are folded into the format string as digits,
+-- so the only hardware operands are the boolean expressions.
+
+renderRep :: SvaRep -> String
+renderRep (RExact n) = integerToString n
+renderRep (RRange a b) = integerToString a +++ ":" +++ integerToString b
+renderRep (RUnbound a) = integerToString a +++ ":$"
+
+renderRepKind :: SvaRepKind -> String
+renderRepKind RepCons = "*"
+renderRepKind RepNonCons = "="
+renderRepKind RepGoto = "->"
+
+renderSeq :: SvaSeq -> (String, List Bool)
+renderSeq (SExpr b) = ("(%b)", Cons b Nil)
+renderSeq (SConcat s1 s2) = renderBinSeq "##1" s1 s2
+renderSeq (SFuse s1 s2) = renderBinSeq "##0" s1 s2
+renderSeq (SDelay n s1 s2) =
+  renderBinSeq ("##" +++ integerToString n) s1 s2
+renderSeq (SDelayRange a b s1 s2) =
+  renderBinSeq ("##[" +++ integerToString a +++ ":" +++
+                integerToString b +++ "]") s1 s2
+renderSeq (SDelayUnbound a s1 s2) =
+  renderBinSeq ("##[" +++ integerToString a +++ ":$]") s1 s2
+renderSeq (SRep k r s) =
+  case renderSeq s of
+    (t, e) -> ("((" +++ t +++ ")[" +++ renderRepKind k +++
+               renderRep r +++ "])", e)
+renderSeq (SOr s1 s2) = renderBinSeq "or" s1 s2
+renderSeq (SAnd s1 s2) = renderBinSeq "and" s1 s2
+renderSeq (SIntersect s1 s2) = renderBinSeq "intersect" s1 s2
+renderSeq (SFirstMatch s) =
+  case renderSeq s of
+    (t, e) -> ("(first_match(" +++ t +++ "))", e)
+renderSeq (SRose b) = ("($rose(%b))", Cons b Nil)
+renderSeq (SFell b) = ("($fell(%b))", Cons b Nil)
+renderSeq (SStable b) = ("($stable(%b))", Cons b Nil)
+
+renderBinSeq :: String -> SvaSeq -> SvaSeq -> (String, List Bool)
+renderBinSeq op s1 s2 =
+  case (renderSeq s1, renderSeq s2) of
+    ((t1, e1), (t2, e2)) ->
+      ("(" +++ t1 +++ ")" +++ op +++ "(" +++ t2 +++ ")", append e1 e2)
+
+--@ \index{renderProp@\te{renderProp} (\te{SVAProp} function)|textbf}
+--@ Render a property to its SVA text (with one \te{\%b} hole per
+--@ boolean operand) and the list of boolean operands in hole order.
+--@ Exposed mainly for testing.
+--@ \begin{libverbatim}
+--@ function Tuple2#(String, List#(Bool)) renderProp(SvaProp p);
+--@ \end{libverbatim}
+renderProp :: SvaProp -> (String, List Bool)
+renderProp (PSeq s) =
+  case renderSeq s of
+    (t, e) -> ("(" +++ t +++ ")", e)
+renderProp (PNot p) =
+  case renderProp p of
+    (t, e) -> ("(not(" +++ t +++ "))", e)
+renderProp (PAnd p1 p2) = renderBinProp "and" p1 p2
+renderProp (POr p1 p2) = renderBinProp "or" p1 p2
+renderProp (PImplies s p) =
+  case (renderSeq s, renderProp p) of
+    ((t1, e1), (t2, e2)) ->
+      ("(" +++ t1 +++ ")|->(" +++ t2 +++ ")", append e1 e2)
+renderProp (PImpliesNext s p) =
+  case (renderSeq s, renderProp p) of
+    ((t1, e1), (t2, e2)) ->
+      ("(" +++ t1 +++ ")|=>(" +++ t2 +++ ")", append e1 e2)
+
+renderBinProp :: String -> SvaProp -> SvaProp -> (String, List Bool)
+renderBinProp op p1 p2 =
+  case (renderProp p1, renderProp p2) of
+    ((t1, e1), (t2, e2)) ->
+      ("(" +++ t1 +++ ")" +++ op +++ "(" +++ t2 +++ ")", append e1 e2)
+
+-- ----------------------------------------------------------------
+-- applying the (syntactically variadic) $SVA task
+--
+-- The number of task arguments is fixed at each syntactic call site,
+-- but the operand list length is an elaboration-time constant, so this
+-- if-chain folds during elaboration and the dead arms are discarded.
+
+applySva :: String -> String -> List Bool -> Bool -> Action
+applySva nm fmt bs breg =
+  letseq n = length bs
+  in if n == 1 then $SVA nm fmt (bs !! 0) breg
+     else if n == 2 then $SVA nm fmt (bs !! 0) (bs !! 1) breg
+     else if n == 3 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) breg
+     else if n == 4 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) breg
+     else if n == 5 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) breg
+     else if n == 6 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) breg
+     else if n == 7 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) breg
+     else if n == 8 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) breg
+     else if n == 9 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) breg
+     else if n == 10 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) breg
+     else if n == 11 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) (bs !! 10) breg
+     else if n == 12 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) (bs !! 10) (bs !! 11) breg
+     else if n == 13 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) (bs !! 10) (bs !! 11) (bs !! 12) breg
+     else if n == 14 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) (bs !! 10) (bs !! 11) (bs !! 12) (bs !! 13) breg
+     else if n == 15 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) (bs !! 10) (bs !! 11) (bs !! 12) (bs !! 13) (bs !! 14) breg
+     else if n == 16 then $SVA nm fmt (bs !! 0) (bs !! 1) (bs !! 2) (bs !! 3) (bs !! 4) (bs !! 5) (bs !! 6) (bs !! 7) (bs !! 8) (bs !! 9) (bs !! 10) (bs !! 11) (bs !! 12) (bs !! 13) (bs !! 14) (bs !! 15) breg
+     else if n == 0 then error ("SVAProp: property `" +++ nm +++ "' has no boolean operands")
+     else error ("SVAProp: property `" +++ nm +++ "' has more than 16 boolean operands")
+
+-- ----------------------------------------------------------------
+-- module constructors
+
+emptyModule :: (IsModule m c) => m Empty
+emptyModule =
+  module
+    interface
+
+-- The common implementation: instantiate the pass/fail register and an
+-- unconditional rule containing the $SVA task, exactly mirroring the
+-- lowering of the BSV assertion-passthrough backend (transAssertStmtPT).
+-- In non-Verilog backends this is a no-op, since only the Verilog
+-- backend implements $SVA.
+mkSvaAssertGeneral :: (IsModule m c) =>
+                      String -> Maybe Bool -> SvaProp -> Action -> Action -> m Empty
+mkSvaAssertGeneral nm mdis p onPass onFail =
+  if not genVerilog then emptyModule
+  else
+    module
+      breg :: Reg Bool <- mkRegU
+      case renderProp p of
+        (fmt0, bs0) ->
+          letseq (fmt, bs) = case mdis of
+                               Nothing -> (fmt0, bs0)
+                               Just dis -> ("disable iff(%b)(" +++ fmt0 +++ ")",
+                                            Cons dis bs0)
+          in addRules $
+              rules
+                {-# ASSERT no implicit conditions #-}
+                {-# ASSERT fire when enabled #-}
+                "svaAssert":
+                  when True ==>
+                    action
+                      applySva nm fmt bs breg
+                      if breg then onPass else onFail
+
+--@ \index{mkSvaAssert@\te{mkSvaAssert} (\te{SVAProp} module)|textbf}
+--@ Emit \te{label: assert property (@(posedge CLK) ...)} in the
+--@ generated Verilog.  The label must be unique within the enclosing
+--@ synthesized module.
+--@ \begin{libverbatim}
+--@ module mkSvaAssert#(String label, SvaProp p)(Empty);
+--@ \end{libverbatim}
+mkSvaAssert :: (IsModule m c) => String -> SvaProp -> m Empty
+mkSvaAssert nm p = mkSvaAssertGeneral nm Nothing p noAction noAction
+
+--@ \index{mkSvaAssertAction@\te{mkSvaAssertAction} (\te{SVAProp} module)|textbf}
+--@ Like \te{mkSvaAssert}, with pass and fail actions that run (in
+--@ simulation) according to the assertion's result in the previous
+--@ cycle.
+--@ \begin{libverbatim}
+--@ module mkSvaAssertAction#(String label, SvaProp p,
+--@                           Action onPass, Action onFail)(Empty);
+--@ \end{libverbatim}
+mkSvaAssertAction :: (IsModule m c) =>
+                     String -> SvaProp -> Action -> Action -> m Empty
+mkSvaAssertAction nm p onPass onFail =
+  mkSvaAssertGeneral nm Nothing p onPass onFail
+
+--@ \index{mkSvaAssertDisable@\te{mkSvaAssertDisable} (\te{SVAProp} module)|textbf}
+--@ Like \te{mkSvaAssert}, with a \te{disable iff (dis)} guard, e.g.\ to
+--@ disable the assertion while the design is in reset.
+--@ \begin{libverbatim}
+--@ module mkSvaAssertDisable#(String label, Bool dis, SvaProp p)(Empty);
+--@ \end{libverbatim}
+mkSvaAssertDisable :: (IsModule m c) => String -> Bool -> SvaProp -> m Empty
+mkSvaAssertDisable nm dis p =
+  mkSvaAssertGeneral nm (Just dis) p noAction noAction
+
+--@ \index{mkSvaAssertDisableAction@\te{mkSvaAssertDisableAction} (\te{SVAProp} module)|textbf}
+--@ \te{mkSvaAssertDisable} with pass and fail actions.
+--@ \begin{libverbatim}
+--@ module mkSvaAssertDisableAction#(String label, Bool dis, SvaProp p,
+--@                                  Action onPass, Action onFail)(Empty);
+--@ \end{libverbatim}
+mkSvaAssertDisableAction :: (IsModule m c) =>
+                            String -> Bool -> SvaProp -> Action -> Action -> m Empty
+mkSvaAssertDisableAction nm dis p onPass onFail =
+  mkSvaAssertGeneral nm (Just dis) p onPass onFail

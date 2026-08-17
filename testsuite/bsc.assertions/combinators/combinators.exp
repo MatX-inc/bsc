@@ -1,0 +1,56 @@
+# Tests for the SVAProp combinator library, which builds SVA properties
+# as ordinary library values and emits them as concurrent
+# `assert property` statements via the $SVA passthrough in the
+# Verilog backend (no -passthrough-assertions flag, no SVA parser
+# syntax needed).
+
+# BSV frontend user of the combinators
+compile_verilog_pass SvaPropTest.bsv sysSvaPropTest
+
+# every mkSvaAssert* instance emits one labeled concurrent assertion
+find_n_strings sysSvaPropTest.v {assert property} 6
+find_regexp sysSvaPropTest.v {basicImpl: assert property \(@\(posedge CLK\)}
+find_regexp sysSvaPropTest.v {delayRanges: assert property}
+find_regexp sysSvaPropTest.v {repetitions: assert property}
+find_regexp sysSvaPropTest.v {seqAlgebra: assert property}
+find_regexp sysSvaPropTest.v {sampledOps: assert property}
+find_regexp sysSvaPropTest.v {withDisable: assert property}
+
+# delays: concatenation, fusion, fixed, bounded range, unbounded range
+find_regexp sysSvaPropTest.v {##1\(}
+find_regexp sysSvaPropTest.v {##0\(}
+find_regexp sysSvaPropTest.v {##\[2:5\]}
+find_regexp sysSvaPropTest.v {##\[1:\$\]}
+
+# repetitions: consecutive (exact, range, unbounded), non-consecutive, goto
+find_regexp sysSvaPropTest.v {\[\*2\]}
+find_regexp sysSvaPropTest.v {\[\*2:3\]}
+find_regexp sysSvaPropTest.v {\[\*1:\$\]}
+find_regexp sysSvaPropTest.v {\[=2\]}
+find_regexp sysSvaPropTest.v {\[=1:3\]}
+find_regexp sysSvaPropTest.v {\[->2\]}
+find_regexp sysSvaPropTest.v {\[->1:4\]}
+
+# sequence algebra and sampled-value functions
+find_regexp sysSvaPropTest.v {first_match\(}
+find_regexp sysSvaPropTest.v {intersect}
+find_regexp sysSvaPropTest.v {\)and\(}
+find_regexp sysSvaPropTest.v {\)or\(}
+find_regexp sysSvaPropTest.v {\$rose\(}
+find_regexp sysSvaPropTest.v {\$fell\(}
+find_regexp sysSvaPropTest.v {\$stable\(}
+
+# property operators
+find_regexp sysSvaPropTest.v {\|->}
+find_regexp sysSvaPropTest.v {\|=>}
+find_regexp sysSvaPropTest.v {not\(}
+find_regexp sysSvaPropTest.v {disable iff\(}
+
+# BH (Classic) frontend user of the same combinators
+compile_verilog_pass SvaPropClassicTest.bs sysSvaPropClassicTest
+find_regexp sysSvaPropClassicTest.v {classicImpl: assert property \(@\(posedge CLK\)}
+find_regexp sysSvaPropClassicTest.v {classicAct: assert property}
+
+# Bluesim backend: the combinators must elaborate as a no-op
+# (the genVerilog guard keeps $SVA out of non-Verilog backends)
+compile_object_pass SvaPropTest.bsv sysSvaPropTest

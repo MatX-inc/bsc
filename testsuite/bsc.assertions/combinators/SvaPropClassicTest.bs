@@ -1,0 +1,29 @@
+-- Exercise the SVAProp combinator library from the BH (Classic)
+-- frontend, which has no SVA statement syntax of its own.
+
+package SvaPropClassicTest(sysSvaPropClassicTest) where
+
+import SVAProp
+
+sysSvaPropClassicTest :: Module Empty
+sysSvaPropClassicTest =
+  module
+    req :: Reg Bool <- mkReg False
+    ack :: Reg Bool <- mkReg False
+
+    a0 :: Empty <- mkSvaAssert "classicImpl"
+                     (pImplies (sExpr req) (pSeq (sNext 1 (sExpr ack))))
+
+    a1 :: Empty <- mkSvaAssertAction "classicAct"
+                     (pSeq (sRose req))
+                     ($display "PASS classicAct")
+                     ($display "FAIL classicAct")
+
+    addRules $
+      rules
+        "drive":
+          when True ==>
+            action
+              req := not req
+              ack := req
+    interface
