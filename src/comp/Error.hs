@@ -1908,10 +1908,12 @@ getErrorText (ENonHaskellOperator op cs) =
                   map toUpper (integerFormat 4 16 (toInteger (fromEnum c))) ++
                   ")"
         suggest c = case lookup c replacements of
-                      Just r -> "  Please use " ++ showU r ++
-                                " instead of " ++ showU c ++ "."
+                      Just rs -> "  Please use " ++
+                                 unwordsOr (map showU rs) ++
+                                 " instead of " ++ showU c ++ "."
                       Nothing -> ""
-        replacements = [('\187'{-»-}, '\x2A20'{-⨠-})]
+        replacements = [('\171'{-«-}, ['\x226A'{-≪-}]),
+                        ('\187'{-»-}, ['\x2A20'{-⨠-}, '\x226B'{-≫-}])]
 
 -- Type check and elaboration errors
 
