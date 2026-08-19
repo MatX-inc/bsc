@@ -7,6 +7,11 @@ module IType(
   ,itArrow
   ,mkNumConT
   ,iTypeNodeId
+  ,fTVars
+  ,VarSet
+  ,fTVarSet
+  ,vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull
+  ,ftvCacheEnabled
   ,iToCT
   ,iToCK
    )
@@ -17,11 +22,13 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
 import System.IO.Unsafe(unsafePerformIO)
 
 import ErrorUtil(internalError)
+import IOUtil(progArgs)
 import Id(Id, getIdBase, getIdQual, setIdPosition, setIdProps, setIdQual)
 import PreIds(idArrow, idId, idTNumToStr)
 import TypeOps(opNumT, opStrT)
@@ -65,20 +72,29 @@ data IKind
 -- The uniques are arrival-order identifiers.  They must never influence
 -- anything observable (ordering, printing, serialization); they may
 -- only be used for pointer-style equality (same unique => same node).
+--
+-- Interior nodes also cache their free type variables (a VarSet) in a
+-- strict field computed at construction.  Since the intern table is
+-- immortal, a lazy field would be a permanent thunk; the eager cost
+-- is near zero because set union and delete return an existing set by
+-- pointer when one side is empty or the element is absent, and ground
+-- types all share the one vsEmpty.  The field is metadata only: it
+-- never serializes, never prints, and never participates in
+-- comparison or intern keys.
 data IType
-        = ITForAll_ {-# UNPACK #-} !Int !Id !IKind IType
-        | ITAp_ {-# UNPACK #-} !Int IType IType
+        = ITForAll_ {-# UNPACK #-} !Int !VarSet !Id !IKind IType
+        | ITAp_ {-# UNPACK #-} !Int !VarSet IType IType
         | ITVar_ !Id
         | ITCon_ !Id !IKind !TISort
         | ITNum !Integer
         | ITStr !FString
 
 pattern ITForAll :: Id -> IKind -> IType -> IType
-pattern ITForAll i k t <- ITForAll_ _ i k t
+pattern ITForAll i k t <- ITForAll_ _ _ i k t
   where ITForAll i k t = mkITForAll i k t
 
 pattern ITAp :: IType -> IType -> IType
-pattern ITAp f a <- ITAp_ _ f a
+pattern ITAp f a <- ITAp_ _ _ f a
   where ITAp f a = mkITAp f a
 
 -- The Id-carrying leaves are sealed the same way: construction goes
@@ -97,6 +113,100 @@ pattern ITCon i k s <- ITCon_ i k s
 {-# COMPLETE ITForAll, ITAp, ITVar, ITCon, ITNum, ITStr #-}
 
 -- --------------------------------
+-- Free type variable sets
+
+-- The set representation used for the cached free-variable metadata
+-- and for substitution-domain checks.  Kept behind a small API so the
+-- representation can be specialized in one place.
+type VarSet = S.Set Id
+
+vsEmpty :: VarSet
+vsEmpty = S.empty
+
+-- Canonicalization table for the free-variable sets stored on
+-- interned nodes.  The node table is immortal, so it amplifies every
+-- duplicate set: canonicalizing by content keeps one copy of each
+-- distinct set (thousands of tiny sets like {e,m} otherwise pile up,
+-- one per polymorphic node).  Same global-table posture as the node
+-- intern table; keyed by the set itself (Set's Ord is by content).
+-- Id's Ord (base name, then qualifier; positions and props ignored)
+-- is the right granularity for that key: the sets never serialize,
+-- and their consumers -- membership checks and alpha-conversion
+-- avoid-lists (cloneId reads only base FStrings) -- never look at
+-- the Id positions or props.
+{-# NOINLINE vsCanonTable #-}
+vsCanonTable :: IORef (M.Map VarSet VarSet)
+vsCanonTable = unsafePerformIO $ newIORef M.empty
+
+{-# NOINLINE vsCanon #-}
+vsCanon :: VarSet -> VarSet
+vsCanon x = unsafePerformIO $ do
+    m0 <- readIORef vsCanonTable
+    case M.lookup x m0 of
+      Just c  -> return c
+      Nothing -> atomicModifyIORef' vsCanonTable go
+  where go m = case M.lookup x m of
+                 Just c  -> (m, c)
+                 Nothing -> (M.insert x x m, x)
+
+-- Union and delete for sets about to be STORED on an interned node:
+-- the arms that can only return an existing set (empty sides, absent
+-- element) stay lookup-free -- those are the hot ground-type paths and
+-- already yield canonical objects -- and only freshly built sets are
+-- canonicalized.
+vsUnionCanon :: VarSet -> VarSet -> VarSet
+vsUnionCanon a b
+    | S.null a = b
+    | S.null b = a
+    | otherwise = vsCanon (S.union a b)
+
+vsDeleteCanon :: Id -> VarSet -> VarSet
+vsDeleteCanon i vs
+    | not (S.member i vs) = vs
+    | otherwise = let vs' = S.delete i vs
+                  in  if S.null vs' then vsEmpty else vsCanon vs'
+
+vsSingleton :: Id -> VarSet
+vsSingleton = S.singleton
+
+vsUnion :: VarSet -> VarSet -> VarSet
+vsUnion = S.union
+
+vsInsert :: Id -> VarSet -> VarSet
+vsInsert = S.insert
+
+vsDelete :: Id -> VarSet -> VarSet
+vsDelete = S.delete
+
+vsMember :: Id -> VarSet -> Bool
+vsMember = S.member
+
+vsNull :: VarSet -> Bool
+vsNull = S.null
+
+-- The free-variable set used by the substitution machinery: interior
+-- nodes answer from their cached field, leaves directly.  When the
+-- cache is disabled (-hack-no-itype-ftv-cache, see below) the fields
+-- hold a shared dummy empty set, so this walks instead; consumers
+-- that need correct sets (context free-variable bookkeeping) must go
+-- through this function and never read the field directly.
+fTVarSet :: IType -> VarSet
+fTVarSet t0 | ftvCacheEnabled = cached t0
+            | otherwise       = walk t0
+  where cached (ITForAll_ _ fvs _ _ _) = fvs
+        cached (ITAp_ _ fvs _ _) = fvs
+        cached l = leaf l
+        walk (ITForAll_ _ _ i _ b) = vsDelete i (walk b)
+        walk (ITAp_ _ _ f a) = walk f `vsUnion` walk a
+        walk l = leaf l
+        leaf (ITVar i) = vsSingleton i
+        leaf _ = vsEmpty
+
+-- Free type variables as a Set Id (the historical interface).
+fTVars :: IType -> S.Set Id
+fTVars = fTVarSet
+
+-- --------------------------------
 -- The intern unique of an interior node (ITAp / ITForAll).  Uniques
 -- are process-local, arrival-order identifiers: two types carry the
 -- same unique exactly when they are the same interned node.  They are
@@ -104,8 +214,8 @@ pattern ITCon i k s <- ITCon_ i k s
 -- sharing-map keys in BinData -- and must never be serialized or
 -- otherwise influence anything observable.
 iTypeNodeId :: IType -> Int
-iTypeNodeId (ITForAll_ u _ _ _) = u
-iTypeNodeId (ITAp_ u _ _) = u
+iTypeNodeId (ITForAll_ u _ _ _ _) = u
+iTypeNodeId (ITAp_ u _ _ _) = u
 iTypeNodeId t =
     internalError ("IType.iTypeNodeId: not an interior node: " ++ show t)
 
@@ -267,18 +377,33 @@ data NodeKey
         deriving (Eq, Ord)
 
 tKey :: IType -> TKey
-tKey (ITForAll_ u _ _ _) = TKNode u
-tKey (ITAp_ u _ _)       = TKNode u
-tKey (ITCon_ i _ _)      = TKCon (getIdQual i) (getIdBase i)
-tKey (ITVar_ i)          = TKVar (getIdBase i)
-tKey (ITNum n)           = TKNum n
-tKey (ITStr s)           = TKStr s
+tKey (ITForAll_ u _ _ _ _) = TKNode u
+tKey (ITAp_ u _ _ _)       = TKNode u
+tKey (ITCon_ i _ _)        = TKCon (getIdQual i) (getIdBase i)
+tKey (ITVar_ i)            = TKVar (getIdBase i)
+tKey (ITNum n)             = TKNum n
+tKey (ITStr s)             = TKStr s
 
 data InternTable = InternTable !(M.Map NodeKey IType) {-# UNPACK #-} !Int
 
 {-# NOINLINE internTable #-}
 internTable :: IORef InternTable
 internTable = unsafePerformIO $ newIORef (InternTable M.empty 0)
+
+-- The hidden flag -hack-no-itype-ftv-cache (registered with the
+-- other progArgs-queried flags in FlagsDecode.traceflags, so the
+-- command-line parser accepts it; BSC_OPTIONS reaches progArgs too)
+-- disables the free-variable cache and the tSubst pruning that
+-- consumes it: interned nodes store one shared empty set in the
+-- metadata field and the substitution machinery takes the exact
+-- pre-cache code paths (full free-variable walks, original
+-- alpha-conversion behavior).  Absent the flag they are enabled (the
+-- default).  The switch lets the optimization be measured A/B on any
+-- workload with a single binary, and doubles as a diagnostic chicken
+-- switch.
+{-# NOINLINE ftvCacheEnabled #-}
+ftvCacheEnabled :: Bool
+ftvCacheEnabled = not ("-hack-no-itype-ftv-cache" `elem` progArgs)
 
 {-# NOINLINE internAp #-}
 internAp :: IType -> IType -> IType
@@ -292,7 +417,9 @@ internAp f a = unsafePerformIO $ do
     go key st@(InternTable m n) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let t = ITAp_ n f a
+          Nothing -> let fvs | ftvCacheEnabled = fTVarSet f `vsUnionCanon` fTVarSet a
+                             | otherwise       = vsEmpty
+                         t = ITAp_ n fvs f a
                      in  (InternTable (M.insert key t m) (n+1), t)
 
 {-# NOINLINE mkITForAll #-}
@@ -309,7 +436,9 @@ mkITForAll i k t = unsafePerformIO $ do
     go key st@(InternTable m n) =
         case M.lookup key m of
           Just t' -> (st, t')
-          Nothing -> let t' = ITForAll_ n ti k t
+          Nothing -> let fvs | ftvCacheEnabled = vsDeleteCanon ti (fTVarSet t)
+                             | otherwise       = vsEmpty
+                         t' = ITForAll_ n fvs ti k t
                      in  (InternTable (M.insert key t' m) (n+1), t')
 
 -- The smart constructor behind the ITAp pattern synonym.  It first
@@ -327,13 +456,13 @@ mkITForAll i k t = unsafePerformIO $ do
 -- real constructors (ITAp_): the ITAp synonym's builder is this very
 -- function.
 mkITAp :: IType -> IType -> IType
-mkITAp (ITAp_ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
+mkITAp (ITAp_ _ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x]
-mkITAp (ITAp_ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
+mkITAp (ITAp_ _ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
     ITStr (fromJust res)
   where res = opStrT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
@@ -357,10 +486,10 @@ mkNumConT i =
 -- intern uniques, matching what the derived instance printed before
 -- hash-consing (so debug dumps are unchanged).
 instance Show IType where
-    showsPrec d (ITForAll_ _ i k t) = showParen (d > 10) $
+    showsPrec d (ITForAll_ _ _ i k t) = showParen (d > 10) $
         showString "ITForAll " . showsPrec 11 i . showString " " .
         showsPrec 11 k . showString " " . showsPrec 11 t
-    showsPrec d (ITAp_ _ f a) = showParen (d > 10) $
+    showsPrec d (ITAp_ _ _ f a) = showParen (d > 10) $
         showString "ITAp " . showsPrec 11 f . showString " " .
         showsPrec 11 a
     showsPrec d (ITVar i) = showParen (d > 10) $
@@ -413,7 +542,7 @@ instance Ord IType where
 -- Interned interior nodes short-circuit on equal uniques (same unique
 -- means the same node, hence EQ).  Uniques are never used for LT/GT.
 cmpT :: IType -> IType -> Ordering
-cmpT (ITForAll_ u1 i1 _ t1) (ITForAll_ u2 i2 _ t2)  -- binder kind comparison skipped (see above)
+cmpT (ITForAll_ u1 _ i1 _ t1) (ITForAll_ u2 _ i2 _ t2)  -- binder kind comparison skipped (see above)
         | u1 == u2  = EQ
         | otherwise =
             case compare i1 i2 of
@@ -422,7 +551,7 @@ cmpT (ITForAll_ u1 i1 _ t1) (ITForAll_ u2 i2 _ t2)  -- binder kind comparison sk
 cmpT (ITForAll _  _  _ ) _                   = LT
 
 cmpT (ITAp _ _)          (ITForAll _  _  _)  = GT
-cmpT (ITAp_ u1 f1 a1)    (ITAp_ u2 f2 a2)
+cmpT (ITAp_ u1 _ f1 a1)  (ITAp_ u2 _ f2 a2)
         | u1 == u2  = EQ
         | otherwise =
             case cmpT f1 f2 of
