@@ -166,6 +166,28 @@ pub struct InstEnv {
     /// have arena slots; string params are marker values).  Part of
     /// the exec dedup signature.
     pub port_consts: HashMap<StrId, (u32, u64)>,
+    /// Real-valued instantiation parameters, as f64 bits: reals reach
+    /// simulation only as task arguments and module parameters, so the
+    /// compiled carrier is an i64 of the double's bits and the foreign
+    /// spec marks the argument Real (decode rebuilds Arg::Real).  Part
+    /// of the exec dedup signature.
+    pub real_consts: HashMap<StrId, u64>,
+    /// Input clock-gate ports bound at instantiation: port name ->
+    /// (owner instance, gate expr) — reads lower the expr in the
+    /// OWNER's frame, mirroring the interp's parent-context gate
+    /// evaluation.  Part of the exec dedup signature (owner slots are
+    /// absolute in deduped bodies, so gate wiring must pin the sig).
+    pub gates: HashMap<StrId, (usize, Expr)>,
+    /// String-valued instantiation parameters: name -> string id.  The
+    /// compiled carrier for strings is an i64 of the id (the interp's
+    /// str_ref marker value), consumed by StrDyn foreign args, string
+    /// Eq, and the StringConcat intern callback.  Part of the exec
+    /// dedup signature.
+    pub str_consts: HashMap<StrId, StrId>,
+    /// Instantiation values wider than 64 bits: name -> (width, LE
+    /// 32-bit limbs), lowered as wide constants (cval).  Part of the
+    /// exec dedup signature.
+    pub wide_consts: HashMap<StrId, (u32, Vec<u32>)>,
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
@@ -228,12 +250,19 @@ pub struct ForeignSpec {
     pub args: Vec<FArgSpec>,
 }
 
-/// One foreign argument: a string literal (no marshaled words) or a
-/// numeric value of the given width with its signed-display flag.
+/// One foreign argument: a string literal (no marshaled words), a
+/// numeric value of the given width with its signed-display flag, or a
+/// real value (one marshaled word carrying the f64 bits — the decode
+/// rebuilds the interp's Arg::Real so formatting is identical).
 #[derive(Clone)]
 pub enum FArgSpec {
     Str(StrId),
     Num { width: u32, signed: bool },
+    Real,
+    /// A dynamically-selected string: one marshaled word carrying the
+    /// string id (static table or runtime-interned) — the decode
+    /// resolves it to the interp's Arg::Str.
+    StrDyn,
 }
 
 /// A compiled rule sched function (kept alive by the leaked engine).
@@ -272,6 +301,30 @@ impl std::fmt::Display for Ineligible {
 
 fn nope<T>(why: impl Into<String>) -> Result<T, Ineligible> {
     Err(Ineligible(why.into()))
+}
+
+/// Variant name for ineligibility notes: the catch-alls must say WHICH
+/// expression kind they refused, or the sweep's why= column lumps every
+/// unlowered variant into one unactionable bucket.
+fn expr_kind(e: &Expr) -> &'static str {
+    match e {
+        Expr::Const { .. } => "Const",
+        Expr::Def(..) => "Def",
+        Expr::Port(..) => "Port",
+        Expr::Param(..) => "Param",
+        Expr::MethCall { .. } => "MethCall",
+        Expr::MethValue { .. } => "MethValue",
+        Expr::TaskValue { .. } => "TaskValue",
+        Expr::ForeignCall { .. } => "ForeignCall",
+        Expr::Str(..) => "Str",
+        Expr::Clock { .. } => "Clock",
+        Expr::Real(..) => "Real",
+        Expr::Reset { .. } => "Reset",
+        Expr::Gate { .. } => "Gate",
+        Expr::Prim { .. } => "Prim",
+        Expr::If { .. } => "If",
+        Expr::Case { .. } => "Case",
+    }
 }
 
 fn words_for(w: u32) -> u32 {
@@ -333,6 +386,16 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
                         w(o, *width);
                         w(o, *signed as u32);
                     }
+                    FArgSpec::Real => {
+                        w(o, 2);
+                        w(o, 0);
+                        w(o, 0);
+                    }
+                    FArgSpec::StrDyn => {
+                        w(o, 3);
+                        w(o, 0);
+                        w(o, 0);
+                    }
                 }
             }
         }
@@ -363,6 +426,9 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
 /// Inverse of encode_protos; None on truncation/garbage.
 pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     let mut i = 0usize;
+    // artifact-supplied counts must never drive an allocation larger
+    // than the bytes backing them: every record is >= 4 bytes, so any
+    // count above b.len()/4 is corruption — reject before reserving
     fn r(b: &[u8], i: &mut usize) -> Option<u32> {
         let v = u32::from_le_bytes(b.get(*i..*i + 4)?.try_into().ok()?);
         *i += 4;
@@ -370,21 +436,33 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     }
     fn rf(b: &[u8], i: &mut usize) -> Option<Vec<ForeignSpec>> {
         let n = r(b, i)?;
+        if n as usize > b.len() / 4 {
+            return None;
+        }
         let mut v = Vec::with_capacity(n as usize);
         for _ in 0..n {
             let inst = r(b, i)? as usize;
             let func = r(b, i)?;
             let ret_width = r(b, i)?;
             let argc = r(b, i)?;
+            if argc as usize > b.len() / 4 {
+                return None;
+            }
             let mut args = Vec::with_capacity(argc as usize);
             for _ in 0..argc {
                 let tag = r(b, i)?;
                 let a = r(b, i)?;
                 let sg = r(b, i)?;
-                args.push(if tag == 0 {
-                    FArgSpec::Str(a)
-                } else {
-                    FArgSpec::Num { width: a, signed: sg != 0 }
+                // exact tags only: an unknown tag is a corrupted or
+                // future-format artifact — fail CLOSED, or the callback
+                // buffer walk desynchronizes on a garbage width
+                // (review finding: unknown tags fell open as Num)
+                args.push(match tag {
+                    0 => FArgSpec::Str(a),
+                    1 => FArgSpec::Num { width: a, signed: sg != 0 },
+                    2 => FArgSpec::Real,
+                    3 => FArgSpec::StrDyn,
+                    _ => return None,
                 });
             }
             v.push(ForeignSpec { inst, func, ret_width, args });
@@ -393,6 +471,9 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     }
     fn rp(b: &[u8], i: &mut usize) -> Option<Vec<PrimCallSpec>> {
         let n = r(b, i)?;
+        if n as usize > b.len() / 4 {
+            return None;
+        }
         let mut v = Vec::with_capacity(n as usize);
         for _ in 0..n {
             let inst = r(b, i)? as usize;
@@ -400,6 +481,9 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
             let ret_width = r(b, i)?;
             let is_action = r(b, i)? != 0;
             let argc = r(b, i)?;
+            if argc as usize > b.len() / 4 {
+                return None;
+            }
             let mut arg_widths = Vec::with_capacity(argc as usize);
             for _ in 0..argc {
                 arg_widths.push(r(b, i)?);
@@ -409,6 +493,9 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
         Some(v)
     }
     let n = r(b, &mut i)?;
+    if n as usize > b.len() / 4 {
+        return None;
+    }
     let mut out = Vec::with_capacity(n as usize);
     for _ in 0..n {
         out.push(FnProtos {
@@ -731,10 +818,41 @@ impl Drop for AotModeGuard {
     }
 }
 
+/// Sentinel method id in a PrimCallSpec: not a method call — the
+/// trampoline answers the prim's gate_out() (compiled Expr::Gate).
+pub const GATE_OUT_METHOD: StrId = u32::MAX;
+
+/// Sentinel func id in a ForeignSpec: not a foreign function — the
+/// callback concatenates its (StrDyn) arguments' texts and interns the
+/// result, returning the new string id (compiled PrimOp::StringConcat,
+/// mirroring the interp's per-evaluation intern_dyn).
+pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
+
+/// A gate expression a compiled read may re-expand: static cones only
+/// (constants, parameters, and pure combinationals over them).  Defs
+/// are excluded because the interp's gate eval prefers their LATCHED
+/// values; prim-state chases (Gate, method reads, flattened
+/// $CLK_GATE_OUT ports) are excluded pending schedule-time gate slots.
+fn gate_static(e: &Expr) -> bool {
+    match e {
+        Expr::Const { .. } | Expr::Param(_) => true,
+        Expr::Prim { args, .. } => args.iter().all(gate_static),
+        Expr::If { cond, then_, else_, .. } => {
+            gate_static(cond) && gate_static(then_) && gate_static(else_)
+        }
+        Expr::Case { scrutinee, arms, default, .. } => {
+            gate_static(scrutinee)
+                && arms.iter().all(|(_, a)| gate_static(a))
+                && gate_static(default)
+        }
+        _ => false,
+    }
+}
+
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 8;
+pub const AOT_LAYOUT_REV: u64 = 16;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -1398,6 +1516,8 @@ fn lower_edge_ssa<'ctx>(
                     av_widths: HashMap::new(),
             dead_defs: Default::default(),
                     tasks: HashMap::new(),
+                    av_slots: HashMap::new(),
+                    av_args: HashMap::new(),
                     is_exec: true,
                     depth: 0,
                 };
@@ -1416,6 +1536,8 @@ fn lower_edge_ssa<'ctx>(
                 av_widths: HashMap::new(),
             dead_defs: Default::default(),
                 tasks: HashMap::new(),
+                av_slots: HashMap::new(),
+                av_args: HashMap::new(),
                 is_exec,
                 depth: 0,
             };
@@ -1643,6 +1765,18 @@ struct Frame<'ctx> {
     /// ActionValue task results by cookie (Expr::TaskValue reads):
     /// (value, width)
     tasks: HashMap<u32, (IntValue<'ctx>, u32)>,
+    /// method arg values latched at inline AV call sites, gated on the
+    /// call condition (select(cond, v, 0) — the interp's per-edge
+    /// latched-if-called-else-0), keyed by (child instance name, arg
+    /// port name).  Expr::MethValue result cones read them.
+    av_args: HashMap<(StrId, StrId), (IntValue<'ctx>, u32)>,
+    /// join-safe ActionValue task results (value alloca, width), keyed
+    /// by the bound def/temp name and by the cookie's synthetic key:
+    /// the interp's ctx.locals persists past a Cond join, so a task
+    /// executed inside an arm is readable after it — the alloca
+    /// initializes to the undet pattern (what a never-run arm's read
+    /// yields) and stores at task execution
+    av_slots: HashMap<StrId, (PointerValue<'ctx>, u32)>,
     /// effectful-eval def memos (value alloca, valid-flag alloca):
     /// evaluate at FIRST dynamic reference this invocation, reuse
     /// after — even across Cond joins where the ssa binding dies
@@ -1701,7 +1835,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let m = &self.env.d.modules[ie.mir];
         match m.defs.iter().find(|d| d.name == name) {
             Some(d) if d.width >= 1 => Ok(d.width),
-            Some(_) => nope("zero-width def"),
+            Some(_) => Ok(0), // zero-width def: the empty bit-vector
             None => Err(Ineligible(format!(
                 "unknown def (width): {}",
                 self.env.d.strings[name as usize]
@@ -1717,34 +1851,56 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             },
             Expr::Port(p) => match f.args.get(p) {
                 Some(&(_, w)) => Ok(w),
-                None => Ok(self
-                    .ie(f.inst)?
-                    .port_consts
-                    .get(p)
-                    .map_or(1, |&(w, _)| w)), // reset/EN ports read 1 bit
+                None => {
+                    let ie = self.ie(f.inst)?;
+                    if ie.real_consts.contains_key(p) {
+                        return Ok(64); // f64 bits carrier
+                    }
+                    if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                        return Ok(w);
+                    }
+                    Ok(ie.port_consts.get(p).map_or(1, |&(w, _)| w)) // reset/EN ports read 1 bit
+                }
             },
-            Expr::Param(p) => match self.ie(f.inst)?.port_consts.get(p) {
-                Some(&(w, _)) => Ok(w),
-                None => nope("parameter not constant-lowerable"),
-            },
-            Expr::Const { width, .. }
-            | Expr::MethCall { width, .. }
-            | Expr::Prim { width, .. }
-            | Expr::If { width, .. }
-            | Expr::Case { width, .. } => {
-                if *width >= 1 {
-                    Ok(*width)
-                } else {
-                    nope("zero-width expression")
+            Expr::Param(p) => {
+                let ie = self.ie(f.inst)?;
+                if ie.real_consts.contains_key(p) {
+                    return Ok(64); // f64 bits carrier
+                }
+                if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                    return Ok(w);
+                }
+                match ie.port_consts.get(p) {
+                    Some(&(w, _)) => Ok(w),
+                    None => nope("parameter not constant-lowerable"),
                 }
             }
-            _ => nope("expression kind not compilable"),
+            Expr::Real(_) => Ok(64), // f64 bits carrier
+            Expr::Gate { .. } => Ok(1),
+            Expr::Const { width, .. }
+            | Expr::MethCall { width, .. }
+            | Expr::MethValue { width, .. }
+            | Expr::TaskValue { width, .. }
+            | Expr::ForeignCall { width, .. }
+            | Expr::Prim { width, .. }
+            | Expr::If { width, .. }
+            | Expr::Case { width, .. } => Ok(*width), // 0 = empty bit-vector
+            _ => nope(format!(
+                "expression kind not compilable: {}",
+                expr_kind(e)
+            )),
         }
     }
 
     /// Resize `v` (of width `from`) to width `to`.
     fn to_w(&self, v: IntValue<'ctx>, from: u32, to: u32, signed: bool) -> IntValue<'ctx> {
         use std::cmp::Ordering::*;
+        // zero-width values are the constant empty bit-vector: any
+        // resize of one is 0, and a resize TO width 0 is the i1-carried
+        // zero (ity(0) = i1).  from.max(1) is v's actual LLVM type.
+        if from == 0 || to == 0 {
+            return self.ity(to).const_zero();
+        }
         match from.cmp(&to) {
             Equal => v,
             Greater => self.builder.build_int_truncate(v, self.ity(to), "tr").unwrap(),
@@ -1758,8 +1914,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
-    /// i1 truthiness of a width-w value.
+    /// i1 truthiness of a width-w value.  A zero-width value is the
+    /// empty bit-vector — constant false, whatever bit its i1 carrier
+    /// happens to hold.
     fn nonzero(&self, v: IntValue<'ctx>, w: u32) -> IntValue<'ctx> {
+        if w == 0 {
+            return self.ctx.bool_type().const_zero();
+        }
         self.builder
             .build_int_compare(IntPredicate::NE, v, self.ity(w).const_zero(), "nz")
             .unwrap()
@@ -1939,10 +2100,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
     /// Lower an expression to an iN value of its BSV width.
     fn expr(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<IntValue<'ctx>, Ineligible> {
+        // string-typed expressions lower uniformly as i64 ids wherever
+        // they appear (def bindings, cones, muxes) — the consumers
+        // (StrDyn foreign args, string Eq, concat) understand the
+        // carrier; concat inside a pure value cone stays ineligible
+        // (no task context)
+        if self.expr_is_str(f, e) {
+            return self.str_expr(f, e, None);
+        }
         match e {
             Expr::Const { width, limbs } => {
                 if *width == 0 {
-                    return nope("zero-width constant");
+                    // the empty bit-vector: value is always 0, carried
+                    // as i1 (ity(0)); the interp's Value width-0 masks
+                    // every op to 0 identically
+                    return Ok(self.ity(0).const_zero());
                 }
                 Ok(self.cval(*width, limbs))
             }
@@ -1961,21 +2133,123 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Ok(self.to_w(word, 64, 1, false));
                 }
                 if let Some(&(w, v)) = ie.port_consts.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero()); // empty bit-vector
+                    }
                     return Ok(self.cval(w, &[v as u32, (v >> 32) as u32]));
+                }
+                if let Some(&bits) = ie.real_consts.get(p) {
+                    return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
+                if let Some((w, limbs)) = ie.wide_consts.get(p) {
+                    let (w, limbs) = (*w, limbs.clone());
+                    return Ok(self.cval(w, &limbs));
+                }
+                // input clock-gate port bound at instantiation: the
+                // interp evaluates the recorded gate expr in the OWNER
+                // instance's context, where LATCHED defs win over
+                // recomputation — a compiled re-expansion only matches
+                // when the cone is static (no defs, no prim-state
+                // chases), so dynamic gates stay interp until gate
+                // values get schedule-time slots (mcd_Rand measured a
+                // cross-domain divergence with live re-expansion)
+                if let Some((owner, g)) = ie.gates.get(p) {
+                    // eligible dynamic cones: prim Gate chases are LIVE
+                    // reads on both engines, and a Port link recurses
+                    // through this same checked resolution in the owner
+                    // (terminating at a const, a further chase, or nope)
+                    if !gate_static(g)
+                        && !matches!(g, Expr::Gate { .. } | Expr::Port(_))
+                    {
+                        return nope("dynamic input gate (latch semantics)");
+                    }
+                    let (owner, g) = (*owner, g.clone());
+                    let mut of = self.child_frame(f, owner, None)?;
+                    return self.expr(&mut of, &g);
                 }
                 nope("port read outside args/reset/EN/consts")
             }
             Expr::Param(p) => {
                 let ie = self.ie(f.inst)?;
+                if let Some(&bits) = ie.real_consts.get(p) {
+                    return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
+                if let Some((w, limbs)) = ie.wide_consts.get(p) {
+                    let (w, limbs) = (*w, limbs.clone());
+                    return Ok(self.cval(w, &limbs));
+                }
                 match ie.port_consts.get(p) {
+                    Some(&(0, _)) => Ok(self.ity(0).const_zero()),
                     Some(&(w, v)) => {
                         Ok(self.cval(w, &[v as u32, (v >> 32) as u32]))
                     }
                     None => nope("parameter not constant-lowerable"),
                 }
             }
+            Expr::Real(r) => {
+                // reals ride as i64 f64-bits; only Real-marked foreign
+                // args (and real params) consume them, so the bits never
+                // mix into integer arithmetic
+                Ok(self.ctx.i64_type().const_int(r.to_bits(), false))
+            }
+            Expr::Gate { instance, clock } => {
+                // a submodule's output clock gate (AMGate): prim
+                // children answer gate_out() through the trampoline
+                // (GATE_OUT_METHOD sentinel); user children evaluate
+                // their recorded ifc gate expr in the child's frame; no
+                // recorded gate = ungated (constant 1) — all three
+                // mirror the interp's Expr::Gate
+                let ie = self.ie(f.inst)?;
+                let Some(&child) = ie.children.get(instance) else {
+                    return nope("gate read on unknown child");
+                };
+                if self.env.insts.contains_key(&child) {
+                    let cie = self.ie(child)?;
+                    let cmod = &self.env.d.modules[cie.mir];
+                    let g = cmod
+                        .ifc_clock_gates
+                        .iter()
+                        .find(|(n, _)| n == clock)
+                        .map(|(_, e)| e.clone());
+                    return match g {
+                        Some(e) => {
+                            // same latch-semantics restriction as bound
+                            // input gates, except a direct child prim
+                            // gate chase (Expr::Gate) is a LIVE read on
+                            // both engines and stays eligible
+                            if !gate_static(&e)
+                                && !matches!(e, Expr::Gate { .. })
+                            {
+                                return nope(
+                                    "dynamic ifc gate (latch semantics)",
+                                );
+                            }
+                            let mut cf = self.child_frame(f, child, None)?;
+                            self.expr(&mut cf, &e)
+                        }
+                        None => Ok(self.ity(1).const_int(1, false)),
+                    };
+                }
+                match self.emit_prim_call(
+                    f,
+                    child,
+                    GATE_OUT_METHOD,
+                    &[],
+                    1,
+                    false,
+                )? {
+                    Some(v) => Ok(v),
+                    None => nope("gate_out returned no value"),
+                }
+            }
             Expr::MethCall { width, instance, method, port, args } => {
                 self.value_call(f, *width, *instance, *method, *port, args)
+            }
+            Expr::MethValue { width, instance, method } => {
+                // the returned value of an ActionValue method: the
+                // interp calls call_value with no args — identical to a
+                // no-arg value method read (port 0)
+                self.value_call(f, *width, *instance, *method, 0, &[])
             }
             Expr::If { width, cond, then_, else_ } => {
                 let wc = self.expr_width(f, cond)?;
@@ -2015,6 +2289,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // phi at the merge
                 let w = (*width).max(1);
                 let ws = self.expr_width(f, scrutinee)?;
+                // interp semantics (lib.rs Case eval): a scrutinee wider
+                // than 64 bits NEVER matches an arm (as_u64 compare is
+                // gated on width <= 64) — lower the default only.  Keys
+                // outside ws bits can't match either (the interp compares
+                // the untruncated u64), and truncating them into the
+                // switch could alias or duplicate cases.
+                if ws > 64 {
+                    let wd = self.expr_width(f, default)?;
+                    let dv = self.expr(f, default)?;
+                    return Ok(self.to_w(dv, wd, w, false));
+                }
                 let sv = self.expr(f, scrutinee)?;
                 let func =
                     self.builder.get_insert_block().unwrap().get_parent().unwrap();
@@ -2024,9 +2309,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .iter()
                     .map(|_| self.ctx.append_basic_block(func, "ca"))
                     .collect();
+                let representable =
+                    |k: u64| ws >= 64 || k < (1u64 << ws);
                 let cases: Vec<_> = arms
                     .iter()
                     .zip(&arm_bbs)
+                    .filter(|((k, _), _)| representable(*k))
                     .map(|((k, _), &bb)| {
                         (self.ity(ws).const_int_arbitrary_precision(&[*k]), bb)
                     })
@@ -2057,15 +2345,31 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 Ok(phi.as_basic_value().into_int_value())
             }
-            Expr::TaskValue { width, cookie } => match f.tasks.get(cookie) {
-                Some(&(v, vw)) => Ok(self.to_w(v, vw, (*width).max(1), false)),
-                None => nope("task value before its task"),
-            },
+            Expr::TaskValue { width, cookie } => {
+                // load the join-safe slot when the task has one — valid
+                // from any block, unlike the tphi value, which only
+                // dominates its own arm
+                if let Some(&(p, vw)) = f.av_slots.get(&(0x8000_0000u32 | *cookie)) {
+                    let v = self
+                        .builder
+                        .build_load(self.ity(vw), p, "tval")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(self.to_w(v, vw, (*width).max(1), false));
+                }
+                match f.tasks.get(cookie) {
+                    Some(&(v, vw)) => Ok(self.to_w(v, vw, (*width).max(1), false)),
+                    None => nope("task value before its task"),
+                }
+            }
             Expr::Prim { op, width, args } => self.prim(f, *op, *width, args),
             Expr::ForeignCall { width, func, args } => {
                 self.bdpi_value_call(f, (*width).max(1), *func, args)
             }
-            _ => nope("expression kind not compilable"),
+            _ => nope(format!(
+                "expression kind not compilable: {}",
+                expr_kind(e)
+            )),
         }
     }
 
@@ -2085,7 +2389,24 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let Some(ff) = self.bdpi_import(func) else {
             return nope("foreign value call without BDPI import");
         };
-        self.bdpi_emit(f, width, &ff, args)
+        if Self::bdpi_lits_ok(&ff, args) {
+            return self.bdpi_emit(f, width, &ff, args);
+        }
+        // dynamic CString arg: boxed trampoline call — the interp's
+        // foreign_value falls through to bdpi_call, which marshals
+        // Arg::Str for CString params
+        match self.emit_foreign(f, func, args, &[], width, None)? {
+            Some(v) => Ok(v),
+            None => nope("BDPI value call returned no value"),
+        }
+    }
+
+    /// Every FT::CString parameter is bound to a literal Expr::Str —
+    /// the precondition for the direct bdpi_emit fast path.
+    fn bdpi_lits_ok(ff: &trs_ir::ForeignFunc, args: &[Expr]) -> bool {
+        ff.args.iter().zip(args).all(|(t, a)| {
+            !matches!(t, trs_ir::ForeignType::CString) || matches!(a, Expr::Str(_))
+        })
     }
 
     /// The design's BDPI import for `func`, if any (system tasks and
@@ -2378,7 +2699,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return match mname.as_str() {
                 "first" if fw == width => {
                     let fst = load(2);
-                    Ok(self.load_val_dyn(f, base + 6, fst, fw))
+                    Ok(self.load_val_dyn(f, base + 7, fst, fw))
                 }
                 "notFull" if width == 1 => {
                     Ok(cmp_w1(self, IntPredicate::ULT, load(0), i64t.const_int(_size as u64, false)))
@@ -2498,17 +2819,39 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         else {
             return nope("unknown method on child");
         };
-        if m.kind != trs_ir::MethodKind::Value {
+        // the interp's call_value evaluates the method's RESULT expr
+        // for Value and ActionValue methods alike; an Expr::MethValue
+        // read arrives with NO args (the action side carried them).
+        // The one asymmetry: the interp may see caller-latched arg
+        // values in its Port fallthrough, which a fully-compiled design
+        // never latches — so an AV result whose cone reads its own arg
+        // ports stays ineligible.
+        if m.kind != trs_ir::MethodKind::Value
+            && !(m.kind == trs_ir::MethodKind::ActionValue && args.is_empty())
+        {
             return nope("non-value method in expression");
         }
         let Some(res) = m.result.clone() else {
             return nope("value method without result");
         };
-        if args.len() != m.args.len() {
+        if !args.is_empty() && args.len() != m.args.len() {
             return nope("method arg count mismatch");
         }
         let margs = m.args.clone();
         let mut cf = self.child_frame(f, child, Some(mi))?;
+        if m.kind == trs_ir::MethodKind::ActionValue {
+            // arg ports in the result cone read exactly what the interp
+            // reads at THIS evaluation site: the per-edge latch when the
+            // call was inlined earlier in this frame (select(cond, v, 0)
+            // captured at the call site), else the uncalled-MethodArg
+            // 0-fold via the Port fallthrough — sched-position hoists
+            // evaluate BEFORE the call and legitimately read 0
+            for pa in &margs {
+                if let Some(&(lv, lw)) = f.av_args.get(&(instance, pa.name)) {
+                    cf.args.insert(pa.name, (lv, lw));
+                }
+            }
+        }
         for (a, p) in args.iter().zip(&margs) {
             let wa = self.expr_width(f, a)?;
             let v0 = self.expr(f, a)?;
@@ -2584,7 +2927,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         );
                 ok.then_some(2)
             }
-            E::Prim { args, .. } => {
+            E::Prim { op, args, .. } => {
+                // Quot/Rem lower with an unconditional divisor-zero trap
+                // check: speculating them in an unselected arm SIGFPEs
+                // where the interp (evaluating only the taken arm) does
+                // not — the canonical `b == 0 ? 0 : a % b` guard
+                if matches!(op, PrimOp::Quot | PrimOp::Rem) {
+                    return None;
+                }
                 let mut total = 1u32;
                 for a in args {
                     total += self.pure_size(f, a, cap.checked_sub(total)?)?;
@@ -2669,8 +3019,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             arg_widths.push(wa);
             vals.push((v, wa));
         }
+        // physical layout is w.max(1) words per argument, matching the
+        // callback decode exactly — a zero-width argument occupies one
+        // stored zero word (review finding: a 0-word argument
+        // desynchronized the buffer walk into an out-of-bounds read)
         let total_words: u32 =
-            arg_widths.iter().map(|&w| words_for(w)).sum::<u32>().max(1);
+            arg_widths.iter().map(|&w| words_for(w.max(1))).sum::<u32>().max(1);
         let out_words = words_for(ret_width.max(1));
         let i64t = self.ctx.i64_type();
         let abuf = self
@@ -2683,9 +3037,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .unwrap();
         let mut off = 0u32;
         for (v, wa) in vals {
-            let words = words_for(wa);
-            let t = self.ity(wa.max(64 * words.min(1)).max(wa));
-            let _ = t;
+            let words = words_for(wa.max(1));
             for k in 0..words {
                 let sh = self.ity(wa).const_int((64 * k) as u64, false);
                 let piece = if k == 0 {
@@ -2704,6 +3056,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let token_const =
             self.token_kind | self.prim_calls.len() as u64;
+        if self.prim_calls.len() >= 1 << 16 {
+            return nope("prim call-site count exceeds the 16-bit token field");
+        }
         let token = self.spec.token_base | token_const;
         self.prim_calls.push(PrimCallSpec {
             inst: prim_inst,
@@ -2776,6 +3131,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: f.is_exec,
             depth: f.depth + 1,
         })
@@ -3016,11 +3373,77 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         Ok(out)
     }
 
+    /// Join-safe slot for an ActionValue task binding: an entry alloca
+    /// initialized to the undet pattern (Value::undet — what the interp
+    /// yields when the binding arm never ran), stored at task execution.
+    /// Post-join references load it, mirroring the interp's body-wide
+    /// ctx.locals.
+    /// The interp's Value::undet pattern (0xAA..., masked to width) as
+    /// an LLVM constant.
+    fn undet_const(&self, w: u32) -> IntValue<'ctx> {
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; words_for(w.max(1)) as usize];
+        let rem = w % 64;
+        if w != 0 && rem != 0 {
+            let last = words.len() - 1;
+            words[last] &= (1u64 << rem) - 1;
+        }
+        if w == 0 {
+            words = vec![0];
+        }
+        self.ity(w).const_int_arbitrary_precision(&words)
+    }
+
+    fn av_slot(&mut self, f: &mut Frame<'ctx>, n: StrId, w: u32) -> PointerValue<'ctx> {
+        if let Some(&(p, _)) = f.av_slots.get(&n) {
+            return p;
+        }
+        let ty = self.ity(w);
+        let p = self.entry_alloca(ty, 1, "avsl");
+        // undet init must dominate every reference site (same
+        // discipline as the thunk valid-flag init)
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; words_for(w) as usize];
+        let rem = w % 64;
+        if rem != 0 {
+            let last = words.len() - 1;
+            words[last] &= (1u64 << rem) - 1;
+        }
+        let undet = ty.const_int_arbitrary_precision(&words);
+        let b = self.ctx.create_builder();
+        match p.as_instruction().and_then(|i| i.get_next_instruction()) {
+            Some(next) => b.position_before(&next),
+            None => {
+                let entry = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap()
+                    .get_first_basic_block()
+                    .unwrap();
+                b.position_at_end(entry);
+            }
+        }
+        b.build_store(p, undet).unwrap();
+        f.av_slots.insert(n, (p, w));
+        p
+    }
+
     fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
         if let Some(v) = f.ssa.get(&n) {
             return Ok(*v);
         }
         if f.dead_defs.contains(&n) {
+            // an ActionValue task binding survives the join through its
+            // slot (interp parity: ctx.locals is body-wide; undet when
+            // the arm never ran)
+            if let Some(&(p, w)) = f.av_slots.get(&n) {
+                let out = self
+                    .builder
+                    .build_load(self.ity(w), p, "avesc")
+                    .unwrap()
+                    .into_int_value();
+                return Ok(out);
+            }
             return Err(Ineligible(format!(
                 "def escaped conditional arm: {}",
                 self.env.d.strings[n as usize]
@@ -3192,6 +3615,29 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         width: u32,
         args: &[Expr],
     ) -> Result<IntValue<'ctx>, Ineligible> {
+        // a zero-width result is the empty bit-vector, always 0: the
+        // interp masks every op back to zero at width 0.  A central
+        // early return keeps the invariant where per-op lowering would
+        // break it (Not of i1 0 is i1 1; Sra computes width-1, which
+        // underflows) — prim exprs are pure, so skipping the args is
+        // safe (review finding)
+        if width == 0 {
+            return Ok(self.ity(0).const_zero());
+        }
+        // string equality: the interp compares marker limbs, i.e. the
+        // ids — an i64 id compare is the exact mirror (both engines
+        // treat distinct ids as unequal regardless of text)
+        if op == PrimOp::Eq
+            && args.len() == 2
+            && self.expr_is_str(f, &args[0])
+        {
+            let a = self.str_expr(f, &args[0], None)?;
+            let b = self.str_expr(f, &args[1], None)?;
+            return Ok(self
+                .builder
+                .build_int_compare(IntPredicate::EQ, a, b, "seq")
+                .unwrap());
+        }
         match op {
             PrimOp::And | PrimOp::Or | PrimOp::Xor | PrimOp::Add | PrimOp::Sub | PrimOp::Mul => {
                 let mut it = args.iter();
@@ -3386,26 +3832,42 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .into_int_value())
             }
             PrimOp::Concat => {
-                // left-to-right, first arg highest
+                // left-to-right, first arg highest.  Zero-width members
+                // contribute nothing and are skipped; the first real
+                // member seeds acc UNSHIFTED — otherwise a full-width
+                // member (its siblings all zero-width) would emit
+                // `shl iW acc, W`, which is LLVM poison
                 let t = self.ity(width);
-                let mut acc = t.const_zero();
+                let mut acc: Option<IntValue<'ctx>> = None;
                 let mut total = 0u32;
                 for a in args {
                     let wa = self.expr_width(f, a)?;
                     let v0 = self.expr(f, a)?;
+                    if wa == 0 {
+                        continue;
+                    }
                     let v = self.to_w(v0, wa, width, false);
                     total += wa;
                     if total > width {
                         return nope("concat width overflow");
                     }
-                    let sh = t.const_int(wa as u64, false);
-                    let shifted = self.builder.build_left_shift(acc, sh, "cc").unwrap();
-                    acc = self.builder.build_or(shifted, v, "co").unwrap();
+                    acc = Some(match acc {
+                        None => v,
+                        Some(prev) => {
+                            // prev holds >= 1 bit, so wa <= width - 1
+                            let sh = t.const_int(wa as u64, false);
+                            let shifted = self
+                                .builder
+                                .build_left_shift(prev, sh, "cc")
+                                .unwrap();
+                            self.builder.build_or(shifted, v, "co").unwrap()
+                        }
+                    });
                 }
                 if total != width {
                     return nope("concat width mismatch");
                 }
-                Ok(acc)
+                Ok(acc.unwrap_or_else(|| t.const_zero()))
             }
             PrimOp::ZeroExt => {
                 let ws = self.expr_width(f, &args[0])?;
@@ -3472,6 +3934,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: false,
             depth: 0,
         };
@@ -3587,6 +4051,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: true,
             depth: 0,
         };
@@ -3692,6 +4158,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: true,
             depth: 0,
         };
@@ -3729,6 +4197,287 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Marshal a foreign call site: numeric args as word runs (strings
     /// ride the spec table), call, optionally read back result words.
     /// Returns the result value for tasks (ret_width > 0).
+    /// Statically real-typed expressions: the shapes whose interp
+    /// evaluation yields a REAL_MARKER Value (val_arg -> Arg::Real).
+    /// Reals reach simulation only as literals, parameters, and muxes/
+    /// defs over those, so the classification is decidable at lowering.
+    fn expr_is_real(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.expr_is_real_in(f, e, &mut Vec::new())
+    }
+
+    fn expr_is_real_in(
+        &self,
+        f: &Frame<'ctx>,
+        e: &Expr,
+        seen: &mut Vec<StrId>,
+    ) -> bool {
+        match e {
+            Expr::Real(_) => true,
+            Expr::Param(p) | Expr::Port(p) => self
+                .ie(f.inst)
+                .map(|ie| ie.real_consts.contains_key(p))
+                .unwrap_or(false),
+            Expr::If { then_, else_, .. } => {
+                self.expr_is_real_in(f, then_, seen)
+                    || self.expr_is_real_in(f, else_, seen)
+            }
+            Expr::Case { arms, default, .. } => {
+                arms.iter().any(|(_, a)| self.expr_is_real_in(f, a, seen))
+                    || self.expr_is_real_in(f, default, seen)
+            }
+            Expr::Def(n) => {
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
+                let Ok(ie) = self.ie(f.inst) else { return false };
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.expr_is_real_in(f, &d.expr, seen);
+                seen.pop();
+                r
+            }
+            _ => false,
+        }
+    }
+
+    /// Statically string-typed expressions: the shapes whose interp
+    /// evaluation yields a STR_MARKER Value (val_arg -> Arg::Str).
+    /// Strings are literals, string params, muxes/defs over those,
+    /// marker-passthrough width adjustments, and StringConcat results.
+    fn expr_is_str(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.expr_is_str_in(f, e, &mut Vec::new())
+    }
+
+    fn expr_is_str_in(
+        &self,
+        f: &Frame<'ctx>,
+        e: &Expr,
+        seen: &mut Vec<StrId>,
+    ) -> bool {
+        match e {
+            Expr::Str(_) => true,
+            Expr::Param(p) | Expr::Port(p) => self
+                .ie(f.inst)
+                .map(|ie| ie.str_consts.contains_key(p))
+                .unwrap_or(false),
+            Expr::If { then_, else_, .. } => {
+                self.expr_is_str_in(f, then_, seen)
+                    || self.expr_is_str_in(f, else_, seen)
+            }
+            Expr::Case { arms, default, .. } => {
+                arms.iter().any(|(_, a)| self.expr_is_str_in(f, a, seen))
+                    || self.expr_is_str_in(f, default, seen)
+            }
+            Expr::Def(n) => {
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
+                let Ok(ie) = self.ie(f.inst) else { return false };
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.expr_is_str_in(f, &d.expr, seen);
+                seen.pop();
+                r
+            }
+            Expr::Prim { op: PrimOp::StringConcat, .. } => true,
+            Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
+                args.first()
+                    .is_some_and(|a| self.expr_is_str_in(f, a, seen))
+            }
+            _ => false,
+        }
+    }
+
+    /// Does a string expression contain a StringConcat anywhere —
+    /// including through Def table expansion?  Concat interns per
+    /// evaluation, so it must never run on an unselected mux arm.
+    fn contains_concat(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.contains_concat_in(f, e, &mut Vec::new())
+    }
+
+    fn contains_concat_in(
+        &self,
+        f: &Frame<'ctx>,
+        e: &Expr,
+        seen: &mut Vec<StrId>,
+    ) -> bool {
+        match e {
+            Expr::Prim { op: PrimOp::StringConcat, .. } => true,
+            Expr::Prim { args, .. } => {
+                args.iter().any(|a| self.contains_concat_in(f, a, seen))
+            }
+            Expr::If { cond, then_, else_, .. } => {
+                self.contains_concat_in(f, cond, seen)
+                    || self.contains_concat_in(f, then_, seen)
+                    || self.contains_concat_in(f, else_, seen)
+            }
+            Expr::Case { scrutinee, arms, default, .. } => {
+                self.contains_concat_in(f, scrutinee, seen)
+                    || arms
+                        .iter()
+                        .any(|(_, a)| self.contains_concat_in(f, a, seen))
+                    || self.contains_concat_in(f, default, seen)
+            }
+            Expr::Def(n) => {
+                // a positioned binding is already a pure id; only an
+                // unbound def's table expansion could re-run a concat
+                if f.ssa.contains_key(n) {
+                    return false;
+                }
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
+                let Ok(ie) = self.ie(f.inst) else { return false };
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.contains_concat_in(f, &d.expr, seen);
+                seen.pop();
+                r
+            }
+            _ => false,
+        }
+    }
+
+    /// Lower a string-typed expression to its i64 string id (the
+    /// compiled carrier for the interp's str_ref marker Value).
+    fn str_expr(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        e: &Expr,
+        stop_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let i64t = self.ctx.i64_type();
+        match e {
+            Expr::Str(sid) => Ok(i64t.const_int(*sid as u64, false)),
+            Expr::Param(p) | Expr::Port(p) => {
+                match self.ie(f.inst)?.str_consts.get(p) {
+                    Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
+                    None => nope("non-string port in string context"),
+                }
+            }
+            Expr::If { cond, then_, else_, .. } => {
+                // arms evaluate eagerly (select), which is only sound
+                // for PURE ids — a StringConcat in an arm would intern
+                // on the unselected path too, diverging from the
+                // interp's selected-arm-only evaluation (review
+                // finding); such shapes stay ineligible until arms get
+                // real control flow
+                if self.contains_concat(f, then_) || self.contains_concat(f, else_) {
+                    return nope("string concat under a mux arm");
+                }
+                let wc = self.expr_width(f, cond)?;
+                let c = self.expr(f, cond)?;
+                let cz = self.nonzero(c, wc);
+                let tv = self.str_expr(f, then_, stop_bb)?;
+                let ev = self.str_expr(f, else_, stop_bb)?;
+                Ok(self
+                    .builder
+                    .build_select(cz, tv, ev, "ssel")
+                    .unwrap()
+                    .into_int_value())
+            }
+            Expr::Case { scrutinee, arms, default, .. } => {
+                if arms.iter().any(|(_, a)| self.contains_concat(f, a))
+                    || self.contains_concat(f, default)
+                {
+                    return nope("string concat under a mux arm");
+                }
+                let ws = self.expr_width(f, scrutinee)?;
+                // interp mirror: wide scrutinees never match an arm
+                if ws > 64 {
+                    return self.str_expr(f, default, stop_bb);
+                }
+                let sv = self.expr(f, scrutinee)?;
+                let mut acc = self.str_expr(f, default, stop_bb)?;
+                for (k, a) in arms {
+                    if ws < 64 && *k >= (1u64 << ws) {
+                        continue; // key not representable: never matches
+                    }
+                    let kv = self.ity(ws).const_int(*k, false);
+                    let hit = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, sv, kv, "scse")
+                        .unwrap();
+                    let av = self.str_expr(f, a, stop_bb)?;
+                    acc = self
+                        .builder
+                        .build_select(hit, av, acc, "scsl")
+                        .unwrap()
+                        .into_int_value();
+                }
+                Ok(acc)
+            }
+            Expr::Def(n) => {
+                // same resolution order as numeric def(): the POSITIONED
+                // ssa binding wins (a Stmt::Def bound the id at its
+                // statement position — table re-expansion would observe
+                // later state mutations and re-run concat effects), then
+                // dead-def refusal, then table expansion (review finding)
+                if let Some(v) = f.ssa.get(n) {
+                    return Ok(*v);
+                }
+                if f.dead_defs.contains(n) {
+                    if let Some(&(p, w)) = f.av_slots.get(n) {
+                        let out = self
+                            .builder
+                            .build_load(self.ity(w), p, "savesc")
+                            .unwrap()
+                            .into_int_value();
+                        return Ok(out);
+                    }
+                    return nope("string def escaped conditional arm");
+                }
+                let ie = self.ie(f.inst)?;
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return nope("unknown string def");
+                };
+                if f.expanding.contains(n) {
+                    return nope("string def cycle");
+                }
+                let dex = d.expr.clone();
+                f.expanding.push(*n);
+                let r = self.str_expr(f, &dex, stop_bb);
+                f.expanding.pop();
+                let v = r?;
+                f.ssa.insert(*n, v);
+                Ok(v)
+            }
+            Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
+                // marker passthrough: width adjustments of string
+                // values are identity in the interp
+                self.str_expr(f, &args[0], stop_bb)
+            }
+            Expr::Prim { op: PrimOp::StringConcat, args, .. } => {
+                // per-evaluation intern through the callback, exactly
+                // the interp's intern_dyn; pure value cones (e.g.
+                // string Eq) have no stop block, and the concat
+                // callback never requests a stop
+                match self.emit_foreign(
+                    f,
+                    STRING_CONCAT_FUNC,
+                    args,
+                    &[],
+                    64,
+                    stop_bb,
+                )? {
+                    Some(v) => Ok(v),
+                    None => nope("string concat returned no value"),
+                }
+            }
+            _ => nope("expression not string-lowerable"),
+        }
+    }
+
     fn emit_foreign(
         &mut self,
         f: &mut Frame<'ctx>,
@@ -3736,7 +4485,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         args: &[Expr],
         signed: &[bool],
         ret_width: u32,
-        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        stop_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     ) -> Result<Option<IntValue<'ctx>>, Ineligible> {
         let Some(envp) = f.envp else {
             return nope("foreign call without env pointer");
@@ -3749,6 +4498,22 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 spec_args.push(FArgSpec::Str(*sid));
                 continue;
             }
+            if self.expr_is_real(f, a) {
+                // i64 f64-bits value, one marshaled word; the spec's
+                // Real tag makes the decode rebuild Arg::Real
+                let v = self.expr(f, a)?;
+                spec_args.push(FArgSpec::Real);
+                vals.push((v, 64));
+                continue;
+            }
+            if self.expr_is_str(f, a) {
+                // i64 string id, one marshaled word; the spec's StrDyn
+                // tag makes the decode resolve it to Arg::Str
+                let v = self.str_expr(f, a, stop_bb)?;
+                spec_args.push(FArgSpec::StrDyn);
+                vals.push((v, 64));
+                continue;
+            }
             let wa = self.expr_width(f, a)?;
             let v = self.expr(f, a)?;
             spec_args.push(FArgSpec::Num {
@@ -3757,8 +4522,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             });
             vals.push((v, wa));
         }
+        // the foreign decode reads w.max(1) words per numeric arg, so a
+        // zero-width arg still occupies ONE (zero) word in the buffer —
+        // its spec width stays 0 so the formatter sees the interp's
+        // width-0 Value
         let total_words: u32 =
-            vals.iter().map(|&(_, w)| words_for(w)).sum::<u32>().max(1);
+            vals.iter().map(|&(_, w)| words_for(w.max(1))).sum::<u32>().max(1);
         let out_words = words_for(ret_width.max(1));
         let abuf = self
             .builder
@@ -3770,7 +4539,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .unwrap();
         let mut off = 0u32;
         for (v, wa) in vals {
-            for k in 0..words_for(wa) {
+            for k in 0..words_for(wa.max(1)) {
                 let sh = self.ity(wa).const_int((64 * k) as u64, false);
                 let piece = if k == 0 {
                     v
@@ -3783,10 +4552,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     unsafe { self.builder.build_gep(i64t, abuf, &[idx], "fap").unwrap() };
                 self.builder.build_store(p, word).unwrap();
             }
-            off += words_for(wa);
+            off += words_for(wa.max(1));
         }
         let token =
             self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
+        if self.foreign_stmts.len() >= 1 << 16 {
+            return nope("foreign call-site count exceeds the 16-bit token field");
+        }
         let token_const = self.token_kind | (self.foreign_stmts.len() as u64);
         self.foreign_stmts.push(ForeignSpec {
             inst: f.inst,
@@ -3814,19 +4586,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let inkwell::values::ValueKind::Basic(rv) = call.try_as_basic_value() else {
             return nope("callback returned void");
         };
-        let stop = self
-            .builder
-            .build_int_compare(
-                IntPredicate::NE,
-                rv.into_int_value(),
-                self.ctx.i32_type().const_int(0, false),
-                "fst",
-            )
-            .unwrap();
-        let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
-        let cont_bb = self.ctx.append_basic_block(func, "fcont");
-        self.builder.build_conditional_branch(stop, stop_bb, cont_bb).unwrap();
-        self.builder.position_at_end(cont_bb);
+        // outside a task context there is no abort target; the callback
+        // contract reserves the nonzero return for genuine aborts and
+        // nothing requests one today, so the result is ignored there
+        if let Some(sb) = stop_bb {
+            let stop = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    rv.into_int_value(),
+                    self.ctx.i32_type().const_int(0, false),
+                    "fst",
+                )
+                .unwrap();
+            let func =
+                self.builder.get_insert_block().unwrap().get_parent().unwrap();
+            let cont_bb = self.ctx.append_basic_block(func, "fcont");
+            self.builder.build_conditional_branch(stop, sb, cont_bb).unwrap();
+            self.builder.position_at_end(cont_bb);
+        }
         if ret_width == 0 {
             return Ok(None);
         }
@@ -3875,6 +4653,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         f.av_widths.insert(*def, (*width).max(1));
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, v);
+                        // join-safe binding for the AvAction def itself
+                        let dp = self.av_slot(f, *def, (*width).max(1));
+                        self.builder.build_store(dp, v).unwrap();
                     }
                     Action::MethCall { instance, method, port, cond, args } => {
                         // ActionValue method on a prim child (trampoline)
@@ -3932,15 +4713,28 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 .position(|x| x == &en_name)
                                 .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
                             let mut cf = self.child_frame(f, child, Some(mi))?;
+                            let wc = self.expr_width(f, cond)?;
+                            let c = self.expr(f, cond)?;
+                            let cz = self.nonzero(c, wc);
                             for (a, pa) in args.iter().zip(&margs) {
                                 let wa = self.expr_width(f, a)?;
                                 let v0 = self.expr(f, a)?;
                                 let v = self.to_w(v0, wa, pa.width, false);
                                 cf.args.insert(pa.name, (v, pa.width));
+                                // per-edge arg latch for later
+                                // Expr::MethValue reads: the interp's
+                                // latched map holds the value iff the
+                                // method was CALLED this edge, else the
+                                // uncalled-MethodArg fallthrough reads 0
+                                let z = self.ity(pa.width.max(1)).const_zero();
+                                let lv = self
+                                    .builder
+                                    .build_select(cz, v, z, "avarg")
+                                    .unwrap()
+                                    .into_int_value();
+                                f.av_args
+                                    .insert((*instance, pa.name), (lv, pa.width));
                             }
-                            let wc = self.expr_width(f, cond)?;
-                            let c = self.expr(f, cond)?;
-                            let cz = self.nonzero(c, wc);
                             let go_bb = self.ctx.append_basic_block(func, "avmgo");
                             let sk_bb = self.ctx.append_basic_block(func, "avmsk");
                             let jn_bb = self.ctx.append_basic_block(func, "avmjn");
@@ -3961,7 +4755,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             let g_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(jn_bb).unwrap();
                             self.builder.position_at_end(sk_bb);
-                            let undet = self.ity(wd).const_zero();
+                            // the interp binds Value::undet (the masked
+                            // 0xAA... pattern) when the call condition is
+                            // false — NOT zero (review finding: the old
+                            // comment claimed parity while binding 0)
+                            let undet = self.undet_const(wd);
                             let s_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(jn_bb).unwrap();
                             self.builder.position_at_end(jn_bb);
@@ -3982,6 +4780,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let jn_bb = self.ctx.append_basic_block(func, "avjn");
                         self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                         self.builder.position_at_end(go_bb);
+                        // the trampoline routes is_action to call_action,
+                        // which never writes the out buffer, and no prim
+                        // implements an AV method (the interp panics):
+                        // refuse rather than read uninitialized words
+                        return nope("prim actionvalue method (no trampoline AV path)");
+                        #[allow(unreachable_code)]
                         let v = self
                             .emit_prim_call(f, child, *method, args, wd, true)?
                             .expect("av prim call returns");
@@ -4130,6 +4934,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<IntValue<'ctx>, Ineligible> {
         let w = width.max(1);
+        // join-safe slots FIRST (undet-initialized at entry): the
+        // interp binds nothing on a false condition, so a later read
+        // sees undet (or a previous execution's value) — the stores
+        // happen only on the TAKEN path (review finding: the old
+        // unconditional store of the phi wrote 0 over undet on skip)
+        let ck = 0x8000_0000u32 | cookie;
+        let cp = self.av_slot(f, ck, w);
+        let tp = temp.map(|t| self.av_slot(f, t, w));
         let wc = self.expr_width(f, cond)?;
         let c = self.expr(f, cond)?;
         let cz = self.nonzero(c, wc);
@@ -4139,18 +4951,24 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
         self.builder.position_at_end(go_bb);
         let v = self
-            .emit_foreign(f, tf, args, signed, w, stop_bb)?
+            .emit_foreign(f, tf, args, signed, w, Some(stop_bb))?
             .expect("task returns");
-        let g_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_store(cp, v).unwrap();
+        if let Some(tp) = tp {
+            self.builder.build_store(tp, v).unwrap();
+        }
         self.builder.build_unconditional_branch(jn_bb).unwrap();
         self.builder.position_at_end(sk_bb);
-        let z = self.ity(w).const_zero();
-        let s_end = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(jn_bb).unwrap();
         self.builder.position_at_end(jn_bb);
-        let phi = self.builder.build_phi(self.ity(w), "tphi").unwrap();
-        phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
-        let out = phi.as_basic_value().into_int_value();
+        // the slot is the single source of truth at the join: executed
+        // value, or the preserved previous/undet contents on skip —
+        // exactly the interp's locals-then-latched-then-undet order
+        let out = self
+            .builder
+            .build_load(self.ity(w), cp, "tval")
+            .unwrap()
+            .into_int_value();
         f.tasks.insert(cookie, (out, w));
         if let Some(t) = temp {
             f.ssa.insert(t, out);
@@ -4474,6 +5292,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         } else {
                             bad
                         };
+                        // in-reset suppress (post-clear, until deassert):
+                        // bounce to the boxed prim, whose action_method
+                        // no-ops — the fast path must not stamp or write
+                        let sup = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                self.load_word(f, base + 6),
+                                i64t.const_zero(),
+                                "fsp",
+                            )
+                            .unwrap();
+                        let warn = self.builder.build_or(warn, sup, "fws").unwrap();
                         self.builder
                             .build_conditional_branch(warn, warn_bb, fast_bb)
                             .unwrap();
@@ -4526,7 +5357,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 Some(v) => v,
                                 None => self.ity(1).const_zero(),
                             };
-                            self.store_val_dyn(f, base + 6, idx, fw.max(1), dv);
+                            self.store_val_dyn(f, base + 7, idx, fw.max(1), dv);
                             let e2 = self
                                 .builder
                                 .build_int_add(elems, i64t.const_int(1, false), "fe2")
@@ -4624,12 +5455,33 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 else {
                     return nope("unknown action method on child");
                 };
-                if m.kind != trs_ir::MethodKind::Action {
-                    return nope("actionvalue method call");
+                // a plain Action call may target an ActionValue method
+                // with its result discarded — the interp's call_action
+                // executes the body either way
+                if !matches!(
+                    m.kind,
+                    trs_ir::MethodKind::Action | trs_ir::MethodKind::ActionValue
+                ) {
+                    return nope("value method as action");
                 }
-                if m.always_enabled {
-                    return nope("always_enabled method (RDY-gated body)");
-                }
+                // (* always_enabled *): the caller-side RDY was dropped,
+                // so the body is gated on the sibling RDY_<m> value
+                // method at call time (the C++ check_rdy wrapper); EN
+                // still lands when the caller fires. No RDY method
+                // exported = constant ready.
+                let rdy_id = if m.always_enabled {
+                    let rdy_name =
+                        format!("RDY_{}", self.env.d.strings[*method as usize]);
+                    self.env
+                        .d
+                        .strings
+                        .iter()
+                        .position(|x| x == &rdy_name)
+                        .map(|id| id as StrId)
+                        .filter(|id| cmod.methods.iter().any(|mm| mm.name == *id))
+                } else {
+                    None
+                };
                 if args.len() != m.args.len() {
                     return nope("method arg count mismatch");
                 }
@@ -4659,6 +5511,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let one = self.ctx.i64_type().const_int(1, false);
                     self.store_word(&cf, slot, one);
                 }
+                if let Some(rid) = rdy_id {
+                    // EN is already latched; only the body waits on RDY
+                    let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
+                    let rz = self.nonzero(r, 1);
+                    let bd_bb = self.ctx.append_basic_block(func, "mrdy");
+                    self.builder.build_conditional_branch(rz, bd_bb, sk_bb).unwrap();
+                    self.builder.position_at_end(bd_bb);
+                }
                 // the inlined body executes inside a conditional block:
                 // caller-frame defs expanded here must not leak either —
                 // cf is fresh, so only its own scope is at stake
@@ -4675,11 +5535,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let sk_bb = self.ctx.append_basic_block(func, "fsk");
                 self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                 self.builder.position_at_end(go_bb);
-                if let Some(imp) = self.bdpi_import(*ff) {
-                    // user BDPI action: direct call (task #22)
-                    self.bdpi_emit(f, 1, &imp, args)?;
-                } else {
-                    self.emit_foreign(f, *ff, args, signed, 0, stop_bb)?;
+                match self.bdpi_import(*ff) {
+                    // user BDPI action: direct call (task #22); dynamic
+                    // CString args take the boxed trampoline instead
+                    Some(imp) if Self::bdpi_lits_ok(&imp, args) => {
+                        self.bdpi_emit(f, 1, &imp, args)?;
+                    }
+                    _ => {
+                        self.emit_foreign(f, *ff, args, signed, 0, Some(stop_bb))?;
+                    }
                 }
                 self.builder.build_unconditional_branch(sk_bb).unwrap();
                 self.builder.position_at_end(sk_bb);
@@ -4725,5 +5589,44 @@ mod tests {
     #[test]
     fn jit_round_trip() {
         assert_eq!(super::llvm_smoke_test().unwrap(), 42);
+    }
+
+    #[test]
+    fn proto_tags_round_trip_and_fail_closed() {
+        use super::{decode_protos, encode_protos, FArgSpec, FnProtos, ForeignSpec};
+        let protos = vec![FnProtos {
+            sched_foreign: vec![ForeignSpec {
+                inst: 3,
+                func: 7,
+                ret_width: 64,
+                args: vec![
+                    FArgSpec::Str(11),
+                    FArgSpec::Num { width: 0, signed: false },
+                    FArgSpec::Num { width: 65, signed: true },
+                    FArgSpec::Real,
+                    FArgSpec::StrDyn,
+                ],
+            }],
+            sched_prims: vec![],
+            exec_foreign: vec![],
+            exec_prims: vec![],
+        }];
+        let bytes = encode_protos(&protos);
+        let back = decode_protos(&bytes).expect("round trip");
+        assert_eq!(back.len(), 1);
+        let args = &back[0].sched_foreign[0].args;
+        assert!(matches!(args[0], FArgSpec::Str(11)));
+        assert!(matches!(args[1], FArgSpec::Num { width: 0, signed: false }));
+        assert!(matches!(args[2], FArgSpec::Num { width: 65, signed: true }));
+        assert!(matches!(args[3], FArgSpec::Real));
+        assert!(matches!(args[4], FArgSpec::StrDyn));
+        // an unknown tag is a corrupted or future-format artifact:
+        // decode must fail CLOSED, never fall open as Num
+        let mut bad = encode_protos(&protos);
+        // first arg record's tag word: protos_count(4) foreign_count(4)
+        // inst(4) func(4) ret(4) argc(4) -> tag at byte offset 24
+        let tag_off = 4 + 4 + 4 + 4 + 4 + 4;
+        bad[tag_off] = 9;
+        assert!(super::decode_protos(&bad).is_none());
     }
 }

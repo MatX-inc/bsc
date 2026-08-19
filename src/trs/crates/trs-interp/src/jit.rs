@@ -102,14 +102,27 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     let mut argv = Vec::with_capacity(arg_widths.len());
     let mut off = 0usize;
     for &w in &arg_widths {
-        let words = ((w as usize) + 63) / 64;
-        let limbs =
-            std::slice::from_raw_parts(args.add(off), words.max(1)).to_vec();
-        argv.push(Value::from_limbs64(w.max(1), limbs));
+        // physical layout is w.max(1) words per argument on BOTH sides
+        // of the ABI — a zero-width argument still occupies one (zero)
+        // word (review finding: reading words.max(1) while advancing by
+        // the logical count walked past the allocation)
+        let words = ((w.max(1) as usize) + 63) / 64;
+        let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+        // TRUE logical width: a zero-width prim arg must reach the prim
+        // as the interp's width-0 Value (from_limbs64 masks the word)
+        argv.push(Value::from_limbs64(w, limbs));
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
-    if is_action {
+    if method == trs_codegen::lower::GATE_OUT_METHOD {
+        // compiled Expr::Gate on a prim child: not a method — answer
+        // gate_out(), the interp's exact read
+        let g = match &interp.insts[inst].kind {
+            InstKind::Prim(p) => p.gate_out() as u64,
+            _ => 1,
+        };
+        *out = g;
+    } else if is_action {
         interp.call_action(inst, method, &argv);
     } else {
         let v = interp.call_value(inst, method, &argv, ret_width);
@@ -123,7 +136,12 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     if let Some(t0) = _t0 {
         prof::add(&prof::PRIM_NS, t0);
         prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let meth = interp.s(method).to_string();
+        // the gate sentinel is no string id — interp.s() would index OOB
+        let meth = if method == trs_codegen::lower::GATE_OUT_METHOD {
+            "$gate_out".to_string()
+        } else {
+            interp.s(method).to_string()
+        };
         prof::PRIM_HIST
             .lock()
             .unwrap()
@@ -412,10 +430,46 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
                 let w = width;
                 let words = ((w.max(1) as usize) + 63) / 64;
                 let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
-                argv.push(Arg::Val(Value::from_limbs64(w.max(1), limbs), signed));
+                // the TRUE width, zero included: the formatter must see
+                // the interp's width-0 Value for zero-width args, not a
+                // width-1 impostor (from_limbs64 masks the buffer word)
+                argv.push(Arg::Val(Value::from_limbs64(w, limbs), signed));
                 off += words;
             }
+            FArgSpec::Real => {
+                // one word of f64 bits -> the interp's Arg::Real, so
+                // %f/%e/%g formatting is byte-identical
+                let word = *args.add(off);
+                argv.push(Arg::Real(f64::from_bits(word)));
+                off += 1;
+            }
+            FArgSpec::StrDyn => {
+                // one word of string id (static or runtime-interned)
+                // -> the interp's Arg::Str
+                let word = *args.add(off);
+                argv.push(Arg::Str(interp.s(word as u32).to_string()));
+                off += 1;
+            }
         }
+    }
+    if func == trs_codegen::lower::STRING_CONCAT_FUNC {
+        // compiled PrimOp::StringConcat: concatenate the resolved
+        // texts and intern per evaluation, the interp's exact behavior
+        // (func is a sentinel, not a string id — resolve nothing)
+        let mut text = String::new();
+        for a in &argv {
+            if let Arg::Str(s) = a {
+                text.push_str(s);
+            }
+        }
+        let id = interp.intern_dyn(text);
+        *out = id as u64;
+        if let Some(t0) = _t0 {
+            prof::add(&prof::FOREIGN_NS, t0);
+            prof::FOREIGN_CALLS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        return 0;
     }
     let fname = interp.s(func).to_string();
     let loc = interp.loc_of(inst);
@@ -917,16 +971,23 @@ fn aot_emit(
         .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
         std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
+        // temp+rename: a crash mid-cc must never leave a truncated
+        // .so at the final path (it would dlopen-fail or worse on the
+        // next run before the gates can judge it)
+        let so_tmp = so.with_extension("so.tmp");
         let st = std::process::Command::new(cc_tool())
             .args(["-shared", "-o"])
-            .arg(so)
+            .arg(&so_tmp)
             .args([&f, &mf])
             .status()
             .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
         std::fs::remove_dir_all(&tmp).ok();
         if !st.success() {
+            std::fs::remove_file(&so_tmp).ok();
             return Err(EmitFail::Infra("cc -shared failed".into()));
         }
+        std::fs::rename(&so_tmp, so)
+            .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: emit + link {:?}", t0.elapsed());
         }
@@ -1048,16 +1109,21 @@ fn aot_emit(
     let mf = tmp.join("meta.o");
     std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
+    // temp+rename, same discipline as the single-object emit
+    let so_tmp = so.with_extension("so.tmp");
     let st = std::process::Command::new("cc")
         .args(["-shared", "-o"])
-        .arg(so)
+        .arg(&so_tmp)
         .args(&files)
         .status()
         .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
     std::fs::remove_dir_all(&tmp).ok();
     if !st.success() {
+        std::fs::remove_file(&so_tmp).ok();
         return Err(EmitFail::Infra("cc -shared failed".into()));
     }
+    std::fs::rename(&so_tmp, so)
+        .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
     if std::env::var_os("TRS_JIT_TIME").is_some() {
         eprintln!("trs aot: emit + link {:?}", t0.elapsed());
     }
@@ -1292,6 +1358,7 @@ impl Interp {
         inst_envs: &HashMap<usize, InstEnv>,
         nodes: &[Vec<(bool, usize)>],
         specs: &[RuleSpec],
+        has_early: bool,
         stats: bool,
     ) -> trs_codegen::lower::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
@@ -2031,6 +2098,17 @@ impl Interp {
             .iter()
             .flat_map(|sp| sp.inhibit_slots.iter().copied())
             .collect();
+        // interp-side consumers: with any early (clock-crossing) rule,
+        // the PG_FINAL pass reads compiled CF slots (inhibitors via
+        // latched_or_arena) and eager/WF defs via eval's arena
+        // fallthrough — keep them all (early designs are rare; the
+        // cost is per-edge scalar stores)
+        if has_early {
+            for e in inst_envs.values() {
+                export_slots.extend(e.cfwf_slot.values().copied());
+                export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
+            }
+        }
         for &o in &outlined_execs {
             export_slots.insert(specs[o].wf_slot);
             let (inst, ridx) = specs_lite[o];
@@ -2067,6 +2145,10 @@ impl Interp {
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
         let request = std::mem::take(&mut self.jit_request);
+        // early (clock-crossing) rules run interpreted in the PG_FINAL
+        // pass and read compiled CF/eager slots — edge-SSA store
+        // elision must keep those stores (see edge_ssa_plan)
+        let has_early = rcomps.iter().any(|rc| !rc.early.is_empty());
         // direct-BDPI registries (task #22): baked-mode call emission
         // reads these; set-once, idempotent
         let _ = trs_codegen::lower::STDIO_CB.set(jit_stdio_cb as usize);
@@ -2127,12 +2209,12 @@ impl Interp {
         let mut rules: Vec<RuleInfo> = Vec::new();
         let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
         for rc in rcomps {
-            if !rc.early.is_empty() {
-                if trace {
-                    eprintln!("trs jit: off (early rules)");
-                }
-                return None;
-            }
+            // clock-crossing "early" rules never enter the compiled
+            // edge walk: the general loop's after-edge pass (PG_FINAL)
+            // runs them interpreted over the same arena-backed state,
+            // exactly like a cold exec cell — so they are SKIPPED here
+            // (kept out of rule_ord and the node stream), not refused.
+            // The central fast loop already bails on early comps.
             // eager defs owned by entries already walked in THIS comp,
             // per instance: later rules of the same instance may load
             // their slots instead of re-expanding the cone
@@ -2140,6 +2222,9 @@ impl Interp {
             for en in &rc.entries {
                 for &node in &en.nodes {
                     let SchedNode::Sched(r) = node else { continue };
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue; // after-edge pass runs it interpreted
+                    }
                     if rule_ord.contains_key(&(en.inst, r)) {
                         continue;
                     }
@@ -2352,7 +2437,7 @@ impl Interp {
                     }
                     Some(ArenaKind::Fifo { width, size, guard }) => {
                         let words = width.max(1).div_ceil(64);
-                        let base = alloc(&mut nslots, 6 + size * words);
+                        let base = alloc(&mut nslots, 7 + size * words);
                         fifo_slot.insert(name, (base, width, size, guard));
                         attach.push((ci, base));
                     }
@@ -2462,9 +2547,22 @@ impl Interp {
             // "unbound" bakes a wrong constant (sysWideModArgPortTest,
             // sysTwoLevelReal2); unfolded means Ineligible -> interp.
             let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
+            let mut real_consts: HashMap<StrId, u64> = HashMap::new();
+            let mut wide_consts: HashMap<StrId, (u32, Vec<u32>)> = HashMap::new();
             for (&pn, pv) in params {
                 if pv.width >= 1 && pv.width <= 64 {
                     port_consts.insert(pn, (pv.width, pv.as_u64()));
+                } else if let Some(r) = pv.as_real() {
+                    // real params ride as f64 bits (task-arg carrier)
+                    real_consts.insert(pn, r.to_bits());
+                } else if pv.width > 64 && pv.width < u32::MAX - 1 {
+                    // wide instantiation values as LE 32-bit limbs
+                    let mut limbs = Vec::new();
+                    for &l in pv.limbs64() {
+                        limbs.push(l as u32);
+                        limbs.push((l >> 32) as u32);
+                    }
+                    wide_consts.insert(pn, (pv.width, limbs));
                 }
             }
             for (&pn, &(w, kind)) in &self.mods[module].ports {
@@ -2479,11 +2577,15 @@ impl Interp {
                 }
                 match kind {
                     trs_ir::PortKind::MethodArg => {
-                        port_consts.insert(pn, (w.max(1), 0));
+                        // LOGICAL width, zero included: the interp's
+                        // fallback masks from_u64(0, _) to the empty
+                        // vector, so a zero-width port must not become
+                        // a width-1 value (review finding)
+                        port_consts.insert(pn, (w, 0));
                     }
                     trs_ir::PortKind::MethodEnable => {}
                     _ => {
-                        port_consts.insert(pn, (w.max(1), 1));
+                        port_consts.insert(pn, (w, if w == 0 { 0 } else { 1 }));
                     }
                 }
             }
@@ -2503,6 +2605,10 @@ impl Interp {
                     eager_slot,
                     memo_slot,
                     port_consts,
+                    real_consts,
+                    gates: gates.clone(),
+                    str_consts: str_params.clone(),
+                    wide_consts,
                     region: (region_start, 0),
                 },
             );
@@ -2578,6 +2684,31 @@ impl Interp {
                     e.port_consts.iter().map(|(&k, &(w, v))| (k, w, v)).collect();
                 m11.sort_unstable();
                 m11.hash(&mut h);
+                let mut m12: Vec<_> =
+                    e.real_consts.iter().map(|(&k, &v)| (k, v)).collect();
+                m12.sort_unstable();
+                m12.hash(&mut h);
+                // gate wiring pins the sig: owner slots are ABSOLUTE in
+                // deduped bodies, so instances gated differently (other
+                // owner, other expr) must never share exec code
+                let mut m13: Vec<_> = e
+                    .gates
+                    .iter()
+                    .map(|(&k, (o, g))| (k, *o, format!("{g:?}")))
+                    .collect();
+                m13.sort_unstable();
+                m13.hash(&mut h);
+                let mut m14: Vec<_> =
+                    e.str_consts.iter().map(|(&k, &v)| (k, v)).collect();
+                m14.sort_unstable();
+                m14.hash(&mut h);
+                let mut m15: Vec<_> = e
+                    .wide_consts
+                    .iter()
+                    .map(|(&k, (w, l))| (k, *w, l.clone()))
+                    .collect();
+                m15.sort_unstable();
+                m15.hash(&mut h);
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e
@@ -2609,6 +2740,9 @@ impl Interp {
                     let SchedNode::Exec(r) = node else { continue };
                     if !self.mods[module].rules.contains_key(&r) {
                         continue; // method exec node
+                    }
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue; // after-edge pass runs it interpreted
                     }
                     if !rule_ord.contains_key(&(en.inst, r)) {
                         if trace {
@@ -2731,7 +2865,7 @@ impl Interp {
                     v
                 })
                 .collect();
-            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, true);
+            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, has_early, true);
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
@@ -2866,9 +3000,30 @@ impl Interp {
         // ---- exec dedup classes: one compiled body per class ----
         let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
         {
-            let mut key_to_class: HashMap<(u64, usize), usize> = HashMap::new();
+            let mut key_to_class: HashMap<(u64, usize, Vec<(bool, u32)>), usize> =
+                HashMap::new();
             for (o, sp) in specs.iter().enumerate() {
-                let key = (inst_sig[&sp.inst], sp.rule_idx);
+                // the compiled body bakes always_fire and inhibitor slot
+                // LOADS; own-region slots are region-relative in codegen
+                // (twins share safely), foreign-instance slots are
+                // absolute (twins must not share) — the key mirrors that
+                let ie = &inst_envs[&sp.inst];
+                let own: std::collections::HashSet<u32> =
+                    ie.cfwf_slot.values().copied().collect();
+                let r0 = ie.region.0;
+                let mut inh: Vec<(bool, u32)> = sp
+                    .inhibit_slots
+                    .iter()
+                    .map(|&sl| {
+                        if own.contains(&sl) {
+                            (true, sl - r0)
+                        } else {
+                            (false, sl)
+                        }
+                    })
+                    .collect();
+                inh.sort_unstable();
+                let key = (inst_sig[&sp.inst], sp.rule_idx, inh);
                 let c = *key_to_class.entry(key).or_insert_with(|| {
                     classes.push((o, Vec::new()));
                     classes.len() - 1
@@ -2894,6 +3049,13 @@ impl Interp {
                             SchedNode::Sched(r) => (r, true),
                             SchedNode::Exec(r) => (r, false),
                         };
+                        // early rules run in THIS comp's PG_FINAL pass
+                        // interpreted — emitting them here would double-
+                        // run a rule that another comp scheduled (and
+                        // gave an ordinal to) normally
+                        if rc.early.contains(&(en.inst, r)) {
+                            continue;
+                        }
                         // interface-method nodes have no ordinal:
                         // they are no-ops in the edge walk (interp
                         // parity — nothing to latch or execute)
@@ -3129,7 +3291,9 @@ impl Interp {
                         })
                         .collect();
                     let mut plan =
-                        self.edge_ssa_plan(&inst_envs, &nodes, &specs, false);
+                        self.edge_ssa_plan(
+                            &inst_envs, &nodes, &specs, has_early, false,
+                        );
                     plan.wire_clears =
                         self.wire_tick_coverage(&inst_envs, rcomps).0;
                     plan

@@ -262,9 +262,28 @@ def one_test(job):
         return (rel, top, "TIMEOUT", f"limit {limit:.0f}s (ref {ref_secs:.2f}s)")
     if inp.returncode != 0 and "panicked" in inp.stderr:
         return (rel, top, "INTERP_PANIC", panic_reason(inp.stderr))
-    if "error" in inp.stderr.lower() and inp.returncode != 0:
+    # infra-failure heuristic: only when the reference did NOT fail the
+    # same way — a design that legitimately exits nonzero (e.g. $fatal)
+    # while printing "Error" must reach the output diff, not hide in an
+    # infra bucket
+    if ("error" in inp.stderr.lower() and inp.returncode != 0
+            and inp.returncode != ref.returncode):
         return (rel, top, "DECODE_FAIL", first_error(inp.stderr))
 
+    # stderr is a sim output channel too ($fdisplay to stderr): diff it
+    # like stdout, with trs' own infra notes (all "trs"-prefixed lines)
+    # filtered out of the trs side first
+    trs_notes = [l for l in inp.stderr.splitlines(True) if l.startswith("trs")]
+    inp_err = "".join(
+        l for l in inp.stderr.splitlines(True) if not l.startswith("trs"))
+    if engine_note == " engine=aot" and any(
+            "compiling in-process instead" in l for l in trs_notes):
+        # the wrapper had --code but the artifact refused at load: the
+        # run was NOT aot — never credit aot timings to a fallback
+        engine_note = " engine=interp why=stale_artifact_load_fallback"
+    if ref.stdout == inp.stdout and ref.stderr != inp_err:
+        return (rel, top, "DIFF",
+                "stderr: " + diff_summary(ref.stderr, inp_err))
     if ref.stdout == inp.stdout:
         if ref.returncode != inp.returncode:
             return (rel, top, "DIFF",
@@ -358,9 +377,15 @@ def main():
         # workers re-import this module (spawn/forkserver); hand the
         # override down via the environment
         os.environ["DIFFSWEEP_TRS"] = TRS
+    # bind the globals too: fork-start pools never re-import, so the
+    # env-only handoff silently no-ops the flags there
     if args.timeout_floor is not None:
+        global TIMEOUT_FLOOR
+        TIMEOUT_FLOOR = args.timeout_floor
         os.environ["DIFFSWEEP_TIMEOUT_FLOOR"] = str(args.timeout_floor)
     if args.timeout_factor is not None:
+        global TIMEOUT_FACTOR
+        TIMEOUT_FACTOR = args.timeout_factor
         os.environ["DIFFSWEEP_TIMEOUT_FACTOR"] = str(args.timeout_factor)
     if args.aot:
         global AOT
@@ -395,11 +420,13 @@ def main():
             if status == "PASS" and note.startswith("t "):
                 total = 0.0
                 for kv in note[2:].split():
-                    _, _, v = kv.partition("=")
+                    k, _, v = kv.partition("=")
+                    if k not in ("ref_build", "ref_run", "trs_link", "trs_run"):
+                        continue  # engine=/why= (even numeric-looking)
                     try:
                         total += float(v)
                     except ValueError:
-                        pass  # non-timing columns (engine=, why=)
+                        pass
                 cost[(rel, top)] = total
         def jobkey(j):
             rel = os.path.relpath(j[0], REPO)

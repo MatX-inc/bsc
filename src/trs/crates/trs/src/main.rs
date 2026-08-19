@@ -216,7 +216,13 @@ fn main() -> ExitCode {
                      exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
                 )
             };
-            if let Err(e) = std::fs::write(&base, script) {
+            // temp+rename: a crash mid-write must never leave a
+            // truncated-but-executable wrapper (a script missing its
+            // exec line runs and exits 0 doing nothing)
+            let base_tmp = format!("{base}.tmp");
+            if let Err(e) = std::fs::write(&base_tmp, script)
+                .and_then(|()| std::fs::rename(&base_tmp, &base))
+            {
                 eprintln!("trs link: {base}: {e}");
                 return ExitCode::FAILURE;
             }

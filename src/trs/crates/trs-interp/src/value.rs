@@ -250,6 +250,9 @@ impl Value {
 
     pub fn lshr(&self, sh: u64, w: u32) -> Value {
         let mut r = Value::zero(w);
+        if sh >= self.width as u64 {
+            return r; // also guards i + sh overflow for huge sh
+        }
         for i in 0..w {
             let src = i as u64 + sh;
             if src < self.width as u64 && self.bit(src as u32) {
@@ -262,6 +265,15 @@ impl Value {
     pub fn ashr(&self, sh: u64, w: u32) -> Value {
         let s = self.sign();
         let mut r = Value::zero(w);
+        if sh >= self.width as u64 {
+            // pure sign fill; also guards i + sh overflow for huge sh
+            if s {
+                for i in 0..w {
+                    r.limbs[(i as usize) / 64] |= 1 << (i % 64);
+                }
+            }
+            return r;
+        }
         for i in 0..w {
             let src = i as u64 + sh;
             let b = if src < self.width as u64 { self.bit(src as u32) } else { s };
