@@ -1964,8 +1964,19 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
     -- same amortization as the C++ backend's g++ link, at a fraction
     -- of the cost.  Any failure (trs not on PATH, built without the
     -- jit feature, infra error) falls back to the interpreter wrapper.
+    -- like the C++ backend, trs dumps waveforms only in VCD and FST
+    let bad_fmts2 = filter (`notElem` ["vcd", "fst"]) (dumpFormats flags)
+    when (not (null bad_fmts2)) $
+        bsError errh
+            [(cmdPosition,
+              EGeneric ("Bluesim does not support waveform dump format `" ++
+                        f ++ "' (supported: vcd, fst)"))
+            | f <- bad_fmts2]
+    let dumpFmtsArg = case dumpFormats flags of
+                        [] -> "none"
+                        fs -> intercalate "," fs
     let linkCmd = "\"${TRS:-trs}\" link \"" ++ outFile ++ ".bir\" -o \""
-                  ++ outFile ++ "\""
+                  ++ outFile ++ "\" --dump-formats " ++ dumpFmtsArg
     rc <- system linkCmd
     case rc of
       ExitSuccess -> do

@@ -62,6 +62,12 @@ pub struct Vcd {
     /// -dump-formats gates which writers are COMPILED INTO a C++
     /// model — an interpreter has no codegen to elide)
     format: WaveFormat,
+    /// -dump-formats: which writers this model claims to carry.  The
+    /// reference default is vcd-only; format selection and dump
+    /// enabling report the reference's exact errors when the model
+    /// was not built with the requested format.
+    allowed_vcd: bool,
+    allowed_fst: bool,
     filename: Option<String>,
     pub state: VcdState,
     pub enabled: bool,
@@ -91,6 +97,8 @@ impl Vcd {
         Vcd {
             sink: None,
             format: WaveFormat::Vcd,
+            allowed_vcd: true,
+            allowed_fst: false,
             filename: None,
             state: VcdState::Off,
             enabled: false,
@@ -165,9 +173,53 @@ impl Vcd {
     /// closed; re-enabling writes a file in the new format.  Format
     /// availability is the CALLER's check (capi): the interp engine
     /// carries both writers.
-    pub fn set_format(&mut self, fmt: WaveFormat, now: u64) {
+    /// -dump-formats: record which writers the model carries; also
+    /// selects the default format (vcd_set_allowed_formats semantics —
+    /// vcd wins when both are present).
+    pub fn set_allowed(&mut self, vcd: bool, fst: bool) {
+        self.allowed_vcd = vcd;
+        self.allowed_fst = fst;
+        if vcd {
+            self.format = WaveFormat::Vcd;
+        } else if fst {
+            self.format = WaveFormat::Fst;
+        }
+    }
+
+    /// vcd_format_available: true iff the model carries `fmt`,
+    /// reporting the reference's exact stderr error when it does not
+    /// (the simulation continues either way).
+    pub fn format_available(&self, fmt: WaveFormat) -> bool {
+        if !self.allowed_vcd && !self.allowed_fst {
+            eprintln!(
+                "Error: this model was built with -dump-formats none; \
+                 no waveform dumping is available"
+            );
+            return false;
+        }
+        let ok = match fmt {
+            WaveFormat::Vcd => self.allowed_vcd,
+            WaveFormat::Fst => self.allowed_fst,
+        };
+        if !ok {
+            let (name, flag) = match fmt {
+                WaveFormat::Fst => ("FST", "fst"),
+                WaveFormat::Vcd => ("VCD", "vcd"),
+            };
+            eprintln!(
+                "Error: this model was not built with {name} support \
+                 (rebuild with -dump-formats {flag})"
+            );
+        }
+        ok
+    }
+
+    pub fn set_format(&mut self, fmt: WaveFormat, now: u64) -> bool {
         if fmt == self.format {
-            return;
+            return true;
+        }
+        if !self.format_available(fmt) {
+            return false;
         }
         self.enabled = false;
         self.go_xs = false;
@@ -187,6 +239,7 @@ impl Vcd {
         self.filename = None;
         self.state = VcdState::Off;
         self.format = fmt;
+        true
     }
 
     pub fn set_file(&mut self, name: &str) -> Result<(), ()> {
@@ -219,6 +272,11 @@ impl Vcd {
     }
 
     pub fn set_state(&mut self, on: bool) {
+        // $dumpon/$dumpvars on a model without the current format:
+        // loud error, stay off, open no file
+        if on && !self.format_available(self.format) {
+            return;
+        }
         if on && self.sink.is_none() {
             let _ = self.set_file(self.default_file_name());
         }

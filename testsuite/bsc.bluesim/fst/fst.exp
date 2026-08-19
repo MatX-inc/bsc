@@ -170,10 +170,13 @@ if { $ctest == 1 } {
     find_regexp sysFstVcdOnly.vcd {\$var reg 8 \S+ counter \$end}
 
     # the per-signal dump code is generated, but the FST writer is
-    # not referenced (it is only linked in when fst is selected)
-    string_occurs mkFstDumpCore.cxx "vcd_write_val"
-    string_does_not_occur model_sysFstVcdOnly.cxx "vcd_register_fst"
-    string_occurs model_sysFstDump.cxx "vcd_register_fst"
+    # not referenced (it is only linked in when fst is selected) —
+    # C++-backend artifacts only
+    if { [cxx_codegen_tests] } {
+        string_occurs mkFstDumpCore.cxx "vcd_write_val"
+        string_does_not_occur model_sysFstVcdOnly.cxx "vcd_register_fst"
+        string_occurs model_sysFstDump.cxx "vcd_register_fst"
+    }
 
     sim_output sysFstVcdOnly {+bscfst}
     string_occurs sysFstVcdOnly.out "Error: this model was not built with FST support (rebuild with -dump-formats fst)"
@@ -188,10 +191,13 @@ if { $ctest == 1 } {
     # the per-signal dump code really is dropped: relinking with
     # none must regenerate the module (not reuse the object built
     # with vcd,fst above) without the dump machinery (the clock
-    # definitions, which the kernel owns, are not gated)
-    string_does_not_occur mkFstDumpCore.cxx "vcd_write_val"
-    string_does_not_occur mkFstDumpCore.cxx "vcd_defs"
-    string_occurs model_sysFstNone.cxx "no waveform dumping is available"
+    # definitions, which the kernel owns, are not gated) —
+    # C++-backend artifacts only
+    if { [cxx_codegen_tests] } {
+        string_does_not_occur mkFstDumpCore.cxx "vcd_write_val"
+        string_does_not_occur mkFstDumpCore.cxx "vcd_defs"
+        string_occurs model_sysFstNone.cxx "no waveform dumping is available"
+    }
 
     sim_output sysFstNone {+bscfst}
     string_occurs sysFstNone.out "Error: this model was built with -dump-formats none; no waveform dumping is available"

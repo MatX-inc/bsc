@@ -3746,16 +3746,20 @@ impl Interp {
         // set_state (mirroring bluesim.tcl's `sim <fmt> on|<file>`)
         if let Some((fmt, file)) = self.wave_pending.take() {
             let now = self.now;
-            self.vcd.set_format(fmt, now);
-            match file {
-                Some(f) => {
-                    if self.vcd.set_file(&f).is_ok() {
-                        self.vcd.set_state(true);
+            // -dump-formats gate FIRST: a refused request must not
+            // even create the file (the reference errors on stderr
+            // and the simulation runs on, dump-less)
+            if self.vcd.format_available(fmt) && self.vcd.set_format(fmt, now) {
+                match file {
+                    Some(f) => {
+                        if self.vcd.set_file(&f).is_ok() {
+                            self.vcd.set_state(true);
+                        }
                     }
+                    None => self.vcd.set_state(true),
                 }
-                None => self.vcd.set_state(true),
+                self.vcd_trace = true;
             }
-            self.vcd_trace = true;
         }
 
         // seed the event heap (see Stepper::heap for the ordering)
@@ -4667,16 +4671,29 @@ impl Interp {
     /// bk_set_waveform_format's engine half (the capi validates the
     /// string): a same-format set is a no-op, otherwise any dump in
     /// progress ends and the file closes.
-    pub fn wave_set_format(&mut self, fmt: WaveFormat) {
+    pub fn wave_set_format(&mut self, fmt: WaveFormat) -> bool {
         let now = self.now;
-        self.vcd.set_format(fmt, now);
+        if !self.vcd.set_format(fmt, now) {
+            return false;
+        }
         // FST recording needs the same def/method traces as VCD
         self.vcd_trace = true;
+        true
     }
 
     /// bk_get_waveform_format.
     pub fn wave_format(&self) -> WaveFormat {
         self.vcd.format()
+    }
+
+    /// -dump-formats plumbing: which waveform writers this model
+    /// carries.  `none` also turns recording off entirely — the model
+    /// is the untraced fast artifact and can never start dumping.
+    pub fn set_allowed_wave_formats(&mut self, vcd: bool, fst: bool) {
+        self.vcd.set_allowed(vcd, fst);
+        if !vcd && !fst {
+            self.vcd_trace = false;
+        }
     }
 
     /// Batch driver (+bscvcd / +bscfst): stage a waveform request
@@ -5079,8 +5096,12 @@ pub fn run_file(
     vcd_file: Option<&str>,
     wave: Option<(WaveFormat, Option<String>)>,
     code: Option<&str>,
+    formats: Option<(bool, bool)>,
 ) -> Result<i32, String> {
     let mut interp = load_file(path, plusargs, vcd_file)?;
+    if let Some((vcd, fst)) = formats {
+        interp.set_allowed_wave_formats(vcd, fst);
+    }
     if let Some((f, file)) = wave {
         interp.wave_request(f, file);
     }

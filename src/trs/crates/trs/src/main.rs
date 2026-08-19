@@ -52,11 +52,30 @@ fn main() -> ExitCode {
         ["link", path, rest @ ..] => {
             let mut out: Option<String> = None;
             let mut interactive = false;
+            // -dump-formats plumbing from bsc: which waveform writers
+            // the artifact carries (reference default: vcd only)
+            let mut fmt_arg = "vcd".to_string();
             let mut it = rest.iter();
             while let Some(a) = it.next() {
                 match *a {
                     "-o" => out = it.next().map(|s| s.to_string()),
                     "--interactive" => interactive = true,
+                    "--dump-formats" => {
+                        let Some(v) = it.next() else {
+                            eprintln!("Error: --dump-formats requires a value");
+                            return ExitCode::from(2);
+                        };
+                        for tok in v.split(',').filter(|t| !t.is_empty()) {
+                            if !matches!(tok, "none" | "vcd" | "fst") {
+                                eprintln!(
+                                    "trs link: unsupported dump format \
+                                     `{tok}' (supported: vcd, fst, none)"
+                                );
+                                return ExitCode::FAILURE;
+                            }
+                        }
+                        fmt_arg = v.to_string();
+                    }
                     // hermeticity: every output-affecting knob is a
                     // flag (bsc passes these through; build systems
                     // key actions on argv, not env).  The env vars
@@ -106,6 +125,11 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            let fmt_vcd = fmt_arg.split(',').any(|t| t == "vcd");
+            let fmt_fst = fmt_arg.split(',').any(|t| t == "fst");
+            // `none` turns recording off: the artifact is the pure
+            // untraced fast model (and the trace salt follows)
+            interp.set_allowed_wave_formats(fmt_vcd, fmt_fst);
             if interactive {
                 // DEBUG/interactive product: a bluetcl-loadable model
                 // .so (docs/TCL-CAPI.md) + the reference's bluesim.tcl
@@ -233,12 +257,12 @@ fn main() -> ExitCode {
             let script = if compiled {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} --formats {fmt_arg} ${{1+\"$@\"}}\n"
                 )
             } else {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n\
-                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --formats {fmt_arg} ${{1+\"$@\"}}\n"
                 )
             };
             // temp+rename: a crash mid-write must never leave a
@@ -271,6 +295,9 @@ fn main() -> ExitCode {
                 None;
             let mut vcd_file: Option<String> = None;
             let mut code_so: Option<String> = None;
+            // (vcd, fst) writers this model carries; None = the
+            // reference default (vcd only) applied at load
+            let mut formats: Option<(bool, bool)> = None;
             let mut script_cmds = String::new();
             // bluesim.tcl's usage text, printed for -h and after the
             // deprecated-flag notices; the driver exits 0 in both cases
@@ -322,6 +349,15 @@ fn main() -> ExitCode {
                     }
                     "--code" => {
                         code_so = it.next().map(|s| s.to_string());
+                    }
+                    // -dump-formats baked into the artifact wrapper
+                    "--formats" => {
+                        if let Some(v) = it.next() {
+                            formats = Some((
+                                v.split(',').any(|t| t == "vcd"),
+                                v.split(',').any(|t| t == "fst"),
+                            ));
+                        }
                     }
                     // artifacts pin their split threshold (arena layout)
                     "--split" => {
@@ -414,6 +450,7 @@ fn main() -> ExitCode {
                     vcd_file.as_deref(),
                     wave.clone(),
                     code_so.as_deref(),
+                    formats,
                     &script_cmds,
                 );
             }
@@ -424,6 +461,7 @@ fn main() -> ExitCode {
                 vcd_file.as_deref(),
                 wave,
                 code_so.as_deref(),
+                formats,
             ) {
                 Ok(code) => {
                     use std::io::Write;
@@ -652,6 +690,7 @@ fn run_script(
     vcd: Option<&str>,
     wave: Option<(trs_interp::WaveFormat, Option<String>)>,
     code: Option<&str>,
+    formats: Option<(bool, bool)>,
     script: &str,
 ) -> ExitCode {
     let mut interp = match trs_interp::load_file(path, plusargs, vcd) {
@@ -661,6 +700,9 @@ fn run_script(
             return ExitCode::FAILURE;
         }
     };
+    if let Some((v, f)) = formats {
+        interp.set_allowed_wave_formats(v, f);
+    }
     if let Some((f, file)) = wave {
         interp.wave_request(f, file);
     }
@@ -730,6 +772,37 @@ fn run_script(
                 .collect::<Vec<_>>()
                 .join(" "),
             ["sim", "config", "interactive"] => String::new(),
+            // bluetcl's `sim vcd` / `sim fst`: select the format
+            // (refused with the reference's error when the model was
+            // not built with it), then on|off|<file>|query
+            ["sim", f @ ("vcd" | "fst")] => {
+                // query: current dump file name (empty list when none)
+                let _ = f;
+                interp.vcd_file_name().to_string()
+            }
+            ["sim", f @ ("vcd" | "fst"), arg] => {
+                let fmt = if *f == "fst" {
+                    trs_interp::WaveFormat::Fst
+                } else {
+                    trs_interp::WaveFormat::Vcd
+                };
+                match *arg {
+                    "off" => interp.vcd_disable(),
+                    "on" => {
+                        if interp.wave_set_format(fmt) {
+                            let _ = interp.vcd_enable();
+                        }
+                    }
+                    file => {
+                        if interp.wave_set_format(fmt)
+                            && interp.vcd_set_file(Some(file)).is_ok()
+                        {
+                            let _ = interp.vcd_enable();
+                        }
+                    }
+                }
+                String::new()
+            }
             _ => {
                 eprintln!(
                     "trs: unsupported -c/-f command {cmd:?} \
