@@ -122,11 +122,21 @@ fn main() -> ExitCode {
                         eprintln!("trs link: {e}");
                         return ExitCode::FAILURE;
                     }
-                    _ => eprintln!(
-                        "trs link: note: aot engine unavailable for \
-                         this design; the model's aot selection will \
-                         run interpreted"
-                    ),
+                    _ => {
+                        if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
+                            eprintln!(
+                                "trs link: TRS_REQUIRE_AOT is set but the \
+                                 aot engine is unavailable for this \
+                                 design; refusing"
+                            );
+                            return ExitCode::from(86);
+                        }
+                        eprintln!(
+                            "trs link: note: aot engine unavailable for \
+                             this design; the model's aot selection will \
+                             run interpreted"
+                        )
+                    }
                 }
                 return link_interactive(path, &base, interp.top_name());
             }
@@ -142,6 +152,13 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 Some(trs_interp::AotEmit::Ineligible(e)) => {
+                    if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
+                        eprintln!(
+                            "trs link: TRS_REQUIRE_AOT is set but compiled \
+                             mode is unavailable ({e}); refusing"
+                        );
+                        return ExitCode::from(86);
+                    }
                     eprintln!(
                         "trs link: note: compiled mode unavailable ({e}); \
                          artifact will run interpreted"
@@ -149,6 +166,14 @@ fn main() -> ExitCode {
                     false
                 }
                 None => {
+                    if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
+                        eprintln!(
+                            "trs link: TRS_REQUIRE_AOT is set but compiled \
+                             mode is unavailable (TRS_JIT_TRACE=1 shows \
+                             why); refusing"
+                        );
+                        return ExitCode::from(86);
+                    }
                     eprintln!(
                         "trs link: note: compiled mode unavailable \
                          (TRS_JIT_TRACE=1 shows why); artifact will run \

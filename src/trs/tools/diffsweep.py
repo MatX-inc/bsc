@@ -58,6 +58,53 @@ TIMEOUT_FACTOR = float(os.environ.get("DIFFSWEEP_TIMEOUT_FACTOR", "5"))
 # script (build cost is NOT counted against the sim-time leash — the
 # incumbents amortize their compiles the same way)
 AOT = os.environ.get("DIFFSWEEP_AOT", "") == "1"
+# golden-output cache directory ("" = off): reference-side results are
+# keyed by (bsc binary, top, cycles, every design input file) and
+# replayed on hit, so a regression sweep pays only the trs side —
+# measured, the reference apparatus (bsc compile + Bluesim build + ref
+# run) is ~95% of a full sweep's wall clock
+GOLDEN = os.environ.get("DIFFSWEEP_GOLDEN", "")
+_BSC_ID = None
+
+
+def _bsc_id():
+    """Content hash of the bsc binary: golden entries from another bsc
+    build must never replay."""
+    global _BSC_ID
+    if _BSC_ID is None:
+        import hashlib
+        h = hashlib.sha256()
+        with open(BSC, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        _BSC_ID = h.hexdigest().encode()
+    return _BSC_ID
+
+
+# every file class one_test copies into the work dir feeds the key —
+# sources, BDPI C/H (incl. .keep), and data files (they shape the
+# reference OUTPUT, not just the build)
+_GOLD_INPUTS = (".bsv", ".bs", ".c", ".c.keep", ".h", ".h.keep",
+                ".dat", ".hex", ".bin", ".txt", ".mem", ".vec",
+                ".input", ".vectors", ".handbuilt", ".rom", ".data")
+
+
+def _golden_key(testdir, top):
+    import hashlib
+    h = hashlib.sha256()
+    h.update(_bsc_id())
+    h.update(top.encode())
+    h.update(MAX_CYCLES.encode())
+    for f in sorted(os.listdir(testdir)):
+        if f.startswith("vpi_") or not f.endswith(_GOLD_INPUTS):
+            continue
+        h.update(f.encode())
+        try:
+            with open(os.path.join(testdir, f), "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            h.update(b"<unreadable>")
+    return h.hexdigest()
 
 
 def find_source(testdir, top):
@@ -115,6 +162,41 @@ def run(cmd, cwd, timeout=TIMEOUT, env=None):
         return None
 
 
+def _gold_terminal(gdir, cls, note):
+    """Cache a deterministic terminal classification (meta written
+    last: its presence is the entry's validity marker)."""
+    if not gdir:
+        return
+    try:
+        os.makedirs(gdir, exist_ok=True)
+        with open(os.path.join(gdir, "meta.json"), "w") as f:
+            json.dump({"status": cls, "note": note}, f)
+    except OSError:
+        pass
+
+
+def _gold_save(gdir, wk, top, ref, ref_secs, ref_build_secs):
+    """Cache a successful reference: the .bir (trs's input), any
+    .bdpi.so, and the golden outputs + timings."""
+    if not gdir:
+        return
+    try:
+        os.makedirs(gdir, exist_ok=True)
+        for f in os.listdir(wk):
+            if f == top + ".bir" or f.endswith(".bdpi.so"):
+                shutil.copy(os.path.join(wk, f), gdir)
+        with open(os.path.join(gdir, "ref.stdout"), "w") as f:
+            f.write(ref.stdout)
+        with open(os.path.join(gdir, "ref.stderr"), "w") as f:
+            f.write(ref.stderr)
+        with open(os.path.join(gdir, "meta.json"), "w") as f:
+            json.dump({"status": "REF_OK", "returncode": ref.returncode,
+                       "ref_secs": ref_secs,
+                       "ref_build_secs": ref_build_secs}, f)
+    except OSError:
+        pass
+
+
 def one_test(job):
     testdir, top, workroot = job
     rel = os.path.relpath(testdir, REPO)
@@ -134,6 +216,35 @@ def one_test(job):
                 shutil.copy(os.path.join(testdir, f), wk)
             except OSError:
                 pass
+
+    gdir = None
+    if GOLDEN:
+        gdir = os.path.join(GOLDEN, _golden_key(testdir, top))
+        meta_p = os.path.join(gdir, "meta.json")
+        if os.path.exists(meta_p):
+            try:
+                meta = json.load(open(meta_p))
+            except (OSError, ValueError):
+                meta = None
+            if meta and meta.get("status") != "REF_OK":
+                # cached terminal classification (COMPILE_FAIL etc.)
+                return (rel, top, meta["status"], meta.get("note", ""))
+            if meta:
+                # cached reference: reconstitute without touching bsc
+                for f in os.listdir(gdir):
+                    if f.endswith((".bir", ".bdpi.so")):
+                        shutil.copy(os.path.join(gdir, f), wk)
+                import types
+                ref = types.SimpleNamespace(
+                    stdout=open(os.path.join(gdir, "ref.stdout"),
+                                errors="replace").read(),
+                    stderr=open(os.path.join(gdir, "ref.stderr"),
+                                errors="replace").read(),
+                    returncode=meta["returncode"],
+                )
+                return _trs_side(rel, top, wk, testdir,
+                                 os.path.join(wk, top + ".bir"), ref,
+                                 meta["ref_secs"], meta["ref_build_secs"])
 
     # sources are COPIED into the work dir and testdir stays OFF the
     # search path: fullparallel leaves version-matched .bo/.ba residue
@@ -185,7 +296,9 @@ def one_test(job):
             return (rel, top, "COMPILE_FAIL", "compile timeout")
         if "(G0097)" in msg or "(G0098)" in msg:
             # Inout is not supported by Bluesim at all
+            _gold_terminal(gdir, "NOT_SUPPORTED", first_error(msg))
             return (rel, top, "NOT_SUPPORTED", first_error(msg))
+        _gold_terminal(gdir, "COMPILE_FAIL", first_error(msg))
         return (rel, top, "COMPILE_FAIL", first_error(msg))
 
     import time as _time
@@ -205,6 +318,10 @@ def one_test(job):
             cls = "NOT_SUPPORTED"
         else:
             cls = "LINK_FAIL"
+        if cls != "LINK_FAIL":
+            # LINK_FAIL stays uncached: it includes build TIMEOUTS,
+            # which are load- and box-dependent (ConflictFree*Large)
+            _gold_terminal(gdir, cls, first_error(msg))
         return (rel, top, cls, first_error(msg))
 
     bir = os.path.join(wk, top + ".bir")
@@ -219,6 +336,15 @@ def one_test(job):
     if ref.returncode < 0:
         return (rel, top, "REF_FAIL", f"signal {-ref.returncode}")
 
+    _gold_save(gdir, wk, top, ref, ref_secs, ref_build_secs)
+    return _trs_side(rel, top, wk, testdir, bir, ref, ref_secs,
+                     ref_build_secs)
+
+
+def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs):
+    """The trs half of one_test: link, run, byte-compare against the
+    reference result (live or golden-replayed)."""
+    import time as _time
     is_long = any(f.endswith(".exp.golden") for f in os.listdir(testdir))
     limit = max(TIMEOUT_FLOOR, TIMEOUT_FACTOR * ref_secs) if is_long else TIMEOUT
     # trs may compile INSIDE the timed window (sync JIT); the
@@ -365,6 +491,11 @@ def main():
                     help="long-test trs timeout as a multiple of the "
                     "reference's wall time (default 5)")
     ap.add_argument(
+        "--golden", default="",
+        help="golden-output cache dir: reference results are cached by "
+        "(bsc, design inputs) and replayed on hit, so the sweep pays "
+        "only the trs side")
+    ap.add_argument(
         "--trs",
         default="",
         help="trs binary to sweep (default: the repo release build); "
@@ -391,6 +522,11 @@ def main():
         global AOT
         AOT = True
         os.environ["DIFFSWEEP_AOT"] = "1"
+    if args.golden:
+        global GOLDEN
+        GOLDEN = os.path.abspath(args.golden)
+        os.environ["DIFFSWEEP_GOLDEN"] = GOLDEN
+        os.makedirs(GOLDEN, exist_ok=True)
     print(f"trs binary: {TRS}", flush=True)
 
     jobs = []

@@ -1969,17 +1969,24 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
     rc <- system linkCmd
     case rc of
       ExitSuccess -> do
-        -- `trs link` exits 0 in both modes: with the jit feature it
-        -- emits a compiled model artifact, without it an interpreter
-        -- wrapper of its own.  Probe the feature set so the message
-        -- reports which one was just created.
-        jitRc <- system "\"${TRS:-trs}\" features 2>/dev/null | grep -qw jit"
-        let how = case jitRc of
+        -- the ENGINE truth lives in the artifact itself: trs link's
+        -- wrapper execs `trs run --code` iff a compiled model was
+        -- emitted.  (The old feature-set probe misreported every
+        -- ineligible design as compiled: a jit-featured binary still
+        -- emits interpreter wrappers for designs it cannot compile.)
+        engRc <- system ("grep -q -- \"--code\" \"" ++ outFile ++ "\"")
+        let how = case engRc of
                     ExitSuccess -> " (compiled)"
                     _           -> " (interpreted)"
         unless (quiet flags) $
             putStrLnF ("TRS simulation created" ++ how ++ ": " ++ outFile)
       _ -> do
+        -- honor a strict-mode refusal: converting `trs link`'s
+        -- TRS_REQUIRE_AOT failure into an interpreter wrapper would
+        -- reintroduce the silent degrade at this layer
+        strictRc <- system "test -n \"$TRS_REQUIRE_AOT\""
+        when (strictRc == ExitSuccess) $
+            exitFailWith errh 86
         writeFileCatch errh outFile $
             unlines [ "#!/bin/sh"
                     , ""
@@ -1991,7 +1998,7 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
             mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
         setFileMode outFile mode'
         unless (quiet flags) $
-            putStrLnF ("TRS simulation created: " ++ outFile)
+            putStrLnF ("TRS simulation created (interpreted): " ++ outFile)
 
 -- ===============
 -- vLink

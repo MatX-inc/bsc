@@ -204,6 +204,26 @@ pub struct Interp {
     jit_arena_ptr: *mut u64,
     /// reset node -> arena slot holding the port level (1 = deasserted)
     jit_reset_slots: Vec<u32>,
+    /// TRACED artifact only: (instance, VCD-declared def) -> recording
+    /// slot (base, width).  When a key has a slot, the slot is the
+    /// single authority — interp-side recording writes it (not the
+    /// vcd_def_vals map) and the writer reads it first.
+    jit_rec_defs: HashMap<(usize, StrId), (u32, u32)>,
+    /// TRACED artifact only: (instance, method) -> recording slots for
+    /// the method's VCD ports (EN time / args / result)
+    jit_rec_meths: HashMap<(usize, StrId), RecSlots>,
+}
+
+/// Arena recording slots for one user-module method's VCD ports
+/// (traced artifacts): the runtime mirror of the codegen-side layout.
+#[derive(Clone, Default)]
+struct RecSlots {
+    /// last-call time slot (init u64::MAX; PortEn = time == pos_at)
+    t: u32,
+    /// per-argument (base, port width), in method arg order (init 0)
+    args: Vec<(u32, u32)>,
+    /// result (base, width) for value/AV methods (init 0)
+    res: Option<(u32, u32)>,
 }
 
 /// Kernel-side clock state mirrored for VCD (tClockInfo essentials).
@@ -624,6 +644,8 @@ impl Interp {
             bir_hash: 0,
             jit_arena_ptr: std::ptr::null_mut(),
             jit_reset_slots: Vec::new(),
+            jit_rec_defs: HashMap::new(),
+            jit_rec_meths: HashMap::new(),
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
@@ -1046,6 +1068,88 @@ impl Interp {
         }
     }
 
+    /// Write a value into arena recording slots (traced artifacts).
+    fn rec_write(&self, base: u32, w: u32, v: &Value) {
+        let words = (w.max(1) as usize).div_ceil(64);
+        let limbs = v.limbs64();
+        unsafe {
+            for k in 0..words {
+                *self.jit_arena_ptr.add(base as usize + k) =
+                    limbs.get(k).copied().unwrap_or(0);
+            }
+        }
+    }
+
+    /// Read a value back from arena recording slots.
+    fn rec_read(&self, base: u32, w: u32) -> Value {
+        let words = (w.max(1) as usize).div_ceil(64);
+        let limbs = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr.add(base as usize), words)
+        }
+        .to_vec();
+        Value::from_limbs64(w.max(1), limbs)
+    }
+
+    /// Record a def's evaluated value for the VCD writer: the arena
+    /// recording slot when the traced artifact declares one (the slot is
+    /// then the single authority — compiled bodies store it inline and
+    /// interp-executed code lands here), else the vcd_def_vals map.
+    fn vcd_rec_def(&mut self, inst: usize, name: StrId, v: &Value) {
+        if !self.jit_arena_ptr.is_null() {
+            if let Some(&(base, w)) = self.jit_rec_defs.get(&(inst, name)) {
+                let vv = v.clone().zext(w.max(1));
+                self.rec_write(base, w, &vv);
+                return;
+            }
+        }
+        self.vcd_def_vals.insert((inst, name), v.clone());
+    }
+
+    /// Record a method-fired timestamp (EN port), preserving prior args.
+    fn vcd_rec_meth_time(&mut self, callee: usize, method: StrId) {
+        let now = self.now;
+        if !self.jit_arena_ptr.is_null() {
+            if let Some(rs) = self.jit_rec_meths.get(&(callee, method)) {
+                unsafe { *self.jit_arena_ptr.add(rs.t as usize) = now };
+                return;
+            }
+        }
+        self.vcd_meth_calls
+            .entry((callee, method))
+            .and_modify(|e| e.0 = now)
+            .or_insert((now, Vec::new()));
+    }
+
+    /// Record a method call: timestamp + argument port values.
+    fn vcd_rec_meth_call(&mut self, callee: usize, method: StrId, argv: &[Value]) {
+        let now = self.now;
+        if !self.jit_arena_ptr.is_null() {
+            if let Some(rs) = self.jit_rec_meths.get(&(callee, method)).cloned() {
+                unsafe { *self.jit_arena_ptr.add(rs.t as usize) = now };
+                for (a, &(base, w)) in argv.iter().zip(&rs.args) {
+                    let vv = a.clone().zext(w.max(1));
+                    self.rec_write(base, w, &vv);
+                }
+                return;
+            }
+        }
+        self.vcd_meth_calls.insert((callee, method), (now, argv.to_vec()));
+    }
+
+    /// Record a value/AV method's returned value (result port).
+    fn vcd_rec_meth_result(&mut self, callee: usize, method: StrId, v: &Value) {
+        if !self.jit_arena_ptr.is_null() {
+            if let Some(rs) = self.jit_rec_meths.get(&(callee, method)) {
+                if let Some((base, w)) = rs.res {
+                    let vv = v.clone().zext(w.max(1));
+                    self.rec_write(base, w, &vv);
+                }
+                return;
+            }
+        }
+        self.vcd_meth_results.insert((callee, method), v.clone());
+    }
+
     /// A latched def, or its arena-slot value when the def is kept
     /// current by compiled scheds (fire signals / schedule-position
     /// defs).  Inhibitor lookups must see compiled rules' CFs.
@@ -1107,7 +1211,7 @@ impl Interp {
                 let d = self.d.modules[mir].defs[di].clone();
                 let v = self.eval(inst, ctx, &d.expr);
                 if self.vcd_trace {
-                    self.vcd_def_vals.insert((inst, *name), v.clone());
+                    self.vcd_rec_def(inst, *name, &v);
                 }
                 if ctx.memo {
                     ctx.locals.insert(*name, v.clone());
@@ -1490,8 +1594,7 @@ impl Interp {
                     Some(r) => {
                         let v = self.eval(callee, &mut ctx, &r).zext(w);
                         if self.vcd_trace {
-                            self.vcd_meth_results
-                                .insert((callee, method), v.clone());
+                            self.vcd_rec_meth_result(callee, method, &v);
                         }
                         v
                     }
@@ -1523,8 +1626,7 @@ impl Interp {
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
                 self.latch_method_en(callee, method);
                 if self.vcd_trace {
-                    self.vcd_meth_calls
-                        .insert((callee, method), (self.now, argv.to_vec()));
+                    self.vcd_rec_meth_call(callee, method, argv);
                 }
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
@@ -1567,10 +1669,7 @@ impl Interp {
     /// conflicting rules read it later in the same pass.
     fn latch_method_en(&mut self, callee: usize, method: StrId) {
         if self.vcd_trace {
-            self.vcd_meth_calls
-                .entry((callee, method))
-                .and_modify(|e| e.0 = self.now)
-                .or_insert((self.now, Vec::new()));
+            self.vcd_rec_meth_time(callee, method);
         }
         let en = format!("EN_{}", self.s(method));
         if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
@@ -1600,8 +1699,7 @@ impl Interp {
                     .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
                 self.latch_method_en(callee, method);
                 if self.vcd_trace {
-                    self.vcd_meth_calls
-                        .insert((callee, method), (self.now, argv.to_vec()));
+                    self.vcd_rec_meth_call(callee, method, argv);
                 }
                 let mir = self.mods[module].ir;
                 let body: Vec<Stmt> = self.d.modules[mir].methods[mi].body.clone();
@@ -1648,7 +1746,7 @@ impl Interp {
                     eprintln!("    def {} := {}", self.s(*name), v.to_hex_string());
                 }
                 if self.vcd_trace {
-                    self.vcd_def_vals.insert((inst, *name), v.clone());
+                    self.vcd_rec_def(inst, *name, &v);
                 }
                 ctx.locals.insert(*name, v);
             }
@@ -1668,8 +1766,7 @@ impl Interp {
                         // Result-port peeks read the LAST-RETURNED
                         // value (review fleet: AV results were never
                         // recorded)
-                        self.vcd_meth_results
-                            .insert((child, *method), v.clone());
+                        self.vcd_rec_meth_result(child, *method, &v);
                     }
                     // synthetic AV temps are not in the def table; the
                     // callee's result already has the declared width
@@ -1678,7 +1775,7 @@ impl Interp {
                         None => v,
                     };
                     if self.vcd_trace {
-                        self.vcd_def_vals.insert((inst, *def), v.clone());
+                        self.vcd_rec_def(inst, *def, &v);
                     }
                     ctx.locals.insert(*def, v);
                 }
@@ -1688,7 +1785,7 @@ impl Interp {
                         .and_then(|t| ctx.locals.get(&t).cloned())
                         .unwrap_or_else(|| Value::undet((*width).max(1)));
                     if self.vcd_trace {
-                        self.vcd_def_vals.insert((inst, *def), v.clone());
+                        self.vcd_rec_def(inst, *def, &v);
                     }
                     ctx.locals.insert(*def, v);
                 }
@@ -2798,34 +2895,64 @@ impl Interp {
                 let asserted = node.map(|nn| self.rst_asserted[nn]).unwrap_or(false);
                 Value::from_u64(1, (!asserted) as u64)
             }
-            VcdSrc::Def(n) => self
-                .vcd_def_vals
-                .get(&(inst, *n))
-                .cloned()
-                .unwrap_or_else(|| Value::undet(v.width.max(1))),
+            VcdSrc::Def(n) => {
+                // traced artifacts: the recording slot is the authority
+                if !self.jit_arena_ptr.is_null() {
+                    if let Some(&(base, w)) = self.jit_rec_defs.get(&(inst, *n)) {
+                        return self.rec_read(base, w);
+                    }
+                }
+                self.vcd_def_vals
+                    .get(&(inst, *n))
+                    .cloned()
+                    .unwrap_or_else(|| Value::undet(v.width.max(1)))
+            }
             VcdSrc::PortEn(mth) => {
                 let clk = self.vcd_inst_clock.get(inst).copied().unwrap_or(0);
                 let at = self.vcd_clocks[clk].pos_at;
-                let en = self
-                    .vcd_meth_calls
-                    .get(&(inst, *mth))
-                    .map(|(t, _)| *t == at)
-                    .unwrap_or(false);
+                let en = if !self.jit_arena_ptr.is_null()
+                    && self.jit_rec_meths.contains_key(&(inst, *mth))
+                {
+                    let rs = &self.jit_rec_meths[&(inst, *mth)];
+                    let t = unsafe { *self.jit_arena_ptr.add(rs.t as usize) };
+                    t == at
+                } else {
+                    self.vcd_meth_calls
+                        .get(&(inst, *mth))
+                        .map(|(t, _)| *t == at)
+                        .unwrap_or(false)
+                };
                 Value::from_u64(1, en as u64)
             }
             // all method ports are zero-initialized in the C++ ctor
             // (mkPortInit) and only updated when the method is called
-            VcdSrc::PortArg(mth, ai) => self
-                .vcd_meth_calls
-                .get(&(inst, *mth))
-                .and_then(|(_, args)| args.get(*ai).cloned())
-                .map(|x| x.zext(v.width.max(1)))
-                .unwrap_or_else(|| Value::zero(v.width.max(1))),
-            VcdSrc::PortRes(mth) => self
-                .vcd_meth_results
-                .get(&(inst, *mth))
-                .map(|r| r.clone().zext(v.width.max(1)))
-                .unwrap_or_else(|| Value::zero(v.width.max(1))),
+            VcdSrc::PortArg(mth, ai) => {
+                if !self.jit_arena_ptr.is_null() {
+                    if let Some(rs) = self.jit_rec_meths.get(&(inst, *mth)) {
+                        if let Some(&(base, w)) = rs.args.get(*ai) {
+                            return self.rec_read(base, w).zext(v.width.max(1));
+                        }
+                    }
+                }
+                self.vcd_meth_calls
+                    .get(&(inst, *mth))
+                    .and_then(|(_, args)| args.get(*ai).cloned())
+                    .map(|x| x.zext(v.width.max(1)))
+                    .unwrap_or_else(|| Value::zero(v.width.max(1)))
+            }
+            VcdSrc::PortRes(mth) => {
+                if !self.jit_arena_ptr.is_null() {
+                    if let Some(rs) = self.jit_rec_meths.get(&(inst, *mth)) {
+                        if let Some((base, w)) = rs.res {
+                            return self.rec_read(base, w).zext(v.width.max(1));
+                        }
+                    }
+                }
+                self.vcd_meth_results
+                    .get(&(inst, *mth))
+                    .map(|r| r.clone().zext(v.width.max(1)))
+                    .unwrap_or_else(|| Value::zero(v.width.max(1)))
+            }
         }
     }
 
@@ -3678,10 +3805,29 @@ impl Interp {
         }
         self.flush_reset_pending();
 
+        // capture BEFORE planning: jit_plan takes the request and the
+        // field resets to the default (Run)
+        #[cfg(feature = "jit")]
+        let was_emit = matches!(self.jit_request, jit::JitRequest::Emit { .. });
         #[cfg(feature = "jit")]
         let jit = self.jit_plan(&rcomps);
         #[cfg(not(feature = "jit"))]
         let jit = None;
+
+        // TRS_REQUIRE_AOT: strict-execution contract for validation
+        // runs — a design about to RUN interpreted is a hard failure,
+        // never a silent degrade.  Emit requests are exempt (the link
+        // caller enforces its own strictness on the emit result).
+        #[cfg(feature = "jit")]
+        if jit.is_none()
+            && !was_emit
+            && std::env::var_os("TRS_REQUIRE_AOT").is_some()
+        {
+            eprintln!(
+                "trs: TRS_REQUIRE_AOT is set but this design would run                  interpreted (TRS_JIT_TRACE=1 shows why); refusing"
+            );
+            std::process::exit(86);
+        }
 
         self.stepper = Some(Stepper {
             clocks,
@@ -4655,28 +4801,54 @@ impl Interp {
             MethPortKind::En => {
                 let en = format!("EN_{}", self.s(method));
                 let id = self.d.strings.iter().position(|x| x == &en);
-                let set = match (&self.insts[i].kind, id) {
+                let mut set = match (&self.insts[i].kind, id) {
                     (InstKind::User { latched, .. }, Some(id)) => {
                         latched.contains_key(&(id as StrId))
                     }
                     _ => false,
                 };
+                // compiled call sites store the arena EN word, not the
+                // boxed latch map
+                if !set && !self.jit_arena_ptr.is_null() {
+                    if let Some(id) = id {
+                        if let Some(&slot) = self.jit_en_slots.get(&(i, id as StrId))
+                        {
+                            set = unsafe { *self.jit_arena_ptr.add(slot as usize) }
+                                != 0;
+                        }
+                    }
+                }
                 Value::from_u64(1, set as u64)
             }
-            MethPortKind::Arg(k) => self
-                .vcd_meth_calls
-                .get(&(i, method))
-                .and_then(|(_, argv)| argv.get(k).cloned())
-                .map(|mut v| {
-                    v.width = v.width.max(1);
-                    v
-                })
-                .unwrap_or_else(|| Value::zero(width.max(1))),
+            MethPortKind::Arg(k) => {
+                if !self.jit_arena_ptr.is_null() {
+                    if let Some(rs) = self.jit_rec_meths.get(&(i, method)) {
+                        if let Some(&(base, w)) = rs.args.get(k) {
+                            return self.rec_read(base, w);
+                        }
+                    }
+                }
+                self.vcd_meth_calls
+                    .get(&(i, method))
+                    .and_then(|(_, argv)| argv.get(k).cloned())
+                    .map(|mut v| {
+                        v.width = v.width.max(1);
+                        v
+                    })
+                    .unwrap_or_else(|| Value::zero(width.max(1)))
+            }
             MethPortKind::Result => {
                 // PORT_<result> is a MEMBER: zero until the method's
                 // first invocation, then the last returned value
                 // (METH_result writes the port on call) — the
                 // vcd_meth_results recording is exactly that
+                if !self.jit_arena_ptr.is_null() {
+                    if let Some(rs) = self.jit_rec_meths.get(&(i, method)) {
+                        if let Some((base, w)) = rs.res {
+                            return self.rec_read(base, w);
+                        }
+                    }
+                }
                 self.vcd_meth_results
                     .get(&(i, method))
                     .cloned()

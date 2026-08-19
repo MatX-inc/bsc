@@ -20,7 +20,7 @@ use trs_codegen::lower::{
     compile_helpers_object, compile_scheds, decode_protos, encode_protos, trial_lower,
     FusedComp, FusedNode,
     CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
-    HelperSpec, InstEnv, PlanEnv, PrimCb, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
+    HelperSpec, InstEnv, PlanEnv, PrimCb, RecMeth, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
 };
 use prim::ArenaKind;
@@ -1134,6 +1134,11 @@ fn aot_emit(
 /// the callback pointer-globals, and resolve every rule's sched/exec
 /// function.  Any failure falls back to in-process compilation.
 #[allow(clippy::type_complexity)]
+/// aot_load's marker error for an artifact compiled for the opposite
+/// trace mode: current, not stale — the fallback recompile is silent.
+const TRACE_MODE_MISMATCH: &str =
+    "artifact trace mode differs from this run; compiling in-process";
+
 fn aot_load(
     so: &std::path::Path,
     bir_hash: u64,
@@ -1151,6 +1156,12 @@ fn aot_load(
         let h: libloading::Symbol<*const u64> =
             lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
         if **h != bir_hash {
+            // the OTHER trace mode's salt matching means the artifact is
+            // current but compiled for the opposite dumping mode — an
+            // expected, by-design in-process recompile, not staleness
+            if **h == bir_hash ^ 0x5452_4143_4544 {
+                return Err(TRACE_MODE_MISMATCH.into());
+            }
             return Err("BIR fingerprint mismatch (stale artifact)".into());
         }
         let r: libloading::Symbol<*const u64> =
@@ -2177,9 +2188,12 @@ impl Interp {
             return None;
         }
         let trace = std::env::var_os("TRS_JIT_TRACE").is_some();
-        if self.vcd_trace || self.wave_pending.is_some() {
+        // VCD tracing compiles: the traced artifact carries recording
+        // slots + inline stores (the VCS/Verilator opt-in model).  Only
+        // the FST wave engine still runs interpreted.
+        if self.wave_pending.is_some() {
             if trace {
-                eprintln!("trs jit: off (VCD tracing)");
+                eprintln!("trs jit: off (wave engine)");
             }
             return None;
         }
@@ -2385,6 +2399,14 @@ impl Interp {
             .collect();
         let mut subtree: HashMap<usize, (u32, u32)> = HashMap::new();
         let mut dfs_order: Vec<usize> = Vec::new();
+        // traced artifacts: per-module VCD var selection (the same walk
+        // the writer uses) drives recording-slot allocation below
+        let rec_mvs: HashMap<usize, std::rc::Rc<crate::ModVars>> = if self.vcd_trace {
+            (0..self.mods.len()).map(|mi| (mi, self.vcd_mod_vars(mi))).collect()
+        } else {
+            HashMap::new()
+        };
+        let mut rec_inits: Vec<(u32, u64)> = Vec::new();
         while let Some(w) = stack.pop() {
             let i = match w {
                 Walk::Exit(i) => {
@@ -2450,6 +2472,83 @@ impl Interp {
                         attach.push((ci, base));
                     }
                     None => {}
+                }
+            }
+            // VCD recording slots (traced artifacts): one block per
+            // declared member def (undet-initialized, the writer's
+            // never-evaluated default), plus per-method port blocks —
+            // EN time (u64::MAX = never), every argument, the result
+            let mut rec_defs: HashMap<StrId, (u32, u32)> = HashMap::new();
+            let mut rec_meths: HashMap<StrId, RecMeth> = HashMap::new();
+            if let Some(mv) = rec_mvs.get(&module) {
+                let irm = &self.d.modules[mir];
+                let mut meth_names: Vec<StrId> = Vec::new();
+                for var in mv.members.iter().chain(mv.ports.iter()) {
+                    match &var.src {
+                        crate::VcdSrc::Def(n) => {
+                            let w = var.width.max(1);
+                            let base = alloc(&mut nslots, w.div_ceil(64));
+                            let u = Value::undet(w);
+                            for (k, l) in u.limbs64().iter().enumerate() {
+                                rec_inits.push((base + k as u32, *l));
+                            }
+                            rec_defs.insert(*n, (base, var.width));
+                        }
+                        crate::VcdSrc::PortEn(mn)
+                        | crate::VcdSrc::PortArg(mn, _)
+                        | crate::VcdSrc::PortRes(mn) => {
+                            if !meth_names.contains(mn) {
+                                meth_names.push(*mn);
+                            }
+                        }
+                        crate::VcdSrc::Reset(_) => {}
+                    }
+                }
+                for mn in meth_names {
+                    let Some(me) = irm.methods.iter().find(|me| me.name == mn)
+                    else {
+                        continue;
+                    };
+                    let t = alloc(&mut nslots, 1);
+                    rec_inits.push((t, u64::MAX));
+                    // every arg gets a slot (the submodule port dump
+                    // reads args the module-scope selection skipped)
+                    let args: Vec<(u32, u32)> = me
+                        .args
+                        .iter()
+                        .map(|a| {
+                            let w = a.width.max(1);
+                            let b = alloc(&mut nslots, w.div_ceil(64));
+                            for k in 0..w.div_ceil(64) {
+                                rec_inits.push((b + k, 0));
+                            }
+                            (b, a.width)
+                        })
+                        .collect();
+                    let res = me.result.as_ref().map(|r| {
+                        let w = match r {
+                            Expr::Def(n) => irm
+                                .defs
+                                .iter()
+                                .find(|d| d.name == *n)
+                                .map(|d| d.width)
+                                .unwrap_or(0),
+                            Expr::Port(n) => irm
+                                .inputs
+                                .iter()
+                                .find(|p| p.name == *n)
+                                .map(|p| p.width)
+                                .unwrap_or(0),
+                            e => e.width(),
+                        }
+                        .max(1);
+                        let b = alloc(&mut nslots, w.div_ceil(64));
+                        for k in 0..w.div_ceil(64) {
+                            rec_inits.push((b + k, 0));
+                        }
+                        (b, w)
+                    });
+                    rec_meths.insert(mn, RecMeth { t, args, res });
                 }
             }
             let reset_slot: HashMap<StrId, u32> = resets
@@ -2609,6 +2708,8 @@ impl Interp {
                     gates: gates.clone(),
                     str_consts: str_params.clone(),
                     wide_consts,
+                    rec_defs,
+                    rec_meths,
                     region: (region_start, 0),
                 },
             );
@@ -2718,6 +2819,31 @@ impl Interp {
                     .collect();
                 m10.sort_unstable();
                 m10.hash(&mut h);
+                // traced artifacts: recording layout is an exec input
+                let mut m16: Vec<_> = e
+                    .rec_defs
+                    .iter()
+                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .collect();
+                m16.sort_unstable();
+                m16.hash(&mut h);
+                let mut m17: Vec<_> = e
+                    .rec_meths
+                    .iter()
+                    .map(|(&k, rm)| {
+                        (
+                            k,
+                            rm.t - r0,
+                            rm.args
+                                .iter()
+                                .map(|&(b, w)| (b - r0, w))
+                                .collect::<Vec<_>>(),
+                            rm.res.map(|(b, w)| (b - r0, w)),
+                        )
+                    })
+                    .collect();
+                m17.sort_unstable();
+                m17.hash(&mut h);
                 let mut kids: Vec<_> = e
                     .children
                     .iter()
@@ -3198,7 +3324,10 @@ impl Interp {
         if let JitRequest::Load { so } = &request {
             match aot_load(
                 so,
-                self.bir_hash,
+                // trace-salted: a traced plan (recording slots shift
+                // the whole layout) must never accept an untraced
+                // artifact, and vice versa
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
                 &specs,
                 &classes,
                 split_thresh.unwrap_or(0),
@@ -3231,10 +3360,15 @@ impl Interp {
                     wire_ticks_flag = wt;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "trs: artifact {}: {e}; compiling in-process instead",
-                        so.display()
-                    );
+                    // mode-mismatch fallbacks are by design (an untraced
+                    // artifact run under -V, or vice versa): keep the
+                    // note out of captured test output
+                    if e != TRACE_MODE_MISMATCH || trace {
+                        eprintln!(
+                            "trs: artifact {}: {e}; compiling in-process instead",
+                            so.display()
+                        );
+                    }
                 }
             }
         }
@@ -3294,8 +3428,14 @@ impl Interp {
                         self.edge_ssa_plan(
                             &inst_envs, &nodes, &specs, has_early, false,
                         );
-                    plan.wire_clears =
-                        self.wire_tick_coverage(&inst_envs, rcomps).0;
+                    // traced artifacts keep wire ticks boxed: the tick
+                    // latches `written` for the VCD dump (and clears
+                    // valid through the slot), which a compiled clear
+                    // inside the edge fn would starve
+                    if !self.vcd_trace {
+                        plan.wire_clears =
+                            self.wire_tick_coverage(&inst_envs, rcomps).0;
+                    }
                     plan
                 });
             self.jit_emit_result = Some(
@@ -3312,7 +3452,10 @@ impl Interp {
                     &comp_nodes,
                     &en_slots,
                     so,
-                    self.bir_hash,
+                    // trace-salted: a traced plan (recording slots shift
+                // the whole layout) must never accept an untraced
+                // artifact, and vice versa
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
                     edge_plan.as_ref(),
                     &{
                         let mut v: Vec<String> = self
@@ -3482,6 +3625,73 @@ impl Interp {
             .iter()
             .flat_map(|(&i, e)| e.en_slot.iter().map(move |(&p, &s)| ((i, p), s)))
             .collect();
+        // traced artifacts: initialize the recording slots, flatten the
+        // per-instance tables for the runtime recorder/writer, and seed
+        // slots from any pre-plan recordings (hybrid warm-up slices ran
+        // interpreted into the maps) — the slot is the single authority
+        // from here on, so seeded map entries are dropped
+        for &(slot, v) in &rec_inits {
+            unsafe { *arena_ptr.add(slot as usize) = v };
+        }
+        self.jit_rec_defs = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| {
+                e.rec_defs.iter().map(move |(&n, &sl)| ((i, n), sl))
+            })
+            .collect();
+        self.jit_rec_meths = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| {
+                e.rec_meths.iter().map(move |(&n, rm)| {
+                    ((i, n), crate::RecSlots { t: rm.t, args: rm.args.clone(), res: rm.res })
+                })
+            })
+            .collect();
+        let keys: Vec<_> = self.jit_rec_defs.keys().cloned().collect();
+        for (i, n) in keys {
+            if let Some(v) = self.vcd_def_vals.remove(&(i, n)) {
+                let (base, w) = self.jit_rec_defs[&(i, n)];
+                let vv = v.zext(w.max(1));
+                unsafe {
+                    for (k, l) in vv.limbs64().iter().enumerate().take(
+                        (w.max(1) as usize).div_ceil(64),
+                    ) {
+                        *arena_ptr.add(base as usize + k) = *l;
+                    }
+                }
+            }
+        }
+        let keys: Vec<_> = self.jit_rec_meths.keys().cloned().collect();
+        for (i, n) in keys {
+            let rs = self.jit_rec_meths[&(i, n)].clone();
+            if let Some((t, argv)) = self.vcd_meth_calls.remove(&(i, n)) {
+                unsafe { *arena_ptr.add(rs.t as usize) = t };
+                for (a, &(base, w)) in argv.iter().zip(&rs.args) {
+                    let vv = a.clone().zext(w.max(1));
+                    unsafe {
+                        for (k, l) in vv.limbs64().iter().enumerate().take(
+                            (w.max(1) as usize).div_ceil(64),
+                        ) {
+                            *arena_ptr.add(base as usize + k) = *l;
+                        }
+                    }
+                }
+            }
+            if let Some(v) = self.vcd_meth_results.remove(&(i, n)) {
+                if let Some((base, w)) = rs.res {
+                    let vv = v.zext(w.max(1));
+                    unsafe {
+                        for (k, l) in vv.limbs64().iter().enumerate().take(
+                            (w.max(1) as usize).div_ceil(64),
+                        ) {
+                            *arena_ptr.add(base as usize + k) = *l;
+                        }
+                    }
+                }
+            }
+        }
         sl.lap("arena+flatmaps+workers");
         let covered_ticks = if wire_ticks_flag {
             self.wire_tick_coverage(&lazy.insts, rcomps).1

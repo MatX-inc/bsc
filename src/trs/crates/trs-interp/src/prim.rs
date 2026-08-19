@@ -1962,6 +1962,8 @@ impl Prim for ConfigReg {
         now: u64,
         _clk_edge_now: bool,
     ) {
+        // arena-attached state: compiled writes land in the slots
+        self.refresh();
         let v = self.value.clone();
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
@@ -2156,6 +2158,12 @@ impl Prim for RWire {
         if dt == D::Xs {
             w.write_x(self.vcd_id, self.width.max(1), now);
             return;
+        }
+        // arena-attached state: compiled wset writes only the slots.
+        // `written` stays tick-latched (the tick is slot-aware); only
+        // the VALUE must be pulled from the arena
+        if self.slot.is_some() && self.width > 0 {
+            self.value = self.get_value();
         }
         let written = self.written;
         let dump = match (&self.vcd_back, dt) {
@@ -2692,6 +2700,8 @@ impl Prim for Fifo {
         clk_edge_now: bool,
     ) {
         use crate::vcd::DumpType as D;
+        // arena-attached state: compiled enq/deq write only the slots
+        self.refresh();
         let bits = self.width;
         let bit = |b: bool| Value::from_u64(1, b as u64);
         let mut num = self.vcd_base;
