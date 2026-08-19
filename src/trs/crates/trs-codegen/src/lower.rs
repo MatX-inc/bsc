@@ -157,6 +157,15 @@ pub struct InstEnv {
     /// EN_<m> port name -> arena slot; zeroed at composition dispatch,
     /// stored by compiled call sites (the C++ enable protocol)
     pub en_slot: HashMap<StrId, u32>,
+    /// constant-valued module input ports and instantiation
+    /// parameters: the compiled mirror of the interpreter's
+    /// Port/Param fallthrough — an uncalled method's arg reads 0,
+    /// unbound clock/gate/reset-kind input ports read 1, numeric
+    /// params read their bound value.  Dynamic bindings never land
+    /// here (bound gates evaluate in the parent; EN and reset ports
+    /// have arena slots; string params are marker values).  Part of
+    /// the exec dedup signature.
+    pub port_consts: HashMap<StrId, (u32, u64)>,
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
@@ -725,7 +734,7 @@ impl Drop for AotModeGuard {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 6;
+pub const AOT_LAYOUT_REV: u64 = 8;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -1708,7 +1717,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             },
             Expr::Port(p) => match f.args.get(p) {
                 Some(&(_, w)) => Ok(w),
-                None => Ok(1), // reset/EN ports
+                None => Ok(self
+                    .ie(f.inst)?
+                    .port_consts
+                    .get(p)
+                    .map_or(1, |&(w, _)| w)), // reset/EN ports read 1 bit
+            },
+            Expr::Param(p) => match self.ie(f.inst)?.port_consts.get(p) {
+                Some(&(w, _)) => Ok(w),
+                None => nope("parameter not constant-lowerable"),
             },
             Expr::Const { width, .. }
             | Expr::MethCall { width, .. }
@@ -1943,7 +1960,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let word = self.load_word(f, slot);
                     return Ok(self.to_w(word, 64, 1, false));
                 }
-                nope("port read outside args/reset/EN")
+                if let Some(&(w, v)) = ie.port_consts.get(p) {
+                    return Ok(self.cval(w, &[v as u32, (v >> 32) as u32]));
+                }
+                nope("port read outside args/reset/EN/consts")
+            }
+            Expr::Param(p) => {
+                let ie = self.ie(f.inst)?;
+                match ie.port_consts.get(p) {
+                    Some(&(w, v)) => {
+                        Ok(self.cval(w, &[v as u32, (v >> 32) as u32]))
+                    }
+                    None => nope("parameter not constant-lowerable"),
+                }
             }
             Expr::MethCall { width, instance, method, port, args } => {
                 self.value_call(f, *width, *instance, *method, *port, args)

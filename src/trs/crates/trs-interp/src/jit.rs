@@ -2145,11 +2145,13 @@ impl Interp {
                     }
                     let module = self.module_of(en.inst);
                     let mir = self.mods[module].ir;
+                    // interface-method node in a segment: nothing to
+                    // latch — the interp skips these identically (an
+                    // external caller latches EN/args at call time;
+                    // uncalled methods read EN as 0 through their
+                    // arena slots), so the compiled walk omits them
                     let Some(&ri) = self.mods[module].rules.get(&r) else {
-                        if trace {
-                            eprintln!("trs jit: off (method node in schedule)");
-                        }
-                        return None;
+                        continue;
                     };
                     let shared =
                         owned_so_far.get(&en.inst).cloned().unwrap_or_default();
@@ -2306,7 +2308,9 @@ impl Interp {
                 }
                 Walk::Enter(i) => i,
             };
-            let InstKind::User { module, children, resets, .. } = &self.insts[i].kind
+            let InstKind::User {
+                module, children, resets, params, str_params, gates, ..
+            } = &self.insts[i].kind
             else {
                 continue;
             };
@@ -2443,6 +2447,46 @@ impl Interp {
                     stack.push(Walk::Enter(c));
                 }
             }
+            // constant-valued input ports and parameters — the compiled
+            // mirror of the interpreter's Port/Param fallthrough
+            // (uncalled MethodArg reads 0, unbound clock/gate/reset-kind
+            // ports read 1, numeric params read their bound value).
+            // Dynamic bindings stay out: bound gates evaluate in the
+            // parent (MCD), EN/reset ports have arena slots, string
+            // params are marker values, and unslotted method enables
+            // stay ineligible rather than folding to a wrong constant.
+            // A BOUND value the u64 fold cannot carry (wide args,
+            // Real's marker width) must stay out of the unbound-port
+            // arms below too — the interp resolves `params` before any
+            // read-as-1/0 fallthrough, so folding such a name as
+            // "unbound" bakes a wrong constant (sysWideModArgPortTest,
+            // sysTwoLevelReal2); unfolded means Ineligible -> interp.
+            let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
+            for (&pn, pv) in params {
+                if pv.width >= 1 && pv.width <= 64 {
+                    port_consts.insert(pn, (pv.width, pv.as_u64()));
+                }
+            }
+            for (&pn, &(w, kind)) in &self.mods[module].ports {
+                if port_consts.contains_key(&pn)
+                    || params.contains_key(&pn)
+                    || en_slot.contains_key(&pn)
+                    || reset_slot.contains_key(&pn)
+                    || gates.contains_key(&pn)
+                    || str_params.contains_key(&pn)
+                {
+                    continue;
+                }
+                match kind {
+                    trs_ir::PortKind::MethodArg => {
+                        port_consts.insert(pn, (w.max(1), 0));
+                    }
+                    trs_ir::PortKind::MethodEnable => {}
+                    _ => {
+                        port_consts.insert(pn, (w.max(1), 1));
+                    }
+                }
+            }
             inst_envs.insert(
                 i,
                 InstEnv {
@@ -2458,6 +2502,7 @@ impl Interp {
                     cfwf_slot,
                     eager_slot,
                     memo_slot,
+                    port_consts,
                     region: (region_start, 0),
                 },
             );
@@ -2526,6 +2571,13 @@ impl Interp {
                     e.memo_slot.iter().map(|(&k, &(b, w))| (k, b - r0, w)).collect();
                 m9.sort_unstable();
                 m9.hash(&mut h);
+                // params/const-ports are baked into compiled bodies:
+                // instances of one module type with different param
+                // values must not share exec code
+                let mut m11: Vec<_> =
+                    e.port_consts.iter().map(|(&k, &(w, v))| (k, w, v)).collect();
+                m11.sort_unstable();
+                m11.hash(&mut h);
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e
@@ -2547,11 +2599,17 @@ impl Interp {
             sigs
         };
 
-        // any Exec node must belong to a scheduled rule above
+        // any Exec node of a RULE must belong to a scheduled rule
+        // above; interface-method Exec nodes are no-ops (skipped by
+        // the interp and by comp_nodes below)
         for rc in rcomps {
             for en in &rc.entries {
+                let module = self.module_of(en.inst);
                 for &node in &en.nodes {
                     let SchedNode::Exec(r) = node else { continue };
+                    if !self.mods[module].rules.contains_key(&r) {
+                        continue; // method exec node
+                    }
                     if !rule_ord.contains_key(&(en.inst, r)) {
                         if trace {
                             eprintln!("trs jit: off (exec without sched)");
@@ -2836,7 +2894,13 @@ impl Interp {
                             SchedNode::Sched(r) => (r, true),
                             SchedNode::Exec(r) => (r, false),
                         };
-                        let ord = rule_ord[&(en.inst, r)] as u32;
+                        // interface-method nodes have no ordinal:
+                        // they are no-ops in the edge walk (interp
+                        // parity — nothing to latch or execute)
+                        let Some(&ord) = rule_ord.get(&(en.inst, r)) else {
+                            continue;
+                        };
+                        let ord = ord as u32;
                         nodes.push(if is_sched {
                             JitNode::Sched(ord)
                         } else {

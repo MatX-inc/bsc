@@ -227,15 +227,28 @@ def one_test(job):
     # asked to beat a budget Bluesim itself did not meet.
     limit = max(limit, ref_build_secs + ref_secs)
     trs_link_secs = 0.0
+    engine_note = ""
     if AOT:
         cexe = os.path.join(wk, top + ".aot.cexe")
+        # engine-outcome telemetry: trace makes every plan gate and
+        # trial-lower refusal name itself on stderr, so the sweep
+        # records WHY a design runs interpreted, not just that it does
+        link_env = dict(ENV)
+        link_env["TRS_JIT_TRACE"] = "1"
         tl0 = _time.monotonic()
-        lk = run([TRS, "link", bir, "-o", cexe], cwd=wk, timeout=300)
+        lk = run([TRS, "link", bir, "-o", cexe], cwd=wk, timeout=300, env=link_env)
         trs_link_secs = _time.monotonic() - tl0
         if lk is None or lk.returncode != 0:
             msg = "" if lk is None else (lk.stderr + lk.stdout)
             return (rel, top, "AOT_LINK_FAIL",
                     "timeout" if lk is None else first_error(msg))
+        # the wrapper is the durable record: --code => compiled
+        try:
+            compiled = "--code" in open(cexe).read()
+        except OSError:
+            compiled = False
+        engine_note = " engine=aot" if compiled else (
+            " engine=interp why=" + link_fallback_reason(lk.stderr))
         env = dict(ENV)
         env["PATH"] = os.path.dirname(TRS) + os.pathsep + env.get("PATH", "")
         tr0 = _time.monotonic()
@@ -261,9 +274,26 @@ def one_test(job):
         # bsc -sim link phase (C++ codegen + cc), the fair comparand
         # for trs_link.
         timing = (f"t ref_build={ref_build_secs:.2f} ref_run={ref_secs:.3f}"
-                  f" trs_link={trs_link_secs:.2f} trs_run={trs_run_secs:.3f}")
+                  f" trs_link={trs_link_secs:.2f} trs_run={trs_run_secs:.3f}"
+                  f"{engine_note}")
         return (rel, top, "PASS", timing)
     return (rel, top, "DIFF", diff_summary(ref.stdout, inp.stdout))
+
+
+def link_fallback_reason(stderr):
+    """Fallback reason from a traced `trs link`: prefer the specific
+    `trs jit: off (...)` line (the last one wins — trial lower may
+    follow a plan gate), else the CLI's compiled-mode-unavailable
+    note.  Whitespace collapses to _ so the note stays one token."""
+    reason = ""
+    for line in stderr.splitlines():
+        l = line.strip()
+        if l.startswith("trs jit: off (") and l.endswith(")"):
+            reason = l[len("trs jit: off ("):-1]
+        elif "compiled mode unavailable (" in l and not reason:
+            reason = l.split("compiled mode unavailable (", 1)[1]
+            reason = reason.split(");", 1)[0]
+    return re.sub(r"\s+", "_", reason)[:100] or "unknown"
 
 
 def first_error(msg):
@@ -363,8 +393,14 @@ def main():
         cost = {}
         for rel, top, status, note in prior:
             if status == "PASS" and note.startswith("t "):
-                fv = dict(kv.split("=") for kv in note[2:].split())
-                cost[(rel, top)] = sum(float(v) for v in fv.values())
+                total = 0.0
+                for kv in note[2:].split():
+                    _, _, v = kv.partition("=")
+                    try:
+                        total += float(v)
+                    except ValueError:
+                        pass  # non-timing columns (engine=, why=)
+                cost[(rel, top)] = total
         def jobkey(j):
             rel = os.path.relpath(j[0], REPO)
             return -cost.get((rel, j[1]), 0.0)
@@ -413,8 +449,14 @@ def main():
     timings = {}
     for (rel, top, status, note) in results:
         if status == "PASS" and note.startswith("t "):
-            fv = dict(kv.split("=") for kv in note[2:].split())
-            timings[f"{rel}:{top}"] = {k: float(v) for k, v in fv.items()}
+            t = {}
+            for kv in note[2:].split():
+                k, _, v = kv.partition("=")
+                try:
+                    t[k] = float(v)
+                except ValueError:
+                    pass  # non-timing columns (engine=, why=)
+            timings[f"{rel}:{top}"] = t
     def _ratios(t):
         out = {}
         if t["ref_run"] >= 0.10:
