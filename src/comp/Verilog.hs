@@ -96,6 +96,7 @@ instance PPrint VProgram where
     pPrint d p (VProgram ms _dpis cs) =
         ppComment cs $+$
         assignment_delay_macro $+$
+        tasks_delay_macro $+$
         reset_level_macro $+$
         vsepEmptyLine (map (pPrint d 0) ms) $+$
         text ""
@@ -105,6 +106,16 @@ instance PPrint VProgram where
           text "`ifdef BSV_ASSIGNMENT_DELAY" $+$
           text "`else" $+$
           text "  `define BSV_ASSIGNMENT_DELAY" $+$
+          text "`endif" $+$
+          text ""
+        -- the 0-tick synchronization delay in system-task blocks
+        -- (historically a hardcoded "#0" to pacify VCS and NC);
+        -- overridable so delay-free consumers (Verilator without
+        -- --timing) can define it empty
+        tasks_delay_macro =
+          text "`ifdef BSV_TASKS_DELAY" $+$
+          text "`else" $+$
+          text "  `define BSV_TASKS_DELAY #0" $+$
           text "`endif" $+$
           text ""
         reset_level_macro =
@@ -586,7 +597,7 @@ instance PPrint VStmt where
         pPrint d p (VAssert ev es) = ppAssert d p ev es
 
 
-        pPrint d p  VZeroDelay     = text "#0;"
+        pPrint d p  VZeroDelay     = text "`BSV_TASKS_DELAY;"
 
 instance NFData VStmt where
     rnf (VAt ev stmt) = rnf2 ev stmt

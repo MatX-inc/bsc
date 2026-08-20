@@ -1,0 +1,124 @@
+name: Simulator Benchmark
+
+# Three-simulator benchmark (Bluesim vs Verilator vs trs) over the
+# in-repo pool — src/trs/tools/bench.py, methodology in
+# src/trs/docs/BENCH.md.
+#
+# Shared-runner numbers are INDICATIVE and only meaningful as
+# RELATIVE deltas within one run (same machine, same moment);
+# authoritative absolute numbers come from the calibrated machine.
+# The external macro pool (Flute, CHERI-Toooba, JpegEncoder,
+# blue-rdma, Fife+FreeRTOS) arrives with the separate benchmark repo
+# (corpus pins + workload images + results archive — the Toooba
+# model); this workflow covers the in-repo designs.
+#
+# Linux only (per Ravi): macOS runners are excluded.
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "substring filter on design names (empty = all)"
+        required: false
+        default: ""
+      runs:
+        description: "runs per measurement (median reported)"
+        required: false
+        default: "3"
+  schedule:
+    # nightly, off-peak for the runner pool
+    - cron: "17 9 * * *"
+
+jobs:
+  bench:
+    name: "Bench: ubuntu-latest"
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+          sudo apt-get install -y verilator llvm-18-dev libpolly-18-dev libelf-dev
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.6.7
+          cabal: recommended
+      - name: Install Haskell dependencies
+        shell: bash
+        run: |
+          cabal update
+          cabal v1-install cborg old-time regex-compat split strict-concurrency syb
+      # Warm from the regular CI builds' ccache (same key prefix), so
+      # the bsc build here is mostly cache replay
+      - name: CCache cache files
+        uses: actions/cache@v5
+        with:
+          path: ${{ GITHUB.WORKSPACE }}/ccache
+          key: build-ubuntu-latest-ghc-9.6.7-ccache-bench-${{ github.sha }}
+          restore-keys: |
+            build-ubuntu-latest-ghc-9.6.7-ccache-
+      - name: Build bsc + trs
+        env:
+          CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+        run: |
+          ccache --zero-stats --max-size 250M
+          export PATH=/usr/lib/ccache:$PATH
+          CORES=$(nproc)
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+      - name: Run benchmark
+        run: |
+          export BSC="$PWD/inst/bin/bsc"
+          export TRS="$PWD/inst/bin/trs"
+          export LC_ALL=en_US.UTF-8
+          python3 src/trs/tools/bench.py \
+            --filter "${{ github.event.inputs.filter || '' }}" \
+            --runs "${{ github.event.inputs.runs || '3' }}" \
+            --out bench-results.json | tee bench-table.txt
+      - name: Summary
+        run: |
+          {
+            echo "## Simulator benchmark (shared runner — relative deltas only)"
+            echo '```'
+            cat bench-table.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.sha }}
+          path: |
+            bench-results.json
+            bench-table.txt
+      # The durable archive is MatX-inc/bsc-benchmarks (results/ —
+      # queryable history, not expiring artifacts).  Needs the
+      # BENCH_ARCHIVE_TOKEN secret (contents:write on that repo);
+      # without it the artifact above is the fallback.
+      - name: Archive to bsc-benchmarks
+        if: ${{ env.BENCH_ARCHIVE_TOKEN != '' }}
+        env:
+          BENCH_ARCHIVE_TOKEN: ${{ secrets.BENCH_ARCHIVE_TOKEN }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${BENCH_ARCHIVE_TOKEN}@github.com/MatX-inc/bsc-benchmarks.git" archive
+          STAMP=$(date -u +%Y-%m-%d)
+          SHA=$(git rev-parse --short=9 HEAD)
+          OUT="archive/results/${STAMP}-${SHA}-gha.json"
+          python3 - "$OUT" "$SHA" <<'PY'
+          import json, sys, platform, subprocess
+          out, sha = sys.argv[1:3]
+          data = json.load(open("bench-results.json"))
+          meta = dict(label="indicative", bsc_sha=sha, host="github-actions",
+                      machine=platform.machine(),
+                      verilator=subprocess.run(["verilator", "--version"],
+                        capture_output=True, text=True).stdout.strip())
+          json.dump(dict(meta=meta, results=data), open(out, "w"), indent=1)
+          PY
+          cd archive
+          git -c user.name="bsc-bench-ci" -c user.email="bench-ci@users.noreply.github.com" \
+            add results && git -c user.name="bsc-bench-ci" -c user.email="bench-ci@users.noreply.github.com" \
+            commit -m "results: ${STAMP} ${SHA} (gha, indicative)" && git push

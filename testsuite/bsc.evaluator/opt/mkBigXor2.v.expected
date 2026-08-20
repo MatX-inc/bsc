@@ -16,6 +16,11 @@
   `define BSV_ASSIGNMENT_DELAY
 `endif
 
+`ifdef BSV_TASKS_DELAY
+`else
+  `define BSV_TASKS_DELAY #0
+`endif
+
 `ifdef BSV_POSITIVE_RESET
   `define BSV_RESET_VALUE 1'b1
   `define BSV_RESET_EDGE posedge

@@ -16,6 +16,11 @@
   `define BSV_ASSIGNMENT_DELAY
 `endif
 
+`ifdef BSV_TASKS_DELAY
+`else
+  `define BSV_TASKS_DELAY #0
+`endif
+
 `ifdef BSV_POSITIVE_RESET
   `define BSV_RESET_VALUE 1'b1
   `define BSV_RESET_EDGE posedge
@@ -104,7 +109,7 @@ module sysUseCondNEqVars3(CLK,
   // synopsys translate_off
   always@(negedge CLK)
   begin
-    #0;
+    `BSV_TASKS_DELAY;
     if (a != 16'd2 && b != 16'd3)
       $display("Error: \"UseCondNEqVars3.bsv\", line 17, column 9: (R0002)\n  Conflict-free rules RL_test2 and RL_test1 called conflicting methods read\n  and write of module instance source.\n");
   end
