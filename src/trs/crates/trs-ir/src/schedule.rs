@@ -50,9 +50,6 @@ pub struct Schedule {
     /// construction; already reflected in the WILL_FIRE defs, carried for
     /// verification and diagnostics.
     pub conflicts: Vec<(StrId, Vec<StrId>)>,
-    /// Intra-module disjoint (mutually exclusive) rule pairs; drives the
-    /// per-module-type ME inhibitors in `Rule::me_inhibits`.
-    pub disjoint: Vec<(StrId, Vec<StrId>)>,
 }
 
 /// A module's execution order within one clock domain and edge, split into

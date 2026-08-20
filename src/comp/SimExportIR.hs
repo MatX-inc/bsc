@@ -64,7 +64,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 1
+birVersion = 2
 
 -- ===============
 -- String interning
@@ -220,7 +220,6 @@ data ModSchedInfo = ModSchedInfo
       -- node key -> ((domain, segment), position within segment)
     , msi_segIdx  :: M.Map String ((Int, Int), Int)
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
-    , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
     , msi_taskRules   :: S.Set String  -- rules with system/foreign tasks
     , msi_finishRules :: S.Set String  -- rules calling $finish/$fatal/$stop
     }
@@ -250,14 +249,6 @@ analyzeModule pkgNames pkg =
         execPos = M.fromList
             [ (getIdBaseString i, p)
             | (Exec i, p) <- zip order [(0 :: Int) ..] ]
-
-        disj0 = exclRulesDBToDisjRulesDB (asi_exclusive_rules_db asi)
-        isRule s = M.member s ruleDom
-        disj = M.fromList
-            [ (rs, S.filter isRule (S.map getIdBaseString ds))
-            | (r, ds) <- M.toList disj0
-            , let rs = getIdBaseString r
-            , isRule rs ]
 
         doms = nub (M.elems ruleDom)
 
@@ -324,7 +315,6 @@ analyzeModule pkgNames pkg =
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
                      , msi_execPos = execPos
-                     , msi_disj = disj
                      , msi_taskRules = taskRules
                      , msi_finishRules = finishRules }
 
@@ -388,22 +378,36 @@ encComposition instToMod msis topGates ss = do
         -- rules singleton per-node segments so the endpoints are
         -- independently placeable).  A same-unit pair is only legal if
         -- the segment's internal order already agrees.
-        schedPosQ = M.fromList [ (qualPath i, p)
+        -- Keyed by Id: comparison is an interned-index compare, where a
+        -- qualified-path String would be rebuilt and compared character by
+        -- character on every probe.  Probed only, never traversed, so the
+        -- interning-order traversal never reaches the output.
+        schedPosQ = M.fromList [ (i, p)
                                | (Sched i, p) <- zip order [(0 :: Int) ..] ]
-        mePairs = nub ([ (r, d)
-                       | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                       , d <- S.toList ds ]
-                       ++ [ (d, r)
-                          | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                          , d <- S.toList ds ])
+        execPosI  = M.fromList [ (i, p)
+                               | (Exec i, p) <- zip order [(0 :: Int) ..] ]
+        -- `resolveFull` is a pure function of the node and there are
+        -- |order| nodes against O(rules^2) disjoint pairs, so resolve each
+        -- node once here and probe by Id below.
+        resolvedS = M.fromList [ (i, v)
+                               | n@(Sched i) <- order, Just v <- [resolveFull n] ]
+        resolvedE = M.fromList [ (i, v)
+                               | n@(Exec i) <- order, Just v <- [resolveFull n] ]
+        -- The disjointness map holds both orientations of every pair
+        -- (`combineSchedDRDB`: "the disjoint map should be the same in
+        -- both directions"), so one pass over it sees each ordered pair
+        -- exactly once.
+        mePairs = [ (r, d)
+                  | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                  , d <- S.toList ds ]
         meEdges = S.fromList
             [ (su, eu)
             | (r, d) <- mePairs
-            , Just ps <- [M.lookup (qualPath r) schedPosQ]
-            , Just pe <- [M.lookup (qualPath d) execPos]
+            , Just ps <- [M.lookup r schedPosQ]
+            , Just pe <- [M.lookup d execPosI]
             , ps < pe
-            , Just (su, sj) <- [resolveFull (Sched r)]
-            , Just (eu, ej) <- [resolveFull (Exec d)]
+            , Just (su, sj) <- [M.lookup r resolvedS]
+            , Just (eu, ej) <- [M.lookup d resolvedE]
             , if su == eu
               then if sj < ej
                    then False  -- ordered inside the segment already
@@ -445,7 +449,10 @@ encComposition instToMod msis topGates ss = do
 
         -- Kahn's algorithm; ties broken by first appearance in the flat
         -- order so the output tracks bsc's own choice.
-        succsOf u = [ b | (a, b) <- S.toList unitEdges, a == u ]
+        -- Successors indexed once: Kahn's asks for them per node, and the
+        -- edge set grows with both instance count and hierarchy depth.
+        succMap = M.fromListWith (++) [ (a, [b]) | (a, b) <- S.toList unitEdges ]
+        succsOf u = M.findWithDefault [] u succMap
         indeg0 = M.fromListWith (+)
                    ([ (u, 0 :: Int) | u <- units ]
                     ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
@@ -503,8 +510,10 @@ encComposition instToMod msis topGates ss = do
         stepME (seen, acc) (i, Sched n) =
             let q = qp i (getIdBaseString n)
                 inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
-            in  (seen, acc ++ [ (d, q) | d <- S.toList inh ])
-        crossPairs = snd (foldl' stepME (S.empty, []) composedNodes)
+            -- Chunk-accumulate and concat once, so the fold stays linear
+            -- in the number of emitted pairs.
+            in  (seen, [ (d, q) | d <- S.toList inh ] : acc)
+        crossPairs = concat (reverse (snd (foldl' stepME (S.empty, []) composedNodes)))
 
         -- direction-filter the primitive ticks against the primMap tick
         -- specs (doTickCall): a posedge schedule also produces a
@@ -755,15 +764,9 @@ encSchedule msi pkg = do
                             bsE <- mapM idE blockers
                             return (encPair rE (encList bsE)))
                          esposito
-    disjEnc <- mapM (\(r, ds) -> do
-                       rE <- strE r
-                       dsE <- mapM strE (S.toList ds)
-                       return (encPair rE (encList dsE)))
-                    (M.toList (msi_disj msi))
     return $ encStruct
       [ ("domains", encList domsEnc)
       , ("conflicts", encList conflictsEnc)
-      , ("disjoint", encList disjEnc)
       ]
 
 encModSched :: (Int, [Seg]) -> EncM C.Encoding

@@ -22,7 +22,7 @@ pub use schedule::{Composition, ModuleSchedule, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 1;
+pub const BIR_VERSION: u32 = 2;
 
 /// Snapshot sidecar magic (`<base>.birsnap`, see `Design::snap_encode`).
 /// The trailing byte is the HEADER format; \x02 added the layout rev
