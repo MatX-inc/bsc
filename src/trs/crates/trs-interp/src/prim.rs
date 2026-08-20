@@ -69,6 +69,14 @@ pub trait Prim {
     fn sym_read_range(&mut self, _key: &str, _addr: u64, _now: u64) -> Option<Value> {
         None
     }
+    /// OCCUPIED addresses of a sparse SYM_RANGE (oracle compare):
+    /// Some(keys) tells the state walk to compare only these instead
+    /// of iterating lo..=hi — a dense walk over RegFile#(UInt#(42)) is
+    /// 4.4e12 reads per checkpoint (sysSparseRF hung the suite).
+    /// None = dense storage, the lo..=hi walk is fine.
+    fn sym_range_keys(&mut self, _key: &str) -> Option<Vec<u64>> {
+        None
+    }
     /// Value-method call (pure read).
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value;
     /// Action-method call (mutates).
@@ -1220,6 +1228,16 @@ impl Prim for RegFile {
                 .cloned()
                 .unwrap_or_else(|| Value::undet(self.width.max(1))),
         )
+    }
+    fn sym_range_keys(&mut self, key: &str) -> Option<Vec<u64>> {
+        // boxed regfiles store sparsely; arena-backed ones are dense
+        // and small by construction (the arena gate) — dense walk fine
+        if !key.is_empty() || self.slot.is_some() {
+            return None;
+        }
+        let mut ks: Vec<u64> = self.data.keys().copied().collect();
+        ks.sort_unstable();
+        Some(ks)
     }
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
@@ -2621,6 +2639,24 @@ impl Prim for Fifo {
             PrimSym { key: "level", width: 32, range: None },
         ]
     }
+    fn state_children(&self) -> Vec<PrimSym> {
+        // the bk tree's "" range reads RAW ring slots (reference `sim
+        // ls` parity: post-deq residue stays visible), but residue is
+        // DEAD state and the engines' ring disciplines legitimately
+        // differ there (boxed interp vs compiled arena) — the
+        // selfcheck sweep witnessed dft64/Divide phantom divergences
+        // on exactly that.  The ORACLE compares the architectural
+        // view instead: occupancy plus the live entries in queue
+        // order.
+        vec![
+            PrimSym {
+                key: "live",
+                width: self.width,
+                range: Some((0, self.size.saturating_sub(1) as u64)),
+            },
+            PrimSym { key: "elems", width: 32, range: None },
+        ]
+    }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         match key {
             "depth" => Some(Value::from_u64(32, self.size as u64)),
@@ -2628,10 +2664,39 @@ impl Prim for Fifo {
             // member (bs_prim_mod_fifo.h init_symbols) — reproduce
             // the contract, not the name
             "level" => Some(Value::from_u64(32, self.size as u64)),
+            // oracle-only: the real occupancy (arena is authority)
+            "elems" => {
+                self.refresh();
+                Some(Value::from_u64(32, self.elems as u64))
+            }
             _ => None,
         }
     }
     fn sym_read_range(&mut self, key: &str, addr: u64, _now: u64) -> Option<Value> {
+        // oracle-only architectural view: entry #addr of the LIVE
+        // queue (head-adjusted); None past the occupancy, so dead
+        // ring residue never enters a state compare
+        if key == "live" {
+            if addr as usize >= self.size {
+                return None;
+            }
+            self.refresh();
+            if addr as usize >= self.elems {
+                return None;
+            }
+            let i = (self.fst + addr as usize) % self.size;
+            // normalize the width: arena refresh reconstructs entries
+            // at width.max(1) while boxed entries keep the enq'd width
+            // (0 for zero-width fifos) — same bits, unequal Values
+            // (sysZeroFIFOParamTest phantom divergence)
+            return Some(
+                self.data
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| Value::zero(self.width.max(1)))
+                    .zext(self.width.max(1)),
+            );
+        }
         if !key.is_empty() || addr as usize >= self.size {
             return None;
         }

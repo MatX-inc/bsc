@@ -55,11 +55,57 @@ fn is_lib_bdpi(c_name: &str) -> bool {
     matches!(c_name, "rand32" | "srand")
 }
 
-extern "C" {
-    #[link_name = "random"]
-    fn libc_random() -> std::ffi::c_long;
-    #[link_name = "srandom"]
-    fn libc_srandom(seed: std::ffi::c_uint);
+/// glibc random() (TYPE_3, trinomial x^31 + x^3 + 1), reimplemented so
+/// every Interp owns its OWN stream.  The reference's rand32.cxx calls
+/// libc random(), whose state is process-global — fine for one model
+/// per process, but the lockstep selfcheck and the bluetcl
+/// multi-engine oracle run several engines in one process, and a
+/// shared stream interleaves: each engine sees a different
+/// subsequence (witness: sysTest_mkNonPipelinedDivider, identical
+/// stdout with divergent Randomize-fed state).  Verified word-exact
+/// against glibc for 1000 draws under the default seed and srandom(N)
+/// reseeding (scratch rngtest.c).
+struct GlibcRandom {
+    state: [u32; 31],
+    f: usize,
+    r: usize,
+}
+
+impl GlibcRandom {
+    fn new() -> GlibcRandom {
+        // glibc's initial state is as if srandom(1)
+        let mut g = GlibcRandom { state: [0; 31], f: 3, r: 0 };
+        g.srandom(1);
+        g
+    }
+    fn srandom(&mut self, seed: u32) {
+        let seed = if seed == 0 { 1 } else { seed };
+        self.state[0] = seed;
+        for i in 1..31 {
+            // 16807 * prev % 2^31-1 via Schrage's method, exactly as
+            // glibc computes it (signed intermediate)
+            let prev = self.state[i - 1] as i32 as i64;
+            let hi = prev / 127773;
+            let lo = prev % 127773;
+            let mut word = 16807 * lo - 2836 * hi;
+            if word < 0 {
+                word += 2147483647;
+            }
+            self.state[i] = word as u32;
+        }
+        self.f = 3;
+        self.r = 0;
+        for _ in 0..310 {
+            self.next();
+        }
+    }
+    fn next(&mut self) -> u32 {
+        self.state[self.f] = self.state[self.f].wrapping_add(self.state[self.r]);
+        let res = (self.state[self.f] >> 1) & 0x7fff_ffff;
+        self.f = (self.f + 1) % 31;
+        self.r = (self.r + 1) % 31;
+        res
+    }
 }
 
 // ===============
@@ -215,6 +261,8 @@ pub struct Interp {
     /// TRACED artifact only: (instance, method) -> recording slots for
     /// the method's VCD ports (EN time / args / result)
     jit_rec_meths: HashMap<(usize, StrId), RecSlots>,
+    /// per-engine $random/$srandom stream (library rand32/srand BDPI)
+    rng: GlibcRandom,
 }
 
 /// Arena recording slots for one user-module method's VCD ports
@@ -650,6 +698,7 @@ impl Interp {
             jit_reset_slots: Vec::new(),
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
+            rng: GlibcRandom::new(),
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
@@ -1970,8 +2019,9 @@ impl Interp {
         // glibc calls for bit-identical streams
         match self.s(ff.c_name) {
             "rand32" => {
-                // rand32.cxx: return (unsigned int)random();
-                let v = unsafe { libc_random() } as u64 & 0xffff_ffff;
+                // rand32.cxx: return (unsigned int)random(); ours is
+                // the same glibc stream, per-engine (see GlibcRandom)
+                let v = self.rng.next() as u64;
                 return Some(Value::from_u64(w.max(1), v));
             }
             "srand" => {
@@ -1980,7 +2030,7 @@ impl Interp {
                     Some(Arg::Val(v, _)) => v.as_u64() as u32,
                     _ => 0,
                 };
-                unsafe { libc_srandom(seed) };
+                self.rng.srandom(seed);
                 return Some(Value::from_u64(w.max(1), 0));
             }
             _ => {}
@@ -3404,6 +3454,136 @@ impl Interp {
         #[cfg(feature = "jit")]
         if let Some(t0) = t0 {
             jit::prof::dump(t0.elapsed());
+        }
+        rc
+    }
+
+    /// Lockstep selfcheck (trs run --selfcheck): drive this engine —
+    /// the PRIMARY, which owns stdout, waveforms, and the exit status —
+    /// and one or more quiet shadow engines in bounded steps, comparing
+    /// each shadow against the primary every `every` default-clock
+    /// posedges (and at the end of the run): cycle/finish status,
+    /// architectural prim state, and time where time is architecturally
+    /// visible.  With an aot primary and interp+jit shadows, ONE run
+    /// cross-checks all three execution tiers — no per-engine test-mode
+    /// explosion — with no reference simulator anywhere.  A divergence
+    /// reports on stderr (instant + the first mismatching state,
+    /// primary-vs-shadow, shadow named by engine) and the run exits 87
+    /// AT the divergence, the oracle doctrine's stop point.
+    ///
+    /// TRS_SELFCHECK_INJECT=<cycle> is the detector's negative
+    /// witness: once the primary passes that cycle, the first shadow is
+    /// advanced one extra posedge, which must trip the next compare.
+    pub fn run_lockstep(
+        &mut self,
+        shadows: &mut [(&'static str, Interp)],
+        max_cycles: u64,
+        every: u64,
+    ) -> i32 {
+        let every = every.max(1);
+        let inject = std::env::var("TRS_SELFCHECK_INJECT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
+        let mut injected = false;
+        let trace = std::env::var_os("TRS_SELFCHECK_TRACE").is_some();
+        loop {
+            let target = self.cycles().saturating_add(every).min(max_cycles);
+            self.advance(target);
+            for (_, sh) in shadows.iter_mut() {
+                sh.advance(target);
+            }
+            if trace {
+                let mut line = format!(
+                    "trs selfcheck: checkpoint target={target} primary \
+                     (t={}, c={})",
+                    self.now, self.cycle
+                );
+                for (kind, sh) in shadows.iter() {
+                    line.push_str(&format!(
+                        " {kind} (t={}, c={})",
+                        sh.now, sh.cycle
+                    ));
+                }
+                eprintln!("{line}");
+            }
+            if let Some(n) = inject {
+                if !injected && self.cycles() >= n {
+                    if let Some((_, sh)) = shadows.first_mut() {
+                        sh.advance(sh.cycles().saturating_add(1));
+                    }
+                    injected = true;
+                }
+            }
+            // a stop consumed by the cycle budget alone is an INTERNAL
+            // point: the central player and the general loop credit the
+            // last posedge's companion-negedge instant differently, so
+            // `now` can sit half a period apart with identical
+            // architectural history (no output can observe it — VCD
+            // disables the central player, and interactive stops use
+            // the heap loop).  Time compares only where time is
+            // architecturally visible: $finish/$stop/heap-dry stops.
+            let budget_stop = self.finished.is_none()
+                && !self.stop_request
+                && self.cycles() >= target;
+            for si in 0..shadows.len() {
+                let (kind, shadow) = &mut shadows[si];
+                let kind = *kind;
+                let mut diverged = Vec::new();
+                if !budget_stop && shadow.now != self.now {
+                    diverged.push(format!(
+                        "time {} vs primary {}",
+                        shadow.now, self.now
+                    ));
+                }
+                if shadow.cycle != self.cycle {
+                    diverged.push(format!(
+                        "cycle {} vs primary {}",
+                        shadow.cycle, self.cycle
+                    ));
+                }
+                if shadow.finished != self.finished {
+                    diverged.push(format!(
+                        "finished {:?} vs primary {:?}",
+                        shadow.finished, self.finished
+                    ));
+                }
+                // shape first: state addressed at different times
+                // compares apples to oranges (the capi oracle's
+                // per-engine gate)
+                if diverged.is_empty() {
+                    diverged = self.state_divergence(shadow, 8);
+                }
+                if !diverged.is_empty() {
+                    eprintln!(
+                        "trs selfcheck: DIVERGENCE [{kind} shadow] at \
+                         time {} (cycle {}):",
+                        self.now, self.cycle
+                    );
+                    for d in &diverged {
+                        eprintln!("trs selfcheck:   {d}");
+                    }
+                    self.dump_central_bails();
+                    let _ = self.finish();
+                    return 87;
+                }
+            }
+            if self.finished.is_some()
+                || self.stop_request
+                || self.cycles() >= max_cycles
+            {
+                break;
+            }
+            if self.cycles() < target {
+                // neither $finish, $stop, nor the cycle target ended
+                // the step: the event heap is dry (run() would have
+                // returned here after its single advance)
+                break;
+            }
+        }
+        self.dump_central_bails();
+        let rc = self.finish();
+        for (_, sh) in shadows.iter_mut() {
+            let _ = sh.finish();
         }
         rc
     }
@@ -5032,7 +5212,28 @@ impl Interp {
                         }
                     }
                     Some((lo, hi)) => {
-                        for addr in lo..=hi {
+                        // sparse ranges compare by OCCUPIED keys (the
+                        // union of both engines' sets — a key written
+                        // in one engine only reads undet in the other
+                        // and flags); a dense lo..=hi walk over a
+                        // RegFile#(UInt#(42)) is 4.4e12 reads per
+                        // checkpoint (sysSparseRF hung the suite)
+                        let ka = self.prim_sym_range_keys(i, ps.key);
+                        let kb = other.prim_sym_range_keys(i, ps.key);
+                        let keys: Option<Vec<u64>> = match (ka, kb) {
+                            (None, None) => None,
+                            (a, b) => {
+                                let mut u: Vec<u64> = a
+                                    .into_iter()
+                                    .flatten()
+                                    .chain(b.into_iter().flatten())
+                                    .collect();
+                                u.sort_unstable();
+                                u.dedup();
+                                Some(u)
+                            }
+                        };
+                        let mut cmp = |addr: u64, out: &mut Vec<String>| {
                             let a = self.prim_sym_read_range(i, ps.key, addr);
                             let b = other.prim_sym_read_range(i, ps.key, addr);
                             if a != b {
@@ -5042,8 +5243,23 @@ impl Interp {
                                     fmt(&b),
                                     fmt(&a)
                                 ));
-                                if out.len() >= max {
-                                    break;
+                            }
+                        };
+                        match keys {
+                            Some(ks) => {
+                                for addr in ks {
+                                    cmp(addr, &mut out);
+                                    if out.len() >= max {
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                for addr in lo..=hi {
+                                    cmp(addr, &mut out);
+                                    if out.len() >= max {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -5071,6 +5287,15 @@ impl Interp {
         let now = self.now;
         match &mut self.insts[i].kind {
             InstKind::Prim(p) => p.sym_read_range(key, addr, now),
+            _ => None,
+        }
+    }
+
+    /// Occupied addresses of a sparse SYM_RANGE (None = dense; walk
+    /// lo..=hi).  See Prim::sym_range_keys.
+    pub fn prim_sym_range_keys(&mut self, i: usize, key: &str) -> Option<Vec<u64>> {
+        match &mut self.insts[i].kind {
+            InstKind::Prim(p) => p.sym_range_keys(key),
             _ => None,
         }
     }
@@ -5119,6 +5344,7 @@ pub fn run_file(
     wave: Option<(WaveFormat, Option<String>)>,
     code: Option<&str>,
     formats: Option<(bool, bool)>,
+    selfcheck: Option<(u64, bool)>,
 ) -> Result<i32, String> {
     let mut interp = load_file(path, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
@@ -5130,5 +5356,73 @@ pub fn run_file(
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }
-    Ok(interp.run(max_cycles))
+    // announce: notes print only for an EXPLICIT --selfcheck (an
+    // interactive user).  Env-armed runs (TRS_SELFCHECK=1 — the
+    // corpus sweep and the DejaGnu suite) stay silent on skips: the
+    // suite captures stderr into byte-compared output, and a note
+    // would fail every BDPI test.  Divergence reports are NOT notes —
+    // they always print (a diverging suite test failing with the
+    // report in its log is the point).
+    let Some((every, announce)) = selfcheck else {
+        return Ok(interp.run(max_cycles));
+    };
+    if interp.needs_user_bdpi() {
+        // dlopen of one path is one refcounted image: user C globals
+        // are process-global, so a lockstep shadow DOUBLE-EXECUTES
+        // stateful foreign functions and corrupts the primary's own
+        // outputs (14 foreign-battery witnesses in the first selfcheck
+        // sweep) — skip the shadow, run plain
+        if announce {
+            eprintln!(
+                "trs selfcheck: note: design imports BDPI — user C \
+                 state is process-global and a lockstep shadow would \
+                 double-execute stateful foreign functions; selfcheck \
+                 skipped"
+            );
+        }
+        return Ok(interp.run(max_cycles));
+    }
+    // lockstep selfcheck: quiet shadow engines ride beside the primary
+    // — no console/file/VCD output, debug tier (a shadow is an oracle,
+    // not the artifact's execution engine, so TRS_REQUIRE_AOT does not
+    // police it).  The default shadow set covers EVERY other execution
+    // tier in one run: a pure interp always, plus a hybrid-jit shadow
+    // when the primary is the aot artifact — interp, jit, and aot then
+    // cross-check simultaneously, one mode instead of three.
+    // TRS_SELFCHECK_ENGINES=interp[,jit] overrides.  Construction runs
+    // under the quiet stamp too: elaboration-time prim diagnostics
+    // ($readmem gap warnings) print at load, before any advance
+    // re-stamps the thread-local (sysWarningTest leaked the shadow's
+    // copy into stdout).
+    let kinds: Vec<&'static str> = match std::env::var("TRS_SELFCHECK_ENGINES") {
+        Ok(s) => s
+            .split(',')
+            .filter_map(|t| match t.trim() {
+                "interp" => Some("interp"),
+                "jit" => Some("jit"),
+                _ => None,
+            })
+            .collect(),
+        Err(_) => {
+            if code.is_some() {
+                vec!["interp", "jit"]
+            } else {
+                vec!["interp"]
+            }
+        }
+    };
+    let mut shadows: Vec<(&'static str, Interp)> = Vec::new();
+    for kind in kinds {
+        prim::QUIET_ENGINE.with(|c| c.set(true));
+        let sh = load_file(path, plusargs, None);
+        prim::QUIET_ENGINE.with(|c| c.set(false));
+        let mut sh = sh?;
+        sh.set_quiet();
+        sh.set_debug_tier();
+        if kind == "jit" {
+            sh.arm_jit();
+        }
+        shadows.push((kind, sh));
+    }
+    Ok(interp.run_lockstep(&mut shadows, max_cycles, every))
 }

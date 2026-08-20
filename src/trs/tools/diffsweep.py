@@ -44,7 +44,10 @@ if not TRS:
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
-TIMEOUT = 60          # reference runs, compiles, and normal trs runs
+# reference runs, compiles, and normal trs runs.  Env-able for the
+# selfcheck sweep (TRS_SELFCHECK=1): the interp shadow rides along, so
+# RegFile-heavy designs legitimately exceed the flat budget.
+TIMEOUT = float(os.environ.get("DIFFSWEEP_TIMEOUT", "60"))
 # Enable-gated long tests (their directory carries a *.exp.golden, the
 # bsc.long_tests convention) are exactly the designs whose interpreter
 # runs blow up; they get a tight leash instead of the flat TIMEOUT:

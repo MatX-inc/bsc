@@ -389,6 +389,23 @@ fn main() -> ExitCode {
             // (vcd, fst) writers this model carries; None = the
             // reference default (vcd only) applied at load
             let mut formats: Option<(bool, bool)> = None;
+            // Some((N, announce)) = lockstep selfcheck, compare
+            // cadence N posedges.  TRS_SELFCHECK=1 arms it
+            // environmentally — existing artifact wrappers then run
+            // checked with no relink (how the corpus sweep and the
+            // DejaGnu suite drive it); env-armed runs suppress the
+            // skip notes (announce=false) because byte-compare
+            // harnesses capture stderr.
+            let mut selfcheck: Option<(u64, bool)> =
+                std::env::var_os("TRS_SELFCHECK").map(|_| {
+                    (
+                        std::env::var("TRS_SELFCHECK_EVERY")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(1000),
+                        false,
+                    )
+                });
             let mut script_cmds = String::new();
             // bluesim.tcl's usage text, printed for -h and after the
             // deprecated-flag notices; the driver exits 0 in both cases
@@ -441,6 +458,38 @@ fn main() -> ExitCode {
                     "--code" => {
                         code_so = it.next().map(|s| s.to_string());
                     }
+                    // lockstep selfcheck: a quiet interp shadow runs
+                    // beside the primary engine; state compared every
+                    // N default-clock posedges (default 1000, or
+                    // --selfcheck-every / TRS_SELFCHECK_EVERY)
+                    "--selfcheck" => {
+                        selfcheck = Some((
+                            selfcheck.map(|(n, _)| n).unwrap_or_else(|| {
+                                std::env::var("TRS_SELFCHECK_EVERY")
+                                    .ok()
+                                    .and_then(|v| v.parse().ok())
+                                    .unwrap_or(1000)
+                            }),
+                            true,
+                        ));
+                    }
+                    "--selfcheck-every" => match it.next() {
+                        Some(n) => match n.parse::<u64>() {
+                            Ok(n) => selfcheck = Some((n, true)),
+                            Err(_) => {
+                                eprintln!(
+                                    "Error: --selfcheck-every requires a number"
+                                );
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => {
+                            eprintln!(
+                                "Error: --selfcheck-every requires a number"
+                            );
+                            return ExitCode::from(2);
+                        }
+                    },
                     // -dump-formats baked into the artifact wrapper
                     "--formats" => {
                         if let Some(v) = it.next() {
@@ -534,6 +583,17 @@ fn main() -> ExitCode {
                 }
             }
             if !script_cmds.is_empty() {
+                if matches!(selfcheck, Some((_, true))) {
+                    // the bluetcl tier's equivalent is the multi-engine
+                    // oracle (TRS_CAPI_ENGINES=interp,jit — see
+                    // docs/SELFCHECK.md); the batch lockstep driver
+                    // does not apply to script runs
+                    eprintln!(
+                        "trs: note: --selfcheck applies to batch runs; \
+                         ignored with -c/-f (use TRS_CAPI_ENGINES for \
+                         the script tier's oracle)"
+                    );
+                }
                 return run_script(
                     path,
                     max_cycles,
@@ -553,6 +613,7 @@ fn main() -> ExitCode {
                 wave,
                 code_so.as_deref(),
                 formats,
+                selfcheck,
             ) {
                 Ok(code) => {
                     use std::io::Write;
