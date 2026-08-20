@@ -18,6 +18,15 @@ fn usage() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // reference parity for `./model | head`: Rust starts with SIGPIPE
+    // ignored, so a $display into a closed pipe returned EPIPE and the
+    // print panicked — and the panic crossed the jit's extern "C"
+    // foreign callback, aborting with a backtrace wall.  The reference
+    // C++ model just dies on SIGPIPE (shell reports 141); restore that.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         // trs features: print the compiled-in feature set, one per line

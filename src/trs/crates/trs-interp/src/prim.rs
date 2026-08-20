@@ -2591,6 +2591,29 @@ impl Fifo {
         h[5] = self.clear_at;
         h[6] = self.suppress as u64;
     }
+    /// Header-only arena refresh: occupancy and head without paying
+    /// for the data mirror.  The oracle keys ("live"/"elems") read one
+    /// element per call — a full refresh there is O(size) per element
+    /// and turned deep-FIFO state compares quadratic (mkTestbench_TagRam:
+    /// 0.03s plain, 120s+ under selfcheck).
+    fn refresh_meta(&mut self) {
+        let Some(slot) = self.slot else { return };
+        let h = unsafe { std::slice::from_raw_parts(slot, 7) };
+        self.elems = h[0] as usize;
+        self.saved_elems = h[1] as usize;
+        self.fst = h[2] as usize;
+        self.enq_at = h[3];
+        self.deq_at = h[4];
+        self.clear_at = h[5];
+    }
+    /// One live element straight from the arena, skipping the O(size)
+    /// data mirror.  None when the prim is boxed (no slot).
+    fn arena_elem(&self, idx: usize) -> Option<Value> {
+        let slot = self.slot?;
+        let w = self.arena_words();
+        let h = unsafe { std::slice::from_raw_parts(slot.add(7 + idx * w), w) };
+        Some(Value::from_limbs64(self.width.max(1), h.to_vec()))
+    }
     /// Arena-authoritative refresh: compiled INLINE enq/deq update the
     /// slots directly; boxed ops re-read them first.
     fn refresh(&mut self) {
@@ -2666,7 +2689,7 @@ impl Prim for Fifo {
             "level" => Some(Value::from_u64(32, self.size as u64)),
             // oracle-only: the real occupancy (arena is authority)
             "elems" => {
-                self.refresh();
+                self.refresh_meta();
                 Some(Value::from_u64(32, self.elems as u64))
             }
             _ => None,
@@ -2680,22 +2703,24 @@ impl Prim for Fifo {
             if addr as usize >= self.size {
                 return None;
             }
-            self.refresh();
+            self.refresh_meta();
             if addr as usize >= self.elems {
                 return None;
             }
             let i = (self.fst + addr as usize) % self.size;
-            // normalize the width: arena refresh reconstructs entries
-            // at width.max(1) while boxed entries keep the enq'd width
+            // normalize the width: arena entries reconstruct at
+            // width.max(1) while boxed entries keep the enq'd width
             // (0 for zero-width fifos) — same bits, unequal Values
             // (sysZeroFIFOParamTest phantom divergence)
-            return Some(
-                self.data
+            return Some(match self.arena_elem(i) {
+                Some(v) => v,
+                None => self
+                    .data
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| Value::zero(self.width.max(1)))
                     .zext(self.width.max(1)),
-            );
+            });
         }
         if !key.is_empty() || addr as usize >= self.size {
             return None;
@@ -4861,7 +4886,11 @@ impl Prim for SyncFifo {
 struct BramPort {
     upd_at: u64,
     upd_addr: u64,
-    upd_wens: u64,
+    /// write-enable lanes as a VALUE: BE brams can carry more than 64
+    /// enables (1024-bit data / 8-bit chunks = 128 lanes) — a u64 here
+    /// silently dropped every lane past 63 (witness: sysBramWideBE;
+    /// the reference C++ does not even compile at these widths)
+    upd_wens: Value,
     upd_val: Value,
     written_at: u64,
     upd_prev: Value,
@@ -4874,7 +4903,7 @@ impl BramPort {
         BramPort {
             upd_at: u64::MAX,
             upd_addr: 0,
-            upd_wens: 0,
+            upd_wens: Value::zero(1),
             upd_val: Value::undet(width),
             written_at: u64::MAX,
             upd_prev: Value::undet(width),
@@ -4903,7 +4932,7 @@ struct Bram {
 #[derive(Clone)]
 struct BramVcdBack {
     en: bool,
-    wens: u64,
+    wens: Value,
     addr: u64,
     di: Value,
     dout: Value,
@@ -4957,12 +4986,12 @@ impl Bram {
         addr_dump_val(a, self.addr_bits)
     }
 
-    fn put(&mut self, port_b: bool, wens: u64, addr: u64, val: Value, now: u64, pname: &str) {
+    fn put(&mut self, port_b: bool, wens: Value, addr: u64, val: Value, now: u64, pname: &str) {
         if addr > self.hi_addr {
             qprintln!(
                 "Warning: BRAM '{}' -- {} address on port {} is out of bounds: {}",
                 self.full_name,
-                if wens != 0 { "Write" } else { "Read" },
+                if !wens.is_zero() { "Write" } else { "Read" },
                 pname,
                 self.addr_hex(addr)
             );
@@ -4981,7 +5010,7 @@ impl Bram {
         if me.upd_at != now {
             return;
         }
-        let is_write = me.upd_wens != 0;
+        let is_write = !me.upd_wens.is_zero();
         if me.upd_addr > self.hi_addr {
             me.out = Value::undet(self.width);
         } else if is_write {
@@ -5001,7 +5030,13 @@ impl Bram {
             let merged = {
                 let mut r = cur;
                 for n in 0..self.num_wens {
-                    if me.upd_wens >> n & 1 != 0 {
+                    // lane test on the VALUE: enables can exceed 64 bits
+                    let lane_on = me
+                        .upd_wens
+                        .limbs64()
+                        .get((n / 64) as usize)
+                        .is_some_and(|l| (l >> (n % 64)) & 1 != 0);
+                    if lane_on {
                         let lo = (n * self.chunk_size) as u64;
                         let hi = lo + self.chunk_size as u64 - 1;
                         let chunk = me.upd_val.extract(hi, lo, self.chunk_size);
@@ -5089,7 +5124,7 @@ impl Prim for Bram {
         let bit = |b: bool| Value::from_u64(1, b as u64);
         let fresh = |width: u32| BramVcdBack {
             en: false,
-            wens: 0,
+            wens: Value::zero(1),
             addr: 0,
             di: Value::undet(width.max(1)),
             dout: Value::undet(width.max(1)),
@@ -5124,8 +5159,8 @@ impl Prim for Bram {
                 D::Changes => {
                     // both ports gate on the (single modeled) clock edge
                     if clk_edge_now {
-                        let did_write = en && p.upd_wens != 0;
-                        let back_did_write = back.en && back.wens != 0;
+                        let did_write = en && !p.upd_wens.is_zero();
+                        let back_did_write = back.en && !back.wens.is_zero();
                         if en != back.en {
                             w.write_val(num, &bit(en), now);
                             back.en = en;
@@ -5133,12 +5168,12 @@ impl Prim for Bram {
                         num += 1;
                         if did_write != back_did_write || p.upd_wens != back.wens {
                             // WE displays 0 while EN is low in CHANGES mode
-                            let wv = if en { p.upd_wens } else { 0 };
-                            w.write_val(
-                                num,
-                                &Value::from_u64(self.num_wens.max(1), wv),
-                                now,
-                            );
+                            let wv = if en {
+                                p.upd_wens.zext(self.num_wens.max(1))
+                            } else {
+                                Value::zero(self.num_wens.max(1))
+                            };
+                            w.write_val(num, &wv, now);
                         }
                         num += 1;
                         if p.upd_addr != back.addr {
@@ -5164,7 +5199,7 @@ impl Prim for Bram {
                 _ => {
                     w.write_val(num, &bit(en), now);
                     num += 1;
-                    w.write_val(num, &Value::from_u64(self.num_wens.max(1), p.upd_wens), now);
+                    w.write_val(num, &p.upd_wens.zext(self.num_wens.max(1)), now);
                     num += 1;
                     w.write_val(
                         num,
@@ -5180,7 +5215,7 @@ impl Prim for Bram {
                 }
             }
             if dt != D::Xs {
-                back.wens = p.upd_wens;
+                back.wens = p.upd_wens.clone();
                 back.addr = p.upd_addr;
                 back.di = p.upd_val.clone();
                 back.dout = dout;
@@ -5211,12 +5246,12 @@ impl Prim for Bram {
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
         match method {
             "put" | "a_put" => {
-                let wens = args[0].as_u64();
+                let wens = args[0].clone();
                 let addr = args[1].as_u64();
                 self.put(false, wens, addr, args[2].clone(), now, "A");
             }
             "b_put" => {
-                let wens = args[0].as_u64();
+                let wens = args[0].clone();
                 let addr = args[1].as_u64();
                 self.put(true, wens, addr, args[2].clone(), now, "B");
             }
