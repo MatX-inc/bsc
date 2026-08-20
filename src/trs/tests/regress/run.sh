@@ -64,4 +64,64 @@ check_expected() { # name top
 # the contract — top byte AND low byte zeroed by the lane-127|lane-0
 # write, everything between stays 0xAA
 check_expected BramWideBE sysBramWideBE
+# A RegFile load file is an input to the simulation, not to the build.
+# The reference opens one when the model object is constructed, which is
+# run time, so link -- both the reference's and ours -- must complete
+# with the file absent.  (Verilog differs: $readmemh runs from an initial
+# block.  The reference is what we match.)  Contents are then checked the
+# usual way: byte parity on the run with the file in place.
+check_memload() {
+    name=RegFileLoadLink; top=sysRegFileLoadLink
+    cp "$SRC/$name.bsv" .
+    rm -f "$name.mem"
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o ref.exe > reflink.out 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    "$TRS" link "$top.bir" -o art > link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    # neither link may so much as name the file (a missing load file is
+    # only a diagnostic, so silence -- not exit status -- is the contract)
+    if grep -q "$name.mem" reflink.out; then echo "FAIL $name (ref link opened the .mem)"; fail=1; return; fi
+    if grep -q "$name.mem" link.out; then echo "FAIL $name (trs link opened the .mem)"; sed -n 1,2p link.out; fail=1; return; fi
+    # still absent: both must report it the same way at RUN time, which
+    # also proves the greps above would have caught a load if one happened
+    ./ref.exe > ref.absent 2>&1; refrc=$?
+    TRS="$TRS" ./art > got.absent 2>&1; gotrc=$?
+    if ! grep -q "$name.mem" ref.absent; then echo "FAIL $name (reference did not read it at run time either)"; fail=1; return; fi
+    if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (absent: exit $refrc vs $gotrc)"; fail=1; return; fi
+    if ! cmp -s ref.absent got.absent; then echo "FAIL $name (absent: stdout)"; diff ref.absent got.absent | head -4; fail=1; return; fi
+    cp "$SRC/$name.mem" .
+    ./ref.exe > ref.out 2>&1; refrc=$?
+    TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
+    if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_memload
+# String args must run COMPILED: byte parity alone would pass on an
+# interpreted fallback (see BdpiMin), and the point here is that the
+# compiler does not bail out on a string.  The model .so beside the
+# artifact is the tell.
+check_compiled() { # name top [cfile]
+    name=$1; top=$2; cfile=$3
+    cp "$SRC/$name.bsv" .
+    [ -n "$cfile" ] && cp "$SRC/$cfile" .
+    rm -f art.so
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./ref.exe > ref.out 2>&1; refrc=$?
+    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    [ -f art.so ] || { echo "FAIL $name (fell back to interpreted)"; fail=1; return; }
+    TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
+    if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+# every way a constant string is built (param/literal concats, nesting,
+# $display of a concat), across two instances with different parameters:
+# compiled bodies are shared per equivalence class, so a baked-in string
+# would show up as one instance wearing the other's text
+check_compiled StrCatBdpi sysStrCatBdpi slen.c
+# a string chosen by a runtime condition: not a per-instance constant —
+# on this stack it still compiles (StrDyn marker values select among
+# interned ids at runtime), and the output must match the reference
+check_compiled StrDynSelect sysStrDynSelect slen.c
 exit $fail

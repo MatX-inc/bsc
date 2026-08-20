@@ -72,14 +72,23 @@ _BSC_ID = None
 
 def _bsc_id():
     """Content hash of the bsc binary: golden entries from another bsc
-    build must never replay."""
+    build must never replay.  An installed `bsc` is a wrapper SCRIPT
+    that never changes across rebuilds (it exec's core/bsc beside it):
+    hashing only the wrapper kept the cache warm across bsc rebuilds
+    and replayed stale reference .birs — hash the real executable too."""
     global _BSC_ID
     if _BSC_ID is None:
         import hashlib
         h = hashlib.sha256()
-        with open(BSC, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
+        targets = [BSC]
+        core = os.path.join(os.path.dirname(BSC), "core",
+                            os.path.basename(BSC))
+        if os.path.exists(core):
+            targets.append(core)
+        for t in targets:
+            with open(t, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
         _BSC_ID = h.hexdigest().encode()
     return _BSC_ID
 
@@ -306,11 +315,14 @@ def one_test(job):
 
     import time as _time
     tb0 = _time.monotonic()
-    # 420s: sysBRAM0Test/sysFloatTest reference builds measure
+    # 420s default: sysBRAM0Test/sysFloatTest reference builds measure
     # 166-256s depending on load and FLAPPED at a 180s ceiling
-    # (LINK_FAIL "unknown" = timeout with empty stderr)
+    # (LINK_FAIL "unknown" = timeout with empty stderr).  The
+    # ConflictFree*Large pair measures 489s cold on a 4-CPU box —
+    # DIFFSWEEP_BUILD_TIMEOUT raises the ceiling for such rechecks.
+    build_limit = int(os.environ.get("DIFFSWEEP_BUILD_TIMEOUT", "420"))
     r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common + cfiles,
-            cwd=wk, timeout=420)
+            cwd=wk, timeout=build_limit)
     ref_build_secs = _time.monotonic() - tb0
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)

@@ -23,6 +23,27 @@ pub(crate) fn quiet_engine() -> bool {
     QUIET_ENGINE.with(|c| c.get())
 }
 
+thread_local! {
+    /// Reference Bluesim reads a RegFile/BRAM load file when the model
+    /// object is constructed, which is run time; a `.mem` is an input to
+    /// the simulation, not to the build.  `trs link` instantiates a
+    /// design only to plan and compile it, and the artifact it writes
+    /// loads its own memories when it runs, so link clears this and
+    /// opens no load file at all.  (Verilog differs -- $readmemh runs
+    /// from an initial block -- and the reference is what we match.)
+    static LOAD_MEMFILES: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(true) };
+}
+
+/// See `LOAD_MEMFILES`: `trs link` clears this before instantiating.
+pub fn set_load_memfiles(on: bool) {
+    LOAD_MEMFILES.with(|c| c.set(on));
+}
+
+pub(crate) fn load_memfiles() -> bool {
+    LOAD_MEMFILES.with(|c| c.get())
+}
+
 /// qprintln! that a QUIET oracle engine suppresses (the primary's
 /// print is the byte-parity one; a secondary's would duplicate it).
 macro_rules! qprintln {
@@ -942,7 +963,9 @@ impl RegFile {
             upd_prev: Value::undet(width),
         };
         if let Some(f) = file {
-            rf.load_memfile(&f, bin);
+            if load_memfiles() {
+                rf.load_memfile(&f, bin);
+            }
         }
         rf
     }
@@ -4978,7 +5001,7 @@ impl Bram {
             vcd_base: 0,
             vcd_back: None,
         };
-        if let Some((f, bin)) = file {
+        if let Some((f, bin)) = file.filter(|_| load_memfiles()) {
             let (ab, w, hi) = (b.addr_bits, b.width, b.hi_addr);
             let data = &mut b.data;
             load_mem_file(&f, bin, ab, w, 0, hi, &leaf, &mut |a, v| {

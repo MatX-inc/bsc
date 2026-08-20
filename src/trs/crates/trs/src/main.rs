@@ -130,6 +130,11 @@ fn main() -> ExitCode {
             let base = out.unwrap_or_else(|| {
                 format!("{}.cexe", path.strip_suffix(".bir").unwrap_or(path))
             });
+            // a .mem is an input to the simulation, not to the build:
+            // the reference reads a load file when the model object is
+            // constructed, so the artifact written here opens its own
+            // when it runs (see prim::LOAD_MEMFILES)
+            trs_interp::prim::set_load_memfiles(false);
             // _fresh: link WRITES the snapshot, so it decodes the .bir
             // source of truth, never a prior sidecar (see startup.rs)
             let mut interp = match trs_interp::startup::load_file_fresh(path, &[], None) {
