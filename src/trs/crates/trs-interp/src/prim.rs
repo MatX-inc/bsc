@@ -912,49 +912,89 @@ impl RangeTracker {
 /// mem_file.cxx parse_hex: '_' ignored, x/z count as 0 nibbles; error if
 /// the value extends beyond the last nibble or sets bits above `bits` in
 /// a partial final nibble.
-fn parse_mem_hex(s: &str, bits: u32) -> Option<Value> {
-    // accumulate at full-nibble width so overflow into a partial final
-    // nibble is observable, then truncate
-    let nibbles = ((bits + 3) / 4).max(1);
-    let w = nibbles * 4;
-    let mut v = Value::zero(w);
-    let mut nbits: u32 = 0;
-    for c in s.chars() {
-        let d = match c {
-            '_' => continue,
-            'x' | 'X' | 'z' | 'Z' => 0,
-            c if c.is_ascii_hexdigit() => c.to_digit(16).unwrap(),
-            _ => return None,
-        };
-        v = v.shl(4, w).or(&Value::from_u64(w, d as u64), w);
-        nbits += 4;
-        if nbits / 4 > nibbles
-            || (nbits / 4 == nibbles && bits % 4 != 0 && !v.lshr(bits as u64, w).is_zero())
-        {
+/// Hex digit value, or None (`_` never reaches here).
+#[inline]
+fn hex_digit(b: u8) -> Option<u64> {
+    match b {
+        b'0'..=b'9' => Some((b - b'0') as u64),
+        b'a'..=b'f' => Some((b - b'a' + 10) as u64),
+        b'A'..=b'F' => Some((b - b'A' + 10) as u64),
+        b'x' | b'X' | b'z' | b'Z' => Some(0),
+        _ => None,
+    }
+}
+
+/// mem_file.cxx parse_hex over bytes: digits place directly at their
+/// final bit positions (no per-nibble shifting — the old accumulate
+/// allocated three Values PER NIBBLE and dominated construction on
+/// load-file designs).  Semantics identical: more digits than the
+/// width's nibbles is an error, as is a final partial nibble whose
+/// bits above `bits` are nonzero; x/z digits read as 0; `_` skipped.
+fn parse_mem_hex(s: &[u8], bits: u32) -> Option<Value> {
+    let nibbles = (bits.div_ceil(4)).max(1) as usize;
+    // digit count (excluding separators), charset check
+    let mut n = 0usize;
+    for &b in s {
+        if b == b'_' {
+            continue;
+        }
+        hex_digit(b)?;
+        n += 1;
+    }
+    if n > nibbles {
+        return None;
+    }
+    let words = (nibbles * 4).div_ceil(64);
+    let mut limbs = vec![0u64; words];
+    let mut i = 0usize;
+    for &b in s {
+        if b == b'_' {
+            continue;
+        }
+        let d = hex_digit(b).unwrap();
+        let pos = (n - 1 - i) * 4;
+        limbs[pos / 64] |= d << (pos % 64);
+        i += 1;
+    }
+    // overflow into the partial final nibble (only reachable when
+    // every nibble is used and the width is not nibble-aligned)
+    if n == nibbles && bits % 4 != 0 {
+        let top = limbs[(bits / 64) as usize] >> (bits % 64);
+        if top != 0 {
             return None;
         }
     }
-    Some(v.extract(bits.max(1) as u64 - 1, 0, bits.max(1)))
+    Some(Value::from_limbs64(bits.max(1), limbs))
 }
 
 /// mem_file.cxx parse_bin: 0/1 plus x/z (as 0); error past `bits` digits.
-fn parse_mem_bin(s: &str, bits: u32) -> Option<Value> {
-    let mut v = Value::zero(bits.max(1));
-    let mut nbits: u32 = 0;
-    for c in s.chars() {
-        let d = match c {
-            '_' => continue,
-            '0' | 'x' | 'X' | 'z' | 'Z' => 0,
-            '1' => 1,
+fn parse_mem_bin(s: &[u8], bits: u32) -> Option<Value> {
+    let cap = bits.max(1) as usize;
+    let mut n = 0usize;
+    for &b in s {
+        match b {
+            b'_' => continue,
+            b'0' | b'1' | b'x' | b'X' | b'z' | b'Z' => n += 1,
             _ => return None,
-        };
-        v = v.shl(1, bits.max(1)).or(&Value::from_u64(bits.max(1), d), bits.max(1));
-        nbits += 1;
-        if nbits > bits {
-            return None;
         }
     }
-    Some(v)
+    if n as u32 > bits {
+        return None;
+    }
+    let mut limbs = vec![0u64; cap.div_ceil(64)];
+    let mut i = 0usize;
+    for &b in s {
+        match b {
+            b'_' => continue,
+            b'1' => {
+                let pos = n - 1 - i;
+                limbs[pos / 64] |= 1u64 << (pos % 64);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    Some(Value::from_limbs64(bits.max(1), limbs))
 }
 
 impl RegFile {
@@ -1039,7 +1079,11 @@ fn load_mem_file(
     mem_name: &str,
     sink: &mut dyn FnMut(u64, Value),
 ) {
-        let text = match std::fs::read_to_string(path) {
+        // bytes, not chars: the grammar is ASCII, tokens are contiguous
+        // slices of the buffer (no per-char String pushes), and the
+        // reference reads bytes too (read_to_string would reject a
+        // non-UTF-8 comment the reference accepts)
+        let text = match std::fs::read(path) {
             Ok(x) => x,
             Err(e) => {
                 let mut msg = e.to_string();
@@ -1054,7 +1098,7 @@ fn load_mem_file(
     let decreasing = lo > hi;
         let mut addr = lo;
         let mut rt = RangeTracker::new();
-        let mut set_entry = |rt: &mut RangeTracker, s: &str, addr: &mut u64,
+        let mut set_entry = |rt: &mut RangeTracker, s: &[u8], addr: &mut u64,
                              sink: &mut dyn FnMut(u64, Value)|
          -> bool {
             if in_range(*addr) {
@@ -1089,37 +1133,40 @@ fn load_mem_file(
             InAddr,
             InValue,
         }
+        let is_tok_byte = |b: u8| {
+            b.is_ascii_hexdigit() || matches!(b, b'_' | b'x' | b'X' | b'z' | b'Z')
+        };
         let mut state = St::Start;
         let mut line: u32 = 1;
         let mut start_line: u32 = 1;
         let mut comment_start_line: u32 = 0;
-        let mut tok = String::new();
-        for c in text.chars() {
+        let mut tok_start = 0usize;
+        for (bi, &b) in text.iter().enumerate() {
+            let c = b as char;
             match state {
-                St::Start => match c {
-                    '/' => state = St::BeginComment,
-                    '@' => {
+                St::Start => match b {
+                    b'/' => state = St::BeginComment,
+                    b'@' => {
                         state = St::InAddr;
-                        tok.clear();
+                        tok_start = bi + 1;
                         start_line = line;
                     }
-                    c if c.is_ascii_hexdigit() => {
+                    b if b.is_ascii_hexdigit() => {
                         state = St::InValue;
-                        tok.clear();
-                        tok.push(c);
+                        tok_start = bi;
                         start_line = line;
                     }
-                    '\n' => line += 1,
-                    '\r' | ' ' | '\t' => {}
+                    b'\n' => line += 1,
+                    b'\r' | b' ' | b'\t' => {}
                     _ => {
                         qprintln!("Error: syntax error at line {line} of file '{path}'");
                         qprintln!("       Encountered '{c}' when expecting '/', '@', hex digit, end-of-line or whitespace.");
                         return;
                     }
                 },
-                St::BeginComment => match c {
-                    '/' => state = St::CppComment,
-                    '*' => {
+                St::BeginComment => match b {
+                    b'/' => state = St::CppComment,
+                    b'*' => {
                         state = St::CComment;
                         comment_start_line = line;
                     }
@@ -1130,25 +1177,25 @@ fn load_mem_file(
                     }
                 },
                 St::CppComment => {
-                    if c == '\n' {
+                    if b == b'\n' {
                         line += 1;
                         state = St::Start;
                     }
                 }
                 St::CComment => {
-                    if c == '\n' {
+                    if b == b'\n' {
                         line += 1;
-                    } else if c == '*' {
+                    } else if b == b'*' {
                         state = St::EndCComment;
                     }
                 }
                 St::EndCComment => {
-                    state = if c == '/' { St::Start } else { St::CComment };
+                    state = if b == b'/' { St::Start } else { St::CComment };
                 }
                 St::InAddr => {
-                    let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
+                    let done = matches!(b, b'\n' | b'\r' | b' ' | b'\t' | b'/');
                     if done {
-                        let err = match parse_mem_hex(&tok, addr_bits) {
+                        let err = match parse_mem_hex(&text[tok_start..bi], addr_bits) {
                             None => Some("Malformed address".to_string()),
                             Some(v) => {
                                 let a = v.as_u64();
@@ -1165,33 +1212,29 @@ fn load_mem_file(
                             qprintln!("       {e}.");
                             return;
                         }
-                        if c == '\n' {
+                        if b == b'\n' {
                             line += 1;
                         }
-                        state = if c == '/' { St::BeginComment } else { St::Start };
-                    } else if c.is_ascii_hexdigit() || matches!(c, '_' | 'x' | 'X' | 'z' | 'Z') {
-                        tok.push(c);
-                    } else {
+                        state = if b == b'/' { St::BeginComment } else { St::Start };
+                    } else if !is_tok_byte(b) {
                         qprintln!("Error: address processing error at line {start_line} of file '{path}'");
                         qprintln!("       Encountered '{c}' when expecting '/', hex digit, end-of-line or whitespace.");
                         return;
                     }
                 }
                 St::InValue => {
-                    let done = matches!(c, '\n' | '\r' | ' ' | '\t' | '/');
+                    let done = matches!(b, b'\n' | b'\r' | b' ' | b'\t' | b'/');
                     if done {
-                        if !set_entry(&mut rt, &tok, &mut addr, sink) {
+                        if !set_entry(&mut rt, &text[tok_start..bi], &mut addr, sink) {
                             qprintln!("Error: value processing error at line {start_line} of file '{path}'");
                             qprintln!("       Malformed value.");
                             return;
                         }
-                        if c == '\n' {
+                        if b == b'\n' {
                             line += 1;
                         }
-                        state = if c == '/' { St::BeginComment } else { St::Start };
-                    } else if c.is_ascii_hexdigit() || matches!(c, '_' | 'x' | 'X' | 'z' | 'Z') {
-                        tok.push(c);
-                    } else {
+                        state = if b == b'/' { St::BeginComment } else { St::Start };
+                    } else if !is_tok_byte(b) {
                         qprintln!("Error: value processing error at line {start_line} of file '{path}'");
                         qprintln!("       Encountered '{c}' when expecting '/', digit, end-of-line or whitespace.");
                         return;
@@ -1205,10 +1248,14 @@ fn load_mem_file(
                 qprintln!("       Unterminated C-style comment.");
             }
             St::InValue => {
-                if !set_entry(&mut rt, &tok, &mut addr, sink) {
+                if !set_entry(&mut rt, &text[tok_start..], &mut addr, sink) {
                     qprintln!("Error: value processing error at line {line} of file '{path}'");
                     qprintln!("       Malformed value.");
                 }
+            }
+            St::InAddr => {
+                // EOF inside an @address: the original char loop fell
+                // out without applying it, matching the reference
             }
             _ => {}
         }
