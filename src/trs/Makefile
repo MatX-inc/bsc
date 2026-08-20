@@ -31,13 +31,21 @@ export LLVM_SYS_181_PREFIX
 TRS_FLAGS = --features jit
 CAPI_FLAGS  =
 else
-TRS_FLAGS =
-CAPI_FLAGS  = --no-default-features
+# lean fallback: no compile tier, but artifact LOADING stays (aot
+# needs no LLVM) — artifacts built elsewhere run at full speed
+TRS_FLAGS = --features aot
+CAPI_FLAGS  = --no-default-features --features aot
 endif
 
 .PHONY: build
 build:
 	$(CARGO) build --release --locked -p trs $(TRS_FLAGS)
+	# slim artifact runtime (no LLVM): what `trs link --exe` binaries
+	# load — the full capi lib carries statically-linked LLVM whose
+	# constructors cost ~5ms at every exec.  Built FIRST and stashed
+	# as libtrs_rt.a before the full capi build overwrites the .a.
+	$(CARGO) build --release --locked -p trs-capi --no-default-features --features aot
+	cp target/release/libtrs_capi.a target/release/libtrs_rt.a
 	$(CARGO) build --release --locked -p trs-capi $(CAPI_FLAGS)
 
 .PHONY: install
@@ -45,15 +53,21 @@ install: build
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 target/release/trs $(BINDIR)/trs
 	$(INSTALL) -m 644 target/release/libtrs_capi.a $(BINDIR)/libtrs_capi.a
+	$(INSTALL) -m 644 target/release/libtrs_rt.a $(BINDIR)/libtrs_rt.a
 	# debuginfo in the staticlib is dead weight at .so link time
 	# (~420MB -> tens of MB); the interactive link strips the model
 	strip --strip-debug $(BINDIR)/libtrs_capi.a
+	strip --strip-debug $(BINDIR)/libtrs_rt.a
 	# the shared capi: linked ONCE here instead of once per design;
 	# without it the fast wrapper's -c/-f script tier is absent (the
 	# artifact contract is unchanged), so a cc/LLVM-less environment
 	# degrades with a note rather than failing the install
 	$(BINDIR)/trs capi-so -o $(BINDIR)/libtrs_capi.so \
 	  || echo "trs: note: libtrs_capi.so not built; artifacts will lack the -c/-f script tier"
+	# the slim runtime .so `trs link --exe` binaries link against;
+	# LLVM-free, so it builds in lean environments too
+	$(BINDIR)/trs capi-so --rt -o $(BINDIR)/libtrs_rt.so \
+	  || echo "trs: note: libtrs_rt.so not built; trs link --exe will fall back to libtrs_capi.so"
 
 .PHONY: clean full_clean
 clean full_clean:

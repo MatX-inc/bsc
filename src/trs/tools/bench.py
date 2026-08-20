@@ -144,7 +144,7 @@ def sh(cmd, cwd, env=None, timeout=7200):
     return r, time.monotonic() - t0
 
 
-def run_measured(cmd, cwd, runs):
+def run_measured(cmd, cwd, runs, env=None):
     """Median wall + max RSS over `runs` executions.
 
     RSS comes from /usr/bin/time %M per run, NOT from
@@ -156,7 +156,8 @@ def run_measured(cmd, cwd, runs):
     out = None
     for _ in range(runs):
         with tempfile.NamedTemporaryFile(mode="r", suffix=".rss") as tf:
-            r, w = sh(["/usr/bin/time", "-f", "%M", "-o", tf.name] + cmd, cwd)
+            r, w = sh(["/usr/bin/time", "-f", "%M", "-o", tf.name] + cmd, cwd,
+                      env=env)
             if r.returncode not in (0,):
                 return None, r
             try:
@@ -248,7 +249,11 @@ def bench_one(d, legs, runs, work):
                     continue
                 L["backend_s"] = round(t2, 2)
                 L["bir_export_s"] = round(t, 2)
-                m, r = run_measured(["./art"], wk, runs)
+                # self-enforcing engine claim: an interpreted or
+                # hybrid downgrade fails the leg loudly (exit 86)
+                # instead of quietly measuring the wrong engine
+                strict = dict(_ENV, TRS_REQUIRE_AOT="1")
+                m, r = run_measured(["./art"], wk, runs, env=strict)
                 exe = "./art"
         else:  # verilator
             t_dpi = ["-use-dpi"] if cfiles else []

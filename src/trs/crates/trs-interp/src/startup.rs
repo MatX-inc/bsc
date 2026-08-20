@@ -42,6 +42,60 @@ pub fn load_file(
     load_file_inner(path, plusargs, vcd_file, true)
 }
 
+/// Code-aware load: prefer the design snapshot EMBEDDED in the
+/// artifact (--code), so the fast path never opens the .bir (full-AOT
+/// doctrine: the .bir is the debug/link sidecar).  Falls back to the
+/// .bir for pre-snap artifacts or any embedded-gate failure; the
+/// fallback keeps the fingerprint cross-check.
+#[cfg(feature = "aot")]
+pub fn load_file_or_code(
+    path: &str,
+    code: Option<&str>,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    let mut sl = StartupLap::new();
+    if let Some(so) = code {
+        if let Some((hash, design)) = crate::jit::aot_embedded_design(
+            &crate::jit::ArtifactSource::Path(so.into()),
+        ) {
+            sl.lap("design load (artifact-embedded snap)");
+            let mut interp = Interp::new(design);
+            sl.lap("interp build (instantiate)");
+            interp.bir_hash = hash;
+            interp.plusargs = plusargs.to_vec();
+            interp.wave_pending =
+                vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
+            // user BDPI code stays a companion .so: prefer the
+            // artifact's sibling, fall back to the .bir's
+            let stems = [
+                so.strip_suffix(".so").unwrap_or(so).to_string(),
+                path.strip_suffix(".bir").unwrap_or(path).to_string(),
+            ];
+            for stem in stems {
+                let b = stem + ".bdpi.so";
+                if std::path::Path::new(&b).exists() {
+                    let b = if b.contains('/') { b } else { format!("./{b}") };
+                    interp.load_bdpi(&b)?;
+                    break;
+                }
+            }
+            return Ok(interp);
+        }
+    }
+    load_file_inner(path, plusargs, vcd_file, true)
+}
+
+#[cfg(not(feature = "aot"))]
+pub fn load_file_or_code(
+    path: &str,
+    _code: Option<&str>,
+    plusargs: &[String],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    load_file_inner(path, plusargs, vcd_file, true)
+}
+
 /// `load_file` that ignores any snapshot sidecar.  `trs link` is the
 /// snapshot WRITER: it must decode the .bir source of truth, never a
 /// prior cache, so a gate-passing-but-wrong snapshot can never be

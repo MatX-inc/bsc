@@ -15,13 +15,17 @@ use super::*;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
-use trs_codegen::lower::{
-    compile_design_object, compile_execs, compile_fused, compile_helpers,
-    compile_helpers_object, compile_scheds, decode_protos, encode_protos, trial_lower,
+use trs_codegen::abi::{
+    decode_protos, encode_protos,
     FusedComp, FusedNode,
     CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
     HelperSpec, InstEnv, PlanEnv, PrimCb, RecMeth, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
+};
+#[cfg(feature = "jit")]
+use trs_codegen::lower::{
+    compile_design_object, compile_execs, compile_fused, compile_helpers,
+    compile_helpers_object, compile_scheds, trial_lower,
 };
 use prim::ArenaKind;
 
@@ -121,7 +125,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
-    if method == trs_codegen::lower::GATE_OUT_METHOD {
+    if method == trs_codegen::abi::GATE_OUT_METHOD {
         // compiled Expr::Gate on a prim child: not a method — answer
         // gate_out(), the interp's exact read
         let g = match &interp.insts[inst].kind {
@@ -144,7 +148,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         prof::add(&prof::PRIM_NS, t0);
         prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // the gate sentinel is no string id — interp.s() would index OOB
-        let meth = if method == trs_codegen::lower::GATE_OUT_METHOD {
+        let meth = if method == trs_codegen::abi::GATE_OUT_METHOD {
             "$gate_out".to_string()
         } else {
             interp.s(method).to_string()
@@ -166,6 +170,44 @@ pub(crate) enum JitNode {
     Exec(u32),
 }
 
+/// Where a --code artifact lives: a shared object on disk, or the
+/// process's own image (artifact-as-executable: the design objects
+/// are linked INTO the exe with --export-dynamic, and dlopen(NULL)
+/// resolves trs_snap / the edge fns from the global scope).
+#[derive(Clone, Debug)]
+pub enum ArtifactSource {
+    Path(std::path::PathBuf),
+    This,
+}
+
+impl ArtifactSource {
+    pub(crate) fn open(&self) -> Result<libloading::Library, String> {
+        match self {
+            ArtifactSource::Path(so) => {
+                // dlopen treats a bare filename as a library-search-
+                // path lookup, NOT a cwd file (same fix as load_bdpi)
+                let so_owned;
+                let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
+                    so_owned = std::path::Path::new(".").join(so);
+                    so_owned.as_path()
+                } else {
+                    so
+                };
+                unsafe { libloading::Library::new(so).map_err(|e| e.to_string()) }
+            }
+            ArtifactSource::This => {
+                Ok(libloading::os::unix::Library::this().into())
+            }
+        }
+    }
+    pub(crate) fn display(&self) -> String {
+        match self {
+            ArtifactSource::Path(so) => so.display().to_string(),
+            ArtifactSource::This => "<self>".to_string(),
+        }
+    }
+}
+
 /// What prime()'s planning pass should do with the compiled form:
 /// JIT in-process (default), emit a persistent artifact .so (trs
 /// link), or load one (trs run --code).
@@ -175,9 +217,10 @@ pub(crate) enum JitRequest {
     Run,
     Emit {
         so: std::path::PathBuf,
+        exe: Option<(std::path::PathBuf, std::path::PathBuf)>,
     },
     Load {
-        so: std::path::PathBuf,
+        src: ArtifactSource,
     },
 }
 
@@ -233,9 +276,16 @@ impl LazyJit {
         self.cold.load(Ordering::Acquire) != 0
     }
 
+    /// No compile tier without `jit`: cells stay cold (and are never
+    /// cold in practice — artifact loads pre-fill every cell, and the
+    /// planner bails before spawning workers otherwise).
+    #[cfg(not(feature = "jit"))]
+    fn work(&self) {}
+
     /// Worker loop: claim CLASS batches, compile one representative
     /// per class, fill every member's cell with the shared body and
     /// its own call-site tables.
+    #[cfg(feature = "jit")]
     fn work(&self) {
         loop {
             if self.stop.load(Ordering::Acquire) {
@@ -340,6 +390,12 @@ impl JitPlans {
         if std::env::var_os("TRS_NO_FUSION").is_some() {
             return;
         }
+        // no compile tier without `jit`: artifact-provided fused fns
+        // pre-filled the cell at plan build; anything else stays on
+        // the node walk
+        #[cfg(not(feature = "jit"))]
+        let _ = self.fused.get_or_init(|| vec![0; self.comp_nodes.len()]);
+        #[cfg(feature = "jit")]
         let _ = self.fused.get_or_init(|| {
             let comps: Vec<FusedComp> = self
                 .comp_nodes
@@ -353,14 +409,14 @@ impl JitPlans {
                             ns.iter()
                                 .map(|n| match *n {
                                     JitNode::Sched(o) => FusedNode::Sched(
-                                        trs_codegen::lower::HelperRef::Addr(
+                                        trs_codegen::abi::HelperRef::Addr(
                                             self.lazy.scheds[o as usize].sched as usize,
                                         ),
                                     ),
                                     JitNode::Exec(o) => {
                                         let (b, t) = self.lazy.exec_args[o as usize];
                                         FusedNode::Exec(
-                                            trs_codegen::lower::HelperRef::Addr(
+                                            trs_codegen::abi::HelperRef::Addr(
                                                 self.lazy.cells[o as usize]
                                                     .get()
                                                     .expect("fuse before warm")
@@ -459,7 +515,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             }
         }
     }
-    if func == trs_codegen::lower::STRING_CONCAT_FUNC {
+    if func == trs_codegen::abi::STRING_CONCAT_FUNC {
         // compiled PrimOp::StringConcat: concatenate the resolved
         // texts and intern per evaluation, the interp's exact behavior
         // (func is a sentinel, not a string id — resolve nothing)
@@ -777,7 +833,27 @@ impl<'a> ConeAnalyzer<'a> {
     }
 }
 
+/// No compile tier without `jit`: a plan that needs freshly compiled
+/// scheds cannot proceed — the caller falls back to the interpreter.
+#[cfg(not(feature = "jit"))]
+#[allow(clippy::too_many_arguments)]
+fn aot_or_jit_scheds(
+    _interp: &Interp,
+    _inst_envs: &HashMap<usize, InstEnv>,
+    _specs: &[RuleSpec],
+    _now_slot: u32,
+    _helpers: Option<&HelperMap>,
+    _nworkers: usize,
+    trace: bool,
+) -> Option<Vec<CompiledSched>> {
+    if trace {
+        eprintln!("trs jit: off (no artifact and no compile tier)");
+    }
+    None
+}
+
 /// Eager parallel sched compile (in-process JIT path).
+#[cfg(feature = "jit")]
 fn aot_or_jit_scheds(
     interp: &Interp,
     inst_envs: &HashMap<usize, InstEnv>,
@@ -840,12 +916,13 @@ fn cc_tool() -> String {
 /// Trial lower catches most ineligibility earlier — this covers
 /// shapes it does not walk (e.g. value-method reads reachable only
 /// through another module's cones).
+#[cfg(feature = "jit")]
 enum EmitFail {
     Ineligible(String),
     Infra(String),
 }
 
-#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
 fn aot_emit(
     d: &Design,
@@ -860,8 +937,12 @@ fn aot_emit(
     comp_nodes: &[Option<Vec<JitNode>>],
     en_slots: &[u32],
     so: &std::path::Path,
+    exe: Option<&(std::path::PathBuf, std::path::PathBuf)>,
     bir_hash: u64,
-    edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
+    bir_hash_raw: u64,
+    plan_a: &[u8],
+    plan_b: &[u8],
+    edge_plan: Option<&trs_codegen::abi::EdgeSsaPlan>,
     bdpi_names: &[String],
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
@@ -943,7 +1024,7 @@ fn aot_emit(
             })
             .collect();
         let env = PlanEnv { d, insts: inst_envs, now_slot };
-        let _g = trs_codegen::lower::AotModeGuard::set();
+        let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
         let obj = compile_design_object(
             &env,
@@ -959,7 +1040,7 @@ fn aot_emit(
             eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
         }
         if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
-            let s = trs_codegen::lower::edge_ssa_sites();
+            let s = trs_codegen::abi::edge_ssa_sites();
             eprintln!(
                 "trs edge-ssa census: fire-signal loads={} eager-reloads(exec)={} \
                  shared-reloads(sched)={} eager-stores={} promotable-load-words={}",
@@ -973,10 +1054,14 @@ fn aot_emit(
         std::fs::write(&f, obj).map_err(|e| EmitFail::Infra(e.to_string()))?;
         let meta = compile_meta_object(
             bir_hash,
+            bir_hash_raw,
             split_thresh as u64,
             &encode_protos(protos),
             edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
             bdpi_names,
+            &d.snap_encode(bir_hash).unwrap_or_default(),
+            plan_a,
+            plan_b,
         )
         .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
@@ -991,17 +1076,63 @@ fn aot_emit(
             .args([&f, &mf])
             .status()
             .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
-        std::fs::remove_dir_all(&tmp).ok();
         if !st.success() {
+            std::fs::remove_dir_all(&tmp).ok();
             std::fs::remove_file(&so_tmp).ok();
             return Err(EmitFail::Infra("cc -shared failed".into()));
         }
         std::fs::rename(&so_tmp, so)
             .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
+        if let Some((exe_out, libdir)) = exe {
+            // artifact-as-executable: the SAME objects, plus a 3-line
+            // main shim, linked as a PIE with --export-dynamic so the
+            // runtime (via trs_run_main) resolves trs_snap and the
+            // edge fns from our own image.  Prefer the slim LLVM-free
+            // runtime (libtrs_rt.so): the full capi lib carries
+            // statically-linked LLVM whose constructors cost ~5ms at
+            // every exec of the produced binary.
+            let rt = if libdir.join("libtrs_rt.so").exists() {
+                "-l:libtrs_rt.so"
+            } else {
+                "-l:libtrs_capi.so"
+            };
+            let mc = tmp.join("trs_main.c");
+            std::fs::write(
+                &mc,
+                "extern int trs_run_main(int argc, char** argv);\n                 int main(int argc, char** argv)                  { return trs_run_main(argc, argv); }\n",
+            )
+            .map_err(|e| EmitFail::Infra(e.to_string()))?;
+            let exe_tmp = exe_out.with_extension("exe.tmp");
+            let st = std::process::Command::new(cc_tool())
+                .arg(&mc)
+                .args([&f, &mf])
+                .arg("-Wl,--export-dynamic")
+                .arg("-Wl,--no-as-needed")
+                .arg(format!("-L{}", libdir.display()))
+                .arg(rt)
+                .arg(format!("-Wl,-rpath,{}", libdir.display()))
+                .args(["-o"])
+                .arg(&exe_tmp)
+                .status()
+                .map_err(|e| EmitFail::Infra(format!("cc exe: {e}")))?;
+            if !st.success() {
+                std::fs::remove_dir_all(&tmp).ok();
+                std::fs::remove_file(&exe_tmp).ok();
+                return Err(EmitFail::Infra("cc exe link failed".into()));
+            }
+            std::fs::rename(&exe_tmp, exe_out)
+                .map_err(|e| EmitFail::Infra(format!("rename exe: {e}")))?;
+        }
+        std::fs::remove_dir_all(&tmp).ok();
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: emit + link {:?}", t0.elapsed());
         }
         return Ok(());
+    }
+    if exe.is_some() {
+        return Err(EmitFail::Infra(
+            "--exe requires the one-module AOT path (TRS_AOT_ONE_MODULE=0 unsupported)".into(),
+        ));
     }
     // helpers are best-effort in AOT exactly as in JIT: if their
     // object fails to compile, drop them and link the design unsplit
@@ -1009,7 +1140,7 @@ fn aot_emit(
     let mut helpers_on = !helper_specs.is_empty();
     let mut helper_obj: Option<Vec<u8>> = None;
     if helpers_on {
-        let _g = trs_codegen::lower::AotModeGuard::set();
+        let _g = trs_codegen::abi::AotModeGuard::set();
         let env = PlanEnv { d, insts: inst_envs, now_slot };
         let pseudo = specs[0].clone();
         match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
@@ -1026,14 +1157,14 @@ fn aot_emit(
         let mut handles = Vec::new();
         for c in specs.chunks(chunk) {
             handles.push(sc.spawn(move || {
-                let _g = trs_codegen::lower::AotModeGuard::set();
+                let _g = trs_codegen::abi::AotModeGuard::set();
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
             }));
         }
         for c in reps.chunks(rchunk) {
             handles.push(sc.spawn(move || {
-                let _g = trs_codegen::lower::AotModeGuard::set();
+                let _g = trs_codegen::abi::AotModeGuard::set();
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
             }));
@@ -1110,10 +1241,14 @@ fn aot_emit(
     }
     let meta = compile_meta_object(
         bir_hash,
+        bir_hash_raw,
         split_thresh as u64,
         &encode_protos(protos),
         false, // chunked path never carries edge-SSA wire ticks
         bdpi_names,
+        &d.snap_encode(bir_hash).unwrap_or_default(),
+        plan_a,
+        plan_b,
     )
     .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
     let mf = tmp.join("meta.o");
@@ -1140,6 +1275,154 @@ fn aot_emit(
     Ok(())
 }
 
+/// Baked PlanA from the artifact (trs_plan_a): gated on the baked
+/// bir hash matching the interp's (same salted expression aot_load
+/// checks — a mismatched artifact must fail BOTH ways together so the
+/// fallback derives a plan consistent with the in-process compile),
+/// the layout rev, and the PlanA blob version.  Any miss = None =
+/// fresh derivation.
+pub(crate) fn aot_plan_a(
+    src: &ArtifactSource,
+    expected_raw: u64,
+) -> Option<crate::PlanA> {
+    unsafe {
+        let lib = src.open().ok()?;
+        let hr: libloading::Symbol<*const u64> =
+            lib.get(b"trs_bir_hash_raw").ok()?;
+        if **hr != expected_raw {
+            return None;
+        }
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_plan_a_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
+        if **r != trs_codegen::abi::AOT_LAYOUT_REV {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_a").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        let plan: crate::PlanA = bincode::deserialize(bytes).ok()?;
+        (plan_a_version(&plan) == crate::PLAN_A_VERSION).then_some(plan)
+    }
+}
+
+fn plan_a_version(p: &crate::PlanA) -> u32 {
+    p.version
+}
+
+/// The expensive-to-derive fraction of jit_plan, baked into artifacts
+/// as trs_plan_b: per-ordinal always-fire bits (deriving them walks
+/// WILL_FIRE def aliases and forces lazy expr decodes) and the exec
+/// dedup classes (deriving them hashes every instance's slot layout).
+/// The specs themselves re-derive at load — measured, that's plain
+/// compute, and shipping them costs more in decode allocations than
+/// the derivation.  Slot-layout consumers depend on trace mode
+/// (recording slots shift the layout), so unlike PlanA this gates on
+/// the SALTED hash — the same expression aot_load checks — plus the
+/// layout rev and the blob version.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct PlanB {
+    version: u32,
+    always_fire: Vec<u8>,
+    class_rep: Vec<u64>,
+    class_members: Vec<u64>,
+    class_off: Vec<u32>,
+}
+
+pub(crate) const PLAN_B_VERSION: u32 = 3;
+
+pub(crate) fn plan_b_encode(
+    specs: &[RuleSpec],
+    classes: &[(usize, Vec<usize>)],
+) -> Vec<u8> {
+    let mut class_members = Vec::new();
+    let mut class_off = vec![0u32];
+    for (_, m) in classes {
+        class_members.extend(m.iter().map(|&x| x as u64));
+        class_off.push(class_members.len() as u32);
+    }
+    let wire = PlanB {
+        version: PLAN_B_VERSION,
+        always_fire: specs.iter().map(|s| s.always_fire as u8).collect(),
+        class_rep: classes.iter().map(|(r, _)| *r as u64).collect(),
+        class_members,
+        class_off,
+    };
+    bincode::serialize(&wire).unwrap_or_default()
+}
+
+pub(crate) fn aot_plan_b(
+    src: &ArtifactSource,
+    expected_salted: u64,
+) -> Option<(Vec<u8>, Vec<(usize, Vec<usize>)>)> {
+    let wire: PlanB = unsafe {
+        let lib = src.open().ok()?;
+        let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash").ok()?;
+        if **h != expected_salted {
+            return None;
+        }
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_plan_b_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
+        if **r != trs_codegen::abi::AOT_LAYOUT_REV {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_b").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        bincode::deserialize(bytes).ok()?
+    };
+    if wire.version != PLAN_B_VERSION {
+        return None;
+    }
+    let classes: Vec<(usize, Vec<usize>)> = (0..wire.class_rep.len())
+        .map(|c| {
+            (
+                wire.class_rep[c] as usize,
+                wire.class_members
+                    [wire.class_off[c] as usize..wire.class_off[c + 1] as usize]
+                    .iter()
+                    .map(|&x| x as usize)
+                    .collect(),
+            )
+        })
+        .collect();
+    Some((wire.always_fire, classes))
+}
+
+/// Full-AOT load: the design snapshot embedded in the artifact
+/// (trs_snap + trs_bir_hash), so a --code run never opens the .bir.
+/// None = pre-snap artifact, empty snap (encode failed at link), a
+/// missing/unloadable .so, or a snap-gate failure — the caller falls
+/// back to the .bir path and the normal fingerprint cross-check.
+pub(crate) fn aot_embedded_design(
+    src: &ArtifactSource,
+) -> Option<(u64, trs_ir::Design)> {
+    unsafe {
+        let lib = src.open().ok()?;
+        // the RAW design identity: trs_bir_hash is trace-salted (it
+        // belongs to aot_load's mode gate) and would corrupt
+        // interp.bir_hash for traced artifacts.  Artifacts that carry
+        // a snap always carry the raw hash too (same commit).
+        let h: libloading::Symbol<*const u64> =
+            lib.get(b"trs_bir_hash_raw").ok()?;
+        let hash = **h;
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_snap_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_snap").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        let d = trs_ir::Design::snap_decode_embedded(bytes, hash)?;
+        Some((hash, d))
+    }
+}
+
 /// trs run --code: dlopen the artifact, verify its fingerprint, fill
 /// the callback pointer-globals, and resolve every rule's sched/exec
 /// function.  Any failure falls back to in-process compilation.
@@ -1150,7 +1433,7 @@ const TRACE_MODE_MISMATCH: &str =
     "artifact trace mode differs from this run; compiling in-process";
 
 fn aot_load(
-    so: &std::path::Path,
+    src: &ArtifactSource,
     bir_hash: u64,
     specs: &[RuleSpec],
     classes: &[(usize, Vec<usize>)],
@@ -1162,7 +1445,7 @@ fn aot_load(
     String,
 > {
     unsafe {
-        let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
+        let lib = src.open()?;
         let h: libloading::Symbol<*const u64> =
             lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
         if **h != bir_hash {
@@ -1225,14 +1508,34 @@ fn aot_load(
         ) -> i32 {
             panic!("trs: exec symbol elided by edge-SSA artifact was called");
         }
+        // ordinal-indexed fn tables (one_module artifacts): 3 dlsyms
+        // instead of ~one per rule.  Null entry = elided symbol.
+        // Absent or size-mismatched tables (chunked artifacts) fall
+        // back to the per-symbol path.
+        let tab = |name: &[u8], len_name: &[u8], want: usize| -> Option<&[usize]> {
+            let l = lib.get::<*const u64>(len_name).ok()?;
+            let t = lib.get::<*const usize>(name).ok()?;
+            (**l as usize == want)
+                .then(|| std::slice::from_raw_parts(*t, want))
+        };
+        let sched_tab = tab(b"trs_sched_tab", b"trs_sched_tab_len", specs.len());
+        let exec_tab = tab(b"trs_exec_tab", b"trs_exec_tab_len", specs.len());
+        let edge_tab = tab(b"trs_edge_tab", b"trs_edge_tab_len", ncomps);
         let mut scheds = Vec::with_capacity(specs.len());
-        for (spec, proto) in specs.iter().zip(protos.iter()) {
-            let sf = lib
-                .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)>(
-                    format!("sched_{}\0", spec.label).as_bytes(),
-                )
-                .map(|f| *f)
-                .unwrap_or(missing_sched);
+        for (o, (spec, proto)) in specs.iter().zip(protos.iter()).enumerate() {
+            let sf = match sched_tab {
+                Some(t) if t[o] != 0 => std::mem::transmute::<
+                    usize,
+                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
+                >(t[o]),
+                Some(_) => missing_sched,
+                None => lib
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)>(
+                        format!("sched_{}\0", spec.label).as_bytes(),
+                    )
+                    .map(|f| *f)
+                    .unwrap_or(missing_sched),
+            };
             scheds.push(CompiledSched {
                 sched: sf,
                 foreign_stmts: proto.sched_foreign.clone(),
@@ -1243,17 +1546,29 @@ fn aot_load(
         let mut execs: Vec<Option<CompiledExec>> =
             (0..specs.len()).map(|_| None).collect();
         for (rep, members) in classes {
-            let ef = lib
-                .get::<unsafe extern "C" fn(
-                    *mut u64,
-                    *mut core::ffi::c_void,
-                    u64,
-                    u64,
-                ) -> i32>(
-                    format!("exec_{}\0", specs[*rep].label).as_bytes(),
-                )
-                .map(|f| *f)
-                .unwrap_or(missing_exec);
+            let ef = match exec_tab {
+                Some(t) if t[*rep] != 0 => std::mem::transmute::<
+                    usize,
+                    unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                        u64,
+                    ) -> i32,
+                >(t[*rep]),
+                Some(_) => missing_exec,
+                None => lib
+                    .get::<unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                        u64,
+                    ) -> i32>(
+                        format!("exec_{}\0", specs[*rep].label).as_bytes(),
+                    )
+                    .map(|f| *f)
+                    .unwrap_or(missing_exec),
+            };
             for &m in members {
                 execs[m] = Some(CompiledExec {
                     exec: ef,
@@ -1269,12 +1584,18 @@ fn aot_load(
         // fused edge fns (absent in pre-fusion artifacts: rev-gated)
         let mut fused = Vec::with_capacity(ncomps);
         for k in 0..ncomps {
-            let ef: libloading::Symbol<
-                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32,
-            > = lib
-                .get(format!("edge_c{k}\0").as_bytes())
-                .map_err(|e| e.to_string())?;
-            fused.push(*ef as usize);
+            let ef = match edge_tab {
+                Some(t) if t[k] != 0 => t[k],
+                Some(_) => return Err(format!("edge_c{k}: null table entry")),
+                None => *lib
+                    .get::<unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                    ) -> i32>(format!("edge_c{k}\0").as_bytes())
+                    .map_err(|e| e.to_string())? as usize,
+            };
+            fused.push(ef);
         }
         // stdio-flush + direct-BDPI callee globals (all optional:
         // absent in old or BDPI-free artifacts)
@@ -1381,7 +1702,7 @@ impl Interp {
         specs: &[RuleSpec],
         has_early: bool,
         stats: bool,
-    ) -> trs_codegen::lower::EdgeSsaPlan {
+    ) -> trs_codegen::abi::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
             specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
         let specs_lite = &specs_lite[..];
@@ -1804,7 +2125,7 @@ impl Interp {
                     let mir = inst_envs[&inst].mir;
                     let body = self.d.modules[mir].rules[ridx].body.clone();
                     let mut c = Cone::default();
-                    for st in &body {
+                    for st in body.iter() {
                         walk_stmt_defs(&mut cx, inst, st, &mut c);
                     }
                     Some((c, o))
@@ -2136,7 +2457,7 @@ impl Interp {
             let mir = inst_envs[&inst].mir;
             let body = self.d.modules[mir].rules[ridx].body.clone();
             let mut c = Cone::default();
-            for st in &body {
+            for st in body.iter() {
                 walk_stmt_defs(&mut cx, inst, st, &mut c);
             }
             for &(di, dn) in &c.defs {
@@ -2151,7 +2472,7 @@ impl Interp {
                 }
             }
         }
-        trs_codegen::lower::EdgeSsaPlan {
+        trs_codegen::abi::EdgeSsaPlan {
             nodes: nodes.to_vec(),
             exec_writes,
             def_reads,
@@ -2160,6 +2481,58 @@ impl Interp {
             wire_clears: Vec::new(),
             export_slots,
         }
+    }
+
+    /// Call-site tables when the artifact supplied none: re-derive them
+    /// by trial lowering (needs LLVM).  None = the plan is off, run
+    /// interpreted (and Emit requests record their ineligibility).
+    #[cfg(feature = "jit")]
+    fn trial_protos(
+        &mut self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        specs: &[RuleSpec],
+        now_slot: u32,
+        request: &JitRequest,
+        trace: bool,
+    ) -> Option<Vec<FnProtos>> {
+        let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+        let t0 = std::time::Instant::now();
+        match trial_lower(&env, specs) {
+            Ok(p) => {
+                if std::env::var_os("TRS_JIT_TIME").is_some() {
+                    eprintln!("trs jit: trial lower {:?}", t0.elapsed());
+                }
+                Some(p)
+            }
+            Err(e) => {
+                if let JitRequest::Emit { .. } = request {
+                    self.jit_emit_result =
+                        Some(crate::AotEmit::Ineligible(e.to_string()));
+                }
+                if trace {
+                    eprintln!("trs jit: off ({e})");
+                }
+                None
+            }
+        }
+    }
+
+    /// No compile tier without `jit`: an artifact that loads without
+    /// baked protos (pre-protos layouts are refused by the rev gate, so
+    /// this is the artifact-load-failed path) runs interpreted.
+    #[cfg(not(feature = "jit"))]
+    fn trial_protos(
+        &mut self,
+        _inst_envs: &HashMap<usize, InstEnv>,
+        _specs: &[RuleSpec],
+        _now_slot: u32,
+        _request: &JitRequest,
+        trace: bool,
+    ) -> Option<Vec<FnProtos>> {
+        if trace {
+            eprintln!("trs jit: off (no artifact protos and no compile tier)");
+        }
+        None
     }
 
     /// Build the JIT plan for the resolved compositions, or None to run
@@ -2172,7 +2545,7 @@ impl Interp {
         let has_early = rcomps.iter().any(|rc| !rc.early.is_empty());
         // direct-BDPI registries (task #22): baked-mode call emission
         // reads these; set-once, idempotent
-        let _ = trs_codegen::lower::STDIO_CB.set(jit_stdio_cb as usize);
+        let _ = trs_codegen::abi::STDIO_CB.set(jit_stdio_cb as usize);
         if let Some(b) = &self.bdpi {
             // registry keys are C names (what call sites resolve)
             let m: std::collections::HashMap<String, usize> = b
@@ -2189,7 +2562,7 @@ impl Interp {
                     (c, a)
                 })
                 .collect();
-            let _ = trs_codegen::lower::BDPI_SYMS.set(m);
+            let _ = trs_codegen::abi::BDPI_SYMS.set(m);
         }
         if matches!(request, JitRequest::Run)
             && std::env::var_os("TRS_JIT").is_none()
@@ -2351,11 +2724,11 @@ impl Interp {
             for mir in mirs {
                 for (name, pi) in an.module(mir) {
                     if pi.outlined && !eager_excl.contains(&(mir, name)) {
-                        let w = self.d.modules[mir]
+                        // self.mods[mir].defs is the prebuilt name index
+                        let w = self.mods[mir]
                             .defs
-                            .iter()
-                            .find(|dd| dd.name == name)
-                            .map(|dd| dd.width.max(1))
+                            .get(&name)
+                            .map(|&i| self.d.modules[mir].defs[i].width.max(1))
                             .unwrap_or(1);
                         let stable = pi.stable && pi.ports.is_empty();
                         sel.insert((mir, name), (w, stable, pi.ports.clone()));
@@ -2605,8 +2978,10 @@ impl Interp {
                 }
                 union.sort_unstable();
                 for e in union {
-                    let Some(ed) =
-                        self.d.modules[mir].defs.iter().find(|d| d.name == e)
+                    let Some(ed) = self.mods[mir]
+                        .defs
+                        .get(&e)
+                        .map(|&i| &self.d.modules[mir].defs[i])
                     else {
                         if trace {
                             eprintln!("trs jit: off (eager def unknown)");
@@ -2732,14 +3107,40 @@ impl Interp {
         }
 
         sl.lap("plan passB (slot alloc + inst envs)");
+        // baked always-fire bits + dedup classes first (Load
+        // requests): skip the WILL_FIRE alias walks (they force lazy
+        // expr decodes) and the class derivation below.  Gated on the
+        // salted hash, so everything here is exactly what derivation
+        // would produce (same design, same trace mode, same layout
+        // rev) — the in-process-compile fallback stays consistent if
+        // aot_load fails later.
+        let mut baked: Option<(Vec<u8>, Vec<(usize, Vec<usize>)>)> = None;
+        if let JitRequest::Load { src } = &request {
+            let mut psl = crate::startup::StartupLap::new();
+            baked = aot_plan_b(
+                src,
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+            );
+            if baked.is_some() {
+                psl.lap("plan-b (baked decode)");
+            }
+        }
+        let (baked_af, baked_classes) = match baked {
+            Some((a, c)) => (Some(a), Some(c)),
+            None => (None, None),
+        };
         // ---- per-instance subtree signatures (exec dedup classes) ----
         // Two instances share compiled exec bodies iff their signatures
         // match.  The sig must cover EVERY input the exec lowering
         // reads: module IR id, region-relative slot layout (all maps),
         // absolute reset-node slots, and the user children recursively.
         // (Stage-2a made twin IR raw-identical; the sweep + twin test
-        // referee this invariant.)
-        let inst_sig: HashMap<usize, u64> = {
+        // referee this invariant.)  Consumed by the class derivation
+        // (skipped when classes are baked) and by helper symbol names
+        // (only when outlining selected pieces).
+        let inst_sig: HashMap<usize, u64> = if baked_classes.is_none()
+            || !outlined_sel.is_empty()
+        {
             use std::hash::{Hash, Hasher};
             let mut sigs: HashMap<usize, u64> = HashMap::new();
             for &i in dfs_order.iter().rev() {
@@ -2864,6 +3265,8 @@ impl Interp {
                 sigs.insert(i, h.finish());
             }
             sigs
+        } else {
+            HashMap::new()
         };
 
         // any Exec node of a RULE must belong to a scheduled rule
@@ -2934,25 +3337,30 @@ impl Interp {
             // into the WF def EXPRESSION (WF_a = CF_a && !WF_b), never
             // into me_inhibits — a const-true CAN_FIRE says nothing
             // (sysEspositoPreempt/sysRegFileVector regression).
-            let const_true = |name: StrId| -> bool {
-                let defs = &self.d.modules[mir].defs;
-                let mut cur = name;
-                for _ in 0..32 {
-                    let Some(dd) = defs.iter().find(|dd| dd.name == cur) else {
-                        return false;
-                    };
-                    match &dd.expr {
-                        trs_ir::Expr::Const { limbs, .. } => {
-                            return limbs.iter().any(|&l| l != 0)
+            let always_fire = if let Some(af) = &baked_af {
+                af.get(ri.ordinal).is_some_and(|&b| b != 0)
+            } else {
+                // self.mods[mir].defs is the prebuilt name index
+                let didx = &self.mods[mir].defs;
+                let const_true = |name: StrId| -> bool {
+                    let defs = &self.d.modules[mir].defs;
+                    let mut cur = name;
+                    for _ in 0..32 {
+                        let Some(dd) = didx.get(&cur).map(|&i| &defs[i]) else {
+                            return false;
+                        };
+                        match &*dd.expr {
+                            trs_ir::Expr::Const { limbs, .. } => {
+                                return limbs.iter().any(|&l| l != 0)
+                            }
+                            trs_ir::Expr::Def(n) => cur = *n,
+                            _ => return false,
                         }
-                        trs_ir::Expr::Def(n) => cur = *n,
-                        _ => return false,
                     }
-                }
-                false
+                    false
+                };
+                inhibit_slots.is_empty() && const_true(rr.will_fire)
             };
-            let always_fire =
-                inhibit_slots.is_empty() && const_true(rr.will_fire);
             specs.push(RuleSpec {
                 always_fire,
                 inst: ri.inst,
@@ -3076,7 +3484,7 @@ impl Interp {
                 for r in &m.rules {
                     let mut seen: std::collections::HashSet<StrId> = Default::default();
                     let mut work: Vec<StrId> = vec![r.can_fire, r.will_fire];
-                    for st in &r.body {
+                    for st in r.body.iter() {
                         match st {
                             trs_ir::Stmt::Def { expr, .. } => refs(expr, &mut work),
                             trs_ir::Stmt::Action(a)
@@ -3134,19 +3542,26 @@ impl Interp {
 
         sl.lap("plan specs");
         // ---- exec dedup classes: one compiled body per class ----
-        let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
-        {
+        let mut classes: Vec<(usize, Vec<usize>)> = baked_classes.unwrap_or_default();
+        if classes.is_empty() {
             let mut key_to_class: HashMap<(u64, usize, Vec<(bool, u32)>), usize> =
                 HashMap::new();
+            // per-INSTANCE memo: rebuilding the own-slot set per spec was
+            // O(rules x cfwf-slots) — 26ms of FloatTest's startup
+            let mut own_by_inst: HashMap<
+                usize,
+                (std::collections::HashSet<u32>, u32),
+            > = HashMap::new();
             for (o, sp) in specs.iter().enumerate() {
                 // the compiled body bakes always_fire and inhibitor slot
                 // LOADS; own-region slots are region-relative in codegen
                 // (twins share safely), foreign-instance slots are
                 // absolute (twins must not share) — the key mirrors that
-                let ie = &inst_envs[&sp.inst];
-                let own: std::collections::HashSet<u32> =
-                    ie.cfwf_slot.values().copied().collect();
-                let r0 = ie.region.0;
+                let (own, r0) = own_by_inst.entry(sp.inst).or_insert_with(|| {
+                    let ie = &inst_envs[&sp.inst];
+                    (ie.cfwf_slot.values().copied().collect(), ie.region.0)
+                });
+                let (own, r0) = (&*own, *r0);
                 let mut inh: Vec<(bool, u32)> = sp
                     .inhibit_slots
                     .iter()
@@ -3283,46 +3698,6 @@ impl Interp {
                 ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width, h.ports.clone()))
             })
             .collect();
-        // deferred: Load requests only need addresses if the artifact
-        // fails to load (in-process fallback) — never compile helpers
-        // just to throw them away at every artifact startup
-        let compile_helpers_now = |inst_envs: &HashMap<usize, InstEnv>| -> HelperMap {
-            if helper_specs.is_empty() {
-                return HelperMap::new();
-            }
-            trs_codegen::lower::llvm_init_once();
-            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
-            let pseudo = specs[0].clone();
-            let t0 = std::time::Instant::now();
-            match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
-                Ok(addrs) => {
-                    if std::env::var_os("TRS_JIT_TIME").is_some() {
-                        eprintln!(
-                            "trs jit: {} helpers compiled {:?}",
-                            helper_specs.len(),
-                            t0.elapsed()
-                        );
-                    }
-                    let am: HashMap<String, usize> = addrs.into_iter().collect();
-                    helper_specs
-                        .iter()
-                        .map(|h| {
-                            (
-                                (h.mir, h.def),
-                                (HelperRef::Addr(am[&h.sym]), h.width, h.ports.clone()),
-                            )
-                        })
-                        .collect()
-                }
-                Err(e) => {
-                    if trace {
-                        eprintln!("trs jit: helpers off ({e})");
-                    }
-                    HelperMap::new()
-                }
-            }
-        };
-
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
@@ -3331,9 +3706,9 @@ impl Interp {
         let mut wire_ticks_flag = false;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
         let mut fused_opt: Option<Vec<usize>> = None;
-        if let JitRequest::Load { so } = &request {
+        if let JitRequest::Load { src } = &request {
             match aot_load(
-                so,
+                src,
                 // trace-salted: a traced plan (recording slots shift
                 // the whole layout) must never accept an untraced
                 // artifact, and vice versa
@@ -3376,7 +3751,7 @@ impl Interp {
                     if e != TRACE_MODE_MISMATCH || trace {
                         eprintln!(
                             "trs: artifact {}: {e}; compiling in-process instead",
-                            so.display()
+                            src.display()
                         );
                     }
                 }
@@ -3387,32 +3762,22 @@ impl Interp {
         // and artifact-fallback paths; skipped on successful loads)
         let protos: Vec<FnProtos> = match protos_opt {
             Some(p) => p,
-            None => {
-                let env = PlanEnv { d: &self.d, insts: &inst_envs, now_slot };
-                let t0 = std::time::Instant::now();
-                match trial_lower(&env, &specs) {
-                    Ok(p) => {
-                        if std::env::var_os("TRS_JIT_TIME").is_some() {
-                            eprintln!("trs jit: trial lower {:?}", t0.elapsed());
-                        }
-                        p
-                    }
-                    Err(e) => {
-                        if let JitRequest::Emit { .. } = &request {
-                            self.jit_emit_result =
-                                Some(crate::AotEmit::Ineligible(e.to_string()));
-                        }
-                        if trace {
-                            eprintln!("trs jit: off ({e})");
-                        }
-                        return None;
-                    }
-                }
-            }
+            None => match self.trial_protos(&inst_envs, &specs, now_slot, &request, trace) {
+                Some(p) => p,
+                None => return None,
+            },
         };
 
         // trs link: emit the artifact .so and stop (nothing runs)
-        if let JitRequest::Emit { so } = &request {
+        #[cfg(not(feature = "jit"))]
+        if let JitRequest::Emit { .. } = &request {
+            self.jit_emit_result = Some(crate::AotEmit::Failed(
+                "this build has no compile tier (feature `jit`)".into(),
+            ));
+            return None;
+        }
+        #[cfg(feature = "jit")]
+        if let JitRequest::Emit { so, exe } = &request {
             // whole-edge SSA emission (task #24, opt-in): build the
             // legality tables the edge emitter consumes
             // DEFAULT ON for AOT links (the specialized fast compile);
@@ -3448,6 +3813,9 @@ impl Interp {
                     }
                     plan
                 });
+            // bake what this emit derived: a Load of the artifact
+            // decodes these instead of re-deriving (see PlanB)
+            let plan_b_bytes = plan_b_encode(&specs, &classes);
             self.jit_emit_result = Some(
                 match aot_emit(
                     &self.d,
@@ -3462,10 +3830,14 @@ impl Interp {
                     &comp_nodes,
                     &en_slots,
                     so,
+                    exe.as_ref(),
                     // trace-salted: a traced plan (recording slots shift
                 // the whole layout) must never accept an untraced
                 // artifact, and vice versa
                 self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+                    self.bir_hash,
+                    self.plan_a_bytes.as_deref().unwrap_or(&[]),
+                    &plan_b_bytes,
                     edge_plan.as_ref(),
                     &{
                         let mut v: Vec<String> = self
@@ -3498,11 +3870,57 @@ impl Interp {
         // SCHED functions compile eagerly (blocking, parallel): they
         // run on every edge and the cone-sharing keeps them small
         let chunk = n.div_ceil(nworkers).max(1);
+        // deferred: Load requests only need addresses if the artifact
+        // fails to load (in-process fallback) — never compile helpers
+        // just to throw them away at every artifact startup
+        #[cfg(feature = "jit")]
+        let compile_helpers_now = |inst_envs: &HashMap<usize, InstEnv>| -> HelperMap {
+            if helper_specs.is_empty() {
+                return HelperMap::new();
+            }
+            trs_codegen::lower::llvm_init_once();
+            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+            let pseudo = specs[0].clone();
+            let t0 = std::time::Instant::now();
+            match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
+                Ok(addrs) => {
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!(
+                            "trs jit: {} helpers compiled {:?}",
+                            helper_specs.len(),
+                            t0.elapsed()
+                        );
+                    }
+                    let am: HashMap<String, usize> = addrs.into_iter().collect();
+                    helper_specs
+                        .iter()
+                        .map(|h| {
+                            (
+                                (h.mir, h.def),
+                                (HelperRef::Addr(am[&h.sym]), h.width, h.ports.clone()),
+                            )
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    if trace {
+                        eprintln!("trs jit: helpers off ({e})");
+                    }
+                    HelperMap::new()
+                }
+            }
+        };
+
+        #[cfg(feature = "jit")]
         let helpers_addr: HelperMap = if preloaded.is_some() {
             HelperMap::new()
         } else {
             compile_helpers_now(&inst_envs)
         };
+        // no compile tier: helper addresses only matter to in-process
+        // sched compilation, which the stub below refuses anyway
+        #[cfg(not(feature = "jit"))]
+        let helpers_addr = HelperMap::new();
         let jit_helpers: Option<&HelperMap> =
             (!helpers_addr.is_empty()).then_some(&helpers_addr);
         let (scheds, preexecs) = if let Some((s, e)) = preloaded {

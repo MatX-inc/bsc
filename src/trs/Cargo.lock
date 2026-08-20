@@ -309,6 +309,7 @@ version = "0.0.1"
 dependencies = [
  "inkwell",
  "libc",
+ "serde",
  "trs-ir",
 ]
 
@@ -316,9 +317,11 @@ dependencies = [
 name = "trs-interp"
 version = "0.0.1"
 dependencies = [
+ "bincode",
  "cc",
  "libc",
  "libloading",
+ "serde",
  "trs-codegen",
  "trs-ir",
 ]

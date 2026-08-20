@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 trs-ir = { path = "../trs-ir" }
+serde = { workspace = true }
 # LLVM 18 via inkwell; requires system llvm-18-dev and libzstd-dev.
 inkwell = { version = "0.9", features = ["llvm18-1"], optional = true }
 

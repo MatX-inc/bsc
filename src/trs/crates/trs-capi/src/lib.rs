@@ -1361,3 +1361,52 @@ pub extern "C" fn bk_define_clock(
 ) -> u32 {
     bk_get_clock_by_name(hdl, name)
 }
+
+/// Artifact-as-executable entry point (trs link --exe): the design
+/// objects and the embedded snapshot live in the CALLING executable's
+/// image; this runtime (linked in as libtrs_capi.so) loads the design
+/// from there and runs it.  Argument handling mirrors the wrapper
+/// script's batch surface: -m N caps cycles, +foo registers a
+/// plusarg.
+#[cfg(feature = "aot")]
+#[no_mangle]
+pub extern "C" fn trs_run_main(
+    argc: core::ffi::c_int,
+    argv: *const *const core::ffi::c_char,
+) -> core::ffi::c_int {
+    // die on SIGPIPE like the reference model (./model | head)
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    let mut max_cycles = u64::MAX;
+    let mut plusargs: Vec<String> = Vec::new();
+    let args: Vec<String> = (1..argc as isize)
+        .map(|i| unsafe {
+            core::ffi::CStr::from_ptr(*argv.offset(i))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "-m" {
+            let Some(v) = it.next().and_then(|v| v.parse().ok()) else {
+                eprintln!("Error: -m requires a cycle count");
+                return 2;
+            };
+            max_cycles = v;
+        } else if let Some(pa) = a.strip_prefix('+') {
+            plusargs.push(pa.to_string());
+        } else {
+            eprintln!("Error: invalid argument '{a}' (supported: -m N, +plusarg)");
+            return 2;
+        }
+    }
+    match trs_interp::run_self(max_cycles, &plusargs) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("trs: {e}");
+            1
+        }
+    }
+}

@@ -38,7 +38,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 1;
+const SNAP_LAYOUT_REV: u32 = 2;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -57,6 +57,124 @@ pub fn fnv1a(bytes: &[u8]) -> u64 {
 
 /// Identifier interned per design; display names live in `Design::strings`.
 pub type StrId = u32;
+
+thread_local! {
+    /// Snap ENCODE side-blob: while `Some`, `Lazy` fields serialize as
+    /// (offset, len) into this accumulator instead of inline.  Set only
+    /// by `snap_encode`; the CBOR .bir path never sets it, so the .bir
+    /// wire format is unchanged.
+    static SNAP_SIDE: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Snap DECODE side-blob: while `Some`, `Lazy` fields deserialize
+    /// as (offset, len) referencing this blob and stay PENDING until
+    /// first touch.  Set only by `snap_decode`.
+    static SNAP_BLOB: std::cell::RefCell<Option<std::sync::Arc<Vec<u8>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Reset the thread-local snap contexts on scope exit (panic-safe).
+struct SnapCtxGuard;
+impl Drop for SnapCtxGuard {
+    fn drop(&mut self) {
+        SNAP_SIDE.with(|s| *s.borrow_mut() = None);
+        SNAP_BLOB.with(|s| *s.borrow_mut() = None);
+    }
+}
+
+/// A design subtree that decodes on first touch when loaded from a
+/// snap (expression trees are fallback/debug-side on a full-AOT run —
+/// eagerly decoding them was most of the snap's load cost).  From the
+/// name-keyed CBOR .bir it decodes eagerly and transparently — the
+/// .bir wire format does not know this type exists.  `Deref` forces:
+/// consumers write `&*def.expr` where they wrote `&def.expr`.
+pub struct Lazy<T> {
+    cell: std::sync::OnceLock<T>,
+    /// (side-blob, offset, len) while un-forced from a snap
+    pending: Option<(std::sync::Arc<Vec<u8>>, u32, u32)>,
+}
+
+impl<T> Lazy<T> {
+    pub fn new(v: T) -> Self {
+        Lazy { cell: std::sync::OnceLock::from(v), pending: None }
+    }
+}
+
+impl<T: serde::de::DeserializeOwned> std::ops::Deref for Lazy<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.cell.get_or_init(|| {
+            let (blob, off, len) =
+                self.pending.as_ref().expect("Lazy with neither value nor blob");
+            // the blob rode the same gated (and, for sidecars,
+            // checksummed) snap payload as the eager half, under the
+            // same layout rev; a decode failure here is the corruption
+            // class the gates exist to exclude
+            bincode::deserialize(&blob[*off as usize..(*off + *len) as usize])
+                .expect("snap lazy subtree decode (gated payload corrupt?)")
+        })
+    }
+}
+
+impl<T: Clone> Clone for Lazy<T> {
+    fn clone(&self) -> Self {
+        match self.cell.get() {
+            Some(v) => Lazy::new(v.clone()),
+            // un-forced: share the blob, stay pending
+            None => Lazy { cell: std::sync::OnceLock::new(), pending: self.pending.clone() },
+        }
+    }
+}
+
+impl<T: std::fmt::Debug + serde::de::DeserializeOwned> std::fmt::Debug for Lazy<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl<T: Serialize + serde::de::DeserializeOwned> Serialize for Lazy<T> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let diverted = SNAP_SIDE.with(|side| {
+            let mut side = side.borrow_mut();
+            match &mut *side {
+                Some(blob) => {
+                    let off = blob.len() as u32;
+                    bincode::serialize_into(&mut *blob, &**self)
+                        .map_err(|e| e.to_string())?;
+                    let len = blob.len() as u32 - off;
+                    Ok::<Option<(u32, u32)>, String>(Some((off, len)))
+                }
+                None => Ok(None),
+            }
+        });
+        match diverted {
+            Ok(Some(pair)) => pair.serialize(s),
+            Ok(None) => (**self).serialize(s),
+            Err(e) => Err(serde::ser::Error::custom(e)),
+        }
+    }
+}
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let blob = SNAP_BLOB.with(|b| b.borrow().clone());
+        match blob {
+            Some(blob) => {
+                let (off, len) = <(u32, u32)>::deserialize(d)?;
+                // bounds must fail the LOAD, not a later force
+                if off as usize + len as usize > blob.len() {
+                    return Err(serde::de::Error::custom(
+                        "snap lazy reference out of blob bounds",
+                    ));
+                }
+                Ok(Lazy {
+                    cell: std::sync::OnceLock::new(),
+                    pending: Some((blob, off, len)),
+                })
+            }
+            None => Ok(Lazy::new(T::deserialize(d)?)),
+        }
+    }
+}
 
 /// A whole linked design: the top module and every module in its hierarchy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,7 +324,7 @@ pub enum RegReset {
 pub struct Def {
     pub name: StrId,
     pub width: u32,
-    pub expr: Expr,
+    pub expr: Lazy<Expr>,
     pub props: DefProps,
 }
 
@@ -230,7 +348,7 @@ pub struct Rule {
     pub can_fire: StrId,
     /// Reference to the WILL_FIRE def for this rule.
     pub will_fire: StrId,
-    pub body: Vec<Stmt>,
+    pub body: Lazy<Vec<Stmt>>,
     pub clock_domain: u32,
     /// `clock_crossing_rule` — executed in the after-edge function.
     pub crossing: bool,
@@ -327,8 +445,21 @@ impl Design {
     /// fast path (measured ~50% on interp-heavy runs).  Recursion depth
     /// matches what `Design::decode` already does on this stack.
     pub fn snap_encode(&self, bir_hash: u64) -> Result<Vec<u8>, String> {
+        // two sections: Lazy subtrees divert into a side blob (see
+        // Lazy) so the load can defer them; blob FIRST so the decoder
+        // has it in hand before the design section references it
+        let _g = SnapCtxGuard;
+        SNAP_SIDE.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        let mut design = Vec::new();
+        bincode::serialize_into(&mut design, self).map_err(|e| e.to_string())?;
+        let blob = SNAP_SIDE
+            .with(|s| s.borrow_mut().take())
+            .expect("snap side-blob vanished mid-encode");
+        drop(_g);
         let mut out = vec![0u8; SNAP_HEADER];
-        bincode::serialize_into(&mut out, self).map_err(|e| e.to_string())?;
+        out.extend_from_slice(&(blob.len() as u64).to_le_bytes());
+        out.extend_from_slice(&blob);
+        out.extend_from_slice(&design);
         let sum = fnv1a(&out[SNAP_HEADER..]);
         out[..8].copy_from_slice(SNAP_MAGIC);
         out[8..12].copy_from_slice(&BIR_VERSION.to_le_bytes());
@@ -350,6 +481,25 @@ impl Design {
     /// guards `Design::decode`, so residual misdecode degrades to the
     /// fallback, never a panic.
     pub fn snap_decode(bytes: &[u8], bir_hash: u64) -> Option<Design> {
+        Self::snap_decode_inner(bytes, bir_hash, true)
+    }
+
+    /// `snap_decode` for a snap EMBEDDED in an artifact .so: the
+    /// checksum gate exists to catch torn sidecar writes (fs::write is
+    /// not atomic), but an embedded snap has exactly the integrity of
+    /// the artifact it rides in — whose compiled code we execute
+    /// without a checksum — and artifacts are written temp+rename.
+    /// Skipping the byte-serial fnv pass saves ~25% of the decode
+    /// (3.7ms on an 11MB FloatTest snap).  All other gates still hold.
+    pub fn snap_decode_embedded(bytes: &[u8], bir_hash: u64) -> Option<Design> {
+        Self::snap_decode_inner(bytes, bir_hash, false)
+    }
+
+    fn snap_decode_inner(
+        bytes: &[u8],
+        bir_hash: u64,
+        checksum: bool,
+    ) -> Option<Design> {
         if bytes.len() < SNAP_HEADER || &bytes[..8] != SNAP_MAGIC {
             return None;
         }
@@ -363,11 +513,24 @@ impl Design {
             return None;
         }
         let payload = &bytes[SNAP_HEADER..];
-        if u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload) {
+        if checksum
+            && u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload)
+        {
             return None;
         }
+        // section split: [blob_len u64][side blob][design]; the blob is
+        // COPIED into an Arc so pending Lazy fields outlive the caller's
+        // byte buffer (an mmapped artifact may be a shorter-lived view)
+        let blob_len =
+            u64::from_le_bytes(payload.get(..8)?.try_into().ok()?) as usize;
+        let blob = payload.get(8..8 + blob_len)?;
+        let design = payload.get(8 + blob_len..)?;
+        let _g = SnapCtxGuard;
+        SNAP_BLOB
+            .with(|b| *b.borrow_mut() = Some(std::sync::Arc::new(blob.to_vec())));
         // caller's thread on purpose — see snap_encode's NOTE
-        let d: Design = bincode::deserialize(payload).ok()?;
+        let d: Design = bincode::deserialize(design).ok()?;
+        drop(_g);
         verify::verify(&d).ok()?;
         Some(d)
     }

@@ -21,5 +21,9 @@ libc = "0.2"
 
 [features]
 llvm = ["trs-codegen/llvm"]
-# hybrid JIT in the interpreter (TRS_JIT=1 at runtime)
-jit = ["trs-interp/jit"]
+# AOT artifact loading without LLVM (lean environments): artifacts
+# built elsewhere still run at full compiled speed
+aot = ["trs-interp/aot"]
+# hybrid JIT in the interpreter (TRS_JIT=1 at runtime) + artifact
+# emission (trs link)
+jit = ["aot", "trs-interp/jit"]

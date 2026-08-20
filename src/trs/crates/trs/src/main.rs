@@ -33,6 +33,9 @@ fn main() -> ExitCode {
         // (the testsuite probes for "jit" to decide whether link-artifact
         // checks are supported)
         ["features"] => {
+            if cfg!(feature = "aot") {
+                println!("aot");
+            }
             if cfg!(feature = "jit") {
                 println!("jit");
             }
@@ -61,6 +64,7 @@ fn main() -> ExitCode {
         ["link", path, rest @ ..] => {
             let mut out: Option<String> = None;
             let mut interactive = false;
+            let mut exe = false;
             // -dump-formats plumbing from bsc: which waveform writers
             // the artifact carries (reference default: vcd only)
             let mut fmt_arg = "vcd".to_string();
@@ -69,6 +73,7 @@ fn main() -> ExitCode {
                 match *a {
                     "-o" => out = it.next().map(|s| s.to_string()),
                     "--interactive" => interactive = true,
+                    "--exe" => exe = true,
                     "--dump-formats" => {
                         let Some(v) = it.next() else {
                             eprintln!("Error: --dump-formats requires a value");
@@ -173,7 +178,22 @@ fn main() -> ExitCode {
                 }
                 return link_interactive(path, &base, interp.top_name());
             }
-            interp.aot_request_emit(format!("{base}.so").into());
+            if exe {
+                // artifact-as-executable: <base> becomes a real PIE
+                // (design objects + main shim + libtrs_capi.so from
+                // the install dir) instead of the wrapper script
+                let libdir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .unwrap_or_else(|| ".".into());
+                interp.aot_request_emit_exe(
+                    format!("{base}.so").into(),
+                    base.clone().into(),
+                    libdir,
+                );
+            } else {
+                interp.aot_request_emit(format!("{base}.so").into());
+            }
             interp.prime();
             // ineligible designs still get a valid artifact — it runs
             // interpreted (reference Bluesim always yields an
@@ -244,6 +264,23 @@ fn main() -> ExitCode {
                     eprintln!("trs link: copy {bdpi_src} -> {bdpi_dst}: {e}");
                     return ExitCode::FAILURE;
                 }
+            }
+            if exe {
+                if !compiled {
+                    // no compiled artifact = no PIE was linked; an
+                    // interpreted wrapper is what plain link is for
+                    eprintln!(
+                        "trs link: --exe requires the compiled artifact \
+                         (this design is not aot-eligible)"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                // --exe: aot_emit already linked the PIE at <base>;
+                // no wrapper script.  The capi/debug companions still
+                // ride beside the .so as usual.
+                let top = interp.top_name().to_string();
+                let _ = write_capi_shim(path, &base, &top, compiled);
+                return ExitCode::SUCCESS;
             }
             // wrapper script (trs must be on PATH, like bluetcl for
             // reference Bluesim executables)
@@ -326,17 +363,23 @@ fn main() -> ExitCode {
         // trs binary).  The 4s / 50MB capi+engine link happens once
         // here instead of once per design (docs/TCL-CAPI.md).
         ["capi-so", rest @ ..] => {
-            let mut out = "libtrs_capi.so".to_string();
+            let mut out: Option<String> = None;
+            // --rt: build the slim artifact RUNTIME (libtrs_rt.so) from
+            // the LLVM-free libtrs_rt.a instead — what `trs link --exe`
+            // binaries load (the full capi lib carries statically-linked
+            // LLVM whose constructors cost ~5ms at every exec)
+            let mut rt = false;
             let mut it = rest.iter();
             while let Some(a) = it.next() {
                 match *a {
                     "-o" => match it.next() {
-                        Some(v) => out = v.to_string(),
+                        Some(v) => out = Some(v.to_string()),
                         None => {
                             eprintln!("Error: -o requires a value");
                             return ExitCode::from(2);
                         }
                     },
+                    "--rt" => rt = true,
                     "--capi-lib" => match it.next() {
                         Some(v) => std::env::set_var("TRS_CAPI_LIB", v),
                         None => {
@@ -350,10 +393,19 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            let Some(lib) = find_capi_staticlib() else {
+            let out = out.unwrap_or_else(|| {
+                if rt { "libtrs_rt.so" } else { "libtrs_capi.so" }.to_string()
+            });
+            let Some(lib) = find_staticlib(if rt {
+                ("TRS_RT_LIB", "libtrs_rt.a")
+            } else {
+                ("TRS_CAPI_LIB", "libtrs_capi.a")
+            }) else {
                 eprintln!(
-                    "trs capi-so: libtrs_capi.a not found (set \
-                     TRS_CAPI_LIB or install it next to the trs binary)"
+                    "trs capi-so: {} not found (set {} or install it \
+                     next to the trs binary)",
+                    if rt { "libtrs_rt.a" } else { "libtrs_capi.a" },
+                    if rt { "TRS_RT_LIB" } else { "TRS_CAPI_LIB" },
                 );
                 return ExitCode::FAILURE;
             };
@@ -372,7 +424,7 @@ fn main() -> ExitCode {
                 eprintln!("trs capi-so: write {}: {e}", map.display());
                 return ExitCode::FAILURE;
             }
-            let r = capi_cc_link(&out, &[], &lib, &map);
+            let r = capi_cc_link(&out, &[], &lib, &map, !rt);
             let _ = std::fs::remove_dir_all(&tmp);
             match r {
                 Ok(()) => {
@@ -614,6 +666,19 @@ fn main() -> ExitCode {
                     &script_cmds,
                 );
             }
+            // single-file UX: `trs run design.so` — the artifact
+            // carries its design, so the .so IS the runnable unit;
+            // the derived .bir name stays only as the fallback path
+            // for pre-snap artifacts
+            let so_direct;
+            let (path, code_so): (&str, Option<String>) =
+                if path.ends_with(".so") && code_so.is_none() {
+                    so_direct =
+                        path.strip_suffix(".so").unwrap().to_string() + ".bir";
+                    (so_direct.as_str(), Some(path.to_string()))
+                } else {
+                    (path as &str, code_so)
+                };
             match trs_interp::run_file(
                 path,
                 max_cycles,
@@ -668,12 +733,13 @@ const BK_EXPORTS: &[&str] = &[
     "bk_disable_VCD_dumping", "bk_set_waveform_format",
 ];
 
-/// The capi staticlib: env override, then alongside the binary.
-fn find_capi_staticlib() -> Option<std::path::PathBuf> {
-    std::env::var("TRS_CAPI_LIB").ok().map(std::path::PathBuf::from).or_else(|| {
+/// A runtime staticlib (libtrs_capi.a or libtrs_rt.a): env override,
+/// then alongside the binary.
+fn find_staticlib((env, name): (&str, &str)) -> Option<std::path::PathBuf> {
+    std::env::var(env).ok().map(std::path::PathBuf::from).or_else(|| {
         let exe = std::env::current_exe().ok()?;
         let d = exe.parent()?;
-        [d.join("libtrs_capi.a"), d.join("../lib/libtrs_capi.a")]
+        [d.join(name), d.join("../lib").join(name)]
             .into_iter()
             .find(|p| p.exists())
     })
@@ -695,13 +761,16 @@ fn find_capi_shared() -> Option<std::path::PathBuf> {
 /// The cc link shared by the fat `--interactive` .so and the
 /// once-per-install `trs capi-so` shared library: force-keep exactly
 /// the dlsym'd bk surface from the staticlib, dead-strip the rest,
-/// and (jit builds) resolve the staticlib's LLVM references against
-/// the shared libLLVM.
+/// and (jit staticlibs — `llvm`) resolve the staticlib's LLVM
+/// references against the shared libLLVM.  The slim libtrs_rt.a has
+/// no LLVM references: pass llvm=false so it links in LLVM-less
+/// environments too.
 fn capi_cc_link(
     out: &str,
     inputs: &[&std::path::Path],
     lib: &std::path::Path,
     map: &std::path::Path,
+    llvm: bool,
 ) -> Result<(), String> {
     let mut cc = std::process::Command::new("cc");
     cc.arg("-shared").arg("-fPIC").arg("-o").arg(out);
@@ -724,8 +793,15 @@ fn capi_cc_link(
         .arg(format!("-Wl,--version-script={}", map.display()))
         .arg("-lpthread")
         .arg("-ldl")
-        .arg("-lm");
-    if cfg!(feature = "jit") {
+        .arg("-lm")
+        // vendored libfst (trs-interp build.rs) gzip-frames FST output
+        // through zlib in every flavor, slim included
+        .arg("-lz")
+        // -shared tolerates undefined symbols; RTLD_NOW (and a static
+        // exe link against this .so) does not — fail at LINK time
+        // instead of at sim load
+        .arg("-Wl,--no-undefined");
+    if llvm && cfg!(feature = "jit") {
         // a jit-featured capi staticlib references LLVM (rustc links
         // it into BINARIES only); use the shared libLLVM
         let libdir = std::process::Command::new("llvm-config-18")
@@ -738,16 +814,12 @@ fn capi_cc_link(
         cc.arg(format!("-L{libdir}"))
             .arg("-lLLVM-18")
             .arg("-lstdc++")
-            .arg("-lz")
             // the execution engine bindings reference libffi (shared
             // libLLVM does not re-export it)
             .arg("-lffi")
             // terminfo + zstd: llvm-sys support-library residue
             .arg("-ltinfo")
-            .arg("-lzstd")
-            // -shared tolerates undefined symbols; RTLD_NOW does not —
-            // fail at LINK time instead of at sim load
-            .arg("-Wl,--no-undefined");
+            .arg("-lzstd");
     }
     match cc.status() {
         Ok(s) if s.success() => Ok(()),
@@ -916,7 +988,7 @@ fn link_interactive(bir_path: &str, base: &str, top: &str) -> ExitCode {
         eprintln!("trs link --interactive: {m}");
         ExitCode::FAILURE
     };
-    let Some(lib) = find_capi_staticlib() else {
+    let Some(lib) = find_staticlib(("TRS_CAPI_LIB", "libtrs_capi.a")) else {
         return fail(
             "libtrs_capi.a not found (set TRS_CAPI_LIB or install it              next to the trs binary)"
                 .into(),
@@ -941,7 +1013,7 @@ fn link_interactive(bir_path: &str, base: &str, top: &str) -> ExitCode {
         return fail(format!("write {}: {e}", map.display()));
     }
     let so = format!("{base}.so");
-    if let Err(e) = capi_cc_link(&so, &[&shim_c, &shim_s], &lib, &map) {
+    if let Err(e) = capi_cc_link(&so, &[&shim_c, &shim_s], &lib, &map, true) {
         return fail(e);
     }
     let _ = std::fs::remove_dir_all(&tmp);

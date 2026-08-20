@@ -19,6 +19,8 @@ libc = "0.2"
 [features]
 # default ON: `sim run`/`sim runto` execute at hybrid-JIT speed between
 # interactive stops (state is edge-coherent for symbol peeks).  A lean
-# LLVM-free .so remains buildable with --no-default-features.
+# LLVM-free runtime that still loads AOT artifacts at full speed builds
+# with --no-default-features --features aot (the slim libtrs_rt.so).
 default = ["jit"]
-jit = ["trs-interp/jit"]
+aot = ["trs-interp/aot"]
+jit = ["aot", "trs-interp/jit"]

@@ -22,26 +22,26 @@ use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 mod jit;
 
 use format::Arg;
 use prim::Prim;
 use value::Value;
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 use jit::JitPlans;
 /// Placeholder so Stepper's field exists (always None) without the
 /// `jit` feature.
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 type JitPlans = std::convert::Infallible;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 type JitShared = std::sync::Arc<jit::LazyJit>;
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 type JitShared = std::convert::Infallible;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 type JitRequestT = jit::JitRequest;
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 type JitRequestT = ();
 
 /// central-loop bail diagnostics (task #21), dumped by finish() under
@@ -208,6 +208,10 @@ pub struct Interp {
     /// per event)
     trace_events: bool,
     trace_clk: bool,
+    /// Emit requests stash the serialized PlanA here for the meta
+    /// object (prime derives it; the aot_emit call site reads it)
+    #[cfg(feature = "aot")]
+    plan_a_bytes: Option<Vec<u8>>,
     trace_wf: bool,
     /// $stop yield: ends the current advance at the slice boundary
     /// but does NOT finish the sim — cleared at the next advance so
@@ -388,6 +392,7 @@ enum FSlot {
 /// at t=0, high 5 / low 5 (the generated model's bk_alter_clock call), so
 /// posedges land at 0 (in reset), 10, 20, ...
 #[derive(Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Wave {
     init_high: bool,
     delay: u64,
@@ -404,6 +409,7 @@ struct Wave {
 /// never (noClock and top-level input clocks with no waveform — the
 /// kernel defines them with period 0 and they never fire).
 #[derive(Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize)]
 enum ClockSource {
     Wave(Wave),
     Triggered { init_high: bool, driver: usize },
@@ -415,6 +421,7 @@ enum ClockSource {
 /// ticks in directly executable form.
 /// One resolved schedule entry: a segment's nodes for one instance, plus
 /// the defs the C++ schedule computes eagerly at this position.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct REntry {
     inst: usize,
     /// module clock domain (used for VCD wiring at prime time)
@@ -439,6 +446,7 @@ struct REntry {
     eager: Vec<StrId>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RComp {
     clk: usize,
     posedge: bool,
@@ -452,6 +460,24 @@ struct RComp {
     // schedule_after_posedge_* at PG_FINAL)
     early: HashSet<(usize, StrId)>,
 }
+
+/// prime()'s derivation half, baked into AOT artifacts as trs_plan_a:
+/// the pre-resolved schedule a --code run would otherwise re-derive
+/// through string-keyed walks (split_qual, inst_by_path, eager cones).
+/// Deterministic from the Design; trace-independent.  The blob is
+/// versioned (bincode is positional — a silent field reorder must
+/// fail the decode, not skew the schedule) and any gate failure falls
+/// back to fresh derivation.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct PlanA {
+    version: u32,
+    clocks: Vec<StrId>,
+    sources: Vec<ClockSource>,
+    driver_clock: Vec<(usize, usize)>,
+    rcomps: Vec<RComp>,
+}
+
+pub(crate) const PLAN_A_VERSION: u32 = 1;
 
 /// Collect the def names an expression references, descending into every
 /// subexpression (both mux arms — the C++ schedule assigns eagerly).
@@ -687,6 +713,8 @@ impl Interp {
             debug_tier: false,
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
+            #[cfg(feature = "aot")]
+            plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
             stop_request: false,
             wave_pending: None,
@@ -2679,13 +2707,13 @@ impl Interp {
         }
         for d in &m.defs {
             let is_string = d.width == 0
-                || matches!(d.expr, Expr::Str(_))
-                || matches!(&d.expr, Expr::Prim { op: ir::PrimOp::StringConcat, .. });
+                || matches!(*d.expr, Expr::Str(_))
+                || matches!(&*d.expr, Expr::Prim { op: ir::PrimOp::StringConcat, .. });
             if is_string {
                 continue;
             }
             let n_fns = usage.get(&d.name).map(|s| s.len()).unwrap_or(0);
-            let is_task = matches!(d.expr, Expr::TaskValue { .. });
+            let is_task = matches!(*d.expr, Expr::TaskValue { .. });
             // -keep-fires pins CAN_FIRE/WILL_FIRE defs (cfwfOkToMove)
             let pinned_fire =
                 self.d.keep_fires && (d.props.can_fire || d.props.will_fire);
@@ -3215,7 +3243,7 @@ impl Interp {
         };
         let r = self.d.modules[mir].rules[ri].clone();
         let mut ctx = Ctx::default();
-        for st in &r.body {
+        for st in r.body.iter() {
             self.exec_stmt(inst, &mut ctx, st);
         }
     }
@@ -3461,12 +3489,12 @@ impl Interp {
     }
 
     pub fn run(&mut self, max_cycles: u64) -> i32 {
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let t0 = jit::prof::on().then(std::time::Instant::now);
         self.advance(max_cycles);
         self.dump_central_bails();
         let rc = self.finish();
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         if let Some(t0) = t0 {
             jit::prof::dump(t0.elapsed());
         }
@@ -3614,13 +3642,11 @@ impl Interp {
         self.finished.is_some()
     }
 
-    /// One-time event-loop setup: resolve clocks and compositions, wire
-    /// VCD clock state, seed the event heap, and run the kernel reset
-    /// protocol.  Idempotent — later calls are no-ops.
-    pub fn prime(&mut self) {
-        if self.stepper.is_some() {
-            return;
-        }
+    /// Derive PlanA fresh (see PlanA): the string-keyed schedule
+    /// resolution.  Emit requests always derive (the artifact writes
+    /// what it derived); Load requests prefer the artifact's baked
+    /// copy and fall back here.
+    fn derive_plan_a(&mut self) -> PlanA {
         let comps = self.d.compositions.clone();
 
         // distinct clocks in first-appearance order, with the default
@@ -3835,7 +3861,60 @@ impl Interp {
                 }
             })
             .collect();
+        PlanA {
+            version: PLAN_A_VERSION,
+            clocks,
+            sources,
+            driver_clock: driver_clock.into_iter().collect(),
+            rcomps,
+        }
+    }
 
+    /// One-time event-loop setup: resolve clocks and compositions, wire
+    /// VCD clock state, seed the event heap, and run the kernel reset
+    /// protocol.  Idempotent — later calls are no-ops.
+    pub fn prime(&mut self) {
+        if self.stepper.is_some() {
+            return;
+        }
+        // baked plan first (Load requests): skip the derivation walks
+        let mut psl = startup::StartupLap::new();
+        #[cfg(feature = "aot")]
+        let plan = match &self.jit_request {
+            jit::JitRequest::Load { src } => {
+                match jit::aot_plan_a(src, self.bir_hash) {
+                    Some(p) => {
+                        psl.lap("plan-a (baked decode)");
+                        p
+                    }
+                    None => {
+                        let p = self.derive_plan_a();
+                        psl.lap("plan-a (derived: no valid bake)");
+                        p
+                    }
+                }
+            }
+            _ => {
+                let p = self.derive_plan_a();
+                psl.lap("plan-a (derived)");
+                p
+            }
+        };
+        #[cfg(not(feature = "aot"))]
+        let plan = {
+            let p = self.derive_plan_a();
+            psl.lap("plan-a (derived)");
+            p
+        };
+        // Emit requests bake what they derived: stash the bytes for
+        // the meta object (read at the aot_emit call site)
+        #[cfg(feature = "aot")]
+        if matches!(self.jit_request, jit::JitRequest::Emit { .. }) {
+            self.plan_a_bytes = bincode::serialize(&plan).ok();
+        }
+        let PlanA { version: _, clocks, sources, driver_clock, rcomps } = plan;
+        let driver_clock: HashMap<usize, usize> =
+            driver_clock.into_iter().collect();
         // VCD clock state: reserve the kernel clock ids first (clock ids
         // are permanent across headers — vcd_keep_ids)
         if self.vcd_clocks.is_empty() {
@@ -4010,18 +4089,18 @@ impl Interp {
 
         // capture BEFORE planning: jit_plan takes the request and the
         // field resets to the default (Run)
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let was_emit = matches!(self.jit_request, jit::JitRequest::Emit { .. });
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let jit = self.jit_plan(&rcomps);
-        #[cfg(not(feature = "jit"))]
+        #[cfg(not(feature = "aot"))]
         let jit = None;
 
         // TRS_REQUIRE_AOT: strict-execution contract for validation
         // runs — a design about to RUN interpreted is a hard failure,
         // never a silent degrade.  Emit requests are exempt (the link
         // caller enforces its own strictness on the emit result).
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         if jit.is_none()
             && !was_emit
             && !self.debug_tier
@@ -4081,7 +4160,7 @@ impl Interp {
             jit,
         } = self.stepper.take().unwrap();
 
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let mut central_tried = false;
         // ---- central loop (task #21): tight steady-state player ----
         // A single Wave clock with fused, tick-free posedge comps and a
@@ -4090,7 +4169,7 @@ impl Interp {
         // general event loop below (one shared semantics).
         macro_rules! try_central {
             () => {
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 'central: {
                     // hot path: no diagnostics on the already-tried check
                     if central_tried {
@@ -4386,9 +4465,9 @@ impl Interp {
                 // compiled dispatch: the whole composition runs as native
                 // Sched/Exec functions over the arena (no latch space —
                 // fire signals and schedule-position defs live in slots)
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 let mut _ran_fused = false;
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 let ran_jit = match &jit {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
@@ -4486,7 +4565,7 @@ impl Interp {
                     },
                     _ => false,
                 };
-                #[cfg(not(feature = "jit"))]
+                #[cfg(not(feature = "aot"))]
                 let ran_jit = false;
 
                 if !ran_jit {
@@ -4528,7 +4607,7 @@ impl Interp {
 
                 // end-of-edge ticks (reset ticks are conditional: the
                 // prim itself checks its reset line)
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 let _tt0 = jit::prof::on().then(std::time::Instant::now);
                 for (_ti, (inst, pname, is_rst, owner, gexpr)) in
                     rc.ticks.iter().enumerate()
@@ -4546,7 +4625,7 @@ impl Interp {
                     }
                     // wire ticks compiled INTO the fused edge fn that
                     // just ran (edge-SSA artifacts): already done
-                    #[cfg(feature = "jit")]
+                    #[cfg(feature = "aot")]
                     if _ran_fused {
                         if let Some(j) = jit.as_ref() {
                             if j.covered_ticks
@@ -4592,7 +4671,7 @@ impl Interp {
                         }
                     }
                 }
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 if let Some(t0) = _tt0 {
                     jit::prof::add(&jit::prof::TICK_NS, t0);
                 }
@@ -4773,17 +4852,37 @@ pub fn bir_fingerprint(bytes: &[u8]) -> u64 {
     ir::fnv1a(bytes)
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 impl Interp {
     /// trs link: make prime() emit the artifact .so instead of
     /// setting up a run.
     pub fn aot_request_emit(&mut self, so: std::path::PathBuf) {
-        self.jit_request = jit::JitRequest::Emit { so };
+        self.jit_request = jit::JitRequest::Emit { so, exe: None };
+    }
+
+    /// trs link --exe: after the artifact .so, also link a
+    /// self-contained executable (design objects + a main shim,
+    /// --export-dynamic, against libtrs_capi.so in `libdir`).
+    pub fn aot_request_emit_exe(
+        &mut self,
+        so: std::path::PathBuf,
+        exe: std::path::PathBuf,
+        libdir: std::path::PathBuf,
+    ) {
+        self.jit_request = jit::JitRequest::Emit { so, exe: Some((exe, libdir)) };
     }
 
     /// trs run --code: resolve compiled functions from the artifact.
     pub fn aot_request_code(&mut self, so: std::path::PathBuf) {
-        self.jit_request = jit::JitRequest::Load { so };
+        self.jit_request =
+            jit::JitRequest::Load { src: jit::ArtifactSource::Path(so) };
+    }
+
+    /// Artifact-as-executable: the design objects are linked into THIS
+    /// process image — resolve compiled functions from ourselves.
+    pub fn aot_request_code_self(&mut self) {
+        self.jit_request =
+            jit::JitRequest::Load { src: jit::ArtifactSource::This };
     }
 
     /// Outcome of an Emit request (valid after prime()).
@@ -4791,10 +4890,27 @@ impl Interp {
         self.jit_emit_result.take()
     }
 }
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 impl Interp {
     pub fn aot_request_emit(&mut self, _so: std::path::PathBuf) {}
+    pub fn aot_request_emit_exe(
+        &mut self,
+        _so: std::path::PathBuf,
+        _exe: std::path::PathBuf,
+        _libdir: std::path::PathBuf,
+    ) {
+    }
+    pub fn aot_request_code_self(&mut self) {}
     pub fn aot_request_code(&mut self, _so: std::path::PathBuf) {
+        // the strict contract holds even without the aot feature: a
+        // run that MUST be compiled cannot silently interpret
+        if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
+            eprintln!(
+                "trs: TRS_REQUIRE_AOT is set but this trs was built \
+                 without artifact support (feature `aot`); refusing"
+            );
+            std::process::exit(86);
+        }
         eprintln!(
             "trs: warning: built without JIT/AOT support; \
              --code ignored (running interpreted)"
@@ -5351,6 +5467,32 @@ impl Interp {
 /// to run — the driver's -c/-f scripting needs the handle between steps.
 pub use startup::load_file;
 
+/// Artifact-as-executable entry: the design objects are linked into
+/// THIS process image (trs link --exe).  Load the embedded design,
+/// resolve the compiled functions from ourselves, run.  BDPI rides as
+/// a companion .so beside the executable.
+#[cfg(feature = "aot")]
+pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
+    let mut sl = startup::StartupLap::new();
+    let src = jit::ArtifactSource::This;
+    let Some((hash, design)) = jit::aot_embedded_design(&src) else {
+        return Err("no embedded design in this executable (trs_snap)".into());
+    };
+    sl.lap("design load (self-image snap)");
+    let mut interp = Interp::new(design);
+    sl.lap("interp build (instantiate)");
+    interp.bir_hash = hash;
+    interp.plusargs = plusargs.to_vec();
+    if let Ok(exe) = std::env::current_exe() {
+        let b = format!("{}.bdpi.so", exe.display());
+        if std::path::Path::new(&b).exists() {
+            interp.load_bdpi(&b)?;
+        }
+    }
+    interp.aot_request_code_self();
+    Ok(interp.run(max_cycles))
+}
+
 pub fn run_file(
     path: &str,
     max_cycles: u64,
@@ -5361,7 +5503,7 @@ pub fn run_file(
     formats: Option<(bool, bool)>,
     selfcheck: Option<(u64, bool)>,
 ) -> Result<i32, String> {
-    let mut interp = load_file(path, plusargs, vcd_file)?;
+    let mut interp = startup::load_file_or_code(path, code, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
         interp.set_allowed_wave_formats(vcd, fst);
     }
@@ -5429,7 +5571,7 @@ pub fn run_file(
     let mut shadows: Vec<(&'static str, Interp)> = Vec::new();
     for kind in kinds {
         prim::QUIET_ENGINE.with(|c| c.set(true));
-        let sh = load_file(path, plusargs, None);
+        let sh = startup::load_file_or_code(path, code, plusargs, None);
         prim::QUIET_ENGINE.with(|c| c.set(false));
         let mut sh = sh?;
         sh.set_quiet();

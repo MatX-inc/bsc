@@ -9,6 +9,7 @@
 //! Everything LLVM-touching is behind the `llvm` feature so the rest of the
 //! workspace builds without llvm-18-dev installed.
 
+pub mod abi;
 #[cfg(feature = "llvm")]
 pub mod lower;
 
