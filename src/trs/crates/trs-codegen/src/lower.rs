@@ -216,6 +216,47 @@ fn module_max_int_width(module: &Module) -> u32 {
     w
 }
 
+/// (instructions, blocks) of the module's largest-by-instructions
+/// function (see the O1 size tier in run_ir_passes).
+fn module_max_fn_shape(module: &Module) -> (u64, u64) {
+    let mut max = (0u64, 0u64);
+    let mut f = module.get_first_function();
+    while let Some(func) = f {
+        let mut n = 0u64;
+        let mut b = 0u64;
+        for bb in func.get_basic_blocks() {
+            b += 1;
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                n += 1;
+                ins = i.get_next_instruction();
+            }
+        }
+        if n > max.0 {
+            max = (n, b);
+        }
+        f = func.get_next_function();
+    }
+    max
+}
+
+/// Above this size (instructions in one function), a STRAIGHT-LINE
+/// giant drops the default AOT pipeline from O3 to O1.  LLVM's O2/O3
+/// function passes are superlinear in function size: a rule-heavy
+/// composition's fused edge fn (sysBRAM0Test: 67k insns / 3.4k blocks
+/// from 776 inlined rules, ~20 insns/block) measured 139.6s under
+/// default<O3> vs 24.8s under default<O1> — and the O1 artifact RAN
+/// faster too (24.5 vs 34.9ms; the over-optimized giant loses on
+/// I-cache), output byte-exact.  The tier is shape-gated: a BRANCH-
+/// LADDER giant (sysTb_v1's exec_i2_20: 24.3k insns over 24.0k
+/// blocks, ~1 insn/block) must KEEP O3 — only jump threading and
+/// aggressive SimplifyCFG collapse the ladder, and without them the
+/// backend's TailDuplicator (MachineSSAUpdater PHI search) runs for
+/// hours on the surviving block graph.  Straight-line = at least
+/// IR_PASS_LINE_RATIO instructions per block, on average.
+const IR_PASS_FN_SIZE_CAP: u64 = 20_000;
+const IR_PASS_LINE_RATIO: u64 = 8;
+
 /// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
 /// asks for optimization.  The engine/object paths only apply BACKEND
 /// codegen opts; without this the IR pass pipeline (GVN, instcombine,
@@ -239,8 +280,20 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
                 return Ok(());
             }
             // O3 default (measured on the edge-SSA + outline-model
-            // IR: ~22% run for +1s link vs O1; reference ships -O3)
-            3
+            // IR: ~22% run for +1s link vs O1; reference ships -O3),
+            // tiered down to O1 for a huge STRAIGHT-LINE function
+            // (see IR_PASS_FN_SIZE_CAP — faster to compile AND to
+            // run; branch-ladder giants must keep O3)
+            {
+                let (insns, blocks) = module_max_fn_shape(module);
+                if insns > IR_PASS_FN_SIZE_CAP
+                    && insns >= blocks.saturating_mul(IR_PASS_LINE_RATIO)
+                {
+                    1
+                } else {
+                    3
+                }
+            }
         }
         Err(_) => return Ok(()),
     };
