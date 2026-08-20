@@ -114,15 +114,23 @@ design), and the reference API already has the vocabulary for it
 (NULL peeks / NoValue errors in bluetcl, unknown tags, whatever
 child list we enumerate).  Per-engine tiers on one symbol tree:
 
-- interp: full introspection (modules, rules, defs, state, ranges).
-- hybrid JIT: architectural state (regs, RegFiles, FIFO contents)
-  is arena-resident and edge-coherent -> peekable at stops; rule/
-  def views degrade to NoValue where the compiled path owns them.
-- fast/AOT: architectural state only — STATE was never elided, only
-  the observability scaffolding; rules/defs enumerate valueless or
-  not at all.  `sim describe`/`ls` reflect reality; peeks that need
-  more error with the remedy (relink --engines=interp), in the
-  linker-note voice.
+- interp: full introspection (modules, rules, defs, state, ranges) —
+  set_sym_trace records every computed def in the map.
+- hybrid JIT: since the compiled-VCD rung, bk_init arms sym_trace
+  (= vcd_trace) here too, so the hybrid builds a TRACED plan whose
+  compiled bodies record defs and method ports into arena recording
+  slots — def/port peeks and the VCD writer read slots first, and
+  the tier serves the SAME debug surface as interp at compiled
+  speed.  (Slot coverage is the VCD selection walk's def set; a def
+  outside it degrades to NoValue.)  This is the shipped default
+  engine when the library carries the jit feature.
+- fast/AOT: architectural state only — the aot engine runs the
+  UNTRACED fast artifact (forcing trace would hash-bounce it back to
+  the hybrid), so rules/defs enumerate valueless or not at all, and
+  VCD control degrades honestly (stderr note + failure).  `sim
+  describe`/`ls` reflect reality; peeks that need more error with
+  the remedy (TRS_CAPI_ENGINES=interp or jit), in the linker-note
+  voice.
 
 Degradation policy: bk_init returns NULL only for hard failures
 (unparseable BIR); a requested engine that cannot construct (AOT
@@ -197,3 +205,35 @@ Acceptance gates, in order: (1) `sim load` + `sim time` + `sim ls`
 on mkTest; (2) the interactive battery's mkTest.cmd byte-identical;
 (3) all 22 interactive outputs byte-identical; (4) VCD-under-Tcl
 parity spot checks.
+
+## Shared capi + per-design shims (the fast wrapper's script tier)
+
+`trs link --interactive` self-contains the whole capi in each
+design's .so (~50MB, ~4.4s per design) — right for a shipped debug
+artifact, wrong for a testsuite that links hundreds of designs.  The
+fast `trs link` therefore uses a split product:
+
+- `trs capi-so` builds ONE shared `libtrs_capi.so` from the
+  staticlib (same -u keep-list, version script, and shared-libLLVM
+  resolution as the fat link) — installed beside the trs binary,
+  once per install.
+- every fast `trs link` also emits `<base>.capi.so`, a ~20KB shim
+  (incbin'd BIR + `new_MODEL_<top>`) with a DT_NEEDED on the shared
+  lib (-Wl,--no-as-needed: the shim references no capi symbol
+  itself; bluetcl dlsym's bk_* through the dependency scope) and an
+  rpath to its directory.  Companions follow bk_init's dladdr
+  lookup: `<base>.capi.bdpi.so` / `<base>.capi.aot.so` are
+  same-directory symlinks onto the fast artifact's files.  No
+  shared lib installed -> no shim, silently: the artifact contract
+  doesn't change, only the script tier is absent.
+- the fast wrapper dispatches -c/-f runs (real Tcl — while/foreach/
+  expr under bluesim.tcl's source/eval) to stock bluetcl +
+  bluesim.tcl on the shim, exporting TRS_CAPI_FORMATS=<-dump-formats
+  csv> so the link-time waveform contract survives the engine swap
+  (the Model ABI stays frozen); every other invocation runs the fast
+  artifact directly.  TRS_CAPI_ENGINES still overrides the engine
+  set; the default is the traced-plan jit tier above.
+
+The capi engines are DEBUG tier by definition: bk_init marks them
+set_debug_tier, exempting them from the TRS_REQUIRE_AOT
+strict-execution refusal that polices the fast artifact.

@@ -152,6 +152,9 @@ pub struct Interp {
     /// VCD — while all STATE effects (including $finish/$fatal flags
     /// and file reads) run normally so lockstep compare is meaningful
     quiet: bool,
+    /// DEBUG-tier engine (bluetcl capi): exempt from the
+    /// TRS_REQUIRE_AOT strict-execution refusal (see set_debug_tier)
+    debug_tier: bool,
     /// $stop yield: ends the current advance at the slice boundary
     /// but does NOT finish the sim — cleared at the next advance so
     /// the session resumes (the reference's resumable-$stop contract)
@@ -625,6 +628,7 @@ impl Interp {
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
             quiet: false,
+            debug_tier: false,
             stop_request: false,
             wave_pending: None,
             vcd_def_vals: HashMap::new(),
@@ -3825,6 +3829,7 @@ impl Interp {
         #[cfg(feature = "jit")]
         if jit.is_none()
             && !was_emit
+            && !self.debug_tier
             && std::env::var_os("TRS_REQUIRE_AOT").is_some()
         {
             eprintln!(
@@ -4625,6 +4630,15 @@ impl Interp {
         self.quiet = true;
     }
 
+    /// Mark this interp as a DEBUG-tier engine (the bluetcl capi).
+    /// TRS_REQUIRE_AOT polices the fast artifact's execution contract;
+    /// the interactive tier runs interp/jit BY DESIGN (introspection
+    /// needs the interp engine's recording), so its engines are exempt
+    /// from the strict-mode refusal.
+    pub fn set_debug_tier(&mut self) {
+        self.debug_tier = true;
+    }
+
     /// Oracle divergence protocol (docs/TCL-CAPI.md): flip the fatal
     /// flag so scripts stop AT the divergence (bluesim.tcl exits 1
     /// via `sim isfatal`).  fatal implies finished in the reference
@@ -4940,7 +4954,15 @@ impl Interp {
 
     /// Last-computed value of a def (set_sym_trace recording); zeros
     /// until first computed, like the reference's member fields.
+    /// Traced-plan engines record into arena slots (the single
+    /// authority when present — compiled bodies store them inline),
+    /// so the slot is read first, like the VCD writer.
     pub fn def_peek(&self, i: usize, d: StrId) -> Option<Value> {
+        if !self.jit_arena_ptr.is_null() {
+            if let Some(&(base, w)) = self.jit_rec_defs.get(&(i, d)) {
+                return Some(self.rec_read(base, w));
+            }
+        }
         self.vcd_def_vals.get(&(i, d)).cloned()
     }
 

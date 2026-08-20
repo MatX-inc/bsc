@@ -211,10 +211,25 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     };
     let bdpi_so = companion("bdpi.so");
     let aot_so = companion("aot.so");
+    // -dump-formats travels from the fast wrapper's -c/-f dispatch as
+    // TRS_CAPI_FORMATS=vcd[,fst]|none (the Model ABI stays frozen);
+    // absent = the historical default (vcd only)
+    let formats = std::env::var("TRS_CAPI_FORMATS").ok().map(|f| {
+        (
+            f.split(',').any(|t| t.trim() == "vcd"),
+            f.split(',').any(|t| t.trim() == "fst"),
+        )
+    });
     let mut engines = Vec::new();
     for kind in kinds.iter().copied() {
         match Interp::from_bir_bytes(bir) {
             Ok(mut interp) => {
+                // the capi IS the debug tier: interp/jit execution is
+                // its design point, never a strict-mode violation
+                interp.set_debug_tier();
+                if let Some((v, f)) = formats {
+                    interp.set_allowed_wave_formats(v, f);
+                }
                 if let Some(so) = &bdpi_so {
                     if let Err(e) = interp.load_bdpi(so) {
                         eprintln!("trs capi: bk_init: {e}");
@@ -295,14 +310,19 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     // one-time event-loop setup: clocks resolved, kernel reset
     // protocol seeded — `sim clock` works right after `sim load`
     for e in &mut st.engines {
-        e.interp.prime();
-        // debug tier: the INTERP engine retains last-computed def
-        // values for peeks; JIT engines skip the recording (their
-        // def visibility degrades per the capability tiers — and
-        // sym_trace would disable the hybrid entirely)
-        if e.kind == EngineKind::Interp {
+        // debug tier: interp engines retain last-computed def values
+        // in the recording map; jit engines build a TRACED plan
+        // (sym_trace = vcd_trace) whose compiled bodies record defs
+        // and method ports into arena slots — def/port peeks and VCD
+        // read slots first, so both tiers serve the full debug
+        // surface.  Only the aot engine skips recording: it runs the
+        // untraced fast artifact (forcing trace would just hash-bounce
+        // it back to the hybrid).  BEFORE prime: the plan is built
+        // there.
+        if e.kind != EngineKind::Aot {
             e.interp.set_sym_trace();
         }
+        e.interp.prime();
     }
     let raw = Box::into_raw(st);
     unsafe { build_symbols(raw) };
@@ -512,10 +532,13 @@ fn peek_symbol_value_inner(p: *mut c_void) -> *const u32 {
     }
     // capability tiers: only the interp engine records defs/ports —
     // other engines degrade to NoValue rather than fabricate zeros
+    // interp records defs in the map; a traced-plan jit engine records
+    // into arena slots — both serve def/port peeks.  Only aot (the
+    // untraced fast artifact) degrades to NoValue.
     let recording = st
         .engines
         .first()
-        .map(|e| e.kind == EngineKind::Interp)
+        .map(|e| e.kind != EngineKind::Aot)
         .unwrap_or(false);
     match s.kind {
         SymKind::Def { .. } | SymKind::MethPort { .. } if !recording => {
@@ -1190,20 +1213,23 @@ pub extern "C" fn bk_set_timescale(
 // VCD control (`sim vcd [on|off|<file>]` -> these three): routed to
 // the PRIMARY engine's writer — the same one the $dump* tasks drive.
 // Secondary engines stay quiet (they'd clobber the same file).
-// Capability tier: VCD needs the interp engine's def recording; a
-// non-interp primary degrades honestly (stderr note + failure) —
-// compiled bodies do not record the def values the dump walks read.
+// Capability tier: VCD needs a RECORDING engine — interp with
+// set_sym_trace, or a jit engine whose traced plan records defs and
+// method ports into arena slots (the compiled-VCD tier).  Only the
+// aot engine degrades (it runs the untraced fast artifact): honest
+// stderr note + failure.
 
-/// True iff the primary engine can serve VCD (interp tier); prints
-/// the remedy note once per call site otherwise.
+/// True iff the primary engine can serve VCD (a recording tier);
+/// prints the remedy note once per call site otherwise.
 fn vcd_capable(st: &mut SimState) -> bool {
     match st.engines.first() {
-        Some(e) if e.kind == EngineKind::Interp => true,
+        Some(e) if e.kind != EngineKind::Aot => true,
         Some(_) => {
             eprintln!(
-                "trs: VCD dumping needs the interp engine \
-                 (TRS_CAPI_ENGINES=interp); the current primary \
-                 engine does not record signal values"
+                "trs: VCD dumping needs a recording engine \
+                 (TRS_CAPI_ENGINES=interp or jit); the aot engine \
+                 runs the untraced artifact and does not record \
+                 signal values"
             );
             false
         }
@@ -1296,7 +1322,12 @@ pub extern "C" fn bk_set_waveform_format(
     if !vcd_capable(st) {
         return BK_ERROR;
     }
-    st.primary().wave_set_format(fmt);
+    // -dump-formats gate: the refusal (reference's exact stderr error,
+    // sim continues) must reach bluetcl as BK_ERROR — simWaveform only
+    // enables dumping on OK
+    if !st.primary().wave_set_format(fmt) {
+        return BK_ERROR;
+    }
     BK_SUCCESS
 }
 

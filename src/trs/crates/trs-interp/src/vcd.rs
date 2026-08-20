@@ -216,7 +216,11 @@ impl Vcd {
 
     pub fn set_format(&mut self, fmt: WaveFormat, now: u64) -> bool {
         if fmt == self.format {
-            return true;
+            // same-format set skips the switch, NOT the availability
+            // gate: a -dump-formats none model keeps the default
+            // format (vcd), so `sim vcd on` lands here and must still
+            // report "built with -dump-formats none"
+            return self.format_available(fmt);
         }
         if !self.format_available(fmt) {
             return false;

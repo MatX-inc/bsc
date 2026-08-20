@@ -15,12 +15,19 @@ all: install
 # needs no BLUESPECDIR or LD_LIBRARY_PATH), so it is installed directly
 # in "bin" with no wrapper script.  libtrs_capi.a (the bk_* C API for
 # `trs link --interactive` models) installs beside it — the linker
-# searches next to its own binary.
+# searches next to its own binary — and `trs capi-so` turns it into
+# the ONE shared libtrs_capi.so the fast link's per-design capi shims
+# link against (docs/TCL-CAPI.md).
 #
-# The hybrid JIT needs llvm-sys (LLVM 18 dev headers): when the
-# environment provides LLVM_SYS_181_PREFIX, build the full product;
-# otherwise the lean interpreter-only fallback (no LLVM required).
-ifdef LLVM_SYS_181_PREFIX
+# The hybrid JIT needs llvm-sys (LLVM 18 dev headers).  The prefix is
+# AUTO-DETECTED via llvm-config-18 so a plain build produces the full
+# product (a lean install silently downgraded every artifact to the
+# interpreter until the perf fence caught it); LLVM_SYS_181_PREFIX in
+# the environment overrides the probe.  Without either, the lean
+# interpreter-only fallback builds (no LLVM required).
+LLVM_SYS_181_PREFIX ?= $(shell llvm-config-18 --prefix 2>/dev/null)
+ifneq ($(LLVM_SYS_181_PREFIX),)
+export LLVM_SYS_181_PREFIX
 TRS_FLAGS = --features jit
 CAPI_FLAGS  =
 else
@@ -41,6 +48,12 @@ install: build
 	# debuginfo in the staticlib is dead weight at .so link time
 	# (~420MB -> tens of MB); the interactive link strips the model
 	strip --strip-debug $(BINDIR)/libtrs_capi.a
+	# the shared capi: linked ONCE here instead of once per design;
+	# without it the fast wrapper's -c/-f script tier is absent (the
+	# artifact contract is unchanged), so a cc/LLVM-less environment
+	# degrades with a note rather than failing the install
+	$(BINDIR)/trs capi-so -o $(BINDIR)/libtrs_capi.so \
+	  || echo "trs: note: libtrs_capi.so not built; artifacts will lack the -c/-f script tier"
 
 .PHONY: clean full_clean
 clean full_clean:
