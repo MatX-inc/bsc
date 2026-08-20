@@ -1525,6 +1525,8 @@ simLink errh flags toplevel afilenames cfilenames = do
                  user_ofiles ++ compiled_user_ofiles ++
                  ofiles_reused
 
+    bdpi_undef <- bdpiUndefinedFlags errh flags toplevel abis
+
     -- under -bir, also package the user's BDPI objects for the trs
     -- runtime (dlopen), named next to the .bir
     when (genBir flags && not (genTrs flags)
@@ -1533,15 +1535,23 @@ simLink errh flags toplevel afilenames cfilenames = do
         let name3 = createEncodedFullFilePath "placeholder" pwd3
             prefix3 = (dirName name3) ++ "/"
             so3 = prefix3 ++ toplevel ++ ".bdpi.so"
-        cxxCompile errh flags (["-shared", "-fPIC", "-o", so3])
-                   (map show (user_ofiles ++ compiled_user_ofiles))
+        -- The user's -L/-l reach this link too: BDPI implementations may
+        -- live in a library rather than the objects, and an unresolved
+        -- symbol here surfaces only when the runtime dlopens the result.
+        -- show is used for quoting, as in cxxLink.
+        let libdirflags3 = map (("-L" ++) . show) (cLibPath flags)
+            userlibs3    = map (("-l" ++) . show) (cLibs flags)
+        cxxCompile errh flags
+                   (["-shared", "-fPIC"] ++ libdirflags3 ++ bdpi_undef
+                    ++ ["-o", so3])
+                   (map show (user_ofiles ++ compiled_user_ofiles) ++ userlibs3)
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
     -- if not generating a SystemC model, link to a Bluesim executable
     start flags DFbluesimlink
     if (genTrs flags)
-      then trsLink errh flags toplevel user_cfiles user_ofiles
+      then trsLink errh flags toplevel user_cfiles user_ofiles bdpi_undef
       else when (not (genSysC flags)) $
              cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
@@ -1924,13 +1934,44 @@ cleanseSharedLib errh flags soFile = do
         ExitSuccess   -> return ()
         ExitFailure n -> exitFailWith errh n
 
+-- The trs runtime resolves each BDPI function out of the .bdpi.so with
+-- dlsym, so nothing inside that shared object refers to them.  A static
+-- library named with -l therefore contributes no members of its own: the
+-- linker extracts only what resolves an outstanding reference.  Naming the
+-- design's BDPI symbols as undefined asks for exactly the members that
+-- define them, leaving the rest of the archive out.
+bdpiUndefinedFlags :: ErrorHandle -> Flags -> String -> [(String, ABin)] ->
+                      IO [String]
+bdpiUndefinedFlags errh flags toplevel abis
+    | null (cLibs flags) = return []
+    | otherwise = do
+        -- a foreign function reaches the link either way round: named
+        -- directly as a .ba on the command line, or reached from a module
+        -- that calls it, whose .ba sits on the search path
+        let cmdline_ffs =
+                [ abffi_foreign_func abffi
+                | (_, ABinForeignFunc { ab_ffuncinfo = abffi }) <- abis ]
+            called = nub [ n
+                         | (_, ABinMod { ab_modinfo = abmi }) <- abis
+                         , n <- getForeignCallNames (abmi_apkg abmi) ]
+            readFF n =
+                let err = (noPosition,
+                           EMissingABinForeignFuncFile n toplevel)
+                in  readAndCheckABinPathCatch errh (verbose flags)
+                        (ifcPath flags) (Just Bluesim) n err
+        called_abis <- mapM readFF called
+        called_ffs <- M.elems `fmap` buildForeignFunctionMap errh called_abis
+        return $ nub [ "-Wl,-u," ++ getIdString (ff_name ff)
+                     | ff <- cmdline_ffs ++ called_ffs ]
+
 -- ===============
 -- trsLink: the TRS backend's link step.  The simulation is the
 -- exported .bir executed by the trs runtime; user BDPI C files are
 -- compiled into a companion shared object that the runtime dlopens.
 
-trsLink :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
-trsLink errh flags toplevel user_cfiles user_ofiles = do
+trsLink :: ErrorHandle -> Flags -> String -> [String] -> [String] ->
+           [String] -> IO ()
+trsLink errh flags toplevel user_cfiles user_ofiles bdpi_undef = do
     pwd <- getCurrentDirectory
     let name = createEncodedFullFilePath "placeholder" pwd
         prefix = (dirName name) ++ "/"
@@ -1955,15 +1996,18 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
     when (not (null user_cfiles) || not (null user_ofiles)) $ do
         cofs <- mapM (compileUserCFile errh flags False) user_cfiles
         cxxCompile errh flags
-                   (["-shared", "-fPIC", "-o", soFile])
-                   (map show (cofs ++ user_ofiles))
+                   (["-shared", "-fPIC"]
+                    ++ map (("-L" ++) . show) (cLibPath flags)
+                    ++ bdpi_undef
+                    ++ ["-o", soFile])
+                   (map show (cofs ++ user_ofiles)
+                    ++ map (("-l" ++) . show) (cLibs flags))
         unless (quiet flags) $
             putStrLnF ("BDPI shared library created: " ++ soFile)
     -- AOT: let the trs driver compile the design and write the
     -- artifact (wrapper script + model .so + pinned options) — the
     -- same amortization as the C++ backend's g++ link, at a fraction
-    -- of the cost.  Any failure (trs not on PATH, built without the
-    -- jit feature, infra error) falls back to the interpreter wrapper.
+    -- of the cost.
     -- like the C++ backend, trs dumps waveforms only in VCD and FST
     let bad_fmts2 = filter (`notElem` ["vcd", "fst"]) (dumpFormats flags)
     when (not (null bad_fmts2)) $
@@ -1991,25 +2035,23 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
                     _           -> " (interpreted)"
         unless (quiet flags) $
             putStrLnF ("TRS simulation created" ++ how ++ ": " ++ outFile)
-      _ -> do
-        -- honor a strict-mode refusal: converting `trs link`'s
-        -- TRS_REQUIRE_AOT failure into an interpreter wrapper would
-        -- reintroduce the silent degrade at this layer
-        strictRc <- system "test -n \"$TRS_REQUIRE_AOT\""
-        when (strictRc == ExitSuccess) $
-            exitFailWith errh 86
-        writeFileCatch errh outFile $
-            unlines [ "#!/bin/sh"
-                    , ""
-                    , "TRS=${TRS:-trs}"
-                    , "exec \"$TRS\" run \"$0.bir\" \"$@\""
-                    ]
-        stat <- getFileStatus outFile
-        let mode = fileMode stat
-            mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
-        setFileMode outFile mode'
-        unless (quiet flags) $
-            putStrLnF ("TRS simulation created (interpreted): " ++ outFile)
+      ExitFailure 86 ->
+        -- `trs link`'s own strict-mode refusal (TRS_REQUIRE_AOT):
+        -- propagate the code so strict callers see the same contract
+        -- at every layer
+        exitFailWith errh 86
+      ExitFailure n ->
+        -- -trs asks for a trs simulation specifically: `trs link`
+        -- exits 0 for everything it handles (ineligible designs get
+        -- its own interpreter wrapper), so a non-zero exit is a
+        -- genuine failure (trs not on PATH, unresolved BDPI symbol,
+        -- infra error).  Standing in an interpreter wrapper here
+        -- turned those into silent successes that failed later, far
+        -- from the cause.  Report the failure and stop.
+        bsError errh
+            [(cmdPosition,
+              EGeneric ("TRS link failed with exit code " ++ show n ++
+                        ": " ++ linkCmd))]
 
 -- ===============
 -- vLink

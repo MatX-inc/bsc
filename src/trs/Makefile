@@ -37,6 +37,14 @@ TRS_FLAGS = --features aot
 CAPI_FLAGS  = --no-default-features --features aot
 endif
 
+# Strip debug info from a static archive.  GNU binutils spells this
+# --strip-debug; the macOS strip does not accept it and uses -S.
+ifeq ($(shell uname -s),Darwin)
+STRIP_DEBUG = strip -S
+else
+STRIP_DEBUG = strip --strip-debug
+endif
+
 .PHONY: build
 build:
 	$(CARGO) build --release --locked -p trs $(TRS_FLAGS)
@@ -55,9 +63,10 @@ install: build
 	$(INSTALL) -m 644 target/release/libtrs_capi.a $(BINDIR)/libtrs_capi.a
 	$(INSTALL) -m 644 target/release/libtrs_rt.a $(BINDIR)/libtrs_rt.a
 	# debuginfo in the staticlib is dead weight at .so link time
-	# (~420MB -> tens of MB); the interactive link strips the model
-	strip --strip-debug $(BINDIR)/libtrs_capi.a
-	strip --strip-debug $(BINDIR)/libtrs_rt.a
+	# (~420MB -> tens of MB); the interactive link strips the model.
+	# GNU strip spells this --strip-debug; the macOS one only has -S.
+	$(STRIP_DEBUG) $(BINDIR)/libtrs_capi.a
+	$(STRIP_DEBUG) $(BINDIR)/libtrs_rt.a
 	# the shared capi: linked ONCE here instead of once per design;
 	# without it the fast wrapper's -c/-f script tier is absent (the
 	# artifact contract is unchanged), so a cc/LLVM-less environment
