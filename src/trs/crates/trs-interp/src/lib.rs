@@ -4246,6 +4246,31 @@ impl Interp {
                         || uncovered_tick(rci)
                         || fused[rci] == 0
                     {
+                        // name the disqualifiers: an uncovered tick is
+                        // the actionable one (which prim, which port)
+                        if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                            for (ti, (ii, pname, is_rst, _, _)) in
+                                rc.ticks.iter().enumerate()
+                            {
+                                if !*is_rst
+                                    && !j.covered_ticks
+                                        .get(rci)
+                                        .is_some_and(|c| c.contains(&ti))
+                                {
+                                    eprintln!(
+                                        "trs jit: central bail #9: uncovered \
+                                         tick {} ({})",
+                                        self.insts[*ii].path, pname
+                                    );
+                                }
+                            }
+                            if !rc.early.is_empty() {
+                                eprintln!("trs jit: central bail #9: early rules");
+                            }
+                            if fused[rci] == 0 {
+                                eprintln!("trs jit: central bail #9: comp {rci} not fused");
+                            }
+                        }
                         { CENTRAL_BAIL[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
                     }
                     pos_rcis.push(rci);

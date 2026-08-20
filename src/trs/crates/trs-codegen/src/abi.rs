@@ -110,6 +110,13 @@ pub struct InstEnv {
     /// header [upd_at, upd_addr, upd_prev(w)] then dense data
     /// (see ArenaKind::RegFile)
     pub regfile_slot: HashMap<StrId, (u32, u32, u64, u64)>,
+    /// local BRAM instance name -> (base slot, width, size, chunk_size,
+    /// num_wens, dual, pipelined): per-port headers then dense data
+    /// (see ArenaKind::Bram)
+    pub bram_slot: HashMap<StrId, (u32, u32, u64, u32, u32, bool, bool)>,
+    /// local CReg (CRegN5) instance name -> (base slot, width): live
+    /// value then registered value, w words each (see ArenaKind::CReg5)
+    pub creg5_slot: HashMap<StrId, (u32, u32)>,
     /// local FIFO instance name -> (base slot, width, size, guarded):
     /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
     /// data (see ArenaKind::Fifo)
@@ -475,7 +482,7 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 20;
+pub const AOT_LAYOUT_REV: u64 = 21;
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).
@@ -538,6 +545,157 @@ pub struct EdgeSsaPlan {
     /// of RWire/PulseWire::tick (the boxed `written` latch only feeds
     /// VCD, where the interpreter runs ticks itself)
     pub wire_clears: Vec<Vec<u32>>,
+    /// per composition: (value base slot, words) of ungated CReg ticks —
+    /// the compiled form of CReg::tick is a copy of the live value into
+    /// the registered value (arena words [base, base+w) -> [base+w,
+    /// base+2w)); the boxed per-port history only feeds VCD
+    pub creg_copies: Vec<Vec<(u32, u32)>>,
+    /// per composition: packed trs_bram_tick argument triples of
+    /// ungated BRAM port ticks — the edge fn calls the helper through
+    /// the trs_bram_tick_cb pointer-global (filled at artifact load)
+    pub bram_ticks: Vec<Vec<[u64; 3]>>,
+}
+
+/// Pack one BRAM port tick into trs_bram_tick's (a0, a1, a2) args.
+pub fn bram_tick_args(
+    base: u32,
+    port_b: bool,
+    width: u32,
+    size: u64,
+    chunk_size: u32,
+    num_wens: u32,
+    dual: bool,
+) -> [u64; 3] {
+    [
+        base as u64 | (port_b as u64) << 32,
+        width as u64 | (chunk_size as u64) << 32,
+        size | (num_wens as u64) << 32 | (dual as u64) << 62,
+    ]
+}
+
+/// Compiled BRAM end-of-edge tick (the arena form of Bram::clk): the
+/// fused edge fn calls this through the trs_bram_tick_cb
+/// pointer-global once per BRAM port tick.  Layout per
+/// ArenaKind::Bram; args packed by bram_tick_args.  Must mirror the
+/// interpreter's Bram::clk exactly: out2 <- out rotation, pending-put
+/// latch, byte-enable lane merge, cross-port same-instant bypass,
+/// out-of-range -> undet (the WARNING printed at put time on the
+/// trampoline).
+///
+/// # Safety
+/// `arena` must be the design arena; the packed args must describe a
+/// BRAM block passB allocated inside it.
+pub unsafe extern "C" fn trs_bram_tick(
+    arena: *mut u64,
+    now: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+) {
+    let base = (a0 & 0xffff_ffff) as usize;
+    let port_b = a0 >> 32 & 1 != 0;
+    let width = (a1 & 0xffff_ffff) as u32;
+    let chunk = (a1 >> 32) as u32;
+    let size = a2 & 0xffff_ffff;
+    let num_wens = ((a2 >> 32) & 0x3fff_ffff) as u32;
+    let dual = a2 >> 62 & 1 != 0;
+    let w = (width.max(1) as usize).div_ceil(64);
+    let wenw = (num_wens.max(1) as usize).div_ceil(64);
+    let pw = 3 + wenw + 4 * w;
+    let me = base + if port_b { pw } else { 0 };
+    let other = base + if port_b { 0 } else { pw };
+    let (o_wens, o_val) = (3, 3 + wenw);
+    let (o_prev, o_out, o_out2) =
+        (3 + wenw + w, 3 + wenw + 2 * w, 3 + wenw + 3 * w);
+    // out2 <- out (unconditional rotation, like the boxed clk)
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            arena.add(me + o_out),
+            arena.add(me + o_out2),
+            w,
+        );
+        if *arena.add(me) != now {
+            return;
+        }
+        let addr = *arena.add(me + 1);
+        let wens_zero =
+            (0..wenw).all(|i| *arena.add(me + o_wens + i) == 0);
+        if addr >= size {
+            // out-of-range: undet pattern, masked to width
+            for i in 0..w {
+                *arena.add(me + o_out + i) = 0xAAAA_AAAA_AAAA_AAAA;
+            }
+            mask_top(arena.add(me + o_out), width, w);
+            return;
+        }
+        let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize * w;
+        // cross-port same-instant bypass: the other port wrote this
+        // address at this instant -> its pre-write value
+        let other_hit = dual
+            && *arena.add(other + 2) == now
+            && *arena.add(other + 1) == addr;
+        if !wens_zero {
+            // write: prev <- (bypass ? other.prev : data), then merge
+            // the enabled lanes of upd_val into data, out <- merged
+            *arena.add(me + 2) = now;
+            if other_hit {
+                std::ptr::copy_nonoverlapping(
+                    arena.add(other + o_prev),
+                    arena.add(me + o_prev),
+                    w,
+                );
+            } else {
+                std::ptr::copy_nonoverlapping(
+                    arena.add(daddr),
+                    arena.add(me + o_prev),
+                    w,
+                );
+            }
+            for n in 0..num_wens {
+                let lane = *arena.add(me + o_wens + (n / 64) as usize)
+                    >> (n % 64)
+                    & 1;
+                if lane == 0 {
+                    continue;
+                }
+                if n * chunk >= width {
+                    continue;
+                }
+                let lo = (n * chunk) as usize;
+                let len = chunk.min(width - n * chunk) as usize;
+                for b in lo..lo + len {
+                    let bit =
+                        *arena.add(me + o_val + b / 64) >> (b % 64) & 1;
+                    let d = arena.add(daddr + b / 64);
+                    *d = *d & !(1u64 << (b % 64)) | bit << (b % 64);
+                }
+            }
+            std::ptr::copy_nonoverlapping(
+                arena.add(daddr),
+                arena.add(me + o_out),
+                w,
+            );
+        } else {
+            // read: bypassed pre-write value or the stored data
+            let src = if other_hit { other + o_prev } else { daddr };
+            std::ptr::copy_nonoverlapping(
+                arena.add(src),
+                arena.add(me + o_out),
+                w,
+            );
+        }
+    }
+}
+
+/// Mask the top word of a `words`-long little-endian value to `width`.
+///
+/// # Safety
+/// `p` must point at `words` valid u64s.
+unsafe fn mask_top(p: *mut u64, width: u32, words: usize) {
+    let rem = width % 64;
+    if width != 0 && rem != 0 {
+        unsafe { *p.add(words - 1) &= (1u64 << rem) - 1 };
+    }
 }
 
 /// One node of a fused per-composition edge function.

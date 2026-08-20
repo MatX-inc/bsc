@@ -487,7 +487,7 @@ pub fn compile_meta_object(
     bir_hash_raw: u64,
     split_thresh: u64,
     protos: &[u8],
-    edge_wire_ticks: bool,
+    edge_tick_level: u64,
     bdpi_names: &[String],
     snap: &[u8],
     plan_a: &[u8],
@@ -510,17 +510,22 @@ pub fn compile_meta_object(
     // loader must plan with the SAME value or refuse the artifact
     let t = module.add_global(i64t, None, "trs_split_thresh");
     t.set_initializer(&i64t.const_int(split_thresh, false));
-    // edge fns contain the compiled wire ticks: the loader skips the
-    // interp tick loop's covered entries iff this is set (absent in
-    // old artifacts -> loader reads 0)
+    // edge fns contain compiled ticks: the loader skips the interp
+    // tick loop's covered entries per this level (absent in old
+    // artifacts -> loader reads 0).  1 = wire clears only (historic);
+    // 2 = wire clears + CReg copies + BRAM port ticks.
     let wt = module.add_global(i64t, None, "trs_edge_wire_ticks");
-    wt.set_initializer(&i64t.const_int(edge_wire_ticks as u64, false));
+    wt.set_initializer(&i64t.const_int(edge_tick_level, false));
     // single definition of the callback pointer-globals every chunk
     // object references; the loader fills them after dlopen
     for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim", "trs_cb_stdio"] {
         let g = module.add_global(ptrt, None, name);
         g.set_initializer(&ptrt.const_null());
     }
+    // compiled-BRAM-tick helper pointer (edge fns call through it;
+    // the loader fills it with abi::trs_bram_tick)
+    let bt = module.add_global(i64t, None, "trs_bram_tick_cb");
+    bt.set_initializer(&i64t.const_zero());
     // direct-BDPI callee pointers, filled by the loader from the
     // artifact's companion .bdpi.so
     for n in bdpi_names {
@@ -1186,6 +1191,81 @@ fn lower_edge_ssa<'ctx>(
                     .unwrap()
                 };
                 bend.build_store(gepw, i64t.const_zero()).unwrap();
+            }
+        }
+        // compiled CReg ticks: copy the live value into the registered
+        // value (the whole untraced semantics of CReg::tick)
+        if let Some(copies) = plan.creg_copies.get(k) {
+            for &(base, words) in copies {
+                for i in 0..words {
+                    let s = unsafe {
+                        bend.build_gep(
+                            i64t,
+                            arena,
+                            &[i64t.const_int((base + i) as u64, false)],
+                            "cs",
+                        )
+                        .unwrap()
+                    };
+                    let v = bend.build_load(i64t, s, "cv").unwrap();
+                    let d = unsafe {
+                        bend.build_gep(
+                            i64t,
+                            arena,
+                            &[i64t
+                                .const_int((base + words + i) as u64, false)],
+                            "cd",
+                        )
+                        .unwrap()
+                    };
+                    bend.build_store(d, v).unwrap();
+                }
+            }
+        }
+        // compiled BRAM ticks: one helper call per port tick, through
+        // the trs_bram_tick_cb pointer-global (filled at load).  Call
+        // order preserves the rc.ticks walk — the cross-port bypass
+        // reads the other port's just-latched written_at.
+        if let Some(ticks) = plan.bram_ticks.get(k) {
+            if !ticks.is_empty() {
+                // external declaration: the meta object owns the single
+                // definition (loader fills it after dlopen)
+                let cbg = module
+                    .get_global("trs_bram_tick_cb")
+                    .unwrap_or_else(|| {
+                        module.add_global(i64t, None, "trs_bram_tick_cb")
+                    });
+                let fp64 = bend
+                    .build_load(i64t, cbg.as_pointer_value(), "btc")
+                    .unwrap()
+                    .into_int_value();
+                let fp =
+                    bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
+                let tick_ty = ctx.void_type().fn_type(
+                    &[
+                        ptrt.into(),
+                        i64t.into(),
+                        i64t.into(),
+                        i64t.into(),
+                        i64t.into(),
+                    ],
+                    false,
+                );
+                for a in ticks {
+                    bend.build_indirect_call(
+                        tick_ty,
+                        fp,
+                        &[
+                            arena.into(),
+                            now.into(),
+                            i64t.const_int(a[0], false).into(),
+                            i64t.const_int(a[1], false).into(),
+                            i64t.const_int(a[2], false).into(),
+                        ],
+                        "bt",
+                    )
+                    .unwrap();
+                }
             }
         }
         bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
@@ -2342,6 +2422,41 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             let phi = self.builder.build_phi(self.ity(rw), "rfp").unwrap();
             phi.add_incoming(&[(&fv, f_end), (&sv, s_end)]);
             return Ok(phi.as_basic_value().into_int_value());
+        }
+        if let Some(&(base, bw, _sz, _cs, nw, _dual, pipelined)) =
+            ie.bram_slot.get(&instance)
+        {
+            // BRAM reads return REGISTERED state (out, or out2 when
+            // pipelined) — a plain load, no bounds or bypass logic
+            // (addressing happened at put/tick)
+            let port_b = match mname.as_str() {
+                "read" | "a_read" => false,
+                "b_read" => true,
+                _ => return nope("bram value method mismatch"),
+            };
+            if bw != width || !args.is_empty() {
+                return nope("bram read shape mismatch");
+            }
+            let w = bw.max(1).div_ceil(64);
+            let wenw = nw.max(1).div_ceil(64);
+            let pw = 3 + wenw + 4 * w;
+            let off = base
+                + if port_b { pw } else { 0 }
+                + 3
+                + wenw
+                + (if pipelined { 3 } else { 2 }) * w;
+            return Ok(self.load_val(f, off, bw));
+        }
+        if let Some(&(base, cw)) = ie.creg5_slot.get(&instance) {
+            // CReg port reads return the LIVE value (schedule order
+            // makes port k's read see earlier ports' writes)
+            if !(mname.starts_with("port") && mname.ends_with("__read")) {
+                return nope("creg value method mismatch");
+            }
+            if cw != width {
+                return nope("creg read width mismatch");
+            }
+            return Ok(self.load_val(f, base, cw));
         }
         // other prim children: trampoline into the interpreter's prim
         let Some(&child) = ie.children.get(&instance) else {
@@ -4933,6 +5048,92 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.build_unconditional_branch(done_bb).unwrap();
 
                     self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, bw, sz, _cs, nw, dual, _pl)) =
+                    ie.bram_slot.get(instance)
+                {
+                    // put latches the pending update into the port
+                    // header (the tick applies it); in-range is pure
+                    // stores, out-of-range bounces to the boxed prim
+                    // for the bounds warning
+                    let port_b = match mname.as_str() {
+                        "put" | "a_put" => false,
+                        "b_put" => true,
+                        _ => return nope("non-put BRAM action"),
+                    };
+                    if args.len() != 3 || (port_b && !dual) {
+                        return nope("bram put shape mismatch");
+                    }
+                    let Some(&child) = ie.children.get(instance) else {
+                        return nope("call on unknown child");
+                    };
+                    let i64t = self.ctx.i64_type();
+                    let w = bw.max(1).div_ceil(64);
+                    let wenw = nw.max(1).div_ceil(64);
+                    let pw = 3 + wenw + 4 * w;
+                    let pb = base + if port_b { pw } else { 0 };
+                    let ww = self.expr_width(f, &args[0])?;
+                    let w0 = self.expr(f, &args[0])?;
+                    let wens = self.to_w(w0, ww, nw.max(1), false);
+                    let aw = self.expr_width(f, &args[1])?;
+                    let a0 = self.expr(f, &args[1])?;
+                    let a = self.to_w(a0, aw, 64, false);
+                    let vw = self.expr_width(f, &args[2])?;
+                    let v0 = self.expr(f, &args[2])?;
+                    let vv = self.to_w(v0, vw, bw.max(1), false);
+                    let go_bb = self.ctx.append_basic_block(func, "bpg");
+                    let fast_bb = self.ctx.append_basic_block(func, "bpf");
+                    let slow_bb = self.ctx.append_basic_block(func, "bps");
+                    let done_bb = self.ctx.append_basic_block(func, "bpd");
+                    self.builder.build_conditional_branch(cz, go_bb, done_bb).unwrap();
+
+                    self.builder.position_at_end(go_bb);
+                    let inb = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::ULT,
+                            a,
+                            i64t.const_int(sz, false),
+                            "bpin",
+                        )
+                        .unwrap();
+                    self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+
+                    self.builder.position_at_end(fast_bb);
+                    let now = self.load_word(f, self.env.now_slot);
+                    self.store_word(f, pb, now);
+                    self.store_word(f, pb + 1, a);
+                    self.store_val(f, pb + 3, nw.max(1), wens);
+                    self.store_val(f, pb + 3 + wenw, bw.max(1), vv);
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(slow_bb);
+                    let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                    self.emit_prim_call(f, child, *method, args, 0, true)?;
+                    f.ssa = saved;
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, cw)) = ie.creg5_slot.get(instance) {
+                    // branchless port write: value = select(cond, v, old)
+                    if !(mname.starts_with("port") && mname.ends_with("__write"))
+                        || args.is_empty()
+                    {
+                        return nope("non-write CReg action");
+                    }
+                    let vw = self.expr_width(f, &args[0])?;
+                    let v0 = self.expr(f, &args[0])?;
+                    let vv = self.to_w(v0, vw, cw.max(1), false);
+                    let oldv = self.load_val(f, base, cw.max(1));
+                    let selv = self
+                        .builder
+                        .build_select(cz, vv, oldv, "cgw")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base, cw.max(1), selv);
                     return Ok(());
                 }
                 if let Some(&(base, fw, size, guarded, loopy)) =

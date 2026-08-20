@@ -334,6 +334,18 @@ impl LazyJit {
     }
 }
 
+/// Per-comp compiled-tick lists + the covered tick-index sets (see
+/// prim_tick_coverage).
+pub(crate) struct TickCoverage {
+    pub(crate) wire_clears: Vec<Vec<u32>>,
+    pub(crate) creg_copies: Vec<Vec<(u32, u32)>>,
+    pub(crate) bram_ticks: Vec<Vec<[u64; 3]>>,
+    /// ticks covered by a level-1 artifact (wire clears only)
+    pub(crate) covered_wire: Vec<std::collections::HashSet<usize>>,
+    /// ticks covered by a level-2 artifact (wires + cregs + brams)
+    pub(crate) covered_all: Vec<std::collections::HashSet<usize>>,
+}
+
 /// Compiled state carried by the Stepper.
 pub(crate) struct JitPlans {
     /// the shared state arena; register prims and Interp::jit_arena_ptr
@@ -1057,7 +1069,19 @@ fn aot_emit(
             bir_hash_raw,
             split_thresh as u64,
             &encode_protos(protos),
-            edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
+            edge_plan
+                .map(|p| {
+                    let any = |vs: &[Vec<u32>]| vs.iter().any(|v| !v.is_empty());
+                    if any(&p.wire_clears)
+                        || p.creg_copies.iter().any(|v| !v.is_empty())
+                        || p.bram_ticks.iter().any(|v| !v.is_empty())
+                    {
+                        2
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0),
             bdpi_names,
             &d.snap_encode(bir_hash).unwrap_or_default(),
             plan_a,
@@ -1244,7 +1268,7 @@ fn aot_emit(
         bir_hash_raw,
         split_thresh as u64,
         &encode_protos(protos),
-        false, // chunked path never carries edge-SSA wire ticks
+        0, // chunked path never carries edge-SSA compiled ticks
         bdpi_names,
         &d.snap_encode(bir_hash).unwrap_or_default(),
         plan_a,
@@ -1441,7 +1465,7 @@ fn aot_load(
     ncomps: usize,
     bdpi_fill: &[(String, usize)],
 ) -> Result<
-    (Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>, Vec<usize>, bool),
+    (Vec<CompiledSched>, Vec<CompiledExec>, Vec<FnProtos>, Vec<usize>, u64),
     String,
 > {
     unsafe {
@@ -1482,6 +1506,10 @@ fn aot_load(
             let g: libloading::Symbol<*mut usize> =
                 lib.get(name).map_err(|e| e.to_string())?;
             **g = addr;
+        }
+        // compiled-BRAM-tick helper (level-2 tick artifacts)
+        if let Ok(g) = lib.get::<*mut usize>(b"trs_bram_tick_cb") {
+            **g = trs_codegen::abi::trs_bram_tick as usize;
         }
         let pl: libloading::Symbol<*const u64> =
             lib.get(b"trs_protos_len").map_err(|e| e.to_string())?;
@@ -1607,15 +1635,15 @@ fn aot_load(
                 unsafe { **g = *addr };
             }
         }
-        // edge fns carry compiled wire ticks (absent symbol = old
-        // artifact = 0)
-        let wire_ticks = lib
+        // edge fns carry compiled ticks (absent symbol = old artifact
+        // = 0; 1 = wire clears only, 2 = wires + cregs + brams)
+        let tick_level = lib
             .get::<*const u64>(b"trs_edge_wire_ticks")
-            .map(|g| unsafe { **g } != 0)
-            .unwrap_or(false);
+            .map(|g| unsafe { **g })
+            .unwrap_or(0);
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);
-        Ok((scheds, execs, protos, fused, wire_ticks))
+        Ok((scheds, execs, protos, fused, tick_level))
     }
 }
 
@@ -1650,25 +1678,46 @@ impl Interp {
     /// rc.ticks indices (runtime skip + central preconditions).  Must
     /// stay deterministic across processes: the linker bakes the
     /// clears, the loader re-derives the covered set.
-    fn wire_tick_coverage(
+    fn prim_tick_coverage(
         &self,
         inst_envs: &HashMap<usize, InstEnv>,
         rcomps: &[RComp],
-    ) -> (Vec<Vec<u32>>, Vec<std::collections::HashSet<usize>>) {
+    ) -> TickCoverage {
         let mut wire_of: HashMap<usize, u32> = HashMap::new();
+        let mut creg_of: HashMap<usize, (u32, u32)> = HashMap::new();
+        let mut bram_of: HashMap<usize, (u32, u32, u64, u32, u32, bool)> =
+            HashMap::new();
         for ie in inst_envs.values() {
             for (name, &(base, _w)) in &ie.wire_slot {
                 if let Some(&gi) = ie.children.get(name) {
                     wire_of.insert(gi, base);
                 }
             }
+            for (name, &(base, w)) in &ie.creg5_slot {
+                if let Some(&gi) = ie.children.get(name) {
+                    creg_of.insert(gi, (base, w.max(1).div_ceil(64)));
+                }
+            }
+            for (name, &(base, w, sz, cs, nw, du, _pl)) in &ie.bram_slot {
+                if let Some(&gi) = ie.children.get(name) {
+                    bram_of.insert(gi, (base, w, sz, cs, nw, du));
+                }
+            }
         }
-        let mut clears = Vec::with_capacity(rcomps.len());
-        let mut covered = Vec::with_capacity(rcomps.len());
+        let mut out = TickCoverage {
+            wire_clears: Vec::with_capacity(rcomps.len()),
+            creg_copies: Vec::with_capacity(rcomps.len()),
+            bram_ticks: Vec::with_capacity(rcomps.len()),
+            covered_wire: Vec::with_capacity(rcomps.len()),
+            covered_all: Vec::with_capacity(rcomps.len()),
+        };
         for rc in rcomps {
             let mut cl: Vec<u32> = Vec::new();
-            let mut cov = std::collections::HashSet::new();
-            for (ti, (inst, _pname, is_rst, _owner, gexpr)) in
+            let mut cc: Vec<(u32, u32)> = Vec::new();
+            let mut bt: Vec<[u64; 3]> = Vec::new();
+            let mut cov_w = std::collections::HashSet::new();
+            let mut cov_a = std::collections::HashSet::new();
+            for (ti, (inst, pname, is_rst, _owner, gexpr)) in
                 rc.ticks.iter().enumerate()
             {
                 if *is_rst || gexpr.is_some() || self.rstgen_out.contains_key(inst)
@@ -1677,14 +1726,36 @@ impl Interp {
                 }
                 if let Some(&slot) = wire_of.get(inst) {
                     cl.push(slot);
-                    cov.insert(ti);
+                    cov_w.insert(ti);
+                    cov_a.insert(ti);
+                } else if let Some(&(base, words)) = creg_of.get(inst) {
+                    cc.push((base, words));
+                    cov_a.insert(ti);
+                } else if let Some(&(base, w, sz, cs, nw, du)) =
+                    bram_of.get(inst)
+                {
+                    // tick order is preserved (the cross-port bypass
+                    // reads the other port's just-latched written_at)
+                    bt.push(trs_codegen::abi::bram_tick_args(
+                        base,
+                        pname == "clkB",
+                        w,
+                        sz,
+                        cs,
+                        nw,
+                        du,
+                    ));
+                    cov_a.insert(ti);
                 }
             }
             cl.sort_unstable();
-            clears.push(cl);
-            covered.push(cov);
+            out.wire_clears.push(cl);
+            out.creg_copies.push(cc);
+            out.bram_ticks.push(bt);
+            out.covered_wire.push(cov_w);
+            out.covered_all.push(cov_a);
         }
-        (clears, covered)
+        out
     }
 
     /// Task #24 M1: gap-wise cross-rule def-sharing legality census.
@@ -2479,6 +2550,8 @@ impl Interp {
             hoists,
             outlined_execs,
             wire_clears: Vec::new(),
+            creg_copies: Vec::new(),
+            bram_ticks: Vec::new(),
             export_slots,
         }
     }
@@ -2712,6 +2785,13 @@ impl Interp {
                         // reads can WARN (bounds): the split analyzer
                         // treats it like an opaque prim
                         Some(ArenaKind::RegFile { .. }) => ChildClass::Other,
+                        // arena-backed; reads are begin-of-instant
+                        // (out changes only at tick) but keep the
+                        // conservative class until the compiled tier
+                        // exploits it
+                        Some(ArenaKind::Bram { .. }) => ChildClass::Other,
+                        // live port-chained reads: never stable
+                        Some(ArenaKind::CReg5 { .. }) => ChildClass::Other,
                         None => ChildClass::Other,
                     }),
                     InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
@@ -2815,6 +2895,8 @@ impl Interp {
             let mut creg_slot = HashMap::new();
             let mut fifo_slot = HashMap::new();
             let mut regfile_slot = HashMap::new();
+            let mut bram_slot = HashMap::new();
+            let mut creg5_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -2852,6 +2934,38 @@ impl Interp {
                         let base =
                             alloc(&mut nslots, 2 + words * (1 + entries));
                         regfile_slot.insert(name, (base, width, lo, hi));
+                        attach.push((ci, base));
+                    }
+                    // traced plans keep CRegs boxed: the per-port VCD
+                    // bookkeeping (EN/D_IN history) lives in the boxed
+                    // write path, which inline compiled writes bypass
+                    Some(ArenaKind::CReg5 { .. }) if self.vcd_trace => {}
+                    Some(ArenaKind::CReg5 { width }) => {
+                        let base =
+                            alloc(&mut nslots, 2 * width.max(1).div_ceil(64));
+                        creg5_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::Bram {
+                        width,
+                        size,
+                        chunk_size,
+                        num_wens,
+                        dual,
+                        pipelined,
+                    }) => {
+                        let w = width.max(1).div_ceil(64);
+                        let wenw = num_wens.max(1).div_ceil(64);
+                        let pw = 3 + wenw + 4 * w;
+                        let ports = if dual { 2 } else { 1 };
+                        let base = alloc(
+                            &mut nslots,
+                            pw * ports + (size as u32) * w,
+                        );
+                        bram_slot.insert(
+                            name,
+                            (base, width, size, chunk_size, num_wens, dual, pipelined),
+                        );
                         attach.push((ci, base));
                     }
                     None => {}
@@ -3083,6 +3197,8 @@ impl Interp {
                     creg_slot,
                     fifo_slot,
                     regfile_slot,
+                    bram_slot,
+                    creg5_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot,
@@ -3230,6 +3346,22 @@ impl Interp {
                     .collect();
                 m10.sort_unstable();
                 m10.hash(&mut h);
+                let mut m19: Vec<_> = e
+                    .creg5_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .collect();
+                m19.sort_unstable();
+                m19.hash(&mut h);
+                let mut m18: Vec<_> = e
+                    .bram_slot
+                    .iter()
+                    .map(|(&k, &(b, w, sz, cs, nw, du, pl))| {
+                        (k, b - r0, w, sz, cs, nw, du, pl)
+                    })
+                    .collect();
+                m18.sort_unstable();
+                m18.hash(&mut h);
                 // traced artifacts: recording layout is an exec input
                 let mut m16: Vec<_> = e
                     .rec_defs
@@ -3703,7 +3835,7 @@ impl Interp {
         // falls back to in-process compilation (which trials below)
         sl.lap("plan classes+nodes");
         let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
-        let mut wire_ticks_flag = false;
+        let mut tick_level_flag: u64 = 0;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
         let mut fused_opt: Option<Vec<usize>> = None;
         if let JitRequest::Load { src } = &request {
@@ -3742,7 +3874,7 @@ impl Interp {
                     preloaded = Some((sch, exe));
                     protos_opt = Some(pr);
                     fused_opt = Some(fu);
-                    wire_ticks_flag = wt;
+                    tick_level_flag = wt;
                 }
                 Err(e) => {
                     // mode-mismatch fallbacks are by design (an untraced
@@ -3808,8 +3940,10 @@ impl Interp {
                     // valid through the slot), which a compiled clear
                     // inside the edge fn would starve
                     if !self.vcd_trace {
-                        plan.wire_clears =
-                            self.wire_tick_coverage(&inst_envs, rcomps).0;
+                        let cov = self.prim_tick_coverage(&inst_envs, rcomps);
+                        plan.wire_clears = cov.wire_clears;
+                        plan.creg_copies = cov.creg_copies;
+                        plan.bram_ticks = cov.bram_ticks;
                     }
                     plan
                 });
@@ -4121,8 +4255,10 @@ impl Interp {
             }
         }
         sl.lap("arena+flatmaps+workers");
-        let covered_ticks = if wire_ticks_flag {
-            self.wire_tick_coverage(&lazy.insts, rcomps).1
+        let covered_ticks = if tick_level_flag >= 2 {
+            self.prim_tick_coverage(&lazy.insts, rcomps).covered_all
+        } else if tick_level_flag == 1 {
+            self.prim_tick_coverage(&lazy.insts, rcomps).covered_wire
         } else {
             vec![Default::default(); rcomps.len()]
         };
