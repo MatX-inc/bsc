@@ -201,13 +201,17 @@ pub enum ArenaKind {
     /// select old/current by comparing written_at against the global
     /// now slot; writes stay on the trampoline and mirror all three.
     ConfigReg { width: u32 },
-    /// Simple guarded FIFO (FIFO1/FIFO2/SizedFIFO): value methods
-    /// compile inline over the mirrored header + data; enq/deq/clear
-    /// stay on the trampoline (guard warnings, saved_elems rules) and
-    /// mirror.  Layout: elems, saved_elems, fst, enq_at, deq_at,
-    /// clear_at (1 word each), then size * ceil(max(width,1)/64) data
-    /// words.
-    Fifo { width: u32, size: u32, guard: bool },
+    /// Guarded FIFO (FIFO1/FIFO2/SizedFIFO and the loopy FIFOL
+    /// variants): value methods compile inline over the mirrored
+    /// header + data; enq/deq/clear stay on the trampoline (guard
+    /// warnings, saved_elems rules) and mirror.  `loopy` selects the
+    /// read semantics: Simple i_notFull/i_notEmpty are begin-of-
+    /// instant (saved_elems when touched this instant), Loopy reads
+    /// LIVE elems — a same-instant deq reopens the fifo, which is the
+    /// loopy contract (and why loopy reads are never schedule-stable).
+    /// Layout: elems, saved_elems, fst, enq_at, deq_at, clear_at
+    /// (1 word each), then size * ceil(max(width,1)/64) data words.
+    Fifo { width: u32, size: u32, guard: bool, loopy: bool },
     /// RegFile/RegFileLoad small enough for a dense image.  Layout:
     /// upd_at, upd_addr (1 word each), upd_prev (w words), then
     /// (hi-lo+1) * w data words (w = ceil(max(width,1)/64)),
@@ -3060,12 +3064,14 @@ impl Prim for Fifo {
     }
 
     fn arena_kind(&self) -> Option<ArenaKind> {
-        // Simple guarded FIFOs only: Loopy/Bypass change the
-        // begin-of-instant selection rules the inline reads bake in
-        (self.ftype == FifoType::Simple).then_some(ArenaKind::Fifo {
+        // Simple and Loopy: the inline reads carry both semantics
+        // (Loopy i_* read LIVE elems).  Bypass stays boxed — its deq
+        // guard couples to same-instant enq the other way around.
+        matches!(self.ftype, FifoType::Simple | FifoType::Loopy).then_some(ArenaKind::Fifo {
             width: self.width,
             size: self.size as u32,
             guard: self.guard,
+            loopy: self.ftype == FifoType::Loopy,
         })
     }
     fn arena_attach(&mut self, slot: *mut u64) {

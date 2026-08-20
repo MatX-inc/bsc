@@ -201,6 +201,14 @@ pub struct Interp {
     /// DEBUG-tier engine (bluetcl capi): exempt from the
     /// TRS_REQUIRE_AOT strict-execution refusal (see set_debug_tier)
     debug_tier: bool,
+    /// TRS_TRACE / TRS_TRACE_CLK, read ONCE at construction: the
+    /// per-event checks sat on getenv, and glibc getenv is a linear
+    /// environ scan under the env lock — sampled at ~70% of
+    /// sysFloatTest's wall (call_value/call_action/Def all checked
+    /// per event)
+    trace_events: bool,
+    trace_clk: bool,
+    trace_wf: bool,
     /// $stop yield: ends the current advance at the slice boundary
     /// but does NOT finish the sim — cleared at the next advance so
     /// the session resumes (the reference's resumable-$stop contract)
@@ -677,6 +685,9 @@ impl Interp {
             vcd_trace: false,
             quiet: false,
             debug_tier: false,
+            trace_events: std::env::var_os("TRS_TRACE").is_some(),
+            trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
+            trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
             stop_request: false,
             wave_pending: None,
             vcd_def_vals: HashMap::new(),
@@ -1625,9 +1636,13 @@ impl Interp {
     fn call_value(&mut self, callee: usize, method: StrId, argv: &[Value], w: u32) -> Value {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
-                let mname = self.d.strings[method as usize].clone();
-                let r = p.value_method(&mname, argv, self.now);
-                if std::env::var_os("TRS_TRACE").is_some() {
+                // borrow, don't clone: this is the per-event prim
+                // value path, and a String alloc per call showed in
+                // the FloatTest malloc profile (disjoint fields, so
+                // the &mut prim borrow tolerates it)
+                let mname: &str = &self.d.strings[method as usize];
+                let r = p.value_method(mname, argv, self.now);
+                if self.trace_events {
                     let path = self.insts[callee].path.clone();
                     eprintln!("[{}] {}.{} -> {}", self.cycle, path, mname,
                               r.to_hex_string());
@@ -1658,7 +1673,7 @@ impl Interp {
     }
 
     fn call_action(&mut self, callee: usize, method: StrId, argv: &[Value]) {
-        if std::env::var_os("TRS_TRACE").is_some() {
+        if self.trace_events {
             if let InstKind::Prim(_) = &self.insts[callee].kind {
                 let mname = self.d.strings[method as usize].clone();
                 let args: Vec<String> = argv.iter().map(|v| v.to_hex_string()).collect();
@@ -1770,7 +1785,7 @@ impl Interp {
                 }
                 match result {
                     Some(r) => {
-                        if std::env::var_os("TRS_TRACE").is_some() {
+                        if self.trace_events {
                             eprintln!("    av-result expr: {r:?}");
                         }
                         self.eval(callee, &mut ctx, &r)
@@ -1795,7 +1810,7 @@ impl Interp {
         match st {
             Stmt::Def { name, expr } => {
                 let v = self.eval(inst, ctx, expr);
-                if std::env::var_os("TRS_TRACE").is_some() {
+                if self.trace_events {
                     eprintln!("    def {} := {}", self.s(*name), v.to_hex_string());
                 }
                 if self.vcd_trace {
@@ -3167,7 +3182,7 @@ impl Interp {
         // latched CAN_FIRE, not the memoized pre-inhibitor values
         let mut wf_ctx = Ctx { memo: true, ..Default::default() };
         let wf = self.eval(inst, &mut wf_ctx, &Expr::Def(r.will_fire));
-        if std::env::var_os("TRS_TRACE_WF").is_some() && wf.as_bool() {
+        if self.trace_wf && wf.as_bool() {
             eprintln!("[{}] FIRE {}.{}", self.cycle, self.insts[inst].path,
                       self.s(rule_name));
         }
@@ -3229,7 +3244,7 @@ impl Interp {
                     *self.jit_arena_ptr.add(self.jit_reset_slots[n] as usize) = (!v) as u64;
                 }
             }
-            if std::env::var_os("TRS_TRACE_CLK").is_some() {
+            if self.trace_clk {
                 eprintln!("[t={}] reset node {n} -> asserted={v}", self.now);
             }
             let subs = self.rst_subs[n].clone();
@@ -3645,7 +3660,7 @@ impl Interp {
                 }
             })
             .collect();
-        if std::env::var_os("TRS_TRACE_CLK").is_some() {
+        if self.trace_clk {
             for (ci, &c) in clocks.iter().enumerate() {
                 let k = match &sources[ci] {
                     ClockSource::Wave(w) => format!(
@@ -3893,7 +3908,7 @@ impl Interp {
                 }
             }
         }
-        if std::env::var_os("TRS_TRACE_CLK").is_some() {
+        if self.trace_clk {
             for (i, rc) in rcomps.iter().enumerate() {
                 let tickinfo: Vec<String> = rc
                     .ticks
@@ -4570,7 +4585,7 @@ impl Interp {
                             Vec::new()
                         };
                         for pos_edge in edges {
-                            if std::env::var_os("TRS_TRACE_CLK").is_some() {
+                            if self.trace_clk {
                                 eprintln!("[t={t}] trigger clk={out_ci} pos={pos_edge}");
                             }
                             heap.push(Reverse((t, 1, out_ci, pos_edge)));

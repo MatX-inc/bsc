@@ -143,7 +143,7 @@ pub struct InstEnv {
     /// local FIFO instance name -> (base slot, width, size, guarded):
     /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
     /// data (see ArenaKind::Fifo)
-    pub fifo_slot: HashMap<StrId, (u32, u32, u32, bool)>,
+    pub fifo_slot: HashMap<StrId, (u32, u32, u32, bool, bool)>,
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
     pub reset_slot: HashMap<StrId, u32>,
@@ -874,7 +874,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 18;
+pub const AOT_LAYOUT_REV: u64 = 19;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -2685,7 +2685,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .unwrap()
                 .into_int_value());
         }
-        if let Some(&(base, fw, _size, _g)) = ie.fifo_slot.get(&instance) {
+        if let Some(&(base, fw, _size, _g, loopy)) = ie.fifo_slot.get(&instance) {
             if !args.is_empty() {
                 return nope("FIFO value method with args");
             }
@@ -2730,11 +2730,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     Ok(cmp_w1(self, IntPredicate::NE, load(0), i64t.const_zero()))
                 }
                 "i_notFull" if width == 1 => {
-                    let e = inst_elems(self);
+                    // loopy i_* read LIVE elems: a same-instant deq
+                    // reopens the fifo (the interp drops the
+                    // begin-of-instant select for FifoType::Loopy)
+                    let e = if loopy { load(0) } else { inst_elems(self) };
                     Ok(cmp_w1(self, IntPredicate::ULT, e, i64t.const_int(_size as u64, false)))
                 }
                 "i_notEmpty" if width == 1 => {
-                    let e = inst_elems(self);
+                    let e = if loopy { load(0) } else { inst_elems(self) };
                     Ok(cmp_w1(self, IntPredicate::NE, e, i64t.const_zero()))
                 }
                 _ => nope("FIFO value method mismatch"),
@@ -5409,7 +5412,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.position_at_end(done_bb);
                     return Ok(());
                 }
-                if let Some(&(base, fw, size, guarded)) =
+                if let Some(&(base, fw, size, guarded, loopy)) =
                     ie.fifo_slot.get(instance).copied().as_ref()
                 {
                     let is_enq = mname.as_str() == "enq";
@@ -5447,7 +5450,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             self.builder
                                 .build_int_compare(IntPredicate::EQ, elems, lim, "fb")
                                 .unwrap();
-                        let warn = if guarded {
+                        // loopy enq drops the begin-of-instant
+                        // disqualifier: enq-when-begin-full succeeds
+                        // if a same-instant deq freed a slot (deq
+                        // keeps it — only Bypass drops the deq-side
+                        // clause, and Bypass stays boxed)
+                        let warn = if guarded && !(is_enq && loopy) {
                             let same = self
                                 .builder
                                 .build_int_compare(IntPredicate::EQ, other_at, now, "fs")

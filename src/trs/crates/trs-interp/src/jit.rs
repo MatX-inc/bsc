@@ -98,19 +98,26 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     };
     let (inst, method, ret_width, is_action) =
         (pc.inst, pc.method, pc.ret_width, pc.is_action);
-    let arg_widths = pc.arg_widths.clone();
-    let mut argv = Vec::with_capacity(arg_widths.len());
+    // pc borrows the OWNED Arc clone, so it outlives every interp use
+    // below — no arg_widths copy needed (this trampoline runs per
+    // boxed prim access; a Vec clone + a Vec per argument showed as
+    // the malloc traffic under TrafficBRAM's 403k calls)
+    let mut argv = Vec::with_capacity(pc.arg_widths.len());
     let mut off = 0usize;
-    for &w in &arg_widths {
+    for &w in &pc.arg_widths {
         // physical layout is w.max(1) words per argument on BOTH sides
         // of the ABI — a zero-width argument still occupies one (zero)
         // word (review finding: reading words.max(1) while advancing by
         // the logical count walked past the allocation)
         let words = ((w.max(1) as usize) + 63) / 64;
-        let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
         // TRUE logical width: a zero-width prim arg must reach the prim
-        // as the interp's width-0 Value (from_limbs64 masks the word)
-        argv.push(Value::from_limbs64(w, limbs));
+        // as the interp's width-0 Value (both constructors mask)
+        argv.push(if (1..=64).contains(&w) {
+            Value::from_u64(w, *args.add(off))
+        } else {
+            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+            Value::from_limbs64(w, limbs)
+        });
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
@@ -503,7 +510,7 @@ pub(crate) enum ChildClass {
     Reg,
     CfgReg,
     Wire,
-    Fifo,
+    Fifo { loopy: bool },
     Other,
 }
 
@@ -683,8 +690,11 @@ impl<'a> ConeAnalyzer<'a> {
                                 // schedule certification pending: not stable
                                 (matches!(mname.as_str(), "whas" | "wget"), false)
                             }
-                            ChildClass::Fifo => match mname.as_str() {
-                                "i_notFull" | "i_notEmpty" => (true, true),
+                            ChildClass::Fifo { loopy } => match mname.as_str() {
+                                // loopy i_* read LIVE elems — a
+                                // same-instant deq changes them, so
+                                // they never certify as stable
+                                "i_notFull" | "i_notEmpty" => (true, !loopy),
                                 "first" | "notFull" | "notEmpty" => (true, false),
                                 _ => (false, false),
                             },
@@ -2324,7 +2334,7 @@ impl Interp {
                         Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
                         Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
                         Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
-                        Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
+                        Some(ArenaKind::Fifo { loopy, .. }) => ChildClass::Fifo { loopy },
                         // arena-backed but NO stability contract and
                         // reads can WARN (bounds): the split analyzer
                         // treats it like an opaque prim
@@ -2457,10 +2467,10 @@ impl Interp {
                         creg_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
-                    Some(ArenaKind::Fifo { width, size, guard }) => {
+                    Some(ArenaKind::Fifo { width, size, guard, loopy }) => {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 7 + size * words);
-                        fifo_slot.insert(name, (base, width, size, guard));
+                        fifo_slot.insert(name, (base, width, size, guard, loopy));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::RegFile { width, lo, hi }) => {
@@ -2753,7 +2763,7 @@ impl Interp {
                 let mut m4: Vec<_> = e
                     .fifo_slot
                     .iter()
-                    .map(|(&k, &(b, w, sz, g))| (k, b - r0, w, sz, g))
+                    .map(|(&k, &(b, w, sz, g, lp))| (k, b - r0, w, sz, g, lp))
                     .collect();
                 m4.sort_unstable();
                 m4.hash(&mut h);
