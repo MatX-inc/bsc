@@ -1368,27 +1368,61 @@ isPassThroughOp i = (i == idBit) ||
 -- Types contribute no positions here: Ids embedded in ITypes carry
 -- noPosition by construction (IType normalizes them on entry), so
 -- only term-side Ids and heap-ref stamps are consulted.
+--
+-- The candidate positions are visited depth-first, considering each
+-- node's Id (or heap-ref stamps) before its subexpressions: the result
+-- is the first useful position in that order or, failing that, the
+-- first non-noPosition one.  (This is what the previous definition's
+-- nested firstPos composition computed: firstPos prefers useful
+-- positions and otherwise keeps the earliest non-empty one, and that
+-- choice composes associatively over the visit order.)
+--
+-- The traversal keeps an explicit worklist instead of recursing, so
+-- the stack use is constant.  The evaluator heaps an expression cell
+-- linear in design size (addHeapUnev stamps each cell with this
+-- position), and elaboration-built structures can nest tens of
+-- thousands deep on large flat designs; the natural recursion here
+-- overflowed the RTS stack cap on such designs (cf. the fixed depth
+-- cap in getIExprPositionCrossInternal, which sidesteps the same
+-- hazard by giving up early).
 getIExprPosition :: IExpr a -> Position
+getIExprPosition e0 = go noPosition [e0]
+  where
+    -- 'best' is the first non-noPosition (but non-useful) position
+    -- seen so far, kept as the fallback answer; the first useful
+    -- position returns immediately.
+    go best [] = best
+    go best (e:rest) =
+      case e of
+        ILam i _ b       -> goP best (getIdPosition i) (b:rest)
+        ILAM i _ b       -> goP best (getIdPosition i) (b:rest)
+        IAps f _ es      -> go best (f : es ++ rest)
+        IVar i           -> goP best (getIdPosition i) rest
+        ICon i _         -> goP best (getIdPosition i) rest
+        -- The positions stamped on the heap ref (collected out of band
+        -- when expressions are rewritten).
+        -- When poss has several entries the pick is by Ord Position,
+        -- whose FString file component compares by intern order.  Today
+        -- every live poss is a singleton allocation seed, so the pick
+        -- rule is moot; when issue #863 re-enables stamping at the
+        -- evaluator sites, revisit it (recency is not representable in
+        -- a set).
+        IRefT _ _ poss _ -> goPs best (S.toAscList poss) rest
 
-getIExprPosition (ILam i _ e) =
-    firstPos [getIdPosition i, getIExprPosition e]
+    -- consider one candidate position, then move on
+    goP best p rest
+      | p == noPosition    = go best rest
+      | isUsefulPosition p = p
+      | best == noPosition = go p rest
+      | otherwise          = go best rest
 
-getIExprPosition (IAps e _ es) =
-    firstPos (getIExprPosition e : map getIExprPosition es)
-
-getIExprPosition (IVar i) = getIdPosition i
-
-getIExprPosition (ILAM i _ e) = firstPos [getIdPosition i, getIExprPosition e]
-getIExprPosition (ICon i _) = getIdPosition i
--- The positions stamped on the heap ref (collected out of band when
--- expressions are rewritten).
--- When poss has several entries the pick is by Ord Position, whose
--- FString file component compares by intern order.  Today every live
--- poss is a singleton allocation seed, so the pick rule is moot; when
--- issue #863 re-enables stamping at the evaluator sites, revisit it
--- (recency is not representable in a set).
-getIExprPosition (IRefT _ _ poss _) =
-    firstPos (S.toAscList poss)
+    -- consider a list of candidate positions, then move on
+    goPs best [] rest = go best rest
+    goPs best (p:ps) rest
+      | p == noPosition    = goPs best ps rest
+      | isUsefulPosition p = p
+      | best == noPosition = goPs p ps rest
+      | otherwise          = goPs best ps rest
 
 --------
 
