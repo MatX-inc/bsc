@@ -1538,13 +1538,77 @@ methodResetName i ws = do
 
 -----------------------------------------------------------------------------
 
+-- A pending module-monad bind ("x <- e1; e2") whose bound action is
+-- still elaborating: the continuation e2 to apply to the action's
+-- result, along with the context to continue in -- the clock/reset
+-- and IStateLoc of the enclosing bind, and (with its ns') whether a
+-- progress message/scheduling name scope was opened and must be closed.
+data ModBindFrame = ModBindFrame (HClock, HReset) IStateLoc IStateLoc Bool HExpr
+
 -- "run" the module monad, collecting rules, interfaces, and state
+--
+-- Monadic binds are handled here, iteratively: the continuations of
+-- pending binds are kept in an explicit list (allocated on the heap)
+-- instead of native stack frames.  A bind's bound action is itself a
+-- module computation -- for a chain like mapM/replicateM it is the
+-- entire rest of the instance list -- so handling binds by recursion
+-- made the native stack usage linear in the number of instances
+-- (about 0.5KB each, overflowing the RTS stack cap around 20k
+-- instances in a flat module).  Everything except a bind dispatches
+-- to handlePrim, whose sub-elaborations (state-name wrappers,
+-- clock/reset blocks, module fix) re-enter this driver; that native
+-- recursion is bounded by design hierarchy depth, not chain length.
 iExpandModule :: Bool -> (HClock, HReset) ->
                  IStateLoc -> HPred -> HExpr -> G PExpr
-iExpandModule isMFix curClkRstn ns p e = do
+iExpandModule isMFix curClkRstn0 ns0 p0 e0 = go curClkRstn0 ns0 p0 e0 []
+  where
+    go curClkRstn ns p e frames = do
         when doDebug $ traceM "iExpandModule"
         (_, P p e') <- evalUH e
-        handlePrim isMFix curClkRstn ns p e'
+        case e' of
+          ea@(IAps (ICon _ (ICPrim { primOp = PrimModuleBind })) [t1, t2] [e1, e2]) -> do
+            -- expand monadic binding x <- e1; e2
+            when doDebug $ traceM "handlePrim: PrimModuleBind"
+
+            e1u <- shallowUnheap e1
+            e2u <- shallowUnheap e2
+            -- A little hack to try and figure out a good name for a
+            -- lambda-bound state component
+            (ns', do_msg) <-
+                case (e2u) of
+                  (ILam i t _) -> do
+                      new_ns <- newIStateLoc i i t ns
+                      -- In some cases, "setStateName" will replace this value,
+                      -- so don't print a progress message yet
+                      case (e1u) of
+                        (IAps (ICon f (ICDef {})) _ _)
+                            | f == (idSetStateNameAt noPosition)
+                            -> return (new_ns, False)
+                        (IAps (ICon f1 (ICDef {})) _
+                              (_:(IAps (ICon f2 (ICDef {})) _ _):_))
+                            | (f1 == (idForceIsModuleAt noPosition)) &&
+                              (f2 == (idSetStateNameAt noPosition))
+                            -> return (new_ns, False)
+                        _ -> return (new_ns, True)
+                  _ -> return (ns, False)
+            when do_msg $ do
+                showModProgress ns' "Elaborating module"
+                pushModuleSchedNameScope ns' t1
+            when doDebug $ traceM ("bind\n" ++ ppReadable e2u)
+            when doDebug $ traceM ("bind " ++ ppReadable e1)
+            when doDebug $ traceM ("bind " ++ ppReadable ea)
+            go curClkRstn ns' p e1
+               (ModBindFrame curClkRstn ns ns' do_msg e2 : frames)
+          _ -> do
+            r <- handlePrim isMFix curClkRstn ns p e'
+            unwind frames r
+
+    unwind [] r = return r
+    unwind (ModBindFrame curClkRstn ns ns' do_msg e2 : frames) (P p1 e1') = do
+        when do_msg $ do
+            showModProgress ns' "Finished module"
+            popModuleSchedNameScope
+        go curClkRstn ns p1 (IAps e2 [] [e1']) frames
 
 handlePrim :: Bool -> (HClock, HReset) ->
               IStateLoc -> HPred -> HExpr -> G PExpr
@@ -1584,42 +1648,9 @@ handlePrim isMFix curClkRstn ns p eee@(IAps prim@(ICon _ (ICPrim _ PrimStateAttr
          iExpandModule isMFix curClkRstn ns p em
      _ -> nfError "PrimStateAttrib" e'
 
-handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModuleBind })) [t1, t2] [e1, e2]) = do
-        -- expand monadic binding x <- e1; e2
-        when doDebug $ traceM "handlePrim: PrimModuleBind"
-
-        e1u <- shallowUnheap e1
-        e2u <- shallowUnheap e2
-        -- A little hack to try and figure out a good name for a
-        -- lambda-bound state component
-        (ns', do_msg) <-
-            case (e2u) of
-              (ILam i t _) -> do
-                  new_ns <- newIStateLoc i i t ns
-                  -- In some cases, "setStateName" will replace this value,
-                  -- so don't print a progress message yet
-                  case (e1u) of
-                    (IAps (ICon f (ICDef {})) _ _)
-                        | f == (idSetStateNameAt noPosition)
-                        -> return (new_ns, False)
-                    (IAps (ICon f1 (ICDef {})) _
-                          (_:(IAps (ICon f2 (ICDef {})) _ _):_))
-                        | (f1 == (idForceIsModuleAt noPosition)) &&
-                          (f2 == (idSetStateNameAt noPosition))
-                        -> return (new_ns, False)
-                    _ -> return (new_ns, True)
-              _ -> return (ns, False)
-        when do_msg $ do
-            showModProgress ns' "Elaborating module"
-            pushModuleSchedNameScope ns' t1
-        when doDebug $ traceM ("bind\n" ++ ppReadable e2u)
-        when doDebug $ traceM ("bind " ++ ppReadable e1)
-        when doDebug $ traceM ("bind " ++ ppReadable ea)
-        P p1 e1' <- iExpandModule isMFix curClkRstn ns' p e1
-        when do_msg $ do
-            showModProgress ns' "Finished module"
-            popModuleSchedNameScope
-        iExpandModule isMFix curClkRstn ns p1 (IAps e2 [] [e1'])
+-- PrimModuleBind ("x <- e1; e2") is handled in iExpandModule's
+-- iterative driver, so that pending bind continuations live on the
+-- heap rather than the native stack (see the comment there).
 
 handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModuleReturn })) _ [e]) = do
         when doDebug $ traceM "handlePrim: PrimModuleReturn"
