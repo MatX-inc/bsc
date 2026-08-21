@@ -895,9 +895,12 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
       -- that map uses to ports.  Then strip out just the [uses].
       portUses :: [[UniqueUse]]
       portUses = M.elems $
-                     -- use "flip" to preserve the order of uses?
-                     M.fromListWith (flip (++))
-                               [(port, [uUse]) | (uUse,port) <- usedPorts]
+                     -- built by prepending (appending recopies the
+                     -- accumulated group per use, quadratic in the
+                     -- group size) and reversed to preserve use order
+                     M.map reverse
+                       (M.fromListWith (++)
+                               [(port, [uUse]) | (uUse,port) <- usedPorts])
 
       -- ---------------
       -- Prepare the info for this method from MethodUsesMap

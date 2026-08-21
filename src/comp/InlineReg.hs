@@ -224,10 +224,16 @@ translateRegUN vco avi = mkENAssignment avi
 -- ==============================
 -- partition reg instances by their clock
 
+-- The groups keep the instance order of the input list.  They are
+-- built by prepending and reversed once at the end: appending each
+-- instance (fromListWith (flip (++))) recopies the accumulated group,
+-- which is quadratic in the group size, and a large flat design puts
+-- tens of thousands of registers in one clock group.
+
 partitionByClock :: ErrorHandle -> [AVInst] -> M.Map AExpr [AVInst]
 partitionByClock errh avis =
     let mkPair avi = (getRegClock errh avi, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+    in  M.map reverse (M.fromListWith (++) (map mkPair avis))
 
 
 -- ==============================
@@ -236,7 +242,7 @@ partitionByClock errh avis =
 partitionByReset :: ErrorHandle -> [AVInst] -> M.Map AExpr [AVInst]
 partitionByReset errh avis =
     let mkPair avi = (getRegReset errh avi, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+    in  M.map reverse (M.fromListWith (++) (map mkPair avis))
 
 
 -- ==============================
@@ -246,7 +252,7 @@ partitionByClockAndReset :: ErrorHandle -> [AVInst] -> M.Map (AExpr, AExpr) [AVI
 partitionByClockAndReset errh avis =
     let mkPair avi = let clk_rst = (getRegClock errh avi, getRegReset errh avi)
                      in  (clk_rst, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+    in  M.map reverse (M.fromListWith (++) (map mkPair avis))
 
 
 -- ==============================

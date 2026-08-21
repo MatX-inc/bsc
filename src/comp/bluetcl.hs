@@ -1485,8 +1485,10 @@ tclSubmodule ["full",modname] =
               sumap =
                   let edges = [ (getIdString instId, [(methId, uses)])
                               | (MethodId instId methId, uses) <- M.toList mumap ]
-                  in  -- use "flip" to preserve the method order
-                      M.fromListWith (flip (++)) edges
+                  in  -- built by prepending (appending recopies the
+                      -- accumulated group, quadratic in group size)
+                      -- and reversed to preserve the method order
+                      M.map reverse (M.fromListWith (++) edges)
           -- mapping from submods to their ifc type
           let ifc_map = makeSubmoduleIfcMap hide (apkg_inst_tree apkg)
           -- make the result for an individual AVInst
