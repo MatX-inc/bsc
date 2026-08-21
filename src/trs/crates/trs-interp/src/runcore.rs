@@ -311,6 +311,14 @@ struct RunCore {
     /// (post-attach, slots are the single source of truth — the
     /// restored prim is indistinguishable from a classic-boot one)
     prims: HashMap<usize, Box<dyn Prim>>,
+    /// per-boot scratch reused across foreign bounces (jit_foreign_cb's
+    /// buffer discipline): the argv spine, task name, and %m location
+    foreign_argv: Vec<Arg>,
+    fname_buf: String,
+    loc_buf: String,
+    /// dense Arc cache for design-table string ids (the hot format
+    /// strings); dyn ids stay on the arg_strs map
+    arg_strs_vec: Vec<Option<std::sync::Arc<str>>>,
 }
 
 impl RunCore {
@@ -323,6 +331,21 @@ impl RunCore {
         }
     }
     fn arg_str(&mut self, id: u32) -> std::sync::Arc<str> {
+        // design-table ids take a dense index (no per-call hashing);
+        // dyn ids (appended past the table) stay on the map
+        let n = self.strings.len();
+        if (id as usize) < n {
+            if self.arg_strs_vec.is_empty() {
+                self.arg_strs_vec = vec![None; n];
+            }
+            if let Some(a) = &self.arg_strs_vec[id as usize] {
+                return a.clone();
+            }
+            let a: std::sync::Arc<str> =
+                std::sync::Arc::from(self.strings[id as usize].as_str());
+            self.arg_strs_vec[id as usize] = Some(a.clone());
+            return a;
+        }
         if let Some(a) = self.arg_strs.get(&id) {
             return a.clone();
         }
@@ -346,23 +369,31 @@ unsafe extern "C" fn runcore_foreign_cb(
     let ordinal = (token >> 17) as usize;
     let is_exec = token & TOKEN_KIND_EXEC != 0;
     let local = (token & 0xffff) as usize;
+    // take the protos table for the marshal walk (rc.arg_str needs
+    // &mut rc) — a Vec move, not a copy; restored before dispatch
+    let protos = std::mem::take(&mut rc.protos);
     let fs = if is_exec {
-        &rc.protos[ordinal].exec_foreign[local]
+        &protos[ordinal].exec_foreign[local]
     } else {
-        &rc.protos[ordinal].sched_foreign[local]
+        &protos[ordinal].sched_foreign[local]
     };
     let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
-    let specs = fs.args.clone();
-    let mut argv: Vec<Arg> = Vec::with_capacity(specs.len());
+    // per-boot scratch (jit_foreign_cb's buffer discipline): the argv
+    // spine survives across bounces, single-limb Values stay inline
+    let mut argv = std::mem::take(&mut rc.foreign_argv);
+    argv.clear();
+    argv.reserve(fs.args.len());
     let mut off = 0usize;
-    for a in &specs {
+    for a in &fs.args {
         match *a {
             FArgSpec::Str(sid) => argv.push(Arg::Str(rc.arg_str(sid))),
             FArgSpec::Num { width, signed } => {
                 let words = ((width.max(1) as usize) + 63) / 64;
-                let limbs =
-                    std::slice::from_raw_parts(args.add(off), words).to_vec();
-                argv.push(Arg::Val(Value::from_limbs64(width, limbs), signed));
+                let limbs = std::slice::from_raw_parts(args.add(off), words);
+                argv.push(Arg::Val(
+                    Value::from_limb_slice(width, limbs),
+                    signed,
+                ));
                 off += words;
             }
             FArgSpec::Real => {
@@ -376,6 +407,7 @@ unsafe extern "C" fn runcore_foreign_cb(
             }
         }
     }
+    rc.protos = protos;
     if func == trs_codegen::abi::STRING_CONCAT_FUNC {
         let mut text = String::new();
         for a in &argv {
@@ -386,29 +418,34 @@ unsafe extern "C" fn runcore_foreign_cb(
         let id = rc.strings.len() + rc.dyn_strs.len();
         rc.dyn_strs.push(text);
         *out = id as u64;
+        argv.clear();
+        rc.foreign_argv = argv;
         return 0;
     }
-    let name = rc.s(func).to_string();
+    let mut name = std::mem::take(&mut rc.fname_buf);
+    name.clear();
+    name.push_str(rc.s(func));
+    let mut loc = std::mem::take(&mut rc.loc_buf);
+    loc.clear();
+    loc.push_str("top");
     let p = &rc.paths[inst];
-    let loc = if p.is_empty() {
-        "top".to_string()
-    } else {
-        format!("top.{p}")
-    };
+    if !p.is_empty() {
+        loc.push('.');
+        loc.push_str(p);
+    }
     if ret_width == 0 {
         if !rc.fe.action(&name, &argv, rc.now, &loc) {
-            if name == "srand" {
-                let seed = match argv.first() {
-                    Some(Arg::Val(v, _)) => v.as_u64() as u32,
-                    _ => 0,
-                };
-                rc.rng.srandom(seed);
-                return 0;
+            if name != "srand" {
+                panic!(
+                    "trs runcore: action task {name:?} reached the boot \
+                     (eligibility-gate bug)"
+                );
             }
-            panic!(
-                "trs runcore: action task {name:?} reached the boot \
-                 (eligibility-gate bug)"
-            );
+            let seed = match argv.first() {
+                Some(Arg::Val(v, _)) => v.as_u64() as u32,
+                _ => 0,
+            };
+            rc.rng.srandom(seed);
         }
     } else {
         let v = match rc.fe.value(&name, &argv, ret_width, rc.now, &loc) {
@@ -427,6 +464,12 @@ unsafe extern "C" fn runcore_foreign_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
+    // return the scratch (a re-entered task took fresh empties via
+    // mem::take, so this only upgrades capacity back)
+    argv.clear();
+    rc.foreign_argv = argv;
+    rc.fname_buf = name;
+    rc.loc_buf = loc;
     0
 }
 
@@ -457,12 +500,10 @@ unsafe extern "C" fn runcore_prim_cb(
     let mut off = 0usize;
     for &w in &pc.arg_widths {
         let words = ((w.max(1) as usize) + 63) / 64;
-        argv.push(if (1..=64).contains(&w) {
-            Value::from_u64(w, *args.add(off))
-        } else {
-            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
-            Value::from_limbs64(w, limbs)
-        });
+        argv.push(Value::from_limb_slice(
+            w,
+            std::slice::from_raw_parts(args.add(off), words),
+        ));
         off += words;
     }
     let Some(p) = rc.prims.get_mut(&pc.inst) else {
@@ -676,6 +717,10 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             rng: crate::GlibcRandom::new(),
             now: 0,
             prims,
+            foreign_argv: Vec::new(),
+            fname_buf: String::new(),
+            loc_buf: String::new(),
+            arg_strs_vec: Vec::new(),
         };
         rc.fe.plusargs = plusargs.to_vec();
         // mem-file overlay (docs/RUNCORE.md, overlay rung): rewrite

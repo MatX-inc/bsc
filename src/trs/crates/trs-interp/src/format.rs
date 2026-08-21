@@ -426,32 +426,27 @@ fn format_str(
             zero_pad = true;
             cs.next();
         }
-        let mut wdigits = String::new();
-        while let Some(d) = cs.peek() {
-            if d.is_ascii_digit() {
-                wdigits.push(*d);
-                cs.next();
-            } else {
-                break;
-            }
+        // digits accumulate directly (a String here was a per-spec
+        // allocation on the hot $display path)
+        while let Some(d) = cs.peek().and_then(|d| d.to_digit(10)) {
+            width = Some(
+                width
+                    .unwrap_or(0)
+                    .saturating_mul(10)
+                    .saturating_add(d as usize),
+            );
+            cs.next();
         }
-        if !wdigits.is_empty() {
-            width = Some(wdigits.parse().unwrap());
-        }
-        // optional .precision (real formats)
+        // optional .precision (real formats); no digits parses as 0
         let mut prec: Option<usize> = None;
         if cs.peek() == Some(&'.') {
             cs.next();
-            let mut pdigits = String::new();
-            while let Some(d) = cs.peek() {
-                if d.is_ascii_digit() {
-                    pdigits.push(*d);
-                    cs.next();
-                } else {
-                    break;
-                }
+            let mut p = 0usize;
+            while let Some(d) = cs.peek().and_then(|d| d.to_digit(10)) {
+                p = p.saturating_mul(10).saturating_add(d as usize);
+                cs.next();
             }
-            prec = Some(pdigits.parse().unwrap_or(0));
+            prec = Some(p);
         }
         let spec = cs.next().unwrap_or('%');
         // "%0d" means minimal width (the 0 is a width of zero), while a

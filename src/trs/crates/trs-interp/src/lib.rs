@@ -204,6 +204,9 @@ pub struct Interp {
     /// string id -> Arc'd text for Arg::Str: interned once, cloned as
     /// a refcount bump on every later call
     arg_strs: HashMap<u32, std::sync::Arc<str>>,
+    /// dense Arc cache for design-table string ids (the hot format
+    /// strings on the foreign bounce path); dyn ids stay on arg_strs
+    arg_strs_vec: Vec<Option<std::sync::Arc<str>>>,
     /// Emit requests stash the serialized PlanA here for the meta
     /// object (prime derives it; the aot_emit call site reads it)
     #[cfg(feature = "aot")]
@@ -803,6 +806,7 @@ impl Interp {
             fname_buf: String::new(),
             loc_buf: String::new(),
             arg_strs: HashMap::new(),
+            arg_strs_vec: Vec::new(),
             #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
@@ -1785,6 +1789,21 @@ impl Interp {
     /// per-event-tax audit: an Arc clone per call replaces a String
     /// alloc per call on the $display path).
     pub(crate) fn arg_str(&mut self, id: u32) -> std::sync::Arc<str> {
+        // design-table ids take a dense index (no per-call hashing);
+        // dyn ids (appended past the table) stay on the map
+        let n = self.d.strings.len();
+        if (id as usize) < n {
+            if self.arg_strs_vec.is_empty() {
+                self.arg_strs_vec = vec![None; n];
+            }
+            if let Some(a) = &self.arg_strs_vec[id as usize] {
+                return a.clone();
+            }
+            let a: std::sync::Arc<str> =
+                std::sync::Arc::from(self.d.strings[id as usize].as_str());
+            self.arg_strs_vec[id as usize] = Some(a.clone());
+            return a;
+        }
         if let Some(a) = self.arg_strs.get(&id) {
             return a.clone();
         }

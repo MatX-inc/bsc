@@ -115,13 +115,12 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         // the logical count walked past the allocation)
         let words = ((w.max(1) as usize) + 63) / 64;
         // TRUE logical width: a zero-width prim arg must reach the prim
-        // as the interp's width-0 Value (both constructors mask)
-        argv.push(if (1..=64).contains(&w) {
-            Value::from_u64(w, *args.add(off))
-        } else {
-            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
-            Value::from_limbs64(w, limbs)
-        });
+        // as the interp's width-0 Value (from_limb_slice masks and keeps
+        // single-limb values off the heap)
+        argv.push(Value::from_limb_slice(
+            w,
+            std::slice::from_raw_parts(args.add(off), words),
+        ));
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
@@ -520,11 +519,12 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             FArgSpec::Num { width, signed } => {
                 let w = width;
                 let words = ((w.max(1) as usize) + 63) / 64;
-                let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
                 // the TRUE width, zero included: the formatter must see
                 // the interp's width-0 Value for zero-width args, not a
-                // width-1 impostor (from_limbs64 masks the buffer word)
-                argv.push(Arg::Val(Value::from_limbs64(w, limbs), signed));
+                // width-1 impostor (from_limb_slice masks the buffer
+                // word and keeps single-limb values off the heap)
+                let limbs = std::slice::from_raw_parts(args.add(off), words);
+                argv.push(Arg::Val(Value::from_limb_slice(w, limbs), signed));
                 off += words;
             }
             FArgSpec::Real => {

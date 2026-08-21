@@ -127,6 +127,27 @@ impl Value {
         &self.limbs
     }
 
+    /// Build from a little-endian 64-bit limb slice without forcing a
+    /// heap Vec: the single-limb case (the callback marshal fast path)
+    /// stays inline.  Pad/truncate + mask semantics identical to
+    /// from_limbs64.
+    pub fn from_limb_slice(width: u32, limbs: &[u64]) -> Value {
+        let n = nlimbs(width).max(1);
+        let mut v = if n == 1 {
+            Value {
+                width,
+                limbs: Limbs::S([limbs.first().copied().unwrap_or(0)]),
+            }
+        } else {
+            let mut l = vec![0u64; n];
+            let k = limbs.len().min(n);
+            l[..k].copy_from_slice(&limbs[..k]);
+            Value { width, limbs: Limbs::W(l) }
+        };
+        v.mask();
+        v
+    }
+
     /// Build from little-endian 64-bit limbs, padding/truncating to the
     /// width's limb count and masking (JIT arena interchange).
     pub fn from_limbs64(width: u32, limbs: Vec<u64>) -> Value {
