@@ -1172,8 +1172,15 @@ fn aot_emit(
         // .so at the final path (it would dlopen-fail or worse on the
         // next run before the gates can judge it)
         let so_tmp = so.with_extension("so.tmp");
+        // -Bsymbolic-functions: the artifact calls its OWN exec/sched
+        // fns, but their symbols must stay dynamically exported (the
+        // table-less loader path dlsyms them) — without local binding
+        // every intra-.so call pays a PLT stub + GOT load (FloatTest:
+        // 415 call sites, 5.5M indirect branches/run).  Function-only
+        // binding keeps the callback DATA globals (trs_cb_*) on their
+        // normal GOT path, which the loader writes through dlsym.
         let st = std::process::Command::new(cc_tool())
-            .args(["-shared", "-o"])
+            .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
             .arg(&so_tmp)
             .args([&f, &mf])
             .status()
@@ -1356,10 +1363,11 @@ fn aot_emit(
     let mf = tmp.join("meta.o");
     std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
-    // temp+rename, same discipline as the single-object emit
+    // temp+rename, same discipline as the single-object emit; local
+    // function binding for the same reason (see the one-module link)
     let so_tmp = so.with_extension("so.tmp");
     let st = std::process::Command::new("cc")
-        .args(["-shared", "-o"])
+        .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
         .arg(&so_tmp)
         .args(&files)
         .status()
