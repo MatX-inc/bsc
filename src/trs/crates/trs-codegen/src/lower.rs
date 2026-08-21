@@ -216,84 +216,117 @@ fn module_max_int_width(module: &Module) -> u32 {
     w
 }
 
-/// (instructions, blocks) of the module's largest-by-instructions
-/// function (see the O1 size tier in run_ir_passes).
-fn module_max_fn_shape(module: &Module) -> (u64, u64) {
-    let mut max = (0u64, 0u64);
-    let mut f = module.get_first_function();
-    while let Some(func) = f {
-        let mut n = 0u64;
-        let mut b = 0u64;
+/// Running census of emitted IR, filled DURING construction: one
+/// single-function walk as each function completes, so every block is
+/// visited exactly once across the whole build.  Feeds the
+/// run_ir_passes size tier and width cap without post-hoc module
+/// walks, the TRS_JIT_TIME census, and the planner's mass-estimate
+/// calibration (tracked actuals against cone-mass predictions).
+#[derive(Default)]
+pub(crate) struct IrTally {
+    /// (name, instructions, blocks) per completed function
+    pub per_fn: Vec<(String, u64, u64)>,
+    /// max integer result width seen (see module_max_int_width)
+    pub max_width: u32,
+}
+
+impl IrTally {
+    pub fn add(&mut self, func: inkwell::values::FunctionValue) {
+        let name = func.get_name().to_string_lossy().into_owned();
+        let mut insns = 0u64;
+        let mut blocks = 0u64;
         for bb in func.get_basic_blocks() {
-            b += 1;
+            blocks += 1;
             let mut ins = bb.get_first_instruction();
             while let Some(i) = ins {
-                n += 1;
+                insns += 1;
+                if let inkwell::types::AnyTypeEnum::IntType(t) = i.get_type() {
+                    self.max_width = self.max_width.max(t.get_bit_width());
+                }
                 ins = i.get_next_instruction();
             }
         }
-        if n > max.0 {
-            max = (n, b);
-        }
-        f = func.get_next_function();
+        self.per_fn.push((name, insns, blocks));
     }
-    max
+    /// tally every not-yet-seen function in the module (used once for
+    /// the helper batch, whose lowering is shared with the JIT path)
+    pub fn add_all(&mut self, module: &Module) {
+        let seen: std::collections::HashSet<String> =
+            self.per_fn.iter().map(|(n, _, _)| n.clone()).collect();
+        let mut f = module.get_first_function();
+        while let Some(func) = f {
+            let next = func.get_next_function();
+            if func.count_basic_blocks() > 0
+                && !seen.contains(func.get_name().to_string_lossy().as_ref())
+            {
+                self.add(func);
+            }
+            f = next;
+        }
+    }
 }
 
-/// Above this size (instructions in one function), a STRAIGHT-LINE
-/// giant drops the default AOT pipeline from O3 to O1.  LLVM's O2/O3
-/// function passes are superlinear in function size: a rule-heavy
-/// composition's fused edge fn (sysBRAM0Test: 67k insns / 3.4k blocks
-/// from 776 inlined rules, ~20 insns/block) measured 139.6s under
-/// default<O3> vs 24.8s under default<O1> — and the O1 artifact RAN
-/// faster too (24.5 vs 34.9ms; the over-optimized giant loses on
-/// I-cache), output byte-exact.  The tier is shape-gated: a BRANCH-
-/// LADDER giant (sysTb_v1's exec_i2_20: 24.3k insns over 24.0k
-/// blocks, ~1 insn/block) must KEEP O3 — only jump threading and
-/// aggressive SimplifyCFG collapse the ladder, and without them the
-/// backend's TailDuplicator (MachineSSAUpdater PHI search) runs for
-/// hours on the surviving block graph.  Straight-line = at least
-/// IR_PASS_LINE_RATIO instructions per block, on average.
-const IR_PASS_FN_SIZE_CAP: u64 = 20_000;
-const IR_PASS_LINE_RATIO: u64 = 8;
 
 /// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
 /// asks for optimization.  The engine/object paths only apply BACKEND
 /// codegen opts; without this the IR pass pipeline (GVN, instcombine,
 /// SimplifyCFG, jump threading) never runs at all.
-fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
-    // mirror opt_level(): the AOT default is O1 even when the env var
-    // is unset (this silently skipping was why one-module emission
-    // showed zero inlining)
-    let lvl = match std::env::var("TRS_JIT_OPT").as_deref() {
-        Ok("1") => 1,
-        Ok("2") => 2,
-        Ok("3") => 3,
+/// `tracked`: the construction-time census, when the caller built one
+/// (the one-module design object) — the width cap and size tier then
+/// read tracked totals instead of re-walking the module.
+/// The AOT pipeline, pass by pass, each with a constructional reason
+/// (per Ravi: no generic levels — enable specific optimizations based
+/// on what we know about our output).  Our IR is loop-free straight-
+/// line arena load/store code, so the O-bundles' loop machinery is
+/// pure compile time; what pays is:
+///   inline           — flatten scheds/helpers into the fused edges
+///                      (the whole point of one-module emission)
+///   early-cse<memssa>— kill the redundant arena loads section
+///                      lowering emits back-to-back
+///   instcombine      — fold slot GEP chains, masks, extends
+///   simplifycfg      — collapse guard diamonds
+///   jump-threading   — collapse case-cone branch LADDERS (without
+///                      this, DFT64's 24k-block body reaches the
+///                      backend un-collapsed and TailDuplicator's
+///                      PHI search runs for minutes-to-hours:
+///                      default<O1> measured 772.8s vs 55.0s here)
+///   gvn, dse         — cross-section load/store redundancy the
+///                      edge-SSA plan's doctrine keeps conservative
+///   instcombine,
+///   simplifycfg      — clean up what gvn/jump-threading exposed
+/// Measured against default<O3> on the five witness shapes (all
+/// byte-exact): links 13.7->10.6s (FloatTest), 27.4->23.0
+/// (BRAM0Test), ties on the rest — and RUNTIME improves too
+/// (FloatTest 70.7->63.1ms); the giant-function O1 shape tier this
+/// replaces is obsolete (this list has no superlinear-in-size pass).
+/// instcombine must be spelled no-verify-fixpoint: the textual pass
+/// defaults to max-iterations=1 and ABORTS on non-convergence.
+const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
+    instcombine<no-verify-fixpoint>,simplifycfg,jump-threading,gvn,dse,\
+    instcombine<no-verify-fixpoint>,simplifycfg)";
+
+fn run_ir_passes(
+    module: &Module,
+    tracked: Option<&IrTally>,
+) -> Result<(), Ineligible> {
+    // TRS_JIT_OPT forces a generic level (A/B tool); the AOT default
+    // is the bespoke pipeline; the JIT engine path runs none (its
+    // backend codegen opts suffice for warm-up-bound sessions)
+    let pipeline = match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok(l @ ("1" | "2" | "3")) => format!("default<O{l}>"),
         Ok(_) => return Ok(()),
         Err(_) if AOT_MODE.with(|m| m.get()) => {
             // width cap on the DEFAULT pipeline only: LLVM's known-bits
             // reasoning is quadratic in integer width, and one i65536
-            // body wedges default<O1> for minutes (sysInit65536Bit AOT
-            // link timeout).  An explicit TRS_JIT_OPT still forces
-            // the pipeline.
-            if module_max_int_width(module) > IR_PASS_WIDTH_CAP {
+            // body wedges the pipeline for minutes (sysInit65536Bit
+            // AOT link timeout).  An explicit TRS_JIT_OPT still forces.
+            let width = tracked
+                .map(|t| t.max_width)
+                .unwrap_or_else(|| module_max_int_width(module));
+            if width > IR_PASS_WIDTH_CAP {
                 return Ok(());
             }
-            // O3 default (measured on the edge-SSA + outline-model
-            // IR: ~22% run for +1s link vs O1; reference ships -O3),
-            // tiered down to O1 for a huge STRAIGHT-LINE function
-            // (see IR_PASS_FN_SIZE_CAP — faster to compile AND to
-            // run; branch-ladder giants must keep O3)
-            {
-                let (insns, blocks) = module_max_fn_shape(module);
-                if insns > IR_PASS_FN_SIZE_CAP
-                    && insns >= blocks.saturating_mul(IR_PASS_LINE_RATIO)
-                {
-                    1
-                } else {
-                    3
-                }
-            }
+            AOT_PIPELINE.to_string()
         }
         Err(_) => return Ok(()),
     };
@@ -305,11 +338,20 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
     }
     // debugging escape: run an arbitrary pipeline string instead
     // (miscompile bisection — e.g. "default<O1>,gvn")
-    let pipeline = std::env::var("TRS_JIT_PIPELINE")
-        .unwrap_or_else(|_| format!("default<O{lvl}>"));
-    module
-        .run_passes(&pipeline, &tm, opts)
-        .map_err(|e| Ineligible(format!("IR passes: {e}")))
+    let pipeline =
+        std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
+    module.run_passes(&pipeline, &tm, opts).map_err(|e| {
+        // LOUD on stderr, not just the Ineligible fallback chain: a
+        // rejected pipeline string (an LLVM upgrade renaming a pass in
+        // AOT_PIPELINE) would otherwise degrade every run to the
+        // interpreter silently.  See the upgrade ritual on
+        // AOT_PIPELINE / tools/pipeline-matrix.py.
+        eprintln!(
+            "trs: WARNING: IR pass pipeline rejected ({e}); \
+             artifact compilation will fall back"
+        );
+        Ineligible(format!("IR passes: {e}"))
+    })
 }
 
 fn finish_engine(
@@ -318,7 +360,7 @@ fn finish_engine(
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let opt = opt_level();
     let ee = module
         .create_jit_execution_engine(opt)
@@ -525,7 +567,7 @@ pub fn compile_object_chunk(
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -674,6 +716,18 @@ fn lower_helpers<'ctx>(
 /// backend).  Larger bodies stay as calls by the inliner's own cost
 /// model.
 #[allow(clippy::too_many_arguments)]
+/// compile_design_object's outcome: the object, or the measured
+/// per-comp inlined-section sizes when an edge fn exceeded the
+/// caller's instruction budget (the caller extends the plan's
+/// outlined set from the MEASURED sizes and re-lowers — lowering is
+/// ms-scale; only the pass pipeline is expensive, and it never runs
+/// on an over-budget module).
+pub enum DesignObject {
+    Object(Vec<u8>),
+    EdgeOverBudget(Vec<Vec<(usize, u64)>>),
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn compile_design_object(
     env: &PlanEnv,
     specs: &[RuleSpec],
@@ -682,12 +736,20 @@ pub fn compile_design_object(
     refs: &HelperMap,
     fused: &[FusedComp],
     edge_plan: Option<&EdgeSsaPlan>,
-) -> Result<Vec<u8>, Ineligible> {
+    // largest tolerated edge-fn size in instructions (0 = unbounded)
+    edge_insn_budget: u64,
+) -> Result<DesignObject, Ineligible> {
     let t_low = std::time::Instant::now();
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
+    // construction-time IR census: every function tallied once as it
+    // completes (helpers here, scheds/execs below, edge fns via the
+    // final add_all) — the pipeline tier reads it instead of
+    // re-walking the module, and TRS_JIT_TIME prints from it
+    let mut tally = IrTally::default();
     if !helper_specs.is_empty() {
         lower_helpers(env, &ctx, &module, cbs, helper_specs, refs, &specs[0])?;
+        tally.add_all(&module);
     }
     let refs_opt = (!refs.is_empty()).then_some(refs);
     // rules covered by an SSA edge function need no standalone
@@ -749,12 +811,48 @@ pub fn compile_design_object(
         };
         lc.lower_exec()?;
     }
+    let mut section_sizes: Vec<Vec<(usize, u64)>> = Vec::new();
     match edge_plan {
-        Some(p) => {
-            lower_edge_ssa(env, &ctx, &module, cbs, specs, refs_opt, p, fused)?
-        }
+        Some(p) => lower_edge_ssa(
+            env,
+            &ctx,
+            &module,
+            cbs,
+            specs,
+            refs_opt,
+            p,
+            fused,
+            &mut section_sizes,
+        )?,
         None => {
             let _ = lower_fused(&ctx, &module, fused);
+        }
+    }
+    // measured edge budget: hand the per-section sizes back for a
+    // replan instead of feeding a giant function to the pass pipeline.
+    // The judgement is the FULL edge-fn size (sched sections and call
+    // preludes included — only exec sections are outlining candidates,
+    // so the caller may find no victims and accept the remainder).
+    if edge_insn_budget > 0 {
+        let mut over = false;
+        for k in 0..fused.len() {
+            if let Some(f) = module.get_function(&format!("edge_c{k}")) {
+                let mut insns = 0u64;
+                for bb in f.get_basic_blocks() {
+                    let mut ins = bb.get_first_instruction();
+                    while let Some(i) = ins {
+                        insns += 1;
+                        ins = i.get_next_instruction();
+                    }
+                }
+                if insns > edge_insn_budget {
+                    over = true;
+                    break;
+                }
+            }
+        }
+        if over {
+            return Ok(DesignObject::EdgeOverBudget(section_sizes));
         }
     }
     // ordinal-indexed fn tables: without them the loader dlsyms ~one
@@ -793,11 +891,14 @@ pub fn compile_design_object(
             l.set_initializer(&i64t.const_int(vals.len() as u64, false));
         }
     }
+    // complete the construction-time census (scheds/execs/edge fns —
+    // everything not tallied incrementally above)
+    tally.add_all(&module);
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
     if timing {
         eprintln!("trs aot: lowering {:?}", t_low.elapsed());
-        // per-function-group IR census: emitted size is the
-        // load-immune proxy that predicts O3 cost; the exec/hlp vs
+        // per-function-group IR census from the tally: emitted size is
+        // the load-immune proxy that predicts O3 cost; the exec/hlp vs
         // edge split is the per-type-precompilation ceiling
         let mut groups: [(&str, u64, u64); 5] = [
             ("edge", 0, 0),
@@ -806,20 +907,8 @@ pub fn compile_design_object(
             ("sched", 0, 0),
             ("other", 0, 0),
         ];
-        let mut top: Vec<(u64, String)> = Vec::new();
-        let mut f = module.get_first_function();
-        while let Some(func) = f {
-            let name = func.get_name().to_string_lossy().into_owned();
-            let mut blocks = 0u64;
-            let mut insts = 0u64;
-            for bb in func.get_basic_blocks() {
-                blocks += 1;
-                let mut cur = bb.get_first_instruction();
-                while let Some(i) = cur {
-                    insts += 1;
-                    cur = i.get_next_instruction();
-                }
-            }
+        let mut top: Vec<(u64, &str)> = Vec::new();
+        for (name, insts, blocks) in &tally.per_fn {
             let gi = if name.starts_with("edge_") {
                 0
             } else if name.starts_with("exec_") {
@@ -833,10 +922,9 @@ pub fn compile_design_object(
             };
             groups[gi].1 += blocks;
             groups[gi].2 += insts;
-            if insts > 0 {
-                top.push((insts, name));
+            if *insts > 0 {
+                top.push((*insts, name.as_str()));
             }
-            f = func.get_next_function();
         }
         let census: Vec<String> = groups
             .iter()
@@ -844,7 +932,7 @@ pub fn compile_design_object(
             .map(|(n, b, i)| format!("{n}={i}insn/{b}bb"))
             .collect();
         eprintln!("trs aot: ir census {}", census.join(" "));
-        top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
         let tops: Vec<String> =
             top.iter().take(5).map(|(i, n)| format!("{n}={i}")).collect();
         eprintln!("trs aot: ir top {}", tops.join(" "));
@@ -853,7 +941,7 @@ pub fn compile_design_object(
     if std::env::var_os("TRS_JIT_DUMP_PRE").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, Some(&tally))?;
     if std::env::var_os("TRS_JIT_DUMP_POST").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
@@ -868,7 +956,7 @@ pub fn compile_design_object(
     if timing {
         eprintln!("trs aot: backend emit {:?}", t1.elapsed());
     }
-    Ok(buf.as_slice().to_vec())
+    Ok(DesignObject::Object(buf.as_slice().to_vec()))
 }
 
 /// JIT: compile a helper batch into one engine; returns (sym, addr).
@@ -908,7 +996,7 @@ pub fn compile_helpers_object(
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     lower_helpers(env, &ctx, &module, cbs, specs, refs, pseudo)?;
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -1051,7 +1139,32 @@ fn lower_edge_ssa<'ctx>(
     outlined: Option<&HelperMap>,
     plan: &EdgeSsaPlan,
     fused: &[FusedComp],
+    // construction-time tracking: per comp, (spec ordinal, emitted
+    // instructions) for every INLINED section — the measured sizes
+    // the budget replan consumes (estimates were tried and failed:
+    // action-heavy bodies emit real code with near-zero cone mass)
+    section_sizes: &mut Vec<Vec<(usize, u64)>>,
 ) -> Result<(), Ineligible> {
+    let count_block = |bb: inkwell::basic_block::BasicBlock| -> u64 {
+        let mut insns = 0u64;
+        let mut ins = bb.get_first_instruction();
+        while let Some(i) = ins {
+            insns += 1;
+            ins = i.get_next_instruction();
+        }
+        insns
+    };
+    // instructions in blocks[from..]: the blocks a section appended
+    let count_new = |func: inkwell::values::FunctionValue,
+                     from_block: usize|
+     -> (usize, u64) {
+        let bbs = func.get_basic_blocks();
+        let mut insns = 0u64;
+        for bb in &bbs[from_block.min(bbs.len())..] {
+            insns += count_block(*bb);
+        }
+        (bbs.len(), insns)
+    };
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
@@ -1084,6 +1197,14 @@ fn lower_edge_ssa<'ctx>(
             exports: plan.export_slots.clone(),
             ..Default::default()
         };
+        section_sizes.push(Vec::new());
+        // checkpoint for exact per-section attribution: new blocks
+        // PLUS growth of the carried-over insert block (straight-line
+        // sections often append no block at all — block-count deltas
+        // alone attribute their code to the next block creator)
+        let mut blocks_seen = func.count_basic_blocks() as usize;
+        let mut carry = entry;
+        let mut carry_insns = count_block(entry);
         let mut cur = entry;
         for (s, &(is_exec, o)) in plan.nodes[k].iter().enumerate() {
             let spec = &specs[o];
@@ -1228,6 +1349,15 @@ fn lower_edge_ssa<'ctx>(
             }
             cur = lc.builder.get_insert_block().unwrap();
             edge_ctx = lc.edge.take().unwrap();
+            let (nb, new_insns) = count_new(func, blocks_seen);
+            let carry_now = count_block(carry);
+            let insns = new_insns + carry_now.saturating_sub(carry_insns);
+            blocks_seen = nb;
+            carry = cur;
+            carry_insns = count_block(cur);
+            if is_exec && !plan.outlined_execs.contains(&o) {
+                section_sizes[k].push((o, insns));
+            }
         }
         let bend = ctx.create_builder();
         bend.position_at_end(cur);
@@ -1358,7 +1488,7 @@ pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> 
     let ctx = Context::create();
     let module = ctx.create_module("trs_fused");
     let _ = lower_fused(&ctx, &module, comps);
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)

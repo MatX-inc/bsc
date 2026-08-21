@@ -929,9 +929,18 @@ fn cc_tool() -> String {
 /// shapes it does not walk (e.g. value-method reads reachable only
 /// through another module's cones).
 #[cfg(feature = "jit")]
+/// Default measured edge-fn budget, instructions: safely under the
+/// pipeline tier's 20k straight-line cap, so a budgeted edge keeps
+/// default<O3>.  TRS_EDGE_INSN_BUDGET overrides; 0 disables.
+const EDGE_INSN_BUDGET: u64 = 16_000;
+
 enum EmitFail {
     Ineligible(String),
     Infra(String),
+    /// an edge fn exceeded the instruction budget: the MEASURED
+    /// oversized inlined sections (ordinals) — the caller extends the
+    /// plan's outlined set and re-emits (see EDGE_INSN_BUDGET)
+    EdgeOverBudget(std::collections::HashSet<usize>),
 }
 
 #[cfg(feature = "jit")]
@@ -956,6 +965,10 @@ fn aot_emit(
     plan_b: &[u8],
     edge_plan: Option<&trs_codegen::abi::EdgeSsaPlan>,
     bdpi_names: &[String],
+    // largest tolerated edge-fn size, instructions (0 = unbounded);
+    // exceeding it returns EmitFail::EdgeOverBudget with measured
+    // victims for the caller's replan (one_module + edge-SSA only)
+    edge_insn_budget: u64,
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
     trs_codegen::lower::llvm_init_once();
@@ -1038,7 +1051,7 @@ fn aot_emit(
         let env = PlanEnv { d, insts: inst_envs, now_slot };
         let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
-        let obj = compile_design_object(
+        let obj = match compile_design_object(
             &env,
             specs,
             &rep_ords,
@@ -1046,8 +1059,35 @@ fn aot_emit(
             refs_sym,
             &comps,
             edge_plan,
+            edge_insn_budget,
         )
-        .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
+        .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?
+        {
+            trs_codegen::lower::DesignObject::Object(o) => o,
+            trs_codegen::lower::DesignObject::EdgeOverBudget(sizes) => {
+                // pick MEASURED victims: per over-budget comp, largest
+                // inlined sections first until the comp fits
+                let mut victims: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+                for comp in &sizes {
+                    let mut total: u64 = comp.iter().map(|&(_, i)| i).sum();
+                    if total <= edge_insn_budget {
+                        continue;
+                    }
+                    let mut by_size: Vec<(u64, usize)> =
+                        comp.iter().map(|&(o, i)| (i, o)).collect();
+                    by_size.sort_unstable_by(|a, b| b.cmp(a));
+                    for &(i, o) in &by_size {
+                        if total <= edge_insn_budget {
+                            break;
+                        }
+                        victims.insert(o);
+                        total -= i;
+                    }
+                }
+                return Err(EmitFail::EdgeOverBudget(victims));
+            }
+        };
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
         }
@@ -1773,6 +1813,10 @@ impl Interp {
         specs: &[RuleSpec],
         has_early: bool,
         stats: bool,
+        // ordinals forced OUTLINED by the measured edge budget (the
+        // replan pass): joined into outlined_execs before any sharing/
+        // hoist/elision table is computed, so the plan stays coherent
+        forced_outline: &std::collections::HashSet<usize>,
     ) -> trs_codegen::abi::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
             specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
@@ -2175,7 +2219,7 @@ impl Interp {
             .unwrap_or(2);
         const OUTLINE_FLOOR: u64 = 800;
         let mut outlined_execs: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
+            forced_outline.clone();
         let mut tot_recompute = 0u64;
         let mut tot_saved = 0u64;
         let mut tot_gaps = 0usize;
@@ -3541,7 +3585,10 @@ impl Interp {
                     v
                 })
                 .collect();
-            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, has_early, true);
+            let _ = self.edge_ssa_plan(
+                &inst_envs, &nodes, &specs, has_early, true,
+                &Default::default(),
+            );
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
@@ -3914,27 +3961,31 @@ impl Interp {
             // legality tables the edge emitter consumes
             // DEFAULT ON for AOT links (the specialized fast compile);
             // TRS_EDGE_SSA=0 restores the classic emission
-            let edge_plan = (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0"))
-                .then(|| {
-                    let nodes: Vec<Vec<(bool, usize)>> = comp_nodes
-                        .iter()
+            let nodes_for_plan: Vec<Vec<(bool, usize)>> = comp_nodes
+                .iter()
+                .map(|ns| {
+                    ns.as_ref()
                         .map(|ns| {
-                            ns.as_ref()
-                                .map(|ns| {
-                                    ns.iter()
-                                        .map(|n| match *n {
-                                            JitNode::Sched(o) => (false, o as usize),
-                                            JitNode::Exec(o) => (true, o as usize),
-                                        })
-                                        .collect()
+                            ns.iter()
+                                .map(|n| match *n {
+                                    JitNode::Sched(o) => (false, o as usize),
+                                    JitNode::Exec(o) => (true, o as usize),
                                 })
-                                .unwrap_or_default()
+                                .collect()
                         })
-                        .collect();
-                    let mut plan =
-                        self.edge_ssa_plan(
-                            &inst_envs, &nodes, &specs, has_early, false,
-                        );
+                        .unwrap_or_default()
+                })
+                .collect();
+            let mk_edge_plan = |forced: &std::collections::HashSet<usize>| {
+                (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
+                    let mut plan = self.edge_ssa_plan(
+                        &inst_envs,
+                        &nodes_for_plan,
+                        &specs,
+                        has_early,
+                        false,
+                        forced,
+                    );
                     // traced artifacts keep wire ticks boxed: the tick
                     // latches `written` for the VCD dump (and clears
                     // valid through the slot), which a compiled clear
@@ -3946,11 +3997,43 @@ impl Interp {
                         plan.bram_ticks = cov.bram_ticks;
                     }
                     plan
-                });
+                })
+            };
             // bake what this emit derived: a Load of the artifact
             // decodes these instead of re-deriving (see PlanB)
             let plan_b_bytes = plan_b_encode(&specs, &classes);
-            self.jit_emit_result = Some(
+            let bdpi_names: Vec<String> = {
+                let mut v: Vec<String> = self
+                    .d
+                    .foreign_funcs
+                    .iter()
+                    .map(|f| self.s(f.c_name).to_string())
+                    .filter(|n| !crate::is_lib_bdpi(n))
+                    .collect();
+                v.sort_unstable();
+                v.dedup();
+                v
+            };
+            // measured edge budget: an over-budget emit hands back the
+            // measured oversized sections, the plan re-runs with them
+            // forced OUTLINED (so sharing/hoist/elision tables stay
+            // coherent), and the second emit is unbounded — measured
+            // sizes make one replan enough.  Lowering is ms-scale; the
+            // expensive pass pipeline never runs on a discarded module.
+            let budget: u64 = std::env::var("TRS_EDGE_INSN_BUDGET")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(EDGE_INSN_BUDGET);
+            let mut forced: std::collections::HashSet<usize> =
+                Default::default();
+            let mut budget_now = budget;
+            // outlining a consumer collapses sharing, so survivors
+            // re-expand cones and the next measurement can still be
+            // over budget: iterate (the forced set only grows, so this
+            // terminates), with a round cap as the safety valve
+            let mut rounds = 0u32;
+            let result = loop {
+                let edge_plan = mk_edge_plan(&forced);
                 match aot_emit(
                     &self.d,
                     &inst_envs,
@@ -3966,33 +4049,43 @@ impl Interp {
                     so,
                     exe.as_ref(),
                     // trace-salted: a traced plan (recording slots shift
-                // the whole layout) must never accept an untraced
-                // artifact, and vice versa
-                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+                    // the whole layout) must never accept an untraced
+                    // artifact, and vice versa
+                    self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
                     self.bir_hash,
                     self.plan_a_bytes.as_deref().unwrap_or(&[]),
                     &plan_b_bytes,
                     edge_plan.as_ref(),
-                    &{
-                        let mut v: Vec<String> = self
-                            .d
-                            .foreign_funcs
-                            .iter()
-                            .map(|f| self.s(f.c_name).to_string())
-                            .filter(|n| !crate::is_lib_bdpi(n))
-                            .collect();
-                        v.sort_unstable();
-                        v.dedup();
-                        v
-                    },
+                    &bdpi_names,
+                    budget_now,
                 ) {
-                    Ok(()) => crate::AotEmit::Compiled,
-                    Err(EmitFail::Ineligible(e)) => {
-                        crate::AotEmit::Ineligible(e)
+                    Err(EmitFail::EdgeOverBudget(victims)) => {
+                        if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                            eprintln!(
+                                "trs jit: edge over budget — replanning \
+                                 with {} measured sections outlined",
+                                victims.len()
+                            );
+                        }
+                        rounds += 1;
+                        // no exec sections left to outline (the
+                        // remainder is sched code) or the round cap:
+                        // accept — the O1 size tier is the backstop
+                        if victims.is_empty() || rounds >= 4 {
+                            budget_now = 0;
+                        }
+                        forced.extend(victims);
                     }
-                    Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
-                },
-            );
+                    other => break other,
+                }
+            };
+            self.jit_emit_result = Some(match result {
+                Ok(()) => crate::AotEmit::Compiled,
+                Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
+                Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
+                // the unbounded second pass cannot report over-budget
+                Err(EmitFail::EdgeOverBudget(_)) => unreachable!(),
+            });
             return None;
         }
 
