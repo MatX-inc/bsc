@@ -23,6 +23,8 @@ use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
 mod foreign;
+pub mod out;
+pub use out::{flush as stdout_flush, force_line as stdout_force_line};
 pub mod topbind;
 pub use topbind::{parse_bind, TopBind};
 #[cfg(feature = "aot")]
@@ -4865,7 +4867,7 @@ pub(crate) fn emit_output_errors(errs: &[String]) {
         return;
     }
     for e in errs.iter().rev() {
-        print!("Output error: {e}");
+        crate::out::write_fmt(format_args!("Output error: {e}"));
     }
 }
 

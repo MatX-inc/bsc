@@ -727,8 +727,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         }
         // teardown parity with run_and_release: flush stdout, leak the
         // arena (the caller exits), exit code = fataled only
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
+        crate::out::flush();
         std::mem::forget(arena);
         Some(if rc.fe.fataled { 1 } else { 0 })
     }

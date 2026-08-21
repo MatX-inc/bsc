@@ -2834,13 +2834,13 @@ fn jit_workers(n: usize) -> usize {
         .min(n.max(1))
 }
 
-/// Stdio-flush callback for direct BDPI calls: phase 0 flushes Rust's
-/// buffered stdout BEFORE the C call, phase 1 fflush(NULL)es libc's
-/// buffers after — the interleaving contract bdpi::Bdpi::call keeps.
+/// Stdio-flush callback for direct BDPI calls: phase 0 flushes the
+/// runtime's stdout sink BEFORE the C call, phase 1 fflush(NULL)es
+/// libc's buffers after — the interleaving contract bdpi::Bdpi::call
+/// keeps.
 pub(crate) unsafe extern "C" fn jit_stdio_cb(phase: u64) {
     if phase == 0 {
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
+        crate::out::flush();
     } else {
         unsafe { libc::fflush(std::ptr::null_mut()) };
     }

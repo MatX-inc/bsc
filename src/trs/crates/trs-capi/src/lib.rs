@@ -159,6 +159,10 @@ fn state<'a>(hdl: *mut c_void) -> &'a mut SimState {
 /// clock waveform and default reset — `prime()` is that protocol.
 #[no_mangle]
 pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
+    // this .so is dlopened into a driver (bluetcl) whose own stdio
+    // interleaves with sim output on fd 1 — a block-buffered sim sink
+    // would reorder against it, so pin line mode (out.rs)
+    trs_interp::stdout_force_line();
     let m = unsafe { &*(model as *const Model) };
     let bir = unsafe { std::slice::from_raw_parts(m.bir_ptr, m.bir_len) };
     // engine set: link-time default (shim Model, TBD) overridden by

@@ -1068,7 +1068,7 @@ fn main() -> ExitCode {
             ) {
                 Ok(code) => {
                     use std::io::Write;
-                    let _ = std::io::stdout().flush();
+                    trs_interp::stdout_flush();
                     let _ = std::io::stderr().flush();
                     // bypass atexit teardown: JIT body workers may still
                     // be inside LLVM and would stall process exit
@@ -1448,6 +1448,10 @@ fn run_script(
     formats: Option<(bool, bool)>,
     script: &str,
 ) -> ExitCode {
+    // script-tier command responses print through std stdout between
+    // sim advances — pin the sim's stdout sink to the same LineWriter
+    // so the two cannot reorder (out.rs)
+    trs_interp::stdout_force_line();
     let mut interp = match trs_interp::load_file(path, plusargs, binds, vcd) {
         Ok(i) => i,
         Err(e) => {

@@ -60,7 +60,7 @@ pub(crate) fn note_window_effect() {
 macro_rules! qprintln {
     ($($t:tt)*) => {
         if !crate::prim::quiet_engine() {
-            println!($($t)*)
+            crate::out::writeln_fmt(format_args!($($t)*))
         } else {
             crate::prim::note_window_effect()
         }
@@ -1542,10 +1542,10 @@ pub(crate) fn bram_warn_hook(block: usize, addr: u64) {
         return;
     }
     if let Some((name, bits)) = BRAM_WARN_NAMES.lock().unwrap().get(&block) {
-        println!(
+        crate::out::writeln_fmt(format_args!(
             "Warning: BRAM '{name}' -- Write collision at address {}",
             addr_dump_val(addr, *bits)
-        );
+        ));
     }
 }
 

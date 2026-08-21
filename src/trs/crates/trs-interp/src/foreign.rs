@@ -89,7 +89,7 @@ impl ForeignEnv {
             return;
         }
         let write_slot = |s: &mut FSlot| match s {
-            FSlot::Stdout => print!("{text}"),
+            FSlot::Stdout => crate::out::write_str(text),
             FSlot::Stderr => eprint!("{text}"),
             FSlot::File(f) => {
                 let _ = f.write_all(text.as_bytes());
@@ -144,11 +144,12 @@ impl ForeignEnv {
     }
 
     /// Format a $display-family call into the reused scratch and write
-    /// it to stdout in ONE locked write_all (println!-per-call paid a
-    /// fresh String, a lock, and a core::fmt walk each; the scratch
-    /// survives across calls so the hot path allocates nothing).  Same
-    /// std LineWriter, so flush semantics ($fflush, the BDPI phase-0
-    /// flush, newline-triggered line flushes) are untouched.
+    /// it to the stdout sink in ONE locked write_all (println!-per-call
+    /// paid a fresh String, a lock, and a core::fmt walk each; the
+    /// scratch survives across calls so the hot path allocates
+    /// nothing).  Flush semantics live in out.rs: block-buffered when
+    /// piped like the reference C stdio, with $fflush and the BDPI
+    /// phase-0 flush as the explicit ordering points.
     pub(crate) fn write_display(
         &mut self,
         args: &[Arg],
@@ -164,8 +165,7 @@ impl ForeignEnv {
         if newline {
             out.push('\n');
         }
-        use std::io::Write;
-        let _ = std::io::stdout().lock().write_all(out.as_bytes());
+        crate::out::write_bytes(out.as_bytes());
         self.fmt_out = out;
     }
 
@@ -273,7 +273,7 @@ impl ForeignEnv {
             }
             "$fflush" => {
                 use std::io::Write;
-                let _ = std::io::stdout().flush();
+                crate::out::flush();
                 let key = match args.first() {
                     Some(Arg::Val(v, _)) => Some(v.as_u64()),
                     _ => None,
