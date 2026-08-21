@@ -963,6 +963,7 @@ data ErrMsg =
 
         | EBSimMCDUnsupported String
         | EBSimDynamicArg String [String]
+        | WVDynamicInstArg String [String]
         | EBSimTopLevelArgOrParam Bool [String]
         | EBSimEnablePragma
         | EBSimForeignImport String String String
@@ -3988,6 +3989,19 @@ getErrorText (WMethodMultipleBoundaryReset meth m_reset) =
               Just rst -> " Instantiations will associate the method " ++
                           "with reset " ++ quote rst ++ "."
            ))
+
+getErrorText (WVDynamicInstArg inst_name arg_names) =
+    (Generate 129, empty,
+     s2par ("The following arguments of submodule " ++ quote inst_name ++
+            " are driven by values that can change during a clock cycle " ++
+            "(such as wire reads or rule fire signals).  Module arguments " ++
+            "in the generated Verilog are continuous wires with no " ++
+            "scheduling relationship to the rules that compute them, so " ++
+            "the submodule can observe these values outside the atomic " ++
+            "rule semantics.  Consider driving the argument from a " ++
+            "register or a constant, or registering the value before " ++
+            "passing it:") <+>
+     quoteStrList arg_names <> text ".")
 
 getErrorText (WRuleUndetPred is_meth rule poss) =
     (Generate 128, empty,

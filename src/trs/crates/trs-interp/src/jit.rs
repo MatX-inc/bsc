@@ -3667,6 +3667,19 @@ impl Interp {
             }
             return None;
         }
+        // batch auto-fire of always_enabled top methods runs on the
+        // interpreted entries loop: compiled call sites exist only
+        // for parent-fused method calls, and the auto-fire positions
+        // (segment cuts) are not in the compiled node stream — the
+        // documented v1 engine contract for such designs is interp
+        // (the regress battery and the sweep's engine column assert
+        // this reason)
+        if !self.autofire.is_empty() {
+            if trace {
+                eprintln!("trs jit: off (top always_enabled autofire)");
+            }
+            return None;
+        }
 
         let mut sl = crate::startup::StartupLap::new();
         let mut nslots: u32 = 0;

@@ -1,0 +1,9 @@
+# trs-only golden-compared sweep design: no reference Bluesim
+# executable exists by design (classic Bluesim refuses the design
+# class).  The sweep gates the classic refusal tag, links/runs with
+# the bindings below, byte-compares stdout against
+# <top>.out.expected, and ASSERTS the engine outcome.
+refuse=G0099
+bind=big=0x0123456789ABCDEF0FEDCBA9
+bind=inc=3
+engine=aot

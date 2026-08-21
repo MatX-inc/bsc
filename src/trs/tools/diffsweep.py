@@ -229,6 +229,19 @@ def one_test(job):
             except OSError:
                 pass
 
+    # trs-only golden-compared designs (<top>.trsonly.expected
+    # sidecar): no reference Bluesim executable exists BY DESIGN —
+    # classic Bluesim refuses the design class (top-level args/params,
+    # always_enabled top methods) — so the "reference" is the stored
+    # hand-derived golden and the sidecar's bindings/engine
+    # expectations.  The name ends in "expected" because the
+    # testsuite's `make clean` deletes sys*/mk* files EXCEPT
+    # %expected/%.exp/... (cleanonly.mk) — a bare <top>.trsonly was
+    # silently removed by every fullparallel-setup.
+    trsonly = os.path.join(testdir, top + ".trsonly.expected")
+    if os.path.exists(trsonly):
+        return _trsonly_test(rel, top, wk, testdir, src, trsonly)
+
     gdir = None
     if GOLDEN:
         gdir = os.path.join(GOLDEN, _golden_key(testdir, top))
@@ -354,6 +367,121 @@ def one_test(job):
     _gold_save(gdir, wk, top, ref, ref_secs, ref_build_secs)
     return _trs_side(rel, top, wk, testdir, bir, ref, ref_secs,
                      ref_build_secs)
+
+
+def _trsonly_test(rel, top, wk, testdir, src, trsonly):
+    """One trs-only golden-compared design (<top>.trsonly.expected).
+    The sidecar reads:
+         refuse=<tag>      classic Bluesim link must fail with this tag
+         bind=NAME=value   trs binding, repeated (recorded per design)
+         engine=aot|interp expected engine, ASSERTED (byte parity is
+                           engine-blind by the oracle contract)
+         why=<substring>   engine=interp only: the traced decline reason
+       Gates: classic refusal tag; `trs link` + the ARTIFACT and a
+       plain `trs run` both byte-match <top>.out.expected; the engine
+       expectation holds.  Any miss classifies DIFF so the census's
+       0-DIFF gate stays the single tripwire."""
+    import time as _time
+    refuse, binds, engine, why = "", [], "aot", ""
+    for line in open(trsonly, errors="replace"):
+        line = line.strip()
+        if line.startswith("refuse="):
+            refuse = line[len("refuse="):]
+        elif line.startswith("bind="):
+            binds.append("+" + line[len("bind="):])
+        elif line.startswith("engine="):
+            engine = line[len("engine="):]
+        elif line.startswith("why="):
+            why = line[len("why="):]
+    golden_p = os.path.join(testdir, top + ".out.expected")
+    try:
+        golden = open(golden_p, errors="replace").read()
+    except OSError:
+        return (rel, top, "DIFF", "trsonly: no golden " + golden_p)
+
+    for f in os.listdir(testdir):
+        if f.endswith((".bsv", ".bs")):
+            try:
+                shutil.copy(os.path.join(testdir, f), wk)
+            except OSError:
+                pass
+    common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-p", wk + ":+"]
+    r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk, timeout=180)
+    if r is None or r.returncode != 0:
+        msg = "" if r is None else (r.stderr + r.stdout)
+        return (rel, top, "COMPILE_FAIL",
+                "compile timeout" if r is None else first_error(msg))
+
+    # the classic refusal is part of the contract: these lifts are
+    # trs-only, and classic Bluesim's error must not drift
+    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "classic.exe"] + common,
+            cwd=wk, timeout=420)
+    if r is None:
+        return (rel, top, "LINK_FAIL", "classic-refusal probe timeout")
+    if r.returncode == 0:
+        return (rel, top, "DIFF", "classic Bluesim link unexpectedly "
+                "succeeded (expected " + refuse + ")")
+    if refuse and refuse not in (r.stderr + r.stdout):
+        return (rel, top, "DIFF", "classic refusal drifted (expected " +
+                refuse + "): " + first_error(r.stderr + r.stdout))
+
+    # export the .bir through bsc's own -trs link; for designs with
+    # required bindings that link step fails (loudly) AFTER exporting,
+    # so only the .bir's existence gates here
+    env = dict(ENV, TRS=TRS)
+    run([BSC, "-sim", "-bir", "-trs", "-e", top, "-o", "trs.exe"] + common,
+        cwd=wk, timeout=420, env=env)
+    bir = os.path.join(wk, top + ".bir")
+    if not os.path.exists(bir):
+        return (rel, top, "EXPORT_FAIL", "no .bir produced")
+
+    cexe = os.path.join(wk, top + ".aot.cexe")
+    link_env = dict(ENV)
+    link_env["TRS_JIT_TRACE"] = "1"
+    tl0 = _time.monotonic()
+    lk = run([TRS, "link", bir] + binds + ["-o", cexe], cwd=wk, timeout=300,
+             env=link_env)
+    trs_link_secs = _time.monotonic() - tl0
+    if lk is None or lk.returncode != 0:
+        msg = "" if lk is None else (lk.stderr + lk.stdout)
+        return (rel, top, "AOT_LINK_FAIL",
+                "timeout" if lk is None else first_error(msg))
+    compiled = os.path.exists(cexe + ".so")
+    got_engine = "aot" if compiled else "interp"
+    got_why = link_fallback_reason(lk.stderr) if not compiled else ""
+    if got_engine != engine:
+        return (rel, top, "DIFF",
+                f"engine drifted: expected {engine}, got {got_engine}" +
+                (f" why={got_why}" if got_why else ""))
+    if engine == "interp" and why and why != got_why:
+        return (rel, top, "DIFF",
+                f"decline reason drifted: expected why={why}, got "
+                f"why={got_why}")
+
+    env = dict(ENV)
+    env["PATH"] = os.path.dirname(TRS) + os.pathsep + env.get("PATH", "")
+    tr0 = _time.monotonic()
+    art = run([cexe, "-m", MAX_CYCLES], cwd=wk, timeout=TIMEOUT, env=env)
+    trs_run_secs = _time.monotonic() - tr0
+    if art is None:
+        return (rel, top, "TIMEOUT", f"limit {TIMEOUT:.0f}s (artifact)")
+    if art.stdout != golden:
+        return (rel, top, "DIFF",
+                "artifact: " + diff_summary(golden, art.stdout))
+    # the per-run binding path must agree byte-for-byte too
+    inp = run([TRS, "run", bir] + binds + ["-m", MAX_CYCLES], cwd=wk,
+              timeout=TIMEOUT)
+    if inp is None:
+        return (rel, top, "TIMEOUT", f"limit {TIMEOUT:.0f}s (trs run)")
+    if inp.stdout != golden:
+        return (rel, top, "DIFF", "run: " + diff_summary(golden, inp.stdout))
+    # ref_* stay 0.0: below the fence floors by construction, so
+    # trs-only designs never enter the perf fence
+    timing = (f"t ref_build=0.00 ref_run=0.000"
+              f" trs_link={trs_link_secs:.2f} trs_run={trs_run_secs:.3f}"
+              f" engine={got_engine}" +
+              (f" why={got_why}" if got_why else ""))
+    return (rel, top, "PASS", timing)
 
 
 def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs):

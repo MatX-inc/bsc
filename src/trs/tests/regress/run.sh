@@ -19,7 +19,13 @@ check() { # name top [cfile]
     $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
-    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link "$top.bir" -o art >link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    # byte parity cannot distinguish engines (that is the oracle
+    # contract), so the compiled contract is asserted explicitly: a
+    # fallback-to-interp artifact fails the battery
+    if grep -q "run interpreted" link.out; then
+        echo "FAIL $name (not compiled: $(head -1 link.out))"; fail=1; return
+    fi
     TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
     if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
     if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
@@ -145,4 +151,101 @@ check_vcd() { # name top
     echo "PASS $name"
 }
 check_vcd FifoVcd sysFifoVcd
+# ---- top-level restriction lifts (-trs only; no reference Bluesim
+# executable exists for these BY DESIGN — classic Bluesim refuses the
+# design class, so stdout gates against stored hand-derived goldens
+# and the classic refusal tags are pinned) ----
+# Top-level module arguments/parameters: classic link keeps
+# EBSimTopLevelArgOrParam (G0099); trs binds +NAME=value at link/run.
+# The parameter is WIDE (96 bits) — multi-limb port_consts folding is
+# the point — and the design must run COMPILED through both the
+# per-run path and the baked artifact.  Missing/unknown/oversized
+# bindings each produce their specific loud error.
+check_topparam() {
+    name=TopParam; top=sysTopParam
+    bigv=0x0123456789ABCDEF0FEDCBA9
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    if $BSC -sim -bir -e "$top" -o tp_ref.exe >tp_err1.out 2>&1; then
+        echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "(G0099)" tp_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
+    # bsc's own -trs link supplies no bindings: the trs link inside it
+    # must fail with the loud missing-binding error (and still export
+    # the .bir, which everything below consumes)
+    if TRS="$TRS" $BSC -sim -bir -trs -e "$top" -o tp.exe >tp_err2.out 2>&1; then
+        echo "FAIL $name (-trs link without bindings unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "requires bindings for" tp_err2.out || { echo "FAIL $name (expected missing-binding error)"; fail=1; return; }
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir exported)"; fail=1; return; }
+    "$TRS" link "$top.bir" +big=1 +inc=1 +typo=9 -o tpbad >tp_err3.out 2>&1 && { echo "FAIL $name (unknown binding accepted)"; fail=1; return; }
+    grep -q "unknown top-level binding" tp_err3.out || { echo "FAIL $name (expected unknown-binding error)"; fail=1; return; }
+    "$TRS" run "$top.bir" +big=1 +inc=999 >tp_err4.out 2>&1 && { echo "FAIL $name (oversized binding accepted)"; fail=1; return; }
+    grep -q "does not fit in the declared width" tp_err4.out || { echo "FAIL $name (expected oversized-binding error)"; fail=1; return; }
+    "$TRS" run "$top.bir" +big=$bigv +inc=3 > got.out 2>&1; gotrc=$?
+    if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" got.out; then
+        echo "FAIL $name (run stdout, rc=$gotrc)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return
+    fi
+    "$TRS" link "$top.bir" +big=$bigv +inc=3 -o tpart >tplink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    if grep -q "run interpreted" tplink.out; then
+        echo "FAIL $name (not compiled: $(head -1 tplink.out))"; fail=1; return
+    fi
+    TRS="$TRS" ./tpart > gota.out 2>&1; gotrc=$?
+    if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" gota.out; then
+        echo "FAIL $name (artifact stdout, rc=$gotrc)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return
+    fi
+    echo "PASS $name"
+}
+check_topparam
+# always_enabled methods on the top interface: classic link keeps
+# EBSimEnablePragma (G0062); trs batch mode auto-fires them per cycle
+# at their schedule position (tick's state mutation is read by the
+# rule BEFORE the methods' Exec cut, so position is observable in the
+# values), with setStep's argument constant-bound.  The documented v1
+# engine contract is INTERPRETED with the specific decline reason —
+# asserted here in both spellings (the link note and the traced why).
+check_topae() {
+    name=TopAlwaysEn; top=sysTopAlwaysEn
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    if $BSC -sim -bir -e "$top" -o ae_ref.exe >ae_err1.out 2>&1; then
+        echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "(G0062)" ae_err1.out || { echo "FAIL $name (expected G0062)"; fail=1; return; }
+    if TRS="$TRS" $BSC -sim -bir -trs -e "$top" -o ae.exe >ae_err2.out 2>&1; then
+        echo "FAIL $name (-trs link without bindings unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "requires bindings for" ae_err2.out || { echo "FAIL $name (expected missing-binding error)"; fail=1; return; }
+    "$TRS" run "$top.bir" +setStep.v=2 > got.out 2>&1; gotrc=$?
+    if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" got.out; then
+        echo "FAIL $name (run stdout, rc=$gotrc)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return
+    fi
+    TRS_JIT_TRACE=1 "$TRS" link "$top.bir" +setStep.v=2 -o aeart >aelink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    grep -q "run interpreted" aelink.out || { echo "FAIL $name (expected interpreted artifact)"; fail=1; return; }
+    grep -q "top always_enabled autofire" aelink.out || { echo "FAIL $name (expected the autofire decline reason)"; fail=1; return; }
+    TRS="$TRS" ./aeart > gota.out 2>&1; gotrc=$?
+    if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" gota.out; then
+        echo "FAIL $name (artifact stdout, rc=$gotrc)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return
+    fi
+    echo "PASS $name"
+}
+check_topae
+# NEGATIVE: bindable arguments plus an additional input clock — a
+# binding supplies a constant, never a waveform, so the -trs link
+# refuses loudly (and classic keeps G0099 via the Bit# argument)
+check_topclk() {
+    name=TopClkArg; top=sysTopClkArg
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    if $BSC -sim -bir -e "$top" -o ck_ref.exe >ck_err1.out 2>&1; then
+        echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "(G0099)" ck_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
+    if TRS="$TRS" $BSC -sim -bir -trs -e "$top" -o ck.exe >ck_err2.out 2>&1; then
+        echo "FAIL $name (-trs link unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "does not support additional input" ck_err2.out || { echo "FAIL $name (expected input-clock refusal)"; fail=1; return; }
+    echo "PASS $name"
+}
+check_topclk
 exit $fail

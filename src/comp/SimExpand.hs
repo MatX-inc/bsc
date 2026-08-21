@@ -2,7 +2,7 @@
 module SimExpand ( simExpand, simExpandSched, simCheckPackage ) where
 
 import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList)
-import Data.List (partition, union, nub, sort, sortBy, delete)
+import Data.List (partition, union, nub, sort, sortBy, delete, intercalate)
 import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
 import qualified Data.Map as M
@@ -73,20 +73,48 @@ simExpand errh flags topname fabis = do
                              assertNoSchedErr emodinfos_used_by_name
 
     -- reject top-level modules with always_enabled ifc, if generating
-    -- a Bluesim executable
+    -- a Bluesim executable.  The trs backend lifts this for methods
+    -- marked always_enabled (its batch mode auto-fires them on every
+    -- cycle of their clock, at their schedule position, with EN
+    -- constant true); enabled_when_ready stays refused there, since
+    -- nothing computes a runtime EN to follow the RDY.
     let topModInfo =
            case (lookup (getIdString topmodId) modinfos_used_by_name) of
                Just (mi,_) -> mi
                Nothing     -> internalError ("simExpand: topmodId not found")
-    when ((not (genSysC flags)) && (hasEnabledMethod topModInfo)) $
+        en_refuse = if (genTrs flags)
+                    then hasEnWhenRdyMethod topModInfo
+                    else hasEnabledMethod topModInfo
+    when ((not (genSysC flags)) && en_refuse) $
         bsError errh [(noPosition, EBSimEnablePragma)]
 
-    -- reject top-level modules with arguments or params in Bluesim or SystemC
+    -- reject top-level modules with arguments or params in Bluesim or
+    -- SystemC.  The trs backend accepts Bit-typed (width >= 1)
+    -- arguments and parameters -- trs binds them to constants at its
+    -- link or run step (+NAME=value) -- while any other argument type
+    -- keeps this refusal.  A top module with bindable arguments must
+    -- not also take input clocks or resets beyond the defaults:
+    -- bindings supply constants, never waveforms, so those are
+    -- refused rather than silently never ticking.
     let (top_args, top_params) = getArgsAndParams topModInfo
     if (genSysC flags)
      then when ((not (null top_args)) || (not (null top_params))) $
                bsError errh [(noPosition, EBSimTopLevelArgOrParam True (top_args ++ top_params))]
-     else when ((not (null top_args)) || (not (null top_params))) $
+     else if (genTrs flags)
+      then do let (bad_args, bad_params) = getNonBitArgsAndParams topModInfo
+              when ((not (null bad_args)) || (not (null bad_params))) $
+                   bsError errh [(noPosition, EBSimTopLevelArgOrParam False (bad_args ++ bad_params))]
+              let extra_ins = getExtraClockAndResetInputs topModInfo
+              when ((not (null (top_args ++ top_params))) &&
+                    (not (null extra_ins))) $
+                   bsError errh
+                       [(noPosition,
+                         EGeneric ("The trs backend binds top-level module " ++
+                                   "arguments and parameters to constants; " ++
+                                   "it does not support additional input " ++
+                                   "clocks or resets on such a top-level " ++
+                                   "module: " ++ intercalate ", " extra_ins))]
+      else when ((not (null top_args)) || (not (null top_params))) $
                bsError errh [(noPosition, EBSimTopLevelArgOrParam False (top_args ++ top_params))]
 
     simpkgs <- mapM (simExpandABin errh flags) (map snd modinfos_used_by_name)
@@ -2345,6 +2373,34 @@ hasEnabledMethod modInfo =
         -- are any action methods required to be enabled
         (not (null en_pps)) && (any isEn action_ifcs)
 
+-- Like hasEnabledMethod, but only methods that are enabled_when_ready
+-- WITHOUT being always_enabled (isEnWhenRdy is true for both — an
+-- always_enabled method is enabled-when-ready a fortiori): the trs
+-- backend's batch auto-fire covers always_enabled methods (whose EN
+-- is constant true by contract), while a merely enabled_when_ready
+-- method would need a runtime EN follower that nothing drives, so it
+-- keeps the refusal.
+hasEnWhenRdyMethod :: ABinModInfo -> Bool
+hasEnWhenRdyMethod modInfo =
+    let
+        pps = abmi_pps modInfo
+        apkg = abmi_apkg modInfo
+        ifcs = apkg_interface apkg
+
+        getActionIfcs (AIAction { aif_name = i }) = [i]
+        getActionIfcs (AIActionValue { aif_name = i }) = [i]
+        getActionIfcs _ = []
+        action_ifcs = concatMap getActionIfcs ifcs
+
+        isEnPragma (PPalwaysEnabled {}) = True
+        isEnPragma (PPenabledWhenReady {}) = True
+        isEnPragma _ = False
+        en_pps = filter isEnPragma pps
+
+        isEwrOnly i = (isEnWhenRdy en_pps i) && (not (isAlwaysEn en_pps i))
+    in
+        (not (null en_pps)) && (any isEwrOnly action_ifcs)
+
 -- ===============
 -- Get the module arguments and parameters, so that Bluesim can reject
 -- designs with top-level args.
@@ -2357,6 +2413,50 @@ getArgsAndParams modInfo =
         params' = [ getIdBaseString i | (AAI_Port (i,_),_) <- params ]
         ports'  = [ getIdBaseString i | (AAI_Port (i,_),_) <- ports ]
     in (ports',params')
+
+-- The subset of the top module's arguments and parameters the trs
+-- backend cannot bind: anything that is not a Bit type of width >= 1
+-- (String, Real, zero-width).  trs bindings are integer constants
+-- checked against the declared width, so only ATBit survives.
+getNonBitArgsAndParams :: ABinModInfo -> ([String],[String])
+getNonBitArgsAndParams modInfo =
+    let inputs = getAPackageInputs (abmi_apkg modInfo)
+        isBindable (AAI_Port (_, ATBit n)) = n >= 1
+        isBindable _ = False
+        params = filter (isParam . snd) inputs
+        ports  = filter (isPort . snd) inputs
+        params' = [ getIdBaseString i
+                  | (p@(AAI_Port (i,_)),_) <- params, not (isBindable p) ]
+        ports'  = [ getIdBaseString i
+                  | (p@(AAI_Port (i,_)),_) <- ports, not (isBindable p) ]
+    in (ports',params')
+
+-- Input clocks and resets of the top module beyond the defaults
+-- (default clock osc, default reset port).  With bindable top-level
+-- arguments in play, the trs backend refuses these: a binding
+-- supplies a constant, never a waveform.
+getExtraClockAndResetInputs :: ABinModInfo -> [String]
+getExtraClockAndResetInputs modInfo =
+    let pps = abmi_pps modInfo
+        def_clk = case msum $ [ lookup idDefaultClock xs
+                              | (PPclock_osc xs) <- pps ] ++ [Just "CLK"] of
+                    Just s -> s
+                    Nothing -> "CLK"
+        -- the fallback is the port convention (RST_N), unlike
+        -- ssys_default_rst's legacy "RSTN" string, which never
+        -- matches a real port name
+        def_rst = case msum $ [ lookup idDefaultReset xs
+                              | (PPreset_port xs) <- pps ] ++ [Just "RST_N"] of
+                    Just s -> s
+                    Nothing -> "RST_N"
+        inputs = map fst (getAPackageInputs (abmi_apkg modInfo))
+        clks = [ getIdBaseString osc
+               | (AAI_Clock osc _) <- inputs
+               , getIdBaseString osc /= def_clk ]
+        rsts = [ getIdBaseString r
+               | (AAI_Reset r) <- inputs
+               , getIdBaseString r /= def_rst ]
+    in clks ++ rsts
 
 -- ===============
 

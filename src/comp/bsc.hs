@@ -114,6 +114,7 @@ import AConv(aConv)
 import IDropRules(iDropRules)
 import ARankMethCalls(aRankMethCalls)
 import AState(aState)
+import AIntraCycleStability(aWarnDynamicInstArgs)
 import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
 import AAddScheduleDefs(aAddScheduleDefs)
@@ -1089,6 +1090,14 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  atsPackage =
     do
+       -- warn about dynamic (intra-cycle-varying) submodule arguments:
+       -- Verilog wires module arguments combinationally, with no
+       -- scheduling relationship to the rules that compute them, so a
+       -- submodule can observe such a value outside the atomic rule
+       -- semantics.  (Bluesim refuses these outright, EBSimDynamicArg.)
+       let dyn_arg_warns = aWarnDynamicInstArgs atsPackage
+       when (not (null dyn_arg_warns)) $ bsWarning errh dyn_arg_warns
+
        -- Read in foreign function info from .ba files for
        -- all foreign functions used in the design, and build a
        -- map to be used when generating verilog

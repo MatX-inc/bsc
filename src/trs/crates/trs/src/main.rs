@@ -12,8 +12,15 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!("trs {} (phase P0 scaffold)", env!("CARGO_PKG_VERSION"));
     eprintln!("usage: trs ir dump <module.bir>");
-    eprintln!("       trs link <module.bir> [-o <out.cexe>]");
-    eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>]");
+    eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
+    eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [+NAME=value...]");
+    eprintln!();
+    eprintln!("Top-level bindings: a top module compiled with -trs may take");
+    eprintln!("Bit-typed arguments/parameters; bind them with +NAME=value or");
+    eprintln!("--bind NAME=value.  Bindings given to `trs link` are BAKED into");
+    eprintln!("the compiled artifact (different values require a relink);");
+    eprintln!("`trs run` takes them per-run.  always_enabled method arguments");
+    eprintln!("bind as +<method>.<arg>=value.");
     ExitCode::from(2)
 }
 
@@ -49,6 +56,7 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     let mut top = String::new();
     let mut formats = "vcd".to_string();
     let mut split = String::new();
+    let mut baked_binds: Vec<String> = Vec::new();
     if let Ok(s) = std::fs::read_to_string(dir.join(format!("{name}.opts"))) {
         for line in s.lines() {
             if let Some(v) = line.strip_prefix("top=") {
@@ -57,6 +65,11 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
                 formats = v.to_string();
             } else if let Some(v) = line.strip_prefix("split=") {
                 split = v.to_string();
+            } else if let Some(v) = line.strip_prefix("bind=") {
+                // link-time top bindings, re-supplied per run (the
+                // compiled bodies baked them via port_consts; a
+                // conflicting user +NAME=value errors at load)
+                baked_binds.push(v.to_string());
             }
         }
     }
@@ -112,6 +125,10 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     }
     synth.push("--formats".into());
     synth.push(formats);
+    for b in baked_binds {
+        synth.push("--bind".into());
+        synth.push(b);
+    }
     synth.extend(user_args.iter().cloned());
     // $TRS points the run at a specific build (the testsuite's hook)
     if let Some(t) = std::env::var_os("TRS") {
@@ -197,10 +214,36 @@ fn main() -> ExitCode {
             // -dump-formats plumbing from bsc: which waveform writers
             // the artifact carries (reference default: vcd only)
             let mut fmt_arg = "vcd".to_string();
+            // top-level bindings (+NAME=value / --bind NAME=value):
+            // link has no plusarg namespace, so every `+` here is a
+            // binding and an unknown name is a loud error at load
+            let mut binds: Vec<trs_interp::TopBind> = Vec::new();
             let mut it = rest.iter();
             while let Some(a) = it.next() {
                 match *a {
                     "-o" => out = it.next().map(|s| s.to_string()),
+                    "--bind" => match it.next() {
+                        Some(v) => match trs_interp::parse_bind(v, true) {
+                            Ok(b) => binds.push(b),
+                            Err(e) => {
+                                eprintln!("trs link: {e}");
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => {
+                            eprintln!("Error: --bind requires NAME=value");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    p if p.starts_with('+') => {
+                        match trs_interp::parse_bind(&p[1..], true) {
+                            Ok(b) => binds.push(b),
+                            Err(e) => {
+                                eprintln!("trs link: {e}");
+                                return ExitCode::from(2);
+                            }
+                        }
+                    }
                     "--interactive" => interactive = true,
                     "--exe" => exe = true,
                     "--dump-formats" => {
@@ -271,13 +314,30 @@ fn main() -> ExitCode {
             let _ = std::fs::remove_file(format!("{base}.arena"));
             // _fresh: link WRITES the snapshot, so it decodes the .bir
             // source of truth, never a prior sidecar (see startup.rs)
-            let mut interp = match trs_interp::startup::load_file_fresh(path, &[], None) {
+            let mut interp = match trs_interp::startup::load_file_fresh(
+                path, &[], &binds, None,
+            ) {
                 Ok(i) => i,
                 Err(e) => {
-                    eprintln!("trs: {e}");
+                    eprintln!("trs link: {e}");
                     return ExitCode::FAILURE;
                 }
             };
+            // the interactive bk_* surface can neither supply bindings
+            // nor auto-fire always_enabled methods, and a --exe PIE
+            // adopts its embedded identity (no per-run rebind check):
+            // both artifact forms refuse such designs (v1)
+            if (interactive || exe)
+                && (!binds.is_empty() || interp.has_autofire())
+            {
+                eprintln!(
+                    "trs link: {} does not support designs with \
+                     top-level bindings or always_enabled top methods \
+                     (batch artifacts only)",
+                    if interactive { "--interactive" } else { "--exe" }
+                );
+                return ExitCode::FAILURE;
+            }
             let fmt_vcd = fmt_arg.split(',').any(|t| t == "vcd");
             let fmt_fst = fmt_arg.split(',').any(|t| t == "fst");
             // `none` turns recording off: the artifact is the pure
@@ -429,6 +489,13 @@ fn main() -> ExitCode {
             } else {
                 format!(" --split {split}")
             };
+            // baked bindings ride in the wrapper (and .opts, for the
+            // symlink dispatch): every run of the artifact re-supplies
+            // them, and a conflicting user +NAME=value errors at load
+            let bind_args: String = binds
+                .iter()
+                .map(|b| format!(" --bind \"{}={}\"", b.name, b.value))
+                .collect();
             // honor $TRS like bsc's interp wrapper (the testsuite
             // points it at a specific build); the DEFAULT is the
             // absolute path of the binary that linked the artifact —
@@ -491,12 +558,12 @@ fn main() -> ExitCode {
                 };
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n{pick}{dispatch}\
-                     exec \"${{TRS:-$r}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} --formats {fmt_arg} ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-$r}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} --formats {fmt_arg}{bind_args} ${{1+\"$@\"}}\n"
                 )
             } else {
                 format!(
                     "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n{dispatch}\
-                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --formats {fmt_arg} ${{1+\"$@\"}}\n"
+                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --formats {fmt_arg}{bind_args} ${{1+\"$@\"}}\n"
                 )
             };
             // temp+rename: a crash mid-write must never leave a
@@ -505,7 +572,11 @@ fn main() -> ExitCode {
             // baked link options for the argv[0] dispatch (one ~60-byte
             // read replaces the wrapper's two command-substitution
             // forks); written for both artifact forms
-            let opts = format!("top={top}\nformats={fmt_arg}\nsplit={split}\n");
+            let mut opts =
+                format!("top={top}\nformats={fmt_arg}\nsplit={split}\n");
+            for b in &binds {
+                opts.push_str(&format!("bind={}={}\n", b.name, b.value));
+            }
             let opts_tmp = format!("{base}.opts.tmp");
             if let Err(e) = std::fs::write(&opts_tmp, opts)
                 .and_then(|()| std::fs::rename(&opts_tmp, format!("{base}.opts")))
@@ -542,7 +613,10 @@ fn main() -> ExitCode {
             // effect-free.  Every non-clean outcome is silent: the
             // design simply boots classic.
             if arena_written && compiled {
-                match trs_interp::startup::load_file(path, &[], None) {
+                // no binds: a binding design's load refuses without
+                // them, so its bake is a silent no-op and it boots
+                // classic (run_file gates RunCore off under binds)
+                match trs_interp::startup::load_file(path, &[], &[], None) {
                     Ok(mut b) => {
                         b.aot_request_code(format!("{base}.so").into());
                         if let Err(e) = b.runcore_bake_window(
@@ -692,6 +766,11 @@ fn main() -> ExitCode {
             // anything else is an error
             let mut max_cycles = u64::MAX;
             let mut plusargs: Vec<String> = Vec::new();
+            // top-level bindings: --bind NAME=value is explicit (an
+            // unknown name errors); +NAME=value is opportunistic — it
+            // binds when NAME is a top-level argument and stays an
+            // ordinary plusarg otherwise (existing designs unchanged)
+            let mut binds: Vec<trs_interp::TopBind> = Vec::new();
             let mut wave: Option<(trs_interp::WaveFormat, Option<String>)> =
                 None;
             let mut vcd_file: Option<String> = None;
@@ -768,6 +847,19 @@ fn main() -> ExitCode {
                     "--code" => {
                         code_so = it.next().map(|s| s.to_string());
                     }
+                    "--bind" => match it.next() {
+                        Some(v) => match trs_interp::parse_bind(v, true) {
+                            Ok(b) => binds.push(b),
+                            Err(e) => {
+                                eprintln!("trs: {e}");
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => {
+                            eprintln!("Error: --bind requires NAME=value");
+                            return ExitCode::from(2);
+                        }
+                    },
                     // lockstep selfcheck: a quiet interp shadow runs
                     // beside the primary engine; state compared every
                     // N default-clock posedges (default 1000, or
@@ -884,6 +976,13 @@ fn main() -> ExitCode {
                                 (!f.is_empty()).then(|| f.to_string()),
                             ));
                         }
+                        // NAME=value is also a top-level binding
+                        // candidate; the loader consumes it (and drops
+                        // it from the plusargs) iff NAME is a top
+                        // argument of this design
+                        if let Ok(b) = trs_interp::parse_bind(&p[1..], false) {
+                            binds.push(b);
+                        }
                         plusargs.push(p[1..].to_string());
                     }
                     other => {
@@ -908,6 +1007,7 @@ fn main() -> ExitCode {
                     path,
                     max_cycles,
                     &plusargs,
+                    &binds,
                     vcd_file.as_deref(),
                     wave.clone(),
                     code_so.as_deref(),
@@ -932,6 +1032,7 @@ fn main() -> ExitCode {
                 path,
                 max_cycles,
                 &plusargs,
+                &binds,
                 vcd_file.as_deref(),
                 wave,
                 code_so.as_deref(),
@@ -1313,13 +1414,14 @@ fn run_script(
     path: &str,
     max_cycles: u64,
     plusargs: &[String],
+    binds: &[trs_interp::TopBind],
     vcd: Option<&str>,
     wave: Option<(trs_interp::WaveFormat, Option<String>)>,
     code: Option<&str>,
     formats: Option<(bool, bool)>,
     script: &str,
 ) -> ExitCode {
-    let mut interp = match trs_interp::load_file(path, plusargs, vcd) {
+    let mut interp = match trs_interp::load_file(path, plusargs, binds, vcd) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("trs: {e}");

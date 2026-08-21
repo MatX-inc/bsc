@@ -23,6 +23,8 @@ use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
 mod foreign;
+pub mod topbind;
+pub use topbind::{parse_bind, TopBind};
 #[cfg(feature = "aot")]
 mod jit;
 #[cfg(feature = "aot")]
@@ -292,6 +294,23 @@ pub struct Interp {
     jit_rec_meths: HashMap<(usize, StrId), RecSlots>,
     /// per-engine $random/$srandom stream (library rand32/srand BDPI)
     rng: GlibcRandom,
+    /// identity salt of the top-level bindings (topbind); folded into
+    /// bir_hash by the loaders so a compiled artifact never matches a
+    /// run with different baked constants.  0 = nothing bound.
+    top_binds_salt: u64,
+    /// +NAME=value arguments consumed as bindings — filtered out of
+    /// the design-visible plusargs by the loaders
+    consumed_plus: Vec<String>,
+    /// always_enabled Action methods of the top auto-fired in batch
+    /// mode (interface order), each with its constant argument values
+    autofire: Vec<(StrId, Vec<Value>)>,
+    /// (composition index, entry index) -> autofire indices to invoke
+    /// after that entry's nodes — the methods' Exec cut positions
+    /// (resolved by topbind::resolve; keys line up with rcomps)
+    autofire_at: HashMap<(usize, usize), Vec<usize>>,
+    /// composition index -> autofire indices invoked before the entry
+    /// walk (Exec cuts preceding every node-bearing top segment)
+    autofire_pre: HashMap<usize, Vec<usize>>,
 }
 
 /// Arena recording slots for one user-module method's VCD ports
@@ -596,6 +615,28 @@ struct Stepper {
     jit: Option<JitPlans>,
 }
 
+impl Interp {
+    /// Identity salt of the top-level bindings, already folded into
+    /// `bir_hash` by the loaders: a compiled artifact's stamp must
+    /// not match a run with different baked constants.
+    pub fn top_binds_salt(&self) -> u64 {
+        self.top_binds_salt
+    }
+
+    /// `+NAME=value` arguments consumed as top-level bindings — the
+    /// loaders filter these out of the design-visible plusargs.
+    pub(crate) fn consumed_plus(&self) -> &[String] {
+        &self.consumed_plus
+    }
+
+    /// True when batch mode auto-fires always_enabled top methods
+    /// (the design runs interpreted; `trs link --interactive` and
+    /// `--exe` refuse such designs).
+    pub fn has_autofire(&self) -> bool {
+        !self.autofire.is_empty()
+    }
+}
+
 struct Inst {
     #[allow(dead_code)]
     path: String,
@@ -645,6 +686,22 @@ struct Ctx {
 
 impl Interp {
     pub fn new(d: Design) -> Interp {
+        // reachable only for designs with no bindable top surface
+        // (every CLI/capi path goes through new_bound); a top that
+        // needs bindings fails loudly rather than reading zeros
+        Interp::new_bound(d, &[]).unwrap_or_else(|e| panic!("trs: {e}"))
+    }
+
+    /// Construct with top-level bindings (see `topbind`): resolves
+    /// +NAME=value constants against the top module's arguments and
+    /// always_enabled method arguments BEFORE instantiation — child
+    /// instantiation arguments may reference the top's parameters, so
+    /// the values must be present when the instance tree is built.
+    pub fn new_bound(
+        d: Design,
+        binds: &[topbind::TopBind],
+    ) -> Result<Interp, String> {
+        let rb = topbind::resolve(&d, binds)?;
         let str_ids: HashMap<&str, StrId> = d
             .strings
             .iter()
@@ -747,6 +804,11 @@ impl Interp {
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
             rng: GlibcRandom::new(),
+            top_binds_salt: rb.salt,
+            consumed_plus: rb.consumed_plus,
+            autofire: rb.autofire,
+            autofire_at: rb.autofire_at,
+            autofire_pre: rb.autofire_pre,
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
@@ -759,16 +821,23 @@ impl Interp {
             .filter(|p| p.kind == ir::PortKind::Reset)
             .map(|p| (p.name, 0))
             .collect();
+        // top-level bindings (arguments/parameters, auto-fire method
+        // args, EN_<m>=1) enter as the top instance's params — the
+        // same mechanism every child instance uses, so Port/Param
+        // reads, the interp fallthroughs, and the compiled
+        // port_consts/wide_consts folds all work unchanged
+        let top_params: HashMap<StrId, Value> =
+            rb.params.into_iter().collect();
         it.instantiate(
             "".to_string(),
             top_mod,
-            HashMap::new(),
+            top_params,
             HashMap::new(),
             top_binds,
             HashMap::new(),
             HashMap::new(),
         );
-        it
+        Ok(it)
     }
 
     fn s(&self, id: StrId) -> &str {
@@ -4373,7 +4442,18 @@ impl Interp {
                             latched.clear();
                         }
                     }
-                    for en in &rc.entries {
+                    // auto-fired methods whose Exec cut precedes every
+                    // node-bearing top segment run first
+                    if !self.autofire.is_empty() {
+                        if let Some(idxs) = self.autofire_pre.get(&rci).cloned()
+                        {
+                            for mi in idxs {
+                                let (m, argv) = self.autofire[mi].clone();
+                                self.call_action(0, m, &argv);
+                            }
+                        }
+                    }
+                    for (ei, en) in rc.entries.iter().enumerate() {
                         let inst = en.inst;
                         // this entry's schedule-position cone defs: computed
                         // eagerly here like the C++ schedule function — side
@@ -4398,6 +4478,21 @@ impl Interp {
                                     self.latch_rule(inst, r, &ci2);
                                 }
                                 SchedNode::Exec(r) => self.exec_rule(inst, r),
+                            }
+                        }
+                        // batch auto-fire: always_enabled top methods
+                        // execute at their cut position — after this
+                        // entry's nodes (EN reads constant 1 via the
+                        // top params; call_action's check_rdy guards
+                        // each fire; $finish semantics as for rules)
+                        if !self.autofire_at.is_empty() {
+                            if let Some(idxs) =
+                                self.autofire_at.get(&(rci, ei)).cloned()
+                            {
+                                for mi in idxs {
+                                    let (m, argv) = self.autofire[mi].clone();
+                                    self.call_action(0, m, &argv);
+                                }
                             }
                         }
                     }
@@ -5272,7 +5367,11 @@ impl Interp {
     /// path — no file I/O at `sim load` time).
     pub fn from_bir_bytes(bytes: &[u8]) -> Result<Interp, String> {
         let design = Design::decode(bytes).map_err(|e| e.to_string())?;
-        let mut interp = Interp::new(design);
+        // no binding surface here: the interactive tier refuses
+        // binding/auto-fire designs at `trs link --interactive`, and
+        // a stale model of one fails loudly (missing binding) rather
+        // than reading zeros
+        let mut interp = Interp::new_bound(design, &[])?;
         interp.bir_hash = bir_fingerprint(bytes);
         Ok(interp)
     }
@@ -5316,7 +5415,9 @@ pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
         return Err("no embedded design in this executable (trs_snap)".into());
     };
     sl.lap("design load (self-image snap)");
-    let mut interp = Interp::new(design);
+    // --exe artifacts refuse binding designs at link, so no binding
+    // surface here either; a stale PIE of one fails loudly
+    let mut interp = Interp::new_bound(design, &[])?;
     sl.lap("interp build (instantiate)");
     interp.bir_hash = hash;
     interp.fe.plusargs = plusargs.to_vec();
@@ -5354,6 +5455,7 @@ pub fn run_file(
     path: &str,
     max_cycles: u64,
     plusargs: &[String],
+    binds: &[topbind::TopBind],
     vcd_file: Option<&str>,
     wave: Option<(WaveFormat, Option<String>)>,
     code: Option<&str>,
@@ -5364,16 +5466,19 @@ pub fn run_file(
     // selfcheck-free artifact run whose sidecar carries an eligible
     // descriptor + baked window boots here — no design decode, no
     // Interp, no plan.  Every gate failure falls through silently to
-    // the classic boot below.
+    // the classic boot below.  Top-level bindings boot classic: the
+    // classic loader owns the baked-bind identity check (and the
+    // recompile-on-mismatch fallback), which the boot cannot do.
     #[cfg(feature = "aot")]
-    if selfcheck.is_none() && wave.is_none() && vcd_file.is_none() {
+    if selfcheck.is_none() && wave.is_none() && vcd_file.is_none() && binds.is_empty() {
         if let Some(so) = code {
             if let Some(rc) = runcore::try_boot(so, max_cycles, plusargs) {
                 return Ok(rc);
             }
         }
     }
-    let mut interp = startup::load_file_or_code(path, code, plusargs, vcd_file)?;
+    let mut interp =
+        startup::load_file_or_code(path, code, plusargs, binds, vcd_file)?;
     if let Some((vcd, fst)) = formats {
         interp.set_allowed_wave_formats(vcd, fst);
     }
@@ -5441,7 +5546,7 @@ pub fn run_file(
     let mut shadows: Vec<(&'static str, Interp)> = Vec::new();
     for kind in kinds {
         prim::QUIET_ENGINE.with(|c| c.set(true));
-        let sh = startup::load_file_or_code(path, code, plusargs, None);
+        let sh = startup::load_file_or_code(path, code, plusargs, binds, None);
         prim::QUIET_ENGINE.with(|c| c.set(false));
         let mut sh = sh?;
         sh.set_quiet();

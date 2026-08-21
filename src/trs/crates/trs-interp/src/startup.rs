@@ -37,9 +37,10 @@ impl StartupLap {
 pub fn load_file(
     path: &str,
     plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, vcd_file, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true)
 }
 
 /// Code-aware load: prefer the design snapshot EMBEDDED in the
@@ -52,17 +53,23 @@ pub fn load_file_or_code(
     path: &str,
     code: Option<&str>,
     plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
     let mut sl = StartupLap::new();
-    if let Some(so) = code {
+    // binding designs load from the .bir: the embedded snap adopts
+    // the ARTIFACT's identity hash (which folded the LINK-time bind
+    // salt), so a run with different bindings would wrongly accept
+    // the baked code.  Loading from the .bir recomputes the identity
+    // from this run's bindings and the stamp check does its job.
+    if let Some(so) = code.filter(|_| binds.is_empty()) {
         if let Some((hash, design)) = crate::jit::aot_embedded_design(
             &crate::jit::ArtifactSource::Path(so.into()),
         ) {
             sl.lap("design load (artifact-embedded snap)");
-            let mut interp = Interp::new(design);
+            let mut interp = Interp::new_bound(design, binds)?;
             sl.lap("interp build (instantiate)");
-            interp.bir_hash = hash;
+            interp.bir_hash = hash ^ interp.top_binds_salt();
             interp.fe.plusargs = plusargs.to_vec();
             interp.wave_pending =
                 vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
@@ -83,7 +90,7 @@ pub fn load_file_or_code(
             return Ok(interp);
         }
     }
-    load_file_inner(path, plusargs, vcd_file, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true)
 }
 
 #[cfg(not(feature = "aot"))]
@@ -91,9 +98,10 @@ pub fn load_file_or_code(
     path: &str,
     _code: Option<&str>,
     plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, vcd_file, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true)
 }
 
 /// `load_file` that ignores any snapshot sidecar.  `trs link` is the
@@ -107,9 +115,10 @@ pub fn load_file_or_code(
 pub fn load_file_fresh(
     path: &str,
     plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, vcd_file, false)
+    load_file_inner(path, plusargs, binds, vcd_file, false)
 }
 
 #[cold]
@@ -117,6 +126,7 @@ pub fn load_file_fresh(
 fn load_file_inner(
     path: &str,
     plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
     use_snap: bool,
 ) -> Result<Interp, String> {
@@ -152,10 +162,18 @@ fn load_file_inner(
             d
         }
     };
-    let mut interp = Interp::new(design);
+    let mut interp = Interp::new_bound(design, binds)?;
     sl.lap("interp build (instantiate)");
-    interp.bir_hash = hash;
-    interp.fe.plusargs = plusargs.to_vec();
+    // the bind salt differentiates compiled artifacts by their baked
+    // constants (stamp and check both derive from bir_hash); the
+    // snapshot key strips it again (write_snapshot)
+    interp.bir_hash = hash ^ interp.top_binds_salt();
+    // +NAME=value arguments consumed as bindings are not plusargs
+    interp.fe.plusargs = plusargs
+        .iter()
+        .filter(|p| !interp.consumed_plus().iter().any(|c| c == *p))
+        .cloned()
+        .collect();
     interp.wave_pending =
         vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
     // user BDPI code lives in a companion shared object next to the .bir
@@ -171,11 +189,14 @@ fn load_file_inner(
 
 impl Interp {
     /// Write the decoded-design snapshot sidecar (`Design::snap_encode`)
-    /// keyed by this interp's .bir fingerprint.
+    /// keyed by this interp's .bir fingerprint.  The snapshot holds
+    /// the DECODED DESIGN, which is binding-independent, so the key
+    /// strips the top-binds salt the loaders folded into bir_hash —
+    /// a later run with different bindings may still replay it.
     #[cold]
     #[inline(never)]
     pub fn write_snapshot(&self, path: &str) -> Result<(), String> {
-        let b = self.d.snap_encode(self.bir_hash)?;
+        let b = self.d.snap_encode(self.bir_hash ^ self.top_binds_salt())?;
         std::fs::write(path, b).map_err(|e| format!("{path}: {e}"))
     }
 }
