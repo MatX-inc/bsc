@@ -32,12 +32,16 @@ use crate::prim::Prim;
 use crate::value::Value;
 use trs_codegen::abi::{self, FArgSpec, FnProtos, TOKEN_KIND_EXEC};
 
-/// Everything a boot needs from the sidecar.
+/// Everything a boot needs from the sidecar.  The string and path
+/// tables are (offset, len) RANGES into the sidecar bytes — CFL-class
+/// designs carry thousands of rule-name strings, and a String per
+/// entry was the dominant boot allocation (the boot-alloc rung); each
+/// range is UTF-8-validated once at parse and sliced unchecked after.
 struct Boot {
     hash: u64,
     nslots: usize,
-    strings: Vec<String>,
-    paths: Vec<String>,
+    strings: Vec<(u32, u32)>,
+    paths: Vec<(u32, u32)>,
     hi: u64,
     lo: u64,
     pos: Vec<usize>,
@@ -96,6 +100,16 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
         *pos += n;
         Some(std::str::from_utf8(s).ok()?.to_string())
     };
+    // allocation-free variant for the big tables: validate the UTF-8
+    // here, hand back the range (table_str slices it unchecked later)
+    let take_range = |pos: &mut usize| -> Option<(u32, u32)> {
+        let n = usize::try_from(take8(pos)?).ok()?;
+        let s = bytes.get(*pos..pos.checked_add(n)?)?;
+        std::str::from_utf8(s).ok()?;
+        let r = (u32::try_from(*pos).ok()?, u32::try_from(n).ok()?);
+        *pos += n;
+        Some(r)
+    };
     if bytes.get(pos..pos + 8) != Some(&b"TRSBOOTD"[..]) {
         return None;
     }
@@ -140,14 +154,14 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
                 let n = usize::try_from(take8(&mut p)?).ok()?;
                 b.strings = Vec::with_capacity(n.min(1 << 20));
                 for _ in 0..n {
-                    b.strings.push(take_str(&mut p)?);
+                    b.strings.push(take_range(&mut p)?);
                 }
             }
             RC_SEC_PATHS => {
                 let n = usize::try_from(take8(&mut p)?).ok()?;
                 b.paths = Vec::with_capacity(n.min(1 << 20));
                 for _ in 0..n {
-                    b.paths.push(take_str(&mut p)?);
+                    b.paths.push(take_range(&mut p)?);
                 }
             }
             RC_SEC_CLOCK => {
@@ -293,12 +307,27 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
 
 /// The boot's foreign context: ForeignEnv plus the baked tables —
 /// the whole state behind runcore_foreign_cb.
+/// Slice one validated string range out of the sidecar buffer.
+///
+/// # Safety (by invariant, not by caller contract)
+/// Every range stored in Boot/RunCore came from parse_sidecar, which
+/// UTF-8-validated exactly these bytes; the buffer is immutable for
+/// the boot lifetime, so the unchecked conversion cannot observe
+/// invalid UTF-8.
+fn table_str(buf: &[u8], r: (u32, u32)) -> &str {
+    let (o, l) = (r.0 as usize, r.1 as usize);
+    unsafe { std::str::from_utf8_unchecked(&buf[o..o + l]) }
+}
+
 struct RunCore {
     fe: ForeignEnv,
-    strings: Vec<String>,
+    /// the sidecar bytes — the string/path tables below are ranges
+    /// into this buffer (zero-copy boot, see Boot)
+    buf: Vec<u8>,
+    strings: Vec<(u32, u32)>,
     dyn_strs: Vec<String>,
     arg_strs: HashMap<u32, std::sync::Arc<str>>,
-    paths: Vec<String>,
+    paths: Vec<(u32, u32)>,
     protos: Vec<FnProtos>,
     /// $random/$srandom (library rand32/srand BDPI): same fresh glibc
     /// stream a classic boot starts with; window-time draws are an
@@ -325,7 +354,7 @@ impl RunCore {
     fn s(&self, id: u32) -> &str {
         let n = self.strings.len();
         if (id as usize) < n {
-            &self.strings[id as usize]
+            table_str(&self.buf, self.strings[id as usize])
         } else {
             &self.dyn_strs[id as usize - n]
         }
@@ -341,8 +370,10 @@ impl RunCore {
             if let Some(a) = &self.arg_strs_vec[id as usize] {
                 return a.clone();
             }
-            let a: std::sync::Arc<str> =
-                std::sync::Arc::from(self.strings[id as usize].as_str());
+            let a: std::sync::Arc<str> = std::sync::Arc::from(table_str(
+                &self.buf,
+                self.strings[id as usize],
+            ));
             self.arg_strs_vec[id as usize] = Some(a.clone());
             return a;
         }
@@ -428,7 +459,7 @@ unsafe extern "C" fn runcore_foreign_cb(
     let mut loc = std::mem::take(&mut rc.loc_buf);
     loc.clear();
     loc.push_str("top");
-    let p = &rc.paths[inst];
+    let p = table_str(&rc.buf, rc.paths[inst]);
     if !p.is_empty() {
         loc.push('.');
         loc.push_str(p);
@@ -518,17 +549,22 @@ unsafe extern "C" fn runcore_prim_cb(
         // resolving it through the table panics on every gate bounce)
         *out = p.gate_out() as u64;
     } else if pc.is_action {
-        // method ids name design strings (never dyn); alloc-free
-        let name: &str = rc
-            .strings
-            .get(pc.method as usize)
-            .expect("prim method id outside the design string table");
+        // method ids name design strings (never dyn); alloc-free.
+        // Field-precise borrows on purpose: `p` holds rc.prims mutably
+        let name: &str = table_str(
+            &rc.buf,
+            *rc.strings
+                .get(pc.method as usize)
+                .expect("prim method id outside the design string table"),
+        );
         p.action_method(name, &argv, rc.now);
     } else {
-        let name: &str = rc
-            .strings
-            .get(pc.method as usize)
-            .expect("prim method id outside the design string table");
+        let name: &str = table_str(
+            &rc.buf,
+            *rc.strings
+                .get(pc.method as usize)
+                .expect("prim method id outside the design string table"),
+        );
         let v = p.value_method(name, &argv, rc.now);
         let words = ((pc.ret_width.max(1) as usize) + 63) / 64;
         let dst = std::slice::from_raw_parts_mut(out, words);
@@ -575,7 +611,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         bail("no sidecar");
         return None;
     };
-    let Some(boot) = parse_sidecar(&bytes) else {
+    let Some(mut boot) = parse_sidecar(&bytes) else {
         bail("sidecar ineligible or malformed");
         return None;
     };
@@ -658,9 +694,12 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         }
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);
-        // arena: the baked post-window image IS the boot state
-        let (image, tp0, cycle0) = boot.window.as_ref().unwrap();
-        let mut arena = image.clone().into_boxed_slice();
+        // arena: the baked post-window image IS the boot state — moved
+        // out, not cloned (a clone re-touched every arena page: a full
+        // alloc + memcpy on the boot path; nothing reads window after)
+        let (image, tp0, cycle0) = boot.window.take().unwrap();
+        let (tp0, cycle0) = (&tp0, &cycle0);
+        let mut arena = image.into_boxed_slice();
         let ap = arena.as_mut_ptr();
         // BRAM collision warnings: same hook, same registry, keyed by
         // this arena's absolute pointers
@@ -709,6 +748,8 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         }
         let mut rc = RunCore {
             fe: ForeignEnv::new(),
+            // the string/path tables are ranges into these bytes
+            buf: bytes,
             strings: boot.strings,
             dyn_strs: Vec::new(),
             arg_strs: HashMap::new(),
