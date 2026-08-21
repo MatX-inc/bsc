@@ -7,19 +7,19 @@ mkTest
 ---------
     mkTest         	 --  	 
         y              	 --  Vector::Vector#(4, Reg#(Int#(32)))	 
-            _element_0     	 -- RegUN Reg#(Int#(32))	y_0 
             _element_1     	 -- RegUN Reg#(Int#(32))	y_1 
             _element_2     	 -- RegUN Reg#(Int#(32))	y_2 
             _element_3     	 -- RegUN Reg#(Int#(32))	y_3 
+            _element_0     	 -- RegUN Reg#(Int#(32))	y_0 
         zw             	 --  Vector::Vector#(5, Reg#(Int#(32)))	 
-            _element_0     	 -- RegN Reg#(Int#(32))	zw_0 
             _element_1     	 -- RegN Reg#(Int#(32))	zw_1 
             _element_2     	 -- RegN Reg#(Int#(32))	zw_2 
             _element_3     	 -- RegN Reg#(Int#(32))	zw_3 
             _element_4     	 -- RegN Reg#(Int#(32))	zw_4 
+            _element_0     	 -- RegN Reg#(Int#(32))	zw_0 
         xx             	 --  Vector::Vector#(2, Test::Foo#(Test::Bar))	 
-            _element_0     	 -- VFoo Test::Foo#(Test::Bar)	xx_0 
             _element_1     	 -- VFoo Test::Foo#(Test::Bar)	xx_1 
+            _element_0     	 -- VFoo Test::Foo#(Test::Bar)	xx_0 
         Loop           	 --  Tuple2#(Integer, Vector::Vector#(4, Reg#(Int#(32))))	 
             x_0            	 -- RegUN Reg#(Int#(32))	x_0 
             x_1            	 -- RegUN Reg#(Int#(32))	x_1 
@@ -39,12 +39,12 @@ mkTest
                 aa_3           	 -- RegUN Reg#(Int#(32))	aa_3 
                 bb_3           	 -- RegUN Reg#(Int#(32))	bb_3 
         subis          	 --  Vector::Vector#(2, Test2::Sub_Ifc)	 
-            _element_0     	 -- mkSub Test2::Sub_Ifc	subis_0 
-                foo2           	 -- RegN Reg#(Int#(32))	subis_0.foo2 
-                barx           	 -- RegN Reg#(Bit#(3))	subis_0.barx 
             _element_1     	 -- mkSub Test2::Sub_Ifc	subis_1 
                 foo2           	 -- RegN Reg#(Int#(32))	subis_1.foo2 
                 barx           	 -- RegN Reg#(Bit#(3))	subis_1.barx 
+            _element_0     	 -- mkSub Test2::Sub_Ifc	subis_0 
+                foo2           	 -- RegN Reg#(Int#(32))	subis_0.foo2 
+                barx           	 -- RegN Reg#(Bit#(3))	subis_0.barx 
 Command: browseinst list 0
 1 mkTest synth
 ---------
@@ -71,10 +71,10 @@ X(SynthPath)  =
 X(UniqueName) = 
 ---------
 Command: browseinst list 2
-8 {_element_0  Reg#(Int#(32))} prim
-9 {_element_1  Reg#(Int#(32))} prim
-10 {_element_2  Reg#(Int#(32))} prim
-11 {_element_3  Reg#(Int#(32))} prim
+8 {_element_1  Reg#(Int#(32))} prim
+9 {_element_2  Reg#(Int#(32))} prim
+10 {_element_3  Reg#(Int#(32))} prim
+11 {_element_0  Reg#(Int#(32))} prim
 ---------
 Command: browseinst detail 2
 X(BSVModule) = mkTest
@@ -91,21 +91,6 @@ Command: browseinst list 8
 ---------
 Command: browseinst detail 8
 X(BSVModule)  = mkTest
-X(BSVPath)    = y _element_0
-X(DEBUG)      = BLeaf _element_0 RegUN Just ((Reg#(Int#(32))))
-X(Interface)  = Reg#(Int#(32))
-X(LocalPath)  = 
-X(Module)     = RegUN
-X(Name)       = _element_0
-X(Node)       = Primitive
-X(SynthPath)  = y_0
-X(UniqueName) = y_0
-X(position)   = %/Libraries/List.bs 748 4 {Library List}
----------
-Command: browseinst list 9
----------
-Command: browseinst detail 9
-X(BSVModule)  = mkTest
 X(BSVPath)    = y _element_1
 X(DEBUG)      = BLeaf _element_1 RegUN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
@@ -117,9 +102,9 @@ X(SynthPath)  = y_1
 X(UniqueName) = y_1
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
-Command: browseinst list 10
+Command: browseinst list 9
 ---------
-Command: browseinst detail 10
+Command: browseinst detail 9
 X(BSVModule)  = mkTest
 X(BSVPath)    = y _element_2
 X(DEBUG)      = BLeaf _element_2 RegUN Just ((Reg#(Int#(32))))
@@ -132,9 +117,9 @@ X(SynthPath)  = y_2
 X(UniqueName) = y_2
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
-Command: browseinst list 11
+Command: browseinst list 10
 ---------
-Command: browseinst detail 11
+Command: browseinst detail 10
 X(BSVModule)  = mkTest
 X(BSVPath)    = y _element_3
 X(DEBUG)      = BLeaf _element_3 RegUN Just ((Reg#(Int#(32))))
@@ -147,12 +132,27 @@ X(SynthPath)  = y_3
 X(UniqueName) = y_3
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
+Command: browseinst list 11
+---------
+Command: browseinst detail 11
+X(BSVModule)  = mkTest
+X(BSVPath)    = y _element_0
+X(DEBUG)      = BLeaf _element_0 RegUN Just ((Reg#(Int#(32))))
+X(Interface)  = Reg#(Int#(32))
+X(LocalPath)  = 
+X(Module)     = RegUN
+X(Name)       = _element_0
+X(Node)       = Primitive
+X(SynthPath)  = y_0
+X(UniqueName) = y_0
+X(position)   = %/Libraries/List.bs 748 4 {Library List}
+---------
 Command: browseinst list 3
-12 {_element_0  Reg#(Int#(32))} prim
-13 {_element_1  Reg#(Int#(32))} prim
-14 {_element_2  Reg#(Int#(32))} prim
-15 {_element_3  Reg#(Int#(32))} prim
-16 {_element_4  Reg#(Int#(32))} prim
+12 {_element_1  Reg#(Int#(32))} prim
+13 {_element_2  Reg#(Int#(32))} prim
+14 {_element_3  Reg#(Int#(32))} prim
+15 {_element_4  Reg#(Int#(32))} prim
+16 {_element_0  Reg#(Int#(32))} prim
 ---------
 Command: browseinst detail 3
 X(BSVModule) = mkTest
@@ -169,21 +169,6 @@ Command: browseinst list 12
 ---------
 Command: browseinst detail 12
 X(BSVModule)  = mkTest
-X(BSVPath)    = zw _element_0
-X(DEBUG)      = BLeaf _element_0 RegN Just ((Reg#(Int#(32))))
-X(Interface)  = Reg#(Int#(32))
-X(LocalPath)  = 
-X(Module)     = RegN
-X(Name)       = _element_0
-X(Node)       = Primitive
-X(SynthPath)  = zw_0
-X(UniqueName) = zw_0
-X(position)   = %/Libraries/List.bs 748 4 {Library List}
----------
-Command: browseinst list 13
----------
-Command: browseinst detail 13
-X(BSVModule)  = mkTest
 X(BSVPath)    = zw _element_1
 X(DEBUG)      = BLeaf _element_1 RegN Just ((Reg#(Int#(32))))
 X(Interface)  = Reg#(Int#(32))
@@ -195,9 +180,9 @@ X(SynthPath)  = zw_1
 X(UniqueName) = zw_1
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
-Command: browseinst list 14
+Command: browseinst list 13
 ---------
-Command: browseinst detail 14
+Command: browseinst detail 13
 X(BSVModule)  = mkTest
 X(BSVPath)    = zw _element_2
 X(DEBUG)      = BLeaf _element_2 RegN Just ((Reg#(Int#(32))))
@@ -210,9 +195,9 @@ X(SynthPath)  = zw_2
 X(UniqueName) = zw_2
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
-Command: browseinst list 15
+Command: browseinst list 14
 ---------
-Command: browseinst detail 15
+Command: browseinst detail 14
 X(BSVModule)  = mkTest
 X(BSVPath)    = zw _element_3
 X(DEBUG)      = BLeaf _element_3 RegN Just ((Reg#(Int#(32))))
@@ -225,9 +210,9 @@ X(SynthPath)  = zw_3
 X(UniqueName) = zw_3
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
-Command: browseinst list 16
+Command: browseinst list 15
 ---------
-Command: browseinst detail 16
+Command: browseinst detail 15
 X(BSVModule)  = mkTest
 X(BSVPath)    = zw _element_4
 X(DEBUG)      = BLeaf _element_4 RegN Just ((Reg#(Int#(32))))
@@ -240,9 +225,24 @@ X(SynthPath)  = zw_4
 X(UniqueName) = zw_4
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
+Command: browseinst list 16
+---------
+Command: browseinst detail 16
+X(BSVModule)  = mkTest
+X(BSVPath)    = zw _element_0
+X(DEBUG)      = BLeaf _element_0 RegN Just ((Reg#(Int#(32))))
+X(Interface)  = Reg#(Int#(32))
+X(LocalPath)  = 
+X(Module)     = RegN
+X(Name)       = _element_0
+X(Node)       = Primitive
+X(SynthPath)  = zw_0
+X(UniqueName) = zw_0
+X(position)   = %/Libraries/List.bs 748 4 {Library List}
+---------
 Command: browseinst list 4
-17 {_element_0  Foo#(Bar)} prim
-18 {_element_1  Foo#(Bar)} prim
+17 {_element_1  Foo#(Bar)} prim
+18 {_element_0  Foo#(Bar)} prim
 ---------
 Command: browseinst detail 4
 X(BSVModule) = mkTest
@@ -259,21 +259,6 @@ Command: browseinst list 17
 ---------
 Command: browseinst detail 17
 X(BSVModule)  = mkTest
-X(BSVPath)    = xx _element_0
-X(DEBUG)      = BLeaf _element_0 VFoo Just ((Test::Foo#(Test::Bar)))
-X(Interface)  = Test::Foo#(Test::Bar)
-X(LocalPath)  = 
-X(Module)     = VFoo
-X(Name)       = _element_0
-X(Node)       = Primitive
-X(SynthPath)  = xx_0
-X(UniqueName) = xx_0
-X(position)   = %/Libraries/List.bs 784 4 {Library List}
----------
-Command: browseinst list 18
----------
-Command: browseinst detail 18
-X(BSVModule)  = mkTest
 X(BSVPath)    = xx _element_1
 X(DEBUG)      = BLeaf _element_1 VFoo Just ((Test::Foo#(Test::Bar)))
 X(Interface)  = Test::Foo#(Test::Bar)
@@ -283,6 +268,21 @@ X(Name)       = _element_1
 X(Node)       = Primitive
 X(SynthPath)  = xx_1
 X(UniqueName) = xx_1
+X(position)   = %/Libraries/List.bs 784 4 {Library List}
+---------
+Command: browseinst list 18
+---------
+Command: browseinst detail 18
+X(BSVModule)  = mkTest
+X(BSVPath)    = xx _element_0
+X(DEBUG)      = BLeaf _element_0 VFoo Just ((Test::Foo#(Test::Bar)))
+X(Interface)  = Test::Foo#(Test::Bar)
+X(LocalPath)  = 
+X(Module)     = VFoo
+X(Name)       = _element_0
+X(Node)       = Primitive
+X(SynthPath)  = xx_0
+X(UniqueName) = xx_0
 X(position)   = %/Libraries/List.bs 784 4 {Library List}
 ---------
 Command: browseinst list 5
@@ -560,8 +560,8 @@ X(UniqueName) = bb_3
 X(position)   = Test2.bsv 25 6
 ---------
 Command: browseinst list 7
-35 {_element_0  Sub_Ifc} synth
-36 {_element_1  Sub_Ifc} synth
+35 {_element_1  Sub_Ifc} synth
+36 {_element_0  Sub_Ifc} synth
 ---------
 Command: browseinst detail 7
 X(BSVModule) = mkTest
@@ -580,53 +580,6 @@ Command: browseinst list 35
 ---------
 Command: browseinst detail 35
 X(BSVModule)  = mkSub
-X(BSVPath)    = subis _element_0
-X(DEBUG)      = BMod _element_0 Just (Test2::Sub_Ifc)
-X(Interface)  = Test2::Sub_Ifc
-X(LocalPath)  = 
-X(Module)     = mkSub
-X(Name)       = _element_0
-X(Node)       = Synthesized
-X(SynthPath)  = subis_0
-X(UniqueName) = subis_0
-X(position)   = %/Libraries/List.bs 748 4 {Library List}
----------
-Command: browseinst list 37
----------
-Command: browseinst detail 37
-X(BSVModule)  = mkSub
-X(BSVPath)    = subis _element_0 foo2
-X(DEBUG)      = BLeaf foo2 RegN Just ((Reg#(Int#(32))))
-X(Interface)  = Reg#(Int#(32))
-X(LocalPath)  = 
-X(Module)     = RegN
-X(Name)       = foo2
-X(Node)       = Primitive
-X(SynthPath)  = subis_0 foo2
-X(UniqueName) = foo2
-X(position)   = Test2.bsv 41 14
----------
-Command: browseinst list 38
----------
-Command: browseinst detail 38
-X(BSVModule)  = mkSub
-X(BSVPath)    = subis _element_0 barx
-X(DEBUG)      = BLeaf barx RegN Just ((Reg#(Bit#(3))))
-X(Interface)  = Reg#(Bit#(3))
-X(LocalPath)  = 
-X(Module)     = RegN
-X(Name)       = barx
-X(Node)       = Primitive
-X(SynthPath)  = subis_0 barx
-X(UniqueName) = barx
-X(position)   = Test2.bsv 42 18
----------
-Command: browseinst list 36
-39 {foo2  Reg#(Int#(32))} prim
-40 {barx  Reg#(Bit#(3))} prim
----------
-Command: browseinst detail 36
-X(BSVModule)  = mkSub
 X(BSVPath)    = subis _element_1
 X(DEBUG)      = BMod _element_1 Just (Test2::Sub_Ifc)
 X(Interface)  = Test2::Sub_Ifc
@@ -638,9 +591,9 @@ X(SynthPath)  = subis_1
 X(UniqueName) = subis_1
 X(position)   = %/Libraries/List.bs 748 4 {Library List}
 ---------
-Command: browseinst list 39
+Command: browseinst list 37
 ---------
-Command: browseinst detail 39
+Command: browseinst detail 37
 X(BSVModule)  = mkSub
 X(BSVPath)    = subis _element_1 foo2
 X(DEBUG)      = BLeaf foo2 RegN Just ((Reg#(Int#(32))))
@@ -653,9 +606,9 @@ X(SynthPath)  = subis_1 foo2
 X(UniqueName) = foo2
 X(position)   = Test2.bsv 41 14
 ---------
-Command: browseinst list 40
+Command: browseinst list 38
 ---------
-Command: browseinst detail 40
+Command: browseinst detail 38
 X(BSVModule)  = mkSub
 X(BSVPath)    = subis _element_1 barx
 X(DEBUG)      = BLeaf barx RegN Just ((Reg#(Bit#(3))))
@@ -668,6 +621,53 @@ X(SynthPath)  = subis_1 barx
 X(UniqueName) = barx
 X(position)   = Test2.bsv 42 18
 ---------
+Command: browseinst list 36
+39 {foo2  Reg#(Int#(32))} prim
+40 {barx  Reg#(Bit#(3))} prim
+---------
+Command: browseinst detail 36
+X(BSVModule)  = mkSub
+X(BSVPath)    = subis _element_0
+X(DEBUG)      = BMod _element_0 Just (Test2::Sub_Ifc)
+X(Interface)  = Test2::Sub_Ifc
+X(LocalPath)  = 
+X(Module)     = mkSub
+X(Name)       = _element_0
+X(Node)       = Synthesized
+X(SynthPath)  = subis_0
+X(UniqueName) = subis_0
+X(position)   = %/Libraries/List.bs 748 4 {Library List}
+---------
+Command: browseinst list 39
+---------
+Command: browseinst detail 39
+X(BSVModule)  = mkSub
+X(BSVPath)    = subis _element_0 foo2
+X(DEBUG)      = BLeaf foo2 RegN Just ((Reg#(Int#(32))))
+X(Interface)  = Reg#(Int#(32))
+X(LocalPath)  = 
+X(Module)     = RegN
+X(Name)       = foo2
+X(Node)       = Primitive
+X(SynthPath)  = subis_0 foo2
+X(UniqueName) = foo2
+X(position)   = Test2.bsv 41 14
+---------
+Command: browseinst list 40
+---------
+Command: browseinst detail 40
+X(BSVModule)  = mkSub
+X(BSVPath)    = subis _element_0 barx
+X(DEBUG)      = BLeaf barx RegN Just ((Reg#(Bit#(3))))
+X(Interface)  = Reg#(Bit#(3))
+X(LocalPath)  = 
+X(Module)     = RegN
+X(Name)       = barx
+X(Node)       = Primitive
+X(SynthPath)  = subis_0 barx
+X(UniqueName) = barx
+X(position)   = Test2.bsv 42 18
+---------
 Command: browseinst debug
 0 ROOT
 1 mkTest
@@ -677,17 +677,17 @@ Command: browseinst debug
 5 Loop
 6 Loop
 7 subis
-8 {_element_0  Reg#(Int#(32))}
-9 {_element_1  Reg#(Int#(32))}
-10 {_element_2  Reg#(Int#(32))}
-11 {_element_3  Reg#(Int#(32))}
-12 {_element_0  Reg#(Int#(32))}
-13 {_element_1  Reg#(Int#(32))}
-14 {_element_2  Reg#(Int#(32))}
-15 {_element_3  Reg#(Int#(32))}
-16 {_element_4  Reg#(Int#(32))}
-17 {_element_0  Foo#(Bar)}
-18 {_element_1  Foo#(Bar)}
+8 {_element_1  Reg#(Int#(32))}
+9 {_element_2  Reg#(Int#(32))}
+10 {_element_3  Reg#(Int#(32))}
+11 {_element_0  Reg#(Int#(32))}
+12 {_element_1  Reg#(Int#(32))}
+13 {_element_2  Reg#(Int#(32))}
+14 {_element_3  Reg#(Int#(32))}
+15 {_element_4  Reg#(Int#(32))}
+16 {_element_0  Reg#(Int#(32))}
+17 {_element_1  Foo#(Bar)}
+18 {_element_0  Foo#(Bar)}
 19 {x_0  Reg#(Int#(32))}
 20 {x_1  Reg#(Int#(32))}
 21 {x_2  Reg#(Int#(32))}
@@ -704,8 +704,8 @@ Command: browseinst debug
 32 {bb_2  Reg#(Int#(32))}
 33 {aa_3  Reg#(Int#(32))}
 34 {bb_3  Reg#(Int#(32))}
-35 {_element_0  Sub_Ifc}
-36 {_element_1  Sub_Ifc}
+35 {_element_1  Sub_Ifc}
+36 {_element_0  Sub_Ifc}
 37 {foo2  Reg#(Int#(32))}
 38 {barx  Reg#(Bit#(3))}
 39 {foo2  Reg#(Int#(32))}
