@@ -1269,10 +1269,12 @@ savePortType minst port t = do
             ++ ppString port ++ ": " ++ ppReadable t)
   s <- get
   let old_map = portTypeMap s
-  let new_map = M.insertWith (flip M.union)
-                         minst (M.singleton port t)
-                         old_map
-  put s { portTypeMap = new_map }
+  -- force the per-instance map, so that repeated saves do not stack
+  -- pending unions whose eventual forcing recurses once per save
+  let new_val = case (M.lookup minst old_map) of
+                  Nothing      -> M.singleton port t
+                  Just old_val -> M.union old_val (M.singleton port t)
+  new_val `seq` put s { portTypeMap = M.insert minst new_val old_map }
 
 -- ---------------
 
