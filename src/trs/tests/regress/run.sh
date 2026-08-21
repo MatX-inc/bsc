@@ -151,6 +151,10 @@ check_vcd() { # name top
     echo "PASS $name"
 }
 check_vcd FifoVcd sysFifoVcd
+# wide (>64-bit) module arguments in compiled bodies: multi-limb
+# port_consts (a single-u64 store once folded them to 0/1 and the run
+# went silently empty)
+check WideArgConst sysWideArgConst
 # ---- top-level restriction lifts (-trs only; no reference Bluesim
 # executable exists for these BY DESIGN — classic Bluesim refuses the
 # design class, so stdout gates against stored hand-derived goldens
@@ -248,4 +252,37 @@ check_topclk() {
     echo "PASS $name"
 }
 check_topclk
+# dynamic scheduling (bsc G0096/G0100/G0101/G0116 family): no
+# reference Bluesim exe exists by design — the classic C++ backend
+# refuses these designs — so stdout diffs against a stored golden
+# whose values are hand-derived.  Also gates the two refusals: plain
+# -sim errors with the class's tag, and -sched-dynamic without -trs
+# errors at link.
+check_dyn() { # name top errtag
+    name=$1; top=$2; tag=$3
+    cp "$SRC/$name.bsv" .
+    if $BSC -sim -u -g "$top" "$name.bsv" >dyn_err1.out 2>&1; then
+        echo "FAIL $name (static compile unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "$tag" dyn_err1.out || { echo "FAIL $name (expected $tag)"; fail=1; return; }
+    $BSC -sim -sched-dynamic -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc -sched-dynamic)"; fail=1; return; }
+    if $BSC -sim -sched-dynamic -bir -e "$top" -o dyn_ref.exe >dyn_err2.out 2>&1; then
+        echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "trs backend" dyn_err2.out || { echo "FAIL $name (expected trs-backend refusal)"; fail=1; return; }
+    $BSC -sim -sched-dynamic -bir -trs -e "$top" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (bsc -trs link)"; fail=1; return; }
+    "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
+    if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
+    "$TRS" link "$top.bir" -o dynart >dynlink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    # the compiled engine does not execute dynamic schedules yet; a
+    # compiled artifact here would mean the jit gate silently vanished
+    grep -q "run interpreted" dynlink.out || { echo "FAIL $name (expected interpreted artifact)"; fail=1; return; }
+    TRS="$TRS" ./dynart > gota.out 2>&1 || { echo "FAIL $name (art run)"; fail=1; return; }
+    if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_dyn DynSched sysDynSched G0100
+check_dyn DynSchedBoth sysDynSchedBoth G0101
+check_dyn DynSchedSelf sysDynSchedSelf G0096
+check_dyn DynSchedLoop sysDynSchedLoop G0116
 exit $fail

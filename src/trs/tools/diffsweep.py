@@ -232,7 +232,7 @@ def one_test(job):
     # trs-only golden-compared designs (<top>.trsonly.expected
     # sidecar): no reference Bluesim executable exists BY DESIGN —
     # classic Bluesim refuses the design class (top-level args/params,
-    # always_enabled top methods) — so the "reference" is the stored
+    # always_enabled top methods, dynamic scheduling) — so the "reference" is the stored
     # hand-derived golden and the sidecar's bindings/engine
     # expectations.  The name ends in "expected" because the
     # testsuite's `make clean` deletes sys*/mk* files EXCEPT
@@ -372,6 +372,8 @@ def one_test(job):
 def _trsonly_test(rel, top, wk, testdir, src, trsonly):
     """One trs-only golden-compared design (<top>.trsonly.expected).
     The sidecar reads:
+         flags=<bsc flags> extra bsc flags admitting the design
+                           (e.g. -sched-dynamic), all bsc calls
          refuse=<tag>      classic Bluesim link must fail with this tag
          bind=NAME=value   trs binding, repeated (recorded per design)
          engine=aot|interp expected engine, ASSERTED (byte parity is
@@ -382,7 +384,7 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
        expectation holds.  Any miss classifies DIFF so the census's
        0-DIFF gate stays the single tripwire."""
     import time as _time
-    refuse, binds, engine, why = "", [], "aot", ""
+    refuse, binds, engine, why, flags = "", [], "aot", "", []
     for line in open(trsonly, errors="replace"):
         line = line.strip()
         if line.startswith("refuse="):
@@ -393,6 +395,8 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
             engine = line[len("engine="):]
         elif line.startswith("why="):
             why = line[len("why="):]
+        elif line.startswith("flags="):
+            flags += line[len("flags="):].split()
     golden_p = os.path.join(testdir, top + ".out.expected")
     try:
         golden = open(golden_p, errors="replace").read()
@@ -406,16 +410,17 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
             except OSError:
                 pass
     common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-p", wk + ":+"]
-    r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk, timeout=180)
+    r = run([BSC, "-sim"] + flags + ["-u", "-g", top] + common + [src],
+            cwd=wk, timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
         return (rel, top, "COMPILE_FAIL",
                 "compile timeout" if r is None else first_error(msg))
 
-    # the classic refusal is part of the contract: these lifts are
+    # the classic refusal is part of the contract: these designs are
     # trs-only, and classic Bluesim's error must not drift
-    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "classic.exe"] + common,
-            cwd=wk, timeout=420)
+    r = run([BSC, "-sim"] + flags + ["-bir", "-e", top, "-o", "classic.exe"]
+            + common, cwd=wk, timeout=420)
     if r is None:
         return (rel, top, "LINK_FAIL", "classic-refusal probe timeout")
     if r.returncode == 0:
@@ -429,8 +434,8 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
     # required bindings that link step fails (loudly) AFTER exporting,
     # so only the .bir's existence gates here
     env = dict(ENV, TRS=TRS)
-    run([BSC, "-sim", "-bir", "-trs", "-e", top, "-o", "trs.exe"] + common,
-        cwd=wk, timeout=420, env=env)
+    run([BSC, "-sim"] + flags + ["-bir", "-trs", "-e", top, "-o", "trs.exe"]
+        + common, cwd=wk, timeout=420, env=env)
     bir = os.path.join(wk, top + ".bir")
     if not os.path.exists(bir):
         return (rel, top, "EXPORT_FAIL", "no .bir produced")
@@ -728,6 +733,22 @@ def main():
     print("\n=== classes ===")
     for cls, n in by_class.most_common():
         print(f"  {cls:14} {n}")
+
+    # An --aot sweep run with a jit-less trs binary passes byte parity
+    # on every design while measuring nothing about the compiled
+    # engine (the top-level `make install` builds trs without the jit
+    # feature unless LLVM_SYS_181_PREFIX is set).  That is never a
+    # legitimate census: fail loudly instead of printing an all-interp
+    # engine column.
+    if AOT:
+        nojit = sum(1 for r in results
+                    if "built_without_JIT" in (r[3] or ""))
+        if nojit:
+            print(f"\nFATAL: {nojit} designs ran interpreted because "
+                  f"this trs was built without the `jit` feature; "
+                  f"rebuild with `cargo build --release --features jit` "
+                  f"(or set LLVM_SYS_181_PREFIX for make) and re-sweep.")
+            sys.exit(2)
 
     print("\n=== top interpreter/export work items ===")
     reasons = collections.Counter(

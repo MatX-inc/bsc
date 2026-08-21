@@ -616,6 +616,7 @@ defaultFlags bluespecdir = Flags {
         ruleNameCheck = True,
         satBackend = SAT_Yices,
         schedConds = True,
+        schedDynamic = False,
         schedDOT = False,
         schedQueries = [],
         showCSyntax = False,
@@ -1473,6 +1474,10 @@ externalFlags = [
          (Toggle (\f x -> f {schedConds=x}) (showIfTrue schedConds),
           "include method conditions when computing rule conflicts", Hidden)),
 
+        ("sched-dynamic",
+         (Toggle (\f x -> f {schedDynamic=x}) (showIfTrue schedDynamic),
+          "allow dynamic scheduling (trs backend only)", Hidden)),
+
         ("sched-dot",
          (Toggle (\f x -> f {schedDOT=x}) (showIfTrue schedDOT),
           "generate .dot files with schedule information", Visible)),
@@ -1956,6 +1961,7 @@ showFlagsRaw flags =
           ("ruleNameCheck", show (ruleNameCheck flags)),
           ("satBackend", show (satBackend flags)),
           ("schedConds", show (schedConds flags)),
+          ("schedDynamic", show (schedDynamic flags)),
           ("schedDOT", show (schedDOT flags)),
           ("schedQueries", show (schedQueries flags)),
           ("showCSyntax", show (showCSyntax flags)),

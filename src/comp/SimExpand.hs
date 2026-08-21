@@ -27,7 +27,7 @@ import VModInfo
 import Wires(WireProps(..), ClockDomain)
 import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..))
 import ASyntax
-import ASyntaxUtil(aSubst, findAExprs, exprFold)
+import ASyntaxUtil(aSubst, findAExprs, exprFold, aAnds)
 import AScheduleInfo
 import AUses(MethodId(..))
 import Params(isConstAExpr)
@@ -289,8 +289,135 @@ simExpandSched abis0 hiermap instmap topmod = do
     -- create the SimSchedule
 
     let
-        mkPosSched (aclk, csi) =
-            let (sched_graph, sched_order) = flattenCombSchedGraph csi
+        mkPosSched (aclk, csi0) =
+            let -- ----------
+                -- dynamic scheduling (-sched-dynamic): resolve the
+                -- recorded pair by dropping the per-cycle-inactive
+                -- constraint's edges from the merged graph.  The base
+                -- order covers cycles where ruleE cannot fire (its
+                -- CAN_FIRE — the guard — is false): ruleE's fused
+                -- cross-instance outgoing edges are vacuous.  The
+                -- alternative covers cycles where the guard holds, so
+                -- ruleL cannot fire (CAN_FIREs are disjoint): ruleL's
+                -- fused cross-instance incoming edges are vacuous.  Rule
+                -- guard evaluation (Sched nodes) keeps all its edges in
+                -- both, so every guard still reads correctly-ordered
+                -- values.
+                sched_map0 = csi_sched_map csi0
+                qualOf sn = getIdQualString (getSchedNodeId sn)
+                (base_map, alt_specs) =
+                    case (csi_dyn_scheds csi0) of
+                      [] -> (sched_map0, [])
+                      facts ->
+                        let
+                            -- one alternative's guard is a conjunction
+                            -- evaluated in a single instance, so all the
+                            -- facts must live in one module
+                            factPath (p, _, _, _) = p
+                            path = case (nub (map factPath facts)) of
+                                     [p] -> p
+                                     ps -> internalError
+                                             ("SimExpand: dynamic "
+                                              ++ "scheduling supports "
+                                              ++ "pairs within a single "
+                                              ++ "module; found pairs in: "
+                                              ++ ppReadable ps)
+                            qual i = if null path then i
+                                     else qualifyChildId path i
+                            qualN n = if null path then n
+                                      else qualifyChildSchedNode path n
+
+                            -- The per-cycle states of one fact, each
+                            -- with the constraint drops that are vacuous
+                            -- in the cycles it covers: Left rules cannot
+                            -- fire there (CAN_FIREs are disjoint), Right
+                            -- edges belong to a call that cannot happen
+                            -- there (call conditions are disjoint).  The
+                            -- guardless default state comes last.
+                            states (_, d@(ADynSched {}), _, _) =
+                                let e = Exec (qual (ads_ruleE d))
+                                    l = Exec (qual (ads_ruleL d))
+                                in  case (ads_guardL d) of
+                                      Nothing ->
+                                          [ (Just (ads_guardE d), Left [l])
+                                          , (Nothing, Left [e]) ]
+                                      Just gL ->
+                                          [ (Just (ads_guardE d), Left [l])
+                                          , (Just gL, Left [e])
+                                          , (Nothing, Left [e, l]) ]
+                            states (_, d@(ADynSchedSelf {}), dsL, dsE) =
+                                let q2 = map (\(a, b) -> (qualN a, qualN b))
+                                in  [ (Just (adss_guard d), Right (q2 dsL))
+                                    , (Nothing, Right (q2 dsE)) ]
+
+                            -- every combination of the facts' states
+                            combos = sequence (map states facts)
+                            comboGuards c = [ g | (Just g, _) <- c ]
+
+                            -- an idle rule's ordering constraints are
+                            -- vacuous: drop its execution's fused
+                            -- cross-instance edges, in both directions
+                            -- (its module-local edges stay, keeping the
+                            -- flat order maximally stable)
+                            dropIdle m n =
+                                let nq = qualOf n
+                                    m1 = M.adjust
+                                           (filter (\p -> qualOf p == nq))
+                                           n m
+                                in  M.mapWithKey
+                                      (\k ps -> if qualOf k /= nq
+                                                then filter (/= n) ps
+                                                else ps)
+                                      m1
+                            -- an inactive call's fused edges drop one
+                            -- occurrence each: an edge also justified by
+                            -- another (active) use keeps its other
+                            -- occurrences
+                            dropEdge m (a, b) = M.adjust (delete a) b m
+                            applyDrop m (Left ns) = foldl dropIdle m ns
+                            applyDrop m (Right es) = foldl dropEdge m es
+                            comboMap c =
+                                foldl applyDrop sched_map0 (map snd c)
+
+                            (defaults, others) =
+                                partition (null . comboGuards) combos
+                            base = case defaults of
+                                     [b] -> comboMap b
+                                     _ -> internalError
+                                            ("SimExpand: dynamic "
+                                             ++ "scheduling: no unique "
+                                             ++ "default combination")
+
+                            -- most-active first: selection is
+                            -- first-match, so a combination is reached
+                            -- only when every more-active one failed,
+                            -- and its guard needs no negations
+                            moreActive a b =
+                                compare (length (comboGuards b))
+                                        (length (comboGuards a))
+                            others' = sortBy moreActive others
+                            specs = [ (path, aAnds (comboGuards c),
+                                       comboMap c)
+                                    | c <- others' ]
+                        in
+                            if (length specs > 15)
+                            then internalError
+                                   ("SimExpand: dynamic scheduling "
+                                    ++ "supports at most 16 order "
+                                    ++ "combinations, found "
+                                    ++ show (length specs + 1))
+                            else (base, specs)
+                csi = csi0 { csi_sched_map = base_map }
+                mkAlt (path, g, amap) =
+                    let (agraph, aorder) =
+                            flattenCombSchedGraph (csi0 { csi_sched_map = amap })
+                    in  SimSchedAlt { ssa_guard_path = path
+                                    , ssa_guard = g
+                                    , ssa_sched_graph = agraph
+                                    , ssa_sched_order = aorder }
+                alts = map mkAlt alt_specs
+
+                (sched_graph, sched_order) = flattenCombSchedGraph csi
 
                 (sched_nodes, exec_nodes) = partition isSchedNode sched_order
                 urgency_order = map getSchedNodeId sched_nodes
@@ -310,7 +437,10 @@ simExpandSched abis0 hiermap instmap topmod = do
                            , let r = getSchedNodeId n
                            , r `elem` early_rules
                            ]
-            in if (null before_early_rules)
+            in if (not (null alts) && not (null early_rules))
+               then internalError ("SimExpand: dynamic scheduling with " ++
+                                   "clock-crossing rules is not supported")
+               else if (null before_early_rules)
                then SimSchedule { ss_clock = aclk
                                 , ss_posedge = True
                                 , ss_schedule = asched
@@ -319,6 +449,7 @@ simExpandSched abis0 hiermap instmap topmod = do
                                 , ss_sched_order = sched_order
                                 , ss_domain_info_map = csi_domain_info_map csi
                                 , ss_early_rules = early_rules
+                                , ss_alts = alts
                                 }
                else internalError $ "unexpected nodes before clock-crossing rule: " ++
                                     (show before_early_rules)
@@ -422,9 +553,23 @@ data CombSchedInfo = CombSchedInfo
       csi_sched_map :: SchedMap,
       csi_rule_rel_map :: RuleRelationMap,
       -- clock domain info (rules, clocked submods, resets)
-      csi_domain_info_map :: DomainInfoMap
+      csi_domain_info_map :: DomainInfoMap,
+      -- dynamically scheduled facts (-sched-dynamic) in flight during
+      -- the merge
+      csi_dyn_scheds :: [CombDynSched]
     }
   deriving (Eq, Show)
+
+-- A dynamically scheduled fact during the merge: the instance path of
+-- the module that recorded it ("" = the module this CSI describes), the
+-- fact, and — for one-rule facts — the fused edges of the flagged
+-- calls, computed when the submodule's schedule merged in (first the
+-- late call's, dropped while the guard holds; then the early call's,
+-- dropped otherwise), in the recording module's post-merge node names.
+-- Rule-pair facts carry empty edge sets (their drops are wholesale, by
+-- idle rule, computed at flattening).
+type CombDynSched = (String, ADynSched,
+                     [(SchedNode, SchedNode)], [(SchedNode, SchedNode)])
 
 -- Just the conflict info from the RuleRelationDB
 -- (the disjoint info cannot be accumulated across method calls)
@@ -813,6 +958,7 @@ splitCSIByClock topifc csi =
         smap = csi_sched_map csi -- SchedMap
         dmap = csi_domain_info_map csi -- DomainInfoMap
         rrmap = csi_rule_rel_map csi -- RuleRelationMap
+        dyn_all = csi_dyn_scheds csi -- [(String, ADynSched)]
 
         -- make a map from domain to the top-level methods in that domain
         ifc_dmap =
@@ -858,12 +1004,21 @@ splitCSIByClock topifc csi =
                 cd_rules = di_rules dinfo
                 cd_methods = getDomainMeths cd
                 cd_rules_and_meths = cd_rules ++ cd_methods
+                -- keep the dynamic pairs whose rules are in this domain
+                cd_rule_set = S.fromList cd_rules
+                dynRule (ADynSched { ads_ruleE = r }) = r
+                dynRule (ADynSchedSelf { adss_rule = r }) = r
+                keepDyn (p, d, _, _) =
+                    let e = if null p then dynRule d
+                            else qualifyChildId p (dynRule d)
+                    in  e `S.member` cd_rule_set
                 csi = CombSchedInfo {
                          csi_conflicts = extractConflicts cd_rules_and_meths,
                          csi_drdb = extractDRDB cd_rules_and_meths,
                          csi_sched_map = extractSchedMap cd_rules_and_meths,
                          csi_domain_info_map = M.singleton cd dinfo,
-                         csi_rule_rel_map = extractRuleRelMap cd_rules_and_meths
+                         csi_rule_rel_map = extractRuleRelMap cd_rules_and_meths,
+                         csi_dyn_scheds = filter keepDyn dyn_all
                       }
             in (aclk, csi)
 
@@ -1023,7 +1178,10 @@ makeCSIForModule curmod_abi =
                   csi_drdb = curmod_drdb,
                   csi_sched_map = curmod_sched_map,
                   csi_rule_rel_map = curmod_rule_rel_map,
-                  csi_domain_info_map = curmod_dmap
+                  csi_domain_info_map = curmod_dmap,
+                  csi_dyn_scheds =
+                      [ ("", d, [], [])
+                      | d <- asi_dyn_scheds curmod_aschedinfo ]
               }
     in
         -- return the domain Id map separately
@@ -1092,13 +1250,52 @@ combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
                                  domain_id_map
                                  (csi_domain_info_map parent_csi)
                                  (csi_domain_info_map child_csi)
+        -- Fill in the fused-edge sets for the parent's one-rule dynamic
+        -- facts on this instance: exactly the edges combineSchedMap
+        -- creates when the rule's use of the given method fuses in
+        -- (preds of the method's nodes become preds of the rule's Exec;
+        -- the rule's Exec becomes a pred of the method's successors),
+        -- with matching multiplicity.
+        dyn_child_smap = csi_sched_map child_csi
+        dyn_rev_child_smap = reverseSchedMap dyn_child_smap
+        dynIsMethSN sn = (getSchedNodeId sn) `S.member` child_meth_set
+        fusedEdges r methId =
+            let mnodes = [Sched methId, Exec methId]
+                q = qualifyChildSchedNode inst
+                mpreds = [ n | u <- mnodes
+                             , n <- M.findWithDefault [] u dyn_child_smap
+                             , not (dynIsMethSN n) ]
+                msuccs = [ n | u <- mnodes
+                             , n <- M.findWithDefault [] u dyn_rev_child_smap
+                             , not (dynIsMethSN n) ]
+            in  [ (q n, Exec r) | n <- mpreds ] ++
+                [ (Exec r, q n) | n <- msuccs ]
+        fillDrops (path, d@(ADynSchedSelf {}), _, _)
+            | null path
+            , (MethodId ei em) <- adss_early d
+            , getIdString ei == inst
+            , (MethodId _ lm) <- adss_late d
+            = (path, d,
+               fusedEdges (adss_rule d) lm,
+               fusedEdges (adss_rule d) em)
+        fillDrops f = f
+
+        -- qualify the child's dynamic facts with the instance name
+        comb_dyn_scheds =
+            map fillDrops (csi_dyn_scheds parent_csi) ++
+            [ (p', d, qual2 ds1, qual2 ds2)
+            | (p, d, ds1, ds2) <- csi_dyn_scheds child_csi
+            , let p' = if null p then inst else inst ++ "." ++ p
+            , let qn = qualifyChildSchedNode inst
+            , let qual2 = map (\(a, b) -> (qn a, qn b)) ]
     in
         CombSchedInfo {
             csi_conflicts = comb_conflicts,
             csi_drdb = comb_drdb,
             csi_sched_map = comb_sched_map,
             csi_rule_rel_map = comb_rule_rel_db,
-            csi_domain_info_map = comb_domain_info_map
+            csi_domain_info_map = comb_domain_info_map,
+            csi_dyn_scheds = comb_dyn_scheds
         }
 
 

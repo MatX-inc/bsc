@@ -481,6 +481,27 @@ struct RComp {
     // run in the after-edge pass at end of timeslice (the C++
     // schedule_after_posedge_* at PG_FINAL)
     early: HashSet<(usize, StrId)>,
+    // dynamic-scheduling alternatives (ir::SchedAlt): guarded
+    // interleavings selected per edge before the walk; empty for
+    // statically-scheduled designs (every design until bsc exports
+    // them under -sched-dynamic)
+    alts: Vec<RAlt>,
+}
+
+/// One resolved dynamic-scheduling alternative: evaluated guards pick
+/// the edge's interleaving before any rule of the composition runs.
+/// Serialized as part of RComp inside PlanA (trs_plan_a) — though an
+/// alts-carrying design never bakes one today: the jit plan refuses
+/// dynamic schedules, so no artifact emit reaches the PlanA stash.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RAlt {
+    /// instance the guard expression evaluates in
+    guard_inst: usize,
+    /// module-scoped guard over pre-edge state (exporter guarantees
+    /// its cone reads nothing written mid-edge by this composition)
+    guard: Expr,
+    entries: Vec<REntry>,
+    cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
 }
 
 /// prime()'s derivation half, baked into AOT artifacts as trs_plan_a:
@@ -499,7 +520,10 @@ pub(crate) struct PlanA {
     rcomps: Vec<RComp>,
 }
 
-pub(crate) const PLAN_A_VERSION: u32 = 1;
+// v2: RComp grew the dynamic-scheduling `alts` field (positional
+// bincode — the blob layout changed even though alts designs never
+// bake a plan; a v1 blob must fall back to fresh derivation).
+pub(crate) const PLAN_A_VERSION: u32 = 2;
 
 /// Collect the def names an expression references, descending into every
 /// subexpression (both mux arms — the C++ schedule assigns eagerly).
@@ -2877,6 +2901,119 @@ impl Interp {
         self.vcd = w;
     }
 
+    /// Resolve one interleaving's composition entries (instance paths
+    /// to indexes, segment nodes cloned) and attach each entry's eager
+    /// schedule defs — shared by the base order and every
+    /// dynamic-scheduling alternative of a composition.
+    fn resolve_entries(
+        &self,
+        src: &[ir::schedule::CompositionEntry],
+        posedge: bool,
+        early: &HashSet<(usize, StrId)>,
+    ) -> Vec<REntry> {
+        let mut entries: Vec<REntry> = src
+            .iter()
+            .map(|e| {
+                let path = self.s(e.instance).to_string();
+                let ii = *self
+                    .inst_by_path
+                    .get(&path)
+                    .unwrap_or_else(|| panic!("unknown instance path {path:?}"));
+                let mir = self.mods[self.module_of(ii)].ir;
+                let sched = &self.d.modules[mir].schedule;
+                let ms = sched
+                    .domains
+                    .iter()
+                    .find(|ms| ms.domain == e.domain && ms.posedge == posedge)
+                    .or_else(|| {
+                        sched.domains.iter().find(|ms| ms.domain == e.domain)
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "no schedule for domain {} in {:?}",
+                            e.domain,
+                            self.s(self.d.modules[mir].name)
+                        )
+                    });
+                REntry {
+                    inst: ii,
+                    domain: e.domain,
+                    nodes: ms.segments[e.segment as usize].nodes.clone(),
+                    eager: Vec::new(),
+                }
+            })
+            .collect();
+
+        // per-entry eager schedule defs (see REntry::eager): walk
+        // entries in merged order, attaching each cone def to the
+        // first entry whose Sched rules reach it
+        let mut attached: HashSet<(usize, StrId)> = HashSet::new();
+        for en in &mut entries {
+            let ii = en.inst;
+            let module = self.module_of(ii);
+            let mir = self.mods[module].ir;
+            let mut stack: Vec<StrId> = Vec::new();
+            for &node in &en.nodes {
+                let SchedNode::Sched(r) = node else { continue };
+                if early.contains(&(ii, r)) {
+                    continue;
+                }
+                let Some(&ri) = self.mods[module].rules.get(&r) else {
+                    continue;
+                };
+                let rr = &self.d.modules[mir].rules[ri];
+                stack.push(rr.can_fire);
+                stack.push(rr.will_fire);
+            }
+            let mut visited: HashSet<StrId> = HashSet::new();
+            let mut wanted: HashSet<StrId> = HashSet::new();
+            while let Some(dn) = stack.pop() {
+                if !visited.insert(dn) {
+                    continue;
+                }
+                let Some(&di) = self.mods[module].defs.get(&dn) else {
+                    continue;
+                };
+                let d = &self.d.modules[mir].defs[di];
+                // CF/WF defs (rule or method) are never latched
+                // here; new cone defs attach to this entry
+                if !d.props.can_fire
+                    && !d.props.will_fire
+                    && !attached.contains(&(ii, dn))
+                {
+                    wanted.insert(dn);
+                }
+                collect_def_refs(&d.expr, &mut stack);
+            }
+            for d in &self.d.modules[mir].defs {
+                if wanted.contains(&d.name) {
+                    attached.insert((ii, d.name));
+                    en.eager.push(d.name);
+                }
+            }
+        }
+        entries
+    }
+
+    /// Resolve qualified cross-inhibit pairs into the (later inst,
+    /// later rule) -> earlier-CFs lookup for one interleaving.
+    fn resolve_cross(
+        &mut self,
+        pairs: &[(StrId, StrId)],
+    ) -> HashMap<(usize, StrId), Vec<(usize, StrId)>> {
+        let mut cross: HashMap<(usize, StrId), Vec<(usize, StrId)>> = HashMap::new();
+        for (earlier, later) in pairs {
+            let (e_inst, e_rule) = self.split_qual(*earlier);
+            let (l_inst, l_rule) = self.split_qual(*later);
+            let e_mod = self.module_of(e_inst);
+            let e_mir = self.mods[e_mod].ir;
+            let e_ri = self.mods[e_mod].rules[&e_rule];
+            let e_cf = self.d.modules[e_mir].rules[e_ri].can_fire;
+            cross.entry((l_inst, l_rule)).or_default().push((e_inst, e_cf));
+        }
+        cross
+    }
+
     fn latch_rule(&mut self, inst: usize, rule_name: StrId, cross_inh: &[(usize, StrId)]) {
         let module = self.module_of(inst);
         let mir = self.mods[module].ir;
@@ -3423,51 +3560,37 @@ impl Interp {
         let rcomps: Vec<RComp> = comps
             .iter()
             .map(|comp| {
-                let mut entries: Vec<REntry> = comp
-                    .entries
+                let early: HashSet<(usize, StrId)> = comp
+                    .early
                     .iter()
-                    .map(|e| {
-                        let path = self.s(e.instance).to_string();
-                        let ii = *self
-                            .inst_by_path
-                            .get(&path)
-                            .unwrap_or_else(|| panic!("unknown instance path {path:?}"));
-                        let mir = self.mods[self.module_of(ii)].ir;
-                        let sched = &self.d.modules[mir].schedule;
-                        let ms = sched
-                            .domains
-                            .iter()
-                            .find(|ms| ms.domain == e.domain && ms.posedge == comp.posedge)
-                            .or_else(|| {
-                                sched.domains.iter().find(|ms| ms.domain == e.domain)
-                            })
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "no schedule for domain {} in {:?}",
-                                    e.domain,
-                                    self.s(self.d.modules[mir].name)
-                                )
-                            });
-                        REntry {
-                            inst: ii,
-                            domain: e.domain,
-                            nodes: ms.segments[e.segment as usize].nodes.clone(),
-                            eager: Vec::new(),
+                    .map(|q| self.split_qual(*q))
+                    .collect();
+                let entries = self.resolve_entries(&comp.entries, comp.posedge, &early);
+                // cross-inhibit lookup: (later inst, later rule) -> earlier CFs
+                let cross = self.resolve_cross(&comp.cross_inhibits);
+                // dynamic-scheduling alternatives: same early set, own
+                // interleaving and order-derived inhibitors; the guard
+                // instance resolves like an entry instance path
+                let alts: Vec<RAlt> = comp
+                    .alts
+                    .iter()
+                    .map(|a| {
+                        let gpath = self.s(a.guard_inst).to_string();
+                        let gi = *self.inst_by_path.get(&gpath).unwrap_or_else(|| {
+                            panic!("unknown guard instance path {gpath:?}")
+                        });
+                        RAlt {
+                            guard_inst: gi,
+                            guard: a.guard.clone(),
+                            entries: self.resolve_entries(
+                                &a.entries,
+                                comp.posedge,
+                                &early,
+                            ),
+                            cross: self.resolve_cross(&a.cross_inhibits),
                         }
                     })
                     .collect();
-
-                // cross-inhibit lookup: (later inst, later rule) -> earlier CFs
-                let mut cross: HashMap<(usize, StrId), Vec<(usize, StrId)>> = HashMap::new();
-                for (earlier, later) in &comp.cross_inhibits {
-                    let (e_inst, e_rule) = self.split_qual(*earlier);
-                    let (l_inst, l_rule) = self.split_qual(*later);
-                    let e_mod = self.module_of(e_inst);
-                    let e_mir = self.mods[e_mod].ir;
-                    let e_ri = self.mods[e_mod].rules[&e_rule];
-                    let e_cf = self.d.modules[e_mir].rules[e_ri].can_fire;
-                    cross.entry((l_inst, l_rule)).or_default().push((e_inst, e_cf));
-                }
 
                 let ticks = comp
                     .ticks
@@ -3502,61 +3625,6 @@ impl Interp {
                     })
                     .collect();
 
-                let early: HashSet<(usize, StrId)> = comp
-                    .early
-                    .iter()
-                    .map(|q| self.split_qual(*q))
-                    .collect();
-
-                // per-entry eager schedule defs (see REntry::eager): walk
-                // entries in merged order, attaching each cone def to the
-                // first entry whose Sched rules reach it
-                let mut attached: HashSet<(usize, StrId)> = HashSet::new();
-                for en in &mut entries {
-                    let ii = en.inst;
-                    let module = self.module_of(ii);
-                    let mir = self.mods[module].ir;
-                    let mut stack: Vec<StrId> = Vec::new();
-                    for &node in &en.nodes {
-                        let SchedNode::Sched(r) = node else { continue };
-                        if early.contains(&(ii, r)) {
-                            continue;
-                        }
-                        let Some(&ri) = self.mods[module].rules.get(&r) else {
-                            continue;
-                        };
-                        let rr = &self.d.modules[mir].rules[ri];
-                        stack.push(rr.can_fire);
-                        stack.push(rr.will_fire);
-                    }
-                    let mut visited: HashSet<StrId> = HashSet::new();
-                    let mut wanted: HashSet<StrId> = HashSet::new();
-                    while let Some(dn) = stack.pop() {
-                        if !visited.insert(dn) {
-                            continue;
-                        }
-                        let Some(&di) = self.mods[module].defs.get(&dn) else {
-                            continue;
-                        };
-                        let d = &self.d.modules[mir].defs[di];
-                        // CF/WF defs (rule or method) are never latched
-                        // here; new cone defs attach to this entry
-                        if !d.props.can_fire
-                            && !d.props.will_fire
-                            && !attached.contains(&(ii, dn))
-                        {
-                            wanted.insert(dn);
-                        }
-                        collect_def_refs(&d.expr, &mut stack);
-                    }
-                    for d in &self.d.modules[mir].defs {
-                        if wanted.contains(&d.name) {
-                            attached.insert((ii, d.name));
-                            en.eager.push(d.name);
-                        }
-                    }
-                }
-
                 RComp {
                     clk: clocks.iter().position(|&c| c == comp.clock).unwrap(),
                     posedge: comp.posedge,
@@ -3564,6 +3632,7 @@ impl Interp {
                     cross,
                     ticks,
                     early,
+                    alts,
                 }
             })
             .collect();
@@ -4453,7 +4522,34 @@ impl Interp {
                             }
                         }
                     }
-                    for (ei, en) in rc.entries.iter().enumerate() {
+                    // dynamic scheduling: pick this edge's interleaving —
+                    // the first alternative whose guard holds against
+                    // pre-edge state wins; none matching = the base order
+                    // (guards are evaluated before any rule of this
+                    // composition runs, per the SchedAlt contract)
+                    let mut sel: Option<usize> = None;
+                    for (ai, alt) in rc.alts.iter().enumerate() {
+                        let mut c = Ctx::default();
+                        if self.eval(alt.guard_inst, &mut c, &alt.guard).as_bool() {
+                            sel = Some(ai);
+                            break;
+                        }
+                    }
+                    // auto-fire anchors are positions in the BASE entry
+                    // order: no front-end pairs -sched-dynamic with top
+                    // auto-fire, and silently misplacing an anchor in a
+                    // selected alternative would be a wrong byte
+                    if sel.is_some() && !self.autofire.is_empty() {
+                        panic!(
+                            "trs: dynamic scheduling with auto-fired top \
+                             methods is unsupported"
+                        );
+                    }
+                    let (walk_entries, walk_cross) = match sel {
+                        Some(ai) => (&rc.alts[ai].entries, &rc.alts[ai].cross),
+                        None => (&rc.entries, &rc.cross),
+                    };
+                    for (ei, en) in walk_entries.iter().enumerate() {
                         let inst = en.inst;
                         // this entry's schedule-position cone defs: computed
                         // eagerly here like the C++ schedule function — side
@@ -4473,8 +4569,10 @@ impl Interp {
                             }
                             match node {
                                 SchedNode::Sched(r) => {
-                                    let ci2 =
-                                        rc.cross.get(&(inst, r)).cloned().unwrap_or_default();
+                                    let ci2 = walk_cross
+                                        .get(&(inst, r))
+                                        .cloned()
+                                        .unwrap_or_default();
                                     self.latch_rule(inst, r, &ci2);
                                 }
                                 SchedNode::Exec(r) => self.exec_rule(inst, r),

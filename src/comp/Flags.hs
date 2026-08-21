@@ -158,7 +158,10 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- allow dynamic scheduling (per-cycle order alternatives) for
+        -- the trs backend; classic Bluesim codegen refuses such designs
+        schedDynamic :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

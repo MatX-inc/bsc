@@ -138,7 +138,7 @@ import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
 import DPIWrappers(genDPIWrappers)
 import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
-import SimPackage(SimSystem(..))
+import SimPackage(SimSystem(..), SimSchedule(..))
 import SimPackageOpt(simPackageOpt)
 import SimExportIR(writeBirFile)
 import qualified Data.ByteString.Lazy as L
@@ -1316,6 +1316,18 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        start flags DFsimExpand
        sim_system <- simExpand errh flags toplevel abis
        time <- dump errh flags time0 DFsimExpand dumpnames sim_system
+
+       -- dynamic scheduling selects the execution order per cycle; the
+       -- C++ Bluesim codegen bakes in one static order, so only the trs
+       -- backend can execute such a design
+       let has_dyn_sched =
+               any (not . null . ss_alts) (ssys_schedules sim_system)
+       when (has_dyn_sched && not (genTrs flags)) $
+            bsError errh
+                [(noPosition,
+                  EGeneric ("This design uses dynamic scheduling " ++
+                            "(-sched-dynamic), which is supported only " ++
+                            "by the trs backend; link with -trs"))]
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files

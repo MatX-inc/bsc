@@ -333,7 +333,6 @@ encComposition :: M.Map String String
                -> [AId] -> SimSchedule -> EncM [C.Encoding]
 encComposition instToMod msis topGates ss = do
     let segmaps = M.map msi_segIdx msis
-        order = ss_sched_order ss
 
         -- resolve a merged node to (instance path, segment index) plus
         -- the node's position inside the segment; top-module method nodes
@@ -352,142 +351,8 @@ encComposition instToMod msis topGates ss = do
             in  (\(ds, j) -> ((inst, ds), j)) <$> M.lookup key segmap
         resolve node = fst <$> resolveFull node
 
-        -- The flat merged order freely interleaves Sched and Exec nodes of
-        -- different instances, so it cannot be collapsed into segment runs
-        -- directly.  Instead, project the merged constraint graph onto
-        -- (instance, segment) units and topologically sort those; the
-        -- BIR.md section 4 argument (cross-instance constraints only
-        -- attach at method cut points) makes this projection acyclic.
-        units = nub (mapMaybe resolve order)
-        firstPos = M.fromList
-            (reverse [ (u, p)
-                     | (p, Just u) <- zip [(0 :: Int) ..] (map resolve order) ])
-
-        graphEdges = S.fromList
-            [ (pu, nu)
-            | (n, preds) <- ss_sched_graph ss
-            , Just nu <- [resolve n]
-            , p <- preds
-            , Just pu <- [resolve p]
-            , pu /= nu ]
-
-        -- ME (disjoint) rule pairs have no graph edge, but bsc's flat
-        -- order still fixes which state snapshot each guard observes: if
-        -- Sched r precedes Exec d there, r's guard must not see d's
-        -- writes.  Restore that as a unit edge (analyzeModule gives ME
-        -- rules singleton per-node segments so the endpoints are
-        -- independently placeable).  A same-unit pair is only legal if
-        -- the segment's internal order already agrees.
-        -- Keyed by Id: comparison is an interned-index compare, where a
-        -- qualified-path String would be rebuilt and compared character by
-        -- character on every probe.  Probed only, never traversed, so the
-        -- interning-order traversal never reaches the output.
-        schedPosQ = M.fromList [ (i, p)
-                               | (Sched i, p) <- zip order [(0 :: Int) ..] ]
-        execPosI  = M.fromList [ (i, p)
-                               | (Exec i, p) <- zip order [(0 :: Int) ..] ]
-        -- `resolveFull` is a pure function of the node and there are
-        -- |order| nodes against O(rules^2) disjoint pairs, so resolve each
-        -- node once here and probe by Id below.
-        resolvedS = M.fromList [ (i, v)
-                               | n@(Sched i) <- order, Just v <- [resolveFull n] ]
-        resolvedE = M.fromList [ (i, v)
-                               | n@(Exec i) <- order, Just v <- [resolveFull n] ]
-        -- The disjointness map holds both orientations of every pair
-        -- (`combineSchedDRDB`: "the disjoint map should be the same in
-        -- both directions"), so one pass over it sees each ordered pair
-        -- exactly once.
-        mePairs = [ (r, d)
-                  | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                  , d <- S.toList ds ]
-        meEdges = S.fromList
-            [ (su, eu)
-            | (r, d) <- mePairs
-            , Just ps <- [M.lookup r schedPosQ]
-            , Just pe <- [M.lookup d execPosI]
-            , ps < pe
-            , Just (su, sj) <- [M.lookup r resolvedS]
-            , Just (eu, ej) <- [M.lookup d resolvedE]
-            , if su == eu
-              then if sj < ej
-                   then False  -- ordered inside the segment already
-                   else internalError
-                     ("SimExportIR: ME pair straddles a segment against "
-                      ++ "its flat order: " ++ qualPath r ++ " / "
-                      ++ qualPath d)
-              else True ]
-
-        -- $finish/$fatal end output for the rest of the instant, so the
-        -- Exec order between a finish-calling rule and ANY task-bearing
-        -- rule is observable even with no graph edge; pin those pairs to
-        -- bsc's flat order (finish rules have singleton segments)
-        execUnit = M.fromList [ (qualPath n, u)
-                              | e@(Exec n) <- order
-                              , Just u <- [resolve e] ]
         instMsi i = M.lookup (M.findWithDefault "" i instToMod) msis
-        qualsOf sel = [ q
-                      | i <- nub [ i' | (i', _) <- units ]
-                      , Just msi <- [instMsi i]
-                      , b <- S.toList (sel msi)
-                      , let q = qp i b
-                      , M.member q execPos ]
-        finishQs = qualsOf msi_finishRules
-        taskQs = qualsOf msi_taskRules
-        finishEdges = S.fromList
-            [ (ue, ul)
-            | f <- finishQs
-            , t <- taskQs
-            , f /= t
-            , let (e_, l_) = if execPos M.! f < execPos M.! t
-                             then (f, t)
-                             else (t, f)
-            , Just ue <- [M.lookup e_ execUnit]
-            , Just ul <- [M.lookup l_ execUnit]
-            , ue /= ul ]
-
-        unitEdges = graphEdges `S.union` meEdges `S.union` finishEdges
-
-        -- Kahn's algorithm; ties broken by first appearance in the flat
-        -- order so the output tracks bsc's own choice.
-        -- Successors indexed once: Kahn's asks for them per node, and the
-        -- edge set grows with both instance count and hierarchy depth.
-        succMap = M.fromListWith (++) [ (a, [b]) | (a, b) <- S.toList unitEdges ]
-        succsOf u = M.findWithDefault [] u succMap
-        indeg0 = M.fromListWith (+)
-                   ([ (u, 0 :: Int) | u <- units ]
-                    ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
-        pickNext ready = case ready of
-            [] -> Nothing
-            _  -> Just (snd (minimum
-                    [ (M.findWithDefault maxBound u firstPos, u)
-                    | u <- ready ]))
-        kahn indeg done
-            | Just u <- pickNext
-                [ v | (v, d) <- M.toList indeg, d == 0 ] =
-                let indeg' = M.delete u indeg
-                    indeg'' = foldl' (\m v -> M.adjust (subtract 1) v m)
-                                     indeg' (succsOf u)
-                in  kahn indeg'' (u : done)
-            | M.null indeg = reverse done
-            | otherwise = internalError
-                ("SimExportIR: cyclic segment graph; a module boundary is "
-                 ++ "interleaved below method granularity (or ME ordering "
-                 ++ "constraints interlock two multi-node segments): "
-                 ++ show (M.keys indeg))
-        entries = kahn indeg0 []
-
-        dups = length entries /= S.size (S.fromList entries)
-
-        execPos = M.fromList [ (qualPath i, p)
-                             | (Exec i, p) <- zip order [(0 :: Int) ..] ]
-
-        -- ME inhibitors, mkMERuleInhibits semantics against the node
-        -- order the backend actually executes (the composed entries
-        -- expanded to their segment nodes): rule r is inhibited by
-        -- disjoint rule d iff Exec(d) runs before Sched(r).  All pairs
-        -- (same- or cross-instance) export at composition level; the
-        -- per-rule me_inhibits list is empty now that the composed order
-        -- is instance-specific.
+        qp i b = if null i then b else i ++ "." ++ b
         segNodes inst (dom, seg) =
             let modName = M.findWithDefault "" inst instToMod
                 segs = case M.lookup modName msis of
@@ -496,24 +361,185 @@ encComposition instToMod msis topGates ss = do
                                        Nothing -> []
                          Nothing -> []
             in  if seg < length segs then seg_nodes (segs !! seg) else []
-        qp i b = if null i then b else i ++ "." ++ b
-        composedNodes =
-            [ (i, node) | (i, ds) <- entries, node <- segNodes i ds ]
+        -- The disjointness map holds both orientations of every pair
+        -- (`combineSchedDRDB`: "the disjoint map should be the same in
+        -- both directions"), so one pass over it sees each ordered pair
+        -- exactly once.
+        mePairs = [ (r, d)
+                  | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                  , d <- S.toList ds ]
         disjQ = M.fromListWith S.union
                   ([ (qualPath r, S.map qualPath ds)
                    | (r, ds) <- M.toList (ss_disjoint_rules_db ss) ]
                    ++ [ (qualPath d, S.singleton (qualPath r))
                       | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
                       , d <- S.toList ds ])
-        stepME (seen, acc) (i, Exec n) =
-            (S.insert (qp i (getIdBaseString n)) seen, acc)
-        stepME (seen, acc) (i, Sched n) =
-            let q = qp i (getIdBaseString n)
-                inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
-            -- Chunk-accumulate and concat once, so the fold stays linear
-            -- in the number of emitted pairs.
-            in  (seen, [ (d, q) | d <- S.toList inh ] : acc)
-        crossPairs = concat (reverse (snd (foldl' stepME (S.empty, []) composedNodes)))
+
+        -- Derive the composed (instance, segment) entries and the
+        -- order-dependent ME inhibitor pairs for one flattening of the
+        -- merged graph: the base flattening, or a dynamic-scheduling
+        -- alternative (same units, different interleaving).
+        deriveComp order graph =
+          let
+            -- The flat merged order freely interleaves Sched and Exec
+            -- nodes of different instances, so it cannot be collapsed
+            -- into segment runs directly.  Instead, project the merged
+            -- constraint graph onto (instance, segment) units and
+            -- topologically sort those; the BIR.md section 4 argument
+            -- (cross-instance constraints only attach at method cut
+            -- points) makes this projection acyclic.
+            units = nub (mapMaybe resolve order)
+            firstPos = M.fromList
+                (reverse [ (u, p)
+                         | (p, Just u) <- zip [(0 :: Int) ..] (map resolve order) ])
+
+            graphEdges = S.fromList
+                [ (pu, nu)
+                | (n, preds) <- graph
+                , Just nu <- [resolve n]
+                , p <- preds
+                , Just pu <- [resolve p]
+                , pu /= nu ]
+
+            -- ME (disjoint) rule pairs have no graph edge, but bsc's flat
+            -- order still fixes which state snapshot each guard observes:
+            -- if Sched r precedes Exec d there, r's guard must not see
+            -- d's writes.  Restore that as a unit edge (analyzeModule
+            -- gives ME rules singleton per-node segments so the endpoints
+            -- are independently placeable).  A same-unit pair is only
+            -- legal if the segment's internal order already agrees.
+            -- Keyed by Id: comparison is an interned-index compare, where
+            -- a qualified-path String would be rebuilt and compared
+            -- character by character on every probe.  Probed only, never
+            -- traversed, so the interning-order traversal never reaches
+            -- the output.
+            schedPosQ = M.fromList [ (i, p)
+                                   | (Sched i, p) <- zip order [(0 :: Int) ..] ]
+            execPosI  = M.fromList [ (i, p)
+                                   | (Exec i, p) <- zip order [(0 :: Int) ..] ]
+            -- `resolveFull` is a pure function of the node and there are
+            -- |order| nodes against O(rules^2) disjoint pairs, so resolve
+            -- each node once here and probe by Id below.
+            resolvedS = M.fromList [ (i, v)
+                                   | n@(Sched i) <- order, Just v <- [resolveFull n] ]
+            resolvedE = M.fromList [ (i, v)
+                                   | n@(Exec i) <- order, Just v <- [resolveFull n] ]
+            meEdges = S.fromList
+                [ (su, eu)
+                | (r, d) <- mePairs
+                , Just ps <- [M.lookup r schedPosQ]
+                , Just pe <- [M.lookup d execPosI]
+                , ps < pe
+                , Just (su, sj) <- [M.lookup r resolvedS]
+                , Just (eu, ej) <- [M.lookup d resolvedE]
+                , if su == eu
+                  then if sj < ej
+                       then False  -- ordered inside the segment already
+                       else internalError
+                         ("SimExportIR: ME pair straddles a segment against "
+                          ++ "its flat order: " ++ qualPath r ++ " / "
+                          ++ qualPath d)
+                  else True ]
+
+            -- $finish/$fatal end output for the rest of the instant, so
+            -- the Exec order between a finish-calling rule and ANY
+            -- task-bearing rule is observable even with no graph edge;
+            -- pin those pairs to bsc's flat order (finish rules have
+            -- singleton segments)
+            execUnit = M.fromList [ (qualPath n, u)
+                                  | e@(Exec n) <- order
+                                  , Just u <- [resolve e] ]
+            qualsOf sel = [ q
+                          | i <- nub [ i' | (i', _) <- units ]
+                          , Just msi <- [instMsi i]
+                          , b <- S.toList (sel msi)
+                          , let q = qp i b
+                          , M.member q execPos ]
+            finishQs = qualsOf msi_finishRules
+            taskQs = qualsOf msi_taskRules
+            finishEdges = S.fromList
+                [ (ue, ul)
+                | f <- finishQs
+                , t <- taskQs
+                , f /= t
+                , let (e_, l_) = if execPos M.! f < execPos M.! t
+                                 then (f, t)
+                                 else (t, f)
+                , Just ue <- [M.lookup e_ execUnit]
+                , Just ul <- [M.lookup l_ execUnit]
+                , ue /= ul ]
+
+            unitEdges = graphEdges `S.union` meEdges `S.union` finishEdges
+
+            -- Kahn's algorithm; ties broken by first appearance in the
+            -- flat order so the output tracks bsc's own choice.
+            -- Successors indexed once: Kahn's asks for them per node, and
+            -- the edge set grows with both instance count and hierarchy
+            -- depth.
+            succMap = M.fromListWith (++) [ (a, [b]) | (a, b) <- S.toList unitEdges ]
+            succsOf u = M.findWithDefault [] u succMap
+            indeg0 = M.fromListWith (+)
+                       ([ (u, 0 :: Int) | u <- units ]
+                        ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
+            pickNext ready = case ready of
+                [] -> Nothing
+                _  -> Just (snd (minimum
+                        [ (M.findWithDefault maxBound u firstPos, u)
+                        | u <- ready ]))
+            kahn indeg done
+                | Just u <- pickNext
+                    [ v | (v, d) <- M.toList indeg, d == 0 ] =
+                    let indeg' = M.delete u indeg
+                        indeg'' = foldl' (\m v -> M.adjust (subtract 1) v m)
+                                         indeg' (succsOf u)
+                    in  kahn indeg'' (u : done)
+                | M.null indeg = reverse done
+                | otherwise = internalError
+                    ("SimExportIR: cyclic segment graph; a module boundary is "
+                     ++ "interleaved below method granularity (or ME ordering "
+                     ++ "constraints interlock two multi-node segments): "
+                     ++ show (M.keys indeg))
+            entries = kahn indeg0 []
+
+            dups = length entries /= S.size (S.fromList entries)
+
+            execPos = M.fromList [ (qualPath i, p)
+                                 | (Exec i, p) <- zip order [(0 :: Int) ..] ]
+
+            -- ME inhibitors, mkMERuleInhibits semantics against the node
+            -- order the backend actually executes (the composed entries
+            -- expanded to their segment nodes): rule r is inhibited by
+            -- disjoint rule d iff Exec(d) runs before Sched(r).  All
+            -- pairs (same- or cross-instance) export at composition
+            -- level; the per-rule me_inhibits list is empty now that the
+            -- composed order is instance-specific.
+            composedNodes =
+                [ (i, node) | (i, ds) <- entries, node <- segNodes i ds ]
+            stepME (seen, acc) (i, Exec n) =
+                (S.insert (qp i (getIdBaseString n)) seen, acc)
+            stepME (seen, acc) (i, Sched n) =
+                let q = qp i (getIdBaseString n)
+                    inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
+                -- Chunk-accumulate and concat once, so the fold stays
+                -- linear in the number of emitted pairs.
+                in  (seen, [ (d, q) | d <- S.toList inh ] : acc)
+            crossPairs = concat (reverse (snd (foldl' stepME (S.empty, []) composedNodes)))
+          in
+            if dups
+            then internalError
+                   ("SimExportIR: non-contiguous segment interleaving; "
+                    ++ "composition needs graph-based derivation")
+            else (entries, crossPairs)
+
+        (entries, crossPairs) =
+            deriveComp (ss_sched_order ss) (ss_sched_graph ss)
+
+        -- dynamic-scheduling alternatives: same segment space, each
+        -- alternative's entries and inhibitors derived from its own
+        -- flattening
+        altComps = [ (ssa_guard_path a, ssa_guard a,
+                      deriveComp (ssa_sched_order a) (ssa_sched_graph a))
+                   | a <- ss_alts ss ]
 
         -- direction-filter the primitive ticks against the primMap tick
         -- specs (doTickCall): a posedge schedule also produces a
@@ -593,19 +619,17 @@ encComposition instToMod msis topGates ss = do
         neg_ticks = [ (i, p, o, False, g)
                     | (i, p, o, g) <- mapMaybe (tickFor False) all_prims ]
 
-    if dups
-      then internalError ("SimExportIR: non-contiguous segment interleaving; "
-                          ++ "composition needs graph-based derivation")
-      else do
+    do
         clkId <- str (oscName (ss_clock ss))
-        entriesEnc <- mapM (\(inst, (dom, seg)) -> do
-                              instE <- strE inst
-                              return $ encStruct
-                                [ ("instance", instE)
-                                , ("domain", encW32 (fromIntegral dom))
-                                , ("segment", encW32 (fromIntegral seg))
-                                ])
-                           entries
+        let encEntry (inst, (dom, seg)) = do
+              instE <- strE inst
+              return $ encStruct
+                [ ("instance", instE)
+                , ("domain", encW32 (fromIntegral dom))
+                , ("segment", encW32 (fromIntegral seg))
+                ]
+            encCrossPair (a, b) = encPair <$> strE a <*> strE b
+        entriesEnc <- mapM encEntry entries
         let encTick (inst, prim, port, rst, gate) = do
               iE <- strE inst
               pE <- strE prim
@@ -627,7 +651,19 @@ encComposition instToMod msis topGates ss = do
         ticksEnc <- mapM encTick ticks
         negTicksEnc <- mapM encTick neg_ticks
         earlyEnc <- mapM (strE . qualPath) (ss_early_rules ss)
-        crossEnc <- mapM (\(a, b) -> encPair <$> strE a <*> strE b) crossPairs
+        crossEnc <- mapM encCrossPair crossPairs
+        altsEnc <- mapM (\(gpath, g, (aentries, across)) -> do
+                           giE <- strE gpath
+                           gE <- encExpr g
+                           aEntriesEnc <- mapM encEntry aentries
+                           aCrossEnc <- mapM encCrossPair across
+                           return $ encStruct
+                             [ ("guard_inst", giE)
+                             , ("guard", gE)
+                             , ("entries", encList aEntriesEnc)
+                             , ("cross_inhibits", encList aCrossEnc)
+                             ])
+                        altComps
         let posComp = encStruct
               [ ("clock", encW32 clkId)
               , ("posedge", encBool (ss_posedge ss))
@@ -635,6 +671,7 @@ encComposition instToMod msis topGates ss = do
               , ("ticks", encList ticksEnc)
               , ("early", encList earlyEnc)
               , ("cross_inhibits", encList crossEnc)
+              , ("alts", encList altsEnc)
               ]
             -- a posedge schedule also owns the opposite edge's tick
             -- function (SimMakeCBlocks builds pos and neg tick stmts
@@ -647,6 +684,7 @@ encComposition instToMod msis topGates ss = do
               , ("ticks", encList negTicksEnc)
               , ("early", encList [])
               , ("cross_inhibits", encList [])
+              , ("alts", encList [])
               ]
         return $ if null neg_ticks then [posComp] else [posComp, negComp]
 

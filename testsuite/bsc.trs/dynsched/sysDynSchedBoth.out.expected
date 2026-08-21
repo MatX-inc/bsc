@@ -1,0 +1,16 @@
+0: r2 put 0 saw 0
+r: acc <= 0
+1: r1 put 1 saw 0
+r: acc <= 1
+2: r2 put 2 saw 0
+r: acc <= 2
+3: r1 put 3 saw 0
+r: acc <= 4
+4: r2 put 4 saw 0
+r: acc <= 6
+5: r1 put 5 saw 0
+r: acc <= 9
+6: r2 put 6 saw 0
+r: acc <= 12
+7: r1 put 7 saw 0
+r: acc <= 16

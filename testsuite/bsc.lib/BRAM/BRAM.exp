@@ -10,13 +10,10 @@
 # Test for various data widths (for Bluesim)
 test_veri_only_bsv BRAMWidthTest
 compile_object_pass BRAMWidthTest.bsv
-# The C++ backend fails to compile/link the generated code (Bug 1731);
-# -trs has no generated C++, so the link succeeds there
-if { [cxx_codegen_tests] } {
-    link_objects_pass_bug {} sysBRAMWidthTest 1731
-} else {
-    link_objects_pass {} sysBRAMWidthTest
-}
+# Bug 1731 (the generated C++ did not compile at wide byte-enable
+# widths) is fixed by the bs_prim_mod_bram.h is_zero discriminator —
+# the link passes on every backend now, so the xfail is retired
+link_objects_pass {} sysBRAMWidthTest
 
 if { $ctest == 1 } {
 compile_object_fail_error BRAMBE1Test.bsv S0015

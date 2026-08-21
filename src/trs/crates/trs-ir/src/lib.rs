@@ -18,7 +18,7 @@ pub mod verify;
 use serde::{Deserialize, Serialize};
 
 pub use expr::{Action, Expr, PrimOp, Stmt};
-pub use schedule::{Composition, ModuleSchedule, SchedNode, Schedule, Segment};
+pub use schedule::{Composition, ModuleSchedule, SchedAlt, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
@@ -38,7 +38,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 2;
+const SNAP_LAYOUT_REV: u32 = 3;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.

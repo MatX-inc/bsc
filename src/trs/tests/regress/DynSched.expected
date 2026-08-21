@@ -1,0 +1,15 @@
+0: get = 0
+1: put 1 (saw 0)
+r: acc <= 1
+2: get = 0
+3: put 3 (saw 0)
+r: acc <= 4
+4: get = 0
+5: put 5 (saw 0)
+r: acc <= 9
+6: get = 0
+7: put 7 (saw 0)
+r: acc <= 16
+8: get = 0
+9: put 9 (saw 0)
+r: acc <= 25

@@ -1930,6 +1930,15 @@ impl Interp {
         if sa.boxed {
             ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
         }
+        // dynamic scheduling: alternative interleavings select per
+        // edge, so no single baked comp order (or window image taken
+        // under one order) is valid across selections.  Alts designs
+        // never reach the Emit stash today (the jit declines them and
+        // desc_finish only runs post-Emit), so this gate is explicit
+        // belt-and-braces against that ever changing.
+        if rcomps.iter().any(|rc| !rc.alts.is_empty()) {
+            ineligible(&mut r_reason, "dynamic scheduling (alts)");
+        }
         // rung 3b: prim call sites no longer gate eligibility — the
         // PRIMS section bakes a native servicer seed for every
         // bounce-reachable prim instead.  Only a site whose target
@@ -3712,6 +3721,14 @@ impl Interp {
             // exactly like a cold exec cell — so they are SKIPPED here
             // (kept out of rule_ord and the node stream), not refused.
             // The central fast loop already bails on early comps.
+            // dynamic-scheduling alternatives select the interleaving
+            // per edge; compiled dispatch bakes one order (v1: interp)
+            if !rc.alts.is_empty() {
+                if trace {
+                    eprintln!("trs jit: off (dynamic schedule)");
+                }
+                return None;
+            }
             // eager defs owned by entries already walked in THIS comp,
             // per instance: later rules of the same instance may load
             // their slots instead of re-expanding the cone

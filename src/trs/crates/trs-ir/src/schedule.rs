@@ -30,6 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::expr::Expr;
 use crate::StrId;
 
 /// `Sched r` computes r's fire conditions; `Exec r` runs r's body.
@@ -102,6 +103,39 @@ pub struct Composition {
     /// Cross-module disjoint pairs (qualified rule paths) whose ME
     /// inhibitors depend on this composed order: the first rule's CAN_FIRE
     /// inhibits the second (which executes later in this composition).
+    pub cross_inhibits: Vec<(StrId, StrId)>,
+    /// Dynamic scheduling (bsc G0100-class designs): guarded alternative
+    /// interleavings for this (clock, edge).  The per-cycle execution
+    /// order of rules whose cross-boundary ordering constraint is
+    /// condition-disjoint cannot be pinned at link time; the compiler
+    /// proves the conflicting method calls never co-execute in one cycle,
+    /// so each cycle has SOME valid order — selected here at run time.
+    /// At each edge the runtime evaluates the alternatives' guards in
+    /// order against pre-edge state (before any rule of this composition
+    /// runs) and walks the first match; when none matches, or `alts` is
+    /// empty, the base `entries`/`cross_inhibits` apply.  Absent from
+    /// pre-dynamic .bir files (serde default keeps them decodable).
+    #[serde(default)]
+    pub alts: Vec<SchedAlt>,
+}
+
+/// One guarded alternative interleaving of a `Composition`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedAlt {
+    /// Instance path the guard is evaluated in ("" = the top module).
+    pub guard_inst: StrId,
+    /// Module-scoped guard over that instance (typically: the flagged
+    /// rule's predicate AND its method call's condition).  The exporter
+    /// must guarantee condition-stability: the guard's cone reads only
+    /// state that no rule of this composition writes mid-edge
+    /// (registers, not wires/EN/fire signals), so evaluating it before
+    /// the walk equals evaluating it at the constraint's position.
+    pub guard: Expr,
+    /// The interleaving to execute when the guard holds.  Same
+    /// (instance, domain, segment) reference space as the base entries.
+    pub entries: Vec<CompositionEntry>,
+    /// Order-derived ME inhibitors for THIS interleaving (the base
+    /// `cross_inhibits` encode the base order and do not apply).
     pub cross_inhibits: Vec<(StrId, StrId)>,
 }
 
