@@ -92,37 +92,54 @@ POOL = [
          character="RegFile range traffic",
          no_verilator="RegFile over a 42-bit index elaborates to a "
                       "2^42-entry Verilog array"),
-    # packet-processing app (mesa)
+    # packet-processing app (mesa).  The old "non-terminating" skip
+    # was the driver's fault twice over: no timeInc (Mesa's testbench
+    # terminates on a $time bound, so it free-ran at $time==0) and an
+    # eval_initial stack overflow on the 2^21-entry $readmemh
+    # memories.  Its output legitimately differs from Bluesim's
+    # (backend time semantics + loader warnings), so the verilator
+    # leg compares against the suite's committed Verilog golden.
     dict(name="Mesa", dir="testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv",
          src="TestMesa.bsv", top="sysTestMesa", cycles=None,
          character="app-scale packet pipeline",
-         no_verilator="non-terminating under the generic C++ driver "
-                      "(packet input side free-runs; same Verilog "
-                      "passes the suite under iverilog with bsc's "
-                      "main.v) — under investigation"),
+         vl_expected="sysTestMesa.v.out.expected"),
 ]
 
 VL_MAIN = r"""
-// generic Verilator driver for a closed bsc top (CLK/RST_N only) —
-// replaces main.v so no --timing is needed
+// main.v-equivalent Verilator driver for a closed bsc top (CLK/RST_N
+// only) — replaces main.v so no --timing is needed, but reproduces its
+// exact protocol: ONE posedge under asserted reset at t=1, deassert at
+// t=2 between edges, negedges at 5+10k, posedges at 10k.  Simulation
+// time advances with the clock (a driver that never calls timeInc
+// leaves $time stuck at 0 — Mesa's testbench terminates on a time
+// bound and free-ran under the old driver).
 #include "V%TOP%.h"
 #include "verilated.h"
+#include <sys/resource.h>
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    V%TOP%* top = new V%TOP%;
-    vluint64_t half = 0;
-    top->RST_N = 0;
-    top->CLK = 0;
-    top->eval();
-    while (!Verilated::gotFinish()) {
-        ++half;
-        if (half == 4) top->RST_N = 1;   // 2 full cycles of reset
-        top->CLK = !top->CLK;
-        top->eval();
-        if (half > 8000000000ULL) break; // 4G-cycle safety cap
+    // Verilator's eval_initial overflows the default stack on
+    // $readmemh-scale memories (Mesa: 2^21-entry RegFiles) — raise to
+    // the hard limit before the first eval
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != rl.rlim_max) {
+        rl.rlim_cur = rl.rlim_max;
+        setrlimit(RLIMIT_STACK, &rl);
+    }
+    VerilatedContext* ctx = new VerilatedContext;
+    ctx->commandArgs(argc, argv);
+    V%TOP%* top = new V%TOP%{ctx};
+    top->RST_N = 0; top->CLK = 0; top->eval();      // t=0: reset asserted
+    ctx->timeInc(1); top->CLK = 1; top->eval();     // t=1: posedge under reset
+    ctx->timeInc(1); top->RST_N = 1; top->eval();   // t=2: deassert
+    ctx->timeInc(3); top->CLK = 0; top->eval();     // t=5: first negedge
+    while (!ctx->gotFinish()) {
+        ctx->timeInc(5); top->CLK = 1; top->eval(); // 10k: posedge
+        if (ctx->time() > 40000000000ULL) break;    // 4G-cycle safety cap
+        ctx->timeInc(5); top->CLK = 0; top->eval(); // 5+10k: negedge
     }
     top->final();
     delete top;
+    delete ctx;
     return 0;
 }
 """
@@ -335,13 +352,28 @@ def bench_one(d, legs, runs, work):
     # $random designs are exempt on the verilator leg (Verilator's RNG
     # is not glibc's, so the operand stream legitimately differs).
     def norm(t):
+        # Verilator prints its $readmem short-file warnings on stdout
+        # (iverilog goldens carry none) — normalized with the trailer
         return "\n".join(
             l for l in t.strip().splitlines()
             if not re.match(r"^- .*Verilog \$finish", l)
+            and not l.startswith("%Warning:")
         ).strip()
     outs = {k: norm(v) for k, v in outputs.items()}
     if d.get("random") or d.get("vl_out_exempt"):
         outs.pop("verilator", None)
+    # a design whose Verilog-backend output legitimately differs from
+    # Bluesim's (time semantics, loader warnings) compares its
+    # verilator leg against the suite's committed Verilog golden
+    # instead of the bluesim leg
+    if d.get("vl_expected") and "verilator" in outs:
+        vl = outs.pop("verilator")
+        try:
+            gold = norm(open(os.path.join(src_dir, d["vl_expected"])).read())
+        except OSError:
+            gold = None
+        if gold is None or vl != gold:
+            res["output_mismatch"] = {"verilator_vs_golden": vl[-200:]}
     # Verilator's $finish sets a flag but finishes evaluating the
     # instant, so sibling always-blocks may print same-instant lines
     # that abort-immediately semantics (Bluesim, trs) never reach: the
