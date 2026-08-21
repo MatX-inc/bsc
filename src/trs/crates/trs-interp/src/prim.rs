@@ -245,6 +245,54 @@ pub trait Prim {
     fn runcore_slot(&self) -> Option<*mut u64> {
         None
     }
+    /// Mem-file prims (RegFileLoad / BRAM*Load): the retained load
+    /// request (file, binary_format).  The overlay rung boots these
+    /// designs by re-running the load against the CURRENT file over
+    /// the baked window arena — Some here puts the inst in the
+    /// sidecar's LOADS section.
+    fn runcore_load(&self) -> Option<(String, bool)> {
+        None
+    }
+    /// The prim's mem-file DATA region as (word offset from the slot
+    /// base, word length): the overlay rewrites exactly these words,
+    /// the two-fill bake gate perturbs them, and the witnesses mask
+    /// them (their content legitimately tracks the file).
+    fn runcore_load_region(&self) -> Option<(usize, usize)> {
+        None
+    }
+    /// Two-fill soundness gate (link bake): overwrite every data
+    /// entry with a word derived from (`key`, address) — see
+    /// runcore_fill_word.  Address-KEYED, not uniform: a uniform
+    /// constant lets fill-invariant predicates (entry equality,
+    /// popcount) escape the gate (review finding).  Must go through
+    /// the prim's own layout so the slots stay valid limbs.
+    fn runcore_fill_region(&mut self, _key: u64) {
+        unreachable!("runcore_fill_region on a prim without a load region")
+    }
+    /// Two-fill gate, checking half: does the data region still hold
+    /// exactly the fill image?  False = the reset window wrote into
+    /// it, and the boot's overlay would lose that write — refuse.
+    fn runcore_region_is(&self, _key: u64) -> bool {
+        unreachable!("runcore_region_is on a prim without a load region")
+    }
+    /// Boot overlay: rewrite the data region exactly as construction
+    /// would — undet everywhere, then the file's in-range entries via
+    /// the same loader (same warnings, same missing-file diagnostic,
+    /// same partial-load behavior).
+    fn runcore_overlay(&mut self, _file: &str, _bin: bool) {
+        unreachable!("runcore_overlay on a prim without a load region")
+    }
+}
+
+/// Two-fill gate fill word for one data entry: the run key mixed with
+/// the entry address (splitmix-style), so no two entries share a
+/// value and the two runs differ at every entry — derived predicates
+/// (equality between entries, popcount classes) cannot be invariant
+/// across both keyed patterns the way they were across uniform fills.
+pub(crate) fn runcore_fill_word(key: u64, addr: u64) -> u64 {
+    let mut z = key ^ addr.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z ^ (z >> 27)
 }
 
 // RunCore seed kind tags (sidecar PRIMS section): stable wire values
@@ -346,6 +394,9 @@ pub(crate) fn runcore_restore(
                 upd_at: u64::MAX,
                 upd_addr: 0,
                 upd_prev: Value::undet(w.max(1)),
+                // the boot's overlay passes file/bin from the LOADS
+                // row — the restored prim never reads this field
+                load: None,
             };
             Some((Box::new(p), fp))
         }
@@ -404,6 +455,8 @@ pub(crate) fn runcore_restore(
             )
             .ok()
             .filter(|&f| f <= 1 << 20)?;
+            // no load request: the boot's overlay passes file/bin
+            // from the LOADS row, never from the restored prim
             let p = Bram::new(
                 pipelined != 0,
                 dual,
@@ -1221,6 +1274,9 @@ struct RegFile {
     upd_at: u64,
     upd_addr: u64,
     upd_prev: Value,
+    /// retained mem-file request (file, binary_format) — RunCore's
+    /// overlay rung re-runs it against the CURRENT file at boot
+    load: Option<(String, bool)>,
 }
 
 /// bs_range_tracker.h: runs of loaded addresses; after loading, report
@@ -1422,6 +1478,7 @@ impl RegFile {
             upd_at: u64::MAX,
             upd_addr: 0,
             upd_prev: Value::undet(width),
+            load: file.clone().map(|f| (f, bin)),
         };
         if let Some(f) = file {
             if load_memfiles() {
@@ -1907,6 +1964,45 @@ impl Prim for RegFile {
     }
     fn runcore_slot(&self) -> Option<*mut u64> {
         self.slot
+    }
+    fn runcore_load(&self) -> Option<(String, bool)> {
+        self.load.clone()
+    }
+    fn runcore_load_region(&self) -> Option<(usize, usize)> {
+        Some((
+            self.data_off(self.lo),
+            (self.hi - self.lo + 1) as usize * self.words(),
+        ))
+    }
+    fn runcore_fill_region(&mut self, key: u64) {
+        for a in self.lo..=self.hi {
+            let w = runcore_fill_word(key, a);
+            let v =
+                Value::from_limbs64(self.width.max(1), vec![w; self.words()]);
+            self.arena_write(self.data_off(a), &v);
+        }
+    }
+    fn runcore_region_is(&self, key: u64) -> bool {
+        (self.lo..=self.hi).all(|a| {
+            let w = runcore_fill_word(key, a);
+            let v =
+                Value::from_limbs64(self.width.max(1), vec![w; self.words()]);
+            self.arena_read(self.data_off(a)) == v
+        })
+    }
+    fn runcore_overlay(&mut self, file: &str, bin: bool) {
+        // construction parity: undet everywhere, then the file's
+        // in-range entries through the same loader (same warnings,
+        // same missing-file diagnostic, same partial-load behavior)
+        let undet = Value::undet(self.width);
+        for a in self.lo..=self.hi {
+            self.arena_write(self.data_off(a), &undet);
+        }
+        let (ab, w, lo, hi) = (self.addr_bits, self.width, self.lo, self.hi);
+        let name = self.mem_name.clone();
+        load_mem_file(file, bin, ab, w, lo, hi, &name, &mut |a, v| {
+            self.arena_write(self.data_off(a), &v)
+        });
     }
 }
 
@@ -5591,6 +5687,11 @@ struct Bram {
     chunk_size: u32,
     num_wens: u32,
     full_name: String,
+    /// leaf instance name (mem-file warnings)
+    mem_name: String,
+    /// retained mem-file request (file, binary_format) — RunCore's
+    /// overlay rung re-runs it against the CURRENT file at boot
+    load: Option<(String, bool)>,
     data: std::collections::HashMap<u64, Value>,
     a: BramPort,
     b: BramPort,
@@ -5639,6 +5740,8 @@ impl Bram {
             chunk_size,
             num_wens,
             full_name,
+            mem_name: leaf.clone(),
+            load: file.clone(),
             data: Default::default(),
             a: BramPort::new(width),
             b: BramPort::new(width),
@@ -6154,6 +6257,44 @@ impl Prim for Bram {
     }
     fn runcore_slot(&self) -> Option<*mut u64> {
         self.slot
+    }
+    fn runcore_load(&self) -> Option<(String, bool)> {
+        self.load.clone()
+    }
+    fn runcore_load_region(&self) -> Option<(usize, usize)> {
+        Some((
+            self.data_base(),
+            (self.hi_addr + 1) as usize * self.vwords(),
+        ))
+    }
+    fn runcore_fill_region(&mut self, key: u64) {
+        for addr in 0..=self.hi_addr {
+            let w = runcore_fill_word(key, addr);
+            let v =
+                Value::from_limbs64(self.width.max(1), vec![w; self.vwords()]);
+            self.mem_set(addr, v);
+        }
+    }
+    fn runcore_region_is(&self, key: u64) -> bool {
+        (0..=self.hi_addr).all(|addr| {
+            let w = runcore_fill_word(key, addr);
+            let v =
+                Value::from_limbs64(self.width.max(1), vec![w; self.vwords()]);
+            self.mem_get(addr) == v
+        })
+    }
+    fn runcore_overlay(&mut self, file: &str, bin: bool) {
+        // construction parity: undet everywhere, then the file's
+        // in-range entries through the same loader
+        let undet = Value::undet(self.width);
+        for addr in 0..=self.hi_addr {
+            self.mem_set(addr, undet.clone());
+        }
+        let (ab, w, hi) = (self.addr_bits, self.width, self.hi_addr);
+        let name = self.mem_name.clone();
+        load_mem_file(file, bin, ab, w, 0, hi, &name, &mut |a, v| {
+            self.mem_set(a, v)
+        });
     }
 }
 

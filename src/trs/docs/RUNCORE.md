@@ -146,6 +146,28 @@ The `$dump*` decline arms remain classic-boot territory (wave
 machinery needs the interp); they are gated by the wave/plusarg
 routing checks, not by materialization.
 
+## Mem-file overlay (rung 4, landed — sidecar v5)
+
+RegFileLoad / BRAM*Load designs boot RunCore.  The link never reads
+load files, so the baked image and window are file-independent by
+construction; the link proves the WINDOW is too by capturing it
+twice under different address-KEYED fills in every mem-file data
+region (`runcore_fill_word`: splitmix over (key, address) — uniform
+constants would let fill-invariant predicates like entry equality
+escape) and committing only when the captures agree everywhere
+OUTSIDE the regions, the effects gate is clean, and each region
+still holds its exact fill (a window write into a region would be
+lost to the overlay).  The sidecar's LOADS section carries (inst,
+file, bin) rows in construction order, each backed by a mem-file
+PRIMS seed; the boot overlays each region from the CURRENT file
+after every fallible gate — undet-fill then the same load_mem_file
+the classic constructor uses, so warnings, missing-file diagnostics,
+and partial loads are byte-identical.  All witnesses mask the load
+regions.  Live witness: RegFileLoadLink under TRS_RUNCORE=1, file
+absent AND appearing after link.  The remaining classic mem designs
+(Mesa, SparseRF) stop on the BOXED gate — their memories exceed the
+arena slot budget by design — not the mem-file gate.
+
 **Sidecar trust model** (3b panel finding, applies since v1): the
 sidecar is a build artifact, not attacker input — the window arena
 image IS simulator state, so a crafted file could already alter sim

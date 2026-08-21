@@ -1750,6 +1750,9 @@ pub(crate) struct RunCoreStageA {
     /// BRAM warn registry rows keyed back to relative arena slots:
     /// (slot, addr_bits, full name)
     pub(crate) warns: Vec<(u64, u32, String)>,
+    /// mem-file loads (overlay rung): (inst, file, binary_format) in
+    /// construction order; every load inst is also in prim_rows
+    pub(crate) load_rows: Vec<(u64, String, u64)>,
 }
 
 /// Parsed sidecar-v2 boot descriptor (clock + comp order +
@@ -1793,6 +1796,12 @@ pub(crate) const RC_SEC_WSTATE: u64 = 8;
 // prims over their live slots and services compiled prim call sites
 // natively (runcore_prim_cb)
 pub(crate) const RC_SEC_PRIMS: u64 = 9;
+// mem-file loads (overlay rung): per row [inst, file_len, file, bin]
+// in construction order — the boot rewrites each prim's data region
+// from the CURRENT file over the baked window image (the two-fill
+// bake gate proved the rest of the window independent of it).  Every
+// LOADS inst also has a PRIMS seed row.
+pub(crate) const RC_SEC_LOADS: u64 = 10;
 
 /// RLE-encode `words` as (value, run) LE u64 pairs onto `out`.
 fn rle_push(words: &[u64], out: &mut Vec<u8>) {
@@ -1837,9 +1846,10 @@ impl Interp {
     /// [version, AOT_LAYOUT_REV, salted bir hash, nslots], then
     /// (value, run) u64 pairs covering nslots.  Version 1 ends there;
     /// runcore_desc_finish appends the boot-descriptor sections and
-    /// bumps the version to 2.  Mem-file designs (RegFileLoad /
-    /// BRAM*Load) return None: their arena content tracks files that
-    /// may legitimately change between link and run.
+    /// bumps the version.  Mem-file designs are included (overlay
+    /// rung): the link never reads load files, so the image is
+    /// file-independent; the witnesses mask the data regions and the
+    /// boot overlays them from the live file.
     fn runcore_image_encode(&self) -> Option<Vec<u8>> {
         if self.jit_arena_ptr.is_null()
             || self.jit_arena_len == 0
@@ -1849,17 +1859,10 @@ impl Interp {
         {
             return None;
         }
-        for m in &self.d.modules {
-            for i in &m.instances {
-                if let ir::InstanceKind::Prim(ir::Primitive::Other { name }) =
-                    &i.kind
-                {
-                    if self.d.strings[*name as usize].contains("Load") {
-                        return None;
-                    }
-                }
-            }
-        }
+        // mem-file designs are back in (overlay rung): the link never
+        // reads load files (set_load_memfiles(false)), so this image
+        // is file-independent by construction; the witnesses mask the
+        // data regions and the boot overlays them from the live file
         let words = unsafe {
             std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
         };
@@ -1938,6 +1941,12 @@ impl Interp {
         // belt-and-braces against that ever changing.
         if rcomps.iter().any(|rc| !rc.alts.is_empty()) {
             ineligible(&mut r_reason, "dynamic scheduling (alts)");
+        }
+        // the boot parser caps LOADS rows (hostile-file bound): refuse
+        // HERE, where a reason can be recorded, rather than bake a
+        // sidecar every boot silently rejects (review finding)
+        if sa.load_rows.len() > 1 << 12 {
+            ineligible(&mut r_reason, "mem-file load count");
         }
         // rung 3b: prim call sites no longer gate eligibility — the
         // PRIMS section bakes a native servicer seed for every
@@ -2022,7 +2031,7 @@ impl Interp {
         };
         let mut p = Vec::new();
         img.extend_from_slice(b"TRSBOOTD");
-        w64(&mut img, 7);
+        w64(&mut img, 8);
         // strings: the full design table (StrDyn tokens may select any)
         p.clear();
         w64(&mut p, self.d.strings.len() as u64);
@@ -2095,13 +2104,25 @@ impl Interp {
             }
         }
         sect(&mut img, RC_SEC_PRIMS, &p);
+        // mem-file loads (construction order; empty for file-free
+        // designs)
+        p.clear();
+        w64(&mut p, sa.load_rows.len() as u64);
+        for (inst, file, bin) in &sa.load_rows {
+            w64(&mut p, *inst);
+            w64(&mut p, file.len() as u64);
+            p.extend_from_slice(file.as_bytes());
+            w64(&mut p, *bin);
+        }
+        sect(&mut img, RC_SEC_LOADS, &p);
         // bump the header version: sections present.  The version IS
         // the eligibility-semantics revision — bump it whenever the
         // gate rules change, so a driver never trusts an `eligible`
         // flag computed under older rules (panel stale-pair finding).
         // 2 = pre-prim-gate; 3 = prim-site + lib-BDPI gates; 4 =
-        // native prim servicing (sites eligible via PRIMS seeds).
-        img[8..16].copy_from_slice(&4u64.to_le_bytes());
+        // native prim servicing (sites eligible via PRIMS seeds); 5 =
+        // mem-file overlay (LOADS rows + two-fill-gated windows).
+        img[8..16].copy_from_slice(&5u64.to_le_bytes());
         self.runcore_pending = Some(img);
     }
 
@@ -2140,8 +2161,8 @@ impl Interp {
         let salted =
             self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
         let version = rd(0);
-        if version != 1 && version != 4 {
-            // 2, 3 = older eligibility-semantics revisions: stale
+        if version != 1 && version != 5 {
+            // 2-4 = older eligibility-semantics revisions: stale
             fail("unknown or stale version");
             return None;
         }
@@ -2160,6 +2181,12 @@ impl Interp {
         let words = unsafe {
             std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
         };
+        // mem-file data regions legitimately track the file (the link
+        // never reads it, this load did): mask them out of the arena
+        // compares; the LOADS section arm verifies the region claims
+        let mask = self.runcore_load_mask();
+        let masked =
+            |k: usize| mask.iter().any(|&(s, l)| k >= s && k < s + l);
         // find where the RLE runs end (also validates them; every
         // field is file data and must be treated as hostile)
         let mut pos = 8 + 32;
@@ -2183,7 +2210,7 @@ impl Interp {
                 return None;
             }
             for k in slot..slot + run {
-                if words[k] != v {
+                if words[k] != v && !masked(k) {
                     fail(&format!(
                         "slot {k}: image {v:#x}, rebuilt {:#x}",
                         words[k]
@@ -2409,6 +2436,11 @@ impl Interp {
                             want_insts.insert(pc.inst);
                         }
                     }
+                    // mem-file prims are in the PRIMS rows too (the
+                    // boot's overlay drives them) — same union here
+                    want_insts.extend(
+                        self.runcore_live_loads().iter().map(|r| r.0 as usize),
+                    );
                     // mirror the encoder: if ANY bounce-reachable inst
                     // is unattached or unseedable, desc_finish encoded
                     // ZERO rows (and an ineligible reason) — expecting
@@ -2496,6 +2528,34 @@ impl Interp {
                         }
                     }
                 }
+                RC_SEC_LOADS => {
+                    // compare the baked rows against the live prims'
+                    // retained load requests, in construction order
+                    let live_loads = self.runcore_live_loads();
+                    let n = want!(take8(&mut p), "load row count");
+                    if n != live_loads.len() as u64 {
+                        fail(&format!(
+                            "descriptor: {n} load rows baked vs {} live",
+                            live_loads.len()
+                        ));
+                        return None;
+                    }
+                    for want_row in &live_loads {
+                        let inst = want!(take8(&mut p), "load inst");
+                        let file =
+                            want!(take_str(&mut p), "load file").to_string();
+                        let bin = want!(take8(&mut p), "load bin");
+                        if (inst, file.as_str(), bin)
+                            != (want_row.0, want_row.1.as_str(), want_row.2)
+                        {
+                            fail(&format!(
+                                "descriptor: load row drift at inst {inst} \
+                                 ({file})"
+                            ));
+                            return None;
+                        }
+                    }
+                }
                 _ => {
                     fail(&format!("descriptor: unknown section {tag}"));
                     return None;
@@ -2503,8 +2563,8 @@ impl Interp {
             }
             pos = end;
         }
-        // required sections: 1-6 + 9 always; window sections travel
-        // as a pair or not at all
+        // required sections: 1-6 + 9 + 10 always; window sections
+        // travel as a pair or not at all
         for t in [
             RC_SEC_STRINGS,
             RC_SEC_PATHS,
@@ -2513,6 +2573,7 @@ impl Interp {
             RC_SEC_WARNS,
             RC_SEC_ELIG,
             RC_SEC_PRIMS,
+            RC_SEC_LOADS,
         ] {
             if seen_tags & (1 << t) == 0 {
                 fail("descriptor: missing required section");
@@ -2578,18 +2639,69 @@ impl Interp {
         out
     }
 
-    /// Link-time window bake (called on a FRESH interp that has an
-    /// artifact Load request armed): run the reset window quiet on
-    /// the compiled engine, and if it was effect-free and reached the
-    /// central-loop engage point, splice the captured post-window
-    /// sections into the sidecar.  Returns whether the splice
-    /// happened; every non-clean outcome is a silent classic boot.
-    pub fn runcore_bake_window(
-        &mut self,
-        sidecar: &std::path::Path,
-    ) -> Result<bool, String> {
+    // -- link-time window bake (docs/RUNCORE.md): runcore_bake_capture
+    // runs the reset window quiet on a FRESH interp with an artifact
+    // Load request armed; runcore_bake_commit gates (two-fill, for
+    // mem-file designs) and splices the captured sections into the
+    // sidecar.  Every non-clean outcome is a silent classic boot. --
+
+    /// The live mem-file data regions as absolute (word index, len)
+    /// ranges into the arena — the words whose content legitimately
+    /// tracks the load file (masked by every arena witness compare;
+    /// rewritten by the boot's overlay).
+    pub(crate) fn runcore_load_mask(&self) -> Vec<(usize, usize)> {
+        let base = self.jit_arena_ptr as usize;
+        let mut m = Vec::new();
+        for inst in &self.insts {
+            if let InstKind::Prim(p) = &inst.kind {
+                if p.runcore_load().is_some() {
+                    if let (Some(ptr), Some((off, len))) =
+                        (p.runcore_slot(), p.runcore_load_region())
+                    {
+                        if let Some(s) = (ptr as usize).checked_sub(base) {
+                            m.push((s / 8 + off, len));
+                        }
+                    }
+                }
+            }
+        }
+        m
+    }
+
+    /// The live mem-file load rows, (inst, file, binary_format) in
+    /// construction order — the single source both the encoder and
+    /// the witness use (drift between them is exactly what the
+    /// witness compare exists to catch, so they must share one walk).
+    pub(crate) fn runcore_live_loads(&self) -> Vec<(u64, String, u64)> {
+        let mut rows = Vec::new();
+        for (ci, inst) in self.insts.iter().enumerate() {
+            if let InstKind::Prim(p) = &inst.kind {
+                if let Some((f, bin)) = p.runcore_load() {
+                    rows.push((ci as u64, f, bin as u64));
+                }
+            }
+        }
+        rows
+    }
+
+    /// True when the design has mem-file prims (RegFileLoad /
+    /// BRAM*Load) — the link's bake then runs the two-fill gate.
+    pub fn runcore_has_loads(&self) -> bool {
+        self.insts.iter().any(|i| {
+            matches!(&i.kind, InstKind::Prim(p) if p.runcore_load().is_some())
+        })
+    }
+
+    /// Run the reset window on the loaded artifact and capture the
+    /// boundary state (docs/RUNCORE.md).  `fill`: two-fill gate
+    /// pattern written into every mem-file data region at plan time.
+    /// None = not bakeable — never engaged, dirty window, or a
+    /// perturbed region was written during the window (the boot's
+    /// overlay would lose that write) — the design boots classic.
+    pub fn runcore_bake_capture(&mut self, fill: Option<u64>) -> Option<RunCoreBake> {
         self.set_quiet();
         self.runcore_bake = true;
+        self.runcore_bake_fill = fill;
         let before =
             crate::prim::WINDOW_EFFECTS.load(std::sync::atomic::Ordering::Relaxed);
         // TWO cycles: advance(1) finishes cycle 1's timeslice and stops
@@ -2601,7 +2713,20 @@ impl Interp {
         let captured = self.runcore_window.take();
         let clean = captured
             .as_ref()
-            .is_some_and(|(_, at_capture)| *at_capture == before);
+            .is_some_and(|(_, at_capture, _)| *at_capture == before);
+        // regions untouched by the window: with the fill in place, a
+        // window write into a region would leave it != the fill image
+        let regions_hold = fill.is_none_or(|pat| {
+            self.insts.iter().all(|i| match &i.kind {
+                InstKind::Prim(p)
+                    if p.runcore_load().is_some()
+                        && p.runcore_slot().is_some() =>
+                {
+                    p.runcore_region_is(pat)
+                }
+                _ => true,
+            })
+        });
         if std::env::var_os("TRS_STARTUP_TIME").is_some() {
             let bails: Vec<String> = crate::CENTRAL_BAIL
                 .iter()
@@ -2612,19 +2737,72 @@ impl Interp {
                 })
                 .collect();
             eprintln!(
-                "trs runcore: bake engaged={} clean={clean} (bails [{}])",
+                "trs runcore: bake engaged={} clean={clean} \
+                 regions_hold={regions_hold} (bails [{}])",
                 captured.is_some(),
                 bails.join(" ")
             );
         }
-        let Some((sections, _)) = captured else {
-            return Ok(false); // never engaged (bailed) — classic boot
-        };
-        if !clean {
+        let (sections, _, state) = captured?;
+        if !clean || !regions_hold {
+            return None;
+        }
+        let arena = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        }
+        .to_vec();
+        Some(RunCoreBake {
+            sections,
+            arena,
+            mask: self.runcore_load_mask(),
+            state,
+        })
+    }
+}
+
+/// One window-bake capture: the encoded window sections plus what the
+/// two-fill gate compares.
+pub struct RunCoreBake {
+    sections: Vec<u8>,
+    /// the post-window (boundary) arena
+    arena: Vec<u64>,
+    /// mem-file data regions, absolute (word index, len)
+    mask: Vec<(usize, usize)>,
+    /// (tp, tn, cycle) at capture
+    state: (u64, u64, u64),
+}
+
+/// Two-fill gate + sidecar splice.  For a mem-file design, `a` and
+/// `b` are captures under DIFFERENT fill patterns: baking is sound
+/// only when every word OUTSIDE the load regions (and the clock
+/// state) agrees — the window provably does not depend on the file
+/// content the boot's overlay will replace.  File-free designs pass
+/// `b = None` (single capture, no gate).
+pub fn runcore_bake_commit(
+    sidecar: &std::path::Path,
+    a: &RunCoreBake,
+    b: Option<&RunCoreBake>,
+) -> Result<bool, String> {
+    if let Some(b) = b {
+        let masked =
+            |k: usize| a.mask.iter().any(|&(s, l)| k >= s && k < s + l);
+        let sound = a.state == b.state
+            && a.mask == b.mask
+            && a.arena.len() == b.arena.len()
+            && (0..a.arena.len()).all(|k| masked(k) || a.arena[k] == b.arena[k]);
+        if !sound {
+            if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                eprintln!(
+                    "trs runcore: bake refused — window depends on \
+                     mem-file content (two-fill gate)"
+                );
+            }
             return Ok(false);
         }
-        let mut bytes =
-            std::fs::read(sidecar).map_err(|e| format!("{}: {e}", sidecar.display()))?;
+    }
+    let sections = &a.sections;
+    let mut bytes =
+        std::fs::read(sidecar).map_err(|e| format!("{}: {e}", sidecar.display()))?;
         // bump nsect (u64 right after TRSBOOTD) by 2 and append
         let Some(td) = bytes
             .windows(8)
@@ -2636,13 +2814,12 @@ impl Interp {
         let nsect =
             u64::from_le_bytes(bytes[td + 8..td + 16].try_into().unwrap());
         bytes[td + 8..td + 16].copy_from_slice(&(nsect + 2).to_le_bytes());
-        bytes.extend_from_slice(&sections);
+        bytes.extend_from_slice(sections);
         let tmp = sidecar.with_extension("arena.tmp");
         std::fs::write(&tmp, &bytes)
             .and_then(|()| std::fs::rename(&tmp, sidecar))
             .map_err(|e| format!("{}: {e}", sidecar.display()))?;
         Ok(true)
-    }
 }
 
 /// Worker-thread count for compile fan-out (TRS_JIT_THREADS caps).
@@ -5182,6 +5359,12 @@ impl Interp {
                             sites.insert(pc.inst);
                         }
                     }
+                    // mem-file prims join the PRIMS rows (the boot's
+                    // overlay drives them through the same restored
+                    // structs); their load requests become LOADS rows
+                    // in construction order
+                    let load_rows = self.runcore_live_loads();
+                    sites.extend(load_rows.iter().map(|r| r.0 as usize));
                     let prim_rows = sites
                         .iter()
                         .map(|&ci| {
@@ -5218,6 +5401,7 @@ impl Interp {
                         boxed: nprims != attach.len(),
                         prim_rows,
                         warns,
+                        load_rows,
                     });
                 }
                 std::mem::forget(arena);
@@ -5388,6 +5572,19 @@ impl Interp {
         self.jit_arena_ptr = arena_ptr;
         self.jit_arena_len = nslots as usize;
         self.jit_reset_slots = reset_node_slot;
+        // two-fill bake gate: perturb every mem-file data region
+        // (post-attach, pre-advance) so the window capture can prove
+        // the rest of the state independent of file content
+        if let Some(pat) = self.runcore_bake_fill {
+            for inst in &mut self.insts {
+                if let InstKind::Prim(p) = &mut inst.kind {
+                    if p.runcore_load().is_some() && p.runcore_slot().is_some()
+                    {
+                        p.runcore_fill_region(pat);
+                    }
+                }
+            }
+        }
         if trace {
             eprintln!(
                 "trs jit: on ({} rules, {} slots, {} compositions)",

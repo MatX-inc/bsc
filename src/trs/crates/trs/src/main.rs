@@ -586,8 +586,8 @@ fn main() -> ExitCode {
             }
             // RunCore arena sidecar (validation form): the plan's
             // deterministic post-attach arena image, cross-checked by
-            // loads under TRS_RUNCORE_CHECK=1; None (interp-only link
-            // or a mem-file design) removes any stale sidecar
+            // loads under TRS_RUNCORE_CHECK=1; None (interp-only or
+            // traced link) removes any stale sidecar
             let arena_written = match interp.take_runcore_image() {
                 Some(img) => {
                     let t = format!("{base}.arena.tmp");
@@ -615,21 +615,48 @@ fn main() -> ExitCode {
             if arena_written && compiled {
                 // no binds: a binding design's load refuses without
                 // them, so its bake is a silent no-op and it boots
-                // classic (run_file gates RunCore off under binds)
-                match trs_interp::startup::load_file(path, &[], &[], None) {
-                    Ok(mut b) => {
-                        b.aot_request_code(format!("{base}.so").into());
-                        if let Err(e) = b.runcore_bake_window(
-                            std::path::Path::new(&format!("{base}.arena")),
-                        ) {
-                            eprintln!(
-                                "trs link: note: window bake skipped: {e}"
-                            );
-                        }
+                // classic (run_file gates RunCore off under binds).
+                // Mem-file designs capture the window TWICE under
+                // different fill patterns (the two-fill gate): the
+                // bake is committed only if everything outside the
+                // load regions agrees — proof the boot's overlay
+                // replaces the only file-dependent state.
+                let sidecar = format!("{base}.arena");
+                let bake = (|| -> Result<bool, String> {
+                    let mut b1 =
+                        trs_interp::startup::load_file(path, &[], &[], None)?;
+                    b1.aot_request_code(format!("{base}.so").into());
+                    if !b1.runcore_has_loads() {
+                        let Some(cap) = b1.runcore_bake_capture(None) else {
+                            return Ok(false);
+                        };
+                        return trs_interp::runcore_bake_commit(
+                            std::path::Path::new(&sidecar),
+                            &cap,
+                            None,
+                        );
                     }
-                    Err(e) => {
-                        eprintln!("trs link: note: window bake skipped: {e}")
-                    }
+                    let Some(a) =
+                        b1.runcore_bake_capture(Some(0x5555_5555_5555_5555))
+                    else {
+                        return Ok(false);
+                    };
+                    let mut b2 =
+                        trs_interp::startup::load_file(path, &[], &[], None)?;
+                    b2.aot_request_code(format!("{base}.so").into());
+                    let Some(b) =
+                        b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
+                    else {
+                        return Ok(false);
+                    };
+                    trs_interp::runcore_bake_commit(
+                        std::path::Path::new(&sidecar),
+                        &a,
+                        Some(&b),
+                    )
+                })();
+                if let Err(e) = bake {
+                    eprintln!("trs link: note: window bake skipped: {e}");
                 }
             }
             // the artifact itself: a SYMLINK to the runner — main()'s

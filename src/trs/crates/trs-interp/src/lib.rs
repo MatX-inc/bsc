@@ -28,6 +28,8 @@ pub use topbind::{parse_bind, TopBind};
 #[cfg(feature = "aot")]
 mod jit;
 #[cfg(feature = "aot")]
+pub use jit::{runcore_bake_commit, RunCoreBake};
+#[cfg(feature = "aot")]
 mod runcore;
 
 use foreign::ForeignEnv;
@@ -270,15 +272,20 @@ pub struct Interp {
     /// by the Emit arm for prime's runcore_desc_finish
     #[cfg(feature = "aot")]
     pub(crate) runcore_stage_a: Option<jit::RunCoreStageA>,
-    /// link-time window bake armed (jit::runcore_bake_window): the
+    /// link-time window bake armed (jit::runcore_bake_capture): the
     /// central loop's engage point captures the post-window sections
     /// plus the WINDOW_EFFECTS reading AT capture (the bake advances
     /// one steady cycle past the boundary; its effects must not
     /// pollute the window-clean gate)
     #[cfg(feature = "aot")]
     pub(crate) runcore_bake: bool,
+    /// two-fill gate pattern: the plan tail writes it into every
+    /// mem-file data region (jit::runcore_bake_capture sets it)
     #[cfg(feature = "aot")]
-    pub(crate) runcore_window: Option<(Vec<u8>, u64)>,
+    pub(crate) runcore_bake_fill: Option<u64>,
+    /// (encoded window sections, effects at capture, (tp, tn, cycle))
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_window: Option<(Vec<u8>, u64, (u64, u64, u64))>,
     /// the central loop engaged at least once this run — the inverse
     /// half of the RunCore descriptor's eligibility witness
     central_engaged: bool,
@@ -821,6 +828,8 @@ impl Interp {
             runcore_stage_a: None,
             #[cfg(feature = "aot")]
             runcore_bake: false,
+            #[cfg(feature = "aot")]
+            runcore_bake_fill: None,
             #[cfg(feature = "aot")]
             runcore_window: None,
             central_engaged: false,
@@ -4106,6 +4115,7 @@ impl Interp {
                     self.runcore_window_encode(tp, tn),
                     prim::WINDOW_EFFECTS
                         .load(std::sync::atomic::Ordering::Relaxed),
+                    (tp, tn, self.cycle),
                 ));
                 // the bake wants the BOUNDARY, not simulation: stop
                 // the advance here — no steady cycle executes at link
@@ -4167,9 +4177,19 @@ impl Interp {
                              {wtp}/{wtn}/{wcyc} vs live {tp}/{tn}/{}",
                             self.cycle
                         );
-                    } else if let Some(k) =
-                        (0..live.len()).find(|&k| live[k] != wa[k])
-                    {
+                    } else if let Some(k) = {
+                        // mem-file data regions legitimately differ:
+                        // the bake never read the file (and perturbed
+                        // the regions for the two-fill gate); the
+                        // boot's overlay rewrites them from the file
+                        let mask = self.runcore_load_mask();
+                        (0..live.len()).find(|&k| {
+                            live[k] != wa[k]
+                                && !mask
+                                    .iter()
+                                    .any(|&(s, l)| k >= s && k < s + l)
+                        })
+                    } {
                         eprintln!(
                             "trs runcore: MISMATCH: window slot {k}: baked \
                              {:#x}, live {:#x}",

@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 use crate::foreign::ForeignEnv;
 use crate::format::Arg;
-use crate::jit::{rle_decode, RC_SEC_CLOCK, RC_SEC_COMPS, RC_SEC_ELIG, RC_SEC_PATHS, RC_SEC_PRIMS, RC_SEC_STRINGS, RC_SEC_WARENA, RC_SEC_WARNS, RC_SEC_WSTATE};
+use crate::jit::{rle_decode, RC_SEC_CLOCK, RC_SEC_COMPS, RC_SEC_ELIG, RC_SEC_LOADS, RC_SEC_PATHS, RC_SEC_PRIMS, RC_SEC_STRINGS, RC_SEC_WARENA, RC_SEC_WARNS, RC_SEC_WSTATE};
 use crate::prim::Prim;
 use crate::value::Value;
 use trs_codegen::abi::{self, FArgSpec, FnProtos, TOKEN_KIND_EXEC};
@@ -47,6 +47,8 @@ struct Boot {
     window: Option<(Vec<u64>, u64, u64)>,
     /// bounce-reachable prim seeds: (inst, slot, tag, words, strings)
     prims: Vec<(usize, usize, u64, Vec<u64>, Vec<String>)>,
+    /// mem-file loads: (inst, file, binary_format), construction order
+    loads: Vec<(usize, String, bool)>,
 }
 
 /// Strict sidecar parse for the boot path: every field is hostile,
@@ -60,10 +62,10 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
     let rd = |k: usize| {
         u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
     };
-    // version 4 = current eligibility semantics (native prim
-    // servicing); older versions' eligible flags were computed under
-    // different gate rules — classic boot
-    if rd(0) != 4 || rd(1) != abi::AOT_LAYOUT_REV {
+    // version 5 = current eligibility semantics (mem-file overlay);
+    // older versions' eligible flags were computed under different
+    // gate rules — classic boot
+    if rd(0) != 5 || rd(1) != abi::AOT_LAYOUT_REV {
         return None;
     }
     let hash = rd(2);
@@ -114,6 +116,7 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
         eligible: false,
         window: None,
         prims: Vec::new(),
+        loads: Vec::new(),
     };
     let mut warena = None;
     let mut wstate = None;
@@ -228,6 +231,25 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
                     return None;
                 }
             }
+            RC_SEC_LOADS => {
+                let n = usize::try_from(take8(&mut p)?).ok()?;
+                if n > 1 << 12 {
+                    return None;
+                }
+                let mut seen_insts = std::collections::HashSet::new();
+                for _ in 0..n {
+                    let inst = usize::try_from(take8(&mut p)?).ok()?;
+                    let file = take_str(&mut p)?;
+                    let bin = take8(&mut p)? != 0;
+                    if !seen_insts.insert(inst) {
+                        return None;
+                    }
+                    b.loads.push((inst, file, bin));
+                }
+                if p > end {
+                    return None;
+                }
+            }
             _ => return None,
         }
         pos = end;
@@ -238,11 +260,28 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
         || seen & (1 << RC_SEC_COMPS) == 0
         || seen & (1 << RC_SEC_ELIG) == 0
         || seen & (1 << RC_SEC_PRIMS) == 0
+        || seen & (1 << RC_SEC_LOADS) == 0
     {
         return None;
     }
     // prim seed insts index the instance-path table
     if b.prims.iter().any(|(inst, ..)| *inst >= b.paths.len()) {
+        return None;
+    }
+    // every load row must have a seed row OF A MEM-FILE KIND: the
+    // boot's overlay drives the load through that restored prim, and
+    // only RegFile/Bram implement it — a row pointing at any other
+    // tag would panic in the default runcore_overlay (review finding:
+    // a hostile sidecar must bail to classic, never crash)
+    if b.loads.iter().any(|(inst, ..)| {
+        !b.prims.iter().any(|(pi, _, tag, ..)| {
+            pi == inst
+                && matches!(
+                    *tag,
+                    crate::prim::RC_PRIM_REGFILE | crate::prim::RC_PRIM_BRAM
+                )
+        })
+    }) {
         return None;
     }
     if let (Some(a), Some((tp, cyc))) = (warena, wstate) {
@@ -639,6 +678,19 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             prims,
         };
         rc.fe.plusargs = plusargs.to_vec();
+        // mem-file overlay (docs/RUNCORE.md, overlay rung): rewrite
+        // each load region from the CURRENT file — construction
+        // order, same loader, same diagnostics as a classic boot.
+        // Placed after every bail: the loader may print (missing-file
+        // diagnostics are output), and classic is no longer a sound
+        // fallback once a byte is out.  Membership was checked at
+        // parse, so the lookup cannot fail.
+        for (inst, file, bin) in &boot.loads {
+            rc.prims
+                .get_mut(inst)
+                .expect("load row without a restored prim (parse gate)")
+                .runcore_overlay(file, *bin);
+        }
         let envp = &mut rc as *mut RunCore as *mut core::ffi::c_void;
         let pos_fns: Vec<
             unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32,
