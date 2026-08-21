@@ -376,6 +376,10 @@ pub(crate) struct JitPlans {
     /// preconditions ignore them.  Empty unless an artifact with
     /// trs_edge_wire_ticks=1 loaded.
     pub(crate) covered_ticks: Vec<std::collections::HashSet<usize>>,
+    /// the artifact's RunCore boot descriptor (sidecar v2 sections),
+    /// parsed under TRS_RUNCORE_CHECK for the central-loop engage
+    /// witness; None when unchecked, absent, or v1
+    pub(crate) runcore_desc: Option<RunCoreDesc>,
     /// fused per-composition edge fns (task #17): compiled once all
     /// bodies are warm; 0 = composition not fused (fall back to the
     /// node walk).  fn(arena, env, now) -> i32 (nonzero = abort;
@@ -400,6 +404,12 @@ impl JitPlans {
     /// bakes cell addresses).  Failure leaves the node walk in place.
     pub(crate) fn try_fuse(&self) {
         if std::env::var_os("TRS_NO_FUSION").is_some() {
+            // still resolve the OnceLock: leaving it empty made the
+            // dispatch guard re-enter here — a getenv PER EDGE for the
+            // whole run, the trs/14 bug pattern (per-event-tax audit,
+            // finding 1).  Zero entries = "nothing fused", the same
+            // state the no-jit build uses.
+            let _ = self.fused.get_or_init(|| vec![0; self.comp_nodes.len()]);
             return;
         }
         // no compile tier without `jit`: artifact-provided fused fns
@@ -494,12 +504,18 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         &lz.scheds[ordinal].foreign_stmts[local]
     };
     let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
-    let mut argv = Vec::with_capacity(fs.args.len());
+    // per-Interp scratch: the argv spine survives across calls (its
+    // element drops still run — Value buffers go with A3)
+    let mut argv = std::mem::take(&mut interp.foreign_argv);
+    argv.clear();
+    argv.reserve(fs.args.len());
     let mut off = 0usize;
     for a in &fs.args {
         match *a {
             FArgSpec::Str(sid) => {
-                argv.push(Arg::Str(interp.s(sid).to_string()));
+                // Arc-interned once per distinct string id: a clone is
+                // a refcount bump, not a heap copy
+                argv.push(Arg::Str(interp.arg_str(sid)));
             }
             FArgSpec::Num { width, signed } => {
                 let w = width;
@@ -520,9 +536,10 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             }
             FArgSpec::StrDyn => {
                 // one word of string id (static or runtime-interned)
-                // -> the interp's Arg::Str
+                // -> the interp's Arg::Str, through the same Arc cache
+                // (dyn ids are stable once interned)
                 let word = *args.add(off);
-                argv.push(Arg::Str(interp.s(word as u32).to_string()));
+                argv.push(Arg::Str(interp.arg_str(word as u32)));
                 off += 1;
             }
         }
@@ -539,6 +556,8 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         }
         let id = interp.intern_dyn(text);
         *out = id as u64;
+        argv.clear();
+        interp.foreign_argv = argv;
         if let Some(t0) = _t0 {
             prof::add(&prof::FOREIGN_NS, t0);
             prof::FOREIGN_CALLS
@@ -546,8 +565,20 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         }
         return 0;
     }
-    let fname = interp.s(func).to_string();
-    let loc = interp.loc_of(inst);
+    // task name + %m location through reused per-Interp buffers: no
+    // per-call allocation (loc is "top[.path]", fname a table borrow —
+    // both copied into scratch because foreign_action takes &mut self)
+    let mut fname = std::mem::take(&mut interp.fname_buf);
+    fname.clear();
+    fname.push_str(interp.s(func));
+    let mut loc = std::mem::take(&mut interp.loc_buf);
+    loc.clear();
+    loc.push_str("top");
+    let p = &interp.insts[inst].path;
+    if !p.is_empty() {
+        loc.push('.');
+        loc.push_str(p);
+    }
     if ret_width == 0 {
         interp.foreign_action(&fname, &argv, &loc);
     } else {
@@ -558,6 +589,13 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
+    // return the scratch (the task may have re-entered and taken fresh
+    // buffers — mem::take left valid empties, so this only upgrades
+    // capacity back)
+    argv.clear();
+    interp.foreign_argv = argv;
+    interp.fname_buf = fname;
+    interp.loc_buf = loc;
     if let Some(t0) = _t0 {
         prof::add(&prof::FOREIGN_NS, t0);
         prof::FOREIGN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1687,6 +1725,917 @@ fn aot_load(
     }
 }
 
+/// Stage-A capture for the RunCore boot descriptor: what only the
+/// Emit arm can see.  prime's runcore_desc_finish consumes it.
+pub(crate) struct RunCoreStageA {
+    /// per-comp rc.ticks indices the emitted edge fns cover
+    pub(crate) covered: Vec<std::collections::HashSet<usize>>,
+    /// edge-SSA emission was on (off = no compiled ticks = central
+    /// loop never engages = ineligible)
+    pub(crate) edge_ssa: bool,
+    /// any prim stayed boxed (no arena slot): its window/steady state
+    /// lives in structs a RunCore boot doesn't have — ineligible
+    /// until lazy Reflect (adversarial-panel finding)
+    pub(crate) boxed: bool,
+    /// per bounce-reachable prim inst (any inst named by a sched or
+    /// exec PrimCallSpec): (inst, slot, tag, words, strings) seed rows
+    /// for the sidecar PRIMS section — the boot restores exactly these
+    /// prims, adopts their live slots, and services bounces natively
+    /// (rung 3b; the rows replace 3a's blanket prim-site gate).
+    /// Err = why native servicing is impossible (unattached target,
+    /// unseedable kind) — the design then boots classic.
+    #[allow(clippy::type_complexity)]
+    pub(crate) prim_rows:
+        Result<Vec<(u64, u64, u64, Vec<u64>, Vec<String>)>, String>,
+    /// BRAM warn registry rows keyed back to relative arena slots:
+    /// (slot, addr_bits, full name)
+    pub(crate) warns: Vec<(u64, u32, String)>,
+}
+
+/// Parsed sidecar-v2 boot descriptor (clock + comp order +
+/// eligibility), stashed in JitPlans for the engage-time witness and,
+/// later, consumed by the RunCore boot driver.
+#[derive(PartialEq, Debug)]
+pub(crate) struct RunCoreDesc {
+    pub(crate) hi: u64,
+    pub(crate) lo: u64,
+    pub(crate) delay: u64,
+    pub(crate) init_high: bool,
+    pub(crate) has_init: bool,
+    pub(crate) pos: Vec<usize>,
+    pub(crate) neg: Vec<usize>,
+    /// RunCore boot eligibility (central + the boot-only gates)
+    pub(crate) eligible: bool,
+    /// central-loop mirror only — what the engage witness compares
+    pub(crate) central: bool,
+    pub(crate) reason: String,
+    /// window-bake sections, when the link's post-emit bake found the
+    /// reset window skippable: (post-window arena, tp, tn, cycle)
+    pub(crate) window: Option<(Vec<u64>, u64, u64, u64)>,
+}
+
+// Boot-descriptor section tags (sidecar v2, after the RLE runs:
+// b"TRSBOOTD", u64 section count, then per section u64 tag + u64
+// payload byte length + payload padded to 8).
+pub(crate) const RC_SEC_STRINGS: u64 = 1;
+pub(crate) const RC_SEC_PATHS: u64 = 2;
+pub(crate) const RC_SEC_CLOCK: u64 = 3;
+pub(crate) const RC_SEC_COMPS: u64 = 4;
+pub(crate) const RC_SEC_WARNS: u64 = 5;
+pub(crate) const RC_SEC_ELIG: u64 = 6;
+// window-bake sections (appended by the link's post-emit bake): the
+// post-reset-window arena image and the clock state at the central-
+// loop engage point — the state a RunCore boot starts from
+pub(crate) const RC_SEC_WARENA: u64 = 7;
+pub(crate) const RC_SEC_WSTATE: u64 = 8;
+// bounce-reachable prim seeds (rung 3b): per row [inst, slot, tag,
+// nwords, words..., nstrs, (len, bytes)...] — the boot restores these
+// prims over their live slots and services compiled prim call sites
+// natively (runcore_prim_cb)
+pub(crate) const RC_SEC_PRIMS: u64 = 9;
+
+/// RLE-encode `words` as (value, run) LE u64 pairs onto `out`.
+fn rle_push(words: &[u64], out: &mut Vec<u8>) {
+    let mut i = 0;
+    while i < words.len() {
+        let v = words[i];
+        let mut j = i + 1;
+        while j < words.len() && words[j] == v {
+            j += 1;
+        }
+        out.extend_from_slice(&v.to_le_bytes());
+        out.extend_from_slice(&((j - i) as u64).to_le_bytes());
+        i = j;
+    }
+}
+
+/// Decode (value, run) pairs into exactly `nslots` words; None on any
+/// truncation, overflow, or length mismatch (the boot path must treat
+/// every field of the file as hostile — adversarial-panel finding).
+pub(crate) fn rle_decode(bytes: &[u8], nslots: usize) -> Option<Vec<u64>> {
+    let mut out = Vec::with_capacity(nslots);
+    let mut pos = 0;
+    while out.len() < nslots {
+        let v = u64::from_le_bytes(bytes.get(pos..pos + 8)?.try_into().ok()?);
+        let run = u64::from_le_bytes(
+            bytes.get(pos + 8..pos + 16)?.try_into().ok()?,
+        );
+        pos += 16;
+        let run = usize::try_from(run).ok()?;
+        if run == 0 || run > nslots - out.len() {
+            return None;
+        }
+        out.extend(std::iter::repeat(v).take(run));
+    }
+    (pos == bytes.len()).then_some(out)
+}
+
+impl Interp {
+    /// RunCore arena sidecar, validation form (self-sufficient AOT
+    /// init, rung 1): encode the freshly built post-attach arena as
+    /// header + RLE runs.  Format: b"TRSARENA", then LE u64s
+    /// [version, AOT_LAYOUT_REV, salted bir hash, nslots], then
+    /// (value, run) u64 pairs covering nslots.  Version 1 ends there;
+    /// runcore_desc_finish appends the boot-descriptor sections and
+    /// bumps the version to 2.  Mem-file designs (RegFileLoad /
+    /// BRAM*Load) return None: their arena content tracks files that
+    /// may legitimately change between link and run.
+    fn runcore_image_encode(&self) -> Option<Vec<u8>> {
+        if self.jit_arena_ptr.is_null()
+            || self.jit_arena_len == 0
+            // traced artifacts boot classic (their rec_inits land
+            // after this hook, and the wave engine needs the interp)
+            || self.vcd_trace
+        {
+            return None;
+        }
+        for m in &self.d.modules {
+            for i in &m.instances {
+                if let ir::InstanceKind::Prim(ir::Primitive::Other { name }) =
+                    &i.kind
+                {
+                    if self.d.strings[*name as usize].contains("Load") {
+                        return None;
+                    }
+                }
+            }
+        }
+        let words = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        };
+        let salted =
+            self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
+        let mut out = Vec::with_capacity(64 + words.len() / 4);
+        out.extend_from_slice(b"TRSARENA");
+        for v in [
+            1u64,
+            trs_codegen::abi::AOT_LAYOUT_REV,
+            salted,
+            self.jit_arena_len as u64,
+        ] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        rle_push(words, &mut out);
+        Some(out)
+    }
+
+    /// prime's post-plan hook for an Emit run: assemble the boot
+    /// descriptor (sidecar v2 sections) from stage A plus the clock
+    /// and comp state prime just built, mirroring try_central's
+    /// eligibility so the engage-time witness can compare decisions.
+    pub(crate) fn runcore_desc_finish(
+        &mut self,
+        rcomps: &[RComp],
+        sources: &[crate::ClockSource],
+        clocks: &[StrId],
+        driver_clock: &HashMap<usize, usize>,
+    ) {
+        let Some(mut img) = self.runcore_pending.take() else { return };
+        let Some(sa) = self.runcore_stage_a.take() else {
+            self.runcore_pending = Some(img);
+            return;
+        };
+        // -- eligibility, two classes (adversarial-panel finding: the
+        // central loop's conditions are WIDER than RunCore's — BDPI
+        // and boxed prims engage the central loop just fine, so a
+        // single flag made the engage witness cry wolf on them) --
+        // central: mirrors try_central's bail conditions exactly; the
+        //   engage witness compares THIS flag.
+        // runcore: central + the boot-only gates; the driver boots on
+        //   THIS flag.
+        let mut c_reason: Option<String> = None;
+        let mut r_reason: Option<String> = None;
+        let ineligible = |r: &mut Option<String>, s: &str| {
+            if r.is_none() {
+                *r = Some(s.to_string());
+            }
+        };
+        if !sa.edge_ssa {
+            ineligible(&mut r_reason, "edge-SSA emission off");
+        }
+        // rung 3a: the ONLY foreign imports the boot services natively
+        // are the two library ones (rand32/srand — a fresh GlibcRandom
+        // matches the classic engine's fresh stream, and any window-
+        // time draw already makes the window unskippable); anything
+        // else, or an aliased name, boots classic.  Exactness matters:
+        // the boot PANICS on an unexpected task rather than fall back,
+        // so this gate must make that unreachable.
+        let lib_only = self.d.foreign_funcs.iter().all(|f| {
+            let (n, c) = (self.s(f.name), self.s(f.c_name));
+            (n == "rand32" && c == "rand32") || (n == "srand" && c == "srand")
+        });
+        if !lib_only {
+            ineligible(&mut r_reason, "foreign (BDPI) imports");
+        }
+        if sa.boxed {
+            ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
+        }
+        // rung 3b: prim call sites no longer gate eligibility — the
+        // PRIMS section bakes a native servicer seed for every
+        // bounce-reachable prim instead.  Only a site whose target
+        // cannot be seeded (unattached, unseedable kind) boots classic.
+        let prim_rows: &[(u64, u64, u64, Vec<u64>, Vec<String>)] =
+            match &sa.prim_rows {
+                Ok(rows) => rows,
+                Err(e) => {
+                    ineligible(&mut r_reason, e);
+                    &[]
+                }
+            };
+        if !driver_clock.is_empty() {
+            ineligible(&mut c_reason, "driver clocks");
+        }
+        if !self.rstgen_out.is_empty() {
+            ineligible(&mut c_reason, "reset generators");
+        }
+        let mut wave = None;
+        for (ci, src) in sources.iter().enumerate() {
+            if let crate::ClockSource::Wave(w) = src {
+                if wave.is_some() {
+                    ineligible(&mut c_reason, "multiple wave clocks");
+                }
+                wave = Some((ci, *w));
+            }
+        }
+        let (wci, wv) = match wave {
+            Some((ci, w)) => (ci, Some(w)),
+            None => {
+                ineligible(&mut c_reason, "no wave clock");
+                (usize::MAX, None)
+            }
+        };
+        if wci != usize::MAX && Some(clocks[wci]) != self.d.default_clock {
+            ineligible(&mut c_reason, "wave clock is not the default clock");
+        }
+        let mut pos: Vec<usize> = Vec::new();
+        let mut neg: Vec<usize> = Vec::new();
+        for (rci, rc) in rcomps.iter().enumerate() {
+            if rc.clk != wci {
+                ineligible(&mut c_reason, "composition on a non-wave clock");
+                continue;
+            }
+            // the central mirror honors the ARTIFACT's tick coverage:
+            // with edge-SSA off the emitted edge fns carry no ticks,
+            // so the load-side covered set is empty regardless of
+            // what coverage analysis would say
+            let uncovered = rc.ticks.iter().enumerate().any(|(ti, t)| {
+                !t.2 && !(sa.edge_ssa
+                    && sa.covered.get(rci).is_some_and(|c| c.contains(&ti)))
+            });
+            if rc.posedge {
+                if !rc.early.is_empty() {
+                    ineligible(&mut c_reason, "early rules");
+                }
+                if uncovered {
+                    ineligible(&mut c_reason, "uncovered prim tick");
+                }
+                pos.push(rci);
+            } else {
+                if rc.entries.iter().any(|e| !e.nodes.is_empty()) || uncovered
+                {
+                    ineligible(&mut c_reason, "negedge composition with work");
+                }
+                neg.push(rci);
+            }
+        }
+        if pos.is_empty() {
+            ineligible(&mut c_reason, "no posedge compositions");
+        }
+        let central = c_reason.is_none();
+        let reason = c_reason.or(r_reason);
+        // -- sections --
+        let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
+        let sect = |o: &mut Vec<u8>, tag: u64, payload: &[u8]| {
+            w64(o, tag);
+            w64(o, payload.len() as u64);
+            o.extend_from_slice(payload);
+            o.resize(o.len().next_multiple_of(8), 0);
+        };
+        let mut p = Vec::new();
+        img.extend_from_slice(b"TRSBOOTD");
+        w64(&mut img, 7);
+        // strings: the full design table (StrDyn tokens may select any)
+        p.clear();
+        w64(&mut p, self.d.strings.len() as u64);
+        for s in &self.d.strings {
+            w64(&mut p, s.len() as u64);
+            p.extend_from_slice(s.as_bytes());
+        }
+        sect(&mut img, RC_SEC_STRINGS, &p);
+        // instance paths (foreign %m locations)
+        p.clear();
+        w64(&mut p, self.insts.len() as u64);
+        for i in &self.insts {
+            w64(&mut p, i.path.len() as u64);
+            p.extend_from_slice(i.path.as_bytes());
+        }
+        sect(&mut img, RC_SEC_PATHS, &p);
+        // clock
+        p.clear();
+        let cvals = wv.map_or([0u64; 5], |w| {
+            [w.hi, w.lo, w.delay, w.init_high as u64, w.has_init as u64]
+        });
+        for v in cvals {
+            w64(&mut p, v);
+        }
+        sect(&mut img, RC_SEC_CLOCK, &p);
+        // comp call order
+        p.clear();
+        w64(&mut p, pos.len() as u64);
+        for &o in &pos {
+            w64(&mut p, o as u64);
+        }
+        w64(&mut p, neg.len() as u64);
+        for &o in &neg {
+            w64(&mut p, o as u64);
+        }
+        sect(&mut img, RC_SEC_COMPS, &p);
+        // BRAM warn rows
+        p.clear();
+        w64(&mut p, sa.warns.len() as u64);
+        for (slot, bits, name) in &sa.warns {
+            w64(&mut p, *slot);
+            w64(&mut p, *bits as u64);
+            w64(&mut p, name.len() as u64);
+            p.extend_from_slice(name.as_bytes());
+        }
+        sect(&mut img, RC_SEC_WARNS, &p);
+        // eligibility: [runcore flag, central-mirror flag, reason]
+        p.clear();
+        w64(&mut p, (central && reason.is_none()) as u64);
+        w64(&mut p, central as u64);
+        let r = reason.unwrap_or_default();
+        w64(&mut p, r.len() as u64);
+        p.extend_from_slice(r.as_bytes());
+        sect(&mut img, RC_SEC_ELIG, &p);
+        // bounce-reachable prim seeds (empty for site-free designs)
+        p.clear();
+        w64(&mut p, prim_rows.len() as u64);
+        for (inst, slot, tag, ws, ss) in prim_rows {
+            w64(&mut p, *inst);
+            w64(&mut p, *slot);
+            w64(&mut p, *tag);
+            w64(&mut p, ws.len() as u64);
+            for w in ws {
+                w64(&mut p, *w);
+            }
+            w64(&mut p, ss.len() as u64);
+            for s in ss {
+                w64(&mut p, s.len() as u64);
+                p.extend_from_slice(s.as_bytes());
+            }
+        }
+        sect(&mut img, RC_SEC_PRIMS, &p);
+        // bump the header version: sections present.  The version IS
+        // the eligibility-semantics revision — bump it whenever the
+        // gate rules change, so a driver never trusts an `eligible`
+        // flag computed under older rules (panel stale-pair finding).
+        // 2 = pre-prim-gate; 3 = prim-site + lib-BDPI gates; 4 =
+        // native prim servicing (sites eligible via PRIMS seeds).
+        img[8..16].copy_from_slice(&4u64.to_le_bytes());
+        self.runcore_pending = Some(img);
+    }
+
+    /// TRS_RUNCORE_CHECK=1: compare this load's freshly built arena
+    /// against the artifact's sidecar image, and (v2) validate the
+    /// boot-descriptor sections against live state — strings, inst
+    /// paths, and BRAM warn rows compare here; clock, comp order, and
+    /// eligibility parse into a RunCoreDesc for the central-loop
+    /// engage witness.  A mismatch means a determinism or descriptor
+    /// claim failed — loud, never fatal (this is the witness, not the
+    /// boot).  Match reports under TRS_STARTUP_TIME.
+    fn runcore_image_check(
+        &self,
+        sidecar: &std::path::Path,
+    ) -> Option<RunCoreDesc> {
+        let Ok(bytes) = std::fs::read(sidecar) else {
+            eprintln!(
+                "trs runcore: check requested but {} is unreadable",
+                sidecar.display()
+            );
+            return None;
+        };
+        let fail = |what: &str| {
+            eprintln!(
+                "trs runcore: MISMATCH vs {}: {what}",
+                sidecar.display()
+            );
+        };
+        if bytes.len() < 8 + 32 || &bytes[..8] != b"TRSARENA" {
+            fail("bad header");
+            return None;
+        }
+        let rd = |k: usize| {
+            u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
+        };
+        let salted =
+            self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
+        let version = rd(0);
+        if version != 1 && version != 4 {
+            // 2, 3 = older eligibility-semantics revisions: stale
+            fail("unknown or stale version");
+            return None;
+        }
+        if rd(1) != trs_codegen::abi::AOT_LAYOUT_REV {
+            fail("layout revision");
+            return None;
+        }
+        if rd(2) != salted {
+            fail("design hash");
+            return None;
+        }
+        if rd(3) != self.jit_arena_len as u64 {
+            fail("arena length");
+            return None;
+        }
+        let words = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        };
+        // find where the RLE runs end (also validates them; every
+        // field is file data and must be treated as hostile)
+        let mut pos = 8 + 32;
+        let mut slot = 0usize;
+        while slot < words.len() {
+            let (Some(vb), Some(rb)) =
+                (bytes.get(pos..pos + 8), bytes.get(pos + 8..pos + 16))
+            else {
+                fail("image truncated mid-run");
+                return None;
+            };
+            let v = u64::from_le_bytes(vb.try_into().unwrap());
+            let run = u64::from_le_bytes(rb.try_into().unwrap());
+            pos += 16;
+            let Ok(run) = usize::try_from(run) else {
+                fail("run length overflow");
+                return None;
+            };
+            if run == 0 || run > words.len() - slot {
+                fail("run length out of range");
+                return None;
+            }
+            for k in slot..slot + run {
+                if words[k] != v {
+                    fail(&format!(
+                        "slot {k}: image {v:#x}, rebuilt {:#x}",
+                        words[k]
+                    ));
+                    return None;
+                }
+            }
+            slot += run;
+        }
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            eprintln!(
+                "trs runcore: image MATCH ({} slots)",
+                self.jit_arena_len
+            );
+        }
+        if version == 1 {
+            return None;
+        }
+        let _ = version;
+        // -- v2 boot-descriptor sections --
+        // every take is bounds-checked and every failure REPORTS: a
+        // truncated or corrupt descriptor must never be a silent None
+        // (this parser is destined for the unconditional boot path)
+        let take8 = |pos: &mut usize| -> Option<u64> {
+            let v = bytes.get(*pos..*pos + 8)?;
+            *pos += 8;
+            Some(u64::from_le_bytes(v.try_into().unwrap()))
+        };
+        let take_str = |pos: &mut usize| -> Option<&str> {
+            let n = usize::try_from(take8(pos)?).ok()?;
+            let s = bytes.get(*pos..pos.checked_add(n)?)?;
+            *pos += n;
+            std::str::from_utf8(s).ok()
+        };
+        macro_rules! want {
+            ($e:expr, $what:literal) => {
+                match $e {
+                    Some(v) => v,
+                    None => {
+                        fail(concat!("descriptor truncated: ", $what));
+                        return None;
+                    }
+                }
+            };
+        }
+        if bytes.get(pos..pos + 8) != Some(&b"TRSBOOTD"[..]) {
+            fail("missing boot descriptor");
+            return None;
+        }
+        pos += 8;
+        let nsect = want!(take8(&mut pos), "section count");
+        if nsect > 64 {
+            fail("absurd section count");
+            return None;
+        }
+        let mut desc = RunCoreDesc {
+            hi: 0,
+            lo: 0,
+            delay: 0,
+            init_high: false,
+            has_init: false,
+            pos: Vec::new(),
+            neg: Vec::new(),
+            eligible: false,
+            central: false,
+            reason: String::new(),
+            window: None,
+        };
+        let mut seen_tags = 0u64;
+        let mut wstate = None;
+        let mut warena: Option<Vec<u64>> = None;
+        for _ in 0..nsect {
+            let tag = want!(take8(&mut pos), "section tag");
+            let len = want!(
+                usize::try_from(want!(take8(&mut pos), "section length")).ok(),
+                "section length overflow"
+            );
+            let end = want!(
+                pos.checked_add(len).map(|e| e.next_multiple_of(8)),
+                "section length overflow"
+            );
+            if end > bytes.len() {
+                fail("section overruns file");
+                return None;
+            }
+            if tag >= 1 && tag <= 63 {
+                if seen_tags & (1 << tag) != 0 {
+                    fail("duplicate section");
+                    return None;
+                }
+                seen_tags |= 1 << tag;
+            }
+            let mut p = pos;
+            match tag {
+                RC_SEC_STRINGS => {
+                    let n = want!(take8(&mut p), "string count");
+                    if n != self.d.strings.len() as u64 {
+                        fail("descriptor: string count");
+                        return None;
+                    }
+                    for want in &self.d.strings {
+                        if take_str(&mut p) != Some(want.as_str()) {
+                            fail("descriptor: string table drift");
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_PATHS => {
+                    let n = want!(take8(&mut p), "inst count");
+                    if n != self.insts.len() as u64 {
+                        fail("descriptor: inst count");
+                        return None;
+                    }
+                    for i in &self.insts {
+                        if take_str(&mut p) != Some(i.path.as_str()) {
+                            fail("descriptor: inst path drift");
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_CLOCK => {
+                    desc.hi = want!(take8(&mut p), "clock hi");
+                    desc.lo = want!(take8(&mut p), "clock lo");
+                    desc.delay = want!(take8(&mut p), "clock delay");
+                    desc.init_high = want!(take8(&mut p), "clock init") != 0;
+                    desc.has_init = want!(take8(&mut p), "clock has_init") != 0;
+                }
+                RC_SEC_COMPS => {
+                    let np = want!(take8(&mut p), "pos count");
+                    for _ in 0..np {
+                        desc.pos
+                            .push(want!(take8(&mut p), "pos ordinal") as usize);
+                    }
+                    let nn = want!(take8(&mut p), "neg count");
+                    for _ in 0..nn {
+                        desc.neg
+                            .push(want!(take8(&mut p), "neg ordinal") as usize);
+                    }
+                }
+                RC_SEC_WARNS => {
+                    let reg = crate::prim::bram_warn_rows();
+                    let n = want!(take8(&mut p), "warn count");
+                    let mut seen = 0usize;
+                    for _ in 0..n {
+                        let slot = want!(take8(&mut p), "warn slot");
+                        let bits = want!(take8(&mut p), "warn bits") as u32;
+                        let name = want!(take_str(&mut p), "warn name");
+                        // bounds BEFORE any pointer arithmetic: the
+                        // slot is file data (UB finding)
+                        if slot >= self.jit_arena_len as u64 {
+                            fail(&format!("warn slot {slot} out of range"));
+                            return None;
+                        }
+                        let key = unsafe {
+                            self.jit_arena_ptr.add(slot as usize)
+                        } as usize;
+                        match reg.get(&key) {
+                            Some((n2, b2)) if n2 == name && *b2 == bits => {
+                                seen += 1;
+                            }
+                            _ => {
+                                fail(&format!(
+                                    "descriptor: warn row drift at slot {slot} ({name})"
+                                ));
+                                return None;
+                            }
+                        }
+                    }
+                    // count only rows in THIS arena's slot range: the
+                    // registry is process-global and an earlier engine
+                    // in the same process (selfcheck) leaves its own
+                    let ours = reg
+                        .keys()
+                        .filter(|&&k| {
+                            let base = self.jit_arena_ptr as usize;
+                            k >= base && k < base + 8 * self.jit_arena_len
+                        })
+                        .count();
+                    if seen != ours {
+                        fail(&format!(
+                            "descriptor: warn rows {seen} baked vs {ours} live"
+                        ));
+                        return None;
+                    }
+                }
+                RC_SEC_ELIG => {
+                    desc.eligible = want!(take8(&mut p), "elig flag") != 0;
+                    desc.central =
+                        want!(take8(&mut p), "central flag") != 0;
+                    desc.reason =
+                        want!(take_str(&mut p), "elig reason").to_string();
+                }
+                RC_SEC_WARENA => {
+                    let Some(w) =
+                        rle_decode(&bytes[p..pos + len], self.jit_arena_len)
+                    else {
+                        fail("window arena malformed");
+                        return None;
+                    };
+                    warena = Some(w);
+                }
+                RC_SEC_WSTATE => {
+                    wstate = Some((
+                        want!(take8(&mut p), "window tp"),
+                        want!(take8(&mut p), "window tn"),
+                        want!(take8(&mut p), "window cycle"),
+                    ));
+                }
+                RC_SEC_PRIMS => {
+                    // recompute the bounce-reachable set from the live
+                    // plan and compare each baked seed against the
+                    // live prim's own serialization + attachment
+                    let Some(lz) = self.jit_shared.as_ref() else {
+                        fail("descriptor: prim seeds without a live plan");
+                        return None;
+                    };
+                    let mut want_insts: std::collections::BTreeSet<usize> =
+                        Default::default();
+                    for pr in lz.protos.iter() {
+                        for pc in
+                            pr.sched_prims.iter().chain(pr.exec_prims.iter())
+                        {
+                            want_insts.insert(pc.inst);
+                        }
+                    }
+                    // mirror the encoder: if ANY bounce-reachable inst
+                    // is unattached or unseedable, desc_finish encoded
+                    // ZERO rows (and an ineligible reason) — expecting
+                    // the full set there made the witness cry wolf on
+                    // every such design (panel finding)
+                    let seedable = want_insts.iter().all(|&i| {
+                        matches!(&self.insts[i].kind, InstKind::Prim(pm)
+                            if pm.runcore_seed().is_some()
+                                && pm.runcore_slot().is_some())
+                    });
+                    let expect = if seedable { want_insts.len() } else { 0 };
+                    let n = want!(take8(&mut p), "prim seed count");
+                    if n != expect as u64 {
+                        fail(&format!(
+                            "descriptor: {n} prim seeds baked vs {expect} \
+                             expected live"
+                        ));
+                        return None;
+                    }
+                    let mut seen_insts = std::collections::HashSet::new();
+                    for _ in 0..n {
+                        let inst =
+                            want!(take8(&mut p), "prim seed inst") as usize;
+                        let slot = want!(take8(&mut p), "prim seed slot");
+                        let tag = want!(take8(&mut p), "prim seed tag");
+                        let nw = want!(take8(&mut p), "prim seed words");
+                        if nw > 64 {
+                            fail("descriptor: absurd prim seed words");
+                            return None;
+                        }
+                        let mut ws = Vec::with_capacity(nw as usize);
+                        for _ in 0..nw {
+                            ws.push(want!(take8(&mut p), "prim seed word"));
+                        }
+                        let ns = want!(take8(&mut p), "prim seed strings");
+                        if ns > 8 {
+                            fail("descriptor: absurd prim seed strings");
+                            return None;
+                        }
+                        let mut ss = Vec::with_capacity(ns as usize);
+                        for _ in 0..ns {
+                            ss.push(
+                                want!(take_str(&mut p), "prim seed string")
+                                    .to_string(),
+                            );
+                        }
+                        if !want_insts.contains(&inst) {
+                            fail(&format!(
+                                "descriptor: prim seed for inst {inst} \
+                                 which no live call site reaches"
+                            ));
+                            return None;
+                        }
+                        if !seen_insts.insert(inst) {
+                            fail(&format!(
+                                "descriptor: duplicate prim seed for \
+                                 inst {inst}"
+                            ));
+                            return None;
+                        }
+                        let InstKind::Prim(pm) = &self.insts[inst].kind
+                        else {
+                            fail("descriptor: prim seed on non-prim inst");
+                            return None;
+                        };
+                        if pm.runcore_seed() != Some((tag, ws, ss)) {
+                            fail(&format!(
+                                "descriptor: prim seed drift at inst \
+                                 {inst} ({})",
+                                self.insts[inst].path
+                            ));
+                            return None;
+                        }
+                        let live = pm.runcore_slot().and_then(|ptr| {
+                            (ptr as usize)
+                                .checked_sub(self.jit_arena_ptr as usize)
+                                .map(|d| d / 8)
+                        });
+                        if live != Some(slot as usize) {
+                            fail(&format!(
+                                "descriptor: prim slot drift at inst \
+                                 {inst}: baked {slot}, live {live:?}"
+                            ));
+                            return None;
+                        }
+                    }
+                }
+                _ => {
+                    fail(&format!("descriptor: unknown section {tag}"));
+                    return None;
+                }
+            }
+            pos = end;
+        }
+        // required sections: 1-6 + 9 always; window sections travel
+        // as a pair or not at all
+        for t in [
+            RC_SEC_STRINGS,
+            RC_SEC_PATHS,
+            RC_SEC_CLOCK,
+            RC_SEC_COMPS,
+            RC_SEC_WARNS,
+            RC_SEC_ELIG,
+            RC_SEC_PRIMS,
+        ] {
+            if seen_tags & (1 << t) == 0 {
+                fail("descriptor: missing required section");
+                return None;
+            }
+        }
+        match (warena, wstate) {
+            (Some(a), Some((tp, tn, cyc))) => {
+                desc.window = Some((a, tp, tn, cyc));
+            }
+            (None, None) => {}
+            _ => {
+                fail("descriptor: window sections must travel as a pair");
+                return None;
+            }
+        }
+        // an eligible claim with a degenerate clock or no posedge
+        // comps is self-contradictory — refuse it before any boot
+        // path could trust it
+        if (desc.eligible || desc.central)
+            && (desc.hi + desc.lo == 0 || desc.pos.is_empty())
+        {
+            fail("descriptor: eligible with degenerate clock/comps");
+            return None;
+        }
+        if desc.eligible && !desc.central {
+            fail("descriptor: runcore-eligible but not central-eligible");
+            return None;
+        }
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            eprintln!(
+                "trs runcore: descriptor sections MATCH (eligible={} \
+                 central={} {}{})",
+                desc.eligible,
+                desc.central,
+                desc.reason,
+                if desc.window.is_some() { " +window" } else { "" }
+            );
+        }
+        Some(desc)
+    }
+
+    /// Window-bake sections: the current (post-window) arena as RLE
+    /// plus the engage-point clock state.  Called from the central
+    /// loop's engage point when runcore_bake is armed.
+    pub(crate) fn runcore_window_encode(&self, tp: u64, tn: u64) -> Vec<u8> {
+        let words = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        };
+        let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
+        let mut rle = Vec::new();
+        rle_push(words, &mut rle);
+        let mut out = Vec::with_capacity(rle.len() + 64);
+        w64(&mut out, RC_SEC_WARENA);
+        w64(&mut out, rle.len() as u64);
+        out.extend_from_slice(&rle);
+        // rle is 16-byte-granular, already 8-aligned
+        w64(&mut out, RC_SEC_WSTATE);
+        w64(&mut out, 24);
+        for v in [tp, tn, self.cycle] {
+            w64(&mut out, v);
+        }
+        out
+    }
+
+    /// Link-time window bake (called on a FRESH interp that has an
+    /// artifact Load request armed): run the reset window quiet on
+    /// the compiled engine, and if it was effect-free and reached the
+    /// central-loop engage point, splice the captured post-window
+    /// sections into the sidecar.  Returns whether the splice
+    /// happened; every non-clean outcome is a silent classic boot.
+    pub fn runcore_bake_window(
+        &mut self,
+        sidecar: &std::path::Path,
+    ) -> Result<bool, String> {
+        self.set_quiet();
+        self.runcore_bake = true;
+        let before =
+            crate::prim::WINDOW_EFFECTS.load(std::sync::atomic::Ordering::Relaxed);
+        // TWO cycles: advance(1) finishes cycle 1's timeslice and stops
+        // BEFORE the pop that deasserts reset — the engage point (and
+        // the capture) is only reached on the way to cycle 2.  The
+        // capture snapshots the effects counter, so the one steady
+        // cycle executed past the boundary cannot pollute the gate.
+        self.advance(2);
+        let captured = self.runcore_window.take();
+        let clean = captured
+            .as_ref()
+            .is_some_and(|(_, at_capture)| *at_capture == before);
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            let bails: Vec<String> = crate::CENTRAL_BAIL
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let n = c.load(std::sync::atomic::Ordering::Relaxed);
+                    (n > 0).then(|| format!("#{i}x{n}"))
+                })
+                .collect();
+            eprintln!(
+                "trs runcore: bake engaged={} clean={clean} (bails [{}])",
+                captured.is_some(),
+                bails.join(" ")
+            );
+        }
+        let Some((sections, _)) = captured else {
+            return Ok(false); // never engaged (bailed) — classic boot
+        };
+        if !clean {
+            return Ok(false);
+        }
+        let mut bytes =
+            std::fs::read(sidecar).map_err(|e| format!("{}: {e}", sidecar.display()))?;
+        // bump nsect (u64 right after TRSBOOTD) by 2 and append
+        let Some(td) = bytes
+            .windows(8)
+            .position(|w| w == b"TRSBOOTD")
+            .filter(|&i| i + 16 <= bytes.len())
+        else {
+            return Err("sidecar has no boot descriptor".into());
+        };
+        let nsect =
+            u64::from_le_bytes(bytes[td + 8..td + 16].try_into().unwrap());
+        bytes[td + 8..td + 16].copy_from_slice(&(nsect + 2).to_le_bytes());
+        bytes.extend_from_slice(&sections);
+        let tmp = sidecar.with_extension("arena.tmp");
+        std::fs::write(&tmp, &bytes)
+            .and_then(|()| std::fs::rename(&tmp, sidecar))
+            .map_err(|e| format!("{}: {e}", sidecar.display()))?;
+        Ok(true)
+    }
+}
+
 /// Worker-thread count for compile fan-out (TRS_JIT_THREADS caps).
 fn jit_workers(n: usize) -> usize {
     std::env::var("TRS_JIT_THREADS")
@@ -2656,6 +3605,18 @@ impl Interp {
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
         let request = std::mem::take(&mut self.jit_request);
+        // RunCore sidecar bookkeeping (validation form): an Emit plan
+        // encodes its post-attach arena image at the tail for the
+        // linker CLI to write beside the artifact; a Path load under
+        // TRS_RUNCORE_CHECK=1 cross-checks its freshly built arena
+        // against that image bit-for-bit
+        let runcore_emit = matches!(request, JitRequest::Emit { .. });
+        let runcore_sidecar: Option<std::path::PathBuf> = match &request {
+            JitRequest::Load { src: ArtifactSource::Path(p) } => {
+                Some(p.with_extension("arena"))
+            }
+            _ => None,
+        };
         // early (clock-crossing) rules run interpreted in the PG_FINAL
         // pass and read compiled CF/eager slots — edge-SSA store
         // elision must keep those stores (see edge_ssa_plan)
@@ -2681,17 +3642,26 @@ impl Interp {
                 .collect();
             let _ = trs_codegen::abi::BDPI_SYMS.set(m);
         }
-        if matches!(request, JitRequest::Run)
-            && std::env::var_os("TRS_JIT").is_none()
-            && !self.jit_armed
+        // TRS_JIT=1 arms the hybrid; "0"/"off"/empty count as UNSET
+        // (the old presence-only check made TRS_JIT=0 turn the JIT ON)
+        let jit_env_on = std::env::var("TRS_JIT")
+            .map(|v| !(v.is_empty() || v == "0" || v == "off"))
+            .unwrap_or(false);
+        if matches!(request, JitRequest::Run) && !jit_env_on && !self.jit_armed
         {
             return None;
         }
         let trace = std::env::var_os("TRS_JIT_TRACE").is_some();
-        // VCD tracing compiles: the traced artifact carries recording
-        // slots + inline stores (the VCS/Verilator opt-in model).  Only
-        // the FST wave engine still runs interpreted.
-        if self.wave_pending.is_some() {
+        // BATCH waveform runs (-V / +bscvcd / +bscfst) stay fully
+        // interpreted: compiled call sites don't maintain the boxed
+        // prims' VCD bookkeeping (FIFO D_IN), so a compiled plan under
+        // a runtime dump produced waveforms that were both wrong and
+        // thread-timing nondeterministic.  wave_engine survives the
+        // wave_pending take in prime (the old wave_pending check here
+        // was dead — prime consumes it before planning).  Link-time
+        // TRACED artifacts (the VCS/Verilator opt-in model) are the
+        // fast path for dumps.
+        if self.wave_engine || self.wave_pending.is_some() {
             if trace {
                 eprintln!("trs jit: off (wave engine)");
             }
@@ -2836,6 +3806,9 @@ impl Interp {
                         Some(ArenaKind::Bram { .. }) => ChildClass::Other,
                         // live port-chained reads: never stable
                         Some(ArenaKind::CReg5 { .. }) => ChildClass::Other,
+                        // begin-of-instant reads, but keep the
+                        // conservative class (no stability claim yet)
+                        Some(ArenaKind::Counter { .. }) => ChildClass::Other,
                         None => ChildClass::Other,
                     }),
                     InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
@@ -2941,6 +3914,7 @@ impl Interp {
             let mut regfile_slot = HashMap::new();
             let mut bram_slot = HashMap::new();
             let mut creg5_slot = HashMap::new();
+            let mut counter_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -2966,6 +3940,12 @@ impl Interp {
                         creg_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
+                    // traced plans keep FIFOs boxed: the D_IN port var
+                    // dumps the last ATTEMPTED enq value (dummyval),
+                    // maintained only by the boxed enq path, which
+                    // inline compiled enqs bypass (CReg5/Counter
+                    // precedent)
+                    Some(ArenaKind::Fifo { .. }) if self.vcd_trace => {}
                     Some(ArenaKind::Fifo { width, size, guard, loopy }) => {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 7 + size * words);
@@ -2988,6 +3968,16 @@ impl Interp {
                         let base =
                             alloc(&mut nslots, 2 * width.max(1).div_ceil(64));
                         creg5_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    // traced plans keep Counters boxed: the port VCD
+                    // bookkeeping (a/b/c/f values + stamps) lives in
+                    // the boxed action path, which inline adds bypass
+                    Some(ArenaKind::Counter { .. }) if self.vcd_trace => {}
+                    Some(ArenaKind::Counter { width }) => {
+                        let w = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 4 * w + 4);
+                        counter_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::Bram {
@@ -3243,6 +4233,7 @@ impl Interp {
                     regfile_slot,
                     bram_slot,
                     creg5_slot,
+                    counter_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot,
@@ -3397,6 +4388,13 @@ impl Interp {
                     .collect();
                 m19.sort_unstable();
                 m19.hash(&mut h);
+                let mut m20: Vec<_> = e
+                    .counter_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .collect();
+                m20.sort_unstable();
+                m20.hash(&mut h);
                 let mut m18: Vec<_> = e
                     .bram_slot
                     .iter()
@@ -3939,6 +4937,7 @@ impl Interp {
         sl.lap("aot load (dlopen+gates+dlsym)");
         // eligibility + call-site tables via trial lowering (link, run,
         // and artifact-fallback paths; skipped on successful loads)
+        let artifact_loaded = protos_opt.is_some();
         let protos: Vec<FnProtos> = match protos_opt {
             Some(p) => p,
             None => match self.trial_protos(&inst_envs, &specs, now_slot, &request, trace) {
@@ -4079,6 +5078,120 @@ impl Interp {
                     other => break other,
                 }
             };
+            // RunCore sidecar (validation form): build the arena the
+            // link would hand a boot — the SAME four steps as the load
+            // tail below (alloc, attach, reset levels, memo stamps;
+            // drift between the two sites is exactly what the
+            // TRS_RUNCORE_CHECK load comparison exists to catch) — and
+            // stash its encoding for the linker CLI.  The box is
+            // leaked: prims are now slot-aware and the link process
+            // exits without touching them again.
+            if result.is_ok() {
+                let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
+                let arena_ptr = arena.as_mut_ptr();
+                for &(ci, slot) in &attach {
+                    if let InstKind::Prim(p) = &mut self.insts[ci].kind {
+                        p.arena_attach(unsafe {
+                            arena_ptr.add(slot as usize)
+                        });
+                    }
+                }
+                for (node, &slot) in reset_node_slot.iter().enumerate() {
+                    unsafe {
+                        *arena_ptr.add(slot as usize) =
+                            (!self.rst_asserted[node]) as u64
+                    };
+                }
+                for &slot in &memo_stamp_slots {
+                    unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
+                }
+                self.jit_arena_ptr = arena_ptr;
+                self.jit_arena_len = nslots as usize;
+                self.runcore_pending = self.runcore_image_encode();
+                // Boot-descriptor stage A: capture what only the emit
+                // can see — per-comp tick coverage (needs inst_envs)
+                // and the BRAM warn-registry rows the attach loop just
+                // wrote (keyed back to relative slots).  prime's
+                // post-plan hook (runcore_desc_finish) assembles the
+                // full v2 descriptor from this plus its clock/comp
+                // state.
+                if self.runcore_pending.is_some() {
+                    let covered =
+                        self.prim_tick_coverage(&inst_envs, rcomps).covered_all;
+                    let reg = crate::prim::bram_warn_rows();
+                    let mut warns: Vec<(u64, u32, String)> = attach
+                        .iter()
+                        .filter_map(|&(_, slot)| {
+                            let key =
+                                unsafe { arena_ptr.add(slot as usize) } as usize;
+                            reg.get(&key).map(|(name, bits)| {
+                                (slot as u64, *bits, name.clone())
+                            })
+                        })
+                        .collect();
+                    warns.sort_by_key(|w| w.0);
+                    let nprims = self
+                        .insts
+                        .iter()
+                        .filter(|i| matches!(i.kind, InstKind::Prim(_)))
+                        .count();
+                    // bounce-reachable prims: every inst a compiled
+                    // prim call site can name.  BTreeSet: the sidecar
+                    // rows must be deterministic (byte-stable sidecars
+                    // are a witness invariant).
+                    let slot_of: HashMap<usize, u64> = attach
+                        .iter()
+                        .map(|&(ci, slot)| (ci, slot as u64))
+                        .collect();
+                    let mut sites: std::collections::BTreeSet<usize> =
+                        Default::default();
+                    for p in &protos {
+                        for pc in
+                            p.sched_prims.iter().chain(p.exec_prims.iter())
+                        {
+                            sites.insert(pc.inst);
+                        }
+                    }
+                    let prim_rows = sites
+                        .iter()
+                        .map(|&ci| {
+                            let Some(&slot) = slot_of.get(&ci) else {
+                                return Err(
+                                    "prim call site on an unattached prim"
+                                        .to_string(),
+                                );
+                            };
+                            let InstKind::Prim(p) = &self.insts[ci].kind
+                            else {
+                                return Err(
+                                    "prim call site on a non-prim inst"
+                                        .to_string(),
+                                );
+                            };
+                            match p.runcore_seed() {
+                                Some((tag, words, strs)) => {
+                                    Ok((ci as u64, slot, tag, words, strs))
+                                }
+                                None => Err(format!(
+                                    "prim call site without a native \
+                                     servicer ({})",
+                                    self.insts[ci].path
+                                )),
+                            }
+                        })
+                        .collect::<Result<Vec<_>, String>>();
+                    self.runcore_stage_a = Some(RunCoreStageA {
+                        covered,
+                        edge_ssa: std::env::var("TRS_EDGE_SSA").as_deref()
+                            != Ok("0"),
+                        // attach lists exactly the slot-allocated prims
+                        boxed: nprims != attach.len(),
+                        prim_rows,
+                        warns,
+                    });
+                }
+                std::mem::forget(arena);
+            }
             self.jit_emit_result = Some(match result {
                 Ok(()) => crate::AotEmit::Compiled,
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
@@ -4243,6 +5356,7 @@ impl Interp {
             unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
         }
         self.jit_arena_ptr = arena_ptr;
+        self.jit_arena_len = nslots as usize;
         self.jit_reset_slots = reset_node_slot;
         if trace {
             eprintln!(
@@ -4347,6 +5461,24 @@ impl Interp {
                 }
             }
         }
+        // RunCore sidecar, validation form: the post-attach image is
+        // deterministic (the slot walk is process-stable — AOT dedup
+        // depends on it — and prim constructors write fixed state).
+        // The Emit branch above stashed its own construction's
+        // encoding; a checked load rebuilds classically HERE and
+        // compares bit-for-bit.  The boot path that TRUSTS the image
+        // lands on top of this witness.
+        let _ = runcore_emit;
+        let mut runcore_desc = None;
+        // gate on a SUCCESSFUL artifact load: fallback runs (trace-
+        // mode mismatch, layout drift) execute freshly compiled code,
+        // so the sidecar's claims are about a run that isn't happening
+        // — checking them there is witness noise (panel finding)
+        if artifact_loaded && std::env::var_os("TRS_RUNCORE_CHECK").is_some() {
+            if let Some(p) = &runcore_sidecar {
+                runcore_desc = self.runcore_image_check(p);
+            }
+        }
         sl.lap("arena+flatmaps+workers");
         let covered_ticks = if tick_level_flag >= 2 {
             self.prim_tick_coverage(&lazy.insts, rcomps).covered_all
@@ -4365,6 +5497,7 @@ impl Interp {
             workers,
             exec_fallback,
             covered_ticks,
+            runcore_desc,
             fused: {
                 let cell = std::sync::OnceLock::new();
                 if let Some(fu) = fused_opt {

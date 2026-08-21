@@ -22,9 +22,13 @@ use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
+mod foreign;
 #[cfg(feature = "aot")]
 mod jit;
+#[cfg(feature = "aot")]
+mod runcore;
 
+use foreign::ForeignEnv;
 use format::Arg;
 use prim::Prim;
 use value::Value;
@@ -65,20 +69,20 @@ fn is_lib_bdpi(c_name: &str) -> bool {
 /// stdout with divergent Randomize-fed state).  Verified word-exact
 /// against glibc for 1000 draws under the default seed and srandom(N)
 /// reseeding (scratch rngtest.c).
-struct GlibcRandom {
+pub(crate) struct GlibcRandom {
     state: [u32; 31],
     f: usize,
     r: usize,
 }
 
 impl GlibcRandom {
-    fn new() -> GlibcRandom {
+    pub(crate) fn new() -> GlibcRandom {
         // glibc's initial state is as if srandom(1)
         let mut g = GlibcRandom { state: [0; 31], f: 3, r: 0 };
         g.srandom(1);
         g
     }
-    fn srandom(&mut self, seed: u32) {
+    pub(crate) fn srandom(&mut self, seed: u32) {
         let seed = if seed == 0 { 1 } else { seed };
         self.state[0] = seed;
         for i in 1..31 {
@@ -99,7 +103,7 @@ impl GlibcRandom {
             self.next();
         }
     }
-    fn next(&mut self) -> u32 {
+    pub(crate) fn next(&mut self) -> u32 {
         self.state[self.f] = self.state[self.f].wrapping_add(self.state[self.r]);
         let res = (self.state[self.f] >> 1) & 0x7fff_ffff;
         self.f = (self.f + 1) % 31;
@@ -124,40 +128,23 @@ pub struct Interp {
     // and LazyJit's need for a copy is served by a one-shot clone only
     // when cold compilation is possible (jit.rs LazyJit.design)
     d: Design,
-    /// Verilog file handles, mirroring VLFiles (dollar_display.cxx):
-    /// one-arg $fopen returns a one-hot MCD key (slot 0 = stdout, first
-    /// user file = 0x2, writes fan out to every set bit); two-arg $fopen
-    /// returns 0x8000_0000+index with stdin/stdout/stderr preregistered
-    /// (first user fd = 0x8000_0003)
-    mcd_files: Vec<FSlot>,
-    fd_files: Vec<FSlot>,
-    /// per-key pushback stack for $ungetc; $fgetc pops from here first
-    pushback: HashMap<u64, Vec<u8>>,
+    /// console/file/finish/plusargs/timescale state for the foreign
+    /// task family, split out (foreign.rs) so the compiled tier's
+    /// foreign bounces can someday be serviced without the Interp
+    fe: ForeignEnv,
     /// runtime-created strings (PrimStringConcat results); string ids at
     /// or past the design table's length index into this arena
     dyn_strs: Vec<String>,
     /// dlopened user BDPI code (from the companion .bdpi.so)
     bdpi: Option<bdpi::Bdpi>,
-    /// command-line +args (without the '+'), for $test$plusargs
-    plusargs: Vec<String>,
     /// capi Jit engine: arm the hybrid JIT without the TRS_JIT env
     /// (jit.rs run-mode gate honors this flag too)
     pub(crate) jit_armed: bool,
-    /// bk_set_timescale factor: $time/%t display = now * timescale
-    /// (kernel bk_now semantics).  CAVEAT: the edge-SSA join
-    /// re-materialization of $time loads the raw now slot — the
-    /// interp engine (which the capi debug tier uses) is exact;
-    /// compiled engines assume timescale == 1.
-    timescale: u64,
     mods: Vec<ModIx>,
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
     inst_by_path: HashMap<String, usize>,
     insts: Vec<Inst>,
-    finished: Option<i32>,
-    /// $fatal was called: the bluesim.tcl driver exits 1 in that case
-    /// and 0 otherwise ($finish codes are not process exit codes)
-    fataled: bool,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
     now: u64,
@@ -193,11 +180,6 @@ pub struct Interp {
     /// record last-computed def values / method calls for VCD dumps (set
     /// when -V is given or the design contains a $dump* task)
     vcd_trace: bool,
-    /// secondary oracle engine (docs/TCL-CAPI.md): every output sink
-    /// is suppressed — console, design files ($fopen(w) -> Sink), and
-    /// VCD — while all STATE effects (including $finish/$fatal flags
-    /// and file reads) run normally so lockstep compare is meaningful
-    quiet: bool,
     /// DEBUG-tier engine (bluetcl capi): exempt from the
     /// TRS_REQUIRE_AOT strict-execution refusal (see set_debug_tier)
     debug_tier: bool,
@@ -208,18 +190,30 @@ pub struct Interp {
     /// per event)
     trace_events: bool,
     trace_clk: bool,
+    /// foreign-call scratch (jit_foreign_cb): argv spine + task-name
+    /// and %m-location buffers, reused across calls
+    foreign_argv: Vec<Arg>,
+    fname_buf: String,
+    loc_buf: String,
+    /// string id -> Arc'd text for Arg::Str: interned once, cloned as
+    /// a refcount bump on every later call
+    arg_strs: HashMap<u32, std::sync::Arc<str>>,
     /// Emit requests stash the serialized PlanA here for the meta
     /// object (prime derives it; the aot_emit call site reads it)
     #[cfg(feature = "aot")]
     plan_a_bytes: Option<Vec<u8>>,
     trace_wf: bool,
-    /// $stop yield: ends the current advance at the slice boundary
-    /// but does NOT finish the sim — cleared at the next advance so
-    /// the session resumes (the reference's resumable-$stop contract)
-    stop_request: bool,
     /// batch waveform request (-V / +bscvcd / +bscfst), consumed at
     /// the stepper build: format + file (None = the format's default)
     wave_pending: Option<(WaveFormat, Option<String>)>,
+    /// a batch waveform request was ARMED (survives the wave_pending
+    /// take): jit_plan's wave-engine gate reads this — checking
+    /// wave_pending there was dead code (prime consumes it first), so
+    /// the hybrid JIT raced the dump and boxed-only VCD bookkeeping
+    /// (FIFO D_IN) froze at a thread-timing-dependent cycle: the
+    /// waveform was both WRONG (4,933 D_IN changes collapsed to ~1-7
+    /// on TrafficBRAM) and nondeterministic run-to-run
+    wave_engine: bool,
     /// last computed value of each def, per instance — the C++ member
     /// fields persist between edges, so dumps show the value from the
     /// last time the def was computed (write_undet pattern before that)
@@ -263,6 +257,29 @@ pub struct Interp {
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
     /// the owning allocation lives in Stepper::jit
     jit_arena_ptr: *mut u64,
+    /// arena length in slots (0 = JIT off); with jit_arena_ptr this
+    /// gives the RunCore image encoder a safe slice view
+    pub(crate) jit_arena_len: usize,
+    /// RunCore arena image encoded at plan tail on an Emit request —
+    /// the linker CLI writes it beside the artifact (see
+    /// jit::Interp::runcore_image_encode)
+    pub(crate) runcore_pending: Option<Vec<u8>>,
+    /// boot-descriptor stage A (tick coverage + warn rows), captured
+    /// by the Emit arm for prime's runcore_desc_finish
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_stage_a: Option<jit::RunCoreStageA>,
+    /// link-time window bake armed (jit::runcore_bake_window): the
+    /// central loop's engage point captures the post-window sections
+    /// plus the WINDOW_EFFECTS reading AT capture (the bake advances
+    /// one steady cycle past the boundary; its effects must not
+    /// pollute the window-clean gate)
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_bake: bool,
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_window: Option<(Vec<u8>, u64)>,
+    /// the central loop engaged at least once this run — the inverse
+    /// half of the RunCore descriptor's eligibility witness
+    central_engaged: bool,
     /// reset node -> arena slot holding the port level (1 = deasserted)
     jit_reset_slots: Vec<u32>,
     /// TRACED artifact only: (instance, VCD-declared def) -> recording
@@ -372,20 +389,6 @@ struct ModVars {
 struct VcdLayout {
     base: u32,
     back: Vec<Option<Value>>,
-}
-
-/// One Verilog file-table slot (VLFiles keeps FILE*; the std streams are
-/// distinguished so they are never closed and write to the right place).
-enum FSlot {
-    Stdin,
-    Stdout,
-    Stderr,
-    File(std::fs::File),
-    /// quiet-engine write-mode $fopen: the slot (and its design-
-    /// visible key) exists so fd values match the primary engine
-    /// exactly, but nothing touches the filesystem
-    Sink,
-    Closed,
 }
 
 /// A periodic clock waveform.  The default clock is LOW with first edge
@@ -687,16 +690,10 @@ impl Interp {
             mod_by_name,
             inst_by_path: HashMap::new(),
             insts: Vec::new(),
-            mcd_files: vec![FSlot::Stdout],
-            fd_files: vec![FSlot::Stdin, FSlot::Stdout, FSlot::Stderr],
-            pushback: HashMap::new(),
+            fe: ForeignEnv::new(),
             dyn_strs: Vec::new(),
             bdpi: None,
-            plusargs: Vec::new(),
             jit_armed: false,
-            timescale: 1,
-            finished: None,
-            fataled: false,
             cycle: 0,
             now: 0,
             clockgen_waves: HashMap::new(),
@@ -709,15 +706,18 @@ impl Interp {
             initial_asserts: Vec::new(),
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
-            quiet: false,
             debug_tier: false,
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
+            foreign_argv: Vec::new(),
+            fname_buf: String::new(),
+            loc_buf: String::new(),
+            arg_strs: HashMap::new(),
             #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
-            stop_request: false,
             wave_pending: None,
+            wave_engine: false,
             vcd_def_vals: HashMap::new(),
             vcd_meth_calls: HashMap::new(),
             vcd_meth_results: HashMap::new(),
@@ -734,6 +734,15 @@ impl Interp {
             jit_emit_result: None,
             bir_hash: 0,
             jit_arena_ptr: std::ptr::null_mut(),
+            jit_arena_len: 0,
+            runcore_pending: None,
+            #[cfg(feature = "aot")]
+            runcore_stage_a: None,
+            #[cfg(feature = "aot")]
+            runcore_bake: false,
+            #[cfg(feature = "aot")]
+            runcore_window: None,
+            central_engaged: false,
             jit_reset_slots: Vec::new(),
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
@@ -773,6 +782,13 @@ impl Interp {
 
     /// Intern a runtime-created string (StringConcat) into the arena.
     pub(crate) fn intern_dyn(&mut self, text: String) -> StrId {
+        // window-time interning shifts every later dyn string id and
+        // leaves baked slots holding ids a RunCore boot cannot resolve
+        // (adversarial-panel finding) — any bake-window intern makes
+        // the window unskippable
+        if prim::quiet_engine() {
+            prim::note_window_effect();
+        }
         self.dyn_strs.push(text);
         (self.d.strings.len() + self.dyn_strs.len() - 1) as StrId
     }
@@ -1620,11 +1636,11 @@ impl Interp {
 
     fn eval_arg(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr, signed: bool) -> Arg {
         match e {
-            Expr::Str(s) => Arg::Str(self.s(*s).to_string()),
+            Expr::Str(s) => Arg::Str(self.s(*s).into()),
             Expr::Port(name) | Expr::Param(name) => {
                 if let InstKind::User { str_params, .. } = &self.insts[inst].kind {
                     if let Some(&sid) = str_params.get(name) {
-                        return Arg::Str(self.s(sid).to_string());
+                        return Arg::Str(self.s(sid).into());
                     }
                 }
                 let v = self.eval(inst, ctx, e);
@@ -1643,7 +1659,7 @@ impl Interp {
             return Arg::Real(r);
         }
         match v.as_str_id() {
-            Some(id) => Arg::Str(self.s(id).to_string()),
+            Some(id) => Arg::Str(self.s(id).into()),
             None => Arg::Val(v, signed),
         }
     }
@@ -1659,6 +1675,18 @@ impl Interp {
             locals: HashMap::new(),
             memo,
         }
+    }
+
+    /// Arg::Str text for a string id, Arc-interned on first use (the
+    /// per-event-tax audit: an Arc clone per call replaces a String
+    /// alloc per call on the $display path).
+    pub(crate) fn arg_str(&mut self, id: u32) -> std::sync::Arc<str> {
+        if let Some(a) = self.arg_strs.get(&id) {
+            return a.clone();
+        }
+        let a: std::sync::Arc<str> = std::sync::Arc::from(self.s(id));
+        self.arg_strs.insert(id, a.clone());
+        a
     }
 
     fn call_value(&mut self, callee: usize, method: StrId, argv: &[Value], w: u32) -> Value {
@@ -1711,8 +1739,10 @@ impl Interp {
         }
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
-                let mname = self.d.strings[method as usize].clone();
-                p.action_method(&mname, argv, self.now);
+                // borrow, don't clone (same disjoint-fields fix as
+                // call_value; per-event-tax audit finding 3)
+                let mname: &str = &self.d.strings[method as usize];
+                p.action_method(mname, argv, self.now);
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -1784,8 +1814,8 @@ impl Interp {
     fn call_actionvalue(&mut self, callee: usize, method: StrId, argv: &[Value]) -> Value {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
-                let mname = self.d.strings[method as usize].clone();
-                p.actionvalue_method(&mname, argv, self.now)
+                let mname: &str = &self.d.strings[method as usize];
+                p.actionvalue_method(mname, argv, self.now)
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -1960,66 +1990,6 @@ impl Interp {
     /// Write to every channel a file key names (VLFiles::findFiles): keys
     /// with bit 31 index the fd table; smaller keys are MCD bitmasks
     /// fanning out to each set bit (bit 0 = stdout).
-    fn write_fd(&mut self, key: u64, text: &str) {
-        use std::io::Write;
-        if self.quiet {
-            return; // oracle secondary: every write sink suppressed
-        }
-        let write_slot = |s: &mut FSlot| match s {
-            FSlot::Stdout => print!("{text}"),
-            FSlot::Stderr => eprint!("{text}"),
-            FSlot::File(f) => {
-                let _ = f.write_all(text.as_bytes());
-            }
-            _ => {}
-        };
-        if key >= 0x8000_0000 {
-            let idx = (key - 0x8000_0000) as usize;
-            if let Some(s) = self.fd_files.get_mut(idx) {
-                write_slot(s);
-            }
-        } else {
-            let mut k = key;
-            let mut i = 0usize;
-            while k != 0 {
-                if k & 1 == 1 {
-                    if let Some(s) = self.mcd_files.get_mut(i) {
-                        write_slot(s);
-                    }
-                }
-                k >>= 1;
-                i += 1;
-            }
-        }
-    }
-
-    /// VLFiles::closeFiles: fd keys above the std handles close their
-    /// slot; MCD masks close every set bit except stdout (bit 0).
-    fn close_files(&mut self, key: u64) {
-        if key > 0x8000_0002 {
-            let idx = (key - 0x8000_0000) as usize;
-            if let Some(s) = self.fd_files.get_mut(idx) {
-                if matches!(s, FSlot::File(_) | FSlot::Sink) {
-                    *s = FSlot::Closed;
-                }
-            }
-        } else if key < 0x0800_0000 {
-            let mut k = key >> 1; // skip stdout
-            let mut i = 1usize;
-            while k != 0 {
-                if k & 1 == 1 {
-                    if let Some(s) = self.mcd_files.get_mut(i) {
-                        if matches!(s, FSlot::File(_) | FSlot::Sink) {
-                            *s = FSlot::Closed;
-                        }
-                    }
-                }
-                k >>= 1;
-                i += 1;
-            }
-        }
-    }
-
     /// dlopen the companion BDPI shared object and resolve the design's
     /// imported functions.  Library-provided imports (is_lib_bdpi) are
     /// not expected in the user .so and are excluded from the eager
@@ -2064,11 +2034,19 @@ impl Interp {
             "rand32" => {
                 // rand32.cxx: return (unsigned int)random(); ours is
                 // the same glibc stream, per-engine (see GlibcRandom)
+                // — a window-time draw desyncs the stream a skipped
+                // window leaves untouched
+                if prim::quiet_engine() {
+                    prim::note_window_effect();
+                }
                 let v = self.rng.next() as u64;
                 return Some(Value::from_u64(w.max(1), v));
             }
             "srand" => {
                 // glibc srand is an alias of srandom, seeding random()
+                if prim::quiet_engine() {
+                    prim::note_window_effect();
+                }
                 let seed = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64() as u32,
                     _ => 0,
@@ -2099,217 +2077,17 @@ impl Interp {
     }
 
     fn foreign_action(&mut self, name: &str, args: &[Arg], loc: &str) {
-        // oracle secondary: console output and the VCD task family are
-        // suppressed wholesale ($f* writes die in write_fd; Sink slots
-        // cover the files).  $fatal is NOT in this list — its finished/
-        // fataled state must still latch (print gated in its arm).
-        if self.quiet
-            && matches!(
-                name,
-                "$display"
-                    | "$displayb"
-                    | "$displayo"
-                    | "$displayh"
-                    | "$write"
-                    | "$writeb"
-                    | "$writeo"
-                    | "$writeh"
-                    | "$error"
-                    | "$warning"
-                    | "$info"
-                    | "$fflush"
-                    | "$dumpfile"
-                    | "$dumpvars"
-                    | "$dumpon"
-                    | "$dumpoff"
-                    | "$dumpall"
-                    | "$dumplimit"
-                    | "$dumpflush"
-            )
-        {
-            return;
-        }
-        if self.finished.is_some()
-            && matches!(
-                name,
-                "$display"
-                    | "$displayb"
-                    | "$displayo"
-                    | "$displayh"
-                    | "$write"
-                    | "$writeb"
-                    | "$writeo"
-                    | "$writeh"
-                    | "$fdisplay"
-                    | "$fdisplayb"
-                    | "$fdisplayo"
-                    | "$fdisplayh"
-                    | "$fwrite"
-                    | "$fwriteb"
-                    | "$fwriteo"
-                    | "$fwriteh"
-                    | "$error"
-                    | "$warning"
-                    | "$info"
-                    | "$fatal"
-            )
-        {
-            // post-$finish OUTPUT tasks are suppressed in the
-            // reference — the whole dollar_display.cxx family (29
-            // bk_finished gates: console, file, and severity tasks);
-            // the rules themselves still run.  The value-bearing
-            // $swrite/$sformat AV tasks are also gated there but
-            // their post-finish return is unwitnessed — left live
-            // until a test pins the contract.
+        // console/file/finish core first (quiet and post-$finish
+        // suppression live there too); what it declines is design-
+        // coupled — the $dump* family (VCD writer) and BDPI imports
+        if self.fe.action(name, args, self.now, loc) {
             return;
         }
         match name {
-            "$fdisplay" | "$fwrite" | "$fdisplayh" | "$fwriteh"
-            | "$fdisplayb" | "$fwriteb" | "$fdisplayo" | "$fwriteo" => {
-                let base = match name.chars().last() {
-                    Some('h') => 16,
-                    Some('b') => 2,
-                    Some('o') => 8,
-                    _ => 10,
-                };
-                let fd = match args.first() {
-                    Some(Arg::Val(v, _)) => v.as_u64(),
-                    _ => 0x8000_0000,
-                };
-                let mut errs = Vec::new();
-                let mut text =
-                    format::format_args(&args[1..], base, self.now, loc, &mut errs);
-                if name.starts_with("$fdisplay") {
-                    text.push('\n');
-                }
-                self.write_fd(fd, &text);
-                emit_output_errors(&errs);
-            }
-            "$fclose" => {
-                if let Some(Arg::Val(v, _)) = args.first() {
-                    self.close_files(v.as_u64());
-                }
-            }
-            "$fflush" => {
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                let key = match args.first() {
-                    Some(Arg::Val(v, _)) => Some(v.as_u64()),
-                    _ => None,
-                };
-                for tbl in [&mut self.fd_files, &mut self.mcd_files] {
-                    for s in tbl.iter_mut() {
-                        if let FSlot::File(f) = s {
-                            if key.is_none() {
-                                let _ = f.flush();
-                            }
-                        }
-                    }
-                }
-                if let Some(k) = key {
-                    // flush the key's fan-out by writing nothing through
-                    // the same decode path, then flushing each file
-                    if k >= 0x8000_0000 {
-                        if let Some(FSlot::File(f)) =
-                            self.fd_files.get_mut((k - 0x8000_0000) as usize)
-                        {
-                            let _ = f.flush();
-                        }
-                    } else {
-                        let (mut kk, mut i) = (k, 0usize);
-                        while kk != 0 {
-                            if kk & 1 == 1 {
-                                if let Some(FSlot::File(f)) = self.mcd_files.get_mut(i) {
-                                    let _ = f.flush();
-                                }
-                            }
-                            kk >>= 1;
-                            i += 1;
-                        }
-                    }
-                }
-            }
-            "$display" => {
-                let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$displayh" => {
-                let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 16, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$displayb" => {
-                let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 2, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$displayo" => {
-                let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 8, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$write" => {
-                let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$writeh" => {
-                let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 16, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$writeb" => {
-                let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 2, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$writeo" => {
-                let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 8, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            // dollar_error/dollar_warning/dollar_info format exactly like
-            // $display — bsc compiles the severity prefix into the message
-            "$error" | "$warning" | "$info" => {
-                let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
-                emit_output_errors(&errs);
-            }
-            "$fatal" => {
-                // first argument is the status passed to bk_fatal_now; the
-                // driver ignores it and exits 1 whenever $fatal fired
-                let rest = match args.split_first() {
-                    Some((Arg::Val(_, _), rest)) => rest,
-                    _ => args,
-                };
-                if !self.quiet {
-                    let mut errs = Vec::new();
-                    println!(
-                        "{}",
-                        format::format_args(rest, 10, self.now, loc, &mut errs)
-                    );
-                    emit_output_errors(&errs);
-                }
-                self.fataled = true;
-                self.finished = Some(1);
-            }
-            "$finish" => {
-                let code = match args.first() {
-                    Some(Arg::Val(v, _)) => v.as_u64() as i32,
-                    _ => 0,
-                };
-                self.finished = Some(code);
-            }
-            // $stop PAUSES (resumable yield: bk_finished stays false,
-            // `sim step`/`sim run` resume); $finish TERMINATES.  The
-            // batch driver observes the yield, reaches script end, and
-            // exits 0 — byte-identical to the reference's batch $stop.
-            "$stop" => self.stop_request = true,
             // waves: dollar_dumpvars.cxx semantics
             "$dumpfile" => {
                 let name = match args.first() {
-                    Some(Arg::Str(s)) => s.clone(),
+                    Some(Arg::Str(s)) => s.to_string(),
                     Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
                     _ => "dump.vcd".to_string(),
                 };
@@ -2344,156 +2122,15 @@ impl Interp {
     }
 
     fn foreign_value(&mut self, name: &str, args: &[Arg], w: u32, loc: &str) -> Value {
-        match name {
-            "$time" | "$stime" => {
-                // the reference's $time goes through bk_now =
-                // sim_timescale * sim_time (dollar_time.cxx)
-                Value::from_u64(w.max(1), self.now.wrapping_mul(self.timescale))
+        // console/file core first; None = a BDPI import (or unknown)
+        if let Some(v) = self.fe.value(name, args, w, self.now, loc) {
+            return v;
+        }
+        match self.bdpi_call(name, args, w) {
+            Some(v) => v.zext(w.max(1)),
+            None => {
+                panic!("trs-interp: unimplemented value task {name:?} ({args:?})")
             }
-            "$fopen" => {
-                let path = match args.first() {
-                    Some(Arg::Str(s)) => s.clone(),
-                    _ => return Value::zero(w.max(1)),
-                };
-                // one-arg form = MCD (always write mode); two-arg = fd
-                let mcd = !matches!(args.get(1), Some(Arg::Str(_)));
-                let write_mode = !matches!(args.get(1), Some(Arg::Str(m)) if m.starts_with('r'));
-                // oracle secondary: a write-mode open would truncate the
-                // file the primary just wrote — allocate a Sink slot so
-                // the design-visible key matches without touching the
-                // filesystem.  Read-mode opens stay real (reads feed
-                // design state, which must track the primary).
-                let f = if self.quiet && write_mode {
-                    Ok(FSlot::Sink)
-                } else if write_mode {
-                    std::fs::File::create(&path).map(FSlot::File)
-                } else {
-                    std::fs::File::open(&path).map(FSlot::File)
-                };
-                match f {
-                    Ok(f) => {
-                        let key = if mcd {
-                            // registerFile(true,..): append below 31 bits,
-                            // else reuse a closed slot
-                            if self.mcd_files.len() < 31 {
-                                self.mcd_files.push(f);
-                                1u64 << (self.mcd_files.len() - 1)
-                            } else if let Some(i) = self
-                                .mcd_files
-                                .iter()
-                                .position(|s| matches!(s, FSlot::Closed))
-                            {
-                                self.mcd_files[i] = f;
-                                1u64 << i
-                            } else {
-                                return Value::zero(w.max(1));
-                            }
-                        } else {
-                            self.fd_files.push(f);
-                            0x8000_0000 + (self.fd_files.len() as u64 - 1)
-                        };
-                        Value::from_u64(w.max(32), key)
-                    }
-                    Err(_) => Value::zero(w.max(1)),
-                }
-            }
-            // prefix match against the registered +args (bk_match_argument)
-            "$test$plusargs" => {
-                let name = match args.first() {
-                    Some(Arg::Str(s)) => s.clone(),
-                    Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
-                    _ => String::new(),
-                };
-                let hit = self.plusargs.iter().any(|a| a.starts_with(&name));
-                Value::from_u64(w.max(1), hit as u64)
-            }
-            "$fgetc" => {
-                use std::io::Read;
-                let fd = match args.first() {
-                    Some(Arg::Val(v, _)) => v.as_u64(),
-                    _ => return Value::from_u64(w.max(32), u32::MAX as u64),
-                };
-                if let Some(b) = self.pushback.get_mut(&fd).and_then(|s| s.pop()) {
-                    return Value::from_u64(w.max(32), b as u64);
-                }
-                // getFD: the fd table only
-                let mut byte = [0u8; 1];
-                if fd >= 0x8000_0000 {
-                    match self.fd_files.get_mut((fd - 0x8000_0000) as usize) {
-                        Some(FSlot::File(f)) => {
-                            if f.read_exact(&mut byte).is_ok() {
-                                return Value::from_u64(w.max(32), byte[0] as u64);
-                            }
-                        }
-                        Some(FSlot::Stdin) => {
-                            if std::io::stdin().read_exact(&mut byte).is_ok() {
-                                return Value::from_u64(w.max(32), byte[0] as u64);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // EOF / bad fd: -1
-                Value::from_u64(w.max(32), 0xFFFF_FFFF)
-            }
-            "$ungetc" => {
-                // args: (char, fd); pushes back for the next $fgetc and
-                // returns the char (C ungetc semantics)
-                let c = match args.first() {
-                    Some(Arg::Val(v, _)) => v.as_u64() as u8,
-                    _ => 0,
-                };
-                let fd = match args.get(1) {
-                    Some(Arg::Val(v, _)) => v.as_u64(),
-                    _ => 0,
-                };
-                // valid on any live fd-table entry (getFD != NULL)
-                let live = fd >= 0x8000_0000
-                    && !matches!(
-                        self.fd_files.get((fd - 0x8000_0000) as usize),
-                        None | Some(FSlot::Closed)
-                    );
-                if live {
-                    self.pushback.entry(fd).or_default().push(c);
-                    Value::from_u64(w.max(32), c as u64)
-                } else {
-                    Value::from_u64(w.max(32), 0xFFFF_FFFF)
-                }
-            }
-            "$swriteAV" | "$sformatAV" | "$swritebAV" | "$swriteoAV" | "$swritehAV" => {
-                // format into a string, then pack the ASCII bytes into the
-                // result width (right-justified, like the C++ BufferTarget
-                // + copy_back)
-                let base = match name {
-                    "$swritebAV" => 2,
-                    "$swriteoAV" => 8,
-                    "$swritehAV" => 16,
-                    _ => 10,
-                };
-                let mut errs = Vec::new();
-                let text = format::format_sformat(
-                    args, base, self.now, loc, name == "$sformatAV", &mut errs,
-                );
-                emit_output_errors(&errs);
-                let packed = format::str_value(&text);
-                if packed.width >= w {
-                    packed.extract(w as u64 - 1, 0, w)
-                } else {
-                    packed.zext(w)
-                }
-            }
-            "$fclose" => {
-                if let Some(Arg::Val(v, _)) = args.first() {
-                    self.close_files(v.as_u64());
-                }
-                Value::zero(w.max(1))
-            }
-            other => match self.bdpi_call(other, args, w) {
-                Some(v) => v.zext(w.max(1)),
-                None => {
-                    panic!("trs-interp: unimplemented value task {other:?} ({args:?})")
-                }
-            },
         }
     }
 
@@ -3565,8 +3202,8 @@ impl Interp {
             // disables the central player, and interactive stops use
             // the heap loop).  Time compares only where time is
             // architecturally visible: $finish/$stop/heap-dry stops.
-            let budget_stop = self.finished.is_none()
-                && !self.stop_request
+            let budget_stop = self.fe.finished.is_none()
+                && !self.fe.stop_request
                 && self.cycles() >= target;
             for si in 0..shadows.len() {
                 let (kind, shadow) = &mut shadows[si];
@@ -3584,10 +3221,10 @@ impl Interp {
                         shadow.cycle, self.cycle
                     ));
                 }
-                if shadow.finished != self.finished {
+                if shadow.fe.finished != self.fe.finished {
                     diverged.push(format!(
                         "finished {:?} vs primary {:?}",
-                        shadow.finished, self.finished
+                        shadow.fe.finished, self.fe.finished
                     ));
                 }
                 // shape first: state addressed at different times
@@ -3610,8 +3247,8 @@ impl Interp {
                     return 87;
                 }
             }
-            if self.finished.is_some()
-                || self.stop_request
+            if self.fe.finished.is_some()
+                || self.fe.stop_request
                 || self.cycles() >= max_cycles
             {
                 break;
@@ -3639,7 +3276,7 @@ impl Interp {
     /// True once $finish has been called (stepping past it is an error
     /// in the reference driver).
     pub fn is_finished(&self) -> bool {
-        self.finished.is_some()
+        self.fe.finished.is_some()
     }
 
     /// Derive PlanA fresh (see PlanA): the string-keyed schedule
@@ -4037,6 +3674,11 @@ impl Interp {
                     None => self.vcd.set_state(true),
                 }
                 self.vcd_trace = true;
+                // armed: the wave engine runs interpreted (jit_plan
+                // reads this AFTER the take above).  A REFUSED request
+                // (-dump-formats gate) keeps the compile tier — the
+                // run continues dump-less at full speed.
+                self.wave_engine = true;
             }
         }
 
@@ -4096,6 +3738,14 @@ impl Interp {
         #[cfg(not(feature = "aot"))]
         let jit = None;
 
+        // RunCore sidecar v2: an Emit plan stashed the arena image and
+        // stage A; append the boot-descriptor sections (clock, comp
+        // order, eligibility — needs the clock state built above)
+        #[cfg(feature = "aot")]
+        if was_emit && self.runcore_pending.is_some() {
+            self.runcore_desc_finish(&rcomps, &sources, &clocks, &driver_clock);
+        }
+
         // TRS_REQUIRE_AOT: strict-execution contract for validation
         // runs — a design about to RUN interpreted is a hard failure,
         // never a silent degrade.  Emit requests are exempt (the link
@@ -4145,9 +3795,9 @@ impl Interp {
         // prim-level diagnostics (fifo guard warnings, readmem
         // errors) check this thread-local — engines run sequentially
         // on one thread, so stamping per advance scopes it correctly
-        prim::QUIET_ENGINE.with(|c| c.set(self.quiet));
+        prim::QUIET_ENGINE.with(|c| c.set(self.fe.quiet));
         // a $stop yield is one-shot: the next advance resumes
-        self.stop_request = false;
+        self.fe.stop_request = false;
         self.prime();
         let Stepper {
             clocks,
@@ -4309,6 +3959,94 @@ impl Interp {
                 { CENTRAL_BAIL[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
             }
             heap.clear();
+            self.central_engaged = true;
+            // link-time window bake: this instant — reset just
+            // deasserted, no steady edge processed — is the state a
+            // RunCore boot starts from; capture it once
+            if self.runcore_bake && self.runcore_window.is_none() {
+                self.runcore_window = Some((
+                    self.runcore_window_encode(tp, tn),
+                    prim::WINDOW_EFFECTS
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ));
+                // the bake wants the BOUNDARY, not simulation: stop
+                // the advance here — no steady cycle executes at link
+                // (stop_request is cleared at the next advance; the
+                // bake interp is discarded anyway)
+                self.fe.stop_request = true;
+            }
+            // RunCore descriptor witness (desc is parsed only under
+            // TRS_RUNCORE_CHECK): the engage decision and shape must
+            // match the baked claim
+            if let Some(d) = j.runcore_desc.as_ref() {
+                // negedge comps and the full wave, for the extended
+                // shape compare (panel finding: neg/delay/init were
+                // baked but witnessed by nothing)
+                let live_neg: Vec<usize> = rcomps
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, rc)| rc.clk == wci && !rc.posedge)
+                    .map(|(i, _)| i)
+                    .collect();
+                let wv = match &sources[wci] {
+                    ClockSource::Wave(w) => Some(*w),
+                    _ => None,
+                };
+                if !d.central {
+                    eprintln!(
+                        "trs runcore: MISMATCH: central loop engaged but \
+                         descriptor says central-ineligible ({})",
+                        d.reason
+                    );
+                } else if d.hi != hi
+                    || d.lo != lo
+                    || d.pos != pos_rcis
+                    || d.neg != live_neg
+                    || wv.is_none_or(|w| {
+                        (d.delay, d.init_high, d.has_init)
+                            != (w.delay, w.init_high, w.has_init)
+                    })
+                {
+                    eprintln!(
+                        "trs runcore: MISMATCH: engaged hi={hi} lo={lo} \
+                         pos={pos_rcis:?} vs descriptor hi={} lo={} pos={:?}",
+                        d.hi, d.lo, d.pos
+                    );
+                } else if let Some((wa, wtp, wtn, wcyc)) = d.window.as_ref() {
+                    // post-window image witness: a classic run's state
+                    // at this exact instant must equal what the link
+                    // baked — this is the byte-level proof that a
+                    // RunCore boot starting here is indistinguishable
+                    let live = unsafe {
+                        std::slice::from_raw_parts(
+                            self.jit_arena_ptr,
+                            self.jit_arena_len,
+                        )
+                    };
+                    if (*wtp, *wtn, *wcyc) != (tp, tn, self.cycle) {
+                        eprintln!(
+                            "trs runcore: MISMATCH: window state tp/tn/cycle \
+                             {wtp}/{wtn}/{wcyc} vs live {tp}/{tn}/{}",
+                            self.cycle
+                        );
+                    } else if let Some(k) =
+                        (0..live.len()).find(|&k| live[k] != wa[k])
+                    {
+                        eprintln!(
+                            "trs runcore: MISMATCH: window slot {k}: baked \
+                             {:#x}, live {:#x}",
+                            wa[k], live[k]
+                        );
+                    } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                        eprintln!(
+                            "trs runcore: descriptor + window MATCH \
+                             (central engage)"
+                        );
+                    }
+                } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                    eprintln!("trs runcore: descriptor MATCH (central engage)");
+                }
+            }
             if std::env::var_os("TRS_JIT_TRACE").is_some() {
                 eprintln!("trs jit: central loop engaged (clock {wci})");
             }
@@ -4317,8 +4055,9 @@ impl Interp {
             let envp = self as *mut Interp as *mut core::ffi::c_void;
             let cycles0 = self.cycle;
             let mut fin_break = false;
-            while self.finished.is_none()
-                && !self.stop_request
+            let mut vcd_yield = false;
+            while self.fe.finished.is_none()
+                && !self.fe.stop_request
                 && self.cycle < max_cycles
             {
                 self.cycle += 1;
@@ -4340,8 +4079,22 @@ impl Interp {
                 // like the general loop's state at a yield (the
                 // fleet: crediting it made oracle edge compares
                 // diverge)
-                if self.finished.is_some() || self.stop_request {
+                if self.fe.finished.is_some() || self.fe.stop_request {
                     fin_break = true;
+                    break;
+                }
+                // a compiled $dumpvars/$dumpon armed the dump mid-
+                // slice: yield to the general loop, whose per-slice
+                // vcd_event takes over (and whose is_active probe
+                // blocks re-engagement).  The arming instant's own
+                // event fires below AFTER the clock bookkeeping — the
+                // reference writes the whole arming sequence
+                // (unstamped initial values, the time marker, the
+                // $dumpvars task, the checkpoint) in that one event.
+                // Cost on the hot path: three flag loads per posedge
+                // (the transition-tax budget).
+                if self.vcd.is_active() {
+                    vcd_yield = true;
                     break;
                 }
                 if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
@@ -4366,24 +4119,44 @@ impl Interp {
                 // and on both exit shapes the last RETIRED negedge
                 // is tn - period (tp/tn advance only on completed
                 // iterations).
-                let done = if fin_break { k.saturating_sub(1) } else { k };
+                // the vcd yield credits the lagging companion negedge
+                // too (it was time-passed silently, like every negedge
+                // inside the player): the general loop must resume at
+                // its SUCCESSOR, or a stale past-time negedge event
+                // writes a time-disordered clock line into the dump
+                let done = if fin_break {
+                    k.saturating_sub(1)
+                } else {
+                    k
+                };
                 if done > 0 {
                     c.neg_count += done;
                     c.neg_at = tn - period;
+                }
+                if vcd_yield {
+                    c.neg_count += 1;
+                    c.neg_at = tn;
                 }
             }
             // on a yield exit tp still names the EXECUTED posedge —
             // re-arming it verbatim would re-run that edge on a
             // $stop resume; its successor is the pending one
-            let tp_pend = if fin_break { tp + period } else { tp };
+            let tp_pend =
+                if fin_break || vcd_yield { tp + period } else { tp };
+            let tn_pend = if vcd_yield { tn + period } else { tn };
             heap.push(Reverse((tp_pend, 1, wci, true)));
-            heap.push(Reverse((tn, 1, wci, false)));
+            heap.push(Reverse((tn_pend, 1, wci, false)));
+            if vcd_yield {
+                // the arming slice's full dump sequence, with the
+                // clock bookkeeping above already in place
+                self.vcd_event(tp);
+            }
         
                 }
             };
         }
 
-        while self.finished.is_none() && !self.stop_request {
+        while self.fe.finished.is_none() && !self.fe.stop_request {
             let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
             // top reset deasserts at t=2 after that instant's logic
             if t > 2 && self.rst_asserted[0] {
@@ -4736,7 +4509,7 @@ impl Interp {
                             // early-rule pass does not run post-finish
                             // (sysFWrite3: 4 extra $fwrite lines when
                             // it did)
-                            if self.finished.is_some() {
+                            if self.fe.finished.is_some() {
                                 break;
                             }
                             let r0 = match node {
@@ -4764,8 +4537,8 @@ impl Interp {
             // steady state may only begin here (fusion compiles after
             // warm-up): retry the central player at slice boundaries
             if !same_time
-                && self.finished.is_none()
-                && !self.stop_request
+                && self.fe.finished.is_none()
+                && !self.fe.stop_request
                 && self.cycle < max_cycles
             {
                 try_central!();
@@ -4785,6 +4558,32 @@ impl Interp {
                 break;
             }
         }
+        // RunCore descriptor witness, inverse half: a batch run that
+        // FINISHED without the central loop ever engaging contradicts
+        // a baked eligible=1 claim (desc is parsed only under
+        // TRS_RUNCORE_CHECK; wave runs and interactive stop conditions
+        // never engage by design, so they are out of scope)
+        #[cfg(feature = "aot")]
+        if cond.trivial()
+            && self.fe.finished.is_some()
+            && !self.central_engaged
+            && !self.wave_engine
+            && !self.vcd.is_active()
+            // a run that finished inside the reset window (t <= 2)
+            // never reaches the engage point — legitimately
+            && self.now > 2
+        {
+            if let Some(d) =
+                jit.as_ref().and_then(|j| j.runcore_desc.as_ref())
+            {
+                if d.central {
+                    eprintln!(
+                        "trs runcore: MISMATCH: descriptor says central-\
+                         eligible but the central loop never engaged"
+                    );
+                }
+            }
+        }
         self.stepper = Some(Stepper {
             clocks,
             sources,
@@ -4795,7 +4594,7 @@ impl Interp {
             final_now,
             jit,
         });
-        if self.fataled { 1 } else { 0 }
+        if self.fe.fataled { 1 } else { 0 }
     }
 
     /// End-of-simulation epilogue (bk_shutdown's VCD side): finish an
@@ -4815,7 +4614,7 @@ impl Interp {
         }
         self.vcd.set_final_min_pending(final_now);
         self.vcd.flush_all_pending();
-        if self.fataled { 1 } else { 0 }
+        if self.fe.fataled { 1 } else { 0 }
     }
 
     /// "a.b.RL_r" -> (instance index of "a.b", rule StrId of "RL_r")
@@ -4843,10 +4642,13 @@ impl Interp {
 
 /// dollar_display's Target collects errors with push_front and prints
 /// them after the task output: "Output error: <msg>", newest first.
-fn emit_output_errors(errs: &[String]) {
+pub(crate) fn emit_output_errors(errs: &[String]) {
     // quiet oracle engines suppress these like every output sink
     // ($fdisplay-family arms reach here even when write_fd is gated)
     if prim::quiet_engine() {
+        if !errs.is_empty() {
+            prim::note_window_effect();
+        }
         return;
     }
     for e in errs.iter().rev() {
@@ -4903,6 +4705,13 @@ impl Interp {
             jit::JitRequest::Load { src: jit::ArtifactSource::Path(so) };
     }
 
+    /// Take the RunCore arena image encoded by an Emit plan; the
+    /// linker CLI writes it beside the artifact as `<base>.arena`
+    /// (see jit — RunCore sidecar, validation form).
+    pub fn take_runcore_image(&mut self) -> Option<Vec<u8>> {
+        self.runcore_pending.take()
+    }
+
     /// Artifact-as-executable: the design objects are linked into THIS
     /// process image — resolve compiled functions from ourselves.
     pub fn aot_request_code_self(&mut self) {
@@ -4926,6 +4735,9 @@ impl Interp {
     ) {
     }
     pub fn aot_request_code_self(&mut self) {}
+    pub fn take_runcore_image(&mut self) -> Option<Vec<u8>> {
+        None
+    }
     pub fn aot_request_code(&mut self, _so: std::path::PathBuf) {
         // the strict contract holds even without the aot feature: a
         // run that MUST be compiled cannot silently interpret
@@ -4963,7 +4775,7 @@ impl Interp {
     /// Secondary oracle engine: suppress every output sink (console,
     /// design files, VCD) while state effects run normally.
     pub fn set_quiet(&mut self) {
-        self.quiet = true;
+        self.fe.quiet = true;
     }
 
     /// Mark this interp as a DEBUG-tier engine (the bluetcl capi).
@@ -4981,8 +4793,8 @@ impl Interp {
     /// ($fatal = message + bk_fatal_now), so latch both — a later
     /// `sim step` must refuse like any post-$finish step.
     pub fn mark_fatal(&mut self) {
-        self.fataled = true;
-        self.finished = Some(1);
+        self.fe.fataled = true;
+        self.fe.finished = Some(1);
     }
 
     // ===============
@@ -5474,7 +5286,7 @@ impl Interp {
 
     /// bk_set_timescale: scale factor applied to $time/%t values.
     pub fn set_timescale(&mut self, f: u64) {
-        self.timescale = f.max(1);
+        self.fe.timescale = f.max(1);
     }
 
     /// Top module name (the new_MODEL_<top> shim symbol).
@@ -5484,7 +5296,7 @@ impl Interp {
 
     /// Stage a +arg (without the '+') for $test$plusargs/$value$plusargs.
     pub fn append_plusarg(&mut self, a: &str) {
-        self.plusargs.push(a.to_string());
+        self.fe.plusargs.push(a.to_string());
     }
 }
 
@@ -5507,7 +5319,7 @@ pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
     let mut interp = Interp::new(design);
     sl.lap("interp build (instantiate)");
     interp.bir_hash = hash;
-    interp.plusargs = plusargs.to_vec();
+    interp.fe.plusargs = plusargs.to_vec();
     if let Ok(exe) = std::env::current_exe() {
         let b = format!("{}.bdpi.so", exe.display());
         if std::path::Path::new(&b).exists() {
@@ -5516,6 +5328,26 @@ pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
     }
     interp.aot_request_code_self();
     Ok(interp.run(max_cycles))
+}
+
+/// CLI teardown (tax-payment doctrine: exit pays nothing per run):
+/// run to completion, finalize the one sink that needs a real close
+/// (FST's tables are written by fstWriterClose in Drop; text waves
+/// are fully flushed by finish() inside run(); $fopen files are raw
+/// fds, closed by process exit), then LEAK the engine — the only
+/// caller is `trs run`, which _exit()s immediately, so dropping the
+/// whole design (measured 12.5M Ir on CrossingFIFOLoop, 16% of the
+/// small-run gap) buys nothing.  TRS_TEARDOWN=drop restores full
+/// drops (memcheck/leak hunting).  capi engines never come here —
+/// bk_shutdown owns their teardown.
+fn run_and_release(mut interp: Interp, max_cycles: u64) -> i32 {
+    let rc = interp.run(max_cycles);
+    if std::env::var_os("TRS_TEARDOWN").is_some_and(|v| v == "drop") {
+        return rc;
+    }
+    let _ = interp.vcd_set_file(None);
+    std::mem::forget(interp);
+    rc
 }
 
 pub fn run_file(
@@ -5528,6 +5360,19 @@ pub fn run_file(
     formats: Option<(bool, bool)>,
     selfcheck: Option<(u64, bool)>,
 ) -> Result<i32, String> {
+    // RunCore boot (TRS_RUNCORE=1, docs/RUNCORE.md): a wave-free,
+    // selfcheck-free artifact run whose sidecar carries an eligible
+    // descriptor + baked window boots here — no design decode, no
+    // Interp, no plan.  Every gate failure falls through silently to
+    // the classic boot below.
+    #[cfg(feature = "aot")]
+    if selfcheck.is_none() && wave.is_none() && vcd_file.is_none() {
+        if let Some(so) = code {
+            if let Some(rc) = runcore::try_boot(so, max_cycles, plusargs) {
+                return Ok(rc);
+            }
+        }
+    }
     let mut interp = startup::load_file_or_code(path, code, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
         interp.set_allowed_wave_formats(vcd, fst);
@@ -5546,7 +5391,7 @@ pub fn run_file(
     // they always print (a diverging suite test failing with the
     // report in its log is the point).
     let Some((every, announce)) = selfcheck else {
-        return Ok(interp.run(max_cycles));
+        return Ok(run_and_release(interp, max_cycles));
     };
     if interp.needs_user_bdpi() {
         // dlopen of one path is one refcounted image: user C globals
@@ -5562,7 +5407,7 @@ pub fn run_file(
                  skipped"
             );
         }
-        return Ok(interp.run(max_cycles));
+        return Ok(run_and_release(interp, max_cycles));
     }
     // lockstep selfcheck: quiet shadow engines ride beside the primary
     // — no console/file/VCD output, debug tier (a shadow is an oracle,

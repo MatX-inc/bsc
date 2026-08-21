@@ -10,7 +10,9 @@ use crate::value::Value;
 pub enum Arg {
     /// value + signed-display flag
     Val(Value, bool),
-    Str(String),
+    /// Arc so a precomputed call-site template clones as a refcount
+    /// bump, not a heap copy (the $display hot path)
+    Str(std::sync::Arc<str>),
     /// real-valued argument (the C++ 'r' annotation)
     Real(f64),
 }
@@ -47,29 +49,92 @@ fn max_width(bits: u32, base: u32, signed: bool) -> usize {
     }
 }
 
-fn fmt_val(v: &Value, base: u32, zero_pad: bool, width: Option<usize>, signed: bool) -> String {
-    let s = match base {
-        2 => v.to_bin_string(),
-        8 => v.to_oct_string(),
-        16 => v.to_hex_string(),
-        _ if signed && v.sign() => format!("-{}", v.neg(v.width).to_dec_string()),
-        _ => v.to_dec_string(),
-    };
-    // %h/%b/%o strings are already max-width with leading zeros; trim per
-    // explicit width or keep; %d needs padding up.
-    let s = if base == 10 {
-        s
-    } else {
-        s.trim_start_matches('0').to_string()
-    };
-    let s = if s.is_empty() { "0".to_string() } else { s };
+/// Minimal digits of a u64 in `base` (2/8/10/16), appended to a stack
+/// buffer MSB-first; x=0 yields "0".  The allocation-free fast path
+/// for <=64-bit values (the overwhelmingly common $display case).
+fn push_u64_digits(out: &mut String, x: u64, base: u64) {
+    let mut buf = [0u8; 64]; // 64 binary digits is the worst case
+    let mut n = 0;
+    let mut x = x;
+    loop {
+        let d = (x % base) as u8;
+        buf[n] = if d < 10 { b'0' + d } else { b'a' + (d - 10) };
+        n += 1;
+        x /= base;
+        if x == 0 {
+            break;
+        }
+    }
+    for k in (0..n).rev() {
+        out.push(buf[k] as char);
+    }
+}
+
+fn push_pad(out: &mut String, c: char, n: usize) {
+    for _ in 0..n {
+        out.push(c);
+    }
+}
+
+/// Append one formatted value.  Semantics are fmt_val's original,
+/// bug-compat included: the final length (sign included) pads up to
+/// `width`; bases 2/8/16 zero-pad, base 10 pads with the caller's
+/// zero_pad flag (which every %d call site passes as false — base-10
+/// space-pads even for "%05d", matching dollar_display.cxx).
+fn fmt_val_into(
+    out: &mut String,
+    v: &Value,
+    base: u32,
+    zero_pad: bool,
+    width: Option<usize>,
+    signed: bool,
+) {
     let w = width.unwrap_or(0);
-    if s.len() >= w {
-        s
-    } else if zero_pad || base != 10 {
-        format!("{}{}", "0".repeat(w - s.len()), s)
+    let pad = if zero_pad || base != 10 { '0' } else { ' ' };
+    if v.width <= 64 {
+        // allocation-free path: digit count first, pad, then digits
+        let x = v.as_u64();
+        let (mag, neg) = if base == 10 && signed && v.sign() {
+            // two's-complement magnitude within the value's width
+            let m = x.wrapping_neg()
+                & if v.width == 64 { u64::MAX } else { (1u64 << v.width) - 1 };
+            (m, true)
+        } else {
+            (x, false)
+        };
+        let b = base as u64;
+        let mut ndig = 1usize;
+        let mut t = mag;
+        while t >= b {
+            ndig += 1;
+            t /= b;
+        }
+        let len = ndig + neg as usize;
+        if len < w {
+            push_pad(out, pad, w - len);
+        }
+        if neg {
+            out.push('-');
+        }
+        push_u64_digits(out, mag, b);
     } else {
-        format!("{}{}", " ".repeat(w - s.len()), s)
+        let s = match base {
+            2 => v.to_bin_string(),
+            8 => v.to_oct_string(),
+            16 => v.to_hex_string(),
+            _ if signed && v.sign() => {
+                format!("-{}", v.neg(v.width).to_dec_string())
+            }
+            _ => v.to_dec_string(),
+        };
+        // %h/%b/%o strings are max-width with leading zeros: trim to
+        // minimal digits (never below one digit)
+        let s = if base == 10 { s.as_str() } else { s.trim_start_matches('0') };
+        let s = if s.is_empty() { "0" } else { s };
+        if s.len() < w {
+            push_pad(out, pad, w - s.len());
+        }
+        out.push_str(s);
     }
 }
 
@@ -85,19 +150,32 @@ pub fn format_args(
     errs: &mut Vec<String>,
 ) -> String {
     let mut out = String::new();
+    format_args_into(&mut out, args, default_base, now, loc, errs);
+    out
+}
+
+/// format_args appending into a caller-owned buffer (the hot $display
+/// path reuses one per Interp — no per-call output allocation).
+pub fn format_args_into(
+    out: &mut String,
+    args: &[Arg],
+    default_base: u32,
+    now: u64,
+    loc: &str,
+    errs: &mut Vec<String>,
+) {
     let mut i = 0;
     while i < args.len() {
         match &args[i] {
             Arg::Str(fmt) => {
                 i += 1;
-                let fmt = fmt.clone();
-                format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
+                format_str(fmt, args, &mut i, out, now, loc, errs);
             }
             Arg::Val(v, sg) => {
-                out.push_str(&fmt_val(
-                    v, default_base, false,
+                fmt_val_into(
+                    out, v, default_base, false,
                     Some(max_width(v.width, default_base, *sg)), *sg,
-                ));
+                );
                 i += 1;
             }
             Arg::Real(r) => {
@@ -105,15 +183,14 @@ pub fn format_args(
                 // print the (signed long long) conversion (fill_tValue)
                 errs.push("unexpected real number argument\n".to_string());
                 let v = Value::from_u64(64, (*r as i64) as u64);
-                out.push_str(&fmt_val(
-                    &v, default_base, false,
+                fmt_val_into(
+                    out, &v, default_base, false,
                     Some(max_width(64, default_base, true)), true,
-                ));
+                );
                 i += 1;
             }
         }
     }
-    out
 }
 
 /// A bit-packed string value back to text: bytes MSB-first, leading NUL
@@ -166,8 +243,7 @@ pub fn format_sformat(
     match args.first() {
         Some(Arg::Str(f)) => {
             i = 1;
-            let fmt = f.clone();
-            format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
+            format_str(f, args, &mut i, &mut out, now, loc, errs);
         }
         Some(Arg::Val(v, _)) => {
             i = 1;
@@ -180,18 +256,18 @@ pub fn format_sformat(
         match &args[i] {
             Arg::Str(text) => out.push_str(text),
             Arg::Val(v, sg) => {
-                out.push_str(&fmt_val(
-                    v, default_base, false,
+                fmt_val_into(
+                    &mut out, v, default_base, false,
                     Some(max_width(v.width, default_base, *sg)), *sg,
-                ));
+                );
             }
             Arg::Real(r) => {
                 errs.push("unexpected real number argument\n".to_string());
                 let v = Value::from_u64(64, (*r as i64) as u64);
-                out.push_str(&fmt_val(
-                    &v, default_base, false,
+                fmt_val_into(
+                    &mut out, &v, default_base, false,
                     Some(max_width(64, default_base, true)), true,
-                ));
+                );
             }
         }
         i += 1;
@@ -390,7 +466,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 10, sg)))
                 };
-                out.push_str(&fmt_val(&v, 10, false, w, sg));
+                fmt_val_into(out, &v, 10, false, w, sg);
             }
             'h' | 'x' => {
                 let (v, _) = next_val(args, i, errs);
@@ -399,7 +475,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 16, false)))
                 };
-                out.push_str(&fmt_val(&v, 16, true, w, false));
+                fmt_val_into(out, &v, 16, true, w, false);
             }
             'o' => {
                 let (v, _) = next_val(args, i, errs);
@@ -408,7 +484,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 8, false)))
                 };
-                out.push_str(&fmt_val(&v, 8, true, w, false));
+                fmt_val_into(out, &v, 8, true, w, false);
             }
             'b' => {
                 let (v, _) = next_val(args, i, errs);
@@ -417,7 +493,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 2, false)))
                 };
-                out.push_str(&fmt_val(&v, 2, true, w, false));
+                fmt_val_into(out, &v, 2, true, w, false);
             }
             'c' => {
                 let (v, _) = next_val(args, i, errs);
@@ -445,28 +521,40 @@ fn format_str(
                 Some(Arg::Val(v, _)) => {
                     // sized string: bytes, MSB first, skipping leading NULs
                     let n = ((v.width + 7) / 8) as usize;
-                    let mut bytes = Vec::new();
+                    let mut seen = false;
                     for k in (0..n).rev() {
                         let b = v.extract((k * 8 + 7) as u64, (k * 8) as u64, 8).as_u64() as u8;
-                        bytes.push(b);
+                        if b == 0 && !seen {
+                            continue;
+                        }
+                        seen = true;
+                        out.push(b as char);
                     }
-                    let s: String = bytes
-                        .into_iter()
-                        .skip_while(|&b| b == 0)
-                        .map(|b| b as char)
-                        .collect();
-                    out.push_str(&s);
                 }
                 None => {}
             },
             't' => {
                 let (v, _) = next_val(args, i, errs);
                 let w = width.unwrap_or(20);
-                let s = v.to_dec_string();
-                if s.len() < w && !explicit_min {
-                    out.push_str(&" ".repeat(w - s.len()));
+                if v.width <= 64 {
+                    let x = v.as_u64();
+                    let mut ndig = 1usize;
+                    let mut t = x;
+                    while t >= 10 {
+                        ndig += 1;
+                        t /= 10;
+                    }
+                    if ndig < w && !explicit_min {
+                        push_pad(out, ' ', w - ndig);
+                    }
+                    push_u64_digits(out, x, 10);
+                } else {
+                    let s = v.to_dec_string();
+                    if s.len() < w && !explicit_min {
+                        push_pad(out, ' ', w - s.len());
+                    }
+                    out.push_str(&s);
                 }
-                out.push_str(&s);
             }
             'f' | 'e' | 'g' => {
                 let v = next_double(args, i, errs);

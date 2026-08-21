@@ -383,11 +383,10 @@ def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs):
             msg = "" if lk is None else (lk.stderr + lk.stdout)
             return (rel, top, "AOT_LINK_FAIL",
                     "timeout" if lk is None else first_error(msg))
-        # the wrapper is the durable record: --code => compiled
-        try:
-            compiled = "--code" in open(cexe).read()
-        except OSError:
-            compiled = False
+        # the sibling .so is the durable record of a compiled link —
+        # it works for both artifact forms (the symlink-to-runner form
+        # is a binary, so reading the artifact as text no longer does)
+        compiled = os.path.exists(cexe + ".so")
         engine_note = " engine=aot" if compiled else (
             " engine=interp why=" + link_fallback_reason(lk.stderr))
         env = dict(ENV)

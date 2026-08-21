@@ -561,7 +561,13 @@ encComposition instToMod msis topGates ss = do
               Left is -> internalError
                 ("SimExportIR: cyclic tick gate dependencies: "
                  ++ ppReadable is)
-              Right cs -> concat [ reverse (M.findWithDefault [] c tickGroups)
+              -- within a clock group, KEEP the fromListWith (++)
+              -- ordering (reversed di_prims): SimMakeCBlocks'
+              -- sortTickCalls emits its grouped list exactly so, and
+              -- dual-port BRAM write-write semantics depend on it
+              -- (the model calls clkA before clkB; an extra reverse
+              -- here ticked clkB first and flipped last-writer-wins)
+              Right cs -> concat [ M.findWithDefault [] c tickGroups
                                  | c <- reverse cs ]
         -- conditional reset ticks (mkResetTickStmt; posedge only), after
         -- the regular ticks; each carries the prim's clock gate

@@ -77,6 +77,14 @@ pub static BDPI_SYMS: std::sync::OnceLock<HashMap<String, usize>> =
 /// interleaving of user printf with $display output, exactly like the
 /// interpreter's BDPI dispatch.
 pub static STDIO_CB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+/// Dual-write collision warning hook for the compiled BRAM tick
+/// (bs_prim_mod_bram.h:454-476): a same-instant same-address dual
+/// write whose OVERLAPPING lane carries an EQUAL chunk prints the
+/// reference's warning (chunks_eq is literal equality upstream).  The
+/// interpreter installs a fn resolving the block base POINTER to the
+/// prim's name, quiet-engine gated.  Unset = silent (unit tests).
+pub static BRAM_WARN: std::sync::OnceLock<fn(block: usize, addr: u64)> =
+    std::sync::OnceLock::new();
 /// One compiled prim call site (resolved by the trampoline).
 #[derive(Clone)]
 pub struct PrimCallSpec {
@@ -117,6 +125,10 @@ pub struct InstEnv {
     /// local CReg (CRegN5) instance name -> (base slot, width): live
     /// value then registered value, w words each (see ArenaKind::CReg5)
     pub creg5_slot: HashMap<StrId, (u32, u32)>,
+    /// local Counter instance name -> (base slot, width): val and
+    /// saved_val (w words each), then saved_at, a (w words), a_at,
+    /// b (w words), b_at, suppress (see ArenaKind::Counter)
+    pub counter_slot: HashMap<StrId, (u32, u32)>,
     /// local FIFO instance name -> (base slot, width, size, guarded):
     /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
     /// data (see ArenaKind::Fifo)
@@ -482,7 +494,7 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 21;
+pub const AOT_LAYOUT_REV: u64 = 22;
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).
@@ -607,8 +619,108 @@ pub unsafe extern "C" fn trs_bram_tick(
     let (o_wens, o_val) = (3, 3 + wenw);
     let (o_prev, o_out, o_out2) =
         (3 + wenw + w, 3 + wenw + 2 * w, 3 + wenw + 3 * w);
-    // out2 <- out (unconditional rotation, like the boxed clk)
     unsafe {
+        // single-limb fast path (width <= 64, one enable word — the
+        // overwhelmingly common BRAM shape): straight scalar loads and
+        // stores, no libc memcpy, word-level lane merge.  Semantics
+        // identical to the general path below, including the
+        // unconditional out2 rotation (the boxed clk rotates every
+        // tick and selfcheck compares that state).
+        if w == 1 && wenw == 1 {
+            *arena.add(me + o_out2) = *arena.add(me + o_out);
+            if *arena.add(me) != now {
+                return;
+            }
+            let addr = *arena.add(me + 1);
+            let wens = *arena.add(me + o_wens);
+            if addr >= size {
+                *arena.add(me + o_out) = 0xAAAA_AAAA_AAAA_AAAA;
+                mask_top(arena.add(me + o_out), width, 1);
+                return;
+            }
+            let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize;
+            let other_hit = dual
+                && *arena.add(other + 2) == now
+                && *arena.add(other + 1) == addr;
+            if wens != 0 {
+                // collision warning: other port PUT (upd_at, not
+                // written_at) same addr this instant, overlapping
+                // lane, equal chunk (see BRAM_WARN)
+                if dual
+                    && *arena.add(other) == now
+                    && *arena.add(other + 1) == addr
+                {
+                    let both = wens & *arena.add(other + o_wens);
+                    if both != 0 {
+                        let x = *arena.add(me + o_val)
+                            ^ *arena.add(other + o_val);
+                        let mut collide = false;
+                        for n in 0..num_wens {
+                            if both >> (n % 64) & 1 == 0 {
+                                continue;
+                            }
+                            let lo = n * chunk;
+                            if lo >= width {
+                                continue;
+                            }
+                            let len = chunk.min(width - lo);
+                            let m = if len >= 64 {
+                                u64::MAX
+                            } else {
+                                (1u64 << len) - 1
+                            };
+                            if (x >> lo) & m == 0 {
+                                collide = true;
+                            }
+                        }
+                        if collide {
+                            if let Some(f) = BRAM_WARN.get() {
+                                f(arena.add(base) as usize, addr);
+                            }
+                        }
+                    }
+                }
+                *arena.add(me + 2) = now;
+                *arena.add(me + o_prev) = if other_hit {
+                    *arena.add(other + o_prev)
+                } else {
+                    *arena.add(daddr)
+                };
+                // enabled-lane mask over the value word
+                let mut m = 0u64;
+                for n in 0..num_wens {
+                    if wens >> (n % 64) & 1 == 0 || n * chunk >= width {
+                        continue;
+                    }
+                    let lo = n * chunk;
+                    let len = chunk.min(width - lo);
+                    let lane = if len >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << len) - 1) << lo
+                    };
+                    m |= lane;
+                }
+                let d = arena.add(daddr);
+                *d = *d & !m | *arena.add(me + o_val) & m;
+                // out's disabled lanes come from the just-latched
+                // prev — on a collided write that is the begin-of-
+                // instant value, not the merged memory word
+                // (bs_prim_mod_bram.h:487-501); prev == memory
+                // otherwise, so the words agree
+                *arena.add(me + o_out) =
+                    *arena.add(me + o_prev) & !m | *arena.add(me + o_val) & m;
+            } else {
+                *arena.add(me + o_out) = if other_hit {
+                    *arena.add(other + o_prev)
+                } else {
+                    *arena.add(daddr)
+                };
+            }
+            return;
+        }
+        // general path (wide data / >64 enables)
+        // out2 <- out (unconditional rotation, like the boxed clk)
         std::ptr::copy_nonoverlapping(
             arena.add(me + o_out),
             arena.add(me + o_out2),
@@ -635,8 +747,60 @@ pub unsafe extern "C" fn trs_bram_tick(
             && *arena.add(other + 2) == now
             && *arena.add(other + 1) == addr;
         if !wens_zero {
+            // collision warning, wide shape (see the fast path / BRAM_WARN)
+            if dual
+                && *arena.add(other) == now
+                && *arena.add(other + 1) == addr
+                && BRAM_WARN.get().is_some()
+            {
+                let mut collide = false;
+                for n in 0..num_wens {
+                    let wi = (n / 64) as usize;
+                    let mine =
+                        *arena.add(me + o_wens + wi) >> (n % 64) & 1;
+                    let theirs =
+                        *arena.add(other + o_wens + wi) >> (n % 64) & 1;
+                    if mine == 0 || theirs == 0 {
+                        continue;
+                    }
+                    let lo = (n * chunk) as usize;
+                    if lo >= width as usize {
+                        continue;
+                    }
+                    let len = chunk.min(width - n * chunk) as usize;
+                    let mut b = lo;
+                    let mut eq = true;
+                    while b < lo + len {
+                        let w_i = b / 64;
+                        let off = b % 64;
+                        let take = (64 - off).min(lo + len - b);
+                        let m = if take >= 64 {
+                            u64::MAX
+                        } else {
+                            ((1u64 << take) - 1) << off
+                        };
+                        if (*arena.add(me + o_val + w_i)
+                            ^ *arena.add(other + o_val + w_i))
+                            & m
+                            != 0
+                        {
+                            eq = false;
+                            break;
+                        }
+                        b += take;
+                    }
+                    if eq {
+                        collide = true;
+                        break;
+                    }
+                }
+                if collide {
+                    (BRAM_WARN.get().unwrap())(arena.add(base) as usize, addr);
+                }
+            }
             // write: prev <- (bypass ? other.prev : data), then merge
-            // the enabled lanes of upd_val into data, out <- merged
+            // the enabled lanes of upd_val into data word-wise, out <-
+            // merged
             *arena.add(me + 2) = now;
             if other_hit {
                 std::ptr::copy_nonoverlapping(
@@ -651,6 +815,15 @@ pub unsafe extern "C" fn trs_bram_tick(
                     w,
                 );
             }
+            // out starts from the just-latched prev: its DISABLED
+            // lanes must show the begin-of-instant value on a collided
+            // write, not the merged memory word
+            // (bs_prim_mod_bram.h:487-501); prev == memory otherwise
+            std::ptr::copy_nonoverlapping(
+                arena.add(me + o_prev),
+                arena.add(me + o_out),
+                w,
+            );
             for n in 0..num_wens {
                 let lane = *arena.add(me + o_wens + (n / 64) as usize)
                     >> (n % 64)
@@ -663,18 +836,27 @@ pub unsafe extern "C" fn trs_bram_tick(
                 }
                 let lo = (n * chunk) as usize;
                 let len = chunk.min(width - n * chunk) as usize;
-                for b in lo..lo + len {
-                    let bit =
-                        *arena.add(me + o_val + b / 64) >> (b % 64) & 1;
-                    let d = arena.add(daddr + b / 64);
-                    *d = *d & !(1u64 << (b % 64)) | bit << (b % 64);
+                // word-level merge over [lo, lo+len) into memory AND
+                // out: the bit-by-bit loop here was 35% of
+                // TrafficBRAM's model compute
+                let mut b = lo;
+                while b < lo + len {
+                    let wi = b / 64;
+                    let off = b % 64;
+                    let take = (64 - off).min(lo + len - b);
+                    let m = if take >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << take) - 1) << off
+                    };
+                    let v = *arena.add(me + o_val + wi) & m;
+                    let d = arena.add(daddr + wi);
+                    *d = *d & !m | v;
+                    let o = arena.add(me + o_out + wi);
+                    *o = *o & !m | v;
+                    b += take;
                 }
             }
-            std::ptr::copy_nonoverlapping(
-                arena.add(daddr),
-                arena.add(me + o_out),
-                w,
-            );
         } else {
             // read: bypassed pre-write value or the stored data
             let src = if other_hit { other + o_prev } else { daddr };

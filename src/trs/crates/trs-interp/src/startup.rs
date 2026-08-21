@@ -63,7 +63,7 @@ pub fn load_file_or_code(
             let mut interp = Interp::new(design);
             sl.lap("interp build (instantiate)");
             interp.bir_hash = hash;
-            interp.plusargs = plusargs.to_vec();
+            interp.fe.plusargs = plusargs.to_vec();
             interp.wave_pending =
                 vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
             // user BDPI code stays a companion .so: prefer the
@@ -155,7 +155,7 @@ fn load_file_inner(
     let mut interp = Interp::new(design);
     sl.lap("interp build (instantiate)");
     interp.bir_hash = hash;
-    interp.plusargs = plusargs.to_vec();
+    interp.fe.plusargs = plusargs.to_vec();
     interp.wave_pending =
         vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
     // user BDPI code lives in a companion shared object next to the .bir

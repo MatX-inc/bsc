@@ -512,11 +512,28 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     let triple = TargetMachine::get_default_triple();
     let target = Target::from_triple(&triple)
         .map_err(|e| Ineligible(format!("LLVM target: {e}")))?;
+    // Artifact code generation targets a PORTABLE baseline by default:
+    // artifacts are cached and shipped (.so, trs link --exe), and the
+    // load gates check design identity, not CPU features — a
+    // host-native artifact from an AVX-512 box SIGILLs elsewhere with
+    // no fallback.  Measured on the bench pool, x86-64-v3 matches
+    // host-native runtime within noise (wide-value memcpy code is the
+    // only vector consumer); TRS_JIT_CPU overrides: "native" restores
+    // host tuning, or any LLVM cpu name (x86-64, x86-64-v4, znver4...).
+    let cpu_env = std::env::var("TRS_JIT_CPU").ok();
+    let (cpu, feats) = match cpu_env.as_deref() {
+        Some("native") => (
+            TargetMachine::get_host_cpu_name().to_string(),
+            TargetMachine::get_host_cpu_features().to_string(),
+        ),
+        Some(name) => (name.to_string(), String::new()),
+        None => ("x86-64-v3".to_string(), String::new()),
+    };
     target
         .create_target_machine(
             &triple,
-            &TargetMachine::get_host_cpu_name().to_string(),
-            &TargetMachine::get_host_cpu_features().to_string(),
+            &cpu,
+            &feats,
             opt_level(),
             RelocMode::PIC,
             CodeModel::Default,
@@ -2640,6 +2657,32 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 return nope("creg read width mismatch");
             }
             return Ok(self.load_val(f, base, cw));
+        }
+        if let Some(&(base, cw)) = ie.counter_slot.get(&instance) {
+            // Counter reads are begin-of-instant: the first same-
+            // instant action snapshotted the pre-action value (stamped
+            // by saved_at).  No suppress check — the reference has
+            // none (in-reset reads see the live/reset value).
+            if !matches!(mname.as_str(), "value" | "_read") {
+                return nope("counter value method mismatch");
+            }
+            if cw != width || !args.is_empty() {
+                return nope("counter read shape mismatch");
+            }
+            let w = cw.max(1).div_ceil(64);
+            let now = self.load_word(f, self.env.now_slot);
+            let sat = self.load_word(f, base + 2 * w);
+            let same = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, sat, now, "cnr")
+                .unwrap();
+            let sv = self.load_val(f, base + w, cw);
+            let cur = self.load_val(f, base, cw);
+            return Ok(self
+                .builder
+                .build_select(same, sv, cur, "cnv")
+                .unwrap()
+                .into_int_value());
         }
         // other prim children: trampoline into the interpreter's prim
         let Some(&child) = ie.children.get(&instance) else {
@@ -5477,6 +5520,86 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         return Ok(());
                     }
                     // clear and anything else: boxed prim below
+                }
+                if let Some(&(base, cw)) = ie.counter_slot.get(instance) {
+                    if matches!(mname.as_str(), "addA" | "incrA" | "addB" | "incrB")
+                        && args.len() == 1
+                    {
+                        // taken-path inline (ConfigReg rule); in-reset
+                        // suppress bounces to the boxed prim, whose
+                        // action_method no-ops — the fast path must not
+                        // stamp or write.  Boxed semantics: save-if-
+                        // first BEFORE the val update, stamp + store
+                        // the arg, wrapping add masked to width.
+                        let Some(&child) = ie.children.get(instance) else {
+                            return nope("call on unknown child");
+                        };
+                        let is_a = matches!(mname.as_str(), "addA" | "incrA");
+                        let w = cw.max(1).div_ceil(64);
+                        let i64t = self.ctx.i64_type();
+                        let vw = self.expr_width(f, &args[0])?;
+                        let v0 = self.expr(f, &args[0])?;
+                        let vv = self.to_w(v0, vw, cw.max(1), false);
+                        let go_bb = self.ctx.append_basic_block(func, "cng");
+                        let fast_bb = self.ctx.append_basic_block(func, "cnf");
+                        let slow_bb = self.ctx.append_basic_block(func, "cnsl");
+                        let done_bb = self.ctx.append_basic_block(func, "cnd");
+                        self.builder.build_conditional_branch(cz, go_bb, done_bb).unwrap();
+
+                        self.builder.position_at_end(go_bb);
+                        let sup = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                self.load_word(f, base + 4 * w + 3),
+                                i64t.const_zero(),
+                                "cnsp",
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(sup, slow_bb, fast_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(slow_bb);
+                        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                        self.emit_prim_call(f, child, *method, args, 0, true)?;
+                        f.ssa = saved;
+                        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                        self.builder.position_at_end(fast_bb);
+                        let now = self.load_word(f, self.env.now_slot);
+                        let sat = self.load_word(f, base + 2 * w);
+                        let first = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, sat, now, "cnfr")
+                            .unwrap();
+                        let val = self.load_val(f, base, cw.max(1));
+                        let oldsv = self.load_val(f, base + w, cw.max(1));
+                        let sv = self
+                            .builder
+                            .build_select(first, val, oldsv, "cnsv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base + w, cw.max(1), sv);
+                        self.store_word(f, base + 2 * w, now);
+                        let (voff, toff) = if is_a {
+                            (base + 2 * w + 1, base + 3 * w + 1)
+                        } else {
+                            (base + 3 * w + 2, base + 4 * w + 2)
+                        };
+                        self.store_val(f, voff, cw.max(1), vv);
+                        self.store_word(f, toff, now);
+                        let sum =
+                            self.builder.build_int_add(val, vv, "cnad").unwrap();
+                        self.store_val(f, base, cw.max(1), sum);
+                        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                        self.builder.position_at_end(done_bb);
+                        return Ok(());
+                    }
+                    // setC/setF and anything else: boxed prim below
+                    // (slot-aware — it sees the inline-written a/b
+                    // values and stamps in the arena)
                 }
                 if let Some(&(base, ww)) = ie.wire_slot.get(instance) {
                     if !matches!(mname.as_str(), "wset" | "send") {

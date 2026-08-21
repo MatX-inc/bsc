@@ -93,7 +93,7 @@ impl Bdpi {
             });
             match (ft, a) {
                 (ForeignType::CString, Arg::Str(s)) => {
-                    let c = CString::new(s.as_str()).unwrap_or_default();
+                    let c = CString::new(&**s).unwrap_or_default();
                     slots.push(c.as_ptr() as u64);
                     cstrs.push(c);
                 }

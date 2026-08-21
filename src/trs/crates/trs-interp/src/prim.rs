@@ -44,10 +44,27 @@ pub(crate) fn load_memfiles() -> bool {
     LOAD_MEMFILES.with(|c| c.get())
 }
 
+/// RunCore window bake: counts effects the skipped reset window
+/// would have had at run time — suppressed prints, file/stdin/
+/// plusarg/rng consults.  The link's bake reads the delta across its
+/// one-cycle advance; any delta = the window is not skippable and
+/// the design boots classic.  Never read on normal runs.
+pub(crate) static WINDOW_EFFECTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) fn note_window_effect() {
+    WINDOW_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// qprintln! that a QUIET oracle engine suppresses (the primary's
 /// print is the byte-parity one; a secondary's would duplicate it).
 macro_rules! qprintln {
-    ($($t:tt)*) => { if !crate::prim::quiet_engine() { println!($($t)*) } };
+    ($($t:tt)*) => {
+        if !crate::prim::quiet_engine() {
+            println!($($t)*)
+        } else {
+            crate::prim::note_window_effect()
+        }
+    };
 }
 
 /// One debug-tier sub-symbol of a primitive (the reference's
@@ -205,6 +222,203 @@ pub trait Prim {
     /// written to the slot(s), which become the single source of truth
     /// for both the interpreter paths and compiled code.
     fn arena_attach(&mut self, _slot: *mut u64) {}
+    /// RunCore native bounce servicing (rung 3b): the prim's STATIC
+    /// config as (kind tag, words, strings) — enough for
+    /// runcore_restore to rebuild an equivalent prim whose DYNAMIC
+    /// state is entirely the adopted arena slots (attach makes the
+    /// slots the single source of truth, and the boot's window image
+    /// carries their live values).  None = no native servicer; a
+    /// bounce-reachable prim returning None keeps the design on the
+    /// classic boot.
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        None
+    }
+    /// arena_attach's adopting twin: point at LIVE slots and write
+    /// NOTHING (attach pushes the boxed pre-attach image over the
+    /// slots — exactly what adopting a live arena must not do).
+    /// Implemented only by kinds that return a runcore_seed.
+    fn arena_adopt(&mut self, _slot: *mut u64) {
+        unreachable!("arena_adopt on a prim kind without a RunCore seed")
+    }
+    /// The attached arena base (RunCore load-time witness: baked slot
+    /// offsets are compared against the live attachment).
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        None
+    }
+}
+
+// RunCore seed kind tags (sidecar PRIMS section): stable wire values
+// — renumbering is a sidecar-version bump.
+pub(crate) const RC_PRIM_REG: u64 = 1;
+pub(crate) const RC_PRIM_WIRE: u64 = 2;
+pub(crate) const RC_PRIM_CONFIGREG: u64 = 3;
+pub(crate) const RC_PRIM_CREG5: u64 = 4;
+pub(crate) const RC_PRIM_COUNTER: u64 = 5;
+pub(crate) const RC_PRIM_REGFILE: u64 = 6;
+pub(crate) const RC_PRIM_FIFO: u64 = 7;
+pub(crate) const RC_PRIM_BRAM: u64 = 8;
+
+/// Rebuild a native bounce servicer from its baked seed: the prim
+/// (dynamic state = the live slots it will adopt) plus its arena
+/// FOOTPRINT in words, computed with the same layout arithmetic the
+/// prim's methods use, so the boot can bounds-check the baked base
+/// slot before any pointer arithmetic.  Every field of the seed is
+/// file data: any arity, width, or size anomaly is None and the boot
+/// falls back classic before producing a byte of output.
+pub(crate) fn runcore_restore(
+    tag: u64,
+    words: &[u64],
+    strs: &[String],
+) -> Option<(Box<dyn Prim>, usize)> {
+    let vw = |w: u32| (w.max(1) as usize).div_ceil(64);
+    let width_of = |x: u64| u32::try_from(x).ok().filter(|&w| w <= 1 << 20);
+    // constructors re-derive full_name as "top" / "top.<path>", so the
+    // baked full name round-trips through its path suffix
+    fn path_of(full: &str) -> &str {
+        full.strip_prefix("top.").unwrap_or("")
+    }
+    match (tag, words, strs) {
+        (RC_PRIM_REG, &[w], []) => {
+            let w = width_of(w)?;
+            let p = Reg {
+                reset_value: Value::undet(w),
+                width: w,
+                prev: Value::undet(w),
+                value: Value::undet(w),
+                in_reset: false,
+                async_rst: false,
+                suppress: false,
+                crossing: false,
+                written_at: u64::MAX,
+                slot: None,
+                vcd_id: 0,
+                vcd_back: None,
+            };
+            Some((Box::new(p), vw(w)))
+        }
+        (RC_PRIM_WIRE, &[w], []) => {
+            let w = width_of(w)?;
+            let p = if w == 0 {
+                RWire::new(&[], true)
+            } else {
+                RWire::new(&[Value::from_u64(32, w as u64)], false)
+            };
+            Some((Box::new(p), 1 + vw(w)))
+        }
+        (RC_PRIM_CONFIGREG, &[w], []) => {
+            let w = width_of(w)?;
+            let p = ConfigReg::new(&[Value::from_u64(32, w as u64)], false, false);
+            Some((Box::new(p), 2 * vw(w) + 1))
+        }
+        (RC_PRIM_CREG5, &[w], []) => {
+            let w = width_of(w)?;
+            let p = CReg::new(&[Value::from_u64(32, w as u64)], false, false);
+            Some((Box::new(p), 2 * vw(w)))
+        }
+        (RC_PRIM_COUNTER, &[w], []) => {
+            let w = width_of(w)?;
+            let p = Counter::new(&[Value::from_u64(32, w as u64)]);
+            Some((Box::new(p), 4 * vw(w) + 4))
+        }
+        (RC_PRIM_REGFILE, &[w, ab, lo, hi], [mem_name, full_name]) => {
+            let w = width_of(w)?;
+            let ab = u32::try_from(ab).ok().filter(|&b| b <= 64)?;
+            if hi < lo {
+                return None;
+            }
+            let entries = hi.checked_sub(lo)?.checked_add(1)?;
+            let fp = usize::try_from(
+                2u64.checked_add(
+                    (vw(w) as u64).checked_mul(entries.checked_add(1)?)?,
+                )?,
+            )
+            .ok()
+            .filter(|&f| f <= 1 << 20)?;
+            let p = RegFile {
+                data: Default::default(),
+                slot: None,
+                mem_name: mem_name.clone(),
+                full_name: full_name.clone(),
+                addr_bits: ab,
+                width: w,
+                lo,
+                hi,
+                upd_at: u64::MAX,
+                upd_addr: 0,
+                upd_prev: Value::undet(w.max(1)),
+            };
+            Some((Box::new(p), fp))
+        }
+        (RC_PRIM_FIFO, &[w, size, ftype, guard, zw], [full_name]) => {
+            let w = width_of(w)?;
+            if size == 0 {
+                return None; // live fifos are depth>=1 by construction
+            }
+            let ftype = match ftype {
+                0 => FifoType::Simple,
+                1 => FifoType::Loopy,
+                _ => return None, // Bypass never seeds (stays boxed)
+            };
+            let fp = usize::try_from(
+                7u64.checked_add(size.checked_mul(vw(w) as u64)?)?,
+            )
+            .ok()
+            .filter(|&f| f <= 1 << 20)?;
+            let p = Fifo::new(
+                w,
+                size,
+                guard != 0,
+                ftype,
+                zw != 0,
+                path_of(full_name),
+            );
+            Some((Box::new(p), fp))
+        }
+        (
+            RC_PRIM_BRAM,
+            &[pipelined, dual, ab, w, hi_addr, chunk, nwens],
+            [full_name],
+        ) => {
+            let w = width_of(w)?;
+            let ab = u32::try_from(ab).ok().filter(|&b| b <= 64)?;
+            let chunk = u32::try_from(chunk).ok()?;
+            let nwens = u32::try_from(nwens).ok()?;
+            let dual = dual != 0;
+            let port_words = 3u64
+                .checked_add((nwens.max(1) as u64).div_ceil(64))?
+                .checked_add(4 * vw(w) as u64)?;
+            // footprint claims BOTH ports unconditionally: a b-port
+            // method on a corrupt dual=0 seed would otherwise access
+            // past the declared extent (panel finding).  For a real
+            // single-port BRAM this over-claims by port_words, which
+            // can only make the boot's bounds check conservatively
+            // refuse (classic boot) — never admit an overrun.
+            let fp = usize::try_from(
+                port_words
+                    .checked_mul(2)?
+                    .checked_add(
+                        hi_addr
+                            .checked_add(1)?
+                            .checked_mul(vw(w) as u64)?,
+                    )?,
+            )
+            .ok()
+            .filter(|&f| f <= 1 << 20)?;
+            let p = Bram::new(
+                pipelined != 0,
+                dual,
+                ab,
+                w,
+                chunk,
+                nwens,
+                hi_addr.checked_add(1)?,
+                path_of(full_name),
+                None,
+            );
+            Some((Box::new(p), fp))
+        }
+        _ => None,
+    }
 }
 
 /// Arena layouts a prim can expose (see Prim::arena_kind).
@@ -264,6 +478,14 @@ pub enum ArenaKind {
     /// end-of-edge tick copies value into value_reg.  The per-port
     /// VCD bookkeeping stays boxed (trampoline write path).
     CReg5 { width: u32 },
+    /// Counter (bs_prim_mod_counter.h): value/addA/addB compile
+    /// inline; setC/setF and reset stay on the trampoline (the boxed
+    /// prim is slot-aware).  Layout: val, saved_val (w words each),
+    /// then saved_at, a (w words), a_at, b (w words), b_at, suppress
+    /// (1 word each); w = ceil(width/64).  c/f and their stamps stay
+    /// struct-only ONLY while every reader and writer of them is
+    /// boxed (setC/setF/vcd_dump); inlining either moves them here.
+    Counter { width: u32 },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -532,6 +754,12 @@ struct Counter {
     f_at: u64,
     in_reset: bool,
     suppress: bool,
+    /// arena base when attached (see ArenaKind::Counter): the semantic
+    /// core (val, saved_val, saved_at, a, a_at, b, b_at, suppress)
+    /// moves to the arena so inline addA/addB stay visible to the
+    /// boxed setC/rst_tick/sym_read paths; c/f/c_at/f_at and the VCD
+    /// state stay in fields (traced plans keep Counter fully boxed)
+    slot: Option<*mut u64>,
     vcd_base: u32,
     vcd_back: Option<CounterVcdBack>,
 }
@@ -569,14 +797,145 @@ impl Counter {
             f_at: u64::MAX,
             in_reset: false,
             suppress: false,
+            slot: None,
             vcd_base: 0,
             vcd_back: None,
         }
     }
+    fn words(&self) -> usize {
+        (self.width.max(1) as usize).div_ceil(64)
+    }
+    fn arena_get(&self, off: usize) -> Value {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let src = unsafe { std::slice::from_raw_parts(slot.add(off), w) };
+        Value::from_limbs64(self.width.max(1), src.to_vec())
+    }
+    // masks to width: compiled stores are always width-masked, and the
+    // arena words must decode as valid limbs
+    fn arena_set(&self, off: usize, v: &Value) {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(off), w) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+        let rem = self.width.max(1) % 64;
+        if rem != 0 {
+            dst[w - 1] &= (1u64 << rem) - 1;
+        }
+    }
+    fn arena_word(&self, off: usize) -> u64 {
+        unsafe { *self.slot.unwrap().add(off) }
+    }
+    fn arena_word_set(&self, off: usize, x: u64) {
+        unsafe { *self.slot.unwrap().add(off) = x }
+    }
+    fn load_val(&self) -> Value {
+        if self.slot.is_some() { self.arena_get(0) } else { self.val.clone() }
+    }
+    fn store_val(&mut self, v: Value) {
+        if self.slot.is_some() { self.arena_set(0, &v) } else { self.val = v }
+    }
+    fn load_saved(&self) -> Value {
+        if self.slot.is_some() {
+            self.arena_get(self.words())
+        } else {
+            self.saved_val.clone()
+        }
+    }
+    fn store_saved(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(self.words(), &v);
+        } else {
+            self.saved_val = v;
+        }
+    }
+    fn get_saved_at(&self) -> u64 {
+        if self.slot.is_some() {
+            self.arena_word(2 * self.words())
+        } else {
+            self.saved_at
+        }
+    }
+    fn set_saved_at(&mut self, t: u64) {
+        self.saved_at = t;
+        if self.slot.is_some() {
+            self.arena_word_set(2 * self.words(), t);
+        }
+    }
+    fn load_a(&self) -> Value {
+        if self.slot.is_some() {
+            self.arena_get(2 * self.words() + 1)
+        } else {
+            self.a.clone()
+        }
+    }
+    fn store_a(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(2 * self.words() + 1, &v);
+        } else {
+            self.a = v;
+        }
+    }
+    fn get_a_at(&self) -> u64 {
+        if self.slot.is_some() {
+            self.arena_word(3 * self.words() + 1)
+        } else {
+            self.a_at
+        }
+    }
+    fn set_a_at(&mut self, t: u64) {
+        self.a_at = t;
+        if self.slot.is_some() {
+            self.arena_word_set(3 * self.words() + 1, t);
+        }
+    }
+    fn load_b(&self) -> Value {
+        if self.slot.is_some() {
+            self.arena_get(3 * self.words() + 2)
+        } else {
+            self.b.clone()
+        }
+    }
+    fn store_b(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(3 * self.words() + 2, &v);
+        } else {
+            self.b = v;
+        }
+    }
+    fn get_b_at(&self) -> u64 {
+        if self.slot.is_some() {
+            self.arena_word(4 * self.words() + 2)
+        } else {
+            self.b_at
+        }
+    }
+    fn set_b_at(&mut self, t: u64) {
+        self.b_at = t;
+        if self.slot.is_some() {
+            self.arena_word_set(4 * self.words() + 2, t);
+        }
+    }
+    fn suppressed(&self) -> bool {
+        if self.slot.is_some() {
+            self.arena_word(4 * self.words() + 3) != 0
+        } else {
+            self.suppress
+        }
+    }
+    fn set_suppress(&mut self, on: bool) {
+        self.suppress = on;
+        if self.slot.is_some() {
+            self.arena_word_set(4 * self.words() + 3, on as u64);
+        }
+    }
     fn save(&mut self, now: u64) {
-        if self.saved_at != now {
-            self.saved_at = now;
-            self.saved_val = self.val.clone();
+        if self.get_saved_at() != now {
+            self.set_saved_at(now);
+            let v = self.load_val();
+            self.store_saved(v);
         }
     }
 }
@@ -589,8 +948,9 @@ impl Prim for Counter {
         vec![PrimSym { key: "", width: self.width, range: None }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
-        // the registered value (ticks have run at any stop boundary)
-        (key.is_empty()).then(|| self.val.clone())
+        // the registered value (ticks have run at any stop boundary);
+        // arena-authoritative when attached (the oracle compares this)
+        (key.is_empty()).then(|| self.load_val())
     }
     fn vcd_defs(
         &mut self,
@@ -732,50 +1092,53 @@ impl Prim for Counter {
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "value" | "_read" => {
-                if self.saved_at == now {
-                    self.saved_val.clone()
+                if self.get_saved_at() == now {
+                    self.load_saved()
                 } else {
-                    self.val.clone()
+                    self.load_val()
                 }
             }
             m => panic!("Counter: unknown value method {m:?}"),
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
-        if self.suppress {
+        if self.suppressed() {
             return;
         }
         let w = self.width;
         match method {
             "addA" | "incrA" => {
                 self.save(now);
-                self.a_at = now;
-                self.a = args[0].clone();
-                self.val = self.val.add(&args[0], w);
+                self.set_a_at(now);
+                self.store_a(args[0].clone());
+                let v = self.load_val().add(&args[0], w);
+                self.store_val(v);
             }
             "addB" | "incrB" => {
                 self.save(now);
-                self.b_at = now;
-                self.b = args[0].clone();
-                self.val = self.val.add(&args[0], w);
+                self.set_b_at(now);
+                self.store_b(args[0].clone());
+                let v = self.load_val().add(&args[0], w);
+                self.store_val(v);
             }
             "setC" | "update" => {
                 self.save(now);
                 self.c_at = now;
                 self.c = args[0].clone();
-                self.val = args[0].clone();
-                if self.a_at == now {
-                    self.val = self.val.add(&self.a.clone(), w);
+                let mut v = args[0].clone();
+                if self.get_a_at() == now {
+                    v = v.add(&self.load_a(), w);
                 }
-                if self.b_at == now {
-                    self.val = self.val.add(&self.b.clone(), w);
+                if self.get_b_at() == now {
+                    v = v.add(&self.load_b(), w);
                 }
+                self.store_val(v);
             }
             "setF" | "_write" => {
                 self.save(now);
                 self.f_at = now;
                 self.f = args[0].clone();
-                self.val = args[0].clone();
+                self.store_val(args[0].clone());
             }
             m => panic!("Counter: unknown action method {m:?}"),
         }
@@ -783,20 +1146,55 @@ impl Prim for Counter {
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
     fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
-            self.val = self.init.clone();
-            self.saved_at = u64::MAX;
-            self.a_at = u64::MAX;
-            self.b_at = u64::MAX;
+            let init = self.init.clone();
+            self.store_val(init);
+            self.set_saved_at(u64::MAX);
+            self.set_a_at(u64::MAX);
+            self.set_b_at(u64::MAX);
             self.c_at = u64::MAX;
             self.f_at = u64::MAX;
-            self.suppress = true;
+            self.set_suppress(true);
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
         if !asserted {
-            self.suppress = false;
+            self.set_suppress(false);
         }
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // >64-bit counters stay boxed (the compiled adds are single-
+        // word); the gate is a shape fact, so bake- and load-time
+        // planning walks agree on the layout
+        (self.width <= 64).then_some(ArenaKind::Counter { width: self.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        let w = self.words();
+        let (v, sv, a, b) =
+            (self.val.clone(), self.saved_val.clone(), self.a.clone(), self.b.clone());
+        self.arena_set(0, &v);
+        self.arena_set(w, &sv);
+        self.arena_word_set(2 * w, self.saved_at);
+        self.arena_set(2 * w + 1, &a);
+        self.arena_word_set(3 * w + 1, self.a_at);
+        self.arena_set(3 * w + 2, &b);
+        self.arena_word_set(4 * w + 2, self.b_at);
+        self.arena_word_set(4 * w + 3, self.suppress as u64);
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        // c/f/c_at/f_at stay boxed even when attached, but they are
+        // write-only outside VCD dumps (setC folds a_at/b_at from the
+        // SLOTS) — a fresh restore is exact for batch bounces
+        self.arena_kind()?;
+        Some((RC_PRIM_COUNTER, vec![self.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -1055,6 +1453,45 @@ impl RegFile {
 /// wide_data.cxx dump_val for narrow values: the out-of-bounds warning's
 /// address rendering ("0x" prefix, width/4 zero-padded digits; width 1
 /// prints True/False).
+/// Arena-attached BRAM block base pointer -> (full name, addr width):
+/// the compiled tick's collision warning (abi::BRAM_WARN) resolves the
+/// printing prim through this map.  Keyed by pointer value — the arena
+/// Vec's buffer never moves once attached (engines move whole across
+/// threads; the buffer stays put).  Entries live for the process (the
+/// CLI leaks engines at exit by design).
+static BRAM_WARN_NAMES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, (String, u32)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// RunCore sidecar: the warn-registry rows, for descriptor baking at
+/// link and load-side validation (cloned — both call sites are
+/// one-shots, not per-event paths).
+pub(crate) fn bram_warn_rows() -> std::collections::HashMap<usize, (String, u32)> {
+    BRAM_WARN_NAMES.lock().unwrap().clone()
+}
+
+/// abi::BRAM_WARN target: print the reference's dual-write collision
+/// warning for the block at `block` (quiet-engine gated, like every
+/// prim diagnostic).
+/// RunCore boot: registry insert without a Bram struct (names come
+/// from the sidecar's warn rows).
+pub(crate) fn bram_warn_register(block: usize, name: String, bits: u32) {
+    BRAM_WARN_NAMES.lock().unwrap().insert(block, (name, bits));
+}
+
+pub(crate) fn bram_warn_hook(block: usize, addr: u64) {
+    if quiet_engine() {
+        note_window_effect();
+        return;
+    }
+    if let Some((name, bits)) = BRAM_WARN_NAMES.lock().unwrap().get(&block) {
+        println!(
+            "Warning: BRAM '{name}' -- Write collision at address {}",
+            addr_dump_val(addr, *bits)
+        );
+    }
+}
+
 fn addr_dump_val(a: u64, width: u32) -> String {
     match width {
         0 => "()".to_string(),
@@ -1456,6 +1893,20 @@ impl Prim for RegFile {
             let v = self.data.get(&a).cloned();
             self.arena_write(self.data_off(a), v.as_ref().unwrap_or(&undet));
         }
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((
+            RC_PRIM_REGFILE,
+            vec![self.width as u64, self.addr_bits as u64, self.lo, self.hi],
+            vec![self.mem_name.clone(), self.full_name.clone()],
+        ))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -1875,6 +2326,16 @@ impl Prim for Reg {
         }
         self.slot = Some(slot);
     }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_REG, vec![self.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
 }
 
 // ===============
@@ -2151,6 +2612,16 @@ impl Prim for ConfigReg {
         self.slot = Some(slot);
         self.mirror();
     }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_CONFIGREG, vec![self.value.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
 }
 
 // ===============
@@ -2339,6 +2810,16 @@ impl Prim for RWire {
             *d = self.value.limbs64().get(i).copied().unwrap_or(0);
         }
         self.slot = Some(slot);
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_WIRE, vec![self.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -2640,6 +3121,16 @@ impl Prim for CReg {
         let (v, vr) = (self.value.clone(), self.value_reg.clone());
         self.arena_set(false, &v);
         self.arena_set(true, &vr);
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_CREG5, vec![self.value.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -3232,6 +3723,26 @@ impl Prim for Fifo {
         for i in 0..self.size {
             self.mirror_data(i);
         }
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((
+            RC_PRIM_FIFO,
+            vec![
+                self.width as u64,
+                self.size as u64,
+                (self.ftype == FifoType::Loopy) as u64,
+                self.guard as u64,
+                self.zero_width as u64,
+            ],
+            vec![self.full_name.clone()],
+        ))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -5287,6 +5798,42 @@ impl Bram {
         if me.upd_addr > self.hi_addr {
             me.out = Value::undet(self.width);
         } else if is_write {
+            // dual-write collision warning (bs_prim_mod_bram.h:454-476):
+            // the reference warns when an OVERLAPPING lane of a same-
+            // instant same-address write on the other port carries an
+            // EQUAL chunk (chunks_eq is literal equality — an apparent
+            // !=-intent quirk upstream, replicated for byte parity);
+            // one line per port tick, printed by BOTH ports' ticks
+            if self.dual
+                && other.upd_at == now
+                && other.upd_addr == me.upd_addr
+                && !other.upd_wens.is_zero()
+            {
+                let mut collide = false;
+                for n in 0..self.num_wens {
+                    let on = |w: &Value| {
+                        w.limbs64()
+                            .get((n / 64) as usize)
+                            .is_some_and(|l| (l >> (n % 64)) & 1 != 0)
+                    };
+                    if on(&me.upd_wens) && on(&other.upd_wens) {
+                        let lo = (n * self.chunk_size) as u64;
+                        let hi = lo + self.chunk_size as u64 - 1;
+                        if me.upd_val.extract(hi, lo, self.chunk_size)
+                            == other.upd_val.extract(hi, lo, self.chunk_size)
+                        {
+                            collide = true;
+                        }
+                    }
+                }
+                if collide {
+                    qprintln!(
+                        "Warning: BRAM '{}' -- Write collision at address {}",
+                        self.full_name,
+                        self.addr_hex(me.upd_addr)
+                    );
+                }
+            }
             let cur = self.mem_get(me.upd_addr);
             // previous value: if the other port wrote the same address at
             // this instant, use its pre-write value
@@ -5296,9 +5843,11 @@ impl Bram {
             } else {
                 cur.clone()
             };
-            let merged = {
-                let mut r = cur;
-                for n in 0..self.num_wens {
+            let (num_wens, chunk_size, width) =
+                (self.num_wens, self.chunk_size, self.width);
+            let merge_lanes = |base: Value, me: &BramPort| {
+                let mut r = base;
+                for n in 0..num_wens {
                     // lane test on the VALUE: enables can exceed 64 bits
                     let lane_on = me
                         .upd_wens
@@ -5306,10 +5855,9 @@ impl Bram {
                         .get((n / 64) as usize)
                         .is_some_and(|l| (l >> (n % 64)) & 1 != 0);
                     if lane_on {
-                        let lo = (n * self.chunk_size) as u64;
-                        let hi = lo + self.chunk_size as u64 - 1;
-                        let chunk = me.upd_val.extract(hi, lo, self.chunk_size);
-                        let width = self.width;
+                        let lo = (n * chunk_size) as u64;
+                        let hi = lo + chunk_size as u64 - 1;
+                        let chunk = me.upd_val.extract(hi, lo, chunk_size);
                         let mut nv = chunk;
                         if lo > 0 {
                             nv = nv.concat(&r.extract(lo - 1, 0, lo as u32), (hi + 1) as u32);
@@ -5325,8 +5873,14 @@ impl Bram {
                 }
                 r
             };
-            self.mem_set(me.upd_addr, merged.clone());
-            me.out = merged;
+            // memory merges into the CURRENT word (post any same-
+            // instant other-port write); out takes its DISABLED lanes
+            // from the just-latched prev — on a collided write that is
+            // the begin-of-instant value, not the merged memory word
+            // (bs_prim_mod_bram.h:487-501).  Without a collision
+            // prev == cur, so the two merges agree.
+            self.mem_set(me.upd_addr, merge_lanes(cur, &me));
+            me.out = merge_lanes(me.upd_prev.clone(), &me);
         } else {
             // read: if the other port wrote the same address at this
             // instant, read the pre-write value
@@ -5551,6 +6105,14 @@ impl Prim for Bram {
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         self.slot = Some(slot);
+        // collision warnings from the compiled tick resolve name and
+        // addr width through the block-pointer map; the hook installs
+        // once per process
+        BRAM_WARN_NAMES
+            .lock()
+            .unwrap()
+            .insert(slot as usize, (self.full_name.clone(), self.addr_bits));
+        let _ = trs_codegen::abi::BRAM_WARN.set(bram_warn_hook);
         let a = std::mem::replace(&mut self.a, BramPort::new(self.width));
         let b = std::mem::replace(&mut self.b, BramPort::new(self.width));
         self.store_port(false, a);
@@ -5563,6 +6125,35 @@ impl Prim for Bram {
             self.mem_set(addr, v.unwrap_or_else(|| undet.clone()));
         }
         self.data = Default::default();
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((
+            RC_PRIM_BRAM,
+            vec![
+                self.pipelined as u64,
+                self.dual as u64,
+                self.addr_bits as u64,
+                self.width as u64,
+                self.hi_addr,
+                self.chunk_size as u64,
+                self.num_wens as u64,
+            ],
+            vec![self.full_name.clone()],
+        ))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        // same registration half as arena_attach (idempotent: pointer
+        // key + identical name), no state writes — the slots are live
+        BRAM_WARN_NAMES
+            .lock()
+            .unwrap()
+            .insert(slot as usize, (self.full_name.clone(), self.addr_bits));
+        let _ = trs_codegen::abi::BRAM_WARN.set(bram_warn_hook);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 

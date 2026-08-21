@@ -47,19 +47,26 @@ endif
 
 .PHONY: build
 build:
-	$(CARGO) build --release --locked -p trs $(TRS_FLAGS)
-	# slim artifact runtime (no LLVM): what `trs link --exe` binaries
-	# load — the full capi lib carries statically-linked LLVM whose
-	# constructors cost ~5ms at every exec.  Built FIRST and stashed
-	# as libtrs_rt.a before the full capi build overwrites the .a.
+	# slim artifact runtime + runner (no LLVM): what `trs link --exe`
+	# binaries load and what the fast wrapper execs — the full builds
+	# carry statically-linked LLVM whose constructors cost ~5-6ms at
+	# every exec.  Both slim builds share one feature graph and run
+	# FIRST, stashed as libtrs_rt.a / trs-run before the full builds
+	# overwrite the originals.
+	$(CARGO) build --release --locked -p trs --no-default-features --features aot
 	$(CARGO) build --release --locked -p trs-capi --no-default-features --features aot
+	cp target/release/trs target/release/trs-run
 	cp target/release/libtrs_capi.a target/release/libtrs_rt.a
+	$(CARGO) build --release --locked -p trs $(TRS_FLAGS)
 	$(CARGO) build --release --locked -p trs-capi $(CAPI_FLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 target/release/trs $(BINDIR)/trs
+	# the slim runner fast wrappers exec (falls back to trs when
+	# absent — wrappers bake whichever exists at link time)
+	$(INSTALL) -m 755 target/release/trs-run $(BINDIR)/trs-run
 	$(INSTALL) -m 644 target/release/libtrs_capi.a $(BINDIR)/libtrs_capi.a
 	$(INSTALL) -m 644 target/release/libtrs_rt.a $(BINDIR)/libtrs_rt.a
 	# debuginfo in the staticlib is dead weight at .so link time

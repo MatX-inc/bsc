@@ -227,7 +227,11 @@ def bench_one(d, legs, runs, work):
                 continue
             L["frontend_s"] = round(t, 2)
             if leg == "bluesim":
-                r, t = sh([BSC, "-sim", "-e", top, "-o", "simb"] + common + cfiles, wk)
+                # dump-free build: bsc's default carries the VCD writer
+                # + per-signal dump code; Verilator's leg already builds
+                # without --trace, so all three legs pay zero dump
+                # machinery (per-event-tax doctrine: cost at link)
+                r, t = sh([BSC, "-sim", "-dump-formats", "none", "-e", top, "-o", "simb"] + common + cfiles, wk)
                 if r.returncode != 0:
                     L["error"] = "bluesim link: " + _err(r)
                     res["legs"][leg] = L
@@ -242,7 +246,7 @@ def bench_one(d, legs, runs, work):
                     L["error"] = "no .bir: " + _err(r)
                     res["legs"][leg] = L
                     continue
-                r2, t2 = sh([TRS, "link", bir, "-o", "art"], wk)
+                r2, t2 = sh([TRS, "link", bir, "-o", "art", "--dump-formats", "none"], wk)
                 if r2.returncode != 0:
                     L["error"] = "trs link: " + _err(r2)
                     res["legs"][leg] = L

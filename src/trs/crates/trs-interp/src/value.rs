@@ -5,7 +5,79 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Value {
     pub width: u32,
-    limbs: Vec<u64>,
+    limbs: Limbs,
+}
+
+/// Limb storage: values of one limb (width <= 64, plus the marker
+/// widths — the overwhelming majority of every workload) live INLINE,
+/// no heap.  Canonical invariant: len == 1 <=> S, so the derived
+/// PartialEq is structural-and-correct.  Deref keeps every slice-shaped
+/// use site (`[i]`, `.len()`, `.get()`, `.iter()`) unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Limbs {
+    S([u64; 1]),
+    W(Vec<u64>),
+}
+
+impl Limbs {
+    #[inline]
+    fn new(mut v: Vec<u64>) -> Limbs {
+        if v.len() == 1 {
+            Limbs::S([v[0]])
+        } else {
+            if v.is_empty() {
+                v.push(0);
+            }
+            Limbs::W(v)
+        }
+    }
+    #[inline]
+    fn filled(n: usize, x: u64) -> Limbs {
+        if n <= 1 {
+            Limbs::S([x])
+        } else {
+            Limbs::W(vec![x; n])
+        }
+    }
+    /// resize to exactly n limbs (zero-fill), keeping the canonical
+    /// small form for n == 1
+    fn resize_to(&mut self, n: usize) {
+        match self {
+            Limbs::S(a) if n <= 1 => {
+                let _ = a;
+            }
+            Limbs::S(a) => {
+                let mut v = vec![0u64; n];
+                v[0] = a[0];
+                *self = Limbs::W(v);
+            }
+            Limbs::W(v) if n <= 1 => {
+                *self = Limbs::S([v.first().copied().unwrap_or(0)]);
+            }
+            Limbs::W(v) => v.resize(n, 0),
+        }
+    }
+}
+
+impl std::ops::Deref for Limbs {
+    type Target = [u64];
+    #[inline]
+    fn deref(&self) -> &[u64] {
+        match self {
+            Limbs::S(a) => a,
+            Limbs::W(v) => v,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Limbs {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [u64] {
+        match self {
+            Limbs::S(a) => a,
+            Limbs::W(v) => v,
+        }
+    }
 }
 
 /// Marker width for string-valued `Value`s (see `Value::str_ref`).
@@ -33,12 +105,12 @@ fn nlimbs(width: u32) -> usize {
 
 impl Value {
     pub fn zero(width: u32) -> Value {
-        Value { width, limbs: vec![0; nlimbs(width).max(1)] }
+        Value { width, limbs: Limbs::filled(nlimbs(width).max(1), 0) }
     }
 
     /// The "undetermined" pattern for -unspecified-to A (0xAAAA...).
     pub fn undet(width: u32) -> Value {
-        let mut v = Value { width, limbs: vec![0xAAAA_AAAA_AAAA_AAAA; nlimbs(width).max(1)] };
+        let mut v = Value { width, limbs: Limbs::filled(nlimbs(width).max(1), 0xAAAA_AAAA_AAAA_AAAA) };
         v.mask();
         v
     }
@@ -57,9 +129,10 @@ impl Value {
 
     /// Build from little-endian 64-bit limbs, padding/truncating to the
     /// width's limb count and masking (JIT arena interchange).
-    pub fn from_limbs64(width: u32, mut limbs: Vec<u64>) -> Value {
-        limbs.resize(nlimbs(width).max(1), 0);
-        let mut v = Value { width, limbs };
+    pub fn from_limbs64(width: u32, limbs: Vec<u64>) -> Value {
+        let mut l = Limbs::new(limbs);
+        l.resize_to(nlimbs(width).max(1));
+        let mut v = Value { width, limbs: l };
         v.mask();
         v
     }
@@ -78,17 +151,14 @@ impl Value {
 
     fn mask(&mut self) {
         let n = nlimbs(self.width).max(1);
-        self.limbs.truncate(n);
-        while self.limbs.len() < n {
-            self.limbs.push(0);
-        }
+        self.limbs.resize_to(n);
         let rem = self.width % 64;
         if rem != 0 {
             let last = self.limbs.len() - 1;
             self.limbs[last] &= (1u64 << rem) - 1;
         }
         if self.width == 0 {
-            self.limbs = vec![0];
+            self.limbs = Limbs::S([0]);
         }
     }
 
@@ -110,7 +180,7 @@ impl Value {
     }
 
     fn to_bigint(&self) -> Vec<u64> {
-        self.limbs.clone()
+        self.limbs.to_vec()
     }
 
     /// Sign bit under the value's width.
@@ -389,7 +459,7 @@ impl Value {
         }
         let mut r = self.clone();
         r.width = w;
-        r.limbs.resize(nlimbs(w).max(1), 0);
+        r.limbs.resize_to(nlimbs(w).max(1));
         r.mask();
         r
     }
@@ -398,7 +468,7 @@ impl Value {
     /// instead of bits.  Only valid as a task argument; the marker width
     /// keeps it inert through muxes and def stores.
     pub fn str_ref(id: u32) -> Value {
-        Value { width: STR_MARKER, limbs: vec![id as u64] }
+        Value { width: STR_MARKER, limbs: Limbs::S([id as u64]) }
     }
 
     pub fn as_str_id(&self) -> Option<u32> {
@@ -438,7 +508,7 @@ impl Value {
     /// it stays inert through muxes and def stores (only ever consumed as
     /// a task argument or module parameter).
     pub fn real(v: f64) -> Value {
-        Value { width: REAL_MARKER, limbs: vec![v.to_bits()] }
+        Value { width: REAL_MARKER, limbs: Limbs::S([v.to_bits()]) }
     }
 
     pub fn as_real(&self) -> Option<f64> {
