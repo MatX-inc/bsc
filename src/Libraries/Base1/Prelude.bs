@@ -221,6 +221,8 @@ package Prelude(
         Array(..),
         primArrayNew,
         primArrayNewU,
+        primArrayGenWith,
+        primArrayFromList,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3847,6 +3849,15 @@ primitive primArrayUpdate :: Array a -> Integer -> a -> Array a
 primitive primArrayDynUpdate :: Array a -> Bit n -> a -> Array a
 primitive primArrayLength :: Array a -> Integer
 
+-- Array constructors evaluated natively by static elaboration.
+-- Building an array with a loop of primArrayUpdate leaves a chain of
+-- pending updates whose forcing recurses once per element; these
+-- primitives build all the element cells iteratively instead, so the
+-- evaluator's stack use does not grow with the array length.
+-- Elements are not forced (they stay as lazy applications).
+primitive primArrayGenWith :: Integer -> (Integer -> a) -> Array a
+primitive primArrayFromList :: List a -> Array a
+
 primitive primMarkArrayInitialized :: Array a -> Array a
 
 arrayLength :: Array a -> Integer
@@ -3863,12 +3874,7 @@ primArrayNewU k = primArrayNew k _
 instance Functor Array
   where
     fmap :: (a -> b) -> Array a -> Array b
-    fmap f v =
-      let buildResult :: Integer -> Array b -> Array b
-          buildResult i arr =
-            if i < 0 then arr
-            else buildResult (i - 1) (primArrayUpdate arr i (f (primArraySelect v i)))
-      in buildResult (primArrayLength v - 1) (primArrayNewU (primArrayLength v))
+    fmap f v = primArrayGenWith (primArrayLength v) (\ i -> f (primArraySelect v i))
 
 instance PrimSelectable (Array a) a
   where

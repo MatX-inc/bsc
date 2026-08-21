@@ -4595,6 +4595,14 @@ conAp' i (ICPrim _ PrimArrayNew) f as = do
   when doDebug $ traceM ("conAp': Lazy PrimArrayNew")
   doArrayNew f as
 
+conAp' i (ICPrim _ PrimArrayGenWith) f as = do
+  when doDebug $ traceM ("conAp': Lazy PrimArrayGenWith")
+  doArrayGenWith f as
+
+conAp' i (ICPrim _ PrimArrayFromList) f as = do
+  when doDebug $ traceM ("conAp': Lazy PrimArrayFromList")
+  doArrayFromList f as
+
 conAp' i (ICPrim _ PrimArrayLength) f [T t, E e] = do
   when doDebug $ traceM ("conAp': Lazy PrimArrayLength!")
   doArrayLength f [T t, E e]
@@ -4926,6 +4934,78 @@ doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, iConType = conType })) [T 
           nfError "primArrayNew" $ mkAp f [T t, E e1', E val']
 
 doArrayNew f as = internalError ("IExpand.doArrayNew : " ++ ppReadable f ++ ppReadable as)
+
+-- Build an array whose element i is the (unevaluated) application of a
+-- generator function to i.  The cells are allocated by an iterative
+-- loop, so unlike a source-level loop of primArrayUpdate -- whose
+-- pending updates form a chain that the evaluator forces by recursion
+-- -- the native stack use is constant in the array length.
+doArrayGenWith :: HExpr -> [Arg] -> G PExpr
+doArrayGenWith f@(ICon cn (ICPrim {primOp = PrimArrayGenWith, iConType = conType}))
+               [T t, E e_n, E e_fn] = do
+     -- save the generator to the heap so the element cells share it
+     let fn_t = itInteger `itFun` t
+     fn' <- toHeap "array-genwith-fn" fn_t e_fn Nothing
+     norm <- getTypeNormalizer
+     let resultType' = norm resultType
+     evalStaticOp e_n resultType' (handleGenWith fn' resultType')
+  where (_, resultType) = itGetArrows (itInst conType [t]) -- grab the result type
+        handleGenWith fn' resultType' (ICon ci (ICInt { iVal = ln })) = do
+          let n = ilValue ln
+              pos = getIdPosition cn
+              mkElem k = IAps fn' [] [iMkLitAt pos itInteger k]
+              build k cells | k < 0 = return cells
+              build k cells = do c <- mkArrayCell (mkElem k)
+                                 build (k - 1) (c : cells)
+          cells <- build (n - 1) []
+          let arr = Array.array (0, n - 1) (zip [0..] cells)
+          return $ pExpr $ ICon ci (ICLazyArray resultType' arr Nothing)
+        handleGenWith fn' _ e_n' =
+          nfError "primArrayGenWith" $ mkAp f [T t, E e_n', E fn']
+
+doArrayGenWith f as = internalError ("IExpand.doArrayGenWith : " ++ ppReadable f ++ ppReadable as)
+
+-- Build an array from a List value.  The list spine is forced by an
+-- iterative loop (the elements are not forced), again so that the
+-- native stack use is constant in the list length.
+doArrayFromList :: HExpr -> [Arg] -> G PExpr
+doArrayFromList f@(ICon cn (ICPrim {primOp = PrimArrayFromList, iConType = conType}))
+                [T t, E e_l] = do
+     norm <- getTypeNormalizer
+     let resultType' = norm resultType
+         walk p_acc cells e = do
+           (_, P p e') <- evalUH e
+           let p_acc' = pConj p_acc p
+           case e' of
+             -- Nil, possibly applied to its (unit) field payload,
+             -- or in tag form (cf. evalMaybe)
+             ICon _ (ICCon { conTagInfo = cti }) | conNo cti == 0 ->
+                 finish p_acc' cells
+             IAps (ICon _ (ICCon { conTagInfo = cti })) _ _ | conNo cti == 0 ->
+                 finish p_acc' cells
+             IAps (ICon _ (ICPrim _ PrimChr)) _ [e_n] -> do
+                 n <- evalInteger e_n
+                 case n of
+                   0 -> finish p_acc' cells
+                   _ -> internalError ("doArrayFromList: PrimChr: " ++ ppReadable n)
+             -- Cons, applied to the (head, tail) field tuple
+             IAps (ICon _ (ICCon { conTagInfo = cti })) _ [e_data]
+               | conNo cti == 1 -> do
+                 (_, P p_d e_data') <- evalUH e_data
+                 case e_data' of
+                   IAps (ICon _ (ICTuple {})) _ [e_h, e_t] -> do
+                       c <- mkArrayCell e_h
+                       walk (pConj p_acc' p_d) (c : cells) e_t
+                   _ -> nfError "primArrayFromList" e_data'
+             _ -> nfError "primArrayFromList" (mkAp f [T t, E e'])
+         finish p_acc cells = do
+           let n = toInteger (length cells)
+               arr = Array.array (0, n - 1) (zip [0..] (reverse cells))
+           return $ P p_acc $ ICon cn (ICLazyArray resultType' arr Nothing)
+     walk pTrue [] e_l
+  where (_, resultType) = itGetArrows (itInst conType [t]) -- grab the result type
+
+doArrayFromList f as = internalError ("IExpand.doArrayFromList : " ++ ppReadable f ++ ppReadable as)
 
 doArrayLength :: HExpr -> [Arg] -> G PExpr
 doArrayLength f as@[T elem_t, E arr_e] =

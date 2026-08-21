@@ -331,6 +331,13 @@ data PrimOp =
         -- (GenBin.header).
         | PrimPack
         | PrimUnpack
+
+        -- Array constructors evaluated natively (and iteratively) by
+        -- IExpand, so that building a large array does not elaborate
+        -- as a chain of PrimArrayUpdate applications whose forcing
+        -- recurses once per element.  They never survive past IExpand.
+        | PrimArrayGenWith
+        | PrimArrayFromList
         deriving (Eq, Ord, Show, Enum, Bounded, Generic.Data, Generic.Typeable)
 
 -- Just some size, have to be coordinated with Prelude.bs
@@ -578,6 +585,8 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
 
         tp "primPack" = PrimPack
         tp "primUnpack" = PrimUnpack
+        tp "primArrayGenWith" = PrimArrayGenWith
+        tp "primArrayFromList" = PrimArrayFromList
         tp s = internalError ("unknown primitive: " ++ s ++ " " ++ prPosition (getIdPosition i))
 
 instance PPrint PrimOp where
@@ -888,6 +897,8 @@ instance NFData PrimOp where
     rnf PrimEQ3 = ()
     rnf PrimPack = ()
     rnf PrimUnpack = ()
+    rnf PrimArrayGenWith = ()
+    rnf PrimArrayFromList = ()
 
 -----
 

@@ -8,15 +8,14 @@ import List::*;
 
 
 // Map starting at the Nth element
+// (constructed with primArrayGenWith rather than a loop of updates,
+// so that elaboration does not build a chain of pending updates whose
+// forcing recurses once per element; likewise for the other
+// constructors below)
 function Array#(res_T) map(function res_T f(any_T x), Array#(any_T) v);
 
-  Integer ln = arrayLength(v);
-  Array#(res_T) resv = primArrayNewU(ln);
-
-  for(Integer i = (ln - 1); i >= 0; i = i - 1)
-    resv[i] = f(v[i]);
-
-  return resv;
+  function res_T gen(Integer i) = f(v[i]);
+  return primArrayGenWith(arrayLength(v), gen);
 
 endfunction
 
@@ -92,12 +91,9 @@ function any_T fold(function any_T f(any_T x, any_T y), Array#(any_T) v);
 
       Integer nln = div(ln+1,2);
 
-      Array#(any_T) temp = primArrayNewU(nln);
-
-      for(Integer i = 0; i < div(ln,2); i = i + 1)
-        temp[i] = f(v[2*i], v[2*i+1]);
-      if (nln != div(ln,2))
-        temp[nln-1] = v[ln-1];
+      function any_T gen(Integer i) =
+         ((i == nln - 1) && (nln != div(ln,2))) ? v[ln-1] : f(v[2*i], v[2*i+1]);
+      Array#(any_T) temp = primArrayGenWith(nln, gen);
       return fold(f, temp);
     end
 
@@ -181,9 +177,8 @@ function Bit#(vsz) packArray(Array#(any_T) v)
    end
    else if (inferLength > 0)
    begin
-     Array#(Bit#(sz)) packedArray = primArrayNewU(inferLength);
-     for(Integer i = inferLength - 1; i >= 0; i = i - 1)
-       packedArray[i] = pack(v[i]);
+     function Bit#(sz) genPacked(Integer i) = pack(v[i]);
+     Array#(Bit#(sz)) packedArray = primArrayGenWith(inferLength, genPacked);
 
      return flatN(0, packedArray);
    end
@@ -202,14 +197,8 @@ function Array#(any_T) unpackArray(Bit#(n) bts, Integer ln)
 
  Integer k = valueOf(sz);
 
- Array#(any_T) res = primArrayNewU(ln);
-
- for (Integer i = (ln - 1); i >= 0; i = i - 1) begin
-   Bit#(sz) v = bts[((i*k)+k-1):(i*k)];
-   res[i] = unpack(v);
- end
-
- return(res);
+ function any_T gen(Integer i) = unpack(bts[((i*k)+k-1):(i*k)]);
+ return primArrayGenWith(ln, gen);
 
 endfunction
 
@@ -219,12 +208,8 @@ function Array#(any_T) takeAt(Array#(any_T) v, Integer hi, Integer lo);
   Integer ln = hi - lo + 1;
   if (ln > 0)
   begin
-    Array#(any_T) resv = primArrayNewU(ln);
-
-    for (Integer x = 0; x < ln; x = x + 1)
-      resv[x] = v[x + lo];
-
-    return resv;
+    function any_T gen(Integer x) = v[x + lo];
+    return primArrayGenWith(ln, gen);
   end
   else return primArrayNewU(0);
 
@@ -233,12 +218,7 @@ endfunction
 
 function Array#(any_T) genWith(Integer n, function any_T initfun(Integer k));
 
-  Array#(any_T) arr = primArrayNewU(n);
-
-  for (Integer x = (n - 1); x >= 0; x = x - 1)
-    arr[x] = initfun(x);
-
-  return arr;
+  return primArrayGenWith(n, initfun);
 
 endfunction
 
@@ -260,16 +240,7 @@ endfunction
 //implicitly reverse list
 function Array#(any_T) listToArray(List#(any_T) l);
 
-   Integer ln = length(l);
-   Array#(any_T) res = primArrayNewU(ln);
-
-   for (Integer x = 0; x < ln; x = x + 1)
-   begin
-     res[x] = head(l);
-     l = tail(l);
-   end
-
-   return res;
+   return primArrayFromList(l);
 
 endfunction
 
@@ -278,15 +249,9 @@ function Array#(any_T) append(Array#(any_T) v1, Array#(any_T) v2);
 
    Integer ln1 = arrayLength(v1);
    Integer ln2 = arrayLength(v2);
-   Array#(any_T) res = primArrayNewU(ln1 + ln2);
 
-   for (Integer x = (ln1 - 1); x >= 0; x = x - 1)
-     res[x + ln2] = v1[x];
-
-   for (Integer x = (ln2 - 1); x >= 0; x = x - 1)
-     res[x] = v2[x];
-
-   return res;
+   function any_T gen(Integer x) = (x < ln2) ? v2[x] : v1[x - ln2];
+   return primArrayGenWith(ln1 + ln2, gen);
 
 endfunction
 
@@ -295,14 +260,9 @@ function Array#(any_T) concat(Array#(Array#(any_T)) v);
 
    Integer ln1 = arrayLength(v);
    Integer ln2 = (ln1 == 0) ? 0 : arrayLength(v[0]);
-   Array#(any_T) resv = primArrayNewU(ln1 * ln2);
 
-
-   for(Integer i = (ln1 - 1); i >= 0; i = i - 1)
-     for(Integer j = (ln2 - 1); j >= 0; j = j - 1)
-       resv[(i*ln2) + j] = v[i][j];
-
-   return resv;
+   function any_T gen(Integer k) = v[div(k, ln2)][mod(k, ln2)];
+   return primArrayGenWith(ln1 * ln2, gen);
 
 endfunction
 
@@ -349,39 +309,24 @@ endfunction
 // zip function
 function Array#(Tuple2#(fst_T, snd_T)) zip(Array#(fst_T) v1, Array#(snd_T) v2);
 
-  Integer ln = arrayLength(v1);
-  Array#(Tuple2#(fst_T, snd_T)) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = tuple2(v1[i], v2[i]);
-
-  return resv;
+  function Tuple2#(fst_T, snd_T) gen(Integer i) = tuple2(v1[i], v2[i]);
+  return primArrayGenWith(arrayLength(v1), gen);
 
 endfunction
 
 // zip 3
 function Array#(Tuple3#(fst_T, snd_T, thd_T)) zip3(Array#(fst_T) v1, Array#(snd_T) v2, Array#(thd_T) v3);
 
-  Integer ln = arrayLength(v1);
-  Array#(Tuple3#(fst_T, snd_T, thd_T)) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = tuple3(v1[i], v2[i], v3[i]);
-
-  return resv;
+  function Tuple3#(fst_T, snd_T, thd_T) gen(Integer i) = tuple3(v1[i], v2[i], v3[i]);
+  return primArrayGenWith(arrayLength(v1), gen);
 
 endfunction
 
 // zip 4
 function Array#(Tuple4#(fst_T, snd_T, thd_T, fth_T)) zip4(Array#(fst_T) v1, Array#(snd_T) v2, Array#(thd_T) v3, Array#(fth_T) v4);
 
-  Integer ln = arrayLength(v1);
-  Array#(Tuple4#(fst_T, snd_T, thd_T, fth_T)) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = tuple4(v1[i], v2[i], v3[i], v4[i]);
-
-  return resv;
+  function Tuple4#(fst_T, snd_T, thd_T, fth_T) gen(Integer i) = tuple4(v1[i], v2[i], v3[i], v4[i]);
+  return primArrayGenWith(arrayLength(v1), gen);
 
 endfunction
 
@@ -389,42 +334,27 @@ endfunction
 function Tuple2#(Array#(fst_T), Array#(snd_T)) unzip(Array#(Tuple2#(fst_T, snd_T)) v);
 
   Integer ln = arrayLength(v);
-  Array#(fst_T) res1 = primArrayNewU(ln);
-  Array#(snd_T) res2 = primArrayNewU(ln);
 
-  for(Integer i = 0; i < ln; i = i + 1)
-  begin
-    res1[i] = v[i].fst();
-    res2[i] = v[i].snd();
-  end
+  function fst_T genFst(Integer i) = v[i].fst();
+  function snd_T genSnd(Integer i) = v[i].snd();
 
-  return tuple2(res1, res2);
+  return tuple2(primArrayGenWith(ln, genFst), primArrayGenWith(ln, genSnd));
 
 endfunction
 
 // zip with
 function Array#(res_T) zipWith(function res_T f(fst_T f, snd_T s), Array#(fst_T) v1, Array#(snd_T) v2);
 
-  Integer ln = arrayLength(v1);
-  Array#(res_T) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = f(v1[i], v2[i]);
-
-  return resv;
+  function res_T gen(Integer i) = f(v1[i], v2[i]);
+  return primArrayGenWith(arrayLength(v1), gen);
 
 endfunction
 
 // zip with 3
 function Array#(res_T) zipWith3(function res_T f(fst_T f, snd_T s, thd_T t), Array#(fst_T) v1, Array#(snd_T) v2, Array#(thd_T) v3);
 
-  Integer ln = arrayLength(v1);
-  Array#(res_T) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = f(v1[i], v2[i], v3[i]);
-
-  return resv;
+  function res_T gen(Integer i) = f(v1[i], v2[i], v3[i]);
+  return primArrayGenWith(arrayLength(v1), gen);
 
 endfunction
 
@@ -434,12 +364,8 @@ function Array#(any_T) reverse(Array#(any_T) v);
   if (ln <= 1) return v;
   else
   begin
-    Array#(any_T) resv = primArrayNewU(ln);
-
-    for(Integer i = 0; i < ln; i = i + 1)
-      resv[ln - i - 1] = v[i];
-
-    return resv;
+    function any_T gen(Integer i) = v[ln - i - 1];
+    return primArrayGenWith(ln, gen);
   end
 
 endfunction
