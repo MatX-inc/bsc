@@ -170,8 +170,21 @@ mkSingleTree node ((name,ty,Just i,ign,ign_name):rest) = mkSingleTree node' rest
 mergeTrees :: InstTree -> InstTree -> InstTree
 mergeTrees t1 t2 = M.unionWith mergeNodes t1 t2
 
+-- Merge pairwise (a balanced reduction) rather than with a linear
+-- fold: with a fold, every per-instance singleton tree stacks one more
+-- pending mergeNodes thunk on the shared root nodes, and forcing that
+-- chain later recurses once per instance -- linear stack in the number
+-- of instances (large flat designs overflowed the RTS stack cap here).
+-- Pairwise merging keeps the pending-merge nesting logarithmic.
+-- mergeNodes keeps the left argument's fields, and both reduction
+-- orders keep the leftmost (earliest) tree's node on top, so the
+-- result is unchanged.
 mergeTreeList :: [InstTree] -> InstTree
-mergeTreeList = foldr mergeTrees M.empty
+mergeTreeList [] = M.empty
+mergeTreeList [t] = t
+mergeTreeList ts = mergeTreeList (pairwise ts)
+  where pairwise (t1:t2:rest) = mergeTrees t1 t2 : pairwise rest
+        pairwise rest = rest
 
 -- merge nodes in parallel InstTrees (used to turn single tree in shared tree)
 mergeNodes :: InstNode -> InstNode -> InstNode
@@ -244,10 +257,17 @@ mkInstTree' imod = optTrace (mergeTreeList singleTrees)
         sv_nodes = map StateVar sv_ids
         rule_nodes = map Rule rule_ids
         -- [InstLoc] for each StateVar and Rule IModule
-        (sv_locs, rule_locs) = (evalState $ do
-              sv_conv <- mapM convIStateLoc sv_isls
-              rule_conv <- mapM convIStateLoc rule_isls
-              return (sv_conv, rule_conv)) M.empty
+        -- (converted one IStateLoc at a time with the result forced:
+        -- a single lazy-State mapM over all the instances accumulates
+        -- one thunk per instance, whose eventual forcing recurses once
+        -- per instance -- linear stack in the number of instances)
+        convAll cache0 isls = go cache0 [] isls
+          where go cache acc [] = (cache, reverse acc)
+                go cache acc (isl:rest) =
+                    let (locs, cache') = runState (convIStateLoc isl) cache
+                    in  locs `deepseq` go cache' (locs : acc) rest
+        (ty_cache, sv_locs) = convAll M.empty sv_isls
+        (_, rule_locs) = convAll ty_cache rule_isls
         svTrees = zipWith mkSingleTree sv_nodes sv_locs
         ruleTrees = zipWith mkSingleTree rule_nodes rule_locs
         singleTrees = svTrees ++ ruleTrees
