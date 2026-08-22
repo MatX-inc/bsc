@@ -33,6 +33,7 @@ import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
 import System.FilePath(isRelative)
 import qualified Data.Array as Array
 import qualified Data.IntMap as IM
+import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Debug.Trace(traceM)
@@ -287,11 +288,17 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a list of just the pointers
       ptrs0 = IM.keys iheap
       -- CSE the pointers and return a map from old pointers to the remaining
-      -- canonical ones.  The pointers are returned in tsorted order.
-      -- The tsort does a non-circularity check, which is a property we
-      -- expect in IModule, but the function "pDef" below also relies on it
-      -- (since "pDef" and "m" are recursively built)
-      (tsorted_cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
+      -- canonical ones.  NOTE: despite the internal tsort, the pointers are
+      -- NOT returned in topological order -- they come back in the CSE
+      -- map's key order (canonicalized-expression order), so the defs list
+      -- built from them below is not dependencies-first and downstream
+      -- code must not assume it is.  The tsort orders only the internal
+      -- CSE fold (dependencies first, so duplicate detection compares
+      -- canonical pointers) and performs a non-circularity check, which is
+      -- a property we expect in IModule and which the function "pDef"
+      -- below also relies on (since "pDef" and "m" are recursively built,
+      -- the lazy knot terminates only on acyclic references)
+      (cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
       -- function for translating old pointers to new ones
       ptran p = IM.findWithDefault p p ptr_map
 
@@ -342,7 +349,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a map from the new pointers to their expressions
       --    Actually, a map to a pair of an expression and maybe an IDef;
       --    if the expr is a def reference, the maybe contains the def.
-      ptr_info = [ (p, pDef p) | p <- tsorted_cse_ptrs ]
+      ptr_info = [ (p, pDef p) | p <- cse_ptrs ]
 
       -- a lookup function for the "ptr_info" map,
       -- returning just the expression to replace the ptr reference
