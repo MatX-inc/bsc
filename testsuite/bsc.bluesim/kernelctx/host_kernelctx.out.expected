@@ -1,0 +1,11 @@
+harness: zero capacity needs no context: yes
+harness: context size grows with the capacity: yes
+harness: null context buffer rejected: yes
+harness: misaligned context buffer rejected: yes
+count=25
+acc=5bb8a4c0cc64c373111cf6afee5b47ec
+harness: first run finished with status 0
+count=25
+acc=5bb8a4c0cc64c373111cf6afee5b47ec
+harness: second run in the same buffer finished with status 0
+harness: runs behave identically: yes
