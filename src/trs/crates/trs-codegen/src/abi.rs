@@ -216,6 +216,12 @@ pub struct PlanEnv<'a> {
     pub now_slot: u32,
     pub d: &'a Design,
     pub insts: &'a HashMap<usize, InstEnv>,
+    /// activity gating: the shared did-a-watched-write-change scratch
+    /// slot.  Some = arena-inline prim WRITE sites emit accurate marks
+    /// (regs/ConfigRegs compare old vs new; wires/FIFOs mark on the
+    /// taken path), which each exec call site consumes into the dirty
+    /// bitmaps.  None = ungated emission, no marking code.
+    pub gate_scratch: Option<u32>,
 }
 /// One auto-fired always_enabled top method, compiled as an appended
 /// pseudo-spec.  NEVER serialized: Emit and Load both derive the same
@@ -515,7 +521,7 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 22;
+pub const AOT_LAYOUT_REV: u64 = 23; // 23: activity-gating dirty words
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).
@@ -566,6 +572,20 @@ pub struct EdgeSsaPlan {
     /// stability contract; defs ABSENT from this table must never be
     /// cached across sections (conservative)
     pub def_reads: HashMap<(usize, StrId), Vec<usize>>,
+    /// sched sections lower as OUTLINED per-section functions behind a
+    /// test-and-call dispatcher in the edge fn (the structure dial):
+    /// cross-section values travel through their CF/WF/eager slots
+    /// (export_slots is widened to all of them; hoists are empty —
+    /// spine SSA cannot dominate another function's body).  Engaged
+    /// when the measured edge fn exceeds TRS_JIT_SCHED_OUTLINE_BUDGET
+    /// with no exec victims left (the Toooba link shape: one
+    /// monolithic edge fn wedges LLVM's early-cse<memssa>, whose
+    /// dominated-use rewrites are superlinear in function size), or
+    /// via TRS_JIT_OUTLINE=1.  NOT implied by gating: outlining
+    /// measured 0.68x of the inline shape on Flute (lost cross-section
+    /// SSA sharing), so it stays a link-scaling dial.  Combined with
+    /// gating, a skipped section's call is never even fetched.
+    pub outline_sched: bool,
     /// per composition, per section index: shared PURE defs to hoist
     /// (computed unconditionally before the section — first-consumer
     /// position; pure = no warning-emitting or callback reads, so the
@@ -600,6 +620,50 @@ pub struct EdgeSsaPlan {
     /// ungated BRAM port ticks — the edge fn calls the helper through
     /// the trs_bram_tick_cb pointer-global (filled at artifact load)
     pub bram_ticks: Vec<Vec<[u64; 3]>>,
+    /// activity gating (single-composition designs): dirty-bitmap
+    /// geometry in the arena, None = gating not armed for this
+    /// artifact.  Bits [0, n_state_bits) are written prim instances;
+    /// bits [n_state_bits, n_state_bits + n_rules) are RULE bits (a
+    /// recomputed sched section sets its own bit for same-edge
+    /// CF-chain propagation; rule bits never survive the edge roll —
+    /// the epilogue writes only state bits into `next`).
+    pub gate: Option<GateLayout>,
+    /// per spec ordinal: the sched section's sensitivity mask as
+    /// (dirty word index, bit mask) pairs over the CURRENT dirty
+    /// words; None = ungateable (effectful/ported/boxed cone, or the
+    /// cone analysis declined) — the section always runs
+    pub gate_masks: Vec<Option<Vec<(u32, u64)>>>,
+    /// per spec ordinal: state bits its body may write (transitive,
+    /// conservative) — ORed into the NEXT-edge dirty words by the
+    /// edge epilogue when WF or last-edge WF is set (covers value
+    /// changes AND wire/bypass revert-to-default on the fire edge)
+    pub dirty_sync: Vec<Vec<(u32, u64)>>,
+    /// per spec ordinal: the same-cycle-visible subset (wires, CReg,
+    /// loopy/bypass FIFOs) — ORed into the CURRENT dirty words right
+    /// after the exec section when WF is set, so later-in-edge
+    /// readers see the write
+    pub dirty_bypass: Vec<Vec<(u32, u64)>>,
+}
+
+/// Arena geometry of the activity-gating dirty bitmaps.  Three
+/// consecutive regions: CURRENT dirty words (what sched guards test),
+/// NEXT dirty words (accumulates this edge's writes; rolled into
+/// CURRENT at the next edge's start), and last-WF bit words (one bit
+/// per spec ordinal, maintained by the epilogue).
+#[derive(Clone, Copy, Debug)]
+pub struct GateLayout {
+    pub cur_base: u32,
+    pub next_base: u32,
+    pub lastwf_base: u32,
+    /// dirty words per bitmap (state bits + rule bits)
+    pub words: u32,
+    /// last-WF words (ceil(n_rules/64)); allocated but unused since
+    /// the v1.5 scratch scheme (kept for geometry stability)
+    pub lastwf_words: u32,
+    /// first rule bit index (= number of state bits)
+    pub rule_bit_base: u32,
+    /// the shared write-mark scratch word (see PlanEnv::gate_scratch)
+    pub scratch: u32,
 }
 
 /// Pack one BRAM port tick into trs_bram_tick's (a0, a1, a2) args.

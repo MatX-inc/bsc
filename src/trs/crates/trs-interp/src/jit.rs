@@ -303,6 +303,7 @@ impl LazyJit {
                     .expect("cold compile cell without a stashed design"),
                 insts: &self.insts,
                 now_slot: self.now_slot,
+                gate_scratch: None,
             };
             let reps: Vec<RuleSpec> =
                 (lo..hi).map(|c| self.specs[self.classes[c].0].clone()).collect();
@@ -923,7 +924,7 @@ fn aot_or_jit_scheds(
             .chunks(chunk)
             .map(|c| {
                 sc.spawn(move || {
-                    let env = PlanEnv { d, insts: inst_envs, now_slot };
+                    let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
                     compile_scheds(&env, c, helpers, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
                 })
             })
@@ -976,9 +977,12 @@ enum EmitFail {
     Ineligible(String),
     Infra(String),
     /// an edge fn exceeded the instruction budget: the MEASURED
-    /// oversized inlined sections (ordinals) — the caller extends the
-    /// plan's outlined set and re-emits (see EDGE_INSN_BUDGET)
-    EdgeOverBudget(std::collections::HashSet<usize>),
+    /// oversized inlined sections (ordinals) plus the largest measured
+    /// edge-fn size — the caller extends the plan's outlined set and
+    /// re-emits (see EDGE_INSN_BUDGET), or, when no exec victims
+    /// remain, decides by size between the inline monolith and the
+    /// sched-outline dispatcher
+    EdgeOverBudget(std::collections::HashSet<usize>, u64),
 }
 
 #[cfg(feature = "jit")]
@@ -1086,7 +1090,13 @@ fn aot_emit(
                     .unwrap_or_default(),
             })
             .collect();
-        let env = PlanEnv { d, insts: inst_envs, now_slot };
+        let env = PlanEnv {
+            d,
+            insts: inst_envs,
+            now_slot,
+            gate_scratch: edge_plan
+                .and_then(|p| p.gate.as_ref().map(|g| g.scratch)),
+        };
         let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
         let obj = match compile_design_object(
@@ -1102,7 +1112,10 @@ fn aot_emit(
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?
         {
             trs_codegen::lower::DesignObject::Object(o) => o,
-            trs_codegen::lower::DesignObject::EdgeOverBudget(sizes) => {
+            trs_codegen::lower::DesignObject::EdgeOverBudget(
+                sizes,
+                edge_insns,
+            ) => {
                 // pick MEASURED victims: per over-budget comp, largest
                 // inlined sections first until the comp fits
                 let mut victims: std::collections::HashSet<usize> =
@@ -1123,7 +1136,7 @@ fn aot_emit(
                         total -= i;
                     }
                 }
-                return Err(EmitFail::EdgeOverBudget(victims));
+                return Err(EmitFail::EdgeOverBudget(victims, edge_insns));
             }
         };
         if std::env::var_os("TRS_JIT_TIME").is_some() {
@@ -1250,7 +1263,7 @@ fn aot_emit(
     let mut helper_obj: Option<Vec<u8>> = None;
     if helpers_on {
         let _g = trs_codegen::abi::AotModeGuard::set();
-        let env = PlanEnv { d, insts: inst_envs, now_slot };
+        let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
         let pseudo = specs[0].clone();
         match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
             Ok(o) => helper_obj = Some(o),
@@ -1267,14 +1280,14 @@ fn aot_emit(
         for c in specs.chunks(chunk) {
             handles.push(sc.spawn(move || {
                 let _g = trs_codegen::abi::AotModeGuard::set();
-                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
             }));
         }
         for c in reps.chunks(rchunk) {
             handles.push(sc.spawn(move || {
                 let _g = trs_codegen::abi::AotModeGuard::set();
-                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
             }));
         }
@@ -2967,6 +2980,14 @@ impl Interp {
         // replan pass): joined into outlined_execs before any sharing/
         // hoist/elision table is computed, so the plan stays coherent
         forced_outline: &std::collections::HashSet<usize>,
+        // sched sections forced OUTLINED by the measured edge budget
+        // (the replan pass found the remaining mass is sched code, the
+        // shape with no exec victims left) — see EdgeSsaPlan::outline_sched
+        forced_outline_sched: bool,
+        // activity-gating dirty-region geometry (allocated by
+        // jit_plan for every request kind); None = the caller forbids
+        // gating for this plan (stats runs, traced artifacts)
+        gate: Option<trs_codegen::abi::GateLayout>,
     ) -> trs_codegen::abi::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
             specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
@@ -2978,6 +2999,13 @@ impl Interp {
         struct Cone {
             /// prim instances this cone reads with NO stability contract
             reads: HashSet<usize>,
+            /// EVERY prim instance this cone reads, stability contract
+            /// or not: the activity-gate sensitivity masks are built
+            /// from this set — a stability contract says a value
+            /// cannot move INTRA-edge, but gating asks whether it
+            /// moved ACROSS edges, where stable reads change like any
+            /// other (using `reads` here was the unsound shortcut)
+            reads_all: HashSet<usize>,
             /// transitive def closure (inst, def), incl. the root
             defs: HashSet<(usize, StrId)>,
             /// root def's own expr node count (share-census units)
@@ -2988,7 +3016,13 @@ impl Interp {
         }
         impl Default for Cone {
             fn default() -> Self {
-                Cone { reads: HashSet::new(), defs: HashSet::new(), mass: 0, poison: 0 }
+                Cone {
+                    reads: HashSet::new(),
+                    reads_all: HashSet::new(),
+                    defs: HashSet::new(),
+                    mass: 0,
+                    poison: 0,
+                }
             }
         }
         impl Cone {
@@ -2997,6 +3031,7 @@ impl Interp {
             }
             fn absorb(&mut self, o: &Cone) {
                 self.reads.extend(o.reads.iter().copied());
+                self.reads_all.extend(o.reads_all.iter().copied());
                 self.defs.extend(o.defs.iter().copied());
                 self.poison |= o.poison;
             }
@@ -3106,6 +3141,7 @@ impl Interp {
                             if !stable_read(pc, cx.itp.s(*method)) {
                                 out.reads.insert(gi);
                             }
+                            out.reads_all.insert(gi);
                             // hoist purity: the read must be an
                             // arena-inline load for THIS instance
                             let ie = &cx.inst_envs[&inst];
@@ -3709,6 +3745,252 @@ impl Interp {
                 .collect();
             eprintln!("trs edge-ssa: poisoned shared defs: {}", po.join(" "));
         }
+        // ---- activity gating: sensitivity masks + dirty write masks ----
+        // Armed only for single-row untraced plans (multi-comp designs
+        // would need a cross-comp roll point; alts append variant rows
+        // and fail the row check).  A section is gateable only when its
+        // whole read cone — CF, WF, eager defs, plus the CF cones of
+        // its transitive ME inhibitors (explicit slot loads outside the
+        // def closure) — is pure arena-inline prim reads: poison bits
+        // 1/2/4/8 (ports, foreign/task/trap, boxed prims, EN reads) all
+        // mark inputs the dirty bitmap cannot see.  Reset/clock/param
+        // port reads (bit 16) are admissible: the runtime saturates the
+        // bitmaps on reset activity, clocks/params are domain-constant.
+        // Masks use Cone.reads_all (a stability contract bounds INTRA-
+        // edge movement; gating asks about CROSS-edge movement).
+        // OPT-IN (TRS_GATING=1): the Flute A/B measured the honest
+        // null — on an ACTIVE CPU core the Ir-dominant cones are the
+        // pipeline's own and they are genuinely dirty on busy AND on
+        // memory stalls (the fetch path keeps running), so the
+        // skippable mass is the small periphery cones (~2-4% of edge
+        // Ir) while guards+marks add ~38% more branches and an I1
+        // point.  Gating pays only for designs with LARGE idle
+        // subsystems; the dirty-model machinery (masks, marks,
+        // sabotage tripwire) stays sealed and available.
+        let gating_on = gate.is_some()
+            && nodes.len() == 1
+            && !self.vcd_trace
+            && std::env::var("TRS_GATING").as_deref() == Ok("1");
+        // dispatcher structure: outline sched sections when the budget
+        // replan demands it (sched mass over the SCHED_OUTLINE
+        // threshold with no exec victims left — the Toooba link
+        // shape), or forced for witnesses.  NOT tied to gating: the
+        // Flute A/B measured outlining at 0.68x of the inline shape
+        // (lost cross-section SSA sharing + 372 calls/edge), so gating
+        // keeps its measured inline form unless the size dial rules
+        // inline out.  Traced plans keep the inline shape too.
+        let outline_sched = !self.vcd_trace
+            && (forced_outline_sched
+                || std::env::var("TRS_JIT_OUTLINE").as_deref() == Ok("1"));
+        // outlined sections cannot consume spine SSA: a hoisted def
+        // computed in the dispatcher does not dominate (or even reach)
+        // another function's body — sections recompute pure shared
+        // cones locally and reload slot-carried defs (def()'s existing
+        // fallbacks, the same lattice standalone sched fns lower with)
+        if outline_sched {
+            for comp in hoists.iter_mut() {
+                for q in comp.iter_mut() {
+                    q.clear();
+                }
+            }
+        }
+        let mut gate_masks: Vec<Option<Vec<(u32, u64)>>> = Vec::new();
+        let mut dirty_sync: Vec<Vec<(u32, u64)>> = Vec::new();
+        let mut dirty_bypass: Vec<Vec<(u32, u64)>> = Vec::new();
+        if gating_on {
+            const SAFE: [&str; 7] =
+                ["reg", "configreg", "creg", "wire", "fifo", "regfile", "bram"];
+            // same-cycle-visible classes: wires (readers see this
+            // edge's write), CReg later ports, FIFOs conservatively as
+            // a class (cat does not distinguish loopy/bypass variants)
+            const BYPASS: [&str; 3] = ["wire", "creg", "fifo"];
+            // bit per WRITTEN instance: an instance nothing writes
+            // cannot go dirty (autonomous-tick prims are excluded by
+            // the SAFE-cat check on the read side)
+            let mut written_all: Vec<usize> = write_sets
+                .iter()
+                .flat_map(|w| w.iter().copied())
+                .collect();
+            written_all.sort_unstable();
+            written_all.dedup();
+            let bit_of: HashMap<usize, u32> = written_all
+                .iter()
+                .enumerate()
+                .map(|(i, &gi)| (gi, i as u32))
+                .collect();
+            let pairs = |bits: &std::collections::BTreeSet<u32>| {
+                let mut out: Vec<(u32, u64)> = Vec::new();
+                for &b in bits {
+                    let (w, m) = (b / 64, 1u64 << (b % 64));
+                    match out.last_mut() {
+                        Some((lw, lm)) if *lw == w => *lm |= m,
+                        _ => out.push((w, m)),
+                    }
+                }
+                out
+            };
+            // cf-slot -> owner ordinal, for the inhibitor closure
+            let cf_owner: HashMap<u32, usize> = specs
+                .iter()
+                .enumerate()
+                .map(|(o, sp)| (sp.cf_slot, o))
+                .collect();
+            for (o, sp) in specs.iter().enumerate() {
+                // write masks (every ordinal, autofire included)
+                let mut sync = std::collections::BTreeSet::new();
+                let mut byp = std::collections::BTreeSet::new();
+                for &gi in &exec_writes[o] {
+                    let b = bit_of[&gi];
+                    sync.insert(b);
+                    if cx
+                        .prim_cat
+                        .get(&gi)
+                        .is_some_and(|c| BYPASS.contains(c))
+                    {
+                        byp.insert(b);
+                    }
+                }
+                dirty_sync.push(pairs(&sync));
+                dirty_bypass.push(pairs(&byp));
+                // read mask: autofire pseudo-specs have no sched
+                // section to gate
+                if sp.autofire.is_some() {
+                    gate_masks.push(None);
+                    continue;
+                }
+                // transitive inhibitor closure over ordinals (an
+                // inhibited CF reads the inhibitor's latched CF, which
+                // its own inhibitors shaped, and so on)
+                let mut need: Vec<usize> = vec![o];
+                let mut seen: HashSet<usize> = need.iter().copied().collect();
+                let mut qi = 0;
+                while qi < need.len() {
+                    let q = need[qi];
+                    qi += 1;
+                    for sl in &specs[q].inhibit_slots {
+                        if let Some(&oo) = cf_owner.get(sl) {
+                            if seen.insert(oo) {
+                                need.push(oo);
+                            }
+                        }
+                    }
+                }
+                let mut c = Cone::default();
+                for (qi2, &q) in need.iter().enumerate() {
+                    let qs = &specs[q];
+                    let mir = inst_envs[&qs.inst].mir;
+                    let r = &self.d.modules[mir].rules[qs.rule_idx];
+                    c.absorb(&cone(&mut cx, qs.inst, r.can_fire));
+                    if qi2 == 0 {
+                        // own rule only: WF + eager defs
+                        c.absorb(&cone(&mut cx, qs.inst, r.will_fire));
+                        for &e in &qs.eager {
+                            c.absorb(&cone(&mut cx, qs.inst, e));
+                        }
+                    }
+                }
+                let inhibitors_resolved = specs[o]
+                    .inhibit_slots
+                    .iter()
+                    .all(|sl| cf_owner.contains_key(sl));
+                let reads_safe = c.reads_all.iter().all(|gi| {
+                    cx.prim_cat.get(gi).is_some_and(|pc| SAFE.contains(pc))
+                });
+                if c.poison & 0b1111 != 0 || !reads_safe || !inhibitors_resolved
+                {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!(
+                            "trs gate: ordinal {o} UNGATED poison={:#b} \
+                             safe={reads_safe} inh={inhibitors_resolved}",
+                            c.poison
+                        );
+                    }
+                    gate_masks.push(None);
+                    continue;
+                }
+                let bits: std::collections::BTreeSet<u32> = c
+                    .reads_all
+                    .iter()
+                    .filter_map(|gi| bit_of.get(gi).copied())
+                    .collect();
+                gate_masks.push(Some(pairs(&bits)));
+            }
+            // TRS_GATE_MASK_CENSUS=1: per watched instance, how many
+            // gated masks contain its bit — the hot-bit poisoning
+            // census (a high-fanin instance that changes every cycle
+            // defeats every mask it appears in)
+            if std::env::var_os("TRS_GATE_MASK_CENSUS").is_some() {
+                let mut fanin: HashMap<u32, usize> = HashMap::new();
+                for gm in gate_masks.iter().flatten() {
+                    for &(w, m) in gm {
+                        for b in 0..64u32 {
+                            if m & (1 << b) != 0 {
+                                *fanin.entry(w * 64 + b).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+                let mut rows: Vec<(usize, u32)> =
+                    fanin.iter().map(|(&b, &c)| (c, b)).collect();
+                rows.sort_unstable_by(|a, b| b.cmp(a));
+                for (c, bit) in rows.iter().take(25) {
+                    let gi = written_all[*bit as usize];
+                    eprintln!(
+                        "trs gate census: bit {bit} in {c} masks — {}",
+                        self.insts[gi].path
+                    );
+                }
+            }
+            if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                let gated = gate_masks.iter().filter(|m| m.is_some()).count();
+                let bits: usize = gate_masks
+                    .iter()
+                    .flatten()
+                    .map(|m| {
+                        m.iter().map(|&(_, b)| b.count_ones() as usize).sum::<usize>()
+                    })
+                    .sum();
+                eprintln!(
+                    "trs gate: {gated}/{} sections gated, {} state bits, \
+                     {} mask bits total",
+                    gate_masks.len(),
+                    written_all.len(),
+                    bits
+                );
+            }
+            // SABOTAGE WITNESS (validation hook, not a product knob):
+            // clear ONE dirty-sync bit that some gated cone actually
+            // watches — a deliberately incomplete dirty model.  The
+            // corpus/battery must classify the affected design DIFF;
+            // if it does not, the tripwire is not trustworthy.
+            if std::env::var_os("TRS_GATING_SABOTAGE").is_some() {
+                'sab: for o in 0..dirty_sync.len() {
+                    for pi in 0..dirty_sync[o].len() {
+                        let (w, m) = dirty_sync[o][pi];
+                        let watched: u64 = gate_masks
+                            .iter()
+                            .flatten()
+                            .flat_map(|gm| gm.iter())
+                            .filter(|&&(gw, _)| gw == w)
+                            .map(|&(_, gm)| gm)
+                            .fold(0, |a, b| a | b);
+                        let hit = m & watched;
+                        if hit != 0 {
+                            let bit = hit.trailing_zeros();
+                            dirty_sync[o][pi].1 &= !(1u64 << bit);
+                            eprintln!(
+                                "trs gating SABOTAGE: dropped dirty bit \
+                                 {} (word {w}) from ordinal {o}'s sync \
+                                 mask — expect byte DIFFs",
+                                w * 64 + bit
+                            );
+                            break 'sab;
+                        }
+                    }
+                }
+            }
+        }
+
         // export keep-set (specialized compile: slot stores survive
         // only for COMPILED consumers — inhibitor loads and outlined
         // bodies; the slot-level debug contract is not part of the
@@ -3717,6 +3999,18 @@ impl Interp {
             .iter()
             .flat_map(|sp| sp.inhibit_slots.iter().copied())
             .collect();
+        // gating consumers: a SKIPPED section's slots are the only
+        // carrier of its values, so every CF/WF/eager store must
+        // survive elision (readers hit def()'s slot fallbacks on
+        // edge-cache miss — the miss is NEW: ungated edges always
+        // insert into the cache).  The epilogue and exec-site bypass
+        // ORs also load every WF slot.  Same keep-set as has_early.
+        if gating_on || outline_sched {
+            for e in inst_envs.values() {
+                export_slots.extend(e.cfwf_slot.values().copied());
+                export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
+            }
+        }
         // interp-side consumers: with any early (clock-crossing) rule,
         // the PG_FINAL pass reads compiled CF slots (inhibitors via
         // latched_or_arena) and eager/WF defs via eval's arena
@@ -3765,6 +4059,11 @@ impl Interp {
             sched_over: Vec::new(),
             ord_fnodes: HashMap::new(),
             export_slots,
+            outline_sched,
+            gate: gating_on.then_some(gate).flatten(),
+            gate_masks,
+            dirty_sync,
+            dirty_bypass,
         }
     }
 
@@ -3780,7 +4079,7 @@ impl Interp {
         request: &JitRequest,
         trace: bool,
     ) -> Option<Vec<FnProtos>> {
-        let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+        let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot, gate_scratch: None };
         let t0 = std::time::Instant::now();
         match trial_lower(&env, specs) {
             Ok(p) => {
@@ -4959,7 +5258,7 @@ impl Interp {
                 .collect();
             let _ = self.edge_ssa_plan(
                 &inst_envs, &nodes, &specs, has_early, true,
-                &Default::default(),
+                &Default::default(), false, None,
             );
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
@@ -5265,6 +5564,30 @@ impl Interp {
                 ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width, h.ports.clone()))
             })
             .collect();
+        // ---- activity-gating dirty region (geometry only; ARMING is
+        // the edge plan's decision) ----
+        // Allocated for EVERY request kind so Emit and Load agree on
+        // the arena length (the artifact bakes nslots and refuses a
+        // mismatch): CURRENT dirty words, NEXT dirty words, last-WF
+        // bits.  Bits cover all instances (pessimistic — masks only
+        // ever use written ones); a few hundred bytes at CPU scale.
+        let gate_layout = {
+            let words = (self.insts.len() as u32).div_ceil(64).max(1);
+            let lastwf_words = (specs.len() as u32).div_ceil(64).max(1);
+            let cur_base = alloc(&mut nslots, words);
+            let next_base = alloc(&mut nslots, words);
+            let lastwf_base = alloc(&mut nslots, lastwf_words);
+            let scratch = alloc(&mut nslots, 1);
+            trs_codegen::abi::GateLayout {
+                cur_base,
+                next_base,
+                lastwf_base,
+                words,
+                lastwf_words,
+                rule_bit_base: self.insts.len() as u32,
+                scratch,
+            }
+        };
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
@@ -5501,7 +5824,8 @@ impl Interp {
                     rep_of[m] = *rep;
                 }
             }
-            let mk_edge_plan = |forced: &std::collections::HashSet<usize>| {
+            let mk_edge_plan = |forced: &std::collections::HashSet<usize>,
+                                outline_sched: bool| {
                 (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
                     let mut plan = self.edge_ssa_plan(
                         &inst_envs,
@@ -5510,6 +5834,8 @@ impl Interp {
                         has_early,
                         false,
                         forced,
+                        outline_sched,
+                        Some(gate_layout),
                     );
                     // traced artifacts keep wire ticks boxed: the tick
                     // latches `written` for the VCD dump (and clears
@@ -5594,8 +5920,9 @@ impl Interp {
             // over budget: iterate (the forced set only grows, so this
             // terminates), with a round cap as the safety valve
             let mut rounds = 0u32;
+            let mut outline_sched = false;
             let result = loop {
-                let edge_plan = mk_edge_plan(&forced);
+                let edge_plan = mk_edge_plan(&forced, outline_sched);
                 match aot_emit(
                     &self.d,
                     &inst_envs,
@@ -5621,19 +5948,57 @@ impl Interp {
                     &bdpi_names,
                     budget_now,
                 ) {
-                    Err(EmitFail::EdgeOverBudget(victims)) => {
+                    Err(EmitFail::EdgeOverBudget(victims, edge_insns)) => {
                         if std::env::var_os("TRS_JIT_TRACE").is_some() {
                             eprintln!(
-                                "trs jit: edge over budget — replanning \
-                                 with {} measured sections outlined",
+                                "trs jit: edge over budget ({edge_insns} \
+                                 insns) — replanning with {} measured \
+                                 sections outlined",
                                 victims.len()
                             );
                         }
                         rounds += 1;
-                        // no exec sections left to outline (the
-                        // remainder is sched code) or the round cap:
-                        // accept — the O1 size tier is the backstop
-                        if victims.is_empty() || rounds >= 4 {
+                        // no exec sections left to outline: the
+                        // remainder is sched code.  Below the sched-
+                        // outline threshold, ACCEPT the inline
+                        // monolith — cross-section SSA sharing is
+                        // worth 1.4x wall on Flute (measured: outlined
+                        // 34.7s vs inline 23.7s busy), and the
+                        // pipeline handles Flute-scale functions
+                        // (~250k insns) fine.  Above it, outline the
+                        // sched sections (the dispatcher structure) —
+                        // the Toooba-scale shape where early-cse's
+                        // superlinear dominated-use rewrites wedge the
+                        // link outright (>39min DNF).  Already
+                        // outlined and still over, or the round cap:
+                        // accept — every remaining function is bounded
+                        // and run_ir_passes's O1 size tier covers
+                        // stragglers.
+                        if victims.is_empty() {
+                            let sched_budget: u64 = std::env::var(
+                                "TRS_JIT_SCHED_OUTLINE_BUDGET",
+                            )
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(1_000_000);
+                            if outline_sched
+                                || sched_budget == 0
+                                || edge_insns < sched_budget
+                            {
+                                budget_now = 0;
+                            } else {
+                                outline_sched = true;
+                                if std::env::var_os("TRS_JIT_TRACE")
+                                    .is_some()
+                                {
+                                    eprintln!(
+                                        "trs jit: sched mass over budget \
+                                         — outlining sched sections"
+                                    );
+                                }
+                            }
+                        }
+                        if rounds >= 5 {
                             budget_now = 0;
                         }
                         forced.extend(victims);
@@ -5668,8 +6033,25 @@ impl Interp {
                 for &slot in &memo_stamp_slots {
                     unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
                 }
+                // activity gating: dirty bitmaps start ALL-ONES so the
+                // first edges recompute every cone (slots hold no
+                // trustworthy values yet); harmless if the artifact
+                // was linked ungated (nothing reads the words)
+                for i in 0..gate_layout.words {
+                    unsafe {
+                        *arena_ptr.add((gate_layout.cur_base + i) as usize) =
+                            u64::MAX;
+                        *arena_ptr.add((gate_layout.next_base + i) as usize) =
+                            u64::MAX;
+                    }
+                }
                 self.jit_arena_ptr = arena_ptr;
                 self.jit_arena_len = nslots as usize;
+                self.jit_gate = Some((
+                    gate_layout.cur_base,
+                    gate_layout.next_base,
+                    gate_layout.words,
+                ));
                 self.runcore_pending = self.runcore_image_encode();
                 // Boot-descriptor stage A: capture what only the emit
                 // can see — per-comp tick coverage (needs inst_envs)
@@ -5767,7 +6149,7 @@ impl Interp {
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
                 Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
                 // the unbounded second pass cannot report over-budget
-                Err(EmitFail::EdgeOverBudget(_)) => unreachable!(),
+                Err(EmitFail::EdgeOverBudget(..)) => unreachable!(),
             });
             return None;
         }
@@ -5789,7 +6171,7 @@ impl Interp {
                 return HelperMap::new();
             }
             trs_codegen::lower::llvm_init_once();
-            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot, gate_scratch: None };
             let pseudo = specs[0].clone();
             let t0 = std::time::Instant::now();
             match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
@@ -5925,9 +6307,22 @@ impl Interp {
         for &slot in &memo_stamp_slots {
             unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
         }
+        // activity gating: bitmaps start ALL-ONES (see the Emit-path
+        // twin); the runtime saturates them again on reset activity
+        for i in 0..gate_layout.words {
+            unsafe {
+                *arena_ptr.add((gate_layout.cur_base + i) as usize) = u64::MAX;
+                *arena_ptr.add((gate_layout.next_base + i) as usize) = u64::MAX;
+            }
+        }
         self.jit_arena_ptr = arena_ptr;
         self.jit_arena_len = nslots as usize;
         self.jit_reset_slots = reset_node_slot;
+        self.jit_gate = Some((
+            gate_layout.cur_base,
+            gate_layout.next_base,
+            gate_layout.words,
+        ));
         // two-fill bake gate: perturb every mem-file data region
         // (post-attach, pre-advance) so the window capture can prove
         // the rest of the state independent of file content

@@ -300,6 +300,11 @@ pub struct Interp {
     central_engaged: bool,
     /// reset node -> arena slot holding the port level (1 = deasserted)
     jit_reset_slots: Vec<u32>,
+    /// activity-gating bitmap geometry (cur base, next base, words)
+    /// when a jit arena is attached: reset activity saturates the
+    /// bitmaps (reset ticks change state without any rule firing —
+    /// invisible to the compiled dirty maintenance)
+    jit_gate: Option<(u32, u32, u32)>,
     /// TRACED artifact only: (instance, VCD-declared def) -> recording
     /// slot (base, width).  When a key has a slot, the slot is the
     /// single authority — interp-side recording writes it (not the
@@ -845,6 +850,7 @@ impl Interp {
             runcore_window: None,
             central_engaged: false,
             jit_reset_slots: Vec::new(),
+            jit_gate: None,
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
             rng: GlibcRandom::new(),
@@ -3197,6 +3203,20 @@ impl Interp {
                 unsafe {
                     *self.jit_arena_ptr.add(self.jit_reset_slots[n] as usize) = (!v) as u64;
                 }
+                // activity gating: reset transitions (and the rst_tick
+                // activity they start) change prim state without any
+                // rule firing — saturate the dirty bitmaps so every
+                // cone recomputes until real dirtiness re-establishes
+                if let Some((cur, next, words)) = self.jit_gate {
+                    unsafe {
+                        for i in 0..words {
+                            *self.jit_arena_ptr.add((cur + i) as usize) =
+                                u64::MAX;
+                            *self.jit_arena_ptr.add((next + i) as usize) =
+                                u64::MAX;
+                        }
+                    }
+                }
             }
             if self.trace_clk {
                 eprintln!("[t={}] reset node {n} -> asserted={v}", self.now);
@@ -4746,6 +4766,27 @@ impl Interp {
                             }
                         } else {
                             p.tick(pname, t, pos, gate);
+                        }
+                    }
+                    // activity gating: a reset tick that RAN may have
+                    // moved prim state with no rule firing — saturate
+                    // the dirty bitmaps (cheap; only reset-active
+                    // edges reach here, see the rst_active skip above)
+                    if *is_rst && gate {
+                        if let Some((cur, next, words)) = self.jit_gate {
+                            if !self.jit_arena_ptr.is_null() {
+                                unsafe {
+                                    for i in 0..words {
+                                        *self
+                                            .jit_arena_ptr
+                                            .add((cur + i) as usize) = u64::MAX;
+                                        *self
+                                            .jit_arena_ptr
+                                            .add((next + i) as usize) =
+                                            u64::MAX;
+                                    }
+                                }
+                            }
                         }
                     }
                     if self.rstgen_out.contains_key(&inst) {
