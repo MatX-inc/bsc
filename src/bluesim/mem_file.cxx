@@ -1,7 +1,5 @@
 #include <cstring>
-#include <cstdio>
 #include <ctype.h>
-#include <errno.h>
 
 #include "bs_wide_data.h"
 #include "bs_mem_defines.h"
@@ -24,6 +22,35 @@ static void report_error(Target& dest, const char* kind,
   dest.write_string("'\n       ");
   dest.write_string(detail);
   dest.write_char('\n');
+}
+
+// Append a string to a fixed-size buffer (always NUL-terminated,
+// truncating silently), returning the new length.  Used to build
+// parse-error details by hand: the model imports no printf-family
+// symbol from a C library.
+static unsigned int append_str(char* buf, unsigned int size,
+                               unsigned int pos, const char* s)
+{
+  while ((*s != '\0') && (pos + 1 < size))
+    buf[pos++] = *s++;
+  if (pos < size)
+    buf[pos] = '\0';
+  return pos;
+}
+
+// Format "Encountered '<c>' when expecting <expecting>." into buf
+static void format_unexpected(char* buf, unsigned int size, char c,
+                              const char* expecting)
+{
+  unsigned int pos = append_str(buf, size, 0, "Encountered '");
+  if (pos + 1 < size)
+  {
+    buf[pos++] = c;
+    buf[pos] = '\0';
+  }
+  pos = append_str(buf, size, pos, "' when expecting ");
+  pos = append_str(buf, size, pos, expecting);
+  append_str(buf, size, pos, ".");
 }
 
 // Parser states
@@ -77,7 +104,7 @@ void read_mem_file(tSimStateHdl simHdl,
     dest.write_string("Error: failed to open file '");
     dest.write_string(filename);
     dest.write_string("' because ");
-    dest.write_string(strerror(errno));
+    dest.write_string(ops->last_error(ctx));
     dest.write_char('\n');
     return;
   }
@@ -162,9 +189,9 @@ void read_mem_file(tSimStateHdl simHdl,
           }
           else
           {
-            snprintf(err_buf, sizeof(err_buf),
-                     "Encountered '%c' when expecting "
-                     "'/', '@', hex digit, end-of-line or whitespace.", c);
+            format_unexpected(err_buf, sizeof(err_buf), c,
+                              "'/', '@', hex digit, end-of-line "
+                              "or whitespace");
             report_error(dest, "syntax error", line, filename, err_buf);
             ops->close(ctx, in);
             return;
@@ -263,9 +290,8 @@ void read_mem_file(tSimStateHdl simHdl,
           }
           else
           {
-            snprintf(err_buf, sizeof(err_buf),
-                     "Encountered '%c' when expecting "
-                     "'/', hex digit, end-of-line or whitespace.", c);
+            format_unexpected(err_buf, sizeof(err_buf), c,
+                              "'/', hex digit, end-of-line or whitespace");
             err = err_buf;
           }
 
@@ -304,9 +330,8 @@ void read_mem_file(tSimStateHdl simHdl,
           }
           else
           {
-            snprintf(err_buf, sizeof(err_buf),
-                     "Encountered '%c' when expecting "
-                     "'/', digit, end-of-line or whitespace.", c);
+            format_unexpected(err_buf, sizeof(err_buf), c,
+                              "'/', digit, end-of-line or whitespace");
             err = err_buf;
           }
 
