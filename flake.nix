@@ -108,8 +108,11 @@
           ];
 
           prePatch = ''
-            # Flakes don't include submodules, so we copy in yices.
-            cp -r --preserve=timestamps --reflink=auto -- \
+            # Flakes don't include submodules, so we copy in yices.  -T,
+            # because some fetchers (github tarballs) materialize the
+            # submodule as an empty directory, which plain cp -r would
+            # nest the copy inside of.
+            cp -rT --preserve=timestamps --reflink=auto -- \
               "${yices2}" src/vendor/yices/v2.6/yices2
             chmod -R u+w -- src/vendor/yices/v2.6/yices2
           '';
