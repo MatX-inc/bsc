@@ -81,13 +81,6 @@ class MOD_GatedClock : public Module
   }
 
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*snew_gate = ", indent+2, "");
-    dump_val(PORT_CLK_GATE_OUT, 1);
-    putchar('\n');
-  }
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 

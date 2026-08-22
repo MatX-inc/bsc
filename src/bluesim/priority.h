@@ -29,7 +29,6 @@ typedef enum {
   PS_CYCLE_DUMP,
   PS_EXECUTE,
   PS_RULE_DUMP,
-  PS_STATE_DUMP,
   PS_COMBINATIONAL
 } tPrioritySlot;
 

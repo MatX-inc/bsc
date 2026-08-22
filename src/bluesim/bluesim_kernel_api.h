@@ -321,11 +321,6 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
  * Routines to control debugging functionality.
  */
 
-void bk_enable_state_dumping(tSimStateHdl simHdl);
-void bk_disable_state_dumping(tSimStateHdl simHdl);
-tBool bk_is_state_dumping_enabled(tSimStateHdl simHdl);
-void bk_dump_state(tSimStateHdl simHdl, const char* label);
-
 void bk_enable_cycle_dumping(tSimStateHdl simHdl);
 void bk_disable_cycle_dumping(tSimStateHdl simHdl);
 tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl);

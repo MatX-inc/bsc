@@ -423,40 +423,6 @@ class MOD_RegFile : public Module
       return NULL;
   }
 
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (last_word < 16)
-    {
-      DT* data = (DT*) top_level;
-      printf("{ ");
-      for (unsigned long long n = 0llu; n <= last_word; ++n)
-      {
-	if (n > 0)
-	  printf(", ");
-	dump_val(lo_addr + n, addr_bits);
-	printf(": ");
-	dump_val(data[n], data_bits);
-      }
-      printf(" }");
-    }
-    else
-    {
-      printf("<RegFile with %llu entries>", (unsigned long long) last_word + 1);
-    }
-
-    // dump write address and data
-    if (upd_at == bk_now(sim_hdl))
-    {
-      printf(" (Wrote ");
-      dump_val(upd_addr, addr_bits);
-      printf(": ");
-      DT* value_ptr = lookup_value(upd_addr,true);
-      dump_val(*value_ptr, data_bits);
-      printf(")");
-    }
-    putchar('\n');
-  }
  // RegFile data members
  private:
   unsigned int addr_bits;

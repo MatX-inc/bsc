@@ -99,19 +99,6 @@ class MOD_Sync2 : public Module
   }
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdSyncReg1 = ", indent+2, "");
-    dump_val(dSyncReg1, 1);
-    putchar('\n');
-    printf("%*sdSyncReg2 = ", indent+2, "");
-    dump_val(dSyncReg2, 1);
-    putchar('\n');
-    printf("%*ssSyncReg = ", indent+2, "");
-    dump_val(sSyncReg.read(), 1);
-    putchar('\n');
-  }
  private:
   tUInt8 dSyncReg1;
   tUInt8 dSyncReg2;
@@ -157,19 +144,6 @@ class MOD_Sync15 : public Module
   }
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdSyncReg1 = ", indent+2, "");
-    dump_val(dSyncReg1, 1);
-    putchar('\n');
-    printf("%*sdSyncReg2 = ", indent+2, "");
-    dump_val(dSyncReg2, 1);
-    putchar('\n');
-    printf("%*ssSyncReg = ", indent+2, "");
-    dump_val(sSyncReg.read(), 1);
-    putchar('\n');
-  }
  private:
   tUInt8 dSyncReg1;
   tUInt8 dSyncReg2;
@@ -215,16 +189,6 @@ class MOD_Sync1 : public Module
   }
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdSyncReg1 = ", indent+2, "");
-    dump_val(dSyncReg1, 1);
-    putchar('\n');
-    printf("%*ssSyncReg = ", indent+2, "");
-    dump_val(sSyncReg.read(), 1);
-    putchar('\n');
-  }
  private:
   tUInt8 dSyncReg1;
   SyncVar<tUInt8> sSyncReg;
@@ -276,22 +240,6 @@ class MOD_SyncPulse : public Module
   }
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdSyncReg1 = ", indent+2, "");
-    dump_val(dSyncReg1, 1);
-    putchar('\n');
-    printf("%*sdSyncReg2 = ", indent+2, "");
-    dump_val(dSyncReg2, 1);
-    putchar('\n');
-    printf("%*sdSyncPulse = ", indent+2, "");
-    dump_val(dSyncPulse, 1);
-    putchar('\n');
-    printf("%*ssSyncReg = ", indent+2, "");
-    dump_val(sSyncReg.read(), 1);
-    putchar('\n');
-  }
  private:
   tUInt8 dSyncReg1;
   tUInt8 dSyncReg2;
@@ -401,31 +349,6 @@ class MOD_SyncHandshake : public Module
   }
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdSyncReg1 = ", indent+2, "");
-    dump_val(dSyncReg1, 1);
-    putchar('\n');
-    printf("%*sdSyncReg2 = ", indent+2, "");
-    dump_val(dSyncReg2.read(), 1);
-    putchar('\n');
-    printf("%*sdLastState = ", indent+2, "");
-    dump_val(dLastState.read(), 1);
-    putchar('\n');
-    printf("%*ssToggleReg = ", indent+2, "");
-    dump_val(sToggleReg.read(), 1);
-    putchar('\n');
-    printf("%*ssSyncReg1 = ", indent+2, "");
-    dump_val(sSyncReg1, 1);
-    putchar('\n');
-    printf("%*ssSyncReg2 = ", indent+2, "");
-    dump_val(sSyncReg2, 1);
-    putchar('\n');
-    printf("%*ssRDY = ", indent+2, "");
-    dump_val(sRDY, 1);
-    putchar('\n');
-  }
  private:
   tUInt8 dSyncReg1;
   SyncVar<tUInt8> dSyncReg2;
@@ -505,17 +428,6 @@ class MOD_SyncReg : public Module
   }
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdD_OUT = ", indent+2, "");
-    dump_val(dD_OUT, bits);
-    putchar('\n');
-    printf("%*ssDataSyncIn = ", indent+2, "");
-    dump_val(sDataSyncIn.read(), bits);
-    putchar('\n');
-    sync.dump_state(indent + 2);
-  }
  private:
   SyncVar<T> sDataSyncIn;
   T dD_OUT;
@@ -837,28 +749,6 @@ class MOD_SyncFIFO : public Module
       return NULL;
   }
 
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (src_hi.read() == dst_lo.read())
-      printf("EMPTY");
-    else
-    {
-      printf("{ ");
-      for (unsigned int n = 0; (dst_lo.read() + n) % (2*depth) != src_hi.read(); ++n)
-      {
-	if (n > 0)
-	  printf(", ");
-	dump_val(data[(dst_lo.read() + n) % depth], width);
-      }
-      printf(" }");
-    }
-    putchar('\n');
-    if (hasClear) {
-      sClrSync.dump_state(indent + 2);
-      dClrSync.dump_state(indent + 2);
-    }
-  }
  private:
   const unsigned int width;
   const unsigned int depth;
@@ -946,10 +836,6 @@ class MOD_DualPortRam : public Module
   }
 
  public:
-  void dump_state(unsigned int indent)
-  {
-    // Memory contents are not dumped
-  }
  private:
   DT* data;
   unsigned int addr_bits;
@@ -1038,16 +924,6 @@ class MOD_LatchCrossingReg : public Module
 
   void rst_tick_clk(tUInt8 /* clock_gate */) { /* unused */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*sdLatch = ", indent+2, "");
-    dump_val(dLatch, bits);
-    putchar('\n');
-    printf("%*ssFlop = ", indent+2, "");
-    dump_val(sFlop, bits);
-    putchar('\n');
-  }
  private:
   T dLatch;
   T sFlop;

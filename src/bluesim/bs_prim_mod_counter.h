@@ -158,12 +158,6 @@ class MOD_Counter : public Module
   }
 
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(val, bits);
-    putchar('\n');
-  }
  private:
   T val;
   T saved_val;

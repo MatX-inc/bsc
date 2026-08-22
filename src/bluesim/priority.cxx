@@ -46,7 +46,6 @@ const char* priority_slot_name(tPrioritySlot s)
     case PS_CYCLE_DUMP:    return "CYCLE DUMP";
     case PS_EXECUTE:       return "EXECUTE";
     case PS_RULE_DUMP:     return "RULE DUMP";
-    case PS_STATE_DUMP:    return "STATE DUMP";
     case PS_COMBINATIONAL: return "COMBINATIONAL";
   }
 

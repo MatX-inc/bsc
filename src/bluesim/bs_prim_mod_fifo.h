@@ -241,24 +241,6 @@ class MOD_Fifo : public Module
       return NULL;
   }
 
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (elems == 0)
-      printf("EMPTY");
-    else
-    {
-      printf("{ ");
-      for (unsigned int n = 0; n < elems; ++n)
-      {
-	if (n > 0)
-	  printf(", ");
-	dump_val(data[(fst + n) % size], bits);
-      }
-      printf(" }");
-    }
-    putchar('\n');
-  }
   // FIFO data members
  private:
   T*                 data;

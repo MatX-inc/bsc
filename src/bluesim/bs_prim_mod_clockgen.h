@@ -33,9 +33,6 @@ class MOD_ClockGen : public Module
 		   initValue ? v1Width : v2Width);  // low duration
   }
 
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
  private:
   tClock __clk_handle_0;
   tTime v1Width;
@@ -135,9 +132,6 @@ class MOD_MakeClock : public Module
     // nothing to do
   }
 
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 
@@ -196,9 +190,6 @@ class MOD_ClockInverter : public Module
     clk_gate_in = gate_value;
   }
 
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 
@@ -298,9 +289,6 @@ class MOD_ClockDivider : public Module
     // nothing to do
   }
 
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 

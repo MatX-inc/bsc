@@ -18,7 +18,6 @@ class Model
   virtual void get_version(char const **name, char const **build) = 0;
   virtual time_t get_creation_time() = 0;
   virtual void * get_instance() = 0;
-  virtual void dump_state() = 0;
 
  // Require construction be of the derived classes, not this class
  protected:

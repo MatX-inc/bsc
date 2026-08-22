@@ -70,10 +70,6 @@ class MOD_ClockMux : public Module
     do_clock();
   }
 
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
-
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 
@@ -215,10 +211,6 @@ class MOD_ClockSelect : public Module
 	do_clock_and_reset();
       }
     }
-  }
-
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
   }
 
  public:

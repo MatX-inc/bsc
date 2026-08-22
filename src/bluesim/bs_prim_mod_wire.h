@@ -73,15 +73,6 @@ class MOD_Wire : public Module
     written = isValid;
     isValid = false;
   }
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (!written)
-      printf("Not set");
-    else
-      dump_val(value, bits);
-    putchar('\n');
-  }
  private:
   tClock __clk_handle_0;
   unsigned int bits;

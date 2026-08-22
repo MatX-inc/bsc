@@ -15,7 +15,6 @@
 
 
 /* forward declarations of some static helper functions */
-static void setup_state_dump_events(tSimStateHdl simHdl, bool initial);
 static void setup_clock_edges(tSimStateHdl simHdl, tClock clk);
 
 /* mutex operations */
@@ -179,18 +178,6 @@ static tTime reset_model_event(tSimStateHdl simHdl, tEvent& ev)
   return 0llu; // not a recurring event
 }
 
-static tTime dump_state_event(tSimStateHdl simHdl, tEvent& ev)
-{
-  bool initial = ev.data.flag;
-
-  if (initial)
-    bk_dump_state(simHdl, "Initial State");
-  else
-    bk_dump_state(simHdl, "State");
-
-  return 0llu;
-}
-
 static void print_cycle_description(tSimStateHdl simHdl,
 				    tClock clk,
                                     tEdgeDirection dir,
@@ -285,13 +272,7 @@ static tTime run_edge_schedule_event(tSimStateHdl simHdl, tEvent& ev)
 
   // run the schedule function
   if (schedule)
-  {
     schedule(simHdl, simHdl->model->get_instance());
-
-    // if necessary, schedule the state dumping event
-    if (simHdl->call_dump_state)
-      setup_state_dump_events(simHdl, false);
-  }
 
   // if necessary, setup to yield to the UI at the end of this timeslice
   if (need_to_yield || simHdl->force_halt)
@@ -387,11 +368,6 @@ static bool isRealScheduleEvent(tSimStateHdl simHdl, const tEvent& ev)
     return (ev.fn == run_combo_schedule_event);
 }
 
-static bool isStateDumpEvent(tSimStateHdl /* unused */, const tEvent& ev)
-{
-  return (ev.fn == dump_state_event);
-}
-
 static bool isCycleDumpEvent(tSimStateHdl /* unused */, const tEvent& ev)
 {
   return (ev.fn == dump_cycle_event);
@@ -426,30 +402,6 @@ static void setup_reset_events(tSimStateHdl simHdl)
 
   simHdl->queue->schedule(assert_event);
   simHdl->queue->schedule(deassert_event);
-}
-
-static void setup_state_dump_events(tSimStateHdl simHdl, bool initial)
-{
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return;
-
-  if (simHdl->last_state_dump_time == simHdl->sim_time)
-    return;
-
-  tEvent ev;
-
-  ev.fn = dump_state_event;
-  ev.at = simHdl->sim_time;
-  ev.data.flag = initial;
-  if (initial)
-    ev.priority = make_priority(PG_INITIAL, PS_STATE_DUMP);
-  else
-    ev.priority = make_priority(PG_AFTER_LOGIC, PS_STATE_DUMP);
-
-  if (!initial)
-    simHdl->last_state_dump_time = simHdl->sim_time;
-
-  simHdl->queue->schedule(ev);
 }
 
 static void setup_cycle_dump_events(tSimStateHdl simHdl)
@@ -541,9 +493,6 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   simHdl->exit_status = 0;
   simHdl->force_halt = false;
 
-  simHdl->call_dump_state = false;
-  simHdl->last_state_dump_time = 0llu;
-
   simHdl->call_dump_cycle_counts = false;
 
   simHdl->need_dummy_edges = 0;
@@ -571,7 +520,6 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   simHdl->top_symbol.key = "";
   simHdl->top_symbol.info = SYM_MODULE;
   simHdl->top_symbol.value = bk_get_model_instance(simHdl);
-  simHdl->last_state_dump_time = ~(simHdl->sim_time);
 
   return simHdl;
 }
@@ -1451,32 +1399,6 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at)
   simHdl->queue->remove(simHdl, isMatchingYieldEvent);
 
   return BK_SUCCESS;
-}
-
-/* Control dumping of state */
-
-void bk_enable_state_dumping(tSimStateHdl simHdl)
-{
-  simHdl->call_dump_state = true;
-  setup_state_dump_events(simHdl, true);
-}
-
-void bk_disable_state_dumping(tSimStateHdl simHdl)
-{
-  simHdl->call_dump_state = false;
-  if (simHdl->queue)
-    simHdl->queue->remove(simHdl, isStateDumpEvent);
-}
-
-tBool bk_is_state_dumping_enabled(tSimStateHdl simHdl)
-{
-  return simHdl->call_dump_state ? 1 : 0;
-}
-
-void bk_dump_state(tSimStateHdl simHdl, const char* label)
-{
-  printf("%s:\n", label);
-  simHdl->model->dump_state();
 }
 
 /* Control dumping of cycle counts */

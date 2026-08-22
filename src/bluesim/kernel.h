@@ -86,10 +86,6 @@ struct tSimState {
   tSInt32 exit_status;
   volatile bool force_halt;
 
-  // flag that records current state dump setting
-  bool  call_dump_state;
-  tTime last_state_dump_time;
-
   // flag that records current cycle dump setting
   bool call_dump_cycle_counts;
 

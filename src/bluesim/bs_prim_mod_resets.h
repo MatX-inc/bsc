@@ -100,10 +100,6 @@ class MOD_SyncReset: public Module
   }
   void rst_tick_rst(tUInt8 /* clock_gate */) { /* nothing required */ }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-  }
  private:
   unsigned int reset_hold;
   unsigned int count;
@@ -142,10 +138,6 @@ class MOD_SyncReset0: public Module
   }
   void rst_tick_rst(tUInt8 /* clock_gate */) { /* nothing required */ }
  public:
-  void dump_state(unsigned int /* indent */)
-  {
-    // no state dump
-  }
  private:
   tResetFn     reset_fn;
   bool         in_reset;
@@ -182,10 +174,6 @@ class MOD_InitialReset: public Module
     }
   }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-  }
  private:
   unsigned int reset_hold;
   unsigned int count;
@@ -267,13 +255,6 @@ class MOD_MakeReset: public Module
     sync.clk(clock_value, gate_value);
   }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*srst = ", indent+2, "");
-    dump_val(rst, 1);
-    putchar('\n');
-  }
  private:
   MOD_SyncReset sync;
   tResetFn     reset_fn;
@@ -352,13 +333,6 @@ class MOD_MakeReset0: public Module
   }
 
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s:\n", indent, "", inst_name);
-    printf("%*srst = ", indent+2, "");
-    dump_val(rst, 1);
-    putchar('\n');
-  }
  private:
   tResetFn     reset_fn;
   // to support the internal RegA
@@ -445,11 +419,6 @@ class MOD_ResetMux : public Module
     }
   }
  public:
-  void dump_state(unsigned int /* indent */) const
-  {
-    // no state dump
-  }
-
  private:
   tResetFn     reset_fn;
   bool         select_out;
@@ -505,11 +474,6 @@ class MOD_ResetEither : public Module
   void rst_tick_xclk(tUInt8 /* clock_gate */) { /* nothing required */ }
 
  public:
-  void dump_state(unsigned int /* indent */) const
-  {
-    // no state dump
-  }
-
  private:
   tResetFn     reset_fn;
   // the last value of each reset
@@ -543,11 +507,6 @@ class MOD_ResetToBool : public Module
   void rst_tick_clk(tUInt8 /* clock_gate */) { /* nothing required */ }
 
  public:
-  void dump_state(unsigned int /* indent */) const
-  {
-    // no state dump
-  }
-
  private:
   tUInt8 in_reset;
 };

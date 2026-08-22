@@ -146,13 +146,6 @@ class MOD_Reg : public Module
     }
   }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-
  // register data members
  private:
   T prev_value;
@@ -313,13 +306,6 @@ class MOD_RegAligned : public Module
     }
   }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-
  // RegAligned data members
  private:
   T value;
@@ -474,13 +460,6 @@ class MOD_ConfigReg : public Module
   }
 
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-
  // ConfigReg data members
  private:
   T value;
@@ -628,13 +607,6 @@ class MOD_RegTwo : public Module
     }
   }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-
  // RegTwo data members
  private:
   T value;
@@ -853,13 +825,6 @@ class MOD_CReg : public Module
     }
   }
  public:
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-
  // register data members
  private:
   static const unsigned int max_ports = 5;

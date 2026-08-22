@@ -32,13 +32,6 @@ class MOD_Probe : public Module
   {
     __clk_handle_0 = bk_get_or_define_clock(sim_hdl, s);
   }
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-
  // Probe data members
  private:
   tClock __clk_handle_0;
@@ -94,10 +87,6 @@ class MOD_ProbeWire : public Module
   {
     //__clk_handle_0 = bk_get_or_define_clock(sim_hdl, s);
   }
-  void dump_state(unsigned int indent)
-  {
-  }
-
  // ProbeWire data members
  private:
 };

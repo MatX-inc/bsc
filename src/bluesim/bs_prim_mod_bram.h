@@ -723,28 +723,6 @@ class MOD_BRAM : public Module
       return NULL;
   }
 
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (last_word < 16)
-    {
-      DT* data = (DT*) top_level;
-      printf("{ ");
-      for (unsigned long long n = 0llu; n <= last_word; ++n)
-      {
-        if (n > 0)
-          printf(", ");
-        dump_val(lo_addr + n, addr_bits);
-        printf(": ");
-        dump_val(data[n], data_bits);
-      }
-      printf(" }\n");
-    }
-    else
-    {
-      printf("<BRAM with %llu entries>\n", (unsigned long long) last_word + 1);
-    }
-  }
  // BRAM data members
  private:
   bool           pipelined;
