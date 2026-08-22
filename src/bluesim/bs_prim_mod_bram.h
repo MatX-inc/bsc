@@ -1,7 +1,6 @@
 #ifndef __BS_PRIM_MOD_BRAM_H__
 #define __BS_PRIM_MOD_BRAM_H__
 
-#include <cstdio>
 #include <string>
 
 #include "bluesim_kernel_api.h"
@@ -72,9 +71,10 @@ class BinFormatHandlerBRAM : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_BRAM<AT,DT,ET>* bram;
@@ -147,9 +147,10 @@ class HexFormatHandlerBRAM : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_BRAM<AT,DT,ET>* bram;
@@ -343,7 +344,7 @@ class MOD_BRAM : public Module
       reader = new HexFormatHandlerBRAM<AT,DT,ET>(this, true,
                                                   addr_bits, data_bits,
                                                   lo_addr, hi_addr);
-    read_mem_file(memfile.c_str(), inst_name, reader);
+    read_mem_file(sim_hdl, memfile.c_str(), inst_name, reader);
   }
 
   void* new_block(unsigned int level)
@@ -459,12 +460,12 @@ class MOD_BRAM : public Module
             }
             if (collision)
             {
-              FileTarget dest(stdout);
-              printf("Warning: BRAM '");
+              FileTarget dest(sim_hdl);
+              dest.write_string("Warning: BRAM '");
               write_name(&dest);
-              printf("' -- Write collision at address ");
-              dump_val(upd_a_addr, addr_bits);
-              putchar('\n');
+              dest.write_string("' -- Write collision at address ");
+              dump_val(&dest, upd_a_addr, addr_bits);
+              dest.write_char('\n');
             }
           }
 
@@ -546,12 +547,12 @@ class MOD_BRAM : public Module
             }
             if (collision)
             {
-              FileTarget dest(stdout);
-              printf("Warning: BRAM '");
+              FileTarget dest(sim_hdl);
+              dest.write_string("Warning: BRAM '");
               write_name(&dest);
-              printf("' -- Write collision at address ");
-              dump_val(upd_b_addr, addr_bits);
-              putchar('\n');
+              dest.write_string("' -- Write collision at address ");
+              dump_val(&dest, upd_b_addr, addr_bits);
+              dest.write_char('\n');
             }
           }
 
@@ -605,12 +606,13 @@ class MOD_BRAM : public Module
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(stdout);
-      printf("Warning: BRAM '");
+      FileTarget dest(sim_hdl);
+      dest.write_string("Warning: BRAM '");
       write_name(&dest);
-      printf("' -- %s address on port A is out of bounds: ", (write_ens != 0) ? "Write" : "Read");
-      dump_val(addr, addr_bits);
-      putchar('\n');
+      dest.write_string((write_ens != 0) ? "' -- Write address on port A is out of bounds: "
+                                         : "' -- Read address on port A is out of bounds: ");
+      dump_val(&dest, addr, addr_bits);
+      dest.write_char('\n');
     }
 
     bool is_write = !is_zero(write_ens);
@@ -646,12 +648,13 @@ class MOD_BRAM : public Module
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(stdout);
-      printf("Warning: BRAM '");
+      FileTarget dest(sim_hdl);
+      dest.write_string("Warning: BRAM '");
       write_name(&dest);
-      printf("' -- %s address on port B is out of bounds: ", (write_ens != 0) ? "Write" : "Read");
-      dump_val(addr, addr_bits);
-      putchar('\n');
+      dest.write_string((write_ens != 0) ? "' -- Write address on port B is out of bounds: "
+                                         : "' -- Read address on port B is out of bounds: ");
+      dump_val(&dest, addr, addr_bits);
+      dest.write_char('\n');
     }
 
     bool is_write = !is_zero(write_ens);

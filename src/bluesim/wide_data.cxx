@@ -1356,22 +1356,23 @@ void init_val(unsigned long long /* unused */, unsigned int /* unused */)
   return;
 }
 
-void dump_val(unsigned long long v, unsigned int width)
+void dump_val(Target* dest, unsigned long long v, unsigned int width)
 {
-  FileTarget dest(stdout);
   if (width == 0)
-    dest.write_string("()");
+    dest->write_string("()");
   else if (width == 1)
-    dest.write_string("%s", (v ? "True" : "False"));
+    dest->write_string(v ? "True" : "False");
   else
-    dest.write_string("0x%0*llx", ((width+3)/4), v);
+  {
+    dest->write_string("0x");
+    dest->write_hex(v, (width+3)/4);
+  }
 }
 
-void dump_val(const WideData& v, unsigned int /* unused */)
+void dump_val(Target* dest, const WideData& v, unsigned int /* unused */)
 {
-  FileTarget dest(stdout);
-  dest.write_string("0x");
-  v.print_hex(&dest);
+  dest->write_string("0x");
+  v.print_hex(dest);
 }
 
 void write_undet(bool* pValue, unsigned int width)

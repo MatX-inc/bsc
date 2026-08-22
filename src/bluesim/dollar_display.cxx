@@ -1,5 +1,5 @@
 #include <cstdarg>
-#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <vector>
@@ -835,7 +835,8 @@ char* copy_format(tFieldDesc& spec) {
 }
 
 // Printing routine for real number formats
-// We re-use printf's floating-point printing
+// The formatting itself is done by the host through the format_real
+// host operation (the host re-uses printf's floating-point printing)
 const char* print_real(tFieldDesc& spec, ArgList* args, Target* dest)
 {
 
@@ -855,25 +856,7 @@ const char* print_real(tFieldDesc& spec, ArgList* args, Target* dest)
     discard_tValue(tv);
   }
 
-  char* output_string = NULL;
-  if (asprintf(&output_string, format_copy, v) != -1) {
-    size_t idx = 0;
-    while (output_string[idx] != '\0') {
-      dest->write_char(output_string[idx]);
-      idx++;
-    }
-    free(output_string);
-  }
-  else {
-    char* error_string = NULL;
-    if (asprintf(&error_string, "printing real number with format %s failed\n", format_copy) != -1) {
-      dest->add_error(error_string);
-      free(error_string);
-    }
-    else {
-      // if this fails we're completely hosed, so give up
-    }
-  }
+  dest->write_real(format_copy, v);
 
   free(format_copy);
   return spec.after;
@@ -1054,7 +1037,7 @@ void dollar_display(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("d", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1068,7 +1051,7 @@ void dollar_display(tSimStateHdl simHdl, Module* /* unused */)
 {
   if (!bk_finished(simHdl))
   {
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     dest.write_char('\n');
     dest.handle_errors();
   }
@@ -1084,7 +1067,7 @@ void dollar_displayb(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("b", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1098,7 +1081,7 @@ void dollar_displayb(tSimStateHdl simHdl, Module* /* unused */)
 {
   if (!bk_finished(simHdl))
   {
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     dest.write_char('\n');
     dest.handle_errors();
   }
@@ -1114,7 +1097,7 @@ void dollar_displayo(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("o", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1128,7 +1111,7 @@ void dollar_displayo(tSimStateHdl simHdl, Module* /* unused */)
 {
   if (!bk_finished(simHdl))
   {
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     dest.write_char('\n');
     dest.handle_errors();
   }
@@ -1144,7 +1127,7 @@ void dollar_displayh(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("h", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1158,7 +1141,7 @@ void dollar_displayh(tSimStateHdl simHdl, Module* /* unused */)
 {
   if (!bk_finished(simHdl))
   {
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     dest.write_char('\n');
     dest.handle_errors();
   }
@@ -1174,7 +1157,7 @@ void dollar_write(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("d", location, &args, &dest, false);
     dest.handle_errors();
   }
@@ -1198,7 +1181,7 @@ void dollar_writeb(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("b", location, &args, &dest, false);
     dest.handle_errors();
   }
@@ -1222,7 +1205,7 @@ void dollar_writeo(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("o", location, &args, &dest, false);
     dest.handle_errors();
   }
@@ -1246,7 +1229,7 @@ void dollar_writeh(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("h", location, &args, &dest, false);
     dest.handle_errors();
   }
@@ -1316,7 +1299,7 @@ void dollar_swriteAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest((bits + 7) / 8);
+      BufferTarget dest(simHdl, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("d", location, &args, &dest, false);
@@ -1349,7 +1332,7 @@ void dollar_swritebAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest((bits + 7) / 8);
+      BufferTarget dest(simHdl, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("b", location, &args, &dest, false);
@@ -1382,7 +1365,7 @@ void dollar_swriteoAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest((bits + 7) / 8);
+      BufferTarget dest(simHdl, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("o", location, &args, &dest, false);
@@ -1415,7 +1398,7 @@ void dollar_swritehAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest((bits + 7) / 8);
+      BufferTarget dest(simHdl, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("h", location, &args, &dest, false);
@@ -1449,7 +1432,7 @@ void dollar_sformatAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest((bits + 7) / 8);
+      BufferTarget dest(simHdl, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("d", location, &args, &dest, true);
@@ -1472,7 +1455,7 @@ void dollar_info(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("d", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1497,7 +1480,7 @@ void dollar_warning(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("d", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1522,7 +1505,7 @@ void dollar_error(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
     format("d", location, &args, &dest, false);
     dest.write_char('\n');
     dest.handle_errors();
@@ -1547,7 +1530,7 @@ void dollar_fatal(tSimStateHdl simHdl,
   if (!bk_finished(simHdl))
   {
     ArgList args(size_str, &ap);
-    FileTarget dest(stdout);
+    FileTarget dest(simHdl);
 
     // first argument is the exit status
     tValue v;
@@ -1583,27 +1566,48 @@ void dollar_fatal(tSimStateHdl simHdl,
 // multi-channel descriptors, which can represent multiple files.
 // Here we define 2 containers for holding these files, and some functions
 // to access them.
+//
+// The files themselves are host streams: they are opened, written and
+// closed through the host operations registered with bk_sync_init().
+// Because these system tasks are not passed a simulation handle, the
+// process-wide host ops (bk_host_ops(NULL)) are used, and the standard
+// streams are registered lazily on first use (the host ops do not
+// exist yet when this file's static storage is initialized).
 class VLFiles {
 private:
-  std::vector<FILE*> mcdfiles ;
-  std::vector<FILE*> fdfiles ;
+  std::vector<bs_host_file*> mcdfiles ;
+  std::vector<bs_host_file*> fdfiles ;
+  bool std_registered ;
 
   const static tUInt32 fdbase = 0x80000000 ;
+
+  void ensure_std_registered()
+  {
+    if (std_registered)
+      return ;
+    const struct bs_host_ops* ops = bk_host_ops(NULL) ;
+    if (ops == NULL)
+      return ; // no simulation has been initialized yet
+    void* ctx = bk_host_ctx(NULL) ;
+    std_registered = true ; // set first: registerFile calls back here
+    // preopened and registered files.
+    registerFile( true, ops->std_stream( ctx, BS_HOST_STDOUT )) ;
+    registerFile( false, ops->std_stream( ctx, BS_HOST_STDIN )) ;
+    registerFile( false, ops->std_stream( ctx, BS_HOST_STDOUT )) ;
+    registerFile( false, ops->std_stream( ctx, BS_HOST_STDERR )) ;
+  }
+
 public:
-  VLFiles() {
-    // preopend and registered files.
-    registerFile( true, stdout ) ;
-    registerFile( false, stdin ) ;
-    registerFile( false, stdout ) ;
-    registerFile( false, stderr ) ;
+  VLFiles() : std_registered(false) {
   }
   ~VLFiles() {
     // We can close any files, but the system does that for us.
   }
 
-  // After a call to fopen, store the FILE pointer
-  tUInt32 registerFile ( bool mcd, FILE* file )
+  // After a call to the open host operation, store the stream handle
+  tUInt32 registerFile ( bool mcd, bs_host_file* file )
   {
+    ensure_std_registered() ;
     tUInt32 key = 0 ;
     if ( file == 0 ) {
       key = 0 ;
@@ -1627,8 +1631,9 @@ public:
   }
 
   // MCD can cause multiple files to be specified.
-  void findFiles( std::vector<FILE*> & result, tUInt32 key )
+  void findFiles( std::vector<bs_host_file*> & result, tUInt32 key )
   {
+    ensure_std_registered() ;
     result.clear() ;
     if ( key >= fdbase ) {     // fd type
       if ( fdfiles[key - fdbase] != 0 )
@@ -1646,19 +1651,25 @@ public:
 
     }
   }
-  void findAllFiles( std::vector<FILE*> & result )
+  void findAllFiles( std::vector<bs_host_file*> & result )
   {
+    ensure_std_registered() ;
     result.clear() ;
     result.insert( result.end(), fdfiles.begin(), fdfiles.end() ) ;
     result.insert( result.end(), mcdfiles.begin(), mcdfiles.end() ) ;
   }
   void closeFiles( tUInt32 key )
   {
+    ensure_std_registered() ;
+    const struct bs_host_ops* ops = bk_host_ops(NULL) ;
+    void* ctx = bk_host_ctx(NULL) ;
+    if ( ops == NULL )
+      return ;
     // Don't close stdin, stdout or stderr
     if ( key > 0x80000002 ) {     // fd type
       if ( fdfiles[key - fdbase] != 0 )
         {
-          fclose( fdfiles[key - fdbase] ) ;
+          ops->close( ctx, fdfiles[key - fdbase] ) ;
           fdfiles[key - fdbase] = 0 ;
         }
       // XXX check for valid index done by stl?
@@ -1668,7 +1679,7 @@ public:
       while (key != 0 ) {
         if ( (key & 0x01) && mcdfiles[position] )
           {
-            fclose( mcdfiles[position] ) ;
+            ops->close( ctx, mcdfiles[position] ) ;
             mcdfiles[position] = 0 ;
           }
         key = key >> 1 ;
@@ -1677,9 +1688,10 @@ public:
     }
   }
 
-  FILE* getFD( tUInt32 key )
+  bs_host_file* getFD( tUInt32 key )
   {
-    FILE *res =  0 ;
+    ensure_std_registered() ;
+    bs_host_file *res =  0 ;
       if (( key >= fdbase ) && (fdfiles[key - fdbase] != 0 ))  {
         res = fdfiles[key - fdbase]  ;
       }
@@ -1699,7 +1711,11 @@ static VLFiles vlfile ;
 tUInt32 dollar_fopen(const char* /*unused*/, const std::string* filename,
                                              const std::string* mode)
 {
-  FILE* nowopened = fopen(filename->c_str(), mode->c_str());
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if (ops == NULL)
+    return 0 ;
+  bs_host_file* nowopened =
+    ops->open(bk_host_ctx(NULL), filename->c_str(), mode->c_str());
   tUInt32 key = vlfile.registerFile(false, nowopened);
   return key ;
 }
@@ -1708,7 +1724,11 @@ tUInt32 dollar_fopen(const char* /*unused*/, const std::string* filename,
 // MCD file type
 tUInt32 dollar_fopen(const char* /*unused*/ , const std::string* filename)
 {
-  FILE* nowopened = fopen(filename->c_str(), "w");
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if (ops == NULL)
+    return 0 ;
+  bs_host_file* nowopened =
+    ops->open(bk_host_ctx(NULL), filename->c_str(), "w");
   tUInt32 key = vlfile.registerFile(true, nowopened);
   return key ;
 }
@@ -1722,20 +1742,26 @@ void dollar_fclose(const char* /*unused*/, tUInt32 filehandle)
 // $fflush( filehandle )
 void dollar_fflush(const char* /*unused*/, tUInt32 filehandle)
 {
-  std::vector<FILE*> files ;
+  std::vector<bs_host_file*> files ;
   vlfile.findFiles( files, filehandle ) ;
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if (ops == NULL)
+    return ;
   for ( unsigned int i = 0 ; i < files.size(); i ++ )
-    fflush( files[i] );
+    ops->flush( bk_host_ctx(NULL), files[i] );
 }
 
 
 // $fflush()
 void dollar_fflush()
 {
-  std::vector<FILE*> files ;
+  std::vector<bs_host_file*> files ;
   vlfile.findAllFiles(files) ;
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if (ops == NULL)
+    return ;
   for (unsigned int i = 0 ; i < files.size(); i ++)
-    fflush(files[i]);
+    ops->flush( bk_host_ctx(NULL), files[i] );
 }
 
 
@@ -1749,7 +1775,7 @@ void dollar_fdisplay(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1763,7 +1789,7 @@ void dollar_fdisplay(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("d", location, local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
@@ -1785,7 +1811,7 @@ void dollar_fdisplayb(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1799,7 +1825,7 @@ void dollar_fdisplayb(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("b", location, local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
@@ -1821,7 +1847,7 @@ void dollar_fdisplayo(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1835,7 +1861,7 @@ void dollar_fdisplayo(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("o", location, local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
@@ -1856,7 +1882,7 @@ void dollar_fdisplayh(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1870,7 +1896,7 @@ void dollar_fdisplayh(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("h", location, local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
@@ -1891,7 +1917,7 @@ void dollar_fwrite(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1905,7 +1931,7 @@ void dollar_fwrite(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("d", location, local_args, &dest, false);
       dest.handle_errors();
 
@@ -1925,7 +1951,7 @@ void dollar_fwriteb(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1939,7 +1965,7 @@ void dollar_fwriteb(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("b", location, local_args, &dest, false);
       dest.handle_errors();
 
@@ -1959,7 +1985,7 @@ void dollar_fwriteo(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -1973,7 +1999,7 @@ void dollar_fwriteo(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("o", location, local_args, &dest, false);
       dest.handle_errors();
 
@@ -1993,7 +2019,7 @@ void dollar_fwriteh(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<FILE*> files ;
+    std::vector<bs_host_file*> files ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
@@ -2007,7 +2033,7 @@ void dollar_fwriteh(tSimStateHdl simHdl,
       ArgList * local_args = new ArgList(size_str, &ap);
       local_args->getUInt() ;
 
-      FileTarget dest(files[i]);
+      FileTarget dest(simHdl, files[i]);
       format("h", location, local_args, &dest, false);
       dest.handle_errors();
 
@@ -2019,10 +2045,15 @@ void dollar_fwriteh(tSimStateHdl simHdl,
 
 tSInt32 dollar_fgetc ( const char* /*Unused*/, const tUInt32 filehandle )
 {
-  FILE * infile = vlfile.getFD( filehandle ) ;
+  bs_host_file * infile = vlfile.getFD( filehandle ) ;
   int res = -1 ;
-  if ( infile )
-    res = fgetc( infile ) ;
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if ( infile && (ops != NULL) )
+  {
+    char c ;
+    if ( ops->read( bk_host_ctx(NULL), infile, &c, 1 ) == 1 )
+      res = (unsigned char) c ;
+  }
 
   return res ;
 }
@@ -2030,10 +2061,11 @@ tSInt32 dollar_fgetc ( const char* /*Unused*/, const tUInt32 filehandle )
 // $ungetc( char, file )
 tSInt32 dollar_ungetc(  const char* size_str, const char back, const tUInt32 filehandle )
 {
-  FILE * infile = vlfile.getFD( filehandle ) ;
+  bs_host_file * infile = vlfile.getFD( filehandle ) ;
   int res = -1 ;
-  if ( infile )
-    res = ungetc( back, infile ) ;
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if ( infile && (ops != NULL) )
+    res = ops->unget_char( bk_host_ctx(NULL), infile, back ) ;
 
   return res ;
 }

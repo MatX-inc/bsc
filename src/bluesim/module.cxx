@@ -30,14 +30,21 @@ void print_rule(tSimStateHdl simHdl,
   if (!could_fire)
     return;
 
+  FileTarget dest(simHdl);
   while (! simHdl->labels.empty())
   {
     const tLabel& label = simHdl->labels.front();
-    printf("%*s%s:\n", label.indent, "", label.text);
+    dest.write_char(' ', label.indent);
+    dest.write_string(label.text);
+    dest.write_string(":\n");
     simHdl->labels.pop_front();
   }
   const char* msg = did_fire ? "fired" : "inhibited by more urgent rule";
-  printf("%*s%s %s\n", simHdl->rule_name_indent, "", name, msg);  
+  dest.write_char(' ', simHdl->rule_name_indent);
+  dest.write_string(name);
+  dest.write_char(' ');
+  dest.write_string(msg);
+  dest.write_char('\n');
 }
 
 

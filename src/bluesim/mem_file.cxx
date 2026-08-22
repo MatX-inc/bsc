@@ -1,4 +1,3 @@
-#include <cstdio>
 #include <string>
 #include <cstring>
 #include <ctype.h>
@@ -7,6 +6,25 @@
 #include "bs_wide_data.h"
 #include "bs_mem_defines.h"
 #include "bs_mem_file.h"
+#include "bs_target.h"
+
+// Helper for reporting an error with position information:
+//   "Error: <kind> at line <line> of file '<filename>'\n"
+//   "       <detail>\n"
+static void report_error(Target& dest, const char* kind,
+                         unsigned int line, const char* filename,
+                         const char* detail)
+{
+  dest.write_string("Error: ");
+  dest.write_string(kind);
+  dest.write_string(" at line ");
+  dest.write_decimal(line);
+  dest.write_string(" of file '");
+  dest.write_string(filename);
+  dest.write_string("'\n       ");
+  dest.write_string(detail);
+  dest.write_char('\n');
+}
 
 // Parser states
 typedef enum { START
@@ -41,25 +59,33 @@ const char* processData(const char* value_str, FormatHandler* handler)
 }
 
 // Top-level routine to read a file
-void read_mem_file(const char* filename,
+void read_mem_file(tSimStateHdl simHdl,
+                   const char* filename,
                    const char* memname,
                    FormatHandler* handler)
 {
   if (filename == NULL)
     return;
 
-  FILE* in = fopen(filename, "r");
+  const struct bs_host_ops* ops = bk_host_ops(simHdl);
+  void* ctx = bk_host_ctx(simHdl);
+  FileTarget dest(simHdl); // error messages go to the host's stdout
+
+  bs_host_file* in = ops->open(ctx, filename, "r");
   if (!in)
   {
-    printf("Error: failed to open file '%s' because %s\n",
-           filename, strerror(errno));
+    dest.write_string("Error: failed to open file '");
+    dest.write_string(filename);
+    dest.write_string("' because ");
+    dest.write_string(strerror(errno));
+    dest.write_char('\n');
     return;
   }
 
   // parse the file contents, passing addresses and data
   // to the handler as strings
   char buf[128];
-  char err_buf[256];
+  std::string err_buf;
   char* cptr;
   unsigned int comment_start_line = 0;
   unsigned int line = 1;
@@ -67,8 +93,10 @@ void read_mem_file(const char* filename,
   std::string addr_str;
   std::string value_str;
   tMemParserState state = START;
-  while (fgets(buf, 128, in))
+  tSInt64 nread;
+  while ((nread = ops->read(ctx, in, buf, sizeof(buf) - 1)) > 0)
   {
+    buf[nread] = '\0';
     cptr = buf;
 
     // when a line extends beyond a buffer, we may need to accumulate
@@ -113,10 +141,11 @@ void read_mem_file(const char* filename,
           }
           else
           {
-            printf("Error: syntax error at line %d of file '%s'\n",
-                   line, filename);
-            printf("       Encountered '%c' when expecting '/', '@', hex digit, end-of-line or whitespace.\n", c);
-            fclose(in);
+            std::string detail("Encountered '");
+            detail += c;
+            detail += "' when expecting '/', '@', hex digit, end-of-line or whitespace.";
+            report_error(dest, "syntax error", line, filename, detail.c_str());
+            ops->close(ctx, in);
             return;
           }
           break;
@@ -135,10 +164,9 @@ void read_mem_file(const char* filename,
           }
           else
           {
-            printf("Error: syntax error at line %d of file '%s'\n",
-                   line, filename);
-            printf("       Malformed comment start sequence.\n");
-            fclose(in);
+            report_error(dest, "syntax error", line, filename,
+                         "Malformed comment start sequence.");
+            ops->close(ctx, in);
             return;
           }
           break;
@@ -212,18 +240,19 @@ void read_mem_file(const char* filename,
           }
           else
           {
-            snprintf(err_buf, 256,
-                    "Encountered '%c' when expecting '/', hex digit, end-of-line or whitespace",
-                    c);
-            err = err_buf;
+            err_buf = "Encountered '";
+            err_buf += c;
+            err_buf += "' when expecting '/', hex digit, end-of-line or whitespace";
+            err = err_buf.c_str();
           }
 
           if (err)
           {
-            printf("Error: address processing error at line %d of file '%s'\n",
-                   start_line, filename);
-            printf("       %s.\n", err);
-            fclose(in);
+            std::string detail(err);
+            detail += '.';
+            report_error(dest, "address processing error", start_line,
+                         filename, detail.c_str());
+            ops->close(ctx, in);
             return;
           }
 
@@ -252,18 +281,19 @@ void read_mem_file(const char* filename,
           }
           else
           {
-            snprintf(err_buf, 256,
-                    "Encountered '%c' when expecting '/', digit, end-of-line or whitespace",
-                    c);
-            err = err_buf;
+            err_buf = "Encountered '";
+            err_buf += c;
+            err_buf += "' when expecting '/', digit, end-of-line or whitespace";
+            err = err_buf.c_str();
           }
 
           if (err)
           {
-            printf("Error: value processing error at line %d of file '%s'\n",
-                   start_line, filename);
-            printf("       %s.\n", err);
-            fclose(in);
+            std::string detail(err);
+            detail += '.';
+            report_error(dest, "value processing error", start_line,
+                         filename, detail.c_str());
+            ops->close(ctx, in);
             return;
           }
 
@@ -276,25 +306,24 @@ void read_mem_file(const char* filename,
 
   if (state == IN_C_COMMENT || state == END_C_COMMENT)
   {
-    printf("Error: syntax error at line %d of file '%s'\n",
-           comment_start_line, filename);
-    printf("       Unterminated C-style comment.\n");
-
+    report_error(dest, "syntax error", comment_start_line, filename,
+                 "Unterminated C-style comment.");
   }
   else if (state == IN_VALUE)
   {
     const char* err = processData(value_str.c_str(), handler);
     if (err)
     {
-      printf("Error: value processing error at line %d of file '%s'\n",
-             line, filename);
-      printf("       %s.\n", err);
+      std::string detail(err);
+      detail += '.';
+      report_error(dest, "value processing error", line, filename,
+                   detail.c_str());
     }
   }
 
-  handler->checkRange(filename, memname);
+  handler->checkRange(simHdl, filename, memname);
 
-  fclose(in);
+  ops->close(ctx, in);
 }
 
 // Utility functions for use in writing FormatHandlers

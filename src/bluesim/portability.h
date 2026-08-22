@@ -5,7 +5,6 @@
  * which enhance code portability.
  */
 
-#include <cstdio>
 #include <sys/types.h>
 #include <limits.h>
 
@@ -30,13 +29,6 @@ extern "C" {
 
 /* exponentiation on integers */
 unsigned long long powll(unsigned int base, unsigned int exp);
-
-// asprintf allocates an output buffer for the caller to free
-// asprintf is common but not standardized, so
-// so we implement it with C99 va_copy and vsnprintf
-#undef asprintf
-#define asprintf new_asprintf
-  int new_asprintf(char **strp, const char *fmt, ...) throw ();
 
 } /* extern "C" */
 

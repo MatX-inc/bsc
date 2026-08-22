@@ -1,13 +1,110 @@
+#include <cerrno>
 #include <cstring>
 
 #include "bs_target.h"
 
-// FileTarget implementation simply forwards output to a file
+// Base class helpers
 
-FileTarget::FileTarget(FILE* file_ptr)
-  : out(file_ptr)
+// Report accumulated errors on the host's stdout stream
+void Target::handle_errors()
 {
-  setlinebuf(file_ptr);
+  while(!errors.empty()) {
+    const std::string& msg = errors.front();
+    if (host_ops != NULL)
+    {
+      struct bs_host_file* out = host_ops->std_stream(host_ctx, BS_HOST_STDOUT);
+      host_ops->write(host_ctx, out, "Output error: ", 14);
+      host_ops->write(host_ctx, out, msg.data(), msg.length());
+    }
+    errors.pop_front();
+  }
+}
+
+// Write a NUL-terminated string
+void Target::write_string(const char* str)
+{
+  unsigned int len = strlen(str);
+  if (len > 0)
+    write_data(str, sizeof(char), len);
+}
+
+// Write an unsigned decimal number ("%llu")
+void Target::write_decimal(tUInt64 value)
+{
+  char buf[20]; // a 64-bit value has at most 20 decimal digits
+  unsigned int digits = 0;
+  do {
+    buf[digits++] = '0' + (char)(value % 10llu);
+    value /= 10llu;
+  } while (value != 0llu);
+  while (digits > 0)
+    write_char(buf[--digits]);
+}
+
+// Write an unsigned hexadecimal number, in lower case, zero-padded
+// on the left to at least min_digits digits ("%0*llx")
+void Target::write_hex(tUInt64 value, unsigned int min_digits)
+{
+  unsigned int digits = 1;
+  for (tUInt64 x = value >> 4; x != 0llu; x >>= 4)
+    ++digits;
+  if (min_digits > digits)
+    write_char('0', min_digits - digits);
+  while (digits > 0)
+  {
+    --digits;
+    unsigned int nibble = (unsigned int)((value >> (4*digits)) & 0xF);
+    write_char((nibble > 9) ? ('a' + (char)(nibble - 10))
+                            : ('0' + (char)nibble));
+  }
+}
+
+// Write one real (double) value, formatted by the host
+void Target::write_real(const char* format, double value)
+{
+  char buf[256];
+  int len = -1;
+  if (host_ops != NULL)
+    len = host_ops->format_real(host_ctx, buf, sizeof(buf), format, value);
+
+  if (len < 0)
+  {
+    std::string msg("printing real number with format ");
+    msg += format;
+    msg += " failed\n";
+    add_error(msg.c_str());
+  }
+  else if (((size_t) len) < sizeof(buf))
+  {
+    write_data(buf, sizeof(char), len);
+  }
+  else
+  {
+    // the formatted value did not fit in the local buffer
+    char* big_buf = new char[len + 1];
+    if (host_ops->format_real(host_ctx, big_buf, len + 1, format, value) == len)
+      write_data(big_buf, sizeof(char), len);
+    delete[] big_buf;
+  }
+}
+
+// FileTarget implementation simply forwards output to a host file
+
+FileTarget::FileTarget(const struct bs_host_ops* ops, void* ctx,
+		       struct bs_host_file* file)
+  : Target(ops, ctx), out(file)
+{
+}
+
+FileTarget::FileTarget(tSimStateHdl simHdl, struct bs_host_file* file)
+  : Target(bk_host_ops(simHdl), bk_host_ctx(simHdl)), out(file)
+{
+}
+
+FileTarget::FileTarget(tSimStateHdl simHdl, tHostStdStream which)
+  : Target(bk_host_ops(simHdl), bk_host_ctx(simHdl))
+{
+  out = host_ops->std_stream(host_ctx, which);
 }
 
 FileTarget::~FileTarget()
@@ -16,27 +113,34 @@ FileTarget::~FileTarget()
 
 void FileTarget::write_char(char c)
 {
-  fputc(c, out);
+  host_ops->write(host_ctx, out, &c, 1);
 }
 
 void FileTarget::write_char(char c, unsigned int count)
 {
-  while (count-- > 0) fputc(c, out);
-}
-
-void FileTarget::write_string(const char* fmt ...)
-{
-  va_list ap;
-  va_start(ap,fmt);
-  vfprintf(out,fmt,ap);
-  va_end(ap);
+  char buf[64];
+  memset(buf, c, std::min(count, 64u));
+  while (count > 0)
+  {
+    unsigned int n = std::min(count, 64u);
+    host_ops->write(host_ctx, out, buf, n);
+    count -= n;
+  }
 }
 
 void FileTarget::write_data(const void* data,
 			    unsigned int size, unsigned int num)
 {
-  if (fwrite(data,size,num,out) != num)
-    perror("FileTarget::write_data");
+  if (!host_ops->write(host_ctx, out, (const char*) data, size * num))
+  {
+    // report the failure on the host's stderr stream, in the manner
+    // of perror("FileTarget::write_data")
+    struct bs_host_file* err = host_ops->std_stream(host_ctx, BS_HOST_STDERR);
+    const char* reason = strerror(errno);
+    host_ops->write(host_ctx, err, "FileTarget::write_data: ", 24);
+    host_ops->write(host_ctx, err, reason, strlen(reason));
+    host_ops->write(host_ctx, err, "\n", 1);
+  }
 }
 
 // Buffer target stores output in a fixed-size buffer.
@@ -45,7 +149,8 @@ void FileTarget::write_data(const void* data,
 // the string by removing leading characters.  We achieve this
 // efficiently by treating the target as a circular buffer.
 
-BufferTarget::BufferTarget(unsigned int size)
+BufferTarget::BufferTarget(tSimStateHdl simHdl, unsigned int size)
+  : Target(bk_host_ops(simHdl), bk_host_ctx(simHdl))
 {
   // the buffer contains one extra space for the null terminator.
   buf_size = size + 1;
@@ -88,11 +193,6 @@ void BufferTarget::write_char(char c, unsigned int count)
   if (bytes > freespace)
     start = (start + bytes - freespace) % buf_size;
   buffer[end] = '\0';
-}
-
-void BufferTarget::write_string(const char* fmt ...)
-{
-  // not implemented for BufferTarget
 }
 
 void BufferTarget::write_data(const void* data,

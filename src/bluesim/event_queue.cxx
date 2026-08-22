@@ -1,6 +1,7 @@
 #include <vector>
-#include <cstdio>
+#include <cstdint>
 
+#include "bs_target.h"
 #include "event_queue.h"
 
 /* we need these for the debugging routines only */
@@ -229,16 +230,37 @@ void EventQueue::clear()
   count = 0;
 }
 
+/* helper for EventQueue::print: write a pointer like printf's %p */
+static void write_pointer(Target& dest, const void* ptr)
+{
+  if (ptr == NULL)
+  {
+    dest.write_string("(nil)");
+    return;
+  }
+  dest.write_string("0x");
+  dest.write_hex((tUInt64)(uintptr_t)ptr);
+}
+
 /* Print the event queue contents (for debugging) */
 void EventQueue::print(tSimStateHdl simHdl) const
 {
-  printf("Event queue:\n");
+  FileTarget dest(simHdl);
+  dest.write_string("Event queue:\n");
   for (unsigned int i = 0; i < count; ++i)
   {
-    printf("  %p(%p) @ %llu %s %s %s\n",
-	   events[i].fn, events[i].data.ptr, events[i].at,
-	   priority_group_name(priority_group(events[i].priority)),
-	   priority_slot_name(priority_slot(events[i].priority)),
-	   bk_clock_name(simHdl, priority_clock(events[i].priority)));
+    dest.write_string("  ");
+    write_pointer(dest, (const void*)events[i].fn);
+    dest.write_char('(');
+    write_pointer(dest, events[i].data.ptr);
+    dest.write_string(") @ ");
+    dest.write_decimal(events[i].at);
+    dest.write_char(' ');
+    dest.write_string(priority_group_name(priority_group(events[i].priority)));
+    dest.write_char(' ');
+    dest.write_string(priority_slot_name(priority_slot(events[i].priority)));
+    dest.write_char(' ');
+    dest.write_string(bk_clock_name(simHdl, priority_clock(events[i].priority)));
+    dest.write_char('\n');
   }
 }

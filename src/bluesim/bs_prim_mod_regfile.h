@@ -1,7 +1,6 @@
 #ifndef __BS_PRIM_MOD_REGFILE_H__
 #define __BS_PRIM_MOD_REGFILE_H__
 
-#include <cstdio>
 #include <string>
 
 #include "bluesim_kernel_api.h"
@@ -72,9 +71,10 @@ class BinFormatHandler : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_RegFile<AT,DT>* rf;
@@ -147,9 +147,10 @@ class HexFormatHandler : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_RegFile<AT,DT>* rf;
@@ -274,7 +275,7 @@ class MOD_RegFile : public Module
       reader = new HexFormatHandler<AT,DT>(this, true,
 					   addr_bits, data_bits,
 					   lo_addr, hi_addr);
-    read_mem_file(memfile.c_str(), inst_name, reader);
+    read_mem_file(sim_hdl, memfile.c_str(), inst_name, reader);
   }
 
   void* new_block(unsigned int level)
@@ -358,12 +359,12 @@ class MOD_RegFile : public Module
   {
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(stdout);
-      printf("Warning: RegFile '");
+      FileTarget dest(sim_hdl);
+      dest.write_string("Warning: RegFile '");
       write_name(&dest);
-      printf("' -- Read address is out of bounds: ");
-      dump_val(addr, addr_bits);
-      putchar('\n');
+      dest.write_string("' -- Read address is out of bounds: ");
+      dump_val(&dest, addr, addr_bits);
+      dest.write_char('\n');
       DT v;
       init_val(v, data_bits);
       write_undet(&v, data_bits);
@@ -404,12 +405,12 @@ class MOD_RegFile : public Module
     }
     else
     {
-      FileTarget dest(stdout);
-      printf("Warning: RegFile '");
+      FileTarget dest(sim_hdl);
+      dest.write_string("Warning: RegFile '");
       write_name(&dest);
-      printf("' -- Write address is out of bounds: ");
-      dump_val(addr, addr_bits);
-      putchar('\n');
+      dest.write_string("' -- Write address is out of bounds: ");
+      dump_val(&dest, addr, addr_bits);
+      dest.write_char('\n');
     }
   }
 

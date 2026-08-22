@@ -1,7 +1,6 @@
 #ifndef __BS_PRIM_MOD_FIFO_H__
 #define __BS_PRIM_MOD_FIFO_H__
 
-#include <cstdio>
 #include <cstring>
 #include "bluesim_kernel_api.h"
 #include "bluesim_probes.h"
@@ -102,10 +101,10 @@ class MOD_Fifo : public Module
          enq_at == bk_now(sim_hdl) &&
          saved_elems == 0))
     {
-      FileTarget dest(stdout);
-      printf("Warning: ");
+      FileTarget dest(sim_hdl);
+      dest.write_string("Warning: ");
       write_name(&dest);
-      printf(" -- Dequeuing from empty fifo\n");
+      dest.write_string(" -- Dequeuing from empty fifo\n");
     }
     else if (elems != 0)
     {
@@ -135,10 +134,10 @@ class MOD_Fifo : public Module
          deq_at == bk_now(sim_hdl) &&
          saved_elems == size))
     {
-      FileTarget dest(stdout);
-      printf("Warning: ");
+      FileTarget dest(sim_hdl);
+      dest.write_string("Warning: ");
       write_name(&dest);
-      printf(" -- Enqueuing to a full fifo\n");
+      dest.write_string(" -- Enqueuing to a full fifo\n");
     }
     else if (elems < size)
     {
