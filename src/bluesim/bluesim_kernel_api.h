@@ -262,6 +262,29 @@ tTime bk_sync(tSimStateHdl simHdl);
  */
 tStatus bk_sync_run(tSimStateHdl simHdl);
 
+/* Like bk_sync_run(), but runs at most one cycle of the given
+ * clock, with the same semantics as bluetcl's 'sim step': the
+ * simulation runs until one more edge of the clock in the direction
+ * which returns it to its current value has executed (one full
+ * clock cycle), except before any logic has executed at time 0,
+ * when it runs to the clock's first edge instead.
+ *
+ * As with bk_sync_run(), it returns earlier if another stopping
+ * condition is encountered ($stop/$finish/$fatal, bk_abort_now(),
+ * an edge limit on another clock or edge direction, a scheduled UI
+ * event) or if the event queue drains; the cause can be
+ * distinguished with the same predicates.  The edge limit for the
+ * stepped clock and direction is saved and restored around the
+ * step, so no one-cycle limit is left behind to stop a later
+ * bk_sync_run() early, and a pending bk_quit_after_edge() limit
+ * survives (limits on other clocks are never modified).
+ *
+ * Returns BK_ERROR on error (including a non-sync-mode handle, an
+ * invalid clock, a call while the simulation is running, or a call
+ * after $finish) and BK_SUCCESS on success.
+ */
+tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
+
 /* Test whether any events remain in the simulation queue.
  *
  * Returns 0 if the queue is empty and non-zero otherwise.
