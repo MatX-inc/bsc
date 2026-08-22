@@ -90,7 +90,7 @@ extern "C" {
  * bk_sync_init().  Returns 0 if 'event_queue_capacity' is 0 (an
  * invalid capacity).
  */
-tUInt64 bk_context_bytes(tUInt32 event_queue_capacity);
+BS_EXPORT tUInt64 bk_context_bytes(tUInt32 event_queue_capacity);
 
 /* This must be called before calling any other Bluesim
  * kernel API functions.
@@ -143,7 +143,7 @@ tUInt64 bk_context_bytes(tUInt32 event_queue_capacity);
  * points into 'context_buffer' and is invalidated by bk_shutdown().
  * Returns NULL on error.
  */
-tSimStateHdl bk_sync_init(tModel model, tBool master,
+BS_EXPORT tSimStateHdl bk_sync_init(tModel model, tBool master,
                           const struct bs_host_ops* ops, void* ctx,
                           tUInt32 event_queue_capacity,
                           void* context_buffer);
@@ -153,8 +153,8 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
  * (that of the most recent bk_sync_init()), which is what system
  * tasks without a simulation handle use.
  */
-const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl);
-void* bk_host_ctx(tSimStateHdl simHdl);
+BS_EXPORT const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl);
+BS_EXPORT void* bk_host_ctx(tSimStateHdl simHdl);
 
 /* Report a fatal condition in the model through the corresponding
  * host operation and do not return.  These are called by the runtime
@@ -163,8 +163,8 @@ void* bk_host_ctx(tSimStateHdl simHdl);
  * bk_host_ops above), since division is performed in contexts that
  * have no simulation handle at hand.
  */
-BS_HOST_NORETURN void bk_divide_by_zero(const char* description);
-BS_HOST_NORETURN void bk_out_of_bounds(tSimStateHdl simHdl,
+BS_EXPORT BS_HOST_NORETURN void bk_divide_by_zero(const char* description);
+BS_EXPORT BS_HOST_NORETURN void bk_out_of_bounds(tSimStateHdl simHdl,
                                        const char* prim,
                                        const char* instance,
                                        const char* access,
@@ -178,7 +178,7 @@ BS_HOST_NORETURN void bk_out_of_bounds(tSimStateHdl simHdl,
  * fixed capacity chosen at bk_sync_init(); it is not for embedders
  * to call.  'capacity' is the fixed capacity that was exceeded.
  */
-BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
+BS_EXPORT BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
                                               tUInt32 capacity);
 
 /* Get the most events the kernel's event queue has ever held at
@@ -186,7 +186,7 @@ BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
  * capacity budgets against bk_max_event_queue_depth(); it never
  * exceeds the capacity fixed at bk_sync_init().
  */
-tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
+BS_EXPORT tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
 
 /* This should be called at the end of simulation to release the
  * resources controlled by the simulation kernel.  The simulation
@@ -196,10 +196,10 @@ tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
  * handle is invalid and no other Bluesim kernel API functions may be
  * called unless bk_sync_init() has been called first.
  */
-void bk_shutdown(tSimStateHdl simHdl);
+BS_EXPORT void bk_shutdown(tSimStateHdl simHdl);
 
 /* Get version information about the Bluesim model */
-void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
+BS_EXPORT void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
 
 /* Get the design's maximum event-queue depth: an upper bound on the
  * number of events the model can have live in the kernel's event
@@ -222,7 +222,7 @@ void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
  *
  * Returns 0 if 'model' is NULL.
  */
-tUInt32 bk_max_event_queue_depth(tModel model);
+BS_EXPORT tUInt32 bk_max_event_queue_depth(tModel model);
 
 /* Get the design's static stack-depth bound: an upper bound, in
  * bytes, on the stack consumed on the simulation thread by a call to
@@ -255,7 +255,7 @@ tUInt32 bk_max_event_queue_depth(tModel model);
  * new_MODEL_*() so an embedder can size a stack before
  * bk_sync_init(); returns 0 if 'model' is NULL.
  */
-tUInt64 bk_stack_depth_bound(tModel model);
+BS_EXPORT tUInt64 bk_stack_depth_bound(tModel model);
 
 /*
  * Non-allocating introspection of a model's state elements and of
@@ -283,51 +283,51 @@ tUInt64 bk_stack_depth_bound(tModel model);
 /* Number of state elements (Bluesim primitive instances) in the
  * design's whole module tree.
  */
-tUInt32 bk_num_state_elements(tModel model);
+BS_EXPORT tUInt32 bk_num_state_elements(tModel model);
 
 /* Descriptor of the nth state element (0-based), in the documented
  * table order.
  */
-const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n);
+BS_EXPORT const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n);
 
 /* Total byte size of the state area the host must provide to
  * new_MODEL_*(): the module-object region followed by the element
  * sub-area (see bluesim_introspection.h).
  */
-tUInt64 bk_state_bytes(tModel model);
+BS_EXPORT tUInt64 bk_state_bytes(tModel model);
 
 /* Byte offset of the element sub-area within the state area: element
  * descriptor offsets are relative to (state + this offset).  Always a
  * multiple of 16.
  */
-tUInt64 bk_state_elements_offset(tModel model);
+BS_EXPORT tUInt64 bk_state_elements_offset(tModel model);
 
 /* Number of top-module input ports (module argument ports, method
  * enables and method arguments; clock and reset ports are driven
  * through the kernel and are not included).
  */
-tUInt32 bk_num_input_ports(tModel model);
+BS_EXPORT tUInt32 bk_num_input_ports(tModel model);
 
 /* Descriptor of the nth input port (0-based), in the documented
  * table order.
  */
-const tBkPortInfo* bk_get_input_port(tModel model, tUInt32 n);
+BS_EXPORT const tBkPortInfo* bk_get_input_port(tModel model, tUInt32 n);
 
 /* Total byte size of the planned contiguous input area. */
-tUInt64 bk_input_bytes(tModel model);
+BS_EXPORT tUInt64 bk_input_bytes(tModel model);
 
 /* Number of top-module output ports (method results, ready results
  * included).
  */
-tUInt32 bk_num_output_ports(tModel model);
+BS_EXPORT tUInt32 bk_num_output_ports(tModel model);
 
 /* Descriptor of the nth output port (0-based), in the documented
  * table order.
  */
-const tBkPortInfo* bk_get_output_port(tModel model, tUInt32 n);
+BS_EXPORT const tBkPortInfo* bk_get_output_port(tModel model, tUInt32 n);
 
 /* Total byte size of the planned contiguous output area. */
-tUInt64 bk_output_bytes(tModel model);
+BS_EXPORT tUInt64 bk_output_bytes(tModel model);
 
 /*
  * Kernel clock definition
@@ -363,7 +363,7 @@ tUInt64 bk_output_bytes(tModel model);
  * truncated to 127 characters if longer.  Defining a 65th clock
  * fails with BAD_CLOCK_HANDLE.
  */
-tClock bk_define_clock(tSimStateHdl simHdl,
+BS_EXPORT tClock bk_define_clock(tSimStateHdl simHdl,
 		       const char* name,
 		       tClockValue initial_value,
 		       tBool       has_initial_value,
@@ -383,7 +383,7 @@ tClock bk_define_clock(tSimStateHdl simHdl,
  * clocks the model registers; for a host-defined clock it is host
  * cost (see bk_define_clock()).
  */
-tStatus bk_alter_clock(tSimStateHdl simHdl,
+BS_EXPORT tStatus bk_alter_clock(tSimStateHdl simHdl,
 		       tClock      handle,
 		       tClockValue initial_value,
 		       tBool       has_initial_value,
@@ -405,7 +405,7 @@ tStatus bk_alter_clock(tSimStateHdl simHdl,
  * clock's schedule events -- up to 5 live per clock with a waveform,
  * counted in bk_max_event_queue_depth() for model-registered clocks.
  */
-tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
+BS_EXPORT tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
 			      tClock handle,
 			      tScheduleFn on_edge_callback,
 			      tScheduleFn after_edge_callback,
@@ -424,7 +424,7 @@ tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
  * model are counted in bk_max_event_queue_depth(); a call made by
  * the HOST is not, and costs 2 further events until they execute.
  */
-tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
+BS_EXPORT tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
 			      tClock handle, tEdgeDirection dir, tTime at);
 
 /* Enqueue an initial clock edge (at time 0).
@@ -439,7 +439,7 @@ tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
  * bk_max_event_queue_depth(); a HOST call is not, and costs 1
  * further event.
  */
-tStatus bk_enqueue_initial_clock_edge(tSimStateHdl simHdl,
+BS_EXPORT tStatus bk_enqueue_initial_clock_edge(tSimStateHdl simHdl,
 				      tClock handle, tEdgeDirection dir);
 
 /* Get the clock handle associated with a clock domain name.
@@ -447,7 +447,7 @@ tStatus bk_enqueue_initial_clock_edge(tSimStateHdl simHdl,
  * Returns the clock handle for the domain, or BAD_CLOCK_HANDLE
  * if there is no clock domain with the given name.
  */
-tClock bk_get_clock_by_name(tSimStateHdl simHdl, const char* name);
+BS_EXPORT tClock bk_get_clock_by_name(tSimStateHdl simHdl, const char* name);
 
 /* If there is already a clock domain with the given name,
  * return the handle for it.  If there is no clock domain with
@@ -455,25 +455,25 @@ tClock bk_get_clock_by_name(tSimStateHdl simHdl, const char* name);
  * new domain.  The domain characteristics can be set with
  * a subsequent call to bk_alter_clock().
  */
-tClock bk_get_or_define_clock(tSimStateHdl simHdl, const char* name);
+BS_EXPORT tClock bk_get_or_define_clock(tSimStateHdl simHdl, const char* name);
 
 /* Get the number of clocks defined in the kernel */
-tUInt32 bk_num_clocks(tSimStateHdl simHdl);
+BS_EXPORT tUInt32 bk_num_clocks(tSimStateHdl simHdl);
 
 /* Get the clock handle for the nth clock.
  *
  * Returns the clock handle on success or BAD_CLOCK_HANDLE on error.
  */
-tClock bk_get_nth_clock(tSimStateHdl simHdl, tUInt32 n);
+BS_EXPORT tClock bk_get_nth_clock(tSimStateHdl simHdl, tUInt32 n);
 
 /* Get various information for a clock */
-const char* bk_clock_name(tSimStateHdl simHdl, tClock handle);
-tClockValue bk_clock_initial_value(tSimStateHdl simHdl, tClock handle);
-tTime bk_clock_first_edge(tSimStateHdl simHdl, tClock handle);
-tTime bk_clock_duration(tSimStateHdl simHdl, tClock handle, tClockValue value);
-tClockValue bk_clock_val(tSimStateHdl simHdl, tClock handle);
-tUInt64 bk_clock_cycle_count(tSimStateHdl simHdl, tClock handle);
-tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
+BS_EXPORT const char* bk_clock_name(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tClockValue bk_clock_initial_value(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tTime bk_clock_first_edge(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tTime bk_clock_duration(tSimStateHdl simHdl, tClock handle, tClockValue value);
+BS_EXPORT tClockValue bk_clock_val(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tUInt64 bk_clock_cycle_count(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 			    tClock handle, tEdgeDirection dir);
 
 /*
@@ -486,14 +486,14 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
  * are counted in bk_max_event_queue_depth(); a further HOST call
  * costs 2 more.
  */
-void bk_use_default_reset(tSimStateHdl simHdl);
+BS_EXPORT void bk_use_default_reset(tSimStateHdl simHdl);
 
 /*
  * Simulation control
  */
 
 /* Get the current simulation time */
-tTime bk_now(tSimStateHdl simHdl);
+BS_EXPORT tTime bk_now(tSimStateHdl simHdl);
 
 /* Set simulation timescale - reporting scale factor and time unit for $time.
  *
@@ -502,23 +502,23 @@ tTime bk_now(tSimStateHdl simHdl);
  * Errors include passing an invalid timescale unit and setting the timescale
  * after the beginning of the simulation.
  */
-tStatus bk_set_timescale(tSimStateHdl simHdl, const char* scale_unit, tTime scale_factor);
+BS_EXPORT tStatus bk_set_timescale(tSimStateHdl simHdl, const char* scale_unit, tTime scale_factor);
 
 /* Test if a given simulation time is still ongoing.
  * WARNING: This is a specialized function for use by
  * Bluesim primitives to facilitate connections to
  * event-driven simulation.  FOR EXPERT USE ONLY!
  */
-tBool bk_is_same_time(tSimStateHdl simHdl, tTime t);
+BS_EXPORT tBool bk_is_same_time(tSimStateHdl simHdl, tTime t);
 
 /* Test if we are currently executing within a combinational
  * schedule.  FOR EXPERT USE ONLY!
  */
-tBool bk_is_combo_sched(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_is_combo_sched(tSimStateHdl simHdl);
 
 /* Get information on the clock event queue */
-tTime bk_clock_last_edge(tSimStateHdl simHdl, tClock handle);
-tTime bk_clock_combinational_time(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tTime bk_clock_last_edge(tSimStateHdl simHdl, tClock handle);
+BS_EXPORT tTime bk_clock_combinational_time(tSimStateHdl simHdl, tClock handle);
 
 /* Quit simulation at the end of the current time slice.
  *
@@ -527,7 +527,7 @@ tTime bk_clock_combinational_time(tSimStateHdl simHdl, tClock handle);
  * bk_max_event_queue_depth() and each call must be budgeted on top
  * of that bound.
  */
-void bk_quit_at(tSimStateHdl simHdl, tTime t);
+BS_EXPORT void bk_quit_at(tSimStateHdl simHdl, tTime t);
 
 /* Quit simulation at the end of the given time slice.
  *
@@ -539,7 +539,7 @@ void bk_quit_at(tSimStateHdl simHdl, tTime t);
  * yield event that IS counted in bk_max_event_queue_depth() (see
  * bk_schedule_ui_event()).
  */
-tStatus bk_quit_after_edge(tSimStateHdl simHdl,
+BS_EXPORT tStatus bk_quit_after_edge(tSimStateHdl simHdl,
 			   tClock handle, tEdgeDirection dir, tUInt64 cycle);
 
 /* Test if simulation events are currently being executed.
@@ -547,7 +547,7 @@ tStatus bk_quit_after_edge(tSimStateHdl simHdl,
  * Returns 0 if the simulation is not running and non-zero if
  * it is running.
  */
-tBool bk_is_running(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_is_running(tSimStateHdl simHdl);
 
 /* Execute simulation events on the caller's thread.
  *
@@ -564,7 +564,7 @@ tBool bk_is_running(tSimStateHdl simHdl);
  * Returns BK_ERROR on error (including a call while the simulation
  * is running) and BK_SUCCESS on success.
  */
-tStatus bk_sync_run(tSimStateHdl simHdl);
+BS_EXPORT tStatus bk_sync_run(tSimStateHdl simHdl);
 
 /* Like bk_sync_run(), but runs at most one cycle of the given
  * clock, with the same semantics as bluetcl's 'sim step': the
@@ -587,13 +587,13 @@ tStatus bk_sync_run(tSimStateHdl simHdl);
  * while the simulation is running, or a call after $finish) and
  * BK_SUCCESS on success.
  */
-tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
+BS_EXPORT tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
 
 /* Test whether any events remain in the simulation queue.
  *
  * Returns 0 if the queue is empty and non-zero otherwise.
  */
-tBool bk_sync_pending(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_sync_pending(tSimStateHdl simHdl);
 
 /* Control whether bk_sync_run() and bk_sync_step() flush open file
  * buffers each time they return control to the caller, by calling
@@ -605,7 +605,7 @@ tBool bk_sync_pending(tSimStateHdl simHdl);
  * disabled, pending $display output stays in the host's buffers
  * until the embedder flushes them itself.
  */
-void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
+BS_EXPORT void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
 
 /* Schedule a UI callback for the end of a given timeslice,
  * unless there is already one scheduled at that time.
@@ -619,13 +619,13 @@ void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
  * reached edge limit.  Each ADDITIONAL pending yield event at some
  * other time is a HOST cost on top of the bound.
  */
-tStatus bk_schedule_ui_event(tSimStateHdl simHdl, tTime at);
+BS_EXPORT tStatus bk_schedule_ui_event(tSimStateHdl simHdl, tTime at);
 
 /* Remove a UI callback previously scheduled at the end of a given timeslice.
  *
  * Returns BK_ERROR on error or BK_SUCCESS on success.
  */
-tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
+BS_EXPORT tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
 
 /*
  * Routines to control debugging functionality.
@@ -637,10 +637,10 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
  * call, NOT counted in bk_max_event_queue_depth(); budget up to 5
  * events per clock on top of the bound while dumping is enabled.
  */
-void bk_enable_cycle_dumping(tSimStateHdl simHdl);
-void bk_disable_cycle_dumping(tSimStateHdl simHdl);
-tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl);
-void bk_dump_cycle_counts(tSimStateHdl simHdl,
+BS_EXPORT void bk_enable_cycle_dumping(tSimStateHdl simHdl);
+BS_EXPORT void bk_disable_cycle_dumping(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl);
+BS_EXPORT void bk_dump_cycle_counts(tSimStateHdl simHdl,
 			  const char* label, tClock handle);
 
 /* Call to enable clock edges without logic (for interactive stepping)
@@ -650,7 +650,7 @@ void bk_dump_cycle_counts(tSimStateHdl simHdl,
  * schedule events (keeping edges that have no logic), never exceeding
  * the 5 live events a clock with a waveform is budgeted for.
  */
-void bk_set_interactive(tSimStateHdl simHdl);
+BS_EXPORT void bk_set_interactive(tSimStateHdl simHdl);
 
 /*
  * Callbacks to stop simulation within a schedule or model.
@@ -666,30 +666,30 @@ void bk_set_interactive(tSimStateHdl simHdl);
  * simulation cycle.  The status value is made available to
  * callers of bk_exit_status().
  */
-void bk_stop_now(tSimStateHdl simHdl, tSInt32 status);
+BS_EXPORT void bk_stop_now(tSimStateHdl simHdl, tSInt32 status);
 
 /* Abort the simulation and return to the UI at the end of this
  * simulation cycle.  The status value is made available to
  * callers of bk_exit_status().
  */
-void bk_finish_now(tSimStateHdl simHdl, tSInt32 status);
+BS_EXPORT void bk_finish_now(tSimStateHdl simHdl, tSInt32 status);
 
 /* Report a fatal error and end simulation. */
-void bk_fatal_now(tSimStateHdl simHdl, tSInt32 status);
+BS_EXPORT void bk_fatal_now(tSimStateHdl simHdl, tSInt32 status);
 
 /* Test if $stop was called. */
-tBool bk_stopped(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_stopped(tSimStateHdl simHdl);
 
 /* Test if $finish was called. */
-tBool bk_finished(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_finished(tSimStateHdl simHdl);
 
 /* Retrieve the status value of the last call to bk_stop_now()
  * or bk_finish_now().
  */
-tSInt32 bk_exit_status(tSimStateHdl simHdl);
+BS_EXPORT tSInt32 bk_exit_status(tSimStateHdl simHdl);
 
 /* Test if $fatal was called. */
-tBool bk_fataled(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_fataled(tSimStateHdl simHdl);
 
 
 /*
@@ -699,10 +699,10 @@ tBool bk_fataled(tSimStateHdl simHdl);
 /* Abort the simulation and return to the UI at the end of the
  * current simulation cycle.
  */
-void bk_abort_now(tSimStateHdl simHdl);
+BS_EXPORT void bk_abort_now(tSimStateHdl simHdl);
 
 /* Test if bk_abort_now() was called. */
-tBool bk_aborted(tSimStateHdl simHdl);
+BS_EXPORT tBool bk_aborted(tSimStateHdl simHdl);
 
 
 /*
@@ -714,78 +714,78 @@ tBool bk_aborted(tSimStateHdl simHdl);
  * 64 arguments of at most 127 characters each are recorded, and an
  * argument beyond either limit is silently ignored.
  */
-void bk_append_argument(tSimStateHdl simHdl, const char* arg);
+BS_EXPORT void bk_append_argument(tSimStateHdl simHdl, const char* arg);
 
 /* Retrieve the trailing portion of the first matching argument */
-const char* bk_match_argument(tSimStateHdl simHdl, const char* name);
+BS_EXPORT const char* bk_match_argument(tSimStateHdl simHdl, const char* name);
 
 /* Routine which provides direct access to the top-level model.  This
  * should only be used by callers that know exactly what they are doing.
  */
-void* bk_get_model_instance(tSimStateHdl simHdl);
+BS_EXPORT void* bk_get_model_instance(tSimStateHdl simHdl);
 
 /*
  * API routines for finding and working with symbols
  */
 
 /* Get the symbol for the top module. */
-tSymbol bk_top_symbol(tSimStateHdl simHdl);
+BS_EXPORT tSymbol bk_top_symbol(tSimStateHdl simHdl);
 
 /* Lookup a symbol by name.  Returns BAD_SYMBOL if the named
  * symbol is not found.
  */
-tSymbol bk_lookup_symbol(tSymbol root, const char* name);
+BS_EXPORT tSymbol bk_lookup_symbol(tSymbol root, const char* name);
 
 /* Get the key for a symbol */
-const char* bk_get_key(tSymbol sym);
+BS_EXPORT const char* bk_get_key(tSymbol sym);
 
 /* Test if a symbol represents a module */
-tBool bk_is_module(tSymbol sym);
+BS_EXPORT tBool bk_is_module(tSymbol sym);
 
 /* Test if a symbol represents a rule */
-tBool bk_is_rule(tSymbol sym);
+BS_EXPORT tBool bk_is_rule(tSymbol sym);
 
 /* Test if a symbol represents a value */
-tBool bk_is_single_value(tSymbol sym);
+BS_EXPORT tBool bk_is_single_value(tSymbol sym);
 
 /* Test if a symbol represents a range of values */
-tBool bk_is_value_range(tSymbol sym);
+BS_EXPORT tBool bk_is_value_range(tSymbol sym);
 
 /* Get the size for a symbol (for value and value range symbols) */
-tUInt32 bk_get_size(tSymbol sym);
+BS_EXPORT tUInt32 bk_get_size(tSymbol sym);
 
 /* Get the value for a symbol (as a void*) */
-void* bk_get_ptr(tSymbol sym);
+BS_EXPORT void* bk_get_ptr(tSymbol sym);
 
 /* Get a pointer to the value for a value symbol.
  * Returns NULL for other symbol types.
  */
-const unsigned int* bk_peek_symbol_value(tSymbol sym);
+BS_EXPORT const unsigned int* bk_peek_symbol_value(tSymbol sym);
 
 /* Get the minimum address for a value range.
  * Returns NULL for other symbol types.
  */
-tUInt64 bk_get_range_min_addr(tSymbol sym);
+BS_EXPORT tUInt64 bk_get_range_min_addr(tSymbol sym);
 
 /* Get the maximum address for a value range.
  * Returns NULL for other symbol types.
  */
-tUInt64 bk_get_range_max_addr(tSymbol sym);
+BS_EXPORT tUInt64 bk_get_range_max_addr(tSymbol sym);
 
 /* Get a pointer to a value selected from a range.
  * Returns NULL for other symbol types, or if the address is out of bounds.
  */
-const unsigned int* bk_peek_range_value(tSymbol sym, tUInt64 addr);
+BS_EXPORT const unsigned int* bk_peek_range_value(tSymbol sym, tUInt64 addr);
 
 /* Get the number of sub-symbols of a module.
  * Returns 0 for other symbol types.
  */
-tUInt32 bk_num_symbols(tSymbol sym);
+BS_EXPORT tUInt32 bk_num_symbols(tSymbol sym);
 
 /* Get the Nth sub-symbol of a module (starting at 0).
  * Returns BAD_SYMBOL for other symbol types.
  */
-tSymbol bk_get_nth_symbol(tSymbol sym, tUInt32 n);
+BS_EXPORT tSymbol bk_get_nth_symbol(tSymbol sym, tUInt32 n);
 
 #if __cplusplus
 } /* extern "C" */

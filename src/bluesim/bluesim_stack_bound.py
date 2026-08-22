@@ -413,11 +413,21 @@ LOC_PART_RE = re.compile(r'^(<built-in>|\S.*:\d+(:\d+)?)$')
 
 INDIRECT = "__indirect_call"
 
-# complete-object <-> base-object constructor/destructor aliases
+# complete-object <-> base-object constructor/destructor aliases.
+# GCC emits one body for equivalent variants and titles its callgraph
+# node after whichever variant it picked; when a class's destructor
+# variants are all aliases (including the deleting D0, e.g. with a
+# trapping class-scope operator delete) that title can be D0, so a
+# D1/D2 call must also try the D0 node.  Charging a plain-destructor
+# call with the deleting destructor's data is conservative: same body
+# plus the operator delete edge.  (D0 calls never resolve to D1/D2 --
+# that would drop the operator delete.)
 CTOR_DTOR_ALIAS = [(re.compile(r"(C)1(E)"), r"\g<1>2\g<2>"),
                    (re.compile(r"(C)2(E)"), r"\g<1>1\g<2>"),
                    (re.compile(r"(D)1(E)"), r"\g<1>2\g<2>"),
-                   (re.compile(r"(D)2(E)"), r"\g<1>1\g<2>")]
+                   (re.compile(r"(D)2(E)"), r"\g<1>1\g<2>"),
+                   (re.compile(r"(D)1(E)"), r"\g<1>0\g<2>"),
+                   (re.compile(r"(D)2(E)"), r"\g<1>0\g<2>")]
 
 
 def unescape(s):
@@ -911,8 +921,8 @@ def emit_tu(path, bound, report, problems):
     lines.append("")
     lines.append("/* Strong definition; the runtime carries a weak 0 "
                  "default (stack_bound_default.cxx). */")
-    lines.append('extern "C" const tUInt64 bs_stack_depth_bound = %dllu;'
-                 % bound)
+    lines.append('extern "C" BS_EXPORT const tUInt64 '
+                 "bs_stack_depth_bound = %dllu;" % bound)
     lines.append("")
     with open(path, "w") as fh:
         fh.write("\n".join(lines))

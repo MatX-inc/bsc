@@ -1,8 +1,6 @@
 #ifndef __BS_PRIM_MOD_WIRE_H__
 #define __BS_PRIM_MOD_WIRE_H__
 
-#include <iostream>
-
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
 #include "bs_prim_storage.h"

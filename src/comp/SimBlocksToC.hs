@@ -234,8 +234,13 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
         -- calling this makes no allocator calls -- and every call
         -- re-records the host ops/context and the caller-provided
         -- state/input/output storage in the Model base.
+        -- BS_EXPORT (bluesim_types.h) keeps the constructor visible:
+        -- the model's translation units are compiled with
+        -- -fvisibility=hidden, and this is one of the few entry
+        -- points the host looks up with dlsym()
         new_fn_proto =
-            function (ptr . void) (mkVar ("new_" ++ model_name))
+            function (ptr . userType "BS_EXPORT void")
+                (mkVar ("new_" ++ model_name))
                 [ (ptr . constant . userType "struct bs_host_ops")
                       (mkVar "ops")
                 , (ptr . void) (mkVar "ctx")

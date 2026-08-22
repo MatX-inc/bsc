@@ -17,7 +17,7 @@
 
 #include "bluesim_types.h"
 
-extern "C" const tUInt64 bs_stack_depth_bound
+extern "C" BS_EXPORT const tUInt64 bs_stack_depth_bound
 #if defined(__GNUC__)
     __attribute__((weak))
 #endif

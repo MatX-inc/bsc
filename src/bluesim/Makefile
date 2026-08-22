@@ -62,6 +62,12 @@ CFLAGS += -Wall -Wextra -Werror \
 	-std=c99 \
         -D_FILE_OFFSET_BITS=64 \
 	-fPIC
+# The runtime is linked into the model shared object, which must be
+# freestanding: no exceptions or RTTI (their tables would import the
+# unwinder and type-info machinery from libgcc/libstdc++), no stack
+# protector (its failure path -- and on some hosts its canary -- lives
+# in libc), and hidden visibility (the public entry points carry
+# BS_EXPORT explicitly; see bluesim_types.h).
 CXXFLAGS += -Wall -Wextra -Werror \
 	-Wpointer-arith \
 	-Wshadow \
@@ -72,6 +78,9 @@ CXXFLAGS += -Wall -Wextra -Werror \
 	-std=c++11 \
         -D_FILE_OFFSET_BITS=64 \
         -fno-rtti \
+        -fno-exceptions \
+        -fno-stack-protector \
+        -fvisibility=hidden \
 	-fPIC
 
 CLANG_MAJVER=$(shell echo | $(CXX) -dM -E - | grep __clang_major__ | awk '{print $$3}')

@@ -11,6 +11,20 @@
 extern "C" {
 #endif
 
+/* Marker for the model shared object's public entry points (the bk_*
+ * kernel API, the generated new_MODEL_* constructors and the injected
+ * bs_stack_depth_bound constant).  The model's translation units are
+ * compiled with -fvisibility=hidden, so anything the host must be
+ * able to look up with dlsym() carries this attribute explicitly;
+ * everything else stays local to the shared object (the export map
+ * passed at link time enforces the same list).
+ */
+#if defined(__GNUC__)
+#define BS_EXPORT __attribute__((visibility("default")))
+#else
+#define BS_EXPORT
+#endif
+
 /* The type used to hold Bluesim version information
  */
 typedef struct

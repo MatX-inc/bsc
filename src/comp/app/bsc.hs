@@ -1561,7 +1561,25 @@ cmdCompileBluesimCFile flags extra_switches cName = do
                     else [])
         -- Generated C++ code may reference uninitialized variables when it
         -- is known to be safe.
-        switches = incflags ++ extra_switches ++
+        --
+        -- A Bluesim model's translation units are compiled the way the
+        -- runtime libraries are (see src/bluesim/Makefile): the shared
+        -- object they are linked into must be freestanding, so
+        -- exceptions, RTTI and the stack protector are off (their
+        -- support code lives in libgcc/libstdc++/libc) and everything
+        -- but the BS_EXPORT-marked public entry points has hidden
+        -- visibility.  SystemC builds compile as before: their objects
+        -- are linked into the user's SystemC program, not into a
+        -- freestanding shared object.
+        freestanding_switches =
+            if (genSysC flags)
+            then []
+            else [ "-fno-exceptions"
+                 , "-fno-rtti"
+                 , "-fno-stack-protector"
+                 , "-fvisibility=hidden"
+                 ]
+        switches = incflags ++ extra_switches ++ freestanding_switches ++
                    [ "-Wno-uninitialized"
                    , "-fPIC"
                    , "-c"
@@ -1868,7 +1886,8 @@ genStackBoundObj errh flags toplevel su_ok ci_files = do
             , "#include \"bluesim_types.h\""
             , ""
             , "/* 0 = no bound available (see bk_stack_depth_bound()) */"
-            , "extern \"C\" const tUInt64 bs_stack_depth_bound = 0llu;"
+            , "extern \"C\" BS_EXPORT const tUInt64 bs_stack_depth_bound " ++
+              "= 0llu;"
             ]
     -- compile without the "Bluesim object created" message: this TU
     -- is internal to the link step (and has no companion header)
