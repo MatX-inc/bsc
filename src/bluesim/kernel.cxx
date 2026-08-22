@@ -3,9 +3,6 @@
 #include <cstring>
 #include <cstdio>
 
-#include <pthread.h>
-#include <signal.h>
-
 #include "mem_alloc.h"
 #include "kernel.h"
 #include "bs_module.h"
@@ -16,133 +13,6 @@
 
 /* forward declarations of some static helper functions */
 static void setup_clock_edges(tSimStateHdl simHdl, tClock clk);
-
-/* mutex operations */
-
-static void lock_sim_state(tSimStateHdl simHdl)
-{
-  if (pthread_mutex_lock(&(simHdl->sim_mutex)) != 0)
-    perror("lock_sim_state()");
-}
-
-static void unlock_sim_state(tSimStateHdl simHdl)
-{
-  if (pthread_mutex_unlock(&(simHdl->sim_mutex)) != 0)
-    perror("unlock_sim_state()");
-}
-
-/* Stop the simulation thread until told to restart */
-static void pause_sim(tSimStateHdl simHdl)
-{
-  fflush(NULL); /* flush open file buffers */
-
-  /* The stop_semaphore is used to indicate when simulation
-   * stops.  It is posted here and can be waited on in
-   * wait_for_sim_stop().
-   */
-  post_semaphore(simHdl->stop_semaphore);
-
-  /* The start_semaphore is used to control simulation wake-up.
-   * It is waited on here and posted in bk_advance, so that
-   * we know the simulation will wake-up exactly once for
-   * each call to bk_advance().
-   */
-  wait_on_semaphore(simHdl->start_semaphore);
-}
-
-/* Wait for the simulation thread to stop in pause_sim().
- * This is a hard-wait and should only be called when we know
- * the simulation thread is actually running (or going to run).
- */
-static void wait_for_sim_stop(tSimStateHdl simHdl)
-{
-  /* Wait for the simulation thread to stop */
-  wait_on_semaphore(simHdl->stop_semaphore);
-
-  fflush(NULL); /* flush open file buffers */
-}
-
-/*
- * SIGINT handler which triggers a simulation stop via bk_abort_now()
- */
-
-// list of sims that have registered their interest in the signal
-// (use a list, so that iterators are still valid after an erase)
-static std::list<tSimStateHdl> abort_watchers;
-
-static void abort_handler(int /* unused */)
-{
-  std::list<tSimStateHdl>::iterator it;
-  for (it = abort_watchers.begin(); it != abort_watchers.end(); it++)
-    bk_abort_now(*it);
-}
-
-static void add_abort_watcher(tSimStateHdl simHdl)
-{
-  abort_watchers.push_back(simHdl);
-}
-
-static void remove_abort_watcher(tSimStateHdl simHdl)
-{
-  std::list<tSimStateHdl>::iterator it;
-  // list iterators are valid after an erase, except for the erased iterator;
-  // therefore, a for-loop is OK, but do the increment before erasing
-  for (it = abort_watchers.begin(); it != abort_watchers.end(); ) {
-    if ((*it) == simHdl) {
-      std::list<tSimStateHdl>::iterator next_it = it;
-      next_it++;
-      abort_watchers.erase(it);
-      it = next_it;
-    } else {
-      it++;
-    }
-  }
-}
-
-/*
- * Simulation thread which handles the actual simulation event queue
- * operations.  It communicates with the rest of the API through
- * semaphore operations in pause_sim, bk_advance and wait_for_sim_stop.
- */
-static void* sim_thread(void* ptr)
-{
-  tSimState* simHdl = (tSimState*)ptr;
-
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return NULL;
-
-  /* install signal handlers to shut down simulation */
-  struct sigaction sa;
-  sa.sa_flags = 0;
-  sa.sa_handler = abort_handler;
-  sigemptyset(&sa.sa_mask);
-  /* SIGINT (user types Ctrl-C) */
-  sigaction(SIGINT, &sa, NULL);
-  /* SIGPIPE (usually stdout piped to a program that exits, eg /usr/bin/head) */
-  sigaction(SIGPIPE, &sa, NULL);
-
-  /* add this sim to the signal watch list */
-  add_abort_watcher(simHdl);
-
-  while (!simHdl->sim_shutting_down)
-  {
-    /* yield to the UI and wait for a trigger to execute */
-    lock_sim_state(simHdl);
-    simHdl->sim_running = false;
-    unlock_sim_state(simHdl);
-    pause_sim(simHdl);
-
-    /* execute the events in the simulation queue */
-    simHdl->force_halt = false;
-    while (bk_is_running(simHdl) && !simHdl->sim_shutting_down)
-      simHdl->queue->execute(simHdl);
-  }
-
-  /* remove this sim from the signal watch list */
-  remove_abort_watcher(simHdl);
-
-  pthread_exit(NULL);
-}
 
 /*
  * Functions to abstract the implementation of the event data
@@ -317,21 +187,13 @@ static tTime quit_event(tSimStateHdl simHdl, tEvent& /* unused */)
 
 static tTime yield_event(tSimStateHdl simHdl, tEvent& ev)
 {
-  lock_sim_state(simHdl);
   simHdl->sim_running = false;
   simHdl->sim_time = ev.at;
-  unlock_sim_state(simHdl);
-  if (simHdl->sync_mode)
-  {
-    /* return control to the caller of bk_sync_run();
-     * sync_run_events() flushes file buffers before returning
-     */
-    simHdl->queue->halt();
-    return (0llu);
-  }
-  pause_sim(simHdl);
-  if (simHdl->sim_shutting_down)
-    simHdl->queue->clear();
+
+  /* return control to the caller of bk_sync_run();
+   * sync_run_events() flushes file buffers before returning
+   */
+  simHdl->queue->halt();
   return (0llu);
 }
 
@@ -467,8 +329,8 @@ bool check_version(tBluesimVersionInfo* version)
           !strcmp(version_name,version->name));
 }
 
-/* Build the simulation state shared by bk_init() and bk_sync_init() */
-static tSimStateHdl init_sim_state(tModel model, tBool master)
+/* Initialize the Bluesim kernel */
+tSimStateHdl bk_sync_init(tModel model, tBool master)
 {
   tSimStateHdl simHdl = new tSimState;
 
@@ -477,12 +339,8 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   simHdl->sim_time = 0llu;
   simHdl->queue = NULL;
 
-  simHdl->sync_mode = false;
   simHdl->flush_on_pause = true;
   simHdl->sim_running = false;
-  simHdl->sim_shutting_down = false;
-  simHdl->start_semaphore = NULL;
-  simHdl->stop_semaphore = NULL;
 
   simHdl->in_combo_schedule = false;
 
@@ -524,73 +382,13 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   return simHdl;
 }
 
-/* Initialize the Bluesim kernel */
-tSimStateHdl bk_init(tModel model, tBool master)
-{
-  tSimStateHdl simHdl = init_sim_state(model, master);
-
-  /* setup simulation thread infrastructure */
-  simHdl->force_halt = false;
-  simHdl->sim_shutting_down = false;
-  pthread_mutex_init(&(simHdl->sim_mutex), NULL);
-  simHdl->start_semaphore = create_semaphore();
-  simHdl->stop_semaphore = create_semaphore();
-  if (simHdl->start_semaphore == NULL || simHdl->stop_semaphore == NULL)
-  {
-    release_semaphore(simHdl->start_semaphore);
-    release_semaphore(simHdl->stop_semaphore);
-    return NULL; // ERROR
-  }
-
-  /* start the simulation thread and wait for it to block in pause_sim */
-  simHdl->sim_running = true;
-  pthread_create(&(simHdl->sim_thread_id), NULL, sim_thread, (void*)simHdl);
-  wait_for_sim_stop(simHdl);
-
-  return simHdl;
-}
-
-/* Initialize the Bluesim kernel in synchronous mode */
-tSimStateHdl bk_sync_init(tModel model, tBool master)
-{
-  tSimStateHdl simHdl = init_sim_state(model, master);
-
-  /* no simulation thread, semaphores, or signal handlers in sync mode;
-   * the mutex is still created so bk_is_running() et al. work unchanged
-   */
-  simHdl->sync_mode = true;
-  pthread_mutex_init(&(simHdl->sim_mutex), NULL);
-
-  return simHdl;
-}
-
 /* Shutdown the Bluesim kernel */
 void bk_shutdown(tSimStateHdl simHdl)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL))
     return;
 
-  /* trigger the simulation queue thread to end */
-  lock_sim_state(simHdl);
-  simHdl->force_halt = true;
-  simHdl->sim_shutting_down = true;
-  unlock_sim_state(simHdl);
-  if (!simHdl->sync_mode)
-  {
-    post_semaphore(simHdl->start_semaphore);
-    pthread_join(simHdl->sim_thread_id, NULL);
-  }
   simHdl->sim_running = false;
-
-  /* clean up semaphores and mutexes */
-  if (!simHdl->sync_mode)
-  {
-    release_semaphore(simHdl->start_semaphore);
-    simHdl->start_semaphore = NULL;
-    release_semaphore(simHdl->stop_semaphore);
-    simHdl->stop_semaphore = NULL;
-  }
-  pthread_mutex_destroy(&(simHdl->sim_mutex));
 
   simHdl->model->destroy_model();
   shutdown_mem_allocator();
@@ -987,7 +785,7 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
- * This should be called before the first bk_advance() call.
+ * This should be called before the first bk_sync_run() call.
  */
 void bk_use_default_reset(tSimStateHdl simHdl)
 {
@@ -1053,10 +851,8 @@ tStatus bk_set_timescale(tSimStateHdl simHdl, const char* scale_unit, tTime scal
  */
 tBool bk_is_same_time(tSimStateHdl simHdl, tTime t)
 {
-  /* This access is not protected by a mutex, for performance reasons.
-   * It should be safe to access, because this will only be called from
-   * primitives during event execution, or from a SystemC wrapper after
-   * bk_advance has returned.
+  /* This will only be called from primitives during event execution,
+   * or from a SystemC wrapper after bk_sync_run has returned.
    */
   if (simHdl->sim_running && (simHdl->sim_time == t))
     return 1;
@@ -1166,74 +962,14 @@ tStatus bk_quit_after_edge(tSimStateHdl simHdl,
   return BK_SUCCESS;
 }
 
-/* Execute simulation events until none remain, simulation is
- * interrupted, or a stopping condition (time limit, etc.) is
- * encountered.
- */
-tStatus bk_advance(tSimStateHdl simHdl, tBool async)
-{
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return BK_ERROR;
-
-  /* a sync-mode handle has no simulation thread; use bk_sync_run() */
-  if (simHdl->sync_mode)
-    return BK_ERROR;
-
-  /* check if the simulation is already running */
-  if (bk_is_running(simHdl))
-    return BK_ERROR;
-
-  /* in case there was no bk_sync(), we want the stop semaphore to
-   * return to 0.
-   */
-  trywait_on_semaphore(simHdl->stop_semaphore);
-
-  /* kick off the simulation thread by posting to the start_semaphore */
-  lock_sim_state(simHdl);
-  simHdl->sim_running = true;
-  unlock_sim_state(simHdl);
-  post_semaphore(simHdl->start_semaphore);
-
-  if (async)
-    return BK_SUCCESS;  // don't wait for simulation to complete
-
-  /* handle the synchronous case */
-  wait_for_sim_stop(simHdl);
-
-  return BK_SUCCESS;
-}
-
-/* Test if the simulation thread is still running.
+/* Test if simulation events are currently being executed.
  *
- * Returns 0 if the thread is not running and non-zero if
- * the thread is running.
+ * Returns 0 if the simulation is not running and non-zero if
+ * it is running.
  */
 tBool bk_is_running(tSimStateHdl simHdl)
 {
-  tBool ret = 0;
-  lock_sim_state(simHdl);
-  if (simHdl->sim_running) ret = 1;
-  unlock_sim_state(simHdl);
-  return ret;
-}
-
-/* Wait for a simulation started using bk_advance in async mode
- * to complete.
- *
- * Returns the simulation time at which execution stopped.
- */
-tTime bk_sync(tSimStateHdl simHdl)
-{
-  /* a sync-mode handle has no simulation thread to wait for;
-   * return the current simulation time immediately
-   */
-  if (simHdl->sync_mode)
-    return simHdl->sim_time;
-
-  if (bk_is_running(simHdl))
-    wait_for_sim_stop(simHdl);
-
-  return simHdl->sim_time;
+  return simHdl->sim_running ? 1 : 0;
 }
 
 /* Execute the events in the simulation queue on the caller's
@@ -1242,12 +978,10 @@ tTime bk_sync(tSimStateHdl simHdl)
  */
 static tStatus sync_run_events(tSimStateHdl simHdl)
 {
-  lock_sim_state(simHdl);
   simHdl->sim_running = true;
-  unlock_sim_state(simHdl);
 
   /* execute the events in the simulation queue, resetting the
-   * transient halt flag first, as the simulation thread does
+   * transient halt flag first
    */
   simHdl->force_halt = false;
   simHdl->queue->execute(simHdl);
@@ -1255,12 +989,9 @@ static tStatus sync_run_events(tSimStateHdl simHdl)
   /* already false if a yield event ended the run; clear it here
    * in case the queue drained instead
    */
-  lock_sim_state(simHdl);
   simHdl->sim_running = false;
-  unlock_sim_state(simHdl);
 
-  /* flush open file buffers once per return to the caller, matching
-   * the one flush per pause performed on the threaded path (unless
+  /* flush open file buffers once per return to the caller (unless
    * the embedder disabled it with bk_set_flush_on_pause())
    */
   if (simHdl->flush_on_pause)
@@ -1276,7 +1007,7 @@ static tStatus sync_run_events(tSimStateHdl simHdl)
  */
 tStatus bk_sync_run(tSimStateHdl simHdl)
 {
-  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
+  if ((simHdl == NULL) || (simHdl->queue == NULL))
     return BK_ERROR;
 
   /* check if the simulation is already running (not re-entrant) */
@@ -1294,7 +1025,7 @@ tStatus bk_sync_run(tSimStateHdl simHdl)
  */
 tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk)
 {
-  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
+  if ((simHdl == NULL) || (simHdl->queue == NULL))
     return BK_ERROR;
 
   /* check if the simulation is already running (not re-entrant) */

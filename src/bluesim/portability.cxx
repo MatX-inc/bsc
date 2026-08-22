@@ -4,8 +4,6 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstdio>
-#include <errno.h>
-#include <unistd.h>
 
 #include "portability.h"
 
@@ -57,106 +55,5 @@ int new_asprintf(char **strp, const char* fmt, ...) throw()
   }
 
   return(result);
-}
-
-/* portable semaphore facade */
-
-#if USE_NAMED_SEMAPHORES
-
-/*
- * Implementation using named semaphores.
- */
-
-tSemaphore* create_semaphore()
-{
-  // Since multiple bluesim processes may be running at the same time, we need
-  // to use a name that is unique to this process.
-  char* name;
-  asprintf(&name, "/bsim_arbitrary_sem_name_%05d", getpid());
-  // Remove the semaphore if it already exists.  It should not exist, but just
-  // in case it does, we want to remove it so that we can create it.
-  sem_unlink(name);
-  // create the semaphore
-  tSemaphore* semaphore = sem_open( name
-                                  , O_CREAT | O_EXCL
-                                  , S_IRUSR | S_IWUSR
-                                  , 0 );
-  if (semaphore == SEM_FAILED)
-  {
-    perror("sem_open");
-    semaphore = NULL;
-  }
-  // Unlink the semaphore to get rid of the name.  The underlying semaphore will
-  // continue to exist as long as there are open handles to it, but we don't
-  // wan't to keep the name around.
-  sem_unlink(name);
-  free(name);
-  return semaphore;
-}
-
-void release_semaphore(tSemaphore* semaphore)
-{
-  if (semaphore == NULL) return;
-  sem_close(semaphore);
-}
-
-#else /* USE_NAMED_SEMAPHORES */
-
-/*
- * Implementation using unnamed semaphores.
- */
-
-tSemaphore* create_semaphore()
-{
-  // allocate semaphore struct
-  tSemaphore* semaphore = (tSemaphore*) malloc(sizeof(tSemaphore));
-  if (semaphore == NULL)
-  {
-    perror("malloc");
-    return NULL;
-  }
-
-  // initialize the semaphore
-  if (sem_init(semaphore, 0, 0) != 0)
-  {
-    perror("sem_init");
-    free(semaphore);
-    return NULL;
-  }
-
-  return semaphore;
-}
-
-void release_semaphore(tSemaphore* semaphore)
-{
-  if (semaphore == NULL) return;
-  sem_destroy(semaphore);
-  free(semaphore);
-}
-
-#endif /* USE_NAMED_SEMAPHORES */
-
-/*
- * Common implementation for both named and unnamed semaphores.
- */
-
-void post_semaphore(tSemaphore* semaphore)
-{
-  if (semaphore != NULL)
-    sem_post(semaphore);
-}
-
-void trywait_on_semaphore(tSemaphore* semaphore)
-{
-  if (semaphore == NULL) return;
-
-  while ((sem_trywait(semaphore) != 0) && (errno == EINTR)) {} ;
-}
-
-void wait_on_semaphore(tSemaphore* semaphore)
-{
-  if (semaphore == NULL) return;
-
-  while ((sem_wait(semaphore) != 0) && (errno == EINTR)) {};
 }
 

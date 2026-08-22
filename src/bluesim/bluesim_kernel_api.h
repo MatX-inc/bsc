@@ -6,6 +6,13 @@
 /*
  * Declarations of all functions in the Bluesim kernel API.
  * All functions have C linkage.
+ *
+ * The kernel is synchronous: it creates no threads and installs no
+ * signal handlers.  Simulation events are executed on the caller's
+ * thread by bk_sync_run() and bk_sync_step(), which return when a
+ * stopping condition is encountered.  An embedder that wants
+ * asynchronous execution or Ctrl-C handling provides them itself
+ * (as bluetcl does with its simulation worker thread).
  */
 
 #if __cplusplus
@@ -24,23 +31,12 @@ extern "C" {
  * Returns a handle to the simulation state, which is needed
  * as an argument to the other Bluesim kernel API functions.
  */
-tSimStateHdl bk_init(tModel model, tBool master);
-
-/* Like bk_init(), but initializes the kernel in synchronous mode:
- * no simulation thread is created and no SIGINT/SIGPIPE handlers
- * are installed.  Simulation events are executed on the caller's
- * thread by calling bk_sync_run(); bk_advance() and bk_sync() may
- * not be used with a handle returned by this function.
- *
- * Returns a handle to the simulation state, which is needed
- * as an argument to the other Bluesim kernel API functions.
- */
 tSimStateHdl bk_sync_init(tModel model, tBool master);
 
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.
  * After bk_shutdown() is called, no other Bluesim kernel
- * API functions may be called unless bk_init() has been
+ * API functions may be called unless bk_sync_init() has been
  * called first.
  */
 void bk_shutdown(tSimStateHdl simHdl);
@@ -162,7 +158,7 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
- * This should be called before the first bk_advance() call.
+ * This should be called before the first bk_sync_run() call.
  */
 void bk_use_default_reset(tSimStateHdl simHdl);
 
@@ -208,43 +204,14 @@ void bk_quit_at(tSimStateHdl simHdl, tTime t);
 tStatus bk_quit_after_edge(tSimStateHdl simHdl,
 			   tClock handle, tEdgeDirection dir, tUInt64 cycle);
 
-/* Execute simulation events until none remain, simulation is
- * interrupted, or a stopping condition (time limit, etc.) is
- * encountered.
+/* Test if simulation events are currently being executed.
  *
- * When called with an argument of 0, it will not return until
- * the simulation has completed.  When called with a non-zero
- * argument it will return immediately, and bk_sync() and
- * bk_is_running() should be used to synchronize with the simulation
- * thread.
- *
- * Returns BK_ERROR on error and BK_SUCCESS on success.
- * Handles created with bk_sync_init() have no simulation thread,
- * so this returns BK_ERROR for them; use bk_sync_run() instead.
- */
-tStatus bk_advance(tSimStateHdl simHdl, tBool async);
-
-/* Test if the simulation thread is still running.
- *
- * Returns 0 if the thread is not running and non-zero if
- * the thread is running.
+ * Returns 0 if the simulation is not running and non-zero if
+ * it is running.
  */
 tBool bk_is_running(tSimStateHdl simHdl);
 
-/* Wait for a simulation started using bk_advance in async mode
- * to complete.
- *
- * Returns the simulation time at which execution stopped.
- * For handles created with bk_sync_init() there is no simulation
- * thread to wait for, so this returns the current simulation time
- * immediately.
- */
-tTime bk_sync(tSimStateHdl simHdl);
-
-/* Execute simulation events on the caller's thread, for handles
- * created with bk_sync_init().  Despite the similar name, this is
- * unrelated to bk_sync(), which waits for the simulation thread
- * of a bk_init() handle to pause.
+/* Execute simulation events on the caller's thread.
  *
  * Returns when the event queue drains or at the end of a stopping
  * timeslice: $stop/$finish/$fatal, bk_abort_now(), an edge limit
@@ -252,12 +219,12 @@ tTime bk_sync(tSimStateHdl simHdl);
  * bk_schedule_ui_event() (which is how running to a target time is
  * composed).  The cause can be distinguished using bk_stopped(),
  * bk_finished(), bk_fataled(), bk_aborted() and bk_sync_pending().
- * Calling it again resumes the simulation.  Note that no signal
- * handlers are installed in sync mode, so Ctrl-C is not converted
- * into bk_abort_now().
+ * Calling it again resumes the simulation.  Note that the kernel
+ * installs no signal handlers, so Ctrl-C is not converted into
+ * bk_abort_now() unless the embedder arranges it.
  *
- * Returns BK_ERROR on error (including a non-sync-mode handle or a
- * call while the simulation is running) and BK_SUCCESS on success.
+ * Returns BK_ERROR on error (including a call while the simulation
+ * is running) and BK_SUCCESS on success.
  */
 tStatus bk_sync_run(tSimStateHdl simHdl);
 
@@ -278,9 +245,9 @@ tStatus bk_sync_run(tSimStateHdl simHdl);
  * bk_sync_run() early, and a pending bk_quit_after_edge() limit
  * survives (limits on other clocks are never modified).
  *
- * Returns BK_ERROR on error (including a non-sync-mode handle, an
- * invalid clock, a call while the simulation is running, or a call
- * after $finish) and BK_SUCCESS on success.
+ * Returns BK_ERROR on error (including an invalid clock, a call
+ * while the simulation is running, or a call after $finish) and
+ * BK_SUCCESS on success.
  */
 tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
 
@@ -298,9 +265,6 @@ tBool bk_sync_pending(tSimStateHdl simHdl);
  * overhead; with flushing disabled, pending $display output
  * stays in the C library's buffers until the embedder flushes them
  * itself or bk_shutdown() is called.
- *
- * The threaded path (bk_init/bk_advance) is unaffected by this
- * setting.
  */
 void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
 
