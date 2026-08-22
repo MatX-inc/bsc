@@ -258,13 +258,14 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
+BO2BLOOGLEEXES = bo2bloogle
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
 CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -444,7 +445,7 @@ endif
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) $(CHECKEXES) install-bsc install-bluetcl install-checkers
+install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
