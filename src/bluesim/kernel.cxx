@@ -1450,20 +1450,12 @@ tTime bk_sync(tSimStateHdl simHdl)
   return simHdl->sim_time;
 }
 
-/* Execute simulation events on the caller's thread until a stopping
- * condition is encountered or the event queue drains.
- *
- * Returns BK_ERROR on error and BK_SUCCESS on success.
+/* Execute the events in the simulation queue on the caller's
+ * thread.  Shared body of bk_sync_run() and bk_sync_step(); the
+ * caller has already validated the handle.
  */
-tStatus bk_sync_run(tSimStateHdl simHdl)
+static tStatus sync_run_events(tSimStateHdl simHdl)
 {
-  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
-    return BK_ERROR;
-
-  /* check if the simulation is already running (not re-entrant) */
-  if (bk_is_running(simHdl))
-    return BK_ERROR;
-
   lock_sim_state(simHdl);
   simHdl->sim_running = true;
   unlock_sim_state(simHdl);
@@ -1484,6 +1476,78 @@ tStatus bk_sync_run(tSimStateHdl simHdl)
   fflush(NULL); /* flush open file buffers */
 
   return BK_SUCCESS;
+}
+
+/* Execute simulation events on the caller's thread until a stopping
+ * condition is encountered or the event queue drains.
+ *
+ * Returns BK_ERROR on error and BK_SUCCESS on success.
+ */
+tStatus bk_sync_run(tSimStateHdl simHdl)
+{
+  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
+    return BK_ERROR;
+
+  /* check if the simulation is already running (not re-entrant) */
+  if (bk_is_running(simHdl))
+    return BK_ERROR;
+
+  return sync_run_events(simHdl);
+}
+
+/* Execute simulation events on the caller's thread until one cycle
+ * of the given clock has completed (bluetcl's 'sim step 1'), a
+ * stopping condition is encountered, or the event queue drains.
+ *
+ * Returns BK_ERROR on error and BK_SUCCESS on success.
+ */
+tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk)
+{
+  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
+    return BK_ERROR;
+
+  /* check if the simulation is already running (not re-entrant) */
+  if (bk_is_running(simHdl))
+    return BK_ERROR;
+
+  if (clk >= simHdl->clocks.size())
+    return BK_ERROR;
+
+  /* once $finish has been called there is nothing to step */
+  if (bk_finished(simHdl))
+    return BK_ERROR;
+
+  /* One step runs until one more edge of clk in the direction which
+   * returns the clock to its current value has executed -- one full
+   * clock cycle -- matching bluetcl's 'sim step'.  Before any logic
+   * has executed at time 0, step to the clock's first edge instead
+   * of the next edge which returns to the initial clock value.
+   */
+  tEdgeDirection dir =
+    (bk_clock_val(simHdl, clk) == CLK_LOW) ? NEGEDGE : POSEDGE;
+  if ((bk_now(simHdl) == 0llu) &&
+      (bk_clock_cycle_count(simHdl, clk) == 0llu))
+    dir = (dir == POSEDGE) ? NEGEDGE : POSEDGE;
+
+  /* arrange to yield after one more edge in that direction */
+  tUInt64 old_limit = (dir == POSEDGE) ? simHdl->clocks[clk].posedge_limit
+                                       : simHdl->clocks[clk].negedge_limit;
+  tUInt64 limit = bk_clock_edge_count(simHdl, clk, dir) + 1llu;
+  bk_quit_after_edge(simHdl, clk, dir, limit);
+
+  tStatus status = sync_run_events(simHdl);
+
+  /* Restore the edge limit for this clock and direction, so the
+   * temporary one-cycle limit cannot linger and stop a later
+   * bk_sync_run() early (e.g. after $stop or an abort ended the
+   * step before the cycle completed), and so a pending limit set
+   * with bk_quit_after_edge() is preserved.  Limits on other clocks
+   * and on the other edge direction are never touched (though the
+   * step will return early if one of them is reached mid-step).
+   */
+  bk_quit_after_edge(simHdl, clk, dir, old_limit);
+
+  return status;
 }
 
 /* Test whether any events remain in the simulation queue. */
