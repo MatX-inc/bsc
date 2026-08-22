@@ -175,6 +175,21 @@ struct bs_host_ops {
    * caller; it is only valid for the duration of the call, which
    * never returns).  'addr' is the out-of-bounds address and
    * 'lo'/'hi' are the valid (inclusive) address bounds.
+   *
+   * Reset carve-out: this operation is only invoked while no reset is
+   * asserted anywhere in the simulation.  Generated rule bodies
+   * execute their RegFile/BRAM reads before their in-reset check, so
+   * while a reset is asserted such reads can legitimately see address
+   * registers still at their undetermined initial ('1010...')
+   * pattern.  While any reset source's output reset (the default
+   * reset waveform included) is asserted, an out-of-bounds access is
+   * therefore tolerated silently: reads return an undetermined value
+   * and writes are dropped, matching the pre-panic runtime.  "Any
+   * reset asserted" is a simulation-wide approximation of "the
+   * accessing rule's clock domain is in reset" (the precise domain is
+   * not visible at the primitive access site); it counts assertions
+   * from the moment they are scheduled by a reset source until the
+   * matching deassertion is scheduled.
    */
   void (*out_of_bounds)(void* ctx,
                         const char* prim,

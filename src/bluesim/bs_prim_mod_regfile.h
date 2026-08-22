@@ -8,6 +8,7 @@
 #include "bs_mem_file.h"
 #include "bs_module.h"
 #include "bs_range_tracker.h"
+#include "bs_reset.h"
 
 // forward declaration
 template<typename AT, typename DT> class MOD_RegFile;
@@ -370,6 +371,18 @@ class MOD_RegFile : public Module
   {
     if (addr < lo_addr || addr > hi_addr)
     {
+      if (any_reset_asserted(sim_hdl))
+      {
+	// While some reset is asserted, rule bodies execute this read
+	// speculatively (before their in-reset check) with the address
+	// register possibly still at its undetermined initial pattern,
+	// so tolerate the access: silently return an undetermined
+	// value, as the pre-panic runtime did (see bs_reset.h).
+	DT v;
+	init_val(v, data_bits);
+	write_undet(&v, data_bits);
+	return v;
+      }
       oob_panic("Read address", addr);
     }
     else if ((upd_addr == addr) && bk_is_same_time(sim_hdl, upd_at))
@@ -395,7 +408,13 @@ class MOD_RegFile : public Module
   void METH_upd(const AT& addr, const DT& val, bool immediate = false)
   {
     if (addr < lo_addr || addr > hi_addr)
+    {
+      if (any_reset_asserted(sim_hdl))
+	return; // in-reset carve-out: drop the write silently instead
+		// of panicking (lookup_value() must not run: it would
+		// alias an out-of-bounds address onto a valid entry)
       oob_panic("Write address", addr);
+    }
     DT* value_ptr = lookup_value(addr, true);
     if (value_ptr != NULL)
     {

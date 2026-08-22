@@ -30,6 +30,8 @@ typedef struct
 void init_reset_request_counters(tSimStateHdl simHdl)
 {
   simHdl->reset_tick_requests = 0;
+  simHdl->resets_asserted = 0;
+  simHdl->default_reset_asserted = false;
 }
 
 /* Test if a any primitive still needs reset ticks */
@@ -49,6 +51,28 @@ void stop_reset_ticks(tSimStateHdl simHdl)
 {
   if (simHdl->reset_tick_requests > 0)
     --(simHdl->reset_tick_requests);
+}
+
+/* Record a level change of one reset source's output reset (see
+ * bs_reset.h).  'level' is the source's own record of its output;
+ * only transitions touch the simulation-wide count, so repeated
+ * assertions or deassertions of the same source stay balanced.
+ */
+void set_reset_output(tSimStateHdl simHdl, bool* level, bool asserted)
+{
+  if (*level == asserted)
+    return;
+  *level = asserted;
+  if (asserted)
+    ++(simHdl->resets_asserted);
+  else if (simHdl->resets_asserted > 0)
+    --(simHdl->resets_asserted);
+}
+
+/* Test if any reset source's output reset is currently asserted */
+bool any_reset_asserted(tSimStateHdl simHdl)
+{
+  return (simHdl->resets_asserted > 0);
 }
 
 

@@ -8,6 +8,7 @@
 #include "bs_mem_file.h"
 #include "bs_module.h"
 #include "bs_range_tracker.h"
+#include "bs_reset.h"
 
 // forward declaration
 template<typename AT, typename DT, typename ET> class MOD_BRAM;
@@ -614,12 +615,22 @@ class MOD_BRAM : public Module
   void METH_a_put(const ET& write_ens, const AT& addr, const DT& val,
                   bool immediate = false)
   {
+    bool is_write = !is_zero(write_ens);
+
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
-      oob_panic((write_ens != 0) ? "Write address on port A"
-                                 : "Read address on port A", addr);
-
-    bool is_write = !is_zero(write_ens);
+    {
+      if (!any_reset_asserted(sim_hdl))
+        oob_panic((write_ens != 0) ? "Write address on port A"
+                                   : "Read address on port A", addr);
+      // in-reset carve-out (see bs_reset.h): drop an immediate
+      // out-of-bounds write silently (lookup_value() would alias the
+      // address onto a valid entry); a deferred request is recorded as
+      // usual and clkA() clamps it to an undetermined read value
+      // without touching memory
+      if (is_write && immediate)
+        return;
+    }
 
     // handle an immediate write
     if (is_write && immediate)
@@ -649,12 +660,18 @@ class MOD_BRAM : public Module
  void METH_b_put(const ET& write_ens, const AT& addr, const DT& val,
                   bool immediate = false)
   {
+    bool is_write = !is_zero(write_ens);
+
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
-      oob_panic((write_ens != 0) ? "Write address on port B"
-                                 : "Read address on port B", addr);
-
-    bool is_write = !is_zero(write_ens);
+    {
+      if (!any_reset_asserted(sim_hdl))
+        oob_panic((write_ens != 0) ? "Write address on port B"
+                                   : "Read address on port B", addr);
+      // in-reset carve-out: see METH_a_put()
+      if (is_write && immediate)
+        return;
+    }
 
     // handle an immediate write
     if (is_write && immediate)

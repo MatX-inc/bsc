@@ -107,6 +107,12 @@ struct tSimState {
   // Count the number of primitives that have requested reset ticks
   unsigned int reset_tick_requests;
 
+  // Count the reset sources whose output reset is currently asserted
+  // (see set_reset_output() in bs_reset.h), and the recorded level of
+  // the kernel's own default reset waveform (one such source).
+  unsigned int resets_asserted;
+  bool default_reset_asserted;
+
 };
 
 typedef struct tSimState tSimState;

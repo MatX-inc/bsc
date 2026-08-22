@@ -46,6 +46,7 @@ class MOD_SyncReset: public Module
     count = 0;
     in_reset = false;
     call_reset_fn = false;
+    out_asserted = false;
   }
  public:
   void set_reset_fn_gen_rst(tResetFn fn) {
@@ -62,6 +63,7 @@ class MOD_SyncReset: public Module
       {
 	if (is_async)
 	{
+	  set_reset_output(sim_hdl, &out_asserted, true);
 	  reset_fn(parent, rst_in);  // async reset generation
 	  start_reset_ticks(sim_hdl);
 	}
@@ -85,7 +87,10 @@ class MOD_SyncReset: public Module
     if (call_reset_fn)
     {
       if (in_reset)
+      {
+	set_reset_output(sim_hdl, &out_asserted, true);
 	reset_at_end_of_timeslice(sim_hdl, reset_fn, parent, 0);
+      }
       call_reset_fn = false;
     }
 
@@ -94,7 +99,10 @@ class MOD_SyncReset: public Module
     if (!in_reset && (count > 0))
     {
       if ((count == 1) && reset_fn)
+      {
+	set_reset_output(sim_hdl, &out_asserted, false);
 	reset_at_end_of_timeslice(sim_hdl, reset_fn, parent, 1);
+      }
       --count;
     }
   }
@@ -106,6 +114,7 @@ class MOD_SyncReset: public Module
   bool         is_async;
   bool         in_reset;
   bool         call_reset_fn;
+  bool         out_asserted;
   tResetFn     reset_fn;
 
   tClock __clk_handle_0;
@@ -116,13 +125,15 @@ class MOD_SyncReset0: public Module
 {
  public:
   MOD_SyncReset0(tSimStateHdl simHdl, const char* name, Module* parent_mod)
-    : Module(simHdl, name, parent_mod), reset_fn(NULL), in_reset(false)
+    : Module(simHdl, name, parent_mod), reset_fn(NULL), in_reset(false),
+      out_asserted(false)
   {
   }
  public:
   void set_reset_fn_gen_rst(tResetFn fn) { reset_fn = fn; }
   void reset_IN_RST(tUInt8 rst_in)
   {
+    set_reset_output(sim_hdl, &out_asserted, rst_in == 0);
     if (reset_fn)
       reset_fn(parent, rst_in);  // async reset generation
     // update the ticks
@@ -141,6 +152,7 @@ class MOD_SyncReset0: public Module
  private:
   tResetFn     reset_fn;
   bool         in_reset;
+  bool         out_asserted;
 };
 
 
@@ -153,14 +165,16 @@ class MOD_InitialReset: public Module
   {
     reset_fn = NULL;
     count = 0;
+    out_asserted = false;
   }
  public:
   void set_reset_fn_gen_rst(tResetFn fn)
   {
     reset_fn = fn;
     count = reset_hold;
-    
+
     // add initial reset assertion at time 0
+    set_reset_output(sim_hdl, &out_asserted, true);
     reset_init(sim_hdl, reset_fn, parent, 0);
   }
   void clk(tUInt8 /* clock_value */, tUInt8 gate_value = 1)
@@ -170,13 +184,17 @@ class MOD_InitialReset: public Module
     if (count-- == 1)
     {
       if (reset_fn != NULL)
+      {
+	set_reset_output(sim_hdl, &out_asserted, false);
 	reset_at_end_of_timeslice(sim_hdl, reset_fn, parent, 1);
+      }
     }
   }
  public:
  private:
   unsigned int reset_hold;
   unsigned int count;
+  bool         out_asserted;
   tResetFn     reset_fn;
 };
 
@@ -281,6 +299,7 @@ class MOD_MakeReset0: public Module
     rst = 1;
     old_rst = rst;
     in_reset = false;
+    out_asserted = false;
   }
  public:
   // the following four member functions are based on RegA
@@ -305,7 +324,10 @@ class MOD_MakeReset0: public Module
       rst = rst_reset_value;
       if (old_rst != rst)
 	if (reset_fn)
+	{
+	  set_reset_output(sim_hdl, &out_asserted, rst == 0);
 	  reset_fn(parent, rst);
+	}
     }
   }
   void rst_tick_clk(tUInt8 /* clock_gate */) { /* nothing required */ }
@@ -321,7 +343,10 @@ class MOD_MakeReset0: public Module
       }
       if (rst != old_rst) {
 	if (reset_fn)
+	{
+	  set_reset_output(sim_hdl, &out_asserted, rst == 0);
 	  reset_at_end_of_timeslice(sim_hdl, reset_fn, parent, rst);
+	}
       }
     }
   }
@@ -339,6 +364,7 @@ class MOD_MakeReset0: public Module
   tUInt8       rst;
   tUInt8       rst_reset_value;
   bool         in_reset;
+  bool         out_asserted;
   // to support clearing the rst when not written
   tTime        written;
   // to support detection of the edges
@@ -348,6 +374,10 @@ class MOD_MakeReset0: public Module
 
 // This is the definition of the ResetMux primitive,
 // used to implement mkResetMux.
+// Note: ResetMux and ResetEither pass upstream resets through and do
+// not report to set_reset_output(): their outputs can only be
+// asserted while an already-counted source's output is asserted
+// (see bs_reset.h).
 class MOD_ResetMux : public Module
 {
  public:

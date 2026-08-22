@@ -31,3 +31,17 @@ test_panic sysRegFileOOBWrite
 test_panic sysBRAMOOBRead
 test_panic sysBRAMOOBWrite
 test_panic sysBRAMOOBPortB
+
+# Reset carve-out: an out-of-bounds access executed while a reset is
+# asserted must NOT panic.  Rule bodies read RegFiles/BRAMs before
+# their in-reset check, with address registers still at their
+# undetermined 1010... pattern, so such accesses are silently clamped
+# (reads return an undetermined value, writes are dropped) and the
+# simulation proceeds.  The exact-output compare also checks that no
+# warning is printed.
+if { $ctest == 1 } {
+    compile_object_pass sysRegFileOOBInReset.bsv sysRegFileOOBInReset
+    link_objects_pass sysRegFileOOBInReset sysRegFileOOBInReset
+    sim_output sysRegFileOOBInReset
+    compare_file sysRegFileOOBInReset.out
+}

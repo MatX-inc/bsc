@@ -97,6 +97,7 @@ class MOD_ClockSelect : public Module
     select_out = select_out2 = false;
     written = ~bk_now(sim_hdl);
     in_reset = false;
+    out_rst_asserted = false;
     a_clk  = b_clk  = 0;
     a_gate = b_gate = 1;
     new_clk = 0;
@@ -135,7 +136,10 @@ class MOD_ClockSelect : public Module
       if (changed || (changed_negedge == bk_now(sim_hdl)))
       {
 	if ((reset_hold > reset_delay) && (reset_fn != NULL))
+	{
+	  set_reset_output(sim_hdl, &out_rst_asserted, true);
 	  reset_at_end_of_timeslice(sim_hdl, reset_fn, parent, 0);
+	}
 	reset_hold = 0;
       }
       else
@@ -143,7 +147,10 @@ class MOD_ClockSelect : public Module
 	if (reset_hold <= reset_delay)
 	  ++reset_hold;
 	if ((reset_hold > reset_delay) && (reset_fn != NULL))
+	{
+	  set_reset_output(sim_hdl, &out_rst_asserted, false);
 	  reset_at_end_of_timeslice(sim_hdl, reset_fn, parent, 1);
+	}
       }
     }
   }
@@ -221,6 +228,7 @@ class MOD_ClockSelect : public Module
   unsigned int reset_delay;
   unsigned int reset_hold;
   tResetFn     reset_fn;
+  bool         out_rst_asserted;
   bool         select_out;
   bool         select_out2;
   tTime        written;

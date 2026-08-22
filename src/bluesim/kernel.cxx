@@ -5,6 +5,7 @@
 #include "mem_alloc.h"
 #include "kernel.h"
 #include "bs_module.h"
+#include "bs_reset.h"
 #include "plusargs.h"
 #include "version.h"
 #include "portability.h"
@@ -94,6 +95,8 @@ unsigned int set_clock_event_data(tClock clk, tEdgeDirection dir)
 
 static tTime reset_model_event(tSimStateHdl simHdl, tEvent& ev)
 {
+  /* the default reset waveform is a reset source (see bs_reset.h) */
+  set_reset_output(simHdl, &simHdl->default_reset_asserted, ev.data.flag);
   simHdl->model->reset_model(ev.data.flag);
   return 0llu; // not a recurring event
 }
@@ -545,6 +548,9 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   simHdl->rule_name_indent = 0;
 
   simHdl->reset_tick_requests = 0;
+
+  simHdl->resets_asserted = 0;
+  simHdl->default_reset_asserted = false;
 
   simHdl->sim_timescale = 1;
 
