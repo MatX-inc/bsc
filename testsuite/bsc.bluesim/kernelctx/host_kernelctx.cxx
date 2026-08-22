@@ -30,7 +30,9 @@
 #include "bluesim_host_ops.h"
 #include "bluesim_host_ops_default.h"
 
-typedef void*        (*tNewModelFn)(void);
+typedef void* (*tNewModelFn)(const struct bs_host_ops*, void*,
+                              void*, void*, void*);
+typedef tUInt64 (*tBytesFn)(tModel);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
 typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
@@ -64,6 +66,11 @@ static tFinishedFn   finished;
 static tExitStatusFn exit_status;
 static tShutdownFn   shutdown_fn;
 
+/* the model's caller-provided storage, shared by every run */
+static void* g_state_buf;
+static void* g_in_buf;
+static void* g_out_buf;
+
 /* one full simulation inside 'ctx_buf': init, run to $finish, tear
  * down in place.  Returns 0 on success and fills in the final status
  * and time.
@@ -71,7 +78,8 @@ static tShutdownFn   shutdown_fn;
 static int run_once(void* ctx_buf, tUInt32 capacity,
                     tSInt32* status, tTime* end_time)
 {
-  tModel model = new_model();
+  tModel model = new_model(bs_default_host_ops(), bs_default_host_ctx(),
+                           g_state_buf, g_in_buf, g_out_buf);
   if (model == NULL)
   {
     fprintf(stderr, "harness: new_MODEL returned NULL\n");
@@ -144,13 +152,23 @@ int main(int argc, char** argv)
   exit_status = (tExitStatusFn) find_sym(dl, "bk_exit_status");
   shutdown_fn = (tShutdownFn)   find_sym(dl, "bk_shutdown");
 
-  tModel probe = new_model();
+  tModel probe = new_model(NULL, NULL, NULL, NULL, NULL);
   if (probe == NULL)
   {
     fprintf(stderr, "harness: new_%s returned NULL\n", top_name);
     return 1;
   }
   tUInt32 capacity = max_depth(probe) + 16;
+
+  /* the model's caller-provided storage (constructor ABI), reused
+   * across every re-initialization below
+   */
+  tBytesFn state_bytes = (tBytesFn) find_sym(dl, "bk_state_bytes");
+  tBytesFn in_bytes    = (tBytesFn) find_sym(dl, "bk_input_bytes");
+  tBytesFn out_bytes   = (tBytesFn) find_sym(dl, "bk_output_bytes");
+  g_state_buf = malloc(state_bytes(probe));
+  g_in_buf  = (in_bytes(probe) > 0)  ? malloc(in_bytes(probe))  : NULL;
+  g_out_buf = (out_bytes(probe) > 0) ? malloc(out_bytes(probe)) : NULL;
 
   /* the size accessor rejects the invalid capacity and accounts for
    * the event storage

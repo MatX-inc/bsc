@@ -5,6 +5,7 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_prim_storage.h"
 
 // This is the definition of the ClockGen primitive,
 // used to implement mkAbsoluteClock, etc.
@@ -12,12 +13,16 @@ class MOD_ClockGen : public Module
 {
  public:
   MOD_ClockGen(tSimStateHdl simHdl, const char* name, Module* parent,
+	       tStateLayout* sto,
 	       tTime v1Width, tTime v2Width, tTime initDelay,
 	       unsigned int initValue, unsigned int /* otherValue */)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
       v1Width(v1Width), v2Width(v2Width),
       initDelay(initDelay), initValue(initValue)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
   }
 
  public:
@@ -47,11 +52,15 @@ class MOD_MakeClock : public Module
 {
  public:
   MOD_MakeClock(tSimStateHdl simHdl, const char* name, Module* parent,
+		tStateLayout* sto,
 		tUInt8 initClock, tUInt8 initCond)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
       initValue(initClock ? CLK_HIGH : CLK_LOW), initGate(initCond),
       in_reset(false)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     current_clk       = initValue;
     old_out_clk       = initValue;
     PORT_CLK_GATE_OUT = initGate;
@@ -151,9 +160,13 @@ class MOD_MakeClock : public Module
 class MOD_ClockInverter : public Module
 {
  public:
-  MOD_ClockInverter(tSimStateHdl simHdl, const char* name, Module* parent)
+  MOD_ClockInverter(tSimStateHdl simHdl, const char* name, Module* parent,
+		    tStateLayout* sto)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     current_clk = CLK_LOW;
     PORT_CLK_GATE_OUT = 1;
     preedge = false;
@@ -209,6 +222,7 @@ class MOD_ClockDivider : public Module
 {
  public:
   MOD_ClockDivider(tSimStateHdl simHdl, const char* name, Module* parent,
+		   tStateLayout* sto,
 		   unsigned int width,
 		   unsigned int lower, unsigned int upper,
 		   unsigned int offset)
@@ -216,6 +230,9 @@ class MOD_ClockDivider : public Module
       width(width), lower(lower), upper(upper), offset(offset),
       __clk_handle_1(BAD_CLOCK_HANDLE)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     cntr = upper - offset;
     transition = 1 << (width - 1);
     in_reset = false;

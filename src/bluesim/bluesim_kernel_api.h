@@ -27,6 +27,49 @@ extern "C" {
 #endif
 
 /*
+ * Model construction.
+ *
+ * A generated design exports one constructor entry point,
+ *
+ *   void* new_MODEL_<top>(const struct bs_host_ops* ops, void* ctx,
+ *                         void* state, void* inputs, void* outputs);
+ *
+ * which returns the design's model handle (the 'tModel' the functions
+ * below take).  The model object itself lives in static storage
+ * inside the loaded design; every call returns the same handle, and
+ * each call re-records the five pointers:
+ *
+ *  - 'ops'/'ctx': the host operations the model performs its I/O
+ *    through during construction (memory-file preloads) and the host
+ *    context passed to each of them.  They must be the same table and
+ *    context later passed to bk_sync_init().  Borrowed.
+ *
+ *  - 'state': storage for the model itself, at least
+ *    bk_state_bytes(model) bytes, aligned like max_align_t (any
+ *    malloc result qualifies).  bk_sync_init() placement-constructs
+ *    the whole module tree in this buffer: the module objects at the
+ *    front, and every published state element at its descriptor
+ *    offset within the element sub-area that starts
+ *    bk_state_elements_offset(model) bytes in (see
+ *    bluesim_introspection.h).  Borrowed until bk_shutdown(), which
+ *    tears the model down in place and frees nothing.
+ *
+ *  - 'inputs'/'outputs': storage for the top module's input and
+ *    output port areas, at least bk_input_bytes(model) /
+ *    bk_output_bytes(model) bytes, 8-byte aligned; either may be
+ *    NULL when its area is empty.  Borrowed until bk_shutdown().
+ *
+ * All five pointers may be NULL for a SIZING call: the returned
+ * handle then supports the pre-initialization queries (the bk_*
+ * introspection walkers, bk_max_event_queue_depth(),
+ * bk_stack_depth_bound()) so the host can size the buffers, after
+ * which it calls new_MODEL_<top>() again with real storage.
+ * bk_sync_init() refuses (returns NULL) a model whose required
+ * storage is still unbound.  Nothing in new_MODEL_<top>() or in model
+ * construction calls the allocator.
+ */
+
+/*
  * Kernel resource management routines.
  */
 
@@ -241,8 +284,17 @@ tUInt32 bk_num_state_elements(tModel model);
  */
 const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n);
 
-/* Total byte size of the planned contiguous state area. */
+/* Total byte size of the state area the host must provide to
+ * new_MODEL_*(): the module-object region followed by the element
+ * sub-area (see bluesim_introspection.h).
+ */
 tUInt64 bk_state_bytes(tModel model);
+
+/* Byte offset of the element sub-area within the state area: element
+ * descriptor offsets are relative to (state + this offset).  Always a
+ * multiple of 16.
+ */
+tUInt64 bk_state_elements_offset(tModel model);
 
 /* Number of top-module input ports (module argument ports, method
  * enables and method arguments; clock and reset ports are driven

@@ -3,6 +3,15 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
+#include "bs_prim_storage.h"
+
+/* aux storage words the wide synchronizer families need for their
+ * secondary values (see bs_prim_storage.h) */
+#define BS_SYNCREG_AUX_WORDS(b)   (3u * BS_AUX_WORDS(b)) /* SyncVar x2, reset */
+#define BS_SYNCFIFO_AUX_WORDS(b)  (1u * BS_AUX_WORDS(b)) /* dDoutReg */
+#define BS_DPRAM_AUX_WORDS(b)     (1u * BS_AUX_WORDS(b)) /* prev_value */
+#define BS_LATCHXREG_AUX_WORDS(b) (3u * BS_AUX_WORDS(b)) /* latch, prev, reset */
 
 // This is a helper class we use manage race conditions at
 // clock domain crossings.  A SyncVar allows us to read a
@@ -14,12 +23,18 @@ template<typename T>
 class SyncVar
 {
  public:
-  SyncVar(tSimStateHdl simHdl, unsigned int width)
+  // 'aux_io' supplies (and advances over) auxiliary word storage for
+  // wide values; a narrow SyncVar ignores it and may pass NULL
+  SyncVar(tSimStateHdl simHdl, unsigned int width,
+          unsigned int** aux_io = NULL)
     : sim_hdl(simHdl), bits(width)
   {
-    init_val(prev_value, bits);
+    if (aux_io != NULL)
+    {
+      bs_bind_aux(prev_value, aux_io, bits);
+      bs_bind_aux(value, aux_io, bits);
+    }
     write_undet(&prev_value, bits);
-    init_val(value, bits);
     write_undet(&value, bits);
     written_at = ~bk_now(sim_hdl);
   }
@@ -66,12 +81,13 @@ class SyncVar
 class MOD_Sync2 : public Module
 {
  public:
-  MOD_Sync2(tSimStateHdl simHdl, const char* name, Module* parent, tUInt8 v)
-    : Module(simHdl, name, parent), sSyncReg(simHdl, 1), reset_value(v)
+  MOD_Sync2(tSimStateHdl simHdl, const char* name, Module* parent,
+            tStateLayout* sto, tUInt8 v)
+    : Module(simHdl, name, parent),
+      dSyncReg2(*(tUInt8*)sto->claim()),
+      sSyncReg(simHdl, 1), reset_value(v)
   {
-    init_val(dSyncReg1, 1);
     write_undet(&dSyncReg1, 1);
-    init_val(dSyncReg2, 1);
     write_undet(&dSyncReg2, 1);
     in_reset = false;
   }
@@ -101,7 +117,7 @@ class MOD_Sync2 : public Module
  public:
  private:
   tUInt8 dSyncReg1;
-  tUInt8 dSyncReg2;
+  tUInt8& dSyncReg2;      // the published element value
   SyncVar<tUInt8> sSyncReg;
   tUInt8 reset_value;
   bool in_reset;
@@ -112,12 +128,13 @@ class MOD_Sync2 : public Module
 class MOD_Sync15 : public Module
 {
  public:
-  MOD_Sync15(tSimStateHdl simHdl, const char* name, Module* parent, tUInt8 v)
-    : Module(simHdl, name, parent), sSyncReg(simHdl, 1), reset_value(v)
+  MOD_Sync15(tSimStateHdl simHdl, const char* name, Module* parent,
+             tStateLayout* sto, tUInt8 v)
+    : Module(simHdl, name, parent),
+      dSyncReg2(*(tUInt8*)sto->claim()),
+      sSyncReg(simHdl, 1), reset_value(v)
   {
-    init_val(dSyncReg1, 1);
     write_undet(&dSyncReg1, 1);
-    init_val(dSyncReg2, 1);
     write_undet(&dSyncReg2, 1);
     in_reset = false;
   }
@@ -146,7 +163,7 @@ class MOD_Sync15 : public Module
  public:
  private:
   tUInt8 dSyncReg1;
-  tUInt8 dSyncReg2;
+  tUInt8& dSyncReg2;      // the published element value
   SyncVar<tUInt8> sSyncReg;
   tUInt8 reset_value;
   bool in_reset;
@@ -159,10 +176,12 @@ class MOD_Sync15 : public Module
 class MOD_Sync1 : public Module
 {
  public:
-  MOD_Sync1(tSimStateHdl simHdl, const char* name, Module* parent, tUInt8 v)
-    : Module(simHdl, name, parent), sSyncReg(simHdl, 1), reset_value(v)
+  MOD_Sync1(tSimStateHdl simHdl, const char* name, Module* parent,
+            tStateLayout* sto, tUInt8 v)
+    : Module(simHdl, name, parent),
+      dSyncReg1(*(tUInt8*)sto->claim()),
+      sSyncReg(simHdl, 1), reset_value(v)
   {
-    init_val(dSyncReg1, 1);
     write_undet(&dSyncReg1, 1);
     in_reset = false;
   }
@@ -190,7 +209,7 @@ class MOD_Sync1 : public Module
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
  private:
-  tUInt8 dSyncReg1;
+  tUInt8& dSyncReg1;      // the published element value
   SyncVar<tUInt8> sSyncReg;
   tUInt8 reset_value;
   bool in_reset;
@@ -203,14 +222,14 @@ class MOD_Sync1 : public Module
 class MOD_SyncPulse : public Module
 {
  public:
-  MOD_SyncPulse(tSimStateHdl simHdl, const char* name, Module* parent)
-    : Module(simHdl, name, parent), sSyncReg(simHdl, 1)
+  MOD_SyncPulse(tSimStateHdl simHdl, const char* name, Module* parent,
+                tStateLayout* sto)
+    : Module(simHdl, name, parent),
+      dSyncReg2(*(tUInt8*)sto->claim()),
+      sSyncReg(simHdl, 1)
   {
-    init_val(dSyncReg1, 1);
     write_undet(&dSyncReg1, 1);
-    init_val(dSyncReg2, 1);
     write_undet(&dSyncReg2, 1);
-    init_val(dSyncPulse, 1);
     write_undet(&dSyncPulse, 1);
     in_reset = false;
   }
@@ -242,7 +261,7 @@ class MOD_SyncPulse : public Module
  public:
  private:
   tUInt8 dSyncReg1;
-  tUInt8 dSyncReg2;
+  tUInt8& dSyncReg2;      // the published element value
   tUInt8 dSyncPulse;
   SyncVar<tUInt8> sSyncReg;
   bool in_reset;
@@ -257,22 +276,24 @@ class MOD_SyncPulse : public Module
 class MOD_SyncHandshake : public Module
 {
  public:
+  // 'sto' is the element-storage cursor when this instance is a
+  // published state element; an embedded instance (inside SyncReg or
+  // SyncFIFO) passes NULL and keeps its ready bit in the object
   MOD_SyncHandshake(tSimStateHdl simHdl, const char* name, Module* parent
+                    ,tStateLayout* sto = NULL
                     ,bool init = 0, bool delayreturn = false)
     : Module(simHdl, name, parent),
       dSyncReg2(simHdl, 1)
     , dLastState(simHdl, 1)
     , sToggleReg(simHdl, 1)
+    , sRDY(sto ? *(tUInt8*)sto->claim() : sRDY_stg)
     , param_init(init)
     , param_delayreturn(delayreturn)
     , __clk_handle_0(BAD_CLOCK_HANDLE)
     , __clk_handle_1(BAD_CLOCK_HANDLE)
   {
-    init_val(sSyncReg1, 1);
     write_undet(&sSyncReg1, 1);
-    init_val(sSyncReg2, 1);
     write_undet(&sSyncReg2, 1);
-    init_val(sRDY, 0);
     sRDY = 0;
 
     init_val(dSyncReg1, 1);
@@ -356,7 +377,8 @@ class MOD_SyncHandshake : public Module
   SyncVar<tUInt8> sToggleReg;
   tUInt8 sSyncReg1;
   tUInt8 sSyncReg2;
-  tUInt8 sRDY;
+  tUInt8 sRDY_stg;        // storage for an embedded (non-element) instance
+  tUInt8& sRDY;           // the published element value when claimed
   bool en;
   bool in_reset;
   bool pulsing;
@@ -375,23 +397,27 @@ class MOD_SyncReg : public Module
 {
  public:
   MOD_SyncReg(tSimStateHdl simHdl, const char* name, Module* parent,
+	      tStateLayout* sto, unsigned int* aux,
 	      unsigned int width, const T& v)
-    : Module(simHdl, name, parent), sDataSyncIn(simHdl, width), reset_value(v),
-    sync(simHdl, "sync", this, false, true), bits(width)
+    : Module(simHdl, name, parent), sDataSyncIn(simHdl, width, &aux),
+      dD_OUT(bs_bind_elem(dD_OUT_stg_, sto->claim(), width)),
+      sync(simHdl, "sync", this, NULL, false, true), bits(width)
   {
-    init_val(dD_OUT, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    reset_value = v;
     write_undet(&dD_OUT, bits);
     in_reset = false;
   }
   MOD_SyncReg(tSimStateHdl simHdl, const char* name, Module* parent,
+	      tStateLayout* sto, unsigned int* aux,
 	      unsigned int width)
-    : Module(simHdl, name, parent), sync(simHdl, "sync", this),
-      sDataSyncIn(simHdl, width), bits(width)
+    : Module(simHdl, name, parent), sDataSyncIn(simHdl, width, &aux),
+      dD_OUT(bs_bind_elem(dD_OUT_stg_, sto->claim(), width)),
+      sync(simHdl, "sync", this), bits(width)
   {
-    init_val(dD_OUT, bits);
+    bs_bind_aux(reset_value, &aux, bits);
     write_undet(&dD_OUT, bits);
-    init_val(reset_value, bits);
-    write_undet(reset_value, bits);
+    write_undet(&reset_value, bits);
     in_reset = false;
   }
  public:
@@ -429,9 +455,10 @@ class MOD_SyncReg : public Module
   void rst_tick_clk_src(tUInt8 /* clock_gate */) { /* unused */ }
  public:
  private:
-  SyncVar<T> sDataSyncIn;
-  T dD_OUT;
-  T reset_value;
+  SyncVar<T> sDataSyncIn; // aux-bound when wide
+  T dD_OUT_stg_;          // wide: the view object behind 'dD_OUT'
+  T& dD_OUT;              // the live element value, in caller storage
+  T reset_value;          // aux-bound when wide
   MOD_SyncHandshake sync;
   bool in_reset;
   const unsigned int bits;
@@ -463,16 +490,17 @@ class MOD_SyncFIFO : public Module
   tSym __symbols[3];
  public:
   MOD_SyncFIFO(tSimStateHdl simHdl, const char* name, Module* parent,
+	       tStateLayout* sto, unsigned int* aux,
 	       unsigned int width, unsigned int depth, unsigned int hasClr)
     : Module(simHdl, name, parent), width(width), depth(depth),
       src_hi(simHdl, index_size(depth)+1), dst_lo(simHdl, index_size(depth)+1),
       hasClear(hasClr),
       sClrSync(simHdl, "sClrSync", this), dClrSync(simHdl, "dClrSync", this)
   {
-    data = new T[depth];
-    for (unsigned int n = 0; n < depth; ++n)
-      init_val(data[n], width);
-    init_val(dDoutReg, width);
+    data.bind(sto->claim(), width);
+    data.init_undet(depth);
+    bs_bind_aux(dDoutReg, &aux, width);
+    write_undet(&dDoutReg, width);
 
     idx_bits = index_size(depth);
     mask = (1 << idx_bits) - 1;
@@ -519,7 +547,6 @@ class MOD_SyncFIFO : public Module
     symbols[2].info = SYM_DEF | idx_bits << 4;
     symbols[2].value = (void*)(&dCountReg);
   }
-  ~MOD_SyncFIFO() { delete[] data; }
  public:
   bool METH_notEmpty()
   {
@@ -538,7 +565,7 @@ class MOD_SyncFIFO : public Module
   }
   T METH_first()
   {
-    return dDoutReg;
+    return bs_value_view(dDoutReg, width);
   }
   bool METH_RDY_deq()
   {
@@ -567,7 +594,7 @@ class MOD_SyncFIFO : public Module
   {
     if (depth == 1)
       dDoutReg = x;
-    data[src_hi.read() % depth] = x;
+    data.put(src_hi.read() % depth, x);
     did_enq = true;
   }
   // For zero-width variants
@@ -677,7 +704,7 @@ class MOD_SyncFIFO : public Module
       //not_empty = dCountReg != 0;
       if (not_empty) {
         if (depth != 1)
-          dDoutReg = data[dst_lo.read() % depth];
+          dDoutReg = data.get(dst_lo.read() % depth);
         dst_lo.write(dst_lo_plus_1);
         dst_lo_plus_1 = (dst_lo_plus_1 + 1) % (2*depth);
       }
@@ -690,7 +717,7 @@ class MOD_SyncFIFO : public Module
 	dCountReg = (dst_hi + (2*depth) - dst_lo.read()) & mask;
 
       if ((depth != 1) && !not_empty && (dst_hi != dst_lo.read())) {
-        dDoutReg = data[dst_lo.read() % depth];
+        dDoutReg = data.get(dst_lo.read() % depth);
         dst_lo.write(dst_lo_plus_1);
         dst_lo_plus_1 = (dst_lo_plus_1 + 1) % (2*depth);
         not_empty = true;
@@ -748,7 +775,7 @@ class MOD_SyncFIFO : public Module
   const unsigned int* data_index(tUInt64 addr) const
   {
     if (addr < ((tUInt64) dCountReg))
-      return symbol_value(&(data[(dst_lo.read() + addr) % depth]),width);
+      return data.sym_value((dst_lo.read() + addr) % depth);
     else
       return NULL;
   }
@@ -760,8 +787,8 @@ class MOD_SyncFIFO : public Module
   unsigned int idx_bits;
   unsigned int mask;
 
-  T* data;
-  T  dDoutReg;
+  tStateArray<T> data;  // flat entries, in caller-provided storage
+  T  dDoutReg;           // aux-bound when wide
   unsigned int src_lo;
   SyncVar<unsigned int> src_hi;
   SyncVar<unsigned int> dst_lo;
@@ -804,21 +831,17 @@ class MOD_DualPortRam : public Module
 {
  public:
   MOD_DualPortRam(tSimStateHdl simHdl, const char* name, Module* parent,
+		  tStateLayout* sto, unsigned int* aux,
 		  unsigned int addr_width, unsigned int data_width)
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), written_at(~bk_now(sim_hdl))
   {
     nWords = 1llu << addr_width;
-    data = new DT[nWords];
-    for (unsigned long long n = 0llu; n < nWords; ++n)
-    {
-      init_val(data[n], data_bits);
-      write_undet(&(data[n]), data_bits);
-    }
+    data.bind(sto->claim(), data_bits);
+    data.init_undet(nWords);
     init_val(write_addr, addr_bits);
-    init_val(prev_value, data_bits);
+    bs_bind_aux(prev_value, &aux, data_bits);
   }
-  ~MOD_DualPortRam() { delete[] data; }
  public:
   // Note: the read and write methods of a DualPortRam are
   // conflict free.  When the edges coincide and a simultaneous
@@ -827,27 +850,27 @@ class MOD_DualPortRam : public Module
   const DT METH_read(const AT& addr) const
   {
     if ((write_addr == addr) && bk_is_same_time(sim_hdl, written_at))
-      return prev_value;
+      return bs_value_view(prev_value, data_bits);
     else
-      return data[addr];
+      return data.get((tUInt64) addr);
   }
   void METH_write(const AT& addr, const DT& val)
   {
     written_at = bk_now(sim_hdl);
     write_addr = addr;
-    prev_value = data[addr];
-    data[addr] = val;
+    prev_value = data.get((tUInt64) addr);
+    data.put((tUInt64) addr, val);
   }
 
  public:
  private:
-  DT* data;
+  tStateArray<DT> data;  // flat entries, in caller-provided storage
   unsigned int addr_bits;
   unsigned int data_bits;
   unsigned long long nWords;
   tTime written_at;
   AT write_addr;
-  DT prev_value;
+  DT prev_value;         // aux-bound when wide
 };
 
 
@@ -861,14 +884,17 @@ class MOD_LatchCrossingReg : public Module
 {
  public:
   MOD_LatchCrossingReg(tSimStateHdl simHdl, const char* name, Module* parent,
+		       tStateLayout* sto, unsigned int* aux,
 		       unsigned int width, const T& v)
-    : Module(simHdl, name, parent), reset_value(v), bits(width)
+    : Module(simHdl, name, parent),
+      sFlop(bs_bind_elem(sFlop_stg_, sto->claim(), width)), bits(width)
   {
-    init_val(dLatch, width);
+    bs_bind_aux(dLatch, &aux, width);
+    bs_bind_aux(prev_value, &aux, width);
+    bs_bind_aux(reset_value, &aux, width);
+    reset_value = v;
     write_undet(&dLatch, width);
-    init_val(sFlop, width);
     write_undet(&sFlop, width);
-    init_val(prev_value, width);
     write_undet(&prev_value, width);
     writtenAt = ~bk_now(sim_hdl);
     in_reset = false;
@@ -929,10 +955,11 @@ class MOD_LatchCrossingReg : public Module
   void rst_tick_clk(tUInt8 /* clock_gate */) { /* unused */ }
  public:
  private:
-  T dLatch;
-  T sFlop;
-  T prev_value;
-  T reset_value;
+  T dLatch;              // aux-bound when wide
+  T sFlop_stg_;          // wide: the view object behind 'sFlop'
+  T& sFlop;              // the live element value, in caller storage
+  T prev_value;          // aux-bound when wide
+  T reset_value;         // aux-bound when wide
   unsigned int bits;
   tTime writtenAt;
   bool in_reset;

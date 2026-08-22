@@ -1,15 +1,19 @@
 #ifndef __BS_PRIM_MOD_BRAM_H__
 #define __BS_PRIM_MOD_BRAM_H__
 
-#include <string>
-
 #include "bluesim_kernel_api.h"
 #include "bs_mem_file.h"
 #include "bs_str.h"
 #include "bs_module.h"
 #include "bs_wide_data.h"
+#include "bs_prim_storage.h"
 #include "bs_range_tracker.h"
 #include "bs_reset.h"
+
+/* aux storage words a wide BRAM needs: per port, the recorded write
+ * value, the two output registers and the previous value (4 each),
+ * plus the recorded write enables when those are themselves wide */
+#define BS_BRAM_AUX_WORDS(d,e) ((8u * BS_AUX_WORDS(d)) + (2u * BS_AUX_WORDS(e)))
 
 // forward declaration
 template<typename AT, typename DT, typename ET> class MOD_BRAM;
@@ -51,18 +55,14 @@ class BinFormatHandlerBRAM : public FormatHandler
     {
       status = MF_IGNORED;
     }
+    else if (!bram->preload_entry(addr, data_str, true))
+    {
+      status = MF_BAD_FORMAT;
+    }
     else
     {
-      DT value;
-      init_val(value, data_bits);
-      if (!parse_bin(&value, data_str, data_bits))
-        status = MF_BAD_FORMAT;
-      else
-      {
-        bram->METH_a_put(1, addr, value, true);
-        status = MF_ACCEPTED;
-        rt.setAddr(addr);
-      }
+      status = MF_ACCEPTED;
+      rt.setAddr(addr);
     }
 
     if (decreasing)
@@ -127,18 +127,14 @@ class HexFormatHandlerBRAM : public FormatHandler
     {
       status = MF_IGNORED;
     }
+    else if (!bram->preload_entry(addr, data_str, false))
+    {
+      status = MF_BAD_FORMAT;
+    }
     else
     {
-      DT value;
-      init_val(value, data_bits);
-      if (!parse_hex(&value, data_str, data_bits))
-        status = MF_BAD_FORMAT;
-      else
-      {
-        bram->METH_a_put(1, addr, value, true);
-        status = MF_ACCEPTED;
-        rt.setAddr(addr);
-      }
+      status = MF_ACCEPTED;
+      rt.setAddr(addr);
     }
 
     if (decreasing)
@@ -179,6 +175,7 @@ class MOD_BRAM : public Module
   tSym __symbols[3];
  public:
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  tUInt8 is_pipelined,
 	  unsigned int addr_width, unsigned int data_width,
 	  unsigned long long mem_size, unsigned int num_ports)
@@ -189,11 +186,12 @@ class MOD_BRAM : public Module
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
       upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     init_symbols();
   }
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  tUInt8 is_pipelined,
 	  unsigned int addr_width, unsigned int data_width,
 	  unsigned int chunk_size, unsigned int num_wens,
@@ -205,12 +203,13 @@ class MOD_BRAM : public Module
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
       upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     init_symbols();
   }
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
-	  const std::string& memfile,
+	  tStateLayout* sto, unsigned int* aux,
+	  const char* memfile,
 	  tUInt8 is_pipelined,
 	  unsigned int addr_width, unsigned int data_width,
 	  unsigned long long mem_size,
@@ -222,7 +221,7 @@ class MOD_BRAM : public Module
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
       upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     init_from_file(memfile, bin_format);
 
@@ -234,6 +233,7 @@ class MOD_BRAM : public Module
  // C-string semantics for the load (a VLA, see
  // DYNAMIC_VLA_FUNCTIONS)
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  const tStr* memfile,
 	  tUInt8 is_pipelined,
 	  unsigned int addr_width, unsigned int data_width,
@@ -246,7 +246,7 @@ class MOD_BRAM : public Module
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
       upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     char memfile_buf[bs_str_len(memfile) + 1];
     init_from_file(bs_str_flatten(memfile, memfile_buf), bin_format);
@@ -254,7 +254,8 @@ class MOD_BRAM : public Module
     init_symbols();
   }
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
-	  const std::string& memfile,
+	  tStateLayout* sto, unsigned int* aux,
+	  const char* memfile,
 	  tUInt8 is_pipelined,
 	  unsigned int addr_width, unsigned int data_width,
 	  unsigned int chunk_size, unsigned int num_wens,
@@ -267,7 +268,7 @@ class MOD_BRAM : public Module
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
       upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     init_from_file(memfile, bin_format);
 
@@ -275,6 +276,7 @@ class MOD_BRAM : public Module
   }
  // the byte-enable form, with the file name given as a string tree
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  const tStr* memfile,
 	  tUInt8 is_pipelined,
 	  unsigned int addr_width, unsigned int data_width,
@@ -288,73 +290,46 @@ class MOD_BRAM : public Module
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
       upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     char memfile_buf[bs_str_len(memfile) + 1];
     init_from_file(bs_str_flatten(memfile, memfile_buf), bin_format);
 
     init_symbols();
   }
- ~MOD_BRAM() { delete_blocks(top_level,0); }
 
  // shared initialization routines
  private:
-  void init_storage()
+  void init_storage(tStateLayout* sto, unsigned int* aux)
   {
-    last_word = hi_addr - lo_addr;
-
-    // partition address space for sparse storage
-    num_levels = (addr_bits + 9) / 10;
-    if ((num_levels > 1) && (addr_bits % 10 > 0) && (addr_bits % 10 < 5))
-      --num_levels;
-    level_bits = new unsigned char[num_levels];
-    unsigned int bits_remaining = addr_bits;
-    for (unsigned int i = num_levels; i > 0; --i)
-    {
-      if (bits_remaining < 15)
-      {
-        level_bits[i-1] = bits_remaining;
-        bits_remaining = 0;
-      }
-      else if (bits_remaining > 16)
-      {
-        level_bits[i-1] = 10;
-        bits_remaining -= 10;
-      }
-      else
-      {
-        level_bits[i-1] = 8;
-        bits_remaining -= 8;
-      }
-    }
-
-    // allocate top-level storage block
-    top_level = new_block(0);
+    n_entries = ((tUInt64)(hi_addr - lo_addr)) + 1llu;
+    data.bind(sto->claim(), data_bits);
+    data.init_undet(n_entries);
 
     // initialize address and data storage
 
     init_val(upd_a_addr, addr_bits);
-    init_val(upd_a_val,data_bits);
+    bs_bind_aux(upd_a_val, &aux, data_bits);
     write_undet(&upd_a_val, data_bits);
-    init_val(out_reg_a,data_bits);
+    bs_bind_aux(out_reg_a, &aux, data_bits);
     write_undet(&out_reg_a, data_bits);
-    init_val(out_reg2_a,data_bits);
+    bs_bind_aux(out_reg2_a, &aux, data_bits);
     write_undet(&out_reg2_a, data_bits);
-    init_val(upd_a_prev,data_bits);
+    bs_bind_aux(upd_a_prev, &aux, data_bits);
     write_undet(&upd_a_prev, data_bits);
-    init_val(upd_a_wens,num_wens);
+    bs_bind_aux(upd_a_wens, &aux, num_wens);
     write_undet(&upd_a_wens, num_wens);
 
     init_val(upd_b_addr, addr_bits);
-    init_val(upd_b_val,data_bits);
+    bs_bind_aux(upd_b_val, &aux, data_bits);
     write_undet(&upd_b_val, data_bits);
-    init_val(out_reg_b,data_bits);
+    bs_bind_aux(out_reg_b, &aux, data_bits);
     write_undet(&out_reg_b, data_bits);
-    init_val(out_reg2_b,data_bits);
+    bs_bind_aux(out_reg2_b, &aux, data_bits);
     write_undet(&out_reg2_b, data_bits);
-    init_val(upd_b_prev,data_bits);
+    bs_bind_aux(upd_b_prev, &aux, data_bits);
     write_undet(&upd_b_prev, data_bits);
-    init_val(upd_b_wens,num_wens);
+    bs_bind_aux(upd_b_wens, &aux, num_wens);
     write_undet(&upd_b_wens, num_wens);
   }
 
@@ -382,90 +357,20 @@ class MOD_BRAM : public Module
     symbols[2].value = (void*)(&lo_addr);
   }
 
-  void init_from_file(const std::string& memfile, bool bin_format)
+  void init_from_file(const char* memfile, bool bin_format)
   {
-    FormatHandler* reader;
+    // the handlers live on the stack for the duration of the read
     if (bin_format)
-      reader = new BinFormatHandlerBRAM<AT,DT,ET>(this, true,
-                                                  addr_bits, data_bits,
-                                                  lo_addr, hi_addr);
-    else
-      reader = new HexFormatHandlerBRAM<AT,DT,ET>(this, true,
-                                                  addr_bits, data_bits,
-                                                  lo_addr, hi_addr);
-    read_mem_file(sim_hdl, memfile.c_str(), inst_name, reader);
-  }
-
-  void* new_block(unsigned int level)
-  {
-    unsigned int nEntries = 1 << level_bits[level];
-    if (level == (num_levels - 1))
     {
-      DT* data = new DT[nEntries];
-      for (unsigned int n = 0; n < nEntries; ++n)
-      {
-        init_val(data[n], data_bits);
-        write_undet(&(data[n]), data_bits);
-      }
-      return (void*) data;
+      BinFormatHandlerBRAM<AT,DT,ET> reader(this, true, addr_bits, data_bits,
+                                            lo_addr, hi_addr);
+      read_mem_file(sim_hdl, memfile, inst_name, &reader);
     }
     else
     {
-      void** ptrs = new void*[nEntries];
-      for (unsigned int n = 0; n < nEntries; ++n)
-        ptrs[n] = NULL;
-      return (void*) ptrs;
-    }
-  }
-
-  void delete_blocks(void* ptr, unsigned int level)
-  {
-    if (level == (num_levels - 1))
-    {
-      DT* data = (DT*) ptr;
-      delete[] data;
-    }
-    else
-    {
-      void** ptrs = (void**) ptr;
-      unsigned int nEntries = 1 << level_bits[level];
-      for (unsigned int n = 0; n < nEntries; ++n)
-      {
-        if (ptrs[n] != NULL)
-          delete_blocks(ptrs[n], level+1);
-      }
-      delete[] ptrs;
-    }
-  }
-
-  DT* lookup_value(const AT& addr, bool alloc)
-  {
-    // figure out the target index and which bits of the address to use
-    unsigned long long idx = addr - lo_addr;
-    unsigned int shift = addr_bits;
-    void* ptr = top_level;
-    unsigned int level = 0;
-    while (true)
-    {
-      shift -= level_bits[level];
-      unsigned int mask = (1 << level_bits[level]) - 1;
-      unsigned int n = (idx >> shift) & mask;
-      if (level == (num_levels - 1))
-      {
-        DT* data = (DT*) ptr;
-        return &(data[n]);
-      }
-      else
-      {
-        void** ptrs = (void**) ptr;
-        ++level;
-        if (ptrs[n] == NULL)
-        {
-          if (alloc) ptrs[n] = new_block(level);
-          else return NULL;
-        }
-        ptr = ptrs[n];
-      }
+      HexFormatHandlerBRAM<AT,DT,ET> reader(this, true, addr_bits, data_bits,
+                                            lo_addr, hi_addr);
+      read_mem_file(sim_hdl, memfile, inst_name, &reader);
     }
   }
 
@@ -488,8 +393,6 @@ class MOD_BRAM : public Module
 
   void clkA(tUInt8 /* clock_value */, tUInt8 gate_value = 1)
   {
-    DT* value_ptr = NULL;
-
     // update out_reg2_a
     out_reg2_a = out_reg_a;
 
@@ -504,8 +407,7 @@ class MOD_BRAM : public Module
       }
       else if (is_write) {
         // perform a memory write and set out_reg_a to the new value
-        value_ptr = lookup_value(upd_a_addr, true);
-        if (value_ptr != NULL)
+        auto&& entry = data.ref((tUInt64)(upd_a_addr - lo_addr));
         {
           if ((upd_a_addr == upd_b_addr) &&
               bk_is_same_time(sim_hdl, upd_b_at) &&
@@ -537,11 +439,11 @@ class MOD_BRAM : public Module
               (upd_a_addr == upd_b_addr))
             upd_a_prev = upd_b_prev;
           else
-            upd_a_prev = *value_ptr;
+            upd_a_prev = entry;
           for (unsigned int n = 0; n < num_wens; ++n)
           {
             if (is_bit_set(upd_a_wens, n))
-              xfer_chunk(value_ptr,upd_a_val,n,chunk_size);
+              xfer_chunk(&entry,upd_a_val,n,chunk_size);
           }
 
           // set the out_reg_a value
@@ -557,26 +459,19 @@ class MOD_BRAM : public Module
       else
       {
         // perform a memory read and set out_reg_a to the retrieved value
-        value_ptr = lookup_value(upd_a_addr, false);
-        if (value_ptr == NULL)
-          write_undet(&out_reg_a, data_bits);
-        else {
-          // if a simultaneous write has been handled on the other port,
-          // we must use the value before that write
-          if (bk_is_same_time(sim_hdl, written_b_at) &&
-              (upd_a_addr == upd_b_addr))
-            out_reg_a = upd_b_prev;
-          else
-            out_reg_a = *value_ptr;
-        }
+        // (if a simultaneous write has been handled on the other port,
+        // we must use the value before that write)
+        if (bk_is_same_time(sim_hdl, written_b_at) &&
+            (upd_a_addr == upd_b_addr))
+          out_reg_a = upd_b_prev;
+        else
+          out_reg_a = data.get((tUInt64)(upd_a_addr - lo_addr));
       }
     }
   }
 
   void clkB(tUInt8 /* clock_value */, tUInt8 gate_value = 1)
   {
-    DT* value_ptr = NULL;
-
     // update out_reg2_b
     out_reg2_b = out_reg_b;
 
@@ -590,9 +485,8 @@ class MOD_BRAM : public Module
         write_undet(&out_reg_b, data_bits);
       }
       else if (is_write) {
-        // perform a memory write and set out_reg_a to the new value
-        value_ptr = lookup_value(upd_b_addr, true);
-        if (value_ptr != NULL)
+        // perform a memory write and set out_reg_b to the new value
+        auto&& entry = data.ref((tUInt64)(upd_b_addr - lo_addr));
         {
           if ((upd_a_addr == upd_b_addr) &&
               bk_is_same_time(sim_hdl, upd_a_at) &&
@@ -624,11 +518,11 @@ class MOD_BRAM : public Module
               (upd_a_addr == upd_b_addr))
             upd_b_prev = upd_a_prev;
           else
-            upd_b_prev = *value_ptr;
+            upd_b_prev = entry;
           for (unsigned int n = 0; n < num_wens; ++n)
           {
             if (is_bit_set(upd_b_wens, n))
-              xfer_chunk(value_ptr,upd_b_val,n,chunk_size);
+              xfer_chunk(&entry,upd_b_val,n,chunk_size);
           }
 
           // set the out_reg_b value
@@ -644,18 +538,13 @@ class MOD_BRAM : public Module
       else
       {
         // perform a memory read and set out_reg_b to the retrieved value
-        value_ptr = lookup_value(upd_b_addr, false);
-        if (value_ptr == NULL)
-          write_undet(&out_reg_b, data_bits);
-        else {
-          // if a simultaneous write has been handled on the other port,
-          // we must use the value before that write
-          if (bk_is_same_time(sim_hdl, written_a_at) &&
-              (upd_a_addr == upd_b_addr))
-            out_reg_b = upd_a_prev;
-          else
-            out_reg_b = *value_ptr;
-        }
+        // (if a simultaneous write has been handled on the other port,
+        // we must use the value before that write)
+        if (bk_is_same_time(sim_hdl, written_a_at) &&
+            (upd_a_addr == upd_b_addr))
+          out_reg_b = upd_a_prev;
+        else
+          out_reg_b = data.get((tUInt64)(upd_b_addr - lo_addr));
       }
     }
   }
@@ -672,10 +561,10 @@ class MOD_BRAM : public Module
         oob_panic((write_ens != 0) ? "Write address on port A"
                                    : "Read address on port A", addr);
       // in-reset carve-out (see bs_reset.h): drop an immediate
-      // out-of-bounds write silently (lookup_value() would alias the
-      // address onto a valid entry); a deferred request is recorded as
-      // usual and clkA() clamps it to an undetermined read value
-      // without touching memory
+      // out-of-bounds write silently (the flat entry lookup would
+      // alias the address onto a valid entry); a deferred request is
+      // recorded as usual and clkA() clamps it to an undetermined
+      // read value without touching memory
       if (is_write && immediate)
         return;
     }
@@ -683,9 +572,7 @@ class MOD_BRAM : public Module
     // handle an immediate write
     if (is_write && immediate)
     {
-      DT* value_ptr = lookup_value(addr, true);
-      if (value_ptr != NULL)
-        *value_ptr = val;
+      data.put((tUInt64)(addr - lo_addr), val);
     }
     else
     {
@@ -700,9 +587,9 @@ class MOD_BRAM : public Module
   const DT METH_a_read()
   {
     if (pipelined)
-      return out_reg2_a;
+      return bs_value_view(out_reg2_a, data_bits);
     else
-      return out_reg_a;
+      return bs_value_view(out_reg_a, data_bits);
   }
 
  void METH_b_put(const ET& write_ens, const AT& addr, const DT& val,
@@ -724,9 +611,7 @@ class MOD_BRAM : public Module
     // handle an immediate write
     if (is_write && immediate)
     {
-      DT* value_ptr = lookup_value(addr, true);
-      if (value_ptr != NULL)
-        *value_ptr = val;
+      data.put((tUInt64)(addr - lo_addr), val);
     }
     else
     {
@@ -741,9 +626,9 @@ class MOD_BRAM : public Module
   const DT METH_b_read()
   {
     if (pipelined)
-      return out_reg2_b;
+      return bs_value_view(out_reg2_b, data_bits);
     else
-      return out_reg_b;
+      return bs_value_view(out_reg_b, data_bits);
   }
 
   // used for single-port BRAMs
@@ -781,11 +666,21 @@ class MOD_BRAM : public Module
  public:
   const unsigned int* data_index(tUInt64 addr)
   {
-    DT* value_ptr = lookup_value(addr, true);
-    if (value_ptr != NULL)
-      return symbol_value(value_ptr, data_bits);
-    else
+    if ((addr < (tUInt64) lo_addr) || (addr > (tUInt64) hi_addr))
       return NULL;
+    return data.sym_value(addr - (tUInt64) lo_addr);
+  }
+
+  /* parse one preloaded entry directly into its element storage
+   * (used by the mem-file format handlers; the address has already
+   * been checked against [lo_addr, hi_addr]) */
+  bool preload_entry(const AT& addr, const char* data_str, bool bin_format)
+  {
+    auto&& entry = data.ref((tUInt64)(addr - lo_addr));
+    if (bin_format)
+      return parse_bin(&entry, data_str, data_bits);
+    else
+      return parse_hex(&entry, data_str, data_bits);
   }
 
  // BRAM data members
@@ -795,31 +690,29 @@ class MOD_BRAM : public Module
   unsigned int   data_bits;
   AT             lo_addr;
   AT             hi_addr;
-  AT             last_word;
+  tUInt64        n_entries;
   unsigned int   chunk_size;
   unsigned int   num_wens;
   bool           dual_port;
-  unsigned int   num_levels;
-  unsigned char* level_bits;
-  void*          top_level;
+  tStateArray<DT> data;  // flat entries, in caller-provided storage
   tClock         __clk_handle_0;
   tClock         __clk_handle_1;
   tTime          upd_a_at;
   tTime          written_a_at;
   AT             upd_a_addr;
-  DT             upd_a_val;
-  DT             out_reg_a;
-  DT             out_reg2_a;
-  DT             upd_a_prev;
-  ET             upd_a_wens;
+  DT             upd_a_val;   // aux-bound when wide
+  DT             out_reg_a;   // aux-bound when wide
+  DT             out_reg2_a;  // aux-bound when wide
+  DT             upd_a_prev;  // aux-bound when wide
+  ET             upd_a_wens;  // aux-bound when wide
   tTime          upd_b_at;
   tTime          written_b_at;
   AT             upd_b_addr;
-  DT             upd_b_val;
-  DT             out_reg_b;
-  DT             out_reg2_b;
-  DT             upd_b_prev;
-  ET             upd_b_wens;
+  DT             upd_b_val;   // aux-bound when wide
+  DT             out_reg_b;   // aux-bound when wide
+  DT             out_reg2_b;  // aux-bound when wide
+  DT             upd_b_prev;  // aux-bound when wide
+  ET             upd_b_wens;  // aux-bound when wide
 
   // range structure for symbolic access to RegFile data
   Range range;

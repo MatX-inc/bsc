@@ -23,6 +23,7 @@ HEADERS = bluesim_kernel_api.h \
           bluesim_systemc.h \
           bs_wide_data.h \
           bs_prim_ops.h \
+          bs_prim_storage.h \
           bs_prim_mod_reg.h bs_prim_mod_wire.h bs_prim_mod_probe.h \
           bs_prim_mod_fifo.h bs_prim_mod_regfile.h bs_prim_mod_bram.h \
           bs_prim_mod_counter.h \

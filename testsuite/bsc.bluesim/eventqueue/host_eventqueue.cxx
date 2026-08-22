@@ -36,7 +36,9 @@
 #include "bluesim_host_ops.h"
 #include "bluesim_host_ops_default.h"
 
-typedef void*        (*tNewModelFn)(void);
+typedef void* (*tNewModelFn)(const struct bs_host_ops*, void*,
+                              void*, void*, void*);
+typedef tUInt64 (*tBytesFn)(tModel);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
 typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
@@ -105,7 +107,7 @@ int main(int argc, char** argv)
   tExitStatusFn exit_status = (tExitStatusFn) find_sym(dl, "bk_exit_status");
   tShutdownFn   shutdown_fn = (tShutdownFn)   find_sym(dl, "bk_shutdown");
 
-  tModel model = new_model();
+  tModel model = new_model(NULL, NULL, NULL, NULL, NULL);
   if (model == NULL)
   {
     fprintf(stderr, "harness: new_%s returned NULL\n", top_name);
@@ -122,6 +124,15 @@ int main(int argc, char** argv)
 
   const struct bs_host_ops* ops = bs_default_host_ops();
   void* ctx = bs_default_host_ctx();
+
+  /* the model's caller-provided storage (constructor ABI) */
+  tBytesFn state_bytes = (tBytesFn) find_sym(dl, "bk_state_bytes");
+  tBytesFn in_bytes    = (tBytesFn) find_sym(dl, "bk_input_bytes");
+  tBytesFn out_bytes   = (tBytesFn) find_sym(dl, "bk_output_bytes");
+  void* state_buf = malloc(state_bytes(model));
+  void* in_buf  = (in_bytes(model) > 0)  ? malloc(in_bytes(model))  : NULL;
+  void* out_buf = (out_bytes(model) > 0) ? malloc(out_bytes(model)) : NULL;
+  model = new_model(ops, ctx, state_buf, in_buf, out_buf);
 
   void* ctx_buf = malloc(ctx_bytes(max));
 

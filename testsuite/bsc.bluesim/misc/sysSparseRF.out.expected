@@ -2,7 +2,7 @@ Warning: file 'mem2.dat' for memory 'rf' has a gap at addresses 0 to 98999.
 Warning: file 'mem2.dat' for memory 'rf' has a gap at addresses 99015 to 10290009.
 Warning: file 'mem2.dat' for memory 'rf' has a gap at addresses 10290042 to 10293999.
 Warning: file 'mem2.dat' for memory 'rf' has a gap at addresses 10294015 to 10295000.
-Warning: file 'mem2.dat' for memory 'rf' has a gap at addresses 10295010 to 4398046511103.
+Warning: file 'mem2.dat' for memory 'rf' has a gap at addresses 10295010 to 67108863.
 rf[10290000] = aa
 rf[10290001] = aa
 rf[10290002] = aa

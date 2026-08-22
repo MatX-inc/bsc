@@ -5,6 +5,7 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_prim_storage.h"
 
 // This is the definition of the Wire primitive for <= 64 bits
 template<typename T>
@@ -16,10 +17,14 @@ class MOD_Wire : public Module
   tSym __symbols[3];
  public:
   MOD_Wire(tSimStateHdl simHdl, const char* name, Module* parent,
+           tStateLayout* sto,
            unsigned int width, const T& v, bool is_sync_wire)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
-      bits(width), value(v), isValid(false), written(false)
+      bits(width),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)),
+      isValid(false), written(false)
   {
+    value = v;
     symbol_count = 3;
     symbols = __symbols;
 
@@ -36,11 +41,13 @@ class MOD_Wire : public Module
     symbols[2].value = (void*)(&value);
   }
   MOD_Wire(tSimStateHdl simHdl, const char* name, Module* parent,
+           tStateLayout* sto,
            unsigned int width, bool is_sync_wire=false)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
-      bits(width), isValid(false), written(false)
+      bits(width),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)),
+      isValid(false), written(false)
   {
-    init_val(value, width);
     write_undet(&value, width);
 
     symbol_count = 3;
@@ -80,7 +87,8 @@ class MOD_Wire : public Module
  private:
   tClock __clk_handle_0;
   unsigned int bits;
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   bool isValid;
   bool written;
 };

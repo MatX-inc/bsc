@@ -1,15 +1,18 @@
 #ifndef __BS_PRIM_MOD_REGFILE_H__
 #define __BS_PRIM_MOD_REGFILE_H__
 
-#include <string>
-
 #include "bluesim_kernel_api.h"
 #include "bs_mem_file.h"
 #include "bs_str.h"
 #include "bs_module.h"
 #include "bs_wide_data.h"
+#include "bs_prim_storage.h"
 #include "bs_range_tracker.h"
 #include "bs_reset.h"
+
+/* aux storage words a wide RegFile needs: the same-cycle read-back
+ * value (upd_prev) and the undetermined-value scratch entry */
+#define BS_REGFILE_AUX_WORDS(b) (2u * BS_AUX_WORDS(b))
 
 // forward declaration
 template<typename AT, typename DT> class MOD_RegFile;
@@ -51,18 +54,14 @@ class BinFormatHandler : public FormatHandler
     {
       status = MF_IGNORED;
     }
+    else if (!rf->preload_entry(addr, data_str, true))
+    {
+      status = MF_BAD_FORMAT;
+    }
     else
     {
-      DT value;
-      init_val(value, data_bits);
-      if (!parse_bin(&value, data_str, data_bits))
-	status = MF_BAD_FORMAT;
-      else
-      {
-	rf->METH_upd(addr, value, true);
-	status = MF_ACCEPTED;
-	rt.setAddr(addr);
-      }
+      status = MF_ACCEPTED;
+      rt.setAddr(addr);
     }
 
     if (decreasing)
@@ -127,18 +126,14 @@ class HexFormatHandler : public FormatHandler
     {
       status = MF_IGNORED;
     }
+    else if (!rf->preload_entry(addr, data_str, false))
+    {
+      status = MF_BAD_FORMAT;
+    }
     else
     {
-      DT value;
-      init_val(value, data_bits);
-      if (!parse_hex(&value, data_str, data_bits))
-	status = MF_BAD_FORMAT;
-      else
-      {
-	rf->METH_upd(addr, value, true);
-	status = MF_ACCEPTED;
-	rt.setAddr(addr);
-      }
+      status = MF_ACCEPTED;
+      rt.setAddr(addr);
     }
 
     if (decreasing)
@@ -169,7 +164,13 @@ class HexFormatHandler : public FormatHandler
 template<typename AT, typename DT>
 const unsigned int* index_rf_fn(void* base, tUInt64 addr);
 
-// This is the definition of the RegFile primitive
+// This is the definition of the RegFile primitive.
+//
+// The entries live as an eager, flat array in the caller-provided
+// element storage claimed at construction (one published entry per
+// address, see bluesim_introspection.h); the sparse lazily-allocated
+// block tree of earlier runtimes is gone, and constructing, loading
+// or accessing a RegFile makes no allocator calls.
 template<typename AT, typename DT>
 class MOD_RegFile : public Module
 {
@@ -179,25 +180,27 @@ class MOD_RegFile : public Module
   tSym __symbols[3];
  public:
   MOD_RegFile(tSimStateHdl simHdl, const char* name, Module* parent,
+	      tStateLayout* sto, unsigned int* aux,
 	      unsigned int addr_width, unsigned int data_width,
 	      const AT& lo, const AT& hi)
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
       upd_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     init_symbols();
   }
   MOD_RegFile(tSimStateHdl simHdl, const char* name, Module* parent,
-	      const std::string& memfile,
+	      tStateLayout* sto, unsigned int* aux,
+	      const char* memfile,
 	      unsigned int addr_width, unsigned int data_width,
 	      const AT& lo, const AT& hi, bool bin_format)
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
       upd_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     init_from_file(memfile, bin_format);
 
@@ -209,6 +212,7 @@ class MOD_RegFile : public Module
   // C-string semantics for the load (a VLA, see
   // DYNAMIC_VLA_FUNCTIONS)
   MOD_RegFile(tSimStateHdl simHdl, const char* name, Module* parent,
+	      tStateLayout* sto, unsigned int* aux,
 	      const tStr* memfile,
 	      unsigned int addr_width, unsigned int data_width,
 	      const AT& lo, const AT& hi, bool bin_format)
@@ -216,54 +220,29 @@ class MOD_RegFile : public Module
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
       upd_at(~bk_now(sim_hdl))
   {
-    init_storage();
+    init_storage(sto, aux);
 
     char memfile_buf[bs_str_len(memfile) + 1];
     init_from_file(bs_str_flatten(memfile, memfile_buf), bin_format);
 
     init_symbols();
   }
-  ~MOD_RegFile() { delete_blocks(top_level,0); }
 
  // shared initialization routines
  private:
-  void init_storage()
+  void init_storage(tStateLayout* sto, unsigned int* aux)
   {
-    last_word = hi_addr - lo_addr;
-
-    // partition address space for sparse storage
-    num_levels = (addr_bits + 9) / 10;
-    if ((num_levels > 1) && (addr_bits % 10 > 0) && (addr_bits % 10 < 5))
-      --num_levels;
-    level_bits = new unsigned char[num_levels];
-    unsigned int bits_remaining = addr_bits;
-    for (unsigned int i = num_levels; i > 0; --i)
-    {
-      if (bits_remaining < 15)
-      {
-	level_bits[i-1] = bits_remaining;
-	bits_remaining = 0;
-      }
-      else if (bits_remaining > 16)
-      {
-	level_bits[i-1] = 10;
-	bits_remaining -= 10;
-      }
-      else
-      {
-	level_bits[i-1] = 8;
-	bits_remaining -= 8;
-      }
-    }
-
-    // allocate top-level storage block
-    top_level = new_block(0);
+    n_entries = ((tUInt64)(hi_addr - lo_addr)) + 1llu;
+    data.bind(sto->claim(), data_bits);
+    data.init_undet(n_entries);
 
     // initialize address and data storage
     init_val(upd_addr, addr_bits);
     write_undet(&upd_addr, addr_bits);
-    init_val(upd_prev, data_bits);
+    bs_bind_aux(upd_prev, &aux, data_bits);
     write_undet(&upd_prev, data_bits);
+    bs_bind_aux(undet_val, &aux, data_bits);
+    write_undet(&undet_val, data_bits);
   }
 
   void init_symbols()
@@ -290,90 +269,20 @@ class MOD_RegFile : public Module
     symbols[2].value = (void*)(&lo_addr);
   }
 
-  void init_from_file(const std::string& memfile, bool bin_format)
+  void init_from_file(const char* memfile, bool bin_format)
   {
-    FormatHandler* reader;
+    // the handlers live on the stack for the duration of the read
     if (bin_format)
-      reader = new BinFormatHandler<AT,DT>(this, true,
-					   addr_bits, data_bits,
-					   lo_addr, hi_addr);
-    else
-      reader = new HexFormatHandler<AT,DT>(this, true,
-					   addr_bits, data_bits,
-					   lo_addr, hi_addr);
-    read_mem_file(sim_hdl, memfile.c_str(), inst_name, reader);
-  }
-
-  void* new_block(unsigned int level)
-  {
-    unsigned int nEntries = 1 << level_bits[level];
-    if (level == (num_levels - 1))
     {
-      DT* data = new DT[nEntries];
-      for (unsigned int n = 0; n < nEntries; ++n)
-      {
-	init_val(data[n], data_bits);
-	write_undet(&(data[n]), data_bits);
-      }
-      return (void*) data;
+      BinFormatHandler<AT,DT> reader(this, true, addr_bits, data_bits,
+				     lo_addr, hi_addr);
+      read_mem_file(sim_hdl, memfile, inst_name, &reader);
     }
     else
     {
-      void** ptrs = new void*[nEntries];
-      for (unsigned int n = 0; n < nEntries; ++n)
-	ptrs[n] = NULL;
-      return (void*) ptrs;
-    }
-  }
-
-  void delete_blocks(void* ptr, unsigned int level)
-  {
-    if (level == (num_levels - 1))
-    {
-      DT* data = (DT*) ptr;
-      delete[] data;
-    }
-    else
-    {
-      void** ptrs = (void**) ptr;
-      unsigned int nEntries = 1 << level_bits[level];
-      for (unsigned int n = 0; n < nEntries; ++n)
-      {
-	if (ptrs[n] != NULL)
-	  delete_blocks(ptrs[n], level+1);
-      }
-      delete[] ptrs;
-    }
-  }
-
-  DT* lookup_value(const AT& addr, bool alloc)
-  {
-    // figure out the target index and which bits of the address to use
-    unsigned long long idx = addr - lo_addr;
-    unsigned int shift = addr_bits;
-    void* ptr = top_level;
-    unsigned int level = 0;
-    while (true)
-    {
-      shift -= level_bits[level];
-      unsigned int mask = (1 << level_bits[level]) - 1;
-      unsigned int n = (idx >> shift) & mask;
-      if (level == (num_levels - 1))
-      {
-	DT* data = (DT*) ptr;
-	return &(data[n]);
-      }
-      else
-      {
-	void** ptrs = (void**) ptr;
-	++level;
-	if (ptrs[n] == NULL)
-	{
-	  if (alloc) ptrs[n] = new_block(level);
-	  else return NULL;
-	}
-	ptr = ptrs[n];
-      }
+      HexFormatHandler<AT,DT> reader(this, true, addr_bits, data_bits,
+				     lo_addr, hi_addr);
+      read_mem_file(sim_hdl, memfile, inst_name, &reader);
     }
   }
 
@@ -389,6 +298,18 @@ class MOD_RegFile : public Module
   }
 
  public:
+  /* parse one preloaded entry directly into its element storage
+   * (used by the mem-file format handlers; the address has already
+   * been checked against [lo_addr, hi_addr]) */
+  bool preload_entry(const AT& addr, const char* data_str, bool bin_format)
+  {
+    auto&& entry = data.ref((tUInt64)(addr - lo_addr));
+    if (bin_format)
+      return parse_bin(&entry, data_str, data_bits);
+    else
+      return parse_hex(&entry, data_str, data_bits);
+  }
+
   // Note: there is RegFileWCF variant of RegFile that
   // allows upd before sub, but sub should be able to read the
   // value from the beginning of the cycle.
@@ -403,32 +324,15 @@ class MOD_RegFile : public Module
 	// register possibly still at its undetermined initial pattern,
 	// so tolerate the access: silently return an undetermined
 	// value, as the pre-panic runtime did (see bs_reset.h).
-	DT v;
-	init_val(v, data_bits);
-	write_undet(&v, data_bits);
-	return v;
+	return bs_value_view(undet_val, data_bits);
       }
       oob_panic("Read address", addr);
     }
     else if ((upd_addr == addr) && bk_is_same_time(sim_hdl, upd_at))
     {
-      return upd_prev;
+      return bs_value_view(upd_prev, data_bits);
     }
-    else
-    {
-      DT* value_ptr = lookup_value(addr, false);
-      if (value_ptr != NULL)
-      {
-	return *value_ptr;
-      }
-      else
-      {
-	DT v;
-	init_val(v, data_bits);
-	write_undet(&v, data_bits);
-	return v;
-      }
-    }
+    return data.get((tUInt64)(addr - lo_addr));
   }
   void METH_upd(const AT& addr, const DT& val, bool immediate = false)
   {
@@ -436,31 +340,25 @@ class MOD_RegFile : public Module
     {
       if (any_reset_asserted(sim_hdl))
 	return; // in-reset carve-out: drop the write silently instead
-		// of panicking (lookup_value() must not run: it would
-		// alias an out-of-bounds address onto a valid entry)
+		// of panicking
       oob_panic("Write address", addr);
     }
-    DT* value_ptr = lookup_value(addr, true);
-    if (value_ptr != NULL)
+    auto&& entry = data.ref((tUInt64)(addr - lo_addr));
+    if (!immediate)
     {
-      if (!immediate)
-      {
-	upd_at = bk_now(sim_hdl);
-	upd_addr = addr;
-	upd_prev = *value_ptr;
-      }
-      *value_ptr = val;
+      upd_at = bk_now(sim_hdl);
+      upd_addr = addr;
+      upd_prev = entry;
     }
+    entry = val;
   }
 
  public:
   const unsigned int* data_index(tUInt64 addr)
   {
-    DT* value_ptr = lookup_value(addr, true);
-    if (value_ptr != NULL)
-      return symbol_value(value_ptr, data_bits);
-    else
+    if ((addr < (tUInt64) lo_addr) || (addr > (tUInt64) hi_addr))
       return NULL;
+    return data.sym_value(addr - (tUInt64) lo_addr);
   }
 
  // RegFile data members
@@ -469,13 +367,12 @@ class MOD_RegFile : public Module
   unsigned int data_bits;
   AT lo_addr;
   AT hi_addr;
-  AT last_word;
-  unsigned int num_levels;
-  unsigned char* level_bits;
-  void* top_level;
+  tUInt64 n_entries;
+  tStateArray<DT> data;  // flat entries, in caller-provided storage
   tTime upd_at;
   AT upd_addr;
-  DT upd_prev;
+  DT upd_prev;           // aux-bound when wide
+  DT undet_val;          // aux-bound when wide
 
   // range structure for symbolic access to RegFile data
   Range range;

@@ -5,6 +5,10 @@
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
 #include "bs_wide_data.h"
+#include "bs_prim_storage.h"
+
+/* aux storage words a wide FIFO needs (the zero-width read buffer) */
+#define BS_FIFO_AUX_WORDS(b) (1u * BS_AUX_WORDS(b))
 
 typedef enum { FIFO_SIMPLE, FIFO_LOOPY, FIFO_BYPASS} tFifoType;
 
@@ -36,6 +40,7 @@ class MOD_Fifo : public Module
   tSym __symbols[3];
  public:
   MOD_Fifo(tSimStateHdl simHdl, const char* name, Module* parent,
+	   tStateLayout* sto, unsigned int* aux,
 	   unsigned int width, unsigned int depth,
 	   unsigned int guarded, unsigned int fifo_type)
     : Module(simHdl, name, parent), bits(width), size(depth),
@@ -43,18 +48,14 @@ class MOD_Fifo : public Module
       enq_at(~bk_now(sim_hdl)), deq_at(~bk_now(sim_hdl)),
       clear_at(~bk_now(sim_hdl))
   {
-    data = new T[depth];
-    for (unsigned int n = 0; n < depth; ++n)
-    {
-      init_val(data[n], width);
-      write_undet(&data[n], width);
-    }
+    data.bind(sto->claim(), width);
+    data.init_undet(depth);
     fst   = 0;
     elems = 0;
     in_reset = false;
     suppress_writes = false;
     // for zero-width fifos
-    init_val(dummyval, width);
+    bs_bind_aux(dummyval, &aux, width);
     write_undet(&dummyval, width);
 
     symbol_count = 3;
@@ -77,13 +78,12 @@ class MOD_Fifo : public Module
     symbols[2].info = SYM_DEF | (8*sizeof(unsigned int)) << 4;
     symbols[2].value = (void*)(&size);
   }
-  ~MOD_Fifo() { delete[] data; }
  public:
   // Note: first < (deq, clear) so we do *not* need to preserve
   // the first element to achieve registered behavior.  first CF enq,
   // but first on a FIFO which was empty at the start of the cycle
   // is allowed to return invalid data.
-  const T& METH_first() const { return data[fst]; }
+const T METH_first() const { return data.get(fst); }
 
   // Note: all FIFOs have deq < clear, and loopy FIFOs also have
   // deq < enq.  Bypass FIFOs have enq < deq.  The only troublesome
@@ -145,7 +145,7 @@ class MOD_Fifo : public Module
     }
     else if (elems < size)
     {
-      data[(fst + elems) % size] = x;
+      data.put((fst + elems) % size, x);
       ++elems;
     }
   }
@@ -239,14 +239,14 @@ class MOD_Fifo : public Module
   const unsigned int* data_index(tUInt64 addr) const
   {
     if (addr < ((tUInt64) size))
-      return symbol_value(&(data[addr]),bits);
+      return data.sym_value(addr);
     else
       return NULL;
   }
 
   // FIFO data members
  private:
-  T*                 data;
+  tStateArray<T>     data;
   const unsigned int bits;
   const unsigned int size;
   const bool         guard;
@@ -261,7 +261,7 @@ class MOD_Fifo : public Module
   bool               in_reset;
   bool               suppress_writes;
 
-  // for zero-width fifos
+  // for zero-width fifos (aux-bound when wide)
   T dummyval;
 
   // range structure for symbolic access to FIFO data

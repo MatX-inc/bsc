@@ -17,13 +17,35 @@
  * bluesim_kernel_api.h).
  *
  * Alongside the descriptors, the code generator defines a flat
- * layout: every state element is assigned a byte offset within a
- * planned contiguous state area, and every top-module input (output)
- * port a byte offset within a planned contiguous input (output)
- * area.  The three areas are independent; each starts at offset 0.
- * In this version of the runtime the layout is DESCRIPTIVE only --
- * construction does not yet place storage at these offsets -- but
- * the layout is fixed per design and hosts may size buffers from it.
+ * layout: every state element is assigned a byte offset within the
+ * element sub-area of the caller-provided state buffer, and every
+ * top-module input (output) port a byte offset within the
+ * caller-provided input (output) buffer.  Construction places the
+ * live storage at exactly these offsets: bk_sync_init() builds the
+ * model in the state buffer recorded by new_MODEL_*(), and each
+ * element's value is read and written there for the whole life of
+ * the simulation, so a host that writes an element's bytes changes
+ * the simulated state and a host that reads them sees the current
+ * simulated value.
+ *
+ * The STATE buffer (bk_state_bytes(model) bytes) has two parts:
+ *
+ *   [ module objects | element sub-area ]
+ *
+ * The module objects -- the C++ shells of the generated module tree,
+ * placement-constructed at the front of the buffer -- are opaque to
+ * hosts.  The element sub-area begins at byte
+ * bk_state_elements_offset(model) (a multiple of 16); the element
+ * descriptors' offsets are relative to ITS start, and
+ * bk_state_bytes() is the elements offset plus the element
+ * sub-area's size.  The input and output areas are independent
+ * whole buffers of their own; port descriptor offsets are relative
+ * to their starts.
+ *
+ * Elements of the CLOCK and RESET kinds (and PROBE elements of the
+ * stateless ProbeWire primitive) occupy their published slots but
+ * store no defined value: their bytes are unspecified and writing
+ * them has no effect.
  *
  * Layout rules (identical for all three areas):
  *

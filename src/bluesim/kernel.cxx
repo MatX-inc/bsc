@@ -452,6 +452,13 @@ tUInt64 bk_state_bytes(tModel model)
   return ((Model*) model)->get_state_bytes();
 }
 
+tUInt64 bk_state_elements_offset(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_state_elements_offset();
+}
+
 tUInt32 bk_num_input_ports(tModel model)
 {
   if (model == NULL)
@@ -567,6 +574,26 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   /* the event queue must be able to hold at least one event */
   if (event_queue_capacity == 0)
     return NULL;
+
+  /* the model must have been given its caller-provided storage: the
+   * state buffer new_MODEL_*() recorded is where create_model() below
+   * placement-constructs the module tree (input/output port buffers
+   * are likewise required whenever their published areas are
+   * non-empty).  A sizing-only new_MODEL_*() call leaves these NULL.
+   */
+  {
+    Model* m = (Model*) model;
+    if (m == NULL)
+      return NULL;
+    if ((m->state_storage == NULL) && (m->get_state_bytes() > 0llu))
+      return NULL;
+    if ((((uintptr_t) m->state_storage) % alignof(max_align_t)) != 0)
+      return NULL;
+    if ((m->input_storage == NULL) && (m->get_input_bytes() > 0llu))
+      return NULL;
+    if ((m->output_storage == NULL) && (m->get_output_bytes() > 0llu))
+      return NULL;
+  }
 
   /* the caller provides the storage for the simulation context: at
    * least bk_context_bytes(event_queue_capacity) bytes, aligned like

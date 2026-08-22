@@ -49,7 +49,7 @@ compile_object_pass ModuleParam.bsv sysModuleParam
 link_objects_fail_error sysModuleParam.ba sysModuleParam G0099
 }
 
-# Test sparse RegFileLoad support for very large RegFiles
+# Test RegFileLoad with a gappy memory file over a large flat RegFile
 test_c_only_bsv SparseRF
 
 # Test that we correctly handle a renamed default clock

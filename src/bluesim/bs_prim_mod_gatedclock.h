@@ -3,6 +3,7 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_prim_storage.h"
 
 // This is the definition of the GatedClock primitive.
 // It has an internal register, to delay the gate change by a cycle.
@@ -13,10 +14,14 @@ class MOD_GatedClock : public Module
 {
  public:
   MOD_GatedClock(tSimStateHdl simHdl, const char* name, Module* parent,
+		 tStateLayout* sto,
 		 tUInt8 v)
     : Module(simHdl, name, parent), written(~bk_now(sim_hdl)),
       clk_in_hdl(BAD_CLOCK_HANDLE), clk_in_gate(0), reg_reset_value(v)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     PORT_CLK_GATE_OUT = 0;
     write_undet(&reg, 1);
     in_reset = false;

@@ -4,7 +4,18 @@
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
 #include "bs_wide_data.h"
+#include "bs_prim_storage.h"
 #include "bs_reset.h"
+
+/* aux storage words each register family needs for its wide
+ * secondary values (see bs_prim_storage.h; 0 when the width is not
+ * wide, in which case the constructors accept a NULL aux pointer) */
+#define BS_REG_AUX_WORDS(b)        (2u * BS_AUX_WORDS(b)) /* prev, reset */
+#define BS_REGALIGNED_AUX_WORDS(b) (2u * BS_AUX_WORDS(b)) /* reset, next */
+#define BS_CONFIGREG_AUX_WORDS(b)  (2u * BS_AUX_WORDS(b)) /* old, reset */
+#define BS_REGTWO_AUX_WORDS(b)     (2u * BS_AUX_WORDS(b)) /* old, reset */
+#define BS_CREG_AUX_WORDS(b)      (12u * BS_AUX_WORDS(b)) /* reset, rec,
+                                                             read[5], write[5] */
 
 #define NO_RESET_REG    0
 #define SYNC_RESET_REG  1
@@ -23,13 +34,16 @@ class MOD_Reg : public Module
  public:
   // RegN, RegA, CrossingRegN, CrossingRegA
   MOD_Reg(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  unsigned int width, const T& v, unsigned int async)
-    : Module(simHdl, name, parent), bits(width), reset_value(v),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
       reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
-    init_val(prev_value, bits);
+    bs_bind_aux(prev_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    reset_value = v;
     write_undet(&prev_value, bits);
-    init_val(value, bits);
     write_undet(&value, bits);
     written_at = ~bk_now(sim_hdl);
 
@@ -45,10 +59,15 @@ class MOD_Reg : public Module
   }
   // RevertReg
   MOD_Reg(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  unsigned int width, const T& v)
-    : Module(simHdl, name, parent), value(v), bits(width),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
       reset_type(NO_RESET_REG)
   {
+    bs_bind_aux(prev_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    value = v;
     in_reset = false;
     suppress_write = false;
 
@@ -61,14 +80,16 @@ class MOD_Reg : public Module
   }
   // RegUN, CrossingRegUN
   MOD_Reg(tSimStateHdl simHdl, const char* name, Module* parent,
+	  tStateLayout* sto, unsigned int* aux,
 	  unsigned int width)
-    : Module(simHdl, name, parent), bits(width), reset_type(NO_RESET_REG)
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      reset_type(NO_RESET_REG)
   {
-    init_val(prev_value, bits);
+    bs_bind_aux(prev_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
     write_undet(&prev_value, bits);
-    init_val(value, bits);
     write_undet(&value, bits);
-    init_val(reset_value, bits);
     write_undet(&reset_value, bits);
     written_at = ~bk_now(sim_hdl);
 
@@ -150,10 +171,11 @@ class MOD_Reg : public Module
  public:
  // register data members
  private:
-  T prev_value;
-  T value;
+  T prev_value;          // aux-bound when wide
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   const unsigned int bits;
-  T reset_value;
+  T reset_value;         // aux-bound when wide
   const unsigned int reset_type;
   tTime written_at;
   bool suppress_write;
@@ -174,15 +196,18 @@ class MOD_RegAligned : public Module
   tSym __symbols[1];
  public:
   MOD_RegAligned(tSimStateHdl simHdl, const char* name, Module* parent,
+		 tStateLayout* sto, unsigned int* aux,
 		 unsigned int width, const T& v, unsigned int async)
-    : Module(simHdl, name, parent), bits(width), reset_value(v),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
       reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG),
       __clk_handle_0(BAD_CLOCK_HANDLE), __clk_handle_1(BAD_CLOCK_HANDLE),
       written_at(~bk_now(sim_hdl))
   {
-    init_val(value, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    bs_bind_aux(next_value, &aux, bits);
+    reset_value = v;
     write_undet(&value, bits);
-    init_val(next_value, bits);
     write_undet(&next_value, bits);
     in_reset = false;
     suppress_write = false;
@@ -196,14 +221,17 @@ class MOD_RegAligned : public Module
     symbols[0].value = (void*)(&value);
   }
   MOD_RegAligned(tSimStateHdl simHdl, const char* name, Module* parent,
+		 tStateLayout* sto, unsigned int* aux,
 		 unsigned int width)
-    : Module(simHdl, name, parent), bits(width), tick_at(~bk_now(sim_hdl)),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      tick_at(~bk_now(sim_hdl)),
       reset_type(NO_RESET_REG), __clk_handle_0(BAD_CLOCK_HANDLE),
       __clk_handle_1(BAD_CLOCK_HANDLE), written_at(~bk_now(sim_hdl))
   {
-    init_val(value, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    bs_bind_aux(next_value, &aux, bits);
     write_undet(&value, bits);
-    init_val(reset_value, bits);
     write_undet(&reset_value, bits);
     in_reset = false;
     suppress_write = false;
@@ -278,10 +306,11 @@ class MOD_RegAligned : public Module
  public:
  // RegAligned data members
  private:
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   const unsigned int bits;
-  T reset_value;
-  T next_value;
+  T reset_value;         // aux-bound when wide
+  T next_value;          // aux-bound when wide
   tTime tick_at;
   const unsigned int reset_type;
   bool suppress_write;
@@ -307,14 +336,17 @@ class MOD_ConfigReg : public Module
   tSym __symbols[1];
  public:
   MOD_ConfigReg(tSimStateHdl simHdl, const char* name, Module* parent,
+		tStateLayout* sto, unsigned int* aux,
 		unsigned int width, const T& v, unsigned int async)
-    : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
-      reset_value(v),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      written(~bk_now(sim_hdl)),
       reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
-    init_val(value, bits);
+    bs_bind_aux(old_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    reset_value = v;
     write_undet(&value, bits);
-    init_val(old_value, bits);
     write_undet(&old_value, bits);
     in_reset = false;
     suppress_write = false;
@@ -327,15 +359,17 @@ class MOD_ConfigReg : public Module
     symbols[0].value = (void*)(&value);
   }
   MOD_ConfigReg(tSimStateHdl simHdl, const char* name, Module* parent,
+		tStateLayout* sto, unsigned int* aux,
 		unsigned int width)
-    : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      written(~bk_now(sim_hdl)),
       reset_type(NO_RESET_REG)
   {
-    init_val(value, bits);
+    bs_bind_aux(old_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
     write_undet(&value, bits);
-    init_val(old_value, bits);
     write_undet(&old_value, bits);
-    init_val(reset_value, bits);
     write_undet(&reset_value, bits);
     in_reset = false;
     suppress_write = false;
@@ -400,11 +434,12 @@ class MOD_ConfigReg : public Module
  public:
  // ConfigReg data members
  private:
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   unsigned int bits;
   tTime written;
-  T old_value;
-  T reset_value;
+  T old_value;           // aux-bound when wide
+  T reset_value;         // aux-bound when wide
   const unsigned int reset_type;
   bool suppress_write;
   bool in_reset;
@@ -420,30 +455,33 @@ class MOD_RegTwo : public Module
 {
  public:
   MOD_RegTwo(tSimStateHdl simHdl, const char* name, Module* parent,
+	     tStateLayout* sto, unsigned int* aux,
 	     unsigned int width, const T& v, unsigned int async)
-    : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
-      a_at(~bk_now(sim_hdl)), reset_value(v),
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      written(~bk_now(sim_hdl)), a_at(~bk_now(sim_hdl)),
       reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
-    init_val(value, bits);
+    bs_bind_aux(old_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    reset_value = v;
     write_undet(&value, bits);
-
-    init_val(old_value, bits);
 
     in_reset = false;
     suppress_write = false;
   }
   MOD_RegTwo(tSimStateHdl simHdl, const char* name, Module* parent,
+	     tStateLayout* sto, unsigned int* aux,
 	     unsigned int width)
-    : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
-      a_at(~bk_now(sim_hdl)), reset_type(NO_RESET_REG)
+    : Module(simHdl, name, parent),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      written(~bk_now(sim_hdl)), a_at(~bk_now(sim_hdl)),
+      reset_type(NO_RESET_REG)
   {
-    init_val(value, bits);
+    bs_bind_aux(old_value, &aux, bits);
+    bs_bind_aux(reset_value, &aux, bits);
     write_undet(&value, bits);
 
-    init_val(old_value, bits);
-
-    init_val(reset_value, bits);
     write_undet(&reset_value, bits);
     in_reset = false;
     suppress_write = false;
@@ -511,12 +549,13 @@ class MOD_RegTwo : public Module
  public:
  // RegTwo data members
  private:
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   const unsigned int bits;
   tTime written;
   tTime a_at;
-  T old_value;
-  T reset_value;
+  T old_value;           // aux-bound when wide
+  T reset_value;         // aux-bound when wide
   const unsigned int reset_type;
   bool suppress_write;
   bool in_reset;
@@ -535,28 +574,30 @@ class MOD_CReg : public Module
  public:
   // CRegN, CRegA
   MOD_CReg(tSimStateHdl simHdl, const char* name, Module* parent,
+	   tStateLayout* sto, unsigned int* aux,
 	   unsigned int width, const T& v, unsigned int async)
     : Module(simHdl, name, parent),
       ports(max_ports), // this should eventually be a parameter
       __clk_handle_0(BAD_CLOCK_HANDLE),
-      bits(width), reset_value(v),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
       reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
-    init_val(value, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    bs_bind_aux(value_rec, &aux, bits);
+    reset_value = v;
     write_undet(&value, bits);
 
     in_reset = false;
     suppress_write = false;
 
-    init_val(value_rec, bits);
     write_undet(&value_rec, bits);
 
     for (unsigned int i = 0; i < max_ports; i++) {
-      init_val(read_val[i], bits);
+      bs_bind_aux(read_val[i], &aux, bits);
       write_undet(&(read_val[i]), bits);
       did_write[i] = false;
       did_write_rec[i] = false;
-      init_val(write_val[i], bits);
+      bs_bind_aux(write_val[i], &aux, bits);
       write_undet(&(write_val[i]), bits);
     }
 
@@ -569,29 +610,30 @@ class MOD_CReg : public Module
   }
   // CRegUN
   MOD_CReg(tSimStateHdl simHdl, const char* name, Module* parent,
+	   tStateLayout* sto, unsigned int* aux,
 	   unsigned int width)
     : Module(simHdl, name, parent),
       ports(max_ports), // this should eventually be a parameter
       __clk_handle_0(BAD_CLOCK_HANDLE),
-      bits(width), reset_type(NO_RESET_REG)
+      value(bs_bind_elem(value_stg_, sto->claim(), width)), bits(width),
+      reset_type(NO_RESET_REG)
   {
-    init_val(value, bits);
+    bs_bind_aux(reset_value, &aux, bits);
+    bs_bind_aux(value_rec, &aux, bits);
     write_undet(&value, bits);
-    init_val(reset_value, bits);
     write_undet(&reset_value, bits);
 
     in_reset = false;
     suppress_write = false;
 
-    init_val(value_rec, bits);
     write_undet(&value_rec, bits);
 
     for (unsigned int i = 0; i < max_ports; i++) {
-      init_val(read_val[i], bits);
+      bs_bind_aux(read_val[i], &aux, bits);
       write_undet(&(read_val[i]), bits);
       did_write[i] = false;
       did_write_rec[i] = false;
-      init_val(write_val[i], bits);
+      bs_bind_aux(write_val[i], &aux, bits);
       write_undet(&(write_val[i]), bits);
     }
 
@@ -699,9 +741,10 @@ class MOD_CReg : public Module
   static const unsigned int max_ports = 5;
   const unsigned int ports;
   tClock __clk_handle_0;
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   const unsigned int bits;
-  T reset_value;
+  T reset_value;         // aux-bound when wide
   const unsigned int reset_type;
   bool suppress_write;
   bool in_reset;

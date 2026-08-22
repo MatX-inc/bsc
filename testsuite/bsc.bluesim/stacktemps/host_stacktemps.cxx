@@ -72,7 +72,9 @@ extern "C" void* realloc(void* ptr, size_t size)
 
 /* ---- kernel entry points ---- */
 
-typedef void*        (*tNewModelFn)(void);
+typedef void* (*tNewModelFn)(const struct bs_host_ops*, void*,
+                              void*, void*, void*);
+typedef tUInt64 (*tBytesFn)(tModel);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
 typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
@@ -164,12 +166,22 @@ int main(int argc, char** argv)
   tCounts before_init;
   sample(&before_init);
 
-  tModel model = new_model();
+  tModel model = new_model(NULL, NULL, NULL, NULL, NULL);
   if (model == NULL)
   {
     fprintf(stderr, "harness: new_%s returned NULL\n", top_name);
     return 1;
   }
+
+  /* the model's caller-provided storage (constructor ABI) */
+  tBytesFn state_bytes = (tBytesFn) find_sym(dl, "bk_state_bytes");
+  tBytesFn in_bytes    = (tBytesFn) find_sym(dl, "bk_input_bytes");
+  tBytesFn out_bytes   = (tBytesFn) find_sym(dl, "bk_output_bytes");
+  void* state_buf = malloc(state_bytes(model));
+  void* in_buf  = (in_bytes(model) > 0)  ? malloc(in_bytes(model))  : NULL;
+  void* out_buf = (out_bytes(model) > 0) ? malloc(out_bytes(model)) : NULL;
+  model = new_model(bs_default_host_ops(), bs_default_host_ctx(),
+                    state_buf, in_buf, out_buf);
 
   tUInt32 capacity = max_depth(model) + 16;
   void* ctx_buf = malloc(ctx_bytes(capacity));
@@ -184,9 +196,11 @@ int main(int argc, char** argv)
 
   tCounts after_init;
   sample(&after_init);
+  /* (the model itself now constructs into caller-provided storage;
+   * the remaining init-time C-allocator use -- kernel bookkeeping --
+   * is removed by a later change) */
   printf("harness: construction and init use the allocators: %s\n",
-         ((after_init.mem_allocs > before_init.mem_allocs) &&
-          (after_init.c_allocs > before_init.c_allocs)) ? "yes" : "NO");
+         (after_init.c_allocs > before_init.c_allocs) ? "yes" : "NO");
 
   tClock clk = get_clock(sim, "CLK");
 

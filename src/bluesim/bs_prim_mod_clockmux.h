@@ -5,6 +5,7 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_prim_storage.h"
 #include "bs_reset.h"
 
 // This is the definition of the ClockMux primitive,
@@ -12,9 +13,13 @@
 class MOD_ClockMux : public Module
 {
  public:
-  MOD_ClockMux(tSimStateHdl simHdl, const char* name, Module* parent)
+  MOD_ClockMux(tSimStateHdl simHdl, const char* name, Module* parent,
+	       tStateLayout* sto)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     select_out = false;
     a_clk  = b_clk  = 0;
     a_gate = b_gate = 0;
@@ -90,10 +95,14 @@ class MOD_ClockSelect : public Module
 {
  public:
   MOD_ClockSelect(tSimStateHdl simHdl, const char* name, Module* parent,
+		  tStateLayout* sto,
 		  unsigned int stages)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
       reset_delay(stages), reset_hold(stages + 1), reset_fn(NULL)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     select_out = select_out2 = false;
     written = ~bk_now(sim_hdl);
     in_reset = false;

@@ -200,6 +200,8 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                            (mkVar "get_state_element")
                            [ (userType "tUInt32") (mkVar "n") ]
               , decl $ function (userType "tUInt64") (mkVar "get_state_bytes") []
+              , decl $ function (userType "tUInt64")
+                           (mkVar "get_state_elements_offset") []
               , decl $ function (userType "tUInt32")
                            (mkVar "get_num_input_ports") []
               , decl $ function (ptr . constant . (userType "tBkPortInfo"))
@@ -225,23 +227,58 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                              ]
             ]
 
-        -- abstract the model constructor
+        -- The model constructor entry point (the ABI is documented at
+        -- the top of bluesim_kernel_api.h).  The model object lives in
+        -- static storage -- placement-constructed on the first call,
+        -- so loading the design registers no static destructor and
+        -- calling this makes no allocator calls -- and every call
+        -- re-records the host ops/context and the caller-provided
+        -- state/input/output storage in the Model base.
         new_fn_proto =
-            function (ptr . void) (mkVar ("new_" ++ model_name)) []
+            function (ptr . void) (mkVar ("new_" ++ model_name))
+                [ (ptr . constant . userType "struct bs_host_ops")
+                      (mkVar "ops")
+                , (ptr . void) (mkVar "ctx")
+                , (ptr . void) (mkVar "state")
+                , (ptr . void) (mkVar "inputs")
+                , (ptr . void) (mkVar "outputs")
+                ]
         new_fn_decl =
             [ comment "Function for creating a new model" $
               externC [decl $ new_fn_proto]
             ]
 
         new_fn_def =
-            [ comment "Function for creating a new model" $
+            [ comment ("Function for creating a new model (see the " ++
+                       "new_MODEL contract in bluesim_kernel_api.h)") $
               define new_fn_proto
                 (block
-                 [ decl $ (ptr . userType model_name) $
-                            (mkVar "model") `assign`
-                                (new (classType model_name) (Just []))
-                 , ret $ Just (cCast (ptrType voidType) (var "model")) ]
+                 [ if_cond ((var "__model_instance") `cEq` mkNULL)
+                       ((mkVar "__model_instance") `assign`
+                            ((var ("new (__model_storage.bytes) " ++
+                                   model_name)) `cCall` []))
+                       Nothing
+                 , stmt $ ((var "__model_instance") `cArrow` "set_storage")
+                              `cCall` [ var "ops", var "ctx", var "state"
+                                      , var "inputs", var "outputs" ]
+                 , ret $ Just (cCast (ptrType voidType)
+                                     (var "__model_instance")) ]
                  )
+            ]
+
+        -- static storage for the model object: aligned raw bytes plus
+        -- the instance pointer set on the first new_MODEL_* call
+        model_storage_decls =
+            [ comment ("Static storage for the model object " ++
+                       "(placement-constructed on first use; " ++
+                       "no global constructor or destructor)")
+                      (blankLines 0)
+            , static $ decl $
+                (userType ("union { double __align; char bytes[sizeof(" ++
+                           model_name ++ ")]; }"))
+                (mkVar "__model_storage")
+            , static $ decl $ (ptr . userType model_name) $
+                (mkVar "__model_instance") `assign` mkNULL
             ]
 
         -- model constructor
@@ -501,12 +538,29 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                             "(static; see bluesim_introspection.h)")
                            (blankLines 0) ] ++ desc_tables
 
+        -- the element sub-area of the caller-provided state buffer
+        -- begins after the module objects, at the next 16-byte
+        -- boundary; the expression is compile-time constant
+        elems_off_txt =
+            "((sizeof(" ++ pfxMod ++ (modName top_blk) ++
+            ") + 15llu) & ~((tUInt64)15))"
+
         mk_num_def fn_name n =
             define (function (userType "tUInt32") (mkScopedVar fn_name) [])
                    (block [ ret (Just (mkUInt32 n)) ])
         mk_bytes_def fn_name n =
             define (function (userType "tUInt64") (mkScopedVar fn_name) [])
                    (block [ ret (Just (mkUInt64 n)) ])
+        -- get_state_bytes: module objects plus the element sub-area
+        mk_state_bytes_def n =
+            define (function (userType "tUInt64")
+                             (mkScopedVar "get_state_bytes") [])
+                   (block [ ret (Just ((var elems_off_txt) `cAdd`
+                                       (mkUInt64 n))) ])
+        mk_elems_off_def =
+            define (function (userType "tUInt64")
+                             (mkScopedVar "get_state_elements_offset") [])
+                   (block [ ret (Just (var elems_off_txt)) ])
         mk_elem_def fn_name ty arr n =
             define (function (ptr . constant . (userType ty))
                              (mkScopedVar fn_name)
@@ -529,7 +583,8 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
             , mk_num_def "get_num_state_elements" num_state_elems
             , mk_elem_def "get_state_element" "tBkStateInfo"
                           "bk_state_elements" num_state_elems
-            , mk_bytes_def "get_state_bytes" state_bytes
+            , mk_state_bytes_def state_bytes
+            , mk_elems_off_def
             , mk_num_def "get_num_input_ports" num_input_ports
             , mk_elem_def "get_input_port" "tBkPortInfo"
                           "bk_input_ports" num_input_ports
@@ -549,12 +604,36 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                                  [ bool $ mkVar "asserted" ]
         get_instance_decl  = function (ptr . void) (mkScopedVar "get_instance") []
 
-        newInst sb   = let inst = mkVar ((modName sb) ++ "_instance")
-                           new_expr = new (classType (pfxMod ++ (modName sb)))
-                                          (Just [var "sim_hdl", mkStr "top", mkNULL])
-                       in inst `assign` new_expr
+        -- placement-construct the module tree in the caller-provided
+        -- state buffer recorded by new_MODEL_*(): module objects at
+        -- the front, published elements at their descriptor offsets
+        -- in the element sub-area (walked through the tStateLayout
+        -- cursor)
+        newInst sb   =
+            let inst = mkVar ((modName sb) ++ "_instance")
+                table_expr = if (num_state_elems == (0 :: Integer))
+                             then mkNULL
+                             else var "bk_state_elements"
+                new_expr = (var ("new (state_storage) " ++
+                                 pfxMod ++ (modName sb))) `cCall`
+                               [ var "sim_hdl", mkStr "top", mkNULL
+                               , var "&__layout" ]
+            in  [ decl $ (userType "tStateLayout") (mkVar "__layout")
+                , (mkVar "__layout.elems") `assign`
+                      (var ("((unsigned char*) state_storage) + " ++
+                            elems_off_txt))
+                , (mkVar "__layout.table") `assign` table_expr
+                , (mkVar "__layout.next") `assign` (mkUInt32 0)
+                , inst `assign` new_expr
+                ]
+        -- the model is torn down in place; the buffer is the
+        -- caller's and nothing is freed here
         deleteInst sb = let nm = (modName sb) ++ "_instance"
-                        in [ stmt $ delete (var nm)
+                            cls = pfxMod ++ (modName sb)
+                        in [ if_cond (var nm)
+                                 (stmt $ ((var nm) `cArrow` ("~" ++ cls))
+                                             `cCall` [])
+                                 Nothing
                            , (mkVar nm) `assign` mkNULL
                            ]
         resetInst sb = let nm = (modName sb) ++ "_instance"
@@ -583,8 +662,9 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                           -- clear reset counters
                           [ stmt $ (var "init_reset_request_counters") `cCall`
                                      [ var "sim_hdl" ] ] ++
-                          -- allocate top module instance
-                          [ newInst top_blk ] ++
+                          -- construct the top module instance in the
+                          -- caller-provided state buffer
+                          (newInst top_blk) ++
                           -- declare clock names (which creates handles)
                           (map declare_clk_name clk_groups) ++
                           -- if master, setup default clock and reset
@@ -667,6 +747,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                  gate_lits ++
                  desc_defs ++
                  ctor_def ++
+                 model_storage_decls ++
                  new_fn_def ++
                  sched_fns ++
                  model_methods ++

@@ -168,7 +168,9 @@ static unsigned int count_strays(void** addrs, unsigned int n)
 
 /* ---- kernel entry points ---- */
 
-typedef void*        (*tNewModelFn)(void);
+typedef void* (*tNewModelFn)(const struct bs_host_ops*, void*,
+                              void*, void*, void*);
+typedef tUInt64 (*tModelBytesFn)(tModel);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
 typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
@@ -279,12 +281,24 @@ int main(int argc, char** argv)
   tExitStatusFn exit_status = (tExitStatusFn) find_sym(dl, "bk_exit_status");
   tShutdownFn   shutdown_fn = (tShutdownFn)   find_sym(dl, "bk_shutdown");
 
-  tModel model = new_model();
+  tModel model = new_model(NULL, NULL, NULL, NULL, NULL);
   if (model == NULL)
   {
     fprintf(stderr, "harness: new_%s returned NULL\n", top_name);
     return 1;
   }
+
+  /* the model's caller-provided storage (constructor ABI) */
+  tModelBytesFn state_bytes = (tModelBytesFn) find_sym(dl, "bk_state_bytes");
+  tModelBytesFn in_bytes    = (tModelBytesFn) find_sym(dl, "bk_input_bytes");
+  tModelBytesFn out_bytes   = (tModelBytesFn) find_sym(dl, "bk_output_bytes");
+  void* state_buf = __libc_malloc(state_bytes(model));
+  void* in_buf  = (in_bytes(model) > 0)
+                      ? __libc_malloc(in_bytes(model))  : NULL;
+  void* out_buf = (out_bytes(model) > 0)
+                      ? __libc_malloc(out_bytes(model)) : NULL;
+  model = new_model(bs_default_host_ops(), bs_default_host_ctx(),
+                    state_buf, in_buf, out_buf);
 
   tUInt32 capacity = max_depth(model) + 16;
   void* ctx_buf = __libc_malloc(ctx_bytes(capacity));

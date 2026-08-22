@@ -4,6 +4,7 @@
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
 #include "bs_wide_data.h"
+#include "bs_prim_storage.h"
 
 // This is the definition of the Probe primitive.
 template<typename T>
@@ -15,11 +16,12 @@ class MOD_Probe : public Module
   tSym __symbols[1];
  public:
   MOD_Probe(tSimStateHdl simHdl, const char* name, Module* parent,
+	    tStateLayout* sto,
 	    unsigned int width)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
+      value(bs_bind_elem(value_stg_, sto->claim(), width)),
       bits(width)
   {
-    init_val(value, bits);
     write_undet(&value, bits);
 
     symbol_count = 1;
@@ -39,7 +41,8 @@ class MOD_Probe : public Module
  // Probe data members
  private:
   tClock __clk_handle_0;
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   unsigned int bits;
 
 };
@@ -50,9 +53,13 @@ class MOD_ProbeWire : public Module
 {
  public:
   MOD_ProbeWire(tSimStateHdl simHdl, const char* name, Module* parent,
+		tStateLayout* sto,
 		unsigned int width)
     : Module(simHdl, name, parent)
   {
+    // a ProbeWire holds no state; claim (and ignore) its published
+    // element entry so later elements bind at their published offsets
+    sto->claim();
     symbol_count = 0;
     symbols = NULL;
   }
