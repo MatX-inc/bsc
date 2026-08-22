@@ -2,6 +2,7 @@
 #define __BLUESIM_KERNEL_H__
 
 #include "bluesim_types.h"
+#include "bluesim_host_ops.h"
 
 /*
  * Declarations of all functions in the Bluesim kernel API.
@@ -13,6 +14,11 @@
  * stopping condition is encountered.  An embedder that wants
  * asynchronous execution or Ctrl-C handling provides them itself
  * (as bluetcl does with its simulation worker thread).
+ *
+ * The kernel and model also perform no I/O of their own: all runtime
+ * I/O ($display output, $fopen/$fwrite file access, memory-file
+ * preloads, warnings, ...) goes through the host operations the
+ * embedder passes to bk_sync_init() (see bluesim_host_ops.h).
  */
 
 #if __cplusplus
@@ -28,10 +34,36 @@ extern "C" {
  * When master is non-zero, it indicates that the model
  * is its own master.
  *
- * Returns a handle to the simulation state, which is needed
- * as an argument to the other Bluesim kernel API functions.
+ * The 'ops' argument supplies the host operations through which the
+ * runtime performs all of its I/O, and 'ctx' is the host context
+ * passed as the first argument of every operation (it may be NULL if
+ * the operations need no context).  The initialization is rejected
+ * (NULL is returned) if 'ops' is NULL, if any operation is missing,
+ * or if the table is older (by size or version) than this kernel
+ * requires; embedders that want the traditional stdio behavior pass
+ * the implementation from bluesim_host_ops_default.h, as bluetcl
+ * does.  Both 'ops' and 'ctx' are borrowed: they must remain valid
+ * until bk_shutdown().
+ *
+ * Note: system tasks that are not passed a simulation handle (the
+ * $fopen family) use the ops of the most recent bk_sync_init() in
+ * the process, so when several models are loaded into one process
+ * they must all be initialized with the same 'ops' and 'ctx'.
+ *
+ * Returns an owned handle to the simulation state, which is needed
+ * as an argument to the other Bluesim kernel API functions and is
+ * released by bk_shutdown().  Returns NULL on error.
  */
-tSimStateHdl bk_sync_init(tModel model, tBool master);
+own tSimStateHdl bk_sync_init(tModel model, tBool master,
+                              const struct bs_host_ops* ops, void* ctx);
+
+/* Get the host operations / host context registered with
+ * bk_sync_init().  A NULL simHdl returns the process-wide copy
+ * (that of the most recent bk_sync_init()), which is what system
+ * tasks without a simulation handle use.
+ */
+const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl);
+void* bk_host_ctx(tSimStateHdl simHdl);
 
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.
@@ -258,13 +290,14 @@ tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
 tBool bk_sync_pending(tSimStateHdl simHdl);
 
 /* Control whether bk_sync_run() and bk_sync_step() flush open file
- * buffers (fflush(NULL)) each time they return control to the caller.
+ * buffers each time they return control to the caller, by calling
+ * the host ops flush entry with a NULL stream (the equivalent of
+ * fflush(NULL) in the default host implementation).
  *
- * The default is enabled.  Embedders whose I/O does not go through
- * the C library's buffered streams can disable it to reduce per-step
- * overhead; with flushing disabled, pending $display output
- * stays in the C library's buffers until the embedder flushes them
- * itself or bk_shutdown() is called.
+ * The default is enabled.  Embedders whose host ops do not buffer
+ * can disable it to reduce per-step overhead; with flushing
+ * disabled, pending $display output stays in the host's buffers
+ * until the embedder flushes them itself.
  */
 void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
 

@@ -50,6 +50,11 @@ struct tSimState {
   // handle to the design
   Model* model;
 
+  // host operations through which all runtime I/O is performed,
+  // and the host context passed to every operation (bk_sync_init)
+  const struct bs_host_ops* host_ops;
+  void* host_ctx;
+
   // current simulation time
   tTime sim_time;
   // scaling factor used for $time/$stime

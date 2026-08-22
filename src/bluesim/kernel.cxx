@@ -1,7 +1,6 @@
 #include <list>
 #include <algorithm>
 #include <cstring>
-#include <cstdio>
 
 #include "mem_alloc.h"
 #include "kernel.h"
@@ -13,6 +12,57 @@
 
 /* forward declarations of some static helper functions */
 static void setup_clock_edges(tSimStateHdl simHdl, tClock clk);
+
+/*
+ * All I/O performed by the kernel goes through the host operations
+ * registered with bk_sync_init().  These are small helpers for
+ * writing the kernel's own messages (cycle dumps, warnings) to the
+ * host's standard streams.
+ */
+
+/* the ops/ctx of the most recent bk_sync_init(), for use by system
+ * tasks which are not passed a simulation handle (see bk_host_ops)
+ */
+static const struct bs_host_ops* process_host_ops = NULL;
+static void* process_host_ctx = NULL;
+
+/* write a string to one of the host's standard streams */
+static void host_write_str(tSimStateHdl simHdl, tHostStdStream which,
+                           const char* str)
+{
+  const struct bs_host_ops* ops = simHdl->host_ops;
+  struct bs_host_file* file = ops->std_stream(simHdl->host_ctx, which);
+  ops->write(simHdl->host_ctx, file, str, strlen(str));
+}
+
+/* write a character to one of the host's standard streams */
+static void host_write_char(tSimStateHdl simHdl, tHostStdStream which,
+                            char c, unsigned int count = 1)
+{
+  const struct bs_host_ops* ops = simHdl->host_ops;
+  struct bs_host_file* file = ops->std_stream(simHdl->host_ctx, which);
+  while (count-- > 0)
+    ops->write(simHdl->host_ctx, file, &c, 1);
+}
+
+/* write an unsigned decimal number to one of the host's standard streams */
+static void host_write_dec(tSimStateHdl simHdl, tHostStdStream which,
+                           tUInt64 value)
+{
+  char buf[20]; /* a 64-bit value has at most 20 decimal digits */
+  unsigned int digits = 0;
+  do {
+    buf[digits++] = '0' + (char)(value % 10llu);
+    value /= 10llu;
+  } while (value != 0llu);
+  const struct bs_host_ops* ops = simHdl->host_ops;
+  struct bs_host_file* file = ops->std_stream(simHdl->host_ctx, which);
+  while (digits > 0)
+  {
+    --digits;
+    ops->write(simHdl->host_ctx, file, &(buf[digits]), 1);
+  }
+}
 
 /*
  * Functions to abstract the implementation of the event data
@@ -63,8 +113,15 @@ static void print_cycle_description(tSimStateHdl simHdl,
     cycle_count = simHdl->clocks[clk].negedge_count + 1;
   const char* combo_str = combo ? "after-" : "";
   char dir_char = (dir == POSEDGE) ? '/' : '\\';
-  printf("%s%c%s @ %llu (cycle %llu)\n",
-         combo_str, dir_char, clock_name, time, cycle_count);
+  /* "%s%c%s @ %llu (cycle %llu)\n" */
+  host_write_str(simHdl, BS_HOST_STDOUT, combo_str);
+  host_write_char(simHdl, BS_HOST_STDOUT, dir_char);
+  host_write_str(simHdl, BS_HOST_STDOUT, clock_name);
+  host_write_str(simHdl, BS_HOST_STDOUT, " @ ");
+  host_write_dec(simHdl, BS_HOST_STDOUT, time);
+  host_write_str(simHdl, BS_HOST_STDOUT, " (cycle ");
+  host_write_dec(simHdl, BS_HOST_STDOUT, cycle_count);
+  host_write_str(simHdl, BS_HOST_STDOUT, ")\n");
 }
 
 static tTime dump_cycle_event(tSimStateHdl simHdl, tEvent& ev)
@@ -329,12 +386,49 @@ bool check_version(tBluesimVersionInfo* version)
           !strcmp(version_name,version->name));
 }
 
-/* Initialize the Bluesim kernel */
-tSimStateHdl bk_sync_init(tModel model, tBool master)
+/* helper routine for checking that a host ops table is usable */
+static bool check_host_ops(const struct bs_host_ops* ops)
 {
+  if (ops == NULL)
+    return false;
+
+  /* the table must be at least as new as this kernel requires */
+  if ((ops->size < sizeof(struct bs_host_ops)) ||
+      (ops->version < BS_HOST_OPS_VERSION))
+    return false;
+
+  /* every operation this kernel knows about must be provided */
+  return ((ops->std_stream  != NULL) &&
+          (ops->open        != NULL) &&
+          (ops->close       != NULL) &&
+          (ops->write       != NULL) &&
+          (ops->read        != NULL) &&
+          (ops->unget_char  != NULL) &&
+          (ops->flush       != NULL) &&
+          (ops->format_real != NULL));
+}
+
+/* Initialize the Bluesim kernel */
+tSimStateHdl bk_sync_init(tModel model, tBool master,
+                          const struct bs_host_ops* ops, void* ctx)
+{
+  /* the runtime cannot do any I/O without host operations */
+  if (!check_host_ops(ops))
+    return NULL;
+
   tSimStateHdl simHdl = new tSimState;
 
   simHdl->model = (Model*)model;
+
+  /* Record the host operations before anything else: creating the
+   * model below may already perform I/O through them (memory-file
+   * preloads, for instance).  The process-wide copy serves the
+   * system tasks which are not passed a simulation handle.
+   */
+  simHdl->host_ops = ops;
+  simHdl->host_ctx = ctx;
+  process_host_ops = ops;
+  process_host_ctx = ctx;
 
   simHdl->sim_time = 0llu;
   simHdl->queue = NULL;
@@ -365,10 +459,9 @@ tSimStateHdl bk_sync_init(tModel model, tBool master)
   simHdl->model->get_version(&(version.name), &(version.build));
   version.creation_time = simHdl->model->get_creation_time();
   if (! check_version(&version)) {
-    fprintf(stderr,
-	    "%s\n%s\n",
-	    "Warning: the Bluesim kernel version does not match the BSC version used to",
-	    "generate the Bluesim model");
+    host_write_str(simHdl, BS_HOST_STDERR,
+		   "Warning: the Bluesim kernel version does not match the BSC version used to\n"
+		   "generate the Bluesim model\n");
   }
   init_mem_allocator();
   simHdl->sim_time = 0llu;
@@ -399,6 +492,25 @@ void bk_shutdown(tSimStateHdl simHdl)
   simHdl->queue = NULL;
   clear_plusargs(simHdl);
   delete simHdl;
+}
+
+/* Get the host operations / host context registered with
+ * bk_sync_init().  A NULL simHdl returns the process-wide copy
+ * (that of the most recent bk_sync_init()), which is what system
+ * tasks without a simulation handle use.
+ */
+const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl)
+{
+  if (simHdl == NULL)
+    return process_host_ops;
+  return simHdl->host_ops;
+}
+
+void* bk_host_ctx(tSimStateHdl simHdl)
+{
+  if (simHdl == NULL)
+    return process_host_ctx;
+  return simHdl->host_ctx;
 }
 
 /* Add edges into the event queue for a particular clock waveform.
@@ -991,11 +1103,11 @@ static tStatus sync_run_events(tSimStateHdl simHdl)
    */
   simHdl->sim_running = false;
 
-  /* flush open file buffers once per return to the caller (unless
-   * the embedder disabled it with bk_set_flush_on_pause())
+  /* flush the host's open file buffers once per return to the caller
+   * (unless the embedder disabled it with bk_set_flush_on_pause())
    */
   if (simHdl->flush_on_pause)
-    fflush(NULL);
+    simHdl->host_ops->flush(simHdl->host_ctx, NULL);
 
   return BK_SUCCESS;
 }
@@ -1155,12 +1267,22 @@ tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl)
   return simHdl->call_dump_cycle_counts ? 1 : 0;
 }
 
+/* helper for bk_dump_cycle_counts: "%llu %s cycles\n" */
+static void dump_cycle_count(tSimStateHdl simHdl, tClock clk)
+{
+  host_write_dec(simHdl, BS_HOST_STDOUT, bk_clock_cycle_count(simHdl, clk));
+  host_write_char(simHdl, BS_HOST_STDOUT, ' ');
+  host_write_str(simHdl, BS_HOST_STDOUT, simHdl->clocks[clk].name);
+  host_write_str(simHdl, BS_HOST_STDOUT, " cycles\n");
+}
+
 void bk_dump_cycle_counts(tSimStateHdl simHdl, const char* label, tClock clk)
 {
   unsigned int indent = 0;
   if (label)
   {
-    printf("%s: ", label);
+    host_write_str(simHdl, BS_HOST_STDOUT, label);
+    host_write_str(simHdl, BS_HOST_STDOUT, ": ");
     indent = strlen(label) + 2;
   }
   if (clk >= simHdl->clocks.size())
@@ -1168,14 +1290,12 @@ void bk_dump_cycle_counts(tSimStateHdl simHdl, const char* label, tClock clk)
     for (tClock n = 0; n < simHdl->clocks.size(); ++n)
     {
       if (n > 0 && indent != 0)
-        printf("%*s", indent, "");
-      printf("%llu %s cycles\n",
-             bk_clock_cycle_count(simHdl, n), simHdl->clocks[n].name);
+        host_write_char(simHdl, BS_HOST_STDOUT, ' ', indent);
+      dump_cycle_count(simHdl, n);
     }
   }
   else
-    printf("%llu %s cycles\n",
-           bk_clock_cycle_count(simHdl, clk), simHdl->clocks[clk].name);
+    dump_cycle_count(simHdl, clk);
 }
 
 /* Call to enable clock edges without logic (for interactive stepping) */
