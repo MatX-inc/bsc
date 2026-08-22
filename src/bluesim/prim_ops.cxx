@@ -7,7 +7,6 @@
  * foreign functions.
  */
 
-#include <vector>
 #include <cstring>
 
 #include "bluesim_types.h"
@@ -15,22 +14,72 @@
 #include "bs_str.h"
 #include "mem_alloc.h"
 
-// Used internally to record argument copies which have been
-// allocated but not yet released.
-static std::vector<unsigned int*> argument_copies_uint;
-static std::vector<unsigned int>  argument_sizes_uint;
-static std::vector<char*>         argument_copies_char;
-static std::vector<unsigned int>  argument_sizes_char;
+// Used internally to record argument copies which have been allocated
+// but not yet released.  The record book is a pair of parallel arrays
+// grown on demand through the Bluesim allocator; its static storage is
+// constant-initialized, so loading a model runs no constructors and
+// makes no allocator calls for it.
+typedef struct
+{
+  void**        items;     // the outstanding copies
+  unsigned int* sizes;     // their sizes, in words
+  unsigned int  count;     // number of outstanding copies
+  unsigned int  capacity;  // slots available in items/sizes
+} tArgCopies;
+
+static tArgCopies arg_copies_uint = { NULL, NULL, 0u, 0u };
+static tArgCopies arg_copies_char = { NULL, NULL, 0u, 0u };
 
 // Records the current return argument
 static unsigned int* current_return_data = NULL;
+
+/* number of words needed for 'n' entries of an items or sizes array */
+static unsigned int record_words(unsigned int n, size_t entry_size)
+{
+  return (unsigned int) ((n * entry_size + sizeof(unsigned int) - 1) /
+                         sizeof(unsigned int));
+}
+
+/* Record one outstanding copy, growing the record book if it is full.
+ * The capacity is retained across delete_arg_copies() calls, so a
+ * design's record book stops growing once it has seen its largest
+ * batch of argument copies.
+ */
+static void record_copy(tArgCopies* book, void* ptr, unsigned int n)
+{
+  if (book->count == book->capacity)
+  {
+    unsigned int new_capacity = (book->capacity == 0u) ? 16u
+                                                       : 2u * book->capacity;
+    void** new_items =
+      (void**) alloc_mem(record_words(new_capacity, sizeof(void*)));
+    unsigned int* new_sizes =
+      (unsigned int*) alloc_mem(record_words(new_capacity,
+                                             sizeof(unsigned int)));
+    for (unsigned int i = 0u; i < book->count; ++i)
+    {
+      new_items[i] = book->items[i];
+      new_sizes[i] = book->sizes[i];
+    }
+    if (book->items != NULL)
+      free_mem(book->items, record_words(book->capacity, sizeof(void*)));
+    if (book->sizes != NULL)
+      free_mem(book->sizes, record_words(book->capacity,
+                                         sizeof(unsigned int)));
+    book->items = new_items;
+    book->sizes = new_sizes;
+    book->capacity = new_capacity;
+  }
+  book->items[book->count] = ptr;
+  book->sizes[book->count] = n;
+  ++(book->count);
+}
 
 // Copy a small argument (used with polymorphic arguments <= 8 bits)
 unsigned int* copy_arg(const tUInt8* data, unsigned int /* n */)
 {
   unsigned int* copy = (unsigned int*) alloc_mem(1);
-  argument_copies_uint.push_back(copy);
-  argument_sizes_uint.push_back(1);
+  record_copy(&arg_copies_uint, copy, 1);
   copy[0] = (unsigned int) (*data);
   return copy;
 }
@@ -39,8 +88,7 @@ unsigned int* copy_arg(const tUInt8* data, unsigned int /* n */)
 unsigned int* copy_arg(const tUInt32* data)
 {
   unsigned int* copy = (unsigned int*) alloc_mem(1);
-  argument_copies_uint.push_back(copy);
-  argument_sizes_uint.push_back(1);
+  record_copy(&arg_copies_uint, copy, 1);
   copy[0] = (unsigned int) (*data);
   return copy;
 }
@@ -49,8 +97,7 @@ unsigned int* copy_arg(const tUInt32* data)
 unsigned int* copy_arg(const tUInt64* data, unsigned int /* n */)
 {
   unsigned int* copy = (unsigned int*) alloc_mem(2);
-  argument_copies_uint.push_back(copy);
-  argument_sizes_uint.push_back(2);
+  record_copy(&arg_copies_uint, copy, 2);
   copy[0] = (unsigned int) (*data);
   copy[1] = (unsigned int) ((*data) >> 32);
   return copy;
@@ -60,8 +107,7 @@ unsigned int* copy_arg(const tUInt64* data, unsigned int /* n */)
 unsigned int* copy_arg(const unsigned int* data, unsigned int n)
 {
   unsigned int* copy = (unsigned int*) alloc_mem(n);
-  argument_copies_uint.push_back(copy);
-  argument_sizes_uint.push_back(n);
+  record_copy(&arg_copies_uint, copy, n);
   memcpy(copy, data, n * sizeof(unsigned int));
   return copy;
 }
@@ -72,8 +118,7 @@ char* copy_arg(const tStr* str)
 {
   unsigned int n = (bs_str_len(str) / BYTES_PER_WORD) + 1;
   char* copy = (char*) alloc_mem(n);
-  argument_copies_char.push_back(copy);
-  argument_sizes_char.push_back(n);
+  record_copy(&arg_copies_char, copy, n);
   bs_str_flatten(str, copy);
   return copy;
 }
@@ -84,8 +129,7 @@ char* copy_arg(const char* str)
 {
   unsigned int n = (strlen(str) / BYTES_PER_WORD) + 1;
   char* copy = (char*) alloc_mem(n);
-  argument_copies_char.push_back(copy);
-  argument_sizes_char.push_back(n);
+  record_copy(&arg_copies_char, copy, n);
   strcpy(copy, str);
   return copy;
 }
@@ -94,8 +138,7 @@ char* copy_arg(const char* str)
 unsigned int* ignore_arg(unsigned int n)
 {
   unsigned int* arg = (unsigned int*) alloc_mem(n);
-  argument_copies_uint.push_back(arg);
-  argument_sizes_uint.push_back(n);
+  record_copy(&arg_copies_uint, arg, n);
   current_return_data = NULL;
   return arg;
 }
@@ -103,8 +146,7 @@ unsigned int* ignore_arg(unsigned int n)
 unsigned int* return_arg(unsigned int n)
 {
   unsigned int* arg = (unsigned int*) alloc_mem(n);
-  argument_copies_uint.push_back(arg);
-  argument_sizes_uint.push_back(n);
+  record_copy(&arg_copies_uint, arg, n);
   current_return_data = arg;
   return arg;
 }
@@ -132,26 +174,11 @@ tUInt64 write_return(unsigned int unused, tUInt64* data)
 // Delete all of the currently allocated argument copies
 void delete_arg_copies()
 {
-  std::vector<unsigned int*>::iterator u = argument_copies_uint.begin();
-  std::vector<unsigned int>::iterator  s = argument_sizes_uint.begin();
-  while (u != argument_copies_uint.end())
-  {
-    unsigned int* ptr = *(u++);
-    unsigned int  n = *(s++);
-    free_mem(ptr, n);
-  }
+  for (unsigned int i = 0u; i < arg_copies_uint.count; ++i)
+    free_mem(arg_copies_uint.items[i], arg_copies_uint.sizes[i]);
+  arg_copies_uint.count = 0u;
 
-  std::vector<char*>::iterator c = argument_copies_char.begin();
-  s = argument_sizes_char.begin();
-  while (c != argument_copies_char.end())
-  {
-    char* ptr = *(c++);
-    unsigned int  n = *(s++);
-    free_mem(ptr, n);
-  }
-
-  argument_copies_uint.clear();
-  argument_sizes_uint.clear();
-  argument_copies_char.clear();
-  argument_sizes_char.clear();
+  for (unsigned int i = 0u; i < arg_copies_char.count; ++i)
+    free_mem(arg_copies_char.items[i], arg_copies_char.sizes[i]);
+  arg_copies_char.count = 0u;
 }

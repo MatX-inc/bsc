@@ -872,12 +872,21 @@ layoutArea elems =
       (end, places) = mapAccumL step 0 elems
   in  (places, alignUp end 8)
 
--- Some literals cannot be written inline in the generated C, so they are
--- declared as separate variables at the beginning of the file.
+-- Some literals cannot be written inline in the generated C, so their
+-- words are declared as plain file-scope arrays at the beginning of
+-- the file.  The arrays are constant-initialized data: loading a
+-- model runs no global constructors and makes no allocator calls for
+-- them.  Functions that use a wide literal as a WideData value
+-- construct a non-owning view of the array, hoisted to the top of the
+-- function (see addLitView in SimCCBlock); constructor initializer
+-- lists construct the view inline; pointer arguments to foreign
+-- functions pass the array itself.  The arrays are deliberately not
+-- const: foreign functions receive them through non-const pointers,
+-- just as they previously received the literals' heap storage.
 mkLiteralDecls :: [(ASize,Integer)] -> [CCFragment]
 mkLiteralDecls [] = [blankLines 0]
 mkLiteralDecls lits = [comment "Literal declarations" (blankLines 0)]
-                      ++ (concatMap mkLitDecl lits)
+                      ++ (map mkLitDecl lits)
                       ++ [blankLines 1]
   where mkLitDecl (sz,val) =
            let name = mkLiteralName sz val
@@ -886,12 +895,9 @@ mkLiteralDecls lits = [comment "Literal declarations" (blankLines 0)]
                                             `mod` (2^(32::Integer)))
                            | n <- [0,32..(sz-1)] ]
                initializer = mkInitBraces arr_words
-               arr_decl = constant . array . unsigned . int $
+               arr_decl = array . unsigned . int $
                             (mkVar arr_name) `assign` initializer
-               lit_var = constant $
-                            (mkVar name) `ofType` (bitsType 65 CTunsigned)
-               lit = construct lit_var [mkUInt32 sz, var arr_name]
-           in [static $ arr_decl, static $ lit]
+           in static $ arr_decl
 
 
 -- String literals are declared as plain file-scope char arrays:

@@ -609,6 +609,11 @@ data ConvState = CS { literals :: [(ASize,Integer)]
                     , stk_decls :: [CCFragment]
                     , stk_count :: Integer
                     , stk_names :: [String]
+                    -- whether we are converting inside a function body,
+                    -- where declarations can be hoisted to the top of the
+                    -- function (as opposed to a constructor initializer
+                    -- list, where wide literal views must be built inline)
+                    , in_function :: Bool
                     }
   deriving (Eq,Show);
 
@@ -617,7 +622,7 @@ type WideDefMap = M.Map String [AId]
 initialState :: ForeignFuncMap -> WideDefMap -> String -> ConvState
 initialState ff_map wdef_map undet_type =
     CS [] 1 M.empty S.empty M.empty M.empty False ff_map wdef_map [] [] M.empty
-       undet_type [] 0 []
+       undet_type [] 0 [] False
 
 type ExprConv  = State ConvState CCExpr
 type ExprsConv = State ConvState [CCExpr]
@@ -733,6 +738,38 @@ takeStkDecls =
     do ds <- gets stk_decls
        modify (\s -> s { stk_decls = [], stk_count = 0, stk_names = [] })
        return (reverse ds)
+
+-- File-scope literals are emitted as plain word arrays (see
+-- mkLiteralDecls in SimBlocksToC), so a function that uses a wide
+-- literal as a WideData value declares one non-owning view of the
+-- array at the top of the function.  Constructing the view stores a
+-- few fields and makes no allocator calls.
+mkLitViewDecl :: String -> Integer -> CCFragment
+mkLitViewDecl name w =
+    construct (constant $ (mkVar name) `ofType` (bitsType 65 CTunsigned))
+              [var (name ++ "_arr"), mkUInt32 w]
+
+-- hoist the view declaration for a wide literal, at most once per function
+addLitView :: Integer -> Integer -> State ConvState ()
+addLitView w x =
+    do let name = mkLiteralName w x
+       names <- gets stk_names
+       when (name `notElem` names) $
+           do modify (\s -> s { stk_names = name:(stk_names s) })
+              addStkDecl (mkLitViewDecl name w)
+
+-- reference a wide literal as a WideData value: inside a function,
+-- through the hoisted view; elsewhere (constructor initializer
+-- lists), through a view constructed inline
+mkLitRef :: Integer -> Integer -> State ConvState CCExpr
+mkLitRef w x =
+    do addLit (w,x) -- record the literal for out-of-line generation
+       in_fn <- gets in_function
+       if in_fn
+         then do addLitView w x
+                 return $ var (mkLiteralName w x)
+         else return $ (var "tUWide") `cCall`
+                           [ var ((mkLiteralName w x) ++ "_arr"), mkUInt32 w ]
 
 setFuncWData :: [AId] -> State ConvState ()
 setFuncWData wids = modify (\s -> s {func_wdata = wids})
@@ -1078,7 +1115,8 @@ convertArgList args = convert args (encodeArgs args)
         convert ((Ptr (ASInt _ ty val)):rest) str | aSize ty <= 64 =
           do let w  = aSize ty
                  x  = ilValue val
-                 e' = (var (mkLiteralName w x)) `cDot` "data"
+                 -- pass the literal's file-scope word array directly
+                 e' = var ((mkLiteralName w x) ++ "_arr")
              addLit (w,x) -- record the literal for out-of-line generation
              rest' <- convert rest str
              return (e':rest')
@@ -1283,9 +1321,7 @@ aExprToCExpr _ (ASInt _ (ATBit w) val) | w == 1    =
                                        | w <= 64   =
   do return $ mkUInt64 (ilValue val)
                                        | otherwise =
-  do let x = ilValue val
-     addLit (w,x) -- record the wide literal for out-of-line generation
-     return $ var (mkLiteralName w x)
+  do mkLitRef w (ilValue val)
 aExprToCExpr _ (ASReal _ _ val) = return $ mkDouble val
 -- a string literal used as a string value: the address of its
 -- constant-initialized tStr leaf object (see bs_str.h).  Call sites
@@ -1577,10 +1613,12 @@ simFnToCDefinition is_static scope c_args prologue
          wdata_fn = concatMap (wideLocalDef) stmts
      setFuncWData wdata_fn
      setFuncArgs (map snd args)
+     modify (\s -> s { in_function = True })
      body_stmts <- mapM simFnStmtToCStmt non_return_stmts
      final_stmts <- mapM simFnStmtToCStmt return_stmts
-     -- stack storage for the function's wide temporaries, declared
-     -- ahead of the statements that construct views over it
+     modify (\s -> s { in_function = False })
+     -- stack storage for the function's wide temporaries and literal
+     -- views, declared ahead of the statements that use them
      stk_decl_stmts <- takeStkDecls
      has_copies <- gets copied_args
      let free_copies = if has_copies

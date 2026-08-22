@@ -10,6 +10,7 @@
 #include "bs_wide_data.h"
 #include "bs_module.h"
 #include "bs_target.h"
+#include "mem_alloc.h"
 #include "portability.h"
 
 // This structure is used to record information
@@ -1606,11 +1607,45 @@ void dollar_fatal(tSimStateHdl simHdl,
 // exist yet when this file's static storage is initialized).
 class VLFiles {
 private:
-  std::vector<bs_host_file*> mcdfiles ;
-  std::vector<bs_host_file*> fdfiles ;
-  bool std_registered ;
+  // MCD keys are one-hot in a 31-bit space, so at most 31 MCD files
+  // can be live at once and their table is a fixed array; fd keys are
+  // indices, so their table grows on demand through the Bluesim
+  // allocator.  All members are constant-initialized: the static
+  // instance below runs no constructor and makes no allocator calls
+  // when the model is loaded.
+  bs_host_file*  mcdfiles[31] = {} ;
+  tUInt32        mcd_count = 0 ;
+  bs_host_file** fdfiles = NULL ;
+  tUInt32        fd_count = 0 ;
+  tUInt32        fd_capacity = 0 ;
+  bool std_registered = false ;
 
   const static tUInt32 fdbase = 0x80000000 ;
+
+  // number of allocator words holding 'n' file pointers
+  static unsigned int fd_table_words( tUInt32 n )
+  {
+    return (unsigned int) ((n * sizeof(bs_host_file*) +
+                            sizeof(unsigned int) - 1) /
+                           sizeof(unsigned int)) ;
+  }
+
+  void append_fd( bs_host_file* file )
+  {
+    if ( fd_count == fd_capacity ) {
+      tUInt32 new_capacity = (fd_capacity == 0) ? 16 : 2 * fd_capacity ;
+      bs_host_file** bigger =
+        (bs_host_file**) alloc_mem( fd_table_words( new_capacity )) ;
+      for ( tUInt32 i = 0 ; i < fd_count ; i = i + 1 )
+        bigger[i] = fdfiles[i] ;
+      if ( fdfiles != NULL )
+        free_mem( fdfiles, fd_table_words( fd_capacity )) ;
+      fdfiles = bigger ;
+      fd_capacity = new_capacity ;
+    }
+    fdfiles[fd_count] = file ;
+    fd_count = fd_count + 1 ;
+  }
 
   void ensure_std_registered()
   {
@@ -1629,11 +1664,8 @@ private:
   }
 
 public:
-  VLFiles() : std_registered(false) {
-  }
-  ~VLFiles() {
-    // We can close any files, but the system does that for us.
-  }
+  // The implicit constructor and destructor are used: all members are
+  // constant-initialized, and the system closes any open files for us.
 
   // After a call to the open host operation, store the stream handle
   tUInt32 registerFile ( bool mcd, bs_host_file* file )
@@ -1642,12 +1674,12 @@ public:
     tUInt32 key = 0 ;
     if ( file == 0 ) {
       key = 0 ;
-    } else if ( mcd && (mcdfiles.size() < 31 )) {
-      mcdfiles.push_back( file );
-      key = 0x01 << (mcdfiles.size() - 1)  ;
+    } else if ( mcd && (mcd_count < 31 )) {
+      mcdfiles[mcd_count] = file ;
+      mcd_count = mcd_count + 1 ;
+      key = 0x01 << (mcd_count - 1)  ;
     } else if ( mcd ) {
-      tUInt32 size = mcdfiles.size() ;
-      for( tUInt32 i = 0 ; i <  size ; i = i + 1 ) {
+      for( tUInt32 i = 0 ; i <  mcd_count ; i = i + 1 ) {
         if ( mcdfiles[i] == 0 ){
           mcdfiles[i] = file ;
           key = 0x01 << i;
@@ -1655,8 +1687,8 @@ public:
         }
       }
     } else {
-      fdfiles.push_back( file ) ;
-      key = fdbase + (fdfiles.size () - 1);
+      append_fd( file ) ;
+      key = fdbase + (fd_count - 1);
     }
     return key ;
   }
@@ -1686,8 +1718,10 @@ public:
   {
     ensure_std_registered() ;
     result.clear() ;
-    result.insert( result.end(), fdfiles.begin(), fdfiles.end() ) ;
-    result.insert( result.end(), mcdfiles.begin(), mcdfiles.end() ) ;
+    for ( tUInt32 i = 0 ; i < fd_count ; i = i + 1 )
+      result.push_back( fdfiles[i] ) ;
+    for ( tUInt32 i = 0 ; i < mcd_count ; i = i + 1 )
+      result.push_back( mcdfiles[i] ) ;
   }
   void closeFiles( tUInt32 key )
   {
