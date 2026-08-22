@@ -103,6 +103,34 @@ static inline void bs_default_divide_by_zero(void* ctx,
   abort();
 }
 
+static inline void bs_default_out_of_bounds(void* ctx,
+                                            const char* prim,
+                                            const char* instance,
+                                            const char* access,
+                                            tUInt64 addr,
+                                            tUInt64 lo,
+                                            tUInt64 hi)
+    BS_HOST_NORETURN;
+static inline void bs_default_out_of_bounds(void* ctx,
+                                            const char* prim,
+                                            const char* instance,
+                                            const char* access,
+                                            tUInt64 addr,
+                                            tUInt64 lo,
+                                            tUInt64 hi)
+{
+  (void) ctx;
+  fprintf(stderr,
+          "Error: %s '%s' -- %s is out of bounds: 0x%llx"
+          " (valid range: 0x%llx to 0x%llx)\n",
+          prim, instance, access,
+          (unsigned long long) addr,
+          (unsigned long long) lo,
+          (unsigned long long) hi);
+  fflush(stderr);
+  abort();
+}
+
 /* Get the default host operations table (constructed on first use).
  * The table is static, so it satisfies bk_sync_init()'s requirement
  * of remaining valid until bk_shutdown().
@@ -124,6 +152,7 @@ static inline const struct bs_host_ops* bs_default_host_ops(void)
     ops.flush       = bs_default_flush;
     ops.format_real = bs_default_format_real;
     ops.divide_by_zero = bs_default_divide_by_zero;
+    ops.out_of_bounds  = bs_default_out_of_bounds;
 
     /* Bluesim's standard output has always been line-buffered (the
      * runtime used to setlinebuf() every stream it wrote to).

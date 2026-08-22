@@ -1,5 +1,6 @@
 # Tests for the noreturn "panic" host operations of bs_host_ops:
-# divide_by_zero (narrow and wide, unsigned and signed).
+# divide_by_zero (narrow and wide, unsigned and signed) and
+# out_of_bounds (RegFile and BRAM reads and writes).
 # The default host implementation prints a message to stderr and
 # abort()s, so each simulation must exit nonzero with a
 # deterministic message on every architecture (Bluesim only; the
@@ -24,3 +25,9 @@ test_panic sysModZero
 test_panic sysSignedDivZero
 test_panic sysWideDivZero
 test_panic sysWideModZero
+
+test_panic sysRegFileOOBRead
+test_panic sysRegFileOOBWrite
+test_panic sysBRAMOOBRead
+test_panic sysBRAMOOBWrite
+test_panic sysBRAMOOBPortB

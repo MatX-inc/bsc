@@ -420,6 +420,17 @@ class MOD_BRAM : public Module
     }
   }
 
+  /* Report an out-of-bounds access through the out_of_bounds host
+   * operation.  Does not return.
+   */
+  BS_HOST_NORETURN void oob_panic(const char* access, const AT& addr) const
+  {
+    BufferTarget name_buf(sim_hdl, 1024);
+    write_name(&name_buf);
+    bk_out_of_bounds(sim_hdl, "BRAM", name_buf.str(), access,
+                     (tUInt64) addr, (tUInt64) lo_addr, (tUInt64) hi_addr);
+  }
+
  public:
   // Note: BRAM has put CF read, plus has cross-port
   // issues, so we must take care to faithfully reproduce
@@ -605,15 +616,8 @@ class MOD_BRAM : public Module
   {
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
-    {
-      FileTarget dest(sim_hdl);
-      dest.write_string("Warning: BRAM '");
-      write_name(&dest);
-      dest.write_string((write_ens != 0) ? "' -- Write address on port A is out of bounds: "
-                                         : "' -- Read address on port A is out of bounds: ");
-      dump_val(&dest, addr, addr_bits);
-      dest.write_char('\n');
-    }
+      oob_panic((write_ens != 0) ? "Write address on port A"
+                                 : "Read address on port A", addr);
 
     bool is_write = !is_zero(write_ens);
 
@@ -647,15 +651,8 @@ class MOD_BRAM : public Module
   {
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
-    {
-      FileTarget dest(sim_hdl);
-      dest.write_string("Warning: BRAM '");
-      write_name(&dest);
-      dest.write_string((write_ens != 0) ? "' -- Write address on port B is out of bounds: "
-                                         : "' -- Read address on port B is out of bounds: ");
-      dump_val(&dest, addr, addr_bits);
-      dest.write_char('\n');
-    }
+      oob_panic((write_ens != 0) ? "Write address on port B"
+                                 : "Read address on port B", addr);
 
     bool is_write = !is_zero(write_ens);
 

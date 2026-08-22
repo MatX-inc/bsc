@@ -73,6 +73,13 @@ void* bk_host_ctx(tSimStateHdl simHdl);
  * have no simulation handle at hand.
  */
 BS_HOST_NORETURN void bk_divide_by_zero(const char* description);
+BS_HOST_NORETURN void bk_out_of_bounds(tSimStateHdl simHdl,
+                                       const char* prim,
+                                       const char* instance,
+                                       const char* access,
+                                       tUInt64 addr,
+                                       tUInt64 lo,
+                                       tUInt64 hi);
 
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.

@@ -351,6 +351,17 @@ class MOD_RegFile : public Module
     }
   }
 
+  /* Report an out-of-bounds access through the out_of_bounds host
+   * operation.  Does not return.
+   */
+  BS_HOST_NORETURN void oob_panic(const char* access, const AT& addr) const
+  {
+    BufferTarget name_buf(sim_hdl, 1024);
+    write_name(&name_buf);
+    bk_out_of_bounds(sim_hdl, "RegFile", name_buf.str(), access,
+                     (tUInt64) addr, (tUInt64) lo_addr, (tUInt64) hi_addr);
+  }
+
  public:
   // Note: there is RegFileWCF variant of RegFile that
   // allows upd before sub, but sub should be able to read the
@@ -359,16 +370,7 @@ class MOD_RegFile : public Module
   {
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(sim_hdl);
-      dest.write_string("Warning: RegFile '");
-      write_name(&dest);
-      dest.write_string("' -- Read address is out of bounds: ");
-      dump_val(&dest, addr, addr_bits);
-      dest.write_char('\n');
-      DT v;
-      init_val(v, data_bits);
-      write_undet(&v, data_bits);
-      return v;
+      oob_panic("Read address", addr);
     }
     else if ((upd_addr == addr) && bk_is_same_time(sim_hdl, upd_at))
     {
@@ -392,6 +394,8 @@ class MOD_RegFile : public Module
   }
   void METH_upd(const AT& addr, const DT& val, bool immediate = false)
   {
+    if (addr < lo_addr || addr > hi_addr)
+      oob_panic("Write address", addr);
     DT* value_ptr = lookup_value(addr, true);
     if (value_ptr != NULL)
     {
@@ -402,15 +406,6 @@ class MOD_RegFile : public Module
 	upd_prev = *value_ptr;
       }
       *value_ptr = val;
-    }
-    else
-    {
-      FileTarget dest(sim_hdl);
-      dest.write_string("Warning: RegFile '");
-      write_name(&dest);
-      dest.write_string("' -- Write address is out of bounds: ");
-      dump_val(&dest, addr, addr_bits);
-      dest.write_char('\n');
     }
   }
 

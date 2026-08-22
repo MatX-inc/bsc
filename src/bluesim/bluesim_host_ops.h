@@ -153,7 +153,8 @@ struct bs_host_ops {
                          const char* format,
                          double value);
 
-  /* -- Operations below were appended in version 2 -- */
+  /* -- Operations below were appended in version 2: the noreturn
+   *    fatal-condition reports (divide_by_zero, out_of_bounds) -- */
 
   /* Report that the model attempted to divide by zero, and terminate
    * execution: this operation must not return (see BS_HOST_NORETURN
@@ -163,6 +164,25 @@ struct bs_host_ops {
    */
   void (*divide_by_zero)(void* ctx,
                          const char* description) BS_HOST_NORETURN;
+
+  /* Report that the model accessed a memory primitive (a RegFile or
+   * BRAM) outside of its address bounds, and terminate execution:
+   * this operation must not return (see BS_HOST_NORETURN above).
+   * 'prim' is the primitive kind (e.g. "RegFile" or "BRAM") and
+   * 'access' describes the offending access (e.g. "Read address" or
+   * "Write address on port A"); both are static strings.  'instance'
+   * is the full dotted instance name of the primitive (owned by the
+   * caller; it is only valid for the duration of the call, which
+   * never returns).  'addr' is the out-of-bounds address and
+   * 'lo'/'hi' are the valid (inclusive) address bounds.
+   */
+  void (*out_of_bounds)(void* ctx,
+                        const char* prim,
+                        const char* instance,
+                        const char* access,
+                        tUInt64 addr,
+                        tUInt64 lo,
+                        tUInt64 hi) BS_HOST_NORETURN;
 
   /* New operations are appended here in later versions; each
    * addition bumps BS_HOST_OPS_VERSION.

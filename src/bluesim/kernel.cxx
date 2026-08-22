@@ -406,7 +406,8 @@ static bool check_host_ops(const struct bs_host_ops* ops)
           (ops->unget_char  != NULL) &&
           (ops->flush       != NULL) &&
           (ops->format_real != NULL) &&
-          (ops->divide_by_zero != NULL));
+          (ops->divide_by_zero != NULL) &&
+          (ops->out_of_bounds  != NULL));
 }
 
 /* Initialize the Bluesim kernel */
@@ -536,6 +537,27 @@ void bk_divide_by_zero(const char* description)
     ops->divide_by_zero(bk_host_ctx(NULL), description);
   /* not reached unless there are no host ops or the host's
    * divide_by_zero operation violates its contract by returning
+   */
+  halt_process();
+}
+
+/* Report a fatal out-of-bounds memory primitive access through the
+ * host operations.  Does not return.
+ */
+void bk_out_of_bounds(tSimStateHdl simHdl,
+                      const char* prim,
+                      const char* instance,
+                      const char* access,
+                      tUInt64 addr,
+                      tUInt64 lo,
+                      tUInt64 hi)
+{
+  const struct bs_host_ops* ops = bk_host_ops(simHdl);
+  if (ops != NULL)
+    ops->out_of_bounds(bk_host_ctx(simHdl), prim, instance, access,
+                       addr, lo, hi);
+  /* not reached unless there are no host ops or the host's
+   * out_of_bounds operation violates its contract by returning
    */
   halt_process();
 }
