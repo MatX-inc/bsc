@@ -33,7 +33,6 @@ class Module
   tSimStateHdl sim_hdl;
 
  protected:
-  unsigned int vcd_num;
   unsigned int symbol_count;
   tSymbol      symbols;
 };

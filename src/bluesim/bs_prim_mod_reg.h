@@ -4,7 +4,6 @@
 #include "bluesim_kernel_api.h"
 #include "bluesim_probes.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 #include "bs_reset.h"
 
 #define NO_RESET_REG    0
@@ -152,30 +151,6 @@ class MOD_Reg : public Module
     printf("%*s%s = ", indent, "", inst_name);
     dump_val(value, bits);
     putchar('\n');
-  }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_def(sim_hdl, vcd_num, inst_name, bits);
-    return (vcd_num + 1);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_Reg<T>& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-      vcd_write_x(sim_hdl, num++, bits);
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (value != backing.value)
-	vcd_write_val(sim_hdl, num++, value, bits);
-      else
-	++num;
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, value, bits);
-    }
-    backing.value = value;
   }
 
  // register data members
@@ -344,75 +319,6 @@ class MOD_RegAligned : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 4);
-    unsigned int n = vcd_num;
-    vcd_write_def(sim_hdl, n++, inst_name, bits);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1);
-    vcd_write_def(sim_hdl, n++, "RST", 1);
-    vcd_set_clock(sim_hdl, n, __clk_handle_1);
-    vcd_write_def(sim_hdl, n++, "EN", 1);
-    vcd_set_clock(sim_hdl, n, __clk_handle_1);
-    vcd_write_def(sim_hdl, n++, "D_IN", bits);
-    vcd_write_def(sim_hdl, vcd_num, "Q_OUT", bits); // alias
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_RegAligned<T>& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, bits);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, bits);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (backing.value != value)
-	vcd_write_val(sim_hdl, num++, value, bits);
-      else
-	++num;
-      if (in_reset != backing.in_reset)
-	vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      else
-	++num;
-      bool at_input_posedge =
-	       bk_clock_val(sim_hdl, __clk_handle_1) == CLK_HIGH &&
-	       bk_clock_last_edge(sim_hdl, __clk_handle_1) == bk_now(sim_hdl);
-      if (at_input_posedge)
-      {
-	did_write = bk_is_same_time(sim_hdl, written_at);
-	if (did_write != backing.did_write)
-	{
-	  vcd_write_val(sim_hdl, num++, did_write, 1);
-	  backing.did_write = did_write;
-	}
-	else
-	  ++num;
-      }
-      else
-	++num;
-      if (next_value != backing.next_value)
-	vcd_write_val(sim_hdl, num++, next_value, bits);
-      else
-	++num;
-    }
-    else
-    {
-      did_write = bk_is_same_time(sim_hdl, written_at);
-      vcd_write_val(sim_hdl, num++, value, bits);
-      vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      vcd_write_val(sim_hdl, num++, did_write, 1);
-      vcd_write_val(sim_hdl, num++, next_value, bits);
-      backing.did_write = did_write;
-    }
-    backing.value = value;
-    backing.next_value = next_value;
-  }
 
  // RegAligned data members
  private:
@@ -425,7 +331,6 @@ class MOD_RegAligned : public Module
   bool suppress_write;
   bool in_reset;
 
-  // used for VCD dumping
   tClock __clk_handle_0;  // clock for reg updates (realClock)
   tClock __clk_handle_1;  // clock for inputs      (sClkIn)
   bool did_write;
@@ -574,22 +479,6 @@ class MOD_ConfigReg : public Module
     printf("%*s%s = ", indent, "", inst_name);
     dump_val(value, bits);
     putchar('\n');
-  }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_def(sim_hdl, vcd_num, inst_name, bits);
-    return (vcd_num + 1);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_ConfigReg<T>& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-      vcd_write_x(sim_hdl, vcd_num, bits);
-    else if ((dt != VCD_DUMP_CHANGES) || (backing.value != value))
-    {
-      vcd_write_val(sim_hdl, vcd_num, value, bits);
-      backing.value = value;
-    }
   }
 
  // ConfigReg data members
@@ -744,22 +633,6 @@ class MOD_RegTwo : public Module
     printf("%*s%s = ", indent, "", inst_name);
     dump_val(value, bits);
     putchar('\n');
-  }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_def(sim_hdl, vcd_num, inst_name, bits);
-    return (vcd_num + 1);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_RegTwo<T>& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-      vcd_write_x(sim_hdl, vcd_num, bits);
-    else if ((dt != VCD_DUMP_CHANGES) || (backing.value != value))
-    {
-      vcd_write_val(sim_hdl, vcd_num, value, bits);
-      backing.value = value;
-    }
   }
 
  // RegTwo data members
@@ -986,94 +859,6 @@ class MOD_CReg : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    // There are 3*ports signals the submodule scope (Q_OUT, EN, D_IN)
-    // and one signal in the parent scope (alias for Q_OUT)
-    // but aliases re-use the same number, so we reserve 3*ports
-    vcd_num = vcd_reserve_ids(sim_hdl, 3 * ports);
-    unsigned int num = vcd_num;
-
-    // don't increment the num, we'll reuse it for the alias
-    vcd_write_def(sim_hdl, num, inst_name, bits);
-
-    // buffer for auto-generating the signal names
-    // (longest name is Q_OUT_# plus room for null terminator)
-    char buf[17];
-
-    vcd_write_scope_start(sim_hdl, inst_name);
-    for (unsigned int i = 0; i < ports; i++) {
-      // start with Q_OUT, so that the alias' number is reused
-      snprintf(buf, sizeof(buf), "Q_OUT_%u", i);
-      vcd_set_clock(sim_hdl, num, __clk_handle_0);
-      vcd_write_def(sim_hdl, num++, buf, bits);
-
-      snprintf(buf, sizeof(buf), "EN_%u", i);
-      vcd_set_clock(sim_hdl, num, __clk_handle_0);
-      vcd_write_def(sim_hdl, num++, buf, 1);
-
-      snprintf(buf, sizeof(buf), "D_IN_%u", i);
-      vcd_set_clock(sim_hdl, num, __clk_handle_0);
-      vcd_write_def(sim_hdl, num++, buf, bits);
-    }
-    vcd_write_scope_end(sim_hdl);
-
-    return num;
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_CReg<T>& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      for (unsigned int i = 0; i < ports; i++) {
-	vcd_write_x(sim_hdl, num++, bits); // Q_OUT (including alias)
-	vcd_write_x(sim_hdl, num++, 1);    // EN
-	vcd_write_x(sim_hdl, num++, bits); // D_IN
-      }
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      // compute the q_out value as we go
-      T tmp_q_out = read_val[0];
-      for (unsigned int i = 0; i < ports; i++) {
-	if (tmp_q_out != backing.read_val[i])
-	  vcd_write_val(sim_hdl, num, tmp_q_out, bits);
-	num++;
-	// record the value, so we can dump if it changes
-	// (this is unnecessary when i==0)
-	read_val[i] = tmp_q_out;
-	if (did_write_rec[i] != backing.did_write_rec[i])
-	  vcd_write_val(sim_hdl, num, did_write_rec[i], 1);
-	num++;
-	if (write_val[i] != backing.write_val[i])
-	  vcd_write_val(sim_hdl, num, write_val[i], bits);
-	num++;
-	if (did_write_rec[i])
-	  tmp_q_out = write_val[i];
-      }
-    }
-    else
-    {
-      // compute the q_out value as we go
-      T tmp_q_out = read_val[0];
-      for (unsigned int i = 0; i < ports; i++) {
-	vcd_write_val(sim_hdl, num++, tmp_q_out, bits);
-	// record the value, so we can dump if it changes
-	// (this is unnecessary when i==0)
-	read_val[i] = tmp_q_out;
-	vcd_write_val(sim_hdl, num++, did_write_rec[i], 1);
-	vcd_write_val(sim_hdl, num++, write_val[i], bits);
-	if (did_write_rec[i])
-	  tmp_q_out = write_val[i];
-      }
-    }
-
-    for (unsigned int i = 0; i < ports; i++) {
-      backing.read_val[i] = read_val[i];
-      backing.did_write_rec[i] = did_write_rec[i];
-      backing.write_val[i] = write_val[i];
-    }
-  }
 
  // register data members
  private:
@@ -1086,7 +871,6 @@ class MOD_CReg : public Module
   const unsigned int reset_type;
   bool suppress_write;
   bool in_reset;
-  // for VCD dumping of the methods
   T value_rec;
   T read_val[max_ports];
   bool did_write[max_ports];

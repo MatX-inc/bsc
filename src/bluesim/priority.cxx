@@ -44,7 +44,6 @@ const char* priority_slot_name(tPrioritySlot s)
     case PS_RESET:         return "RESET";
     case PS_UI:            return "UI";
     case PS_CYCLE_DUMP:    return "CYCLE DUMP";
-    case PS_VCD:           return "VCD";
     case PS_EXECUTE:       return "EXECUTE";
     case PS_RULE_DUMP:     return "RULE DUMP";
     case PS_STATE_DUMP:    return "STATE DUMP";

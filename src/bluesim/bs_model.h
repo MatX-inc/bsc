@@ -2,7 +2,6 @@
 #define __BS_MODEL_H__
 
 #include "bluesim_types.h"
-#include "bs_vcd.h"
 
 /* This is the (pure virtual) base class for Bluesim-generated designs.
  * It declares the functions that the kernel requires from a design.
@@ -20,8 +19,6 @@ class Model
   virtual time_t get_creation_time() = 0;
   virtual void * get_instance() = 0;
   virtual void dump_state() = 0;
-  virtual void dump_VCD_defs() = 0;
-  virtual void dump_VCD(tVCDDumpType dt) = 0;
 
  // Require construction be of the derived classes, not this class
  protected:

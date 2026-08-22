@@ -5,7 +5,6 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 
 // This is the definition of the ClockGen primitive,
 // used to implement mkAbsoluteClock, etc.
@@ -37,18 +36,6 @@ class MOD_ClockGen : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num) const
-  {
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (num);
-  }
-  void dump_VCD(tVCDDumpType /* unused */,
-		MOD_ClockGen& /* unused */) const
-  {
-  }
-
  private:
   tClock __clk_handle_0;
   tTime v1Width;
@@ -151,45 +138,6 @@ class MOD_MakeClock : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
-    vcd_write_def(sim_hdl, n++, "CLK_GATE_OUT", 1);
-    vcd_write_def(sim_hdl, n++, "CLK_VAL_OUT", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_MakeClock& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (PORT_CLK_GATE_OUT != backing.PORT_CLK_GATE_OUT)
-	vcd_write_val(sim_hdl, num++, PORT_CLK_GATE_OUT, 1);
-      else
-	++num;
-      if (current_clk != backing.current_clk)
-	vcd_write_val(sim_hdl, num++, current_clk, 1);
-      else
-	++num;
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, PORT_CLK_GATE_OUT, 1);
-      vcd_write_val(sim_hdl, num++, current_clk, 1);
-    }
-    backing.current_clk       = current_clk;
-    backing.PORT_CLK_GATE_OUT = PORT_CLK_GATE_OUT;
-  }
-
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 
@@ -244,7 +192,6 @@ class MOD_ClockInverter : public Module
     if (new_clk == CLK_LOW)
       PORT_CLK_GATE_OUT = gate_value;
 
-    // record for VCD dumping
     clk_in = clk_value;
     clk_gate_in = gate_value;
   }
@@ -252,64 +199,6 @@ class MOD_ClockInverter : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 4);
-    unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, n++, "CLK_IN", 1);
-    vcd_write_def(sim_hdl, n++, "CLK_GATE_IN", 1);
-    vcd_write_def(sim_hdl, n++, "PREEDGE", 1);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
-    vcd_write_def(sim_hdl, n++, "CLK_GATE_OUT", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_ClockInverter& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      preedge = false;
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (clk_in != backing.clk_in)
-	vcd_write_val(sim_hdl, num++, clk_in, 1);
-      else
-	++num;
-      if (clk_gate_in != backing.clk_gate_in)
-	vcd_write_val(sim_hdl, num++, clk_gate_in, 1);
-      else
-	++num;
-      preedge = true;
-      if (preedge != backing.preedge)
-	vcd_write_val(sim_hdl, num++, preedge, 1);
-      else
-	++num;
-      if (PORT_CLK_GATE_OUT != backing.PORT_CLK_GATE_OUT)
-	vcd_write_val(sim_hdl, num++, PORT_CLK_GATE_OUT, 1);
-      else
-	++num;
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, clk_in, 1);
-      vcd_write_val(sim_hdl, num++, clk_gate_in, 1);
-      preedge = true;
-      vcd_write_val(sim_hdl, num++, preedge, 1);
-      vcd_write_val(sim_hdl, num++, PORT_CLK_GATE_OUT, 1);
-    }
-    backing.clk_in            = clk_in;
-    backing.clk_gate_in       = clk_gate_in;
-    backing.preedge           = preedge;
-    backing.PORT_CLK_GATE_OUT = PORT_CLK_GATE_OUT;
-  }
-
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 
@@ -317,7 +206,6 @@ class MOD_ClockInverter : public Module
   tClock __clk_handle_0;
   tClockValue current_clk;
 
-  // used for VCD dumping
   tUInt8 clk_in;
   tUInt8 clk_gate_in;
   bool   preedge;
@@ -413,47 +301,6 @@ class MOD_ClockDivider : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_1), "CLK_IN", 1);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
-    vcd_write_def(sim_hdl, n++, "RST", 1);
-    vcd_write_def(sim_hdl, n++, "PREEDGE", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_ClockDivider& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (in_reset != backing.in_reset)
-	vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      else
-	++num;
-      if ((cntr != backing.cntr) &&
-	  (cntr == (transition-1) || backing.cntr != (transition - 1)))
-	vcd_write_val(sim_hdl, num++, cntr == (transition - 1), 1);
-      else
-	++num;
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      vcd_write_val(sim_hdl, num++, cntr == (transition - 1), 1);
-    }
-    backing.in_reset = in_reset;
-    backing.cntr     = cntr;
-  }
-
  public:
   tUInt8 PORT_CLK_GATE_OUT;
 
@@ -467,7 +314,6 @@ class MOD_ClockDivider : public Module
   unsigned int transition;
   bool         in_reset;
 
-  // used for VCD dumping
   tClock __clk_handle_1;
 };
 

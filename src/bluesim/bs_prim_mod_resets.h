@@ -3,8 +3,8 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 #include "bs_reset.h"
+#include "bs_wide_data.h"
 
 /* Notes on reset handling
  *
@@ -104,47 +104,6 @@ class MOD_SyncReset: public Module
   {
     printf("%*s%s:\n", indent, "", inst_name);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1);
-    vcd_write_def(sim_hdl, n++, "IN_RST", 1);
-    vcd_write_def(sim_hdl, n++, "OUT_RST", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_SyncReset& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (in_reset != backing.in_reset)
-	vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      else
-	num++;
-      bool rst_out = in_reset || (count > 1);
-      bool backing_rst_out = backing.in_reset || (backing.count > 1);
-      if (rst_out != backing_rst_out)
-	vcd_write_val(sim_hdl, num++, !rst_out, 1);
-      else
-	num++;
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      vcd_write_val(sim_hdl, num++, !(in_reset || (count > 1)), 1);
-    }
-    backing.in_reset = in_reset;
-    backing.count    = count;
-  }
-
  private:
   unsigned int reset_hold;
   unsigned int count;
@@ -153,7 +112,6 @@ class MOD_SyncReset: public Module
   bool         call_reset_fn;
   tResetFn     reset_fn;
 
-  // used for VCD dumping
   tClock __clk_handle_0;
 };
 
@@ -188,16 +146,6 @@ class MOD_SyncReset0: public Module
   {
     // no state dump
   }
-  unsigned int dump_VCD_defs(unsigned int num )
-  {
-    // no VCD output
-    return num;
-  }
-  void dump_VCD(tVCDDumpType /* dt */, MOD_SyncReset0& /* backing */)
-  {
-    // no VCD output
-  }
-
  private:
   tResetFn     reset_fn;
   bool         in_reset;
@@ -238,17 +186,6 @@ class MOD_InitialReset: public Module
   {
     printf("%*s%s:\n", indent, "", inst_name);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 3);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 3);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_InitialReset& backing)
-  {
-  }
-
  private:
   unsigned int reset_hold;
   unsigned int count;
@@ -337,25 +274,6 @@ class MOD_MakeReset: public Module
     dump_val(rst, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num, "rst", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 1);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_MakeReset& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-      vcd_write_x(sim_hdl, vcd_num, 1);
-    else if ((dt != VCD_DUMP_CHANGES) || (backing.rst != rst))
-    {
-      vcd_write_val(sim_hdl, vcd_num, rst, 1);
-      backing.rst = rst;
-    }
-  }
-
  private:
   MOD_SyncReset sync;
   tResetFn     reset_fn;
@@ -441,25 +359,6 @@ class MOD_MakeReset0: public Module
     dump_val(rst, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num, "rst", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 1);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_MakeReset0& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-      vcd_write_x(sim_hdl, vcd_num, 1);
-    else if ((dt != VCD_DUMP_CHANGES) || (backing.rst != rst))
-    {
-      vcd_write_val(sim_hdl, vcd_num, rst, 1);
-      backing.rst = rst;
-    }
-  }
-
  private:
   tResetFn     reset_fn;
   // to support the internal RegA
@@ -551,17 +450,6 @@ class MOD_ResetMux : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
-  {
-    // no VCD output
-    return (num);
-  }
-
-  void dump_VCD(tVCDDumpType /* dt */, MOD_ResetMux& /* backing */)
-  {
-    // no VCD output
-  }
-
  private:
   tResetFn     reset_fn;
   bool         select_out;
@@ -622,17 +510,6 @@ class MOD_ResetEither : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
-  {
-    // no VCD output
-    return (num);
-  }
-
-  void dump_VCD(tVCDDumpType /* dt */, MOD_ResetEither& /* backing */)
-  {
-    // no VCD output
-  }
-
  private:
   tResetFn     reset_fn;
   // the last value of each reset
@@ -669,17 +546,6 @@ class MOD_ResetToBool : public Module
   void dump_state(unsigned int /* indent */) const
   {
     // no state dump
-  }
-
-  unsigned int dump_VCD_defs(unsigned int num) const
-  {
-    // no VCD output
-    return (num);
-  }
-
-  void dump_VCD(tVCDDumpType /* dt */, MOD_ResetToBool& /* backing */)
-  {
-    // no VCD output
   }
 
  private:

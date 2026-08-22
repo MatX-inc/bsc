@@ -3,7 +3,6 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 
 // This is a helper class we use manage race conditions at
 // clock domain crossings.  A SyncVar allows us to read a
@@ -113,45 +112,6 @@ class MOD_Sync2 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 3);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
-    vcd_write_def(sim_hdl, vcd_num+1, "dSyncReg2", 1);
-    vcd_write_def(sim_hdl, vcd_num+2, "sSyncReg",  1);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 3);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_Sync2& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, vcd_num,   1);
-      vcd_write_x(sim_hdl, vcd_num+1, 1);
-      vcd_write_x(sim_hdl, vcd_num+2, 1);
-    }
-    else
-    {
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg1 != dSyncReg1))
-      {
-	vcd_write_val(sim_hdl, vcd_num, dSyncReg1, 1);
-	backing.dSyncReg1 = dSyncReg1;
-      }
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg2 != dSyncReg2))
-      {
-	vcd_write_val(sim_hdl, vcd_num+1, dSyncReg2, 1);
-	backing.dSyncReg2 = dSyncReg2;
-      }
-      if ((dt != VCD_DUMP_CHANGES) ||
-	  (backing.sSyncReg.read() != sSyncReg.read()))
-      {
-	vcd_write_val(sim_hdl, vcd_num+2, sSyncReg.read(),  1);
-	backing.sSyncReg = sSyncReg;
-      }
-    }
-  }
-
  private:
   tUInt8 dSyncReg1;
   tUInt8 dSyncReg2;
@@ -210,45 +170,6 @@ class MOD_Sync15 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 3);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
-    vcd_write_def(sim_hdl, vcd_num+1, "dSyncReg2", 1);
-    vcd_write_def(sim_hdl, vcd_num+2, "sSyncReg",  1);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 3);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_Sync15& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, vcd_num,   1);
-      vcd_write_x(sim_hdl, vcd_num+1, 1);
-      vcd_write_x(sim_hdl, vcd_num+2, 1);
-    }
-    else
-    {
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg1 != dSyncReg1))
-      {
-	vcd_write_val(sim_hdl, vcd_num, dSyncReg1, 1);
-	backing.dSyncReg1 = dSyncReg1;
-      }
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg2 != dSyncReg2))
-      {
-	vcd_write_val(sim_hdl, vcd_num+1, dSyncReg2, 1);
-	backing.dSyncReg2 = dSyncReg2;
-      }
-      if ((dt != VCD_DUMP_CHANGES) ||
-	  (backing.sSyncReg.read() != sSyncReg.read()))
-      {
-	vcd_write_val(sim_hdl, vcd_num+2, sSyncReg.read(), 1);
-	backing.sSyncReg = sSyncReg;
-      }
-    }
-  }
-
  private:
   tUInt8 dSyncReg1;
   tUInt8 dSyncReg2;
@@ -304,38 +225,6 @@ class MOD_Sync1 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
-    vcd_write_def(sim_hdl, vcd_num+1, "sSyncReg",  1);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 2);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_Sync1& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, vcd_num,   1);
-      vcd_write_x(sim_hdl, vcd_num+1, 1);
-    }
-    else
-    {
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg1 != dSyncReg1))
-      {
-	vcd_write_val(sim_hdl, vcd_num, dSyncReg1, 1);
-	backing.dSyncReg1 = dSyncReg1;
-      }
-      if ((dt != VCD_DUMP_CHANGES) ||
-	  (backing.sSyncReg.read() != sSyncReg.read()))
-      {
-	vcd_write_val(sim_hdl, vcd_num+1, sSyncReg.read(), 1);
-	backing.sSyncReg = sSyncReg;
-      }
-    }
-  }
-
  private:
   tUInt8 dSyncReg1;
   SyncVar<tUInt8> sSyncReg;
@@ -403,52 +292,6 @@ class MOD_SyncPulse : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 4);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
-    vcd_write_def(sim_hdl, vcd_num+1, "dSyncReg2", 1);
-    vcd_write_def(sim_hdl, vcd_num+2, "dSyncPulse", 1);
-    vcd_write_def(sim_hdl, vcd_num+3, "sSyncReg",  1);
-    vcd_write_scope_end(sim_hdl);
-    return (vcd_num + 4);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_SyncPulse& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, vcd_num,   1);
-      vcd_write_x(sim_hdl, vcd_num+1, 1);
-      vcd_write_x(sim_hdl, vcd_num+2, 1);
-      vcd_write_x(sim_hdl, vcd_num+3, 1);
-    }
-    else
-    {
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg1 != dSyncReg1))
-      {
-	vcd_write_val(sim_hdl, vcd_num, dSyncReg1, 1);
-	backing.dSyncReg1 = dSyncReg1;
-      }
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncReg2 != dSyncReg2))
-      {
-	vcd_write_val(sim_hdl, vcd_num+1, dSyncReg2, 1);
-	backing.dSyncReg2 = dSyncReg2;
-      }
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dSyncPulse != dSyncPulse))
-      {
-	vcd_write_val(sim_hdl, vcd_num+2, dSyncPulse, 1);
-	backing.dSyncPulse = dSyncPulse;
-      }
-      if ((dt != VCD_DUMP_CHANGES) ||
-	  (backing.sSyncReg.read() != sSyncReg.read()))
-      {
-	vcd_write_val(sim_hdl, vcd_num+3, sSyncReg.read(),  1);
-	backing.sSyncReg = sSyncReg;
-      }
-    }
-  }
-
  private:
   tUInt8 dSyncReg1;
   tUInt8 dSyncReg2;
@@ -583,113 +426,6 @@ class MOD_SyncHandshake : public Module
     dump_val(sRDY, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 12);
-    unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, n++, "dSyncReg1", 1);
-    vcd_write_def(sim_hdl, n++, "dSyncReg2", 1);
-    vcd_write_def(sim_hdl, n++, "dLastState", 1);
-    vcd_write_def(sim_hdl, n++, "sToggleReg", 1);
-    vcd_write_def(sim_hdl, n++, "sSyncReg1", 1);
-    vcd_write_def(sim_hdl, n++, "sSyncReg2", 1);
-    vcd_write_def(sim_hdl, n++, "sRDY", 1);
-    vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "sEN", 1);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "sCLK", 1);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_1), "dCLK", 1);
-    vcd_write_def(sim_hdl, n++, "sRST", 1);
-    vcd_write_def(sim_hdl, n++, "dPulse", 1);
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_SyncHandshake& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (backing.dSyncReg1 != dSyncReg1)
-	vcd_write_val(sim_hdl, num++, dSyncReg1, 1);
-      else
-	num++;
-      if (backing.dSyncReg2.probe() != dSyncReg2.probe())
-	vcd_write_val(sim_hdl, num++, dSyncReg2.probe(), 1);
-      else
-	num++;
-      if (backing.dLastState.probe() != dLastState.probe())
-	vcd_write_val(sim_hdl, num++, dLastState.probe(), 1);
-      else
-	num++;
-      if (backing.sToggleReg.probe() != sToggleReg.probe())
-	vcd_write_val(sim_hdl, num++, sToggleReg.probe(), 1);
-      else
-	num++;
-      if (backing.sSyncReg1 != sSyncReg1)
-	vcd_write_val(sim_hdl, num++, sSyncReg1, 1);
-      else
-	num++;
-      if (backing.sSyncReg2 != sSyncReg2)
-	vcd_write_val(sim_hdl, num++, sSyncReg2, 1);
-      else
-	num++;
-      if (backing.sRDY != sRDY)
-	vcd_write_val(sim_hdl, num++, sRDY, 1);
-      else
-	num++;
-      if (backing.did_send != did_send)
-      {
-	vcd_write_val(sim_hdl, num++, did_send, 1);
-	backing.did_send = did_send;
-      }
-      else
-	num++;
-      if (backing.in_reset != in_reset)
-	vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      else
-	num++;
-      if (backing.pulsing != pulsing)
-	vcd_write_val(sim_hdl, num++, pulsing, 1);
-      else
-	num++;
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, dSyncReg1, 1);
-      vcd_write_val(sim_hdl, num++, dSyncReg2.probe(), 1);
-      vcd_write_val(sim_hdl, num++, dLastState.probe(), 1);
-      vcd_write_val(sim_hdl, num++, sToggleReg.probe(), 1);
-      vcd_write_val(sim_hdl, num++, sSyncReg1, 1);
-      vcd_write_val(sim_hdl, num++, sSyncReg2, 1);
-      vcd_write_val(sim_hdl, num++, sRDY, 1);
-      vcd_write_val(sim_hdl, num++, did_send, 1);
-      backing.did_send = did_send;
-      vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      vcd_write_val(sim_hdl, num++, pulsing, 1);
-    }
-    backing.dSyncReg1 = dSyncReg1;
-    backing.dSyncReg2 = dSyncReg2;
-    backing.dLastState = dLastState;
-    backing.sToggleReg = sToggleReg;
-    backing.sSyncReg1 = sSyncReg1;
-    backing.sSyncReg2 = sSyncReg2;
-    backing.sRDY = sRDY;
-    backing.pulsing = pulsing;
-  }
-
  private:
   tUInt8 dSyncReg1;
   SyncVar<tUInt8> dSyncReg2;
@@ -704,7 +440,6 @@ class MOD_SyncHandshake : public Module
   bool param_init;
   bool param_delayreturn;
 
-  // used for VCD dumping
   tClock __clk_handle_0; // sCLK
   tClock __clk_handle_1; // dCLK
   bool did_send;
@@ -781,40 +516,6 @@ class MOD_SyncReg : public Module
     putchar('\n');
     sync.dump_state(indent + 2);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, vcd_num,   "dD_OUT", bits);
-    vcd_write_def(sim_hdl, vcd_num+1, "sDataSyncIn", bits);
-    unsigned int n = sync.dump_VCD_defs(vcd_num + 2);
-    vcd_write_scope_end(sim_hdl);
-    return (n);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_SyncReg<T>& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, vcd_num,   bits);
-      vcd_write_x(sim_hdl, vcd_num+1, bits);
-    }
-    else
-    {
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dD_OUT != dD_OUT))
-      {
-	vcd_write_val(sim_hdl, vcd_num, dD_OUT, bits);
-	backing.dD_OUT = dD_OUT;
-      }
-      if ((dt != VCD_DUMP_CHANGES) ||
-	  (backing.sDataSyncIn.read() != sDataSyncIn.read()))
-      {
-	vcd_write_val(sim_hdl, vcd_num+1, sDataSyncIn.read(), bits);
-	backing.sDataSyncIn = sDataSyncIn;
-      }
-    }
-    sync.dump_VCD(dt, backing.sync);
-  }
-
  private:
   SyncVar<T> sDataSyncIn;
   T dD_OUT;
@@ -1158,183 +859,6 @@ class MOD_SyncFIFO : public Module
       dClrSync.dump_state(indent + 2);
     }
   }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, depth + 13);
-    unsigned int n = vcd_num;
-    char buf[16];
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, n++, "FULL_N", 1);
-    vcd_write_def(sim_hdl, n++, "EMPTY_N", 1);
-    vcd_write_def(sim_hdl, n++, "dEnqPtr", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "dGDeqPtr", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "dGDeqPtr1", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "dSyncReg1", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "sDeqPtr", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "sGEnqPtr", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "sGEnqPtr1", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "sSyncReg1", idx_bits+1);
-    vcd_write_def(sim_hdl, n++, "sCount", idx_bits);
-    vcd_write_def(sim_hdl, n++, "dCount", idx_bits);
-    vcd_write_def(sim_hdl, n++, "dDoutReg", width);
-    for (unsigned int i = 0; i < depth; ++i)
-    {
-      snprintf(buf, 16, "arr_%d", i);
-      vcd_write_def(sim_hdl, n++, buf, width);
-    }
-    unsigned int n2 = sClrSync.dump_VCD_defs(n);
-    unsigned int n3 = dClrSync.dump_VCD_defs(n2);
-    vcd_write_scope_end(sim_hdl);
-    return n3;
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_SyncFIFO<T,I>& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits+1);
-      vcd_write_x(sim_hdl, num++, idx_bits);
-      vcd_write_x(sim_hdl, num++, idx_bits);
-      vcd_write_x(sim_hdl, num++, width);
-      for (unsigned int i = 0; i < depth; ++i)
-	vcd_write_x(sim_hdl, num++, width);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (not_full != backing.not_full)
-	vcd_write_val(sim_hdl, num++, not_full, 1);
-      else
-	++num;
-      if (METH_RDY_first() != backing.METH_RDY_first())
-	vcd_write_val(sim_hdl, num++, METH_RDY_first(), 1);
-      else
-	++num;
-      if (dst_hi != backing.dst_hi)
-	vcd_write_val(sim_hdl, num++, dst_hi, idx_bits+1);
-      else
-	++num;
-      if (dst_lo.probe() != backing.dst_lo.read())
-        vcd_write_val(sim_hdl, num++, dst_lo.probe(), idx_bits+1);
-      else
-	++num;
-      if (dst_lo_plus_1 != backing.dst_lo_plus_1)
-	vcd_write_val(sim_hdl, num++, dst_lo_plus_1, idx_bits+1);
-      else
-	++num;
-      if (dSyncReg1 != backing.dSyncReg1)
-	vcd_write_val(sim_hdl, num++, dSyncReg1, idx_bits+1);
-      else
-	++num;
-      if (src_lo != backing.src_lo)
-	vcd_write_val(sim_hdl, num++, src_lo, idx_bits+1);
-      else
-	++num;
-      if (src_hi.probe() != backing.src_hi.read())
-        vcd_write_val(sim_hdl, num++, src_hi.probe(), idx_bits+1);
-      else
-	++num;
-      if (src_hi_plus_1 != backing.src_hi_plus_1)
-	vcd_write_val(sim_hdl, num++, src_hi_plus_1, idx_bits+1);
-      else
-	++num;
-      if (sSyncReg1 != backing.sSyncReg1)
-	vcd_write_val(sim_hdl, num++, sSyncReg1, idx_bits+1);
-      else
-	++num;
-      if (sCountReg != backing.sCountReg)
-	vcd_write_val(sim_hdl, num++, sCountReg, idx_bits);
-      else
-	++num;
-      if (dCountReg != backing.dCountReg)
-	vcd_write_val(sim_hdl, num++, dCountReg, idx_bits);
-      else
-	++num;
-      if (METH_RDY_first() && !backing.METH_RDY_first())
-	vcd_write_val(sim_hdl, num++, dDoutReg, width);
-      else if (!METH_RDY_first() && backing.METH_RDY_first())
-        vcd_write_x(sim_hdl, num++, width);
-      else if (METH_RDY_first() && (dDoutReg != backing.dDoutReg))
-	vcd_write_val(sim_hdl, num++, dDoutReg, width);
-      else
-	++num;
-      for (unsigned int i = 0; i < depth; ++i)
-      {
-	unsigned int idx = (dst_lo.probe() + i) % depth;
-	unsigned int b_idx = (backing.dst_lo.read() + i) % depth;
-	// handle value which has been added
-	if (occupied(idx) && !backing.occupied(b_idx))
-	  vcd_write_val(sim_hdl, num++, data[idx], width);
-	// handle value which is removed
-	else if (!occupied(idx) && backing.occupied(b_idx))
-	  vcd_write_x(sim_hdl, num++, width);
-	// handle value which is changed
-	else if (occupied(idx) && backing.occupied(b_idx) &&
-		 (data[idx] != backing.data[b_idx]))
-	  vcd_write_val(sim_hdl, num++, data[idx], width);
-	// handle value which is unchanged
-	else
-	  ++num;
-      }
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, METH_RDY_enq(), 1);
-      vcd_write_val(sim_hdl, num++, METH_RDY_first(), 1);
-      vcd_write_val(sim_hdl, num++, dst_hi, idx_bits+1);
-      vcd_write_val(sim_hdl, num++, dst_lo.probe(), idx_bits+1);
-      vcd_write_val(sim_hdl, num++, dst_lo_plus_1, idx_bits+1);
-      vcd_write_val(sim_hdl, num++, dSyncReg1, idx_bits+1);
-      vcd_write_val(sim_hdl, num++, src_lo, idx_bits+1);
-      vcd_write_val(sim_hdl, num++, src_hi.probe(), idx_bits+1);
-      vcd_write_val(sim_hdl, num++, src_hi_plus_1, idx_bits+1);
-      vcd_write_val(sim_hdl, num++, sSyncReg1, idx_bits+1);
-      vcd_write_val(sim_hdl, num++, sCountReg, idx_bits);
-      vcd_write_val(sim_hdl, num++, dCountReg, idx_bits);
-      if (METH_RDY_first()) 
-        vcd_write_val(sim_hdl, num++, dDoutReg, width);
-      else
-	  vcd_write_x(sim_hdl, num++, width);
-      for (unsigned int i = 0; i < depth; ++i)
-      {
-	unsigned int idx = (dst_lo.read() + i) % depth;
-	if (occupied(idx))
-	  vcd_write_val(sim_hdl, num++, data[idx], width);
-	else
-	  vcd_write_x(sim_hdl, num++, width);
-      }
-    }
-
-    backing.src_lo = src_lo;
-    backing.src_hi = src_hi;
-    backing.dst_lo = dst_lo;
-    backing.dst_hi = dst_hi;
-    backing.src_hi_plus_1 = src_hi_plus_1;
-    backing.dst_lo_plus_1 = dst_lo_plus_1;
-    backing.sSyncReg1 = sSyncReg1;
-    backing.dSyncReg1 = dSyncReg1;
-    backing.sCountReg = sCountReg;
-    backing.dCountReg = dCountReg;
-    backing.not_empty = not_empty;
-    backing.not_full  = not_full;
-    backing.s_reset = s_reset;
-    backing.d_reset = d_reset;
-    backing.dDoutReg = dDoutReg;
-    for (unsigned int i = 0; i < depth; ++i)
-      backing.data[i] = data[i];
-
-    sClrSync.dump_VCD(dt, backing.sClrSync);
-    dClrSync.dump_VCD(dt, backing.dClrSync);
-  }
-
  private:
   const unsigned int width;
   const unsigned int depth;
@@ -1390,8 +914,6 @@ class MOD_DualPortRam : public Module
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), written_at(~bk_now(sim_hdl))
   {
-    if (vcd_is_backing_instance(sim_hdl))
-      return;  // do not allocate storage for backing instance
     nWords = 1llu << addr_width;
     data = new DT[nWords];
     for (unsigned long long n = 0llu; n < nWords; ++n)
@@ -1428,18 +950,6 @@ class MOD_DualPortRam : public Module
   {
     // Memory contents are not dumped
   }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    // Memory contents are not dumped
-    return (num);
-  }
-  void dump_VCD(tVCDDumpType /* unused */,
-		MOD_DualPortRam<AT,DT>& /* unused */)
-
-  {
-    // Memory contents are not dumped
-  }
-
  private:
   DT* data;
   unsigned int addr_bits;
@@ -1538,38 +1048,6 @@ class MOD_LatchCrossingReg : public Module
     dump_val(sFlop, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    char buf[128];
-    vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    snprintf(buf,128,"%s$L_OUT",inst_name);
-    vcd_write_def(sim_hdl, vcd_num,   buf, bits);
-    snprintf(buf,128,"%s$Q_OUT",inst_name);
-    vcd_write_def(sim_hdl, vcd_num+1, buf, bits);
-    return (vcd_num + 2);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_LatchCrossingReg& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, vcd_num,   bits);
-      vcd_write_x(sim_hdl, vcd_num+1, bits);
-    }
-    else
-    {
-      if ((dt != VCD_DUMP_CHANGES) || (backing.dLatch != dLatch))
-      {
-	vcd_write_val(sim_hdl, vcd_num, dLatch, bits);
-	backing.dLatch = dLatch;
-      }
-      if ((dt != VCD_DUMP_CHANGES) || (backing.sFlop != sFlop))
-      {
-	vcd_write_val(sim_hdl, vcd_num+1, sFlop, bits);
-	backing.sFlop = sFlop;
-      }
-    }
-  }
-
  private:
   T dLatch;
   T sFlop;
