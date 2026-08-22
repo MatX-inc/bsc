@@ -1940,9 +1940,31 @@ cxxLink errh flags toplevel names su_ok ci_files creation_time = do
                                "bs_" ++ binfmt ++ "_export_map.txt"
         -- this flag doesn't seem to work, so we use a separate call to "strip"
         stripflags = [] -- if (cDebug flags) then [] else ["-Wl,-x"]
+        -- The ELF shared object is linked freestanding:
+        --   * -nostartfiles drops the crt objects, whose weak
+        --     tooling references (_ITM_*, __gmon_start__,
+        --     __cxa_finalize) would otherwise be the last entries in
+        --     the dynamic symbol table (the model registers no
+        --     static destructors, so it needs nothing from them);
+        --   * --as-needed records no DT_NEEDED for the default
+        --     libraries nothing references.  With the translation
+        --     units compiled -fno-exceptions -fno-rtti a model
+        --     references none of them: a model without BDPI imports
+        --     gets no DT_NEEDED at all, and the documented BDPI
+        --     fallback's malloc/free keep libc;
+        --   * -z relro -z now: every relocation is resolved at load
+        --     and the relocated sections are then made read-only, so
+        --     no PLT/GOT entry needs runtime resolution.
+        -- The export map keeps only the public entry points dynamic
+        -- (see bs_elf_export_map.txt); -lm was vestigial (nothing in
+        -- a model references libm; reals go through the host ops).
         switches =
           case getBinFmtType of
-            ELF   -> ["-shared", "-fPIC", "-Wl,-Bsymbolic"] ++ libdirflags ++
+            ELF   -> ["-shared", "-fPIC", "-Wl,-Bsymbolic"] ++
+                     [ "-nostartfiles"
+                     , "-Wl,--as-needed"
+                     , "-Wl,-z,relro", "-Wl,-z,now"
+                     ] ++ libdirflags ++
                      ["-Wl,--version-script=" ++ exportmap] ++ stripflags ++
                      ["-o", soFile]
             MachO -> ["-dynamiclib", "-fPIC"] ++ libdirflags ++
@@ -1950,7 +1972,7 @@ cxxLink errh flags toplevel names su_ok ci_files creation_time = do
                      ["-o", soFile]
         -- show is used for quoting
         opts = map show $ linkFlags flags
-        files = map show compile_names ++ ["-lm"] ++ userlibs
+        files = map show compile_names ++ userlibs
     cxxCompile errh flags (opts ++ switches) files
     when (not (cDebug flags)) $ cleanseSharedLib errh flags soFile
     unless (quiet flags) $ putStrLnF ("Simulation shared library created: " ++ soFile)

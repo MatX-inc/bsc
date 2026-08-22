@@ -342,8 +342,8 @@ EXTERNAL_ALLOWANCES = [
     # allocator family (glibc malloc worst path: arena setup + mmap)
     (r"^(malloc|free|cfree|calloc|realloc|posix_memalign|strdup)$", 8192),
     # the Bluesim allocator's unbounded fallback hooks: thin wrappers
-    # over operator new[]/delete[], defined only in models with BDPI
-    # imports (weak-undefined -- never called -- elsewhere)
+    # over malloc/free in models with BDPI imports, no-heap weak
+    # defaults everywhere else
     (r"^bs_mem_heap_(alloc|free)$", 8192 + 1024),
     (r"\boperator (new|delete)\s*(\[\])?\s*\(", 8192),
     (r"^_Z(nw|na|dl|da)m?", 8192),
