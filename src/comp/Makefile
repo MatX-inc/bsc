@@ -403,6 +403,12 @@ showrules: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
+.PHONY: bo2bloogle
+bo2bloogle: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
+	$(POSTBUILDCOMMAND)
+
 # bluetcl is built in two steps:
 # 1. Build BlueTcl module using -c to emit .hi/.o files, and also the
 #    BlueTcl_stub.h reqired by bluetcl_Main.hsc in the next action
@@ -462,6 +468,11 @@ install-bsc: $(PKGINFO)
 install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
 install-bluetcl: $(addprefix $(BINDIR)/core/,$(TCLEXES))
 install-bluetcl: $(PKGINFO)
+
+.PHONY: install-bo2bloogle
+install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(PKGINFO)
 
 .PHONY: install-utils
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
