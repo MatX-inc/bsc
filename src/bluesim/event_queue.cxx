@@ -8,6 +8,16 @@
 #include "priority.h"
 extern "C" const char* bk_clock_name(tSimStateHdl simHdl, tClock handle);
 
+/* the noreturn overflow report (kernel.cxx), called when an event is
+ * scheduled into a full queue
+ */
+extern "C" void bk_event_queue_overflow(tSimStateHdl simHdl,
+                                        tUInt32 capacity)
+#if defined(__GNUC__)
+    __attribute__((noreturn))
+#endif
+    ;
+
 
 /* Fundamental heap operations */
 
@@ -96,9 +106,12 @@ bool EventQueue::isValid()
  * The event queue operations
  */
 
-/* Construct an EventQueue */
-EventQueue::EventQueue()
-  : events(), count(0), in_event(false), halted(false),
+/* Construct an EventQueue with a fixed capacity.  The storage is
+ * preallocated here and never grows (see schedule()).
+ */
+EventQueue::EventQueue(tSimStateHdl simHdl, unsigned int queue_capacity)
+  : sim_hdl(simHdl), events(queue_capacity), capacity(queue_capacity),
+    count(0), max_count(0), in_event(false), halted(false),
     last_find_pred(NULL), curr_find_idx(0)
 {}
 
@@ -106,14 +119,19 @@ EventQueue::EventQueue()
 EventQueue::~EventQueue()
 {}
 
-/* Add an event to the queue */
+/* Add an event to the queue.  The queue never grows past the
+ * capacity fixed at construction: scheduling into a full queue is a
+ * fatal condition reported through the host's event_queue_overflow
+ * operation, which does not return.
+ */
 void EventQueue::schedule(const tEvent& e)
 {
-  if (count == events.size())
-    events.push_back(e);
-  else
-    events[count] = e;
+  if (count == capacity)
+    bk_event_queue_overflow(sim_hdl, capacity); /* does not return */
+  events[count] = e;
   bubble_up(count++);
+  if (count > max_count)
+    max_count = count;
 }
 
 /* Execute events in sequence */
@@ -161,6 +179,12 @@ void EventQueue::halt()
 unsigned int EventQueue::size() const
 {
   return count;
+}
+
+/* Get the most events the queue has ever held at once */
+unsigned int EventQueue::high_water() const
+{
+  return max_count;
 }
 
 /* Search the queue for a matching event.
@@ -223,10 +247,9 @@ void EventQueue::remove(tSimStateHdl simHdl, tEventPredicate pred)
   }
 }
 
-/* Remove all events */
+/* Remove all events (the fixed storage is retained) */
 void EventQueue::clear()
 {
-  events.clear();
   count = 0;
 }
 

@@ -322,10 +322,11 @@ foreign import ccall "dynamic"
   dl_ptr_uchar_ret_ptr :: FunPtr (Ptr CUInt -> CUChar -> IO (Ptr CUInt)) ->
                           (Ptr CUInt -> CUChar -> IO (Ptr CUInt))
 
--- bk_sync_init: model handle, master flag, host ops, host context
+-- bk_sync_init: model handle, master flag, host ops, host context,
+-- event-queue capacity
 foreign import ccall "dynamic"
-  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> IO (Ptr CUInt)) ->
-                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> IO (Ptr CUInt))
+  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> IO (Ptr CUInt)) ->
+                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> IO (Ptr CUInt))
 
 foreign import ccall "dynamic"
   dl_ptr_uint_int_ullong_ret_int :: FunPtr (Ptr CUInt -> CUInt -> CInt -> CULLong -> IO CInt) ->
@@ -487,6 +488,7 @@ loadBluesimModel fname top_name = do
   dl <- dlopen fname' [RTLD_NOW]
   -- lookup symbols in the shared object
   c_new_model              <- dlsym dl ("new_" ++ pfxModel ++ top_name)
+  c_bk_max_event_queue_depth <- dlsym dl "bk_max_event_queue_depth"
   c_bk_sync_init           <- dlsym dl "bk_sync_init"
   c_bk_sync_run            <- dlsym dl "bk_sync_run"
   c_bk_now                 <- dlsym dl "bk_now"
@@ -531,9 +533,13 @@ loadBluesimModel fname top_name = do
   -- convert functions to Haskell types and build BluesimModel
   let new_model :: IO WordPtr
       new_model = fromC $ dl_ret_ptr c_new_model
-      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> IO WordPtr
-      bk_sync_init m mstr ops ctx =
+      bk_max_event_queue_depth :: WordPtr -> IO Word32
+      bk_max_event_queue_depth m =
+          fromC $ dl_ptr_ret_uint c_bk_max_event_queue_depth (toC m)
+      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> Word32 -> IO WordPtr
+      bk_sync_init m mstr ops ctx cap =
           do p <- dl_sync_init_fn c_bk_sync_init (toC m) (toC mstr) ops ctx
+                                  (toC cap)
              return (fromC p)
       -- string return must be handled specially for bk_clock_name, etc.
       clk_name_fn :: WordPtr -> BSClock -> IO String
@@ -603,7 +609,15 @@ loadBluesimModel fname top_name = do
   -- model performs all of its I/O
   host_ops <- bs_default_host_ops
   host_ctx <- bs_default_host_ctx
-  sim_hdl <- bk_sync_init model_hdl True host_ops host_ctx
+  -- The event queue's fixed capacity is the model's static bound
+  -- (assuming no host calls that enqueue events) plus headroom for
+  -- bluetcl's own host calls: the UI yield events of 'sim runto',
+  -- edge limits and Ctrl-C handling (at most one extra pending at a
+  -- time, deduplicated per target time).  16 matches the headroom
+  -- documented at bk_sync_init().
+  model_max <- bk_max_event_queue_depth model_hdl
+  let queue_capacity = model_max + 16
+  sim_hdl <- bk_sync_init model_hdl True host_ops host_ctx queue_capacity
   -- start the simulation worker thread, which executes the model's
   -- event queue through the kernel's synchronous API
   worker_hdl <- if (sim_hdl == ptrToWordPtr nullPtr)

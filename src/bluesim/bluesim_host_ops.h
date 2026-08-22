@@ -73,7 +73,7 @@ typedef enum { BS_HOST_STDIN  = 0
  * refuses a table whose version (or size) is older than the one it
  * was compiled against.
  */
-#define BS_HOST_OPS_VERSION 2u
+#define BS_HOST_OPS_VERSION 3u
 
 struct bs_host_ops {
   /* The size in bytes of the structure as compiled into the host,
@@ -183,6 +183,21 @@ struct bs_host_ops {
                         tUInt64 addr,
                         tUInt64 lo,
                         tUInt64 hi) BS_HOST_NORETURN;
+
+  /* -- Operations below were appended in version 3: the noreturn
+   *    event-queue overflow report -- */
+
+  /* Report that the kernel's event queue is full and cannot accept
+   * another event, and terminate execution: this operation must not
+   * return (see BS_HOST_NORETURN above).  The event queue has the
+   * fixed capacity the host chose at bk_sync_init() (normally the
+   * model's bk_max_event_queue_depth() plus headroom for the host's
+   * own events), so hitting this means either the host under-budgeted
+   * its own event-enqueuing calls or the model exceeded its computed
+   * bound.  'capacity' is the fixed capacity that was exceeded.
+   */
+  void (*event_queue_overflow)(void* ctx,
+                               tUInt32 capacity) BS_HOST_NORETURN;
 
   /* New operations are appended here in later versions; each
    * addition bumps BS_HOST_OPS_VERSION.

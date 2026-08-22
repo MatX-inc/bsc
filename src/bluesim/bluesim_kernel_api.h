@@ -50,12 +50,28 @@ extern "C" {
  * the process, so when several models are loaded into one process
  * they must all be initialized with the same 'ops' and 'ctx'.
  *
+ * 'event_queue_capacity' fixes the capacity of the kernel's event
+ * queue: the storage is preallocated here and NEVER grows, and
+ * scheduling an event into a full queue fails through the host's
+ * noreturn event_queue_overflow operation.  The host chooses the
+ * capacity; the intended budget is
+ *
+ *   bk_max_event_queue_depth(model) + headroom
+ *
+ * where the headroom covers the host's own event-enqueuing calls
+ * (each documents its cost below).  bluetcl and the generated
+ * SystemC wrappers use a headroom of 16, which generously covers
+ * their usage (at most one extra pending UI yield event, one
+ * bk_quit_at event and one host-triggered edge pair at a time).  A
+ * capacity of 0 is rejected (NULL is returned).
+ *
  * Returns an owned handle to the simulation state, which is needed
  * as an argument to the other Bluesim kernel API functions and is
  * released by bk_shutdown().  Returns NULL on error.
  */
 own tSimStateHdl bk_sync_init(tModel model, tBool master,
-                              const struct bs_host_ops* ops, void* ctx);
+                              const struct bs_host_ops* ops, void* ctx,
+                              tUInt32 event_queue_capacity);
 
 /* Get the host operations / host context registered with
  * bk_sync_init().  A NULL simHdl returns the process-wide copy
@@ -80,6 +96,22 @@ BS_HOST_NORETURN void bk_out_of_bounds(tSimStateHdl simHdl,
                                        tUInt64 addr,
                                        tUInt64 lo,
                                        tUInt64 hi);
+
+/* Report that the kernel's event queue is full through the host's
+ * event_queue_overflow operation and do not return.  This is called
+ * by the event queue itself when an event is scheduled past the
+ * fixed capacity chosen at bk_sync_init(); it is not for embedders
+ * to call.  'capacity' is the fixed capacity that was exceeded.
+ */
+BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
+                                              tUInt32 capacity);
+
+/* Get the most events the kernel's event queue has ever held at
+ * once.  This is a test/debug aid for validating event-queue
+ * capacity budgets against bk_max_event_queue_depth(); it never
+ * exceeds the capacity fixed at bk_sync_init().
+ */
+tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
 
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.

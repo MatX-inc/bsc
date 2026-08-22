@@ -131,6 +131,20 @@ static inline void bs_default_out_of_bounds(void* ctx,
   abort();
 }
 
+static inline void bs_default_event_queue_overflow(void* ctx,
+                                                   tUInt32 capacity)
+    BS_HOST_NORETURN;
+static inline void bs_default_event_queue_overflow(void* ctx,
+                                                   tUInt32 capacity)
+{
+  (void) ctx;
+  fprintf(stderr,
+          "Error: Bluesim event queue overflow (capacity %u events).\n",
+          (unsigned int) capacity);
+  fflush(stderr);
+  abort();
+}
+
 /* Get the default host operations table (constructed on first use).
  * The table is static, so it satisfies bk_sync_init()'s requirement
  * of remaining valid until bk_shutdown().
@@ -153,6 +167,7 @@ static inline const struct bs_host_ops* bs_default_host_ops(void)
     ops.format_real = bs_default_format_real;
     ops.divide_by_zero = bs_default_divide_by_zero;
     ops.out_of_bounds  = bs_default_out_of_bounds;
+    ops.event_queue_overflow = bs_default_event_queue_overflow;
 
     /* Bluesim's standard output has always been line-buffered (the
      * runtime used to setlinebuf() every stream it wrote to).

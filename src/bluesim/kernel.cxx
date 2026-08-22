@@ -420,15 +420,21 @@ static bool check_host_ops(const struct bs_host_ops* ops)
           (ops->flush       != NULL) &&
           (ops->format_real != NULL) &&
           (ops->divide_by_zero != NULL) &&
-          (ops->out_of_bounds  != NULL));
+          (ops->out_of_bounds  != NULL) &&
+          (ops->event_queue_overflow != NULL));
 }
 
 /* Initialize the Bluesim kernel */
 tSimStateHdl bk_sync_init(tModel model, tBool master,
-                          const struct bs_host_ops* ops, void* ctx)
+                          const struct bs_host_ops* ops, void* ctx,
+                          tUInt32 event_queue_capacity)
 {
   /* the runtime cannot do any I/O without host operations */
   if (!check_host_ops(ops))
+    return NULL;
+
+  /* the event queue must be able to hold at least one event */
+  if (event_queue_capacity == 0)
     return NULL;
 
   tSimStateHdl simHdl = new tSimState;
@@ -480,7 +486,14 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   }
   init_mem_allocator();
   simHdl->sim_time = 0llu;
-  simHdl->queue = new EventQueue();
+  /* The queue's storage is preallocated here and never grows: the
+   * host chose the capacity (normally bk_max_event_queue_depth() of
+   * the model plus headroom for its own event-enqueuing calls), and
+   * scheduling past it fails through the event_queue_overflow host
+   * operation.  create_model() below already schedules events (reset
+   * waveform, clock edges), so the queue must exist first.
+   */
+  simHdl->queue = new EventQueue(simHdl, event_queue_capacity);
   simHdl->need_dummy_edges = 0;
   simHdl->model->create_model(simHdl, master != 0);
   simHdl->top_symbol.key = "";
@@ -573,6 +586,33 @@ void bk_out_of_bounds(tSimStateHdl simHdl,
    * out_of_bounds operation violates its contract by returning
    */
   halt_process();
+}
+
+/* Report a fatal event-queue overflow through the host operations.
+ * Called by the event queue when an event is scheduled into a full
+ * queue (the capacity is fixed at bk_sync_init()).  Does not return.
+ */
+void bk_event_queue_overflow(tSimStateHdl simHdl, tUInt32 capacity)
+{
+  const struct bs_host_ops* ops = bk_host_ops(simHdl);
+  if (ops != NULL)
+    ops->event_queue_overflow(bk_host_ctx(simHdl), capacity);
+  /* not reached unless there are no host ops or the host's
+   * event_queue_overflow operation violates its contract by
+   * returning
+   */
+  halt_process();
+}
+
+/* Get the most events the queue has ever held at once.  This is a
+ * test/debug aid for validating event-queue capacity budgets against
+ * bk_max_event_queue_depth().
+ */
+tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl)
+{
+  if ((simHdl == NULL) || (simHdl->queue == NULL))
+    return 0;
+  return simHdl->queue->high_water();
 }
 
 /* Add edges into the event queue for a particular clock waveform.
