@@ -550,7 +550,7 @@ instance Bin Flags where
     writeBytes (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
-                a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
+                a_020 a_021 a_dumpFormats a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
@@ -631,7 +631,7 @@ instance Bin Flags where
        do
           (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
            a_008, a_009, a_010, a_011, a_012, a_013, a_014) <- rd_chunk0
-          (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022,
+          (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_dumpFormats, a_022,
            a_023, a_024, a_025, a_026, a_027, a_028, a_029) <- rd_chunk1
           (a_030, a_031, a_032, a_033, a_034, a_035, a_036, a_037,
            a_038, a_039, a_040, a_041, a_042, a_043, a_044) <- rd_chunk2
@@ -651,7 +651,7 @@ instance Bin Flags where
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
-                a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
+                a_020 a_021 a_dumpFormats a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
@@ -678,7 +678,7 @@ instance Bin Flags where
              a_015 <- fromBin; a_016 <- fromBin; a_017 <- fromBin; a_018 <- fromBin; a_019 <- fromBin;
              a_020 <- fromBin; a_021 <- fromBin; a_022 <- fromBin; a_023 <- fromBin; a_024 <- fromBin;
              a_025 <- fromBin; a_026 <- fromBin; a_027 <- fromBin; a_028 <- fromBin; a_029 <- fromBin
-             return (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022,
+             return (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_dumpFormats, a_022,
                      a_023, a_024, a_025, a_026, a_027, a_028, a_029)
         {-# NOINLINE rd_chunk2 #-}
         rd_chunk2 =
