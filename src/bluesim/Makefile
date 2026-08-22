@@ -16,6 +16,7 @@ all: install
 # These get copied to the inst/lib/Bluesim area
 HEADERS = bluesim_kernel_api.h \
           bluesim_host_ops.h \
+          bluesim_host_ops_default.h \
           bluesim_types.h \
           bluesim_primitives.h \
           bluesim_systemc.h \

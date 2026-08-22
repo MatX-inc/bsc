@@ -322,6 +322,11 @@ foreign import ccall "dynamic"
   dl_ptr_uchar_ret_ptr :: FunPtr (Ptr CUInt -> CUChar -> IO (Ptr CUInt)) ->
                           (Ptr CUInt -> CUChar -> IO (Ptr CUInt))
 
+-- bk_sync_init: model handle, master flag, host ops, host context
+foreign import ccall "dynamic"
+  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> IO (Ptr CUInt)) ->
+                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> IO (Ptr CUInt))
+
 foreign import ccall "dynamic"
   dl_ptr_uint_int_ullong_ret_int :: FunPtr (Ptr CUInt -> CUInt -> CInt -> CULLong -> IO CInt) ->
                                     (Ptr CUInt -> CUInt -> CInt -> CULLong -> IO CInt)
@@ -377,6 +382,17 @@ foreign import ccall "dynamic"
 -- as function pointers.
 
 type BSWorkerHdl = Ptr ()
+
+-- The default (C-library-backed) host operations that bluetcl
+-- installs into a loaded model with bk_sync_init(): the runtime
+-- performs all of its I/O through them (bluesim_host_ops.h).  The
+-- implementation is compiled into bluetcl (bluesim_host_ops.cxx).
+
+foreign import ccall unsafe "bluesim_default_host_ops"
+  bs_default_host_ops :: IO (Ptr ())
+
+foreign import ccall unsafe "bluesim_default_host_ctx"
+  bs_default_host_ctx :: IO (Ptr ())
 
 foreign import ccall safe "bluesim_worker_create"
   bworker_create :: Ptr CUInt                        -- tSimStateHdl
@@ -515,8 +531,10 @@ loadBluesimModel fname top_name = do
   -- convert functions to Haskell types and build BluesimModel
   let new_model :: IO WordPtr
       new_model = fromC $ dl_ret_ptr c_new_model
-      bk_sync_init :: WordPtr -> Bool -> IO WordPtr
-      bk_sync_init = fromC $ dl_ptr_uchar_ret_ptr c_bk_sync_init
+      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> IO WordPtr
+      bk_sync_init m mstr ops ctx =
+          do p <- dl_sync_init_fn c_bk_sync_init (toC m) (toC mstr) ops ctx
+             return (fromC p)
       -- string return must be handled specially for bk_clock_name, etc.
       clk_name_fn :: WordPtr -> BSClock -> IO String
       clk_name_fn simHdl c =
@@ -581,7 +599,11 @@ loadBluesimModel fname top_name = do
                       return $ Value { num_bits = (fromC sz), value = v }
               else return NoValue
   model_hdl <- new_model
-  sim_hdl <- bk_sync_init model_hdl True
+  -- install the default host operations, through which the loaded
+  -- model performs all of its I/O
+  host_ops <- bs_default_host_ops
+  host_ctx <- bs_default_host_ctx
+  sim_hdl <- bk_sync_init model_hdl True host_ops host_ctx
   -- start the simulation worker thread, which executes the model's
   -- event queue through the kernel's synchronous API
   worker_hdl <- if (sim_hdl == ptrToWordPtr nullPtr)
