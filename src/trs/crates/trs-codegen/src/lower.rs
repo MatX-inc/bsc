@@ -297,8 +297,13 @@ impl IrTally {
 /// Measured against default<O3> on the five witness shapes (all
 /// byte-exact): links 13.7->10.6s (FloatTest), 27.4->23.0
 /// (BRAM0Test), ties on the rest — and RUNTIME improves too
-/// (FloatTest 70.7->63.1ms); the giant-function O1 shape tier this
-/// replaces is obsolete (this list has no superlinear-in-size pass).
+/// (FloatTest 70.7->63.1ms).  The "no superlinear-in-size pass" claim
+/// that retired the old O1 shape tier was FALSIFIED at Toooba scale:
+/// early-cse<memssa>'s dominated-use rewrites are superlinear in
+/// FUNCTION size (the monolithic edge fn wedged >39min, DNF).  The
+/// replacements are structural — the dispatcher outlines sched
+/// sections into bounded functions (EdgeSsaPlan::outline_sched), and
+/// the per-function insn backstop below optnones any straggler.
 /// instcombine must be spelled no-verify-fixpoint: the textual pass
 /// defaults to max-iterations=1 and ABORTS on non-convergence.
 const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
@@ -340,6 +345,53 @@ fn run_ir_passes(
     // (miscompile bisection — e.g. "default<O1>,gvn")
     let pipeline =
         std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
+    // per-function insn backstop: a function over budget here is
+    // pathological (one giant cone the dispatcher could not split) —
+    // mark it optnone (+noinline, which optnone requires) so it
+    // codegens at O0 instead of feeding a superlinear function pass
+    // (early-cse<memssa> wedged >39min on a Toooba-scale monolith).
+    // TRS_JIT_FN_INSN_BUDGET overrides; 0 disables.
+    let fn_budget: u64 = std::env::var("TRS_JIT_FN_INSN_BUDGET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2_000_000);
+    if fn_budget > 0 {
+        let mctx = module.get_context();
+        let kind = |n: &str| {
+            inkwell::attributes::Attribute::get_named_enum_kind_id(n)
+        };
+        let mut fo = module.get_first_function();
+        while let Some(func) = fo {
+            if func.count_basic_blocks() > 0 {
+                let mut insns = 0u64;
+                for bb in func.get_basic_blocks() {
+                    let mut ins = bb.get_first_instruction();
+                    while let Some(i) = ins {
+                        insns += 1;
+                        ins = i.get_next_instruction();
+                    }
+                }
+                if insns > fn_budget {
+                    func.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        mctx.create_enum_attribute(kind("noinline"), 0),
+                    );
+                    func.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        mctx.create_enum_attribute(kind("optnone"), 0),
+                    );
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!(
+                            "trs jit: {} over the fn insn budget \
+                             ({insns} > {fn_budget}) — optnone backstop",
+                            func.get_name().to_string_lossy()
+                        );
+                    }
+                }
+            }
+            fo = func.get_next_function();
+        }
+    }
     module.run_passes(&pipeline, &tm, opts).map_err(|e| {
         // LOUD on stderr, not just the Ineligible fallback chain: a
         // rejected pipeline string (an LLVM upgrade renaming a pass in
@@ -741,7 +793,11 @@ fn lower_helpers<'ctx>(
 /// on an over-budget module).
 pub enum DesignObject {
     Object(Vec<u8>),
-    EdgeOverBudget(Vec<Vec<(usize, u64)>>),
+    /// (per-comp inlined section sizes, largest measured edge-fn size
+    /// in IR instructions) — the caller replans on the sizes and uses
+    /// the edge measurement to decide between accepting the inline
+    /// monolith and outlining the sched sections (see outline_sched)
+    EdgeOverBudget(Vec<Vec<(usize, u64)>>, u64),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -848,10 +904,13 @@ pub fn compile_design_object(
     // measured edge budget: hand the per-section sizes back for a
     // replan instead of feeding a giant function to the pass pipeline.
     // The judgement is the FULL edge-fn size (sched sections and call
-    // preludes included — only exec sections are outlining candidates,
-    // so the caller may find no victims and accept the remainder).
+    // preludes included); the max measurement rides along so the
+    // caller can decide between accepting the inline remainder (the
+    // common CPU-core shape — cross-section SSA sharing is worth 1.4x
+    // wall on Flute) and outlining the sched sections (the
+    // Toooba-scale link fix).
     if edge_insn_budget > 0 {
-        let mut over = false;
+        let mut max_insns = 0u64;
         for k in 0..fused.len() {
             if let Some(f) = module.get_function(&format!("edge_c{k}")) {
                 let mut insns = 0u64;
@@ -862,14 +921,17 @@ pub fn compile_design_object(
                         ins = i.get_next_instruction();
                     }
                 }
-                if insns > edge_insn_budget {
-                    over = true;
-                    break;
+                if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                    eprintln!("trs jit: edge_c{k} measured {insns} insns");
                 }
+                max_insns = max_insns.max(insns);
             }
         }
-        if over {
-            return Ok(DesignObject::EdgeOverBudget(section_sizes));
+        if max_insns > edge_insn_budget {
+            return Ok(DesignObject::EdgeOverBudget(
+                section_sizes,
+                max_insns,
+            ));
         }
     }
     // ordinal-indexed fn tables: without them the loader dlsyms ~one
@@ -1138,6 +1200,35 @@ fn lower_fused<'ctx>(
     syms
 }
 
+/// Activity-gating dirty test at the builder's position: OR of
+/// (CURRENT dirty word & mask word) over the mask pairs, compared
+/// against zero — i1 "some input moved since this cone last ran".
+fn gate_test<'ctx>(
+    b: &Builder<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    arena: PointerValue<'ctx>,
+    g: &crate::abi::GateLayout,
+    mask: &[(u32, u64)],
+) -> IntValue<'ctx> {
+    let mut acc = i64t.const_zero();
+    for &(w, m) in mask {
+        let p = unsafe {
+            b.build_gep(
+                i64t,
+                arena,
+                &[i64t.const_int((g.cur_base + w) as u64, false)],
+                "gw",
+            )
+            .unwrap()
+        };
+        let v = b.build_load(i64t, p, "gv").unwrap().into_int_value();
+        let a = b.build_and(v, i64t.const_int(m, false), "ga").unwrap();
+        acc = b.build_or(acc, a, "go").unwrap();
+    }
+    b.build_int_compare(IntPredicate::NE, acc, i64t.const_zero(), "gd")
+        .unwrap()
+}
+
 /// Whole-edge SSA emission (task #24 M2): one edge_c<k> per
 /// composition with every sched/exec section lowered INLINE, sharing
 /// an EdgeCtx value cache across sections — latched CF/WF/eager values
@@ -1146,6 +1237,15 @@ fn lower_fused<'ctx>(
 /// and signature as lower_fused, so the loader and runtime are
 /// untouched.  Every existing slot STORE is preserved (interp/debug
 /// contract).
+///
+/// Under `plan.outline_sched` (the dispatcher structure) sched
+/// sections are NOT inlined: each lowers into its own bounded internal
+/// noinline function and the edge fn becomes a test-and-call
+/// dispatcher over them — the link-scaling shape (LLVM's function
+/// passes stay linear per function); combined with gating, a skipped
+/// section's code is never even fetched.  With gating armed (either
+/// structure), maximal runs of consecutive gated sections sit behind
+/// an outer union-mask group guard.
 #[allow(clippy::too_many_arguments)]
 fn lower_edge_ssa<'ctx>(
     env: &PlanEnv,
@@ -1202,6 +1302,7 @@ fn lower_edge_ssa<'ctx>(
         let gg = module.add_global(i64t.array_type(3), None, "trs_gate_geom");
         gg.set_initializer(&arr);
     }
+    let exports_rc = std::rc::Rc::new(plan.export_slots.clone());
     for (k, comp) in fused.iter().enumerate() {
         let sym = format!("edge_c{k}");
         let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
@@ -1331,7 +1432,7 @@ fn lower_edge_ssa<'ctx>(
         }
         for (row, start) in bodies {
             let mut edge_ctx = EdgeCtx {
-                exports: plan.export_slots.clone(),
+                exports: exports_rc.clone(),
                 ..Default::default()
             };
             // checkpoint for exact per-section attribution: new blocks
@@ -1342,6 +1443,67 @@ fn lower_edge_ssa<'ctx>(
             let mut carry = start;
             let mut carry_insns = count_block(start);
             let mut cur = start;
+            // guard grouping (gating armed): a maximal run of
+            // consecutive gated sched sections gets ONE outer test on
+            // the union of its masks — union clean means every member
+            // is clean (members' inputs are all in the union, and CUR
+            // only changes at exec consume sites, which break runs), so
+            // the whole run of calls is skipped on one branch.  Inner
+            // per-section tests still discriminate when the union is
+            // dirty.  run_end: run head index -> last member index.
+            let mut run_end: HashMap<usize, usize> = HashMap::new();
+            if plan.gate.is_some() {
+                let ns = &plan.nodes[row];
+                let gated = |s: usize| {
+                    let (ie, oo) = ns[s];
+                    !ie && specs[oo].autofire.is_none()
+                        && plan
+                            .gate_masks
+                            .get(oo)
+                            .and_then(|m| m.as_ref())
+                            .is_some_and(|m| !m.is_empty())
+                };
+                let mut s = 0;
+                while s < ns.len() {
+                    if gated(s) {
+                        let mut e = s;
+                        while e + 1 < ns.len() && gated(e + 1) {
+                            e += 1;
+                        }
+                        if e > s {
+                            run_end.insert(s, e);
+                        }
+                        s = e + 1;
+                    } else {
+                        s += 1;
+                    }
+                }
+            }
+            if std::env::var_os("TRS_JIT_TRACE").is_some()
+                && !run_end.is_empty()
+            {
+                let members: usize =
+                    run_end.iter().map(|(&s0, &e)| e - s0 + 1).sum();
+                let gated_total = plan.nodes[row]
+                    .iter()
+                    .filter(|&&(ie, oo)| {
+                        !ie && plan
+                            .gate_masks
+                            .get(oo)
+                            .and_then(|m| m.as_ref())
+                            .is_some_and(|m| !m.is_empty())
+                    })
+                    .count();
+                eprintln!(
+                    "trs jit: edge_c{k} row {row}: {} group guards \
+                     cover {members} of {gated_total} gated sections",
+                    run_end.len()
+                );
+            }
+            let mut run_close: Option<(
+                usize,
+                inkwell::basic_block::BasicBlock<'ctx>,
+            )> = None;
             for (s, &(is_exec, o)) in plan.nodes[row].iter().enumerate() {
                 let base_spec = &specs[o];
                 // order-derived sched overrides (variant rows only):
@@ -1512,6 +1674,36 @@ fn lower_edge_ssa<'ctx>(
                             .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
                     });
                 } else {
+                    // outer group guard at a run head: one union test
+                    // covers every gated call in the run (see run_end)
+                    if let Some(&re) = run_end.get(&s) {
+                        let g = plan.gate.as_ref().unwrap();
+                        let mut union: Vec<(u32, u64)> = Vec::new();
+                        for si in s..=re {
+                            let (_, oo) = plan.nodes[row][si];
+                            for &(w, m) in
+                                plan.gate_masks[oo].as_ref().unwrap()
+                            {
+                                match union
+                                    .iter_mut()
+                                    .find(|(uw, _)| *uw == w)
+                                {
+                                    Some((_, um)) => *um |= m,
+                                    None => union.push((w, m)),
+                                }
+                            }
+                        }
+                        union.sort_unstable_by_key(|&(w, _)| w);
+                        let dirty =
+                            gate_test(&lc.builder, i64t, arena, g, &union);
+                        let orun = ctx.append_basic_block(func, "orun");
+                        let ocont = ctx.append_basic_block(func, "ocont");
+                        lc.builder
+                            .build_conditional_branch(dirty, orun, ocont)
+                            .unwrap();
+                        lc.builder.position_at_end(orun);
+                        run_close = Some((re, ocont));
+                    }
                     // activity gating: pure sched cones sit behind a
                     // dirty test — (mask AND current-dirty) == 0 means
                     // no input moved since this section last ran, so
@@ -1524,67 +1716,157 @@ fn lower_edge_ssa<'ctx>(
                         .and_then(|_| plan.gate_masks.get(o))
                         .and_then(|m| m.as_ref())
                         .filter(|m| !m.is_empty());
-                    match gm {
-                        Some(mask) => {
-                            let g = plan.gate.as_ref().unwrap();
-                            let mut acc = i64t.const_zero();
-                            for &(w, m) in mask {
-                                let p = unsafe {
-                                    lc.builder
-                                        .build_gep(
-                                            i64t,
-                                            arena,
-                                            &[i64t.const_int(
-                                                (g.cur_base + w) as u64,
-                                                false,
-                                            )],
-                                            "gw",
-                                        )
-                                        .unwrap()
-                                };
-                                let v = lc
-                                    .builder
-                                    .build_load(i64t, p, "gv")
+                    if plan.outline_sched && spec.autofire.is_none() {
+                        // dispatcher structure: the sched body lives in
+                        // its own bounded function (internal + noinline
+                        // — function passes stay linear per function,
+                        // and the inliner must not rebuild the
+                        // monolith); the edge fn tests and calls.
+                        // Cross-section values travel through their
+                        // CF/WF/eager slots: the plan widened the
+                        // export keep-set and emptied the hoist tables,
+                        // and gate_no_latch keeps this section's SSA
+                        // out of any cross-function cache — the same
+                        // slot fallbacks a skipped gated section
+                        // relies on (def()'s existing lattice, the one
+                        // standalone sched fns lower with).
+                        let gname = format!("gsec{k}_r{row}_s{s}");
+                        let gty = ctx
+                            .void_type()
+                            .fn_type(&[ptrt.into(), ptrt.into()], false);
+                        let gfunc = module.add_function(&gname, gty, None);
+                        gfunc.set_linkage(
+                            inkwell::module::Linkage::Internal,
+                        );
+                        gfunc.add_attribute(
+                            inkwell::attributes::AttributeLoc::Function,
+                            ctx.create_enum_attribute(
+                                inkwell::attributes::Attribute::get_named_enum_kind_id(
+                                    "noinline",
+                                ),
+                                0,
+                            ),
+                        );
+                        {
+                            let mut lo = Lower {
+                                env,
+                                ctx,
+                                module,
+                                builder: ctx.create_builder(),
+                                cbs,
+                                spec,
+                                token_kind: 0,
+                                outlined,
+                                helper_self: None,
+                                dedup: None,
+                                foreign_stmts: Vec::new(),
+                                prim_calls: Vec::new(),
+                                edge: Some(EdgeCtx {
+                                    exports: exports_rc.clone(),
+                                    gate_no_latch: true,
+                                    ..Default::default()
+                                }),
+                            };
+                            let gentry =
+                                ctx.append_basic_block(gfunc, "entry");
+                            lo.builder.position_at_end(gentry);
+                            let mut gf = Frame {
+                                arena: gfunc
+                                    .get_nth_param(0)
                                     .unwrap()
-                                    .into_int_value();
-                                let a = lc
-                                    .builder
-                                    .build_and(
-                                        v,
-                                        i64t.const_int(m, false),
-                                        "ga",
+                                    .into_pointer_value(),
+                                envp: Some(
+                                    gfunc
+                                        .get_nth_param(1)
+                                        .unwrap()
+                                        .into_pointer_value(),
+                                ),
+                                inst: spec.inst,
+                                method_idx: None,
+                                args: HashMap::new(),
+                                ssa: HashMap::new(),
+                                expanding: Vec::new(),
+                                thunks: HashMap::new(),
+                                av_widths: HashMap::new(),
+                                dead_defs: Default::default(),
+                                tasks: HashMap::new(),
+                                av_slots: HashMap::new(),
+                                av_args: HashMap::new(),
+                                is_exec: false,
+                                depth: 0,
+                            };
+                            lo.sched_section(&mut gf)?;
+                            lo.builder.build_return(None).unwrap();
+                        }
+                        let cargs: [inkwell::values::BasicMetadataValueEnum;
+                            2] = [arena.into(), envp.into()];
+                        match gm {
+                            Some(mask) => {
+                                let g = plan.gate.as_ref().unwrap();
+                                let dirty = gate_test(
+                                    &lc.builder,
+                                    i64t,
+                                    arena,
+                                    g,
+                                    mask,
+                                );
+                                let run_bb =
+                                    ctx.append_basic_block(func, "grun");
+                                let cont_bb =
+                                    ctx.append_basic_block(func, "gcont");
+                                lc.builder
+                                    .build_conditional_branch(
+                                        dirty, run_bb, cont_bb,
                                     )
                                     .unwrap();
-                                acc = lc.builder.build_or(acc, a, "go").unwrap();
+                                lc.builder.position_at_end(run_bb);
+                                lc.builder
+                                    .build_call(gfunc, &cargs, "")
+                                    .unwrap();
+                                lc.builder
+                                    .build_unconditional_branch(cont_bb)
+                                    .unwrap();
+                                lc.builder.position_at_end(cont_bb);
                             }
-                            let dirty = lc
-                                .builder
-                                .build_int_compare(
-                                    IntPredicate::NE,
-                                    acc,
-                                    i64t.const_zero(),
-                                    "gd",
-                                )
-                                .unwrap();
-                            let run_bb =
-                                ctx.append_basic_block(func, "grun");
-                            let cont_bb =
-                                ctx.append_basic_block(func, "gcont");
-                            lc.builder
-                                .build_conditional_branch(
-                                    dirty, run_bb, cont_bb,
-                                )
-                                .unwrap();
-                            lc.builder.position_at_end(run_bb);
-                            lc.edge.as_mut().unwrap().gate_no_latch = true;
-                            lc.sched_section(&mut f)?;
-                            lc.edge.as_mut().unwrap().gate_no_latch = false;
-                            lc.builder
-                                .build_unconditional_branch(cont_bb)
-                                .unwrap();
-                            lc.builder.position_at_end(cont_bb);
+                            None => {
+                                lc.builder
+                                    .build_call(gfunc, &cargs, "")
+                                    .unwrap();
+                            }
                         }
-                        None => lc.sched_section(&mut f)?,
+                    } else {
+                        match gm {
+                            Some(mask) => {
+                                let g = plan.gate.as_ref().unwrap();
+                                let dirty = gate_test(
+                                    &lc.builder,
+                                    i64t,
+                                    arena,
+                                    g,
+                                    mask,
+                                );
+                                let run_bb =
+                                    ctx.append_basic_block(func, "grun");
+                                let cont_bb =
+                                    ctx.append_basic_block(func, "gcont");
+                                lc.builder
+                                    .build_conditional_branch(
+                                        dirty, run_bb, cont_bb,
+                                    )
+                                    .unwrap();
+                                lc.builder.position_at_end(run_bb);
+                                lc.edge.as_mut().unwrap().gate_no_latch =
+                                    true;
+                                lc.sched_section(&mut f)?;
+                                lc.edge.as_mut().unwrap().gate_no_latch =
+                                    false;
+                                lc.builder
+                                    .build_unconditional_branch(cont_bb)
+                                    .unwrap();
+                                lc.builder.position_at_end(cont_bb);
+                            }
+                            None => lc.sched_section(&mut f)?,
+                        }
                     }
                 }
                 // activity gating, consume the write-mark scratch: a
@@ -1668,6 +1950,17 @@ fn lower_edge_ssa<'ctx>(
                         lc.builder
                             .build_store(gp(g.scratch), i64t.const_zero())
                             .unwrap();
+                    }
+                }
+                // close an outer group guard at its run's last member:
+                // the dirty path rejoins the skip path's continuation
+                if let Some((re, ocont)) = run_close {
+                    if re == s {
+                        lc.builder
+                            .build_unconditional_branch(ocont)
+                            .unwrap();
+                        lc.builder.position_at_end(ocont);
+                        run_close = None;
                     }
                 }
                 cur = lc.builder.get_insert_block().unwrap();
@@ -1833,7 +2126,9 @@ struct EdgeCtx<'ctx> {
     /// Everything else is dead weight in the specialized compile
     /// (Ravi: speed first — the slot-level debug contract is not part
     /// of the edge-SSA artifact surface).
-    exports: std::collections::HashSet<u32>,
+    /// (Rc: under sched outlining every section's fresh EdgeCtx shares
+    /// the one keep-set — the clone is a pointer bump, not a rebuild)
+    exports: std::rc::Rc<std::collections::HashSet<u32>>,
     /// position-latched values: CF/WF and eager defs at their compute
     /// position — what the arena slots hold.  NEVER evicted (eviction
     /// would change latched semantics, not just performance).

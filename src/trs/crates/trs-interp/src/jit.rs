@@ -977,9 +977,12 @@ enum EmitFail {
     Ineligible(String),
     Infra(String),
     /// an edge fn exceeded the instruction budget: the MEASURED
-    /// oversized inlined sections (ordinals) — the caller extends the
-    /// plan's outlined set and re-emits (see EDGE_INSN_BUDGET)
-    EdgeOverBudget(std::collections::HashSet<usize>),
+    /// oversized inlined sections (ordinals) plus the largest measured
+    /// edge-fn size — the caller extends the plan's outlined set and
+    /// re-emits (see EDGE_INSN_BUDGET), or, when no exec victims
+    /// remain, decides by size between the inline monolith and the
+    /// sched-outline dispatcher
+    EdgeOverBudget(std::collections::HashSet<usize>, u64),
 }
 
 #[cfg(feature = "jit")]
@@ -1109,7 +1112,10 @@ fn aot_emit(
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?
         {
             trs_codegen::lower::DesignObject::Object(o) => o,
-            trs_codegen::lower::DesignObject::EdgeOverBudget(sizes) => {
+            trs_codegen::lower::DesignObject::EdgeOverBudget(
+                sizes,
+                edge_insns,
+            ) => {
                 // pick MEASURED victims: per over-budget comp, largest
                 // inlined sections first until the comp fits
                 let mut victims: std::collections::HashSet<usize> =
@@ -1130,7 +1136,7 @@ fn aot_emit(
                         total -= i;
                     }
                 }
-                return Err(EmitFail::EdgeOverBudget(victims));
+                return Err(EmitFail::EdgeOverBudget(victims, edge_insns));
             }
         };
         if std::env::var_os("TRS_JIT_TIME").is_some() {
@@ -2974,6 +2980,10 @@ impl Interp {
         // replan pass): joined into outlined_execs before any sharing/
         // hoist/elision table is computed, so the plan stays coherent
         forced_outline: &std::collections::HashSet<usize>,
+        // sched sections forced OUTLINED by the measured edge budget
+        // (the replan pass found the remaining mass is sched code, the
+        // shape with no exec victims left) — see EdgeSsaPlan::outline_sched
+        forced_outline_sched: bool,
         // activity-gating dirty-region geometry (allocated by
         // jit_plan for every request kind); None = the caller forbids
         // gating for this plan (stats runs, traced artifacts)
@@ -3761,6 +3771,29 @@ impl Interp {
             && nodes.len() == 1
             && !self.vcd_trace
             && std::env::var("TRS_GATING").as_deref() == Ok("1");
+        // dispatcher structure: outline sched sections when the budget
+        // replan demands it (sched mass over the SCHED_OUTLINE
+        // threshold with no exec victims left — the Toooba link
+        // shape), or forced for witnesses.  NOT tied to gating: the
+        // Flute A/B measured outlining at 0.68x of the inline shape
+        // (lost cross-section SSA sharing + 372 calls/edge), so gating
+        // keeps its measured inline form unless the size dial rules
+        // inline out.  Traced plans keep the inline shape too.
+        let outline_sched = !self.vcd_trace
+            && (forced_outline_sched
+                || std::env::var("TRS_JIT_OUTLINE").as_deref() == Ok("1"));
+        // outlined sections cannot consume spine SSA: a hoisted def
+        // computed in the dispatcher does not dominate (or even reach)
+        // another function's body — sections recompute pure shared
+        // cones locally and reload slot-carried defs (def()'s existing
+        // fallbacks, the same lattice standalone sched fns lower with)
+        if outline_sched {
+            for comp in hoists.iter_mut() {
+                for q in comp.iter_mut() {
+                    q.clear();
+                }
+            }
+        }
         let mut gate_masks: Vec<Option<Vec<(u32, u64)>>> = Vec::new();
         let mut dirty_sync: Vec<Vec<(u32, u64)>> = Vec::new();
         let mut dirty_bypass: Vec<Vec<(u32, u64)>> = Vec::new();
@@ -3972,7 +4005,7 @@ impl Interp {
         // edge-cache miss — the miss is NEW: ungated edges always
         // insert into the cache).  The epilogue and exec-site bypass
         // ORs also load every WF slot.  Same keep-set as has_early.
-        if gating_on {
+        if gating_on || outline_sched {
             for e in inst_envs.values() {
                 export_slots.extend(e.cfwf_slot.values().copied());
                 export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
@@ -4026,6 +4059,7 @@ impl Interp {
             sched_over: Vec::new(),
             ord_fnodes: HashMap::new(),
             export_slots,
+            outline_sched,
             gate: gating_on.then_some(gate).flatten(),
             gate_masks,
             dirty_sync,
@@ -5224,7 +5258,7 @@ impl Interp {
                 .collect();
             let _ = self.edge_ssa_plan(
                 &inst_envs, &nodes, &specs, has_early, true,
-                &Default::default(), None,
+                &Default::default(), false, None,
             );
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
@@ -5790,7 +5824,8 @@ impl Interp {
                     rep_of[m] = *rep;
                 }
             }
-            let mk_edge_plan = |forced: &std::collections::HashSet<usize>| {
+            let mk_edge_plan = |forced: &std::collections::HashSet<usize>,
+                                outline_sched: bool| {
                 (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
                     let mut plan = self.edge_ssa_plan(
                         &inst_envs,
@@ -5799,6 +5834,7 @@ impl Interp {
                         has_early,
                         false,
                         forced,
+                        outline_sched,
                         Some(gate_layout),
                     );
                     // traced artifacts keep wire ticks boxed: the tick
@@ -5884,8 +5920,9 @@ impl Interp {
             // over budget: iterate (the forced set only grows, so this
             // terminates), with a round cap as the safety valve
             let mut rounds = 0u32;
+            let mut outline_sched = false;
             let result = loop {
-                let edge_plan = mk_edge_plan(&forced);
+                let edge_plan = mk_edge_plan(&forced, outline_sched);
                 match aot_emit(
                     &self.d,
                     &inst_envs,
@@ -5911,19 +5948,57 @@ impl Interp {
                     &bdpi_names,
                     budget_now,
                 ) {
-                    Err(EmitFail::EdgeOverBudget(victims)) => {
+                    Err(EmitFail::EdgeOverBudget(victims, edge_insns)) => {
                         if std::env::var_os("TRS_JIT_TRACE").is_some() {
                             eprintln!(
-                                "trs jit: edge over budget — replanning \
-                                 with {} measured sections outlined",
+                                "trs jit: edge over budget ({edge_insns} \
+                                 insns) — replanning with {} measured \
+                                 sections outlined",
                                 victims.len()
                             );
                         }
                         rounds += 1;
-                        // no exec sections left to outline (the
-                        // remainder is sched code) or the round cap:
-                        // accept — the O1 size tier is the backstop
-                        if victims.is_empty() || rounds >= 4 {
+                        // no exec sections left to outline: the
+                        // remainder is sched code.  Below the sched-
+                        // outline threshold, ACCEPT the inline
+                        // monolith — cross-section SSA sharing is
+                        // worth 1.4x wall on Flute (measured: outlined
+                        // 34.7s vs inline 23.7s busy), and the
+                        // pipeline handles Flute-scale functions
+                        // (~250k insns) fine.  Above it, outline the
+                        // sched sections (the dispatcher structure) —
+                        // the Toooba-scale shape where early-cse's
+                        // superlinear dominated-use rewrites wedge the
+                        // link outright (>39min DNF).  Already
+                        // outlined and still over, or the round cap:
+                        // accept — every remaining function is bounded
+                        // and the per-function insn backstop in
+                        // run_ir_passes covers stragglers.
+                        if victims.is_empty() {
+                            let sched_budget: u64 = std::env::var(
+                                "TRS_JIT_SCHED_OUTLINE_BUDGET",
+                            )
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(1_000_000);
+                            if outline_sched
+                                || sched_budget == 0
+                                || edge_insns < sched_budget
+                            {
+                                budget_now = 0;
+                            } else {
+                                outline_sched = true;
+                                if std::env::var_os("TRS_JIT_TRACE")
+                                    .is_some()
+                                {
+                                    eprintln!(
+                                        "trs jit: sched mass over budget \
+                                         — outlining sched sections"
+                                    );
+                                }
+                            }
+                        }
+                        if rounds >= 5 {
                             budget_now = 0;
                         }
                         forced.extend(victims);
@@ -6074,7 +6149,7 @@ impl Interp {
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
                 Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
                 // the unbounded second pass cannot report over-budget
-                Err(EmitFail::EdgeOverBudget(_)) => unreachable!(),
+                Err(EmitFail::EdgeOverBudget(..)) => unreachable!(),
             });
             return None;
         }

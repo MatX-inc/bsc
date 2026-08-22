@@ -572,6 +572,20 @@ pub struct EdgeSsaPlan {
     /// stability contract; defs ABSENT from this table must never be
     /// cached across sections (conservative)
     pub def_reads: HashMap<(usize, StrId), Vec<usize>>,
+    /// sched sections lower as OUTLINED per-section functions behind a
+    /// test-and-call dispatcher in the edge fn (the structure dial):
+    /// cross-section values travel through their CF/WF/eager slots
+    /// (export_slots is widened to all of them; hoists are empty —
+    /// spine SSA cannot dominate another function's body).  Engaged
+    /// when the measured edge fn exceeds TRS_JIT_SCHED_OUTLINE_BUDGET
+    /// with no exec victims left (the Toooba link shape: one
+    /// monolithic edge fn wedges LLVM's early-cse<memssa>, whose
+    /// dominated-use rewrites are superlinear in function size), or
+    /// via TRS_JIT_OUTLINE=1.  NOT implied by gating: outlining
+    /// measured 0.68x of the inline shape on Flute (lost cross-section
+    /// SSA sharing), so it stays a link-scaling dial.  Combined with
+    /// gating, a skipped section's call is never even fetched.
+    pub outline_sched: bool,
     /// per composition, per section index: shared PURE defs to hoist
     /// (computed unconditionally before the section — first-consumer
     /// position; pure = no warning-emitting or callback reads, so the
