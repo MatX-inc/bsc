@@ -402,6 +402,23 @@ tUInt32 bk_max_event_queue_depth(tModel model)
   return ((Model*) model)->get_max_event_queue_depth();
 }
 
+/* The design's static stack-depth bound in bytes (see
+ * bluesim_kernel_api.h for the exact semantics and exclusions).
+ * The value is computed at link time by bluesim_stack_bound.py and
+ * injected as the strong definition of bs_stack_depth_bound in a
+ * small generated TU; a link without that TU (a SystemC build, or a
+ * link done outside bsc) picks up the weak 0 default from
+ * stack_bound_default.cxx instead, i.e. "no bound available".
+ */
+extern "C" { extern const tUInt64 bs_stack_depth_bound; }
+
+tUInt64 bk_stack_depth_bound(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return bs_stack_depth_bound;
+}
+
 /* Non-allocating introspection walkers over the static descriptor
  * tables the code generator emits into the model: state elements and
  * top-module input/output ports, with the flat layout documented in

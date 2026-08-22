@@ -4,3 +4,5 @@ test_hdr.cxx
 *.o
 *.d
 lib*.a
+*.su
+*.ci
