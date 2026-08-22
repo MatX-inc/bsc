@@ -95,6 +95,15 @@ class Model
  // Declare the destructor as virtual, so that the derived destructor is used
  public:
   virtual ~Model() { };
+
+  // Models are never deleted through the allocator -- the generated
+  // MODEL_* object is a static instance inside its shared object --
+  // but the virtual destructor makes the compiler emit a deleting
+  // destructor that would otherwise reference the global operator
+  // delete.  This class-scope operator delete keeps that reference
+  // (and the allocator import it would create) out of the generated
+  // code; it can never actually run.
+  static void operator delete(void*) {}
 };
 
 #endif /* __BS_MODEL_H__ */

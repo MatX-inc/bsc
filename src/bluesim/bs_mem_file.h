@@ -17,6 +17,15 @@ class FormatHandler
  public:
   FormatHandler() {}
   virtual ~FormatHandler() {}
+
+  // Format handlers are never heap-allocated (the memory primitives
+  // build them on the stack while preloading), but the virtual
+  // destructor makes the compiler emit deleting destructors that
+  // would otherwise reference the global operator delete.  This
+  // class-scope operator delete keeps that reference (and the
+  // allocator import it would create) out of the generated code; it
+  // can never actually run.
+  static void operator delete(void*) {}
   virtual tMemFileStatus updateAddress(const char* addr_str) = 0;
   virtual tMemFileStatus setEntry(const char* data_str) = 0;
   virtual void checkRange(tSimStateHdl simHdl,

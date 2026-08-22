@@ -309,6 +309,11 @@ INDIRECT_SITE_TABLE = [
     # host and calls back into the primitive being preloaded; the
     # callbacks are non-virtual members, but the reads are host ops.
     (r"\b(read_mem_file|MemFileParser|parse_mem)", ["HOST_OPS"]),
+    # The Bluesim allocator's arena-exhaustion report writes through
+    # the host ops (arena_exhausted() is file-static and may be
+    # inlined into alloc_mem).
+    (r"^void\* alloc_mem\(", ["HOST_OPS"]),
+    (r"^void (free_mem|arena_exhausted)\(", ["HOST_OPS"]),
 ]
 
 # Conservative per-call stack allowances, in bytes, for external
@@ -336,6 +341,10 @@ EXTERNAL_ALLOWANCES = [
     (r"^(strtol|strtoul|strtoll|strtoull|strtod|atoi|atol)$", 2048),
     # allocator family (glibc malloc worst path: arena setup + mmap)
     (r"^(malloc|free|cfree|calloc|realloc|posix_memalign|strdup)$", 8192),
+    # the Bluesim allocator's unbounded fallback hooks: thin wrappers
+    # over operator new[]/delete[], defined only in models with BDPI
+    # imports (weak-undefined -- never called -- elsewhere)
+    (r"^bs_mem_heap_(alloc|free)$", 8192 + 1024),
     (r"\boperator (new|delete)\s*(\[\])?\s*\(", 8192),
     (r"^_Z(nw|na|dl|da)m?", 8192),
     # out-of-line libstdc++ helpers (extern-template std::string,
