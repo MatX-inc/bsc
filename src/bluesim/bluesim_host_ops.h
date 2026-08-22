@@ -43,6 +43,19 @@ extern "C" {
 #define own
 #endif
 
+/* Marker for operations that must not return: after reporting the
+ * condition, the host must terminate execution (as the default
+ * implementation does with abort()) or unwind past the runtime by a
+ * mechanism of its own (e.g. longjmp to a point outside the kernel;
+ * the simulation state may not be used again afterwards).  The
+ * runtime traps if such an operation returns.
+ */
+#if defined(__GNUC__)
+#define BS_HOST_NORETURN __attribute__((noreturn))
+#else
+#define BS_HOST_NORETURN
+#endif
+
 /* An opaque handle to a host output/input stream.  The host owns the
  * underlying object (a FILE* in the default implementation); the
  * runtime only stores and forwards these handles.
@@ -60,7 +73,7 @@ typedef enum { BS_HOST_STDIN  = 0
  * refuses a table whose version (or size) is older than the one it
  * was compiled against.
  */
-#define BS_HOST_OPS_VERSION 1u
+#define BS_HOST_OPS_VERSION 2u
 
 struct bs_host_ops {
   /* The size in bytes of the structure as compiled into the host,
@@ -139,6 +152,17 @@ struct bs_host_ops {
                          size_t buf_size,
                          const char* format,
                          double value);
+
+  /* -- Operations below were appended in version 2 -- */
+
+  /* Report that the model attempted to divide by zero, and terminate
+   * execution: this operation must not return (see BS_HOST_NORETURN
+   * above).  'description' is a static string describing the
+   * operation, phrased to fit a message of the form
+   * "<description> by zero" (e.g. "wide integer division").
+   */
+  void (*divide_by_zero)(void* ctx,
+                         const char* description) BS_HOST_NORETURN;
 
   /* New operations are appended here in later versions; each
    * addition bumps BS_HOST_OPS_VERSION.

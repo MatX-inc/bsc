@@ -746,6 +746,44 @@ maskedPrim2 ret out_width op op_name arg1 arg2 =
          then return v
          else return $ addMask out_width v
 
+-- Generate an expression for a division operator (quot or rem).
+-- This is maskedPrim2, except that C/C++ division by zero is
+-- undefined behavior (x86 traps, arm64 silently yields 0), so a
+-- narrow divisor which is not a known non-zero constant is wrapped
+-- in a guard (primChkDiv in bs_prim_ops.h) which reports a zero
+-- divisor through the divide_by_zero host operation and does not
+-- return.  This covers signed division too, since the Prelude
+-- implements it by stripping the signs and calling the unsigned
+-- primitives.  A wide divisor needs no emitted guard: the wide
+-- operations (wop_quot/wop_rem and WideData's operator/ and
+-- operator%) all funnel into wide_quot_rem in the runtime library,
+-- which performs the same check itself.
+divPrim :: (Maybe (Bool,AId)) -> Integer
+        -> (CCExpr -> CCExpr -> CCExpr) -> String
+        -> AExpr -> AExpr -> ExprConv
+divPrim ret out_width op op_name arg1 arg2 =
+    do wdata_test <- getWDataTest
+       v1 <- aExprToCExpr noRet arg1
+       v2 <- aExprToCExpr noRet arg2
+       let needs_guard = (aSize arg2 <= 64) &&
+                         (case getConstVal arg2 of
+                            Just v  -> v == 0
+                            Nothing -> True)
+           g_v2 = if needs_guard
+                  then (var "primChkDiv") `cCall` [v2]
+                  else v2
+           (w_ret,w_wret) = -- w_wret is true if ret exists & is wide-data
+               case ret of
+                 Nothing            -> ([], False)
+                 (Just (False,aid)) -> ([aDefIdToC aid], (wdata_test aid))
+                 (Just (True,aid))  -> ([aPortIdToC aid], (wdata_test aid))
+       if w_wret
+         then do let wop_name = var ("wop_"++op_name)
+                 return $ wop_name `cCall` ([v1, v2]++w_ret)
+         else if out_width > 64
+              then return $ v1 `op` g_v2
+              else return $ addMask out_width (v1 `op` g_v2)
+
 -- Generate an expression for a multiplication operator.
 -- Multiplication is special because we want to use the built-in operator
 -- but must also deal with the larger size of the result,
@@ -971,9 +1009,9 @@ aExprToCExpr ret p@(APrim _ _ PrimSub args) = argCount (==2) args $
 aExprToCExpr ret p@(APrim _ _ PrimMul args) = argCount (==2) args $
   mulPrim ret (aSize p) (toWString PrimMul) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimQuot args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cQuot) (toWString PrimQuot) (args!!0) (args!! 1)
+  divPrim ret (aSize p) (cQuot) (toWString PrimQuot) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimRem args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cRem) (toWString PrimRem) (args!!0) (args!! 1)
+  divPrim ret (aSize p) (cRem) (toWString PrimRem) (args!!0) (args!! 1)
 aExprToCExpr ret (APrim _ _ PrimAnd args) = argCount (>1) args $
   simplePrimN ret (cBitAnd) (toWString PrimAnd) args
 aExprToCExpr ret (APrim _ _ PrimOr args) = argCount (>1) args $

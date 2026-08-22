@@ -65,6 +65,15 @@ own tSimStateHdl bk_sync_init(tModel model, tBool master,
 const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl);
 void* bk_host_ctx(tSimStateHdl simHdl);
 
+/* Report a fatal condition in the model through the corresponding
+ * host operation and do not return.  These are called by the runtime
+ * library and by generated model code, not by embedders.
+ * bk_divide_by_zero uses the process-wide host operations (see
+ * bk_host_ops above), since division is performed in contexts that
+ * have no simulation handle at hand.
+ */
+BS_HOST_NORETURN void bk_divide_by_zero(const char* description);
+
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.
  * After bk_shutdown() is called, no other Bluesim kernel

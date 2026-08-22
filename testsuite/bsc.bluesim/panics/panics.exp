@@ -1,0 +1,26 @@
+# Tests for the noreturn "panic" host operations of bs_host_ops:
+# divide_by_zero (narrow and wide, unsigned and signed).
+# The default host implementation prints a message to stderr and
+# abort()s, so each simulation must exit nonzero with a
+# deterministic message on every architecture (Bluesim only; the
+# Verilog behavior of these constructs is unchanged and is tested
+# elsewhere, e.g. bsc.misc/divmod).
+
+set abrt [list SIGABRT 6 134]
+
+proc test_panic { top } {
+    global abrt
+    global ctest
+    if { $ctest == 1 } {
+        compile_object_pass $top.bsv $top
+        link_objects_pass $top $top
+        sim_output_status $top $abrt
+        compare_file $top.out
+    }
+}
+
+test_panic sysDivZero
+test_panic sysModZero
+test_panic sysSignedDivZero
+test_panic sysWideDivZero
+test_panic sysWideModZero

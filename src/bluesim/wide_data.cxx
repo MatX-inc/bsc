@@ -1,7 +1,7 @@
 #include <cstdlib>
 #include <cstring>
-#include <csignal>
 
+#include "bluesim_kernel_api.h"
 #include "bs_wide_data.h"
 #include "bs_mem_defines.h"
 #include "mem_alloc.h"
@@ -1216,9 +1216,11 @@ void wide_quot_rem(const WideData& v1, const WideData& v2,
     --first_divisor_bit;
   }
 
-  // handle division by zero
+  // handle division by zero: report through the host operations and
+  // do not return (bk_divide_by_zero is noreturn, so execution can
+  // never fall through to compute a garbage result)
   if (first_divisor_bit < 0)
-    raise(SIGFPE);
+    bk_divide_by_zero("wide integer division");
 
   // find the most significant bit set in the dividend
   int first_dividend_bit = dividend.size() - 1;

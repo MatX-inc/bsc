@@ -405,7 +405,8 @@ static bool check_host_ops(const struct bs_host_ops* ops)
           (ops->read        != NULL) &&
           (ops->unget_char  != NULL) &&
           (ops->flush       != NULL) &&
-          (ops->format_real != NULL));
+          (ops->format_real != NULL) &&
+          (ops->divide_by_zero != NULL));
 }
 
 /* Initialize the Bluesim kernel */
@@ -511,6 +512,32 @@ void* bk_host_ctx(tSimStateHdl simHdl)
   if (simHdl == NULL)
     return process_host_ctx;
   return simHdl->host_ctx;
+}
+
+/* Stop the process without returning, used as a backstop when a host
+ * operation that must not return does return anyway.  This traps
+ * rather than calling abort() so that the runtime stays free of libc
+ * signal machinery.
+ */
+static void halt_process(void) __attribute__((noreturn));
+static void halt_process(void)
+{
+  __builtin_trap();
+}
+
+/* Report a fatal division by zero through the process-wide host
+ * operations (division sites have no simulation handle at hand).
+ * Does not return.
+ */
+void bk_divide_by_zero(const char* description)
+{
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if (ops != NULL)
+    ops->divide_by_zero(bk_host_ctx(NULL), description);
+  /* not reached unless there are no host ops or the host's
+   * divide_by_zero operation violates its contract by returning
+   */
+  halt_process();
 }
 
 /* Add edges into the event queue for a particular clock waveform.

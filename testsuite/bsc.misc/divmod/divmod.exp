@@ -7,25 +7,25 @@ test_c_veri_bsv_modules_options DivMod {} "-no-use-negate"
 
 test_c_veri_bsv_modules_options DivModWide {} "-no-use-negate" sysDivModWide.out.expected
 
-set fpe [list SIGFPE 8 136]
+# Division by a dynamic zero calls the divide_by_zero host operation;
+# the default implementation prints a message and abort()s, on every
+# architecture (previously: an unhandled SIGFPE on x86 for narrow
+# division and for wide division via raise(), but a silent 0 result
+# on arm64 for narrow division -- GitHub #688).
+set abrt [list SIGABRT 6 134]
 
-# Test that divide-by-zero produces some failure in Bluesim
+# Test that divide-by-zero fails deterministically in Bluesim
 compile_object_pass DivideByZero.bsv sysDivideByZero
 link_objects_pass sysDivideByZero sysDivideByZero
-if { [lsearch -exact -nocase {aarch64 arm64} [which_mach]] != -1 } {
-    # This is an expected bug (GitHub #688)
-    sim_output_status sysDivideByZero 0
-} else {
-    sim_output_status sysDivideByZero $fpe
-}
+sim_output_status sysDivideByZero $abrt
 
 # In Verilog it silently produces x's
 test_veri_only_bsv DivideByZero sysDivideByZero.v.out.expected
 
-# Test that divide-by-zero produces some failure in Bluesim
+# Test that divide-by-zero fails deterministically in Bluesim
 compile_object_pass DivideByZeroWide.bsv sysDivideByZeroWide
 link_objects_pass sysDivideByZeroWide sysDivideByZeroWide
-sim_output_status sysDivideByZeroWide $fpe
+sim_output_status sysDivideByZeroWide $abrt
 
 # In Verilog it silently produces x's
 test_veri_only_bsv DivideByZeroWide sysDivideByZeroWide.v.out.expected

@@ -19,6 +19,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "bluesim_host_ops.h"
 
@@ -90,6 +91,18 @@ static inline tSInt32 bs_default_format_real(void* ctx, char* buf, size_t buf_si
   return (tSInt32) snprintf(buf, buf_size, format, value);
 }
 
+static inline void bs_default_divide_by_zero(void* ctx,
+                                             const char* description)
+    BS_HOST_NORETURN;
+static inline void bs_default_divide_by_zero(void* ctx,
+                                             const char* description)
+{
+  (void) ctx;
+  fprintf(stderr, "Error: %s by zero.\n", description);
+  fflush(stderr);
+  abort();
+}
+
 /* Get the default host operations table (constructed on first use).
  * The table is static, so it satisfies bk_sync_init()'s requirement
  * of remaining valid until bk_shutdown().
@@ -110,6 +123,7 @@ static inline const struct bs_host_ops* bs_default_host_ops(void)
     ops.unget_char  = bs_default_unget_char;
     ops.flush       = bs_default_flush;
     ops.format_real = bs_default_format_real;
+    ops.divide_by_zero = bs_default_divide_by_zero;
 
     /* Bluesim's standard output has always been line-buffered (the
      * runtime used to setlinebuf() every stream it wrote to).
