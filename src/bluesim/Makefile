@@ -45,9 +45,12 @@ LINKFILES = bs_elf_export_map.txt \
             bs_mach-o_export_map.txt
 
 # The link-time stack-depth analysis tool (see bk_stack_depth_bound()
-# in bluesim_kernel_api.h); installed alongside the libraries so that
-# bsc can run it when linking a model.
-SCRIPTS = bluesim_stack_bound.py
+# in bluesim_kernel_api.h), installed alongside the libraries so that
+# bsc can run it when linking a model; and the freestanding-ELF
+# checker, which verifies that a generated model shared object has no
+# dynamic dependencies (the testsuite runs it, and embedders can).
+SCRIPTS = bluesim_stack_bound.py \
+          bluesim_elf_check.py
 
 # -------------------------
 

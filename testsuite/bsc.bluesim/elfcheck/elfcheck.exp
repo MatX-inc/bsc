@@ -1,0 +1,84 @@
+# Enforces that generated Bluesim model shared objects are
+# freestanding, using bluesim_elf_check.py (installed with the
+# Bluesim runtime).  For each representative model the checker
+# requires:
+#
+#   * zero DT_NEEDED entries;
+#   * zero unresolved dynamic symbols (weak ones included);
+#   * no relocations needing runtime symbol resolution -- only
+#     R_*_RELATIVE base adjustments, applied before the -z relro
+#     -z now link seals the relocated data;
+#   * no system-call instructions in the executable sections (which,
+#     with the symbol check, also rules out vDSO use).
+#
+# The probes cover the runtime surface: sysElfCompute (wide data,
+# string literals, real formatting), sysElfMem (preloaded RegFile and
+# BRAM), sysElfFile (file system tasks).  sysElfBdpi covers the
+# documented exception: a model with BDPI imports keeps the
+# marshaling fallback's malloc/free (and with them DT_NEEDED on
+# libc); the checker's --bdpi mode admits exactly that exclusion list
+# and nothing more, and the same object must FAIL the strict check.
+#
+# Every probe also runs to completion through the normal flow first,
+# so the checker only ever certifies objects that demonstrably work.
+#
+# Bluesim-only, Linux-only: the property under test is the ELF image
+# of a Bluesim model.
+
+proc run_elf_check { opts so logfile expstatus } {
+    global srcdir
+    global subdir
+    global bsdir
+    global lasterr
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set errfile "[file rootname $logfile].err"
+    set tool "$bsdir/Bluesim/bluesim_elf_check.py"
+    set status [catch "exec python3 $tool $opts $so > $logfile 2> $errfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "ELF check `$opts $so' exits with expected status"
+    } else {
+        fail "ELF check `$opts $so' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 && [which_os] == "Linux" } {
+
+    # wide data, strings, reals
+    compile_object_pass sysElfCompute.bsv sysElfCompute
+    link_objects_pass {sysElfCompute} sysElfCompute
+    sim_output sysElfCompute
+    compare_file sysElfCompute.out
+    run_elf_check "" sysElfCompute.cexe.so elf_check_compute.out [list 0]
+    compare_file elf_check_compute.out
+
+    # preloaded RegFile and BRAM
+    compile_object_pass sysElfMem.bsv sysElfMem
+    link_objects_pass {sysElfMem} sysElfMem
+    sim_output sysElfMem
+    compare_file sysElfMem.out
+    run_elf_check "" sysElfMem.cexe.so elf_check_mem.out [list 0]
+    compare_file elf_check_mem.out
+
+    # file system tasks
+    compile_object_pass sysElfFile.bsv sysElfFile
+    link_objects_pass {sysElfFile} sysElfFile
+    sim_output sysElfFile
+    compare_file sysElfFile.out
+    run_elf_check "" sysElfFile.cexe.so elf_check_file.out [list 0]
+    compare_file elf_check_file.out
+
+    # BDPI: passes only with the documented exclusions admitted, and
+    # the strict check must reject the same object
+    compile_object_pass sysElfBdpi.bsv sysElfBdpi
+    link_objects_pass {sysElfBdpi} sysElfBdpi {elfbdpi_c.c}
+    sim_output sysElfBdpi
+    compare_file sysElfBdpi.out
+    run_elf_check "--bdpi" sysElfBdpi.cexe.so elf_check_bdpi.out [list 0]
+    compare_file elf_check_bdpi.out
+    run_elf_check "--quiet" sysElfBdpi.cexe.so elf_check_bdpi_strict.out [list 1]
+}
