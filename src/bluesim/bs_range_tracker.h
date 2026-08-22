@@ -1,7 +1,7 @@
 #ifndef __BS_RANGE_TRACKER_H__
 #define __BS_RANGE_TRACKER_H__
 
-#include <list>
+#include <algorithm>
 
 #include "bs_target.h"
 
@@ -24,32 +24,49 @@ bool operator< (const RangeElem<AT> & x, const RangeElem<AT> & y)
   }
 }
 
+/* The number of distinct address ranges a RangeTracker can record.
+ * The tracker exists only to warn about gaps and duplicates in
+ * memory files (see checkRange), so the ranges live in a fixed array
+ * inside the memory primitive instead of a heap container.  A
+ * memory file so scattered that it produces more disjoint ranges
+ * than this stops being tracked: checkRange then reports once that
+ * the gap and duplicate checks were skipped (the file's values are
+ * loaded either way; only the warnings are affected).
+ */
+#define BS_RANGE_TRACKER_MAX_RANGES 64u
+
 template<typename AT>
 class RangeTracker
 {
  public:
-  RangeTracker() {}
+  RangeTracker() : count(0), overflowed(false) {}
   ~RangeTracker() {}
 
  public:
   void setAddr (const AT& addr)
     {
-      if (rlist.empty()) {
+      if (overflowed) {
+	// out of fixed storage: tracking has stopped
+	return;
+      }
+      if (count == 0) {
 	// create a new entry
-	RangeElem<AT> e;
-	e.low = addr;
-	e.high = addr;
-	rlist.push_back(e);
-      } else if (addr == (rlist.back().high + 1)) {
-	rlist.back().high++;
-      } else if (addr == (rlist.back().low - 1)) {
-	rlist.back().low--;
-      } else {
+	ranges[count].low = addr;
+	ranges[count].high = addr;
+	++count;
+      } else if (addr == (ranges[count-1].high + 1)) {
+	ranges[count-1].high++;
+      } else if (addr == (ranges[count-1].low - 1)) {
+	ranges[count-1].low--;
+      } else if (count < BS_RANGE_TRACKER_MAX_RANGES) {
 	// start a new entry
-	RangeElem<AT> e;
-	e.low = addr;
-	e.high = addr;
-	rlist.push_back(e);
+	ranges[count].low = addr;
+	ranges[count].high = addr;
+	++count;
+      } else {
+	// no room for a new entry: stop tracking; checkRange
+	// reports the skipped checks once
+	overflowed = true;
       }
     }
 
@@ -57,9 +74,24 @@ class RangeTracker
 		  const char* filename, const char* memname,
 		  const AT& start, const AT& end)
     {
-      if (!rlist.empty()) {
+      if (overflowed) {
 	FileTarget dest(simHdl);
-	rlist.sort();
+	dest.write_string("Warning: file '");
+	dest.write_string(filename);
+	dest.write_string("' for memory '");
+	dest.write_string(memname);
+	dest.write_string("' has more than ");
+	dest.write_decimal((unsigned long long) BS_RANGE_TRACKER_MAX_RANGES);
+	dest.write_string(" address ranges; "
+			  "gap and duplicate checks were skipped.\n");
+	count = 0;
+	overflowed = false;
+	return;
+      }
+
+      if (count != 0) {
+	FileTarget dest(simHdl);
+	std::sort(ranges, ranges + count);
 
 	// one more than the last address seen
 	AT next_addr = start;
@@ -69,9 +101,8 @@ class RangeTracker
 	bool full = false; // set to true when next_addr passes end
 	bool overlap_full = false; // when next_overlap_addr passes end
 
-	typename std::list<RangeElem<AT> >::iterator i = rlist.begin();
-	while (i != rlist.end()) {
-	  RangeElem<AT> e = *i;
+	for (unsigned int i = 0; i < count; ++i) {
+	  RangeElem<AT> e = ranges[i];
 	  if ((e.low < next_addr) || full) {
 	    // overlap
 	    AT overlap_low = e.low;
@@ -118,8 +149,6 @@ class RangeTracker
 	      full = true;
 	    }
 	  }
-	  // next element
-	  ++i;
 	}
 
 	if (!full) {
@@ -136,8 +165,8 @@ class RangeTracker
 	  }
 	}
 
-	// the list is no longer needed
-	rlist.clear();
+	// the ranges are no longer needed
+	count = 0;
       }
     }
 
@@ -156,8 +185,9 @@ class RangeTracker
     }
 
  private:
-  std::list<RangeElem<AT> > rlist;
+  RangeElem<AT> ranges[BS_RANGE_TRACKER_MAX_RANGES];
+  unsigned int  count;
+  bool          overflowed;
 };
 
 #endif /* __BS_RANGE_TRACKER_H__ */
-
