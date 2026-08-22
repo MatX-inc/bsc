@@ -3543,10 +3543,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // other rules' fire signals read their (already computed) slots;
         // this rule's own CF/WF must expand its cone instead — the sched
         // fn is what computes those slots
-        let own = f.inst == self.spec.inst && {
-            let r = self.rule();
-            n == r.can_fire || n == r.will_fire
-        };
+        // auto-fire pseudo-specs have no rule (synthetic rule_idx) and
+        // no own CF/WF — every fire signal reads its computed slot
+        let own = f.inst == self.spec.inst
+            && self.spec.autofire.is_none()
+            && {
+                let r = self.rule();
+                n == r.can_fire || n == r.will_fire
+            };
         if !own {
             if let Some(&slot) = ie.cfwf_slot.get(&n) {
                 edge_ssa_count(0, 1);
@@ -4024,6 +4028,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// is at the section's top level, so recording it in the edge
     /// cache is dominance-safe.
     fn sched_section(&mut self, f: &mut Frame<'ctx>) -> Result<(), Ineligible> {
+        if self.spec.autofire.is_some() {
+            // auto-fire pseudo-spec: nothing to latch — the method
+            // executes unconditionally at its Exec anchor
+            return Ok(());
+        }
         let r = self.rule().clone();
         // EFFECTFUL eager defs latch FIRST, in list order — the
         // interpreter evaluates REntry::eager into the latch before
@@ -4148,6 +4157,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         func: FunctionValue<'ctx>,
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<(), Ineligible> {
+        if let Some(af) = self.spec.autofire.clone() {
+            return self.autofire_section(f, func, stop_bb, &af);
+        }
         let r = self.rule().clone();
         let body_bb = self.ctx.append_basic_block(func, "body");
         let cont_bb = self.ctx.append_basic_block(func, "cont");
@@ -4175,6 +4187,98 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.stmts(f, func, &r.body, stop_bb)?;
         self.builder.build_unconditional_branch(cont_bb).unwrap();
         self.builder.position_at_end(cont_bb);
+        Ok(())
+    }
+
+    /// Auto-fired always_enabled top method (pseudo-spec): the body
+    /// inlines at its Exec anchor with EN latched, constant argument
+    /// values (the baked bindings), and the sibling RDY_<m> wrap — the
+    /// compiled twin of the interpreter's call_action at the cut.
+    /// always_fire on the pseudo-spec skipped the WF gate; only RDY
+    /// gates the body (the C++ check_rdy wrapper), absent = ready.
+    fn autofire_section(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        af: &crate::abi::AfSpec,
+    ) -> Result<(), Ineligible> {
+        let ie = self.ie(f.inst)?;
+        let mir = ie.mir;
+        let m = &self.env.d.modules[mir].methods[af.method_idx];
+        if !matches!(m.kind, trs_ir::MethodKind::Action) {
+            return nope("auto-fire on a non-Action method");
+        }
+        if !m.always_enabled || m.args.len() != af.argv.len() {
+            return nope("auto-fire spec out of step with the method");
+        }
+        let (margs, body, mname) = (m.args.clone(), m.body.clone(), m.name);
+        // sibling RDY_<m> lookup — same rule as the interp's
+        // always_en_rdy and the parent-call inline: no RDY method
+        // exported = constant ready
+        let rdy = {
+            let rdy_name =
+                format!("RDY_{}", self.env.d.strings[mname as usize]);
+            self.env
+                .d
+                .strings
+                .iter()
+                .position(|x| x == &rdy_name)
+                .and_then(|id| {
+                    self.env.d.modules[mir]
+                        .methods
+                        .iter()
+                        .enumerate()
+                        .find(|(_, mm)| mm.name == id as StrId)
+                        .map(|(mi, mm)| (mi, mm.result.clone()))
+                })
+        };
+        let en_slot = {
+            let en_name =
+                format!("EN_{}", self.env.d.strings[mname as usize]);
+            self.env
+                .d
+                .strings
+                .iter()
+                .position(|x| x == &en_name)
+                .and_then(|id| ie.en_slot.get(&(id as StrId)).copied())
+        };
+        // callee frame on the top itself, args bound to the baked
+        // constants (limbs pre-normalized to ceil(width/64) words)
+        let mut cf = self.child_frame(f, f.inst, Some(af.method_idx))?;
+        for (pa, (_, limbs)) in margs.iter().zip(&af.argv) {
+            let v = self
+                .ity(pa.width.max(1))
+                .const_int_arbitrary_precision(limbs);
+            cf.args.insert(pa.name, (v, pa.width));
+        }
+        if let Some(slot) = en_slot {
+            let one = self.ctx.i64_type().const_int(1, false);
+            self.store_word(&cf, slot, one);
+        }
+        let rec_argv: Vec<_> = margs
+            .iter()
+            .filter_map(|pa| cf.args.get(&pa.name).copied())
+            .collect();
+        self.rec_meth_call(&cf, f.inst, mname, &rec_argv)?;
+        let sk_bb = self.ctx.append_basic_block(func, "afsk");
+        match rdy {
+            Some((mi_r, Some(res))) => {
+                let mut rf = self.child_frame(f, f.inst, Some(mi_r))?;
+                let r = self.expr(&mut rf, &res)?;
+                let rz = self.nonzero(r, 1);
+                let bd_bb = self.ctx.append_basic_block(func, "afrdy");
+                self.builder
+                    .build_conditional_branch(rz, bd_bb, sk_bb)
+                    .unwrap();
+                self.builder.position_at_end(bd_bb);
+            }
+            Some((_, None)) => return nope("RDY method without result"),
+            None => {}
+        }
+        self.stmts(&mut cf, func, &body, stop_bb)?;
+        self.builder.build_unconditional_branch(sk_bb).unwrap();
+        self.builder.position_at_end(sk_bb);
         Ok(())
     }
 

@@ -1950,6 +1950,13 @@ impl Interp {
         if rcomps.iter().any(|rc| !rc.alts.is_empty()) {
             ineligible(&mut r_reason, "dynamic scheduling (alts)");
         }
+        // auto-fire designs (compiled via pseudo-specs) stay RunCore-
+        // ineligible v1: the boot's baked plan replay knows nothing of
+        // the per-edge anchor invocations, and such designs usually
+        // carry bindings anyway (which the boot hook already refuses)
+        if !self.autofire.is_empty() {
+            ineligible(&mut r_reason, "top always_enabled autofire");
+        }
         // the boot parser caps LOADS rows (hostile-file bound): refuse
         // HERE, where a reason can be recorded, rather than bake a
         // sidecar every boot silently rejects (review finding)
@@ -3329,12 +3336,25 @@ impl Interp {
             write_memo: HashMap::new(),
         };
 
+        // one body resolver for rule specs AND auto-fire pseudo-specs
+        // (whose synthetic rule_idx must never index rules): the
+        // method body is the section body, so its cones and write
+        // sets analyze exactly like a rule's
+        let spec_body = |o: usize| -> Vec<Stmt> {
+            let sp = &specs[o];
+            let mir = inst_envs[&sp.inst].mir;
+            match &sp.autofire {
+                Some(af) => {
+                    self.d.modules[mir].methods[af.method_idx].body.clone()
+                }
+                None => self.d.modules[mir].rules[sp.rule_idx].body.to_vec(),
+            }
+        };
         // per-ordinal exec write sets (all rules, once)
         let mut exec_writes: Vec<Vec<usize>> = Vec::with_capacity(specs_lite.len());
         let mut write_sets: Vec<HashSet<usize>> = Vec::with_capacity(specs_lite.len());
-        for &(inst, ridx) in specs_lite {
-            let mir = inst_envs[&inst].mir;
-            let body = self.d.modules[mir].rules[ridx].body.clone();
+        for (o, &(inst, _ridx)) in specs_lite.iter().enumerate() {
+            let body = spec_body(o);
             let mut w = HashSet::new();
             stmt_writes(&mut cx, inst, &body, &mut w);
             let mut v: Vec<usize> = w.iter().copied().collect();
@@ -3379,9 +3399,8 @@ impl Interp {
                     if !is_exec {
                         return None;
                     }
-                    let (inst, ridx) = specs_lite[o];
-                    let mir = inst_envs[&inst].mir;
-                    let body = self.d.modules[mir].rules[ridx].body.clone();
+                    let (inst, _ridx) = specs_lite[o];
+                    let body = spec_body(o);
                     let mut c = Cone::default();
                     for st in body.iter() {
                         walk_stmt_defs(&mut cx, inst, st, &mut c);
@@ -3711,9 +3730,8 @@ impl Interp {
         }
         for &o in &outlined_execs {
             export_slots.insert(specs[o].wf_slot);
-            let (inst, ridx) = specs_lite[o];
-            let mir = inst_envs[&inst].mir;
-            let body = self.d.modules[mir].rules[ridx].body.clone();
+            let (inst, _ridx) = specs_lite[o];
+            let body = spec_body(o);
             let mut c = Cone::default();
             for st in body.iter() {
                 walk_stmt_defs(&mut cx, inst, st, &mut c);
@@ -3868,14 +3886,22 @@ impl Interp {
             }
             return None;
         }
-        // batch auto-fire of always_enabled top methods runs on the
-        // interpreted entries loop: compiled call sites exist only
-        // for parent-fused method calls, and the auto-fire positions
-        // (segment cuts) are not in the compiled node stream — the
-        // documented v1 engine contract for such designs is interp
-        // (the regress battery and the sweep's engine column assert
-        // this reason)
-        if !self.autofire.is_empty() {
+        // batch auto-fire of always_enabled top methods compiles ONLY
+        // as edge-SSA artifact emission — pseudo exec sections at the
+        // methods' cut anchors in the node stream — or a Load of such
+        // an artifact.  The in-process JIT tier, TRS_EDGE_SSA=0, and
+        // traced plans keep the documented interp fallback (their
+        // node streams carry no anchors), mirroring the
+        // dynamic-scheduling gate below.
+        let edge_ssa_on = std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0");
+        let have_af = !self.autofire.is_empty();
+        let af_compiled = have_af
+            && match &request {
+                JitRequest::Emit { .. } => edge_ssa_on && !self.vcd_trace,
+                JitRequest::Load { .. } => true,
+                JitRequest::Run => false,
+            };
+        if have_af && !af_compiled {
             if trace {
                 eprintln!("trs jit: off (top always_enabled autofire)");
             }
@@ -3893,7 +3919,6 @@ impl Interp {
         // recording.  The alternative cap bounds edge-fn growth
         // (bodies multiply per alternative).
         let have_alts = rcomps.iter().any(|rc| !rc.alts.is_empty());
-        let edge_ssa_on = std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0");
         let alts_capped = rcomps.iter().all(|rc| rc.alts.len() <= 16);
         let alts_compiled = have_alts
             && alts_capped
@@ -4833,7 +4858,69 @@ impl Interp {
                 shared: ri.shared.clone(),
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
                 token_base: (ri.ordinal as u64) << 17,
+                autofire: None,
             });
+        }
+        // auto-fired always_enabled top methods: appended PSEUDO-SPECS,
+        // one per method in interface order — deterministic, so Emit
+        // and Load derive identical ordinals/tokens and PlanB never
+        // needs to carry them (its always_fire vec grows matching
+        // trailing `true`s, read back only for rule ordinals).
+        // always_fire skips the WF gate; the exec section inlines the
+        // method body at its anchor (lower.rs autofire_section); the
+        // synthetic rule_idx keys the dedup classes uniquely and must
+        // never index rules (every consumer branches on autofire).
+        let n_rule_specs = specs.len();
+        if af_compiled {
+            let top_inst = 0usize;
+            let tmir = self.mods[self.module_of(top_inst)].ir;
+            for (afi, (mname, argv)) in
+                self.autofire.clone().iter().enumerate()
+            {
+                let Some(mi) = self.d.modules[tmir]
+                    .methods
+                    .iter()
+                    .position(|m| m.name == *mname)
+                else {
+                    if trace {
+                        eprintln!("trs jit: off (autofire method missing)");
+                    }
+                    return None;
+                };
+                let m = &self.d.modules[tmir].methods[mi];
+                if m.args.len() != argv.len() {
+                    if trace {
+                        eprintln!("trs jit: off (autofire argv mismatch)");
+                    }
+                    return None;
+                }
+                let mut av: Vec<(u32, Vec<u64>)> = Vec::new();
+                for (pa, v) in m.args.iter().zip(argv) {
+                    let words = (pa.width.max(1) as usize).div_ceil(64);
+                    let mut limbs = v.limbs64().to_vec();
+                    limbs.resize(words, 0);
+                    av.push((pa.width, limbs));
+                }
+                let o = specs.len();
+                specs.push(RuleSpec {
+                    always_fire: true,
+                    inst: top_inst,
+                    rule_idx: usize::MAX - afi,
+                    inhibit_slots: Vec::new(),
+                    cf_slot: 0,
+                    wf_slot: 0,
+                    eager: Vec::new(),
+                    shared: Vec::new(),
+                    label: format!("af{afi}_{o}"),
+                    token_base: (o as u64) << 17,
+                    autofire: Some(trs_codegen::abi::AfSpec {
+                        method_idx: mi,
+                        method: *mname,
+                        argv: av,
+                    }),
+                });
+                sched_parts.push((0, vec![Vec::new(); rcomps.len()]));
+            }
         }
         // edge-SSA shareability analysis (task #24 M1,
         // TRS_EDGE_SSA_STATS=1): for every def consumed by 2+ exec
@@ -5056,9 +5143,20 @@ impl Interp {
 
         let comp_nodes: Vec<Option<Vec<JitNode>>> = rcomps
             .iter()
-            .map(|rc| {
+            .enumerate()
+            .map(|(rci, rc)| {
                 let mut nodes = Vec::new();
-                for en in &rc.entries {
+                // auto-fire anchors (interp parity): Exec cuts that
+                // precede every node-bearing top segment fire before
+                // the walk; the rest after their entry's nodes
+                let af_node =
+                    |mi: &usize| JitNode::Exec((n_rule_specs + *mi) as u32);
+                if af_compiled {
+                    if let Some(idxs) = self.autofire_pre.get(&rci) {
+                        nodes.extend(idxs.iter().map(af_node));
+                    }
+                }
+                for (ei, en) in rc.entries.iter().enumerate() {
                     for &node in &en.nodes {
                         let (r, is_sched) = match node {
                             SchedNode::Sched(r) => (r, true),
@@ -5083,6 +5181,11 @@ impl Interp {
                         } else {
                             JitNode::Exec(ord)
                         });
+                    }
+                    if af_compiled {
+                        if let Some(idxs) = self.autofire_at.get(&(rci, ei)) {
+                            nodes.extend(idxs.iter().map(af_node));
+                        }
                     }
                 }
                 Some(nodes)

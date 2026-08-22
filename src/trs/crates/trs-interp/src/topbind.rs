@@ -27,10 +27,14 @@
 //!   always_enabled implies RDY constant true: asserted at arm time
 //!   (a sibling RDY_<m> method must be absent or a non-zero
 //!   constant), and call_action's check_rdy still guards each fire.
-//! - Auto-fire designs run INTERPRETED: the jit plan declines with
-//!   "top always_enabled autofire" (the sweep's why= column).
-//!   Binding-only designs compile normally (params fold into
-//!   port_consts / wide_consts).
+//! - Auto-fire designs COMPILE as edge-SSA artifacts: the jit plan
+//!   appends one pseudo-spec per method (always_fire, method body
+//!   inlined at its anchor — see lower.rs autofire_section) and the
+//!   node stream carries the anchors.  The in-process JIT tier,
+//!   TRS_EDGE_SSA=0, and traced plans still decline with "top
+//!   always_enabled autofire" (the sweep's why= column for those
+//!   modes).  Binding-only designs compile normally (params fold
+//!   into port_consts / wide_consts).
 //! - Refused loudly: ActionValue or enabled_when_ready methods,
 //!   zero-width/non-Bit arguments (also refused by bsc), input clocks
 //!   or resets beyond the defaults on a top with bindable arguments,

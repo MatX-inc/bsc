@@ -205,9 +205,9 @@ check_topparam
 # EBSimEnablePragma (G0062); trs batch mode auto-fires them per cycle
 # at their schedule position (tick's state mutation is read by the
 # rule BEFORE the methods' Exec cut, so position is observable in the
-# values), with setStep's argument constant-bound.  The documented v1
-# engine contract is INTERPRETED with the specific decline reason —
-# asserted here in both spellings (the link note and the traced why).
+# values), with setStep's argument constant-bound.  The engine
+# contract is COMPILED (pseudo exec sections at the cut anchors);
+# `trs run` on the .bir still exercises the interp path above.
 check_topae() {
     name=TopAlwaysEn; top=sysTopAlwaysEn
     cp "$SRC/$name.bsv" .
@@ -224,9 +224,10 @@ check_topae() {
     if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" got.out; then
         echo "FAIL $name (run stdout, rc=$gotrc)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return
     fi
-    TRS_JIT_TRACE=1 "$TRS" link "$top.bir" +setStep.v=2 -o aeart >aelink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
-    grep -q "run interpreted" aelink.out || { echo "FAIL $name (expected interpreted artifact)"; fail=1; return; }
-    grep -q "top always_enabled autofire" aelink.out || { echo "FAIL $name (expected the autofire decline reason)"; fail=1; return; }
+    # compiled auto-fire: the artifact's edge fns carry the method
+    # bodies at their cut anchors, so the link must COMPILE —
+    # TRS_REQUIRE_AOT trips (rc 86) if the engine silently falls back
+    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" +setStep.v=2 -o aeart >aelink.out 2>&1 || { echo "FAIL $name (trs link, compiled)"; fail=1; return; }
     TRS="$TRS" ./aeart > gota.out 2>&1; gotrc=$?
     if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" gota.out; then
         echo "FAIL $name (artifact stdout, rc=$gotrc)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return

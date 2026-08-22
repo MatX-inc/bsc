@@ -1,5 +1,4 @@
 # trs-only golden-compared sweep design (see sysTopParam.trsonly.expected).
 refuse=G0062
 bind=setStep.v=2
-engine=interp
-why=top_always_enabled_autofire
+engine=aot

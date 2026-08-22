@@ -217,6 +217,21 @@ pub struct PlanEnv<'a> {
     pub d: &'a Design,
     pub insts: &'a HashMap<usize, InstEnv>,
 }
+/// One auto-fired always_enabled top method, compiled as an appended
+/// pseudo-spec.  NEVER serialized: Emit and Load both derive the same
+/// list from the design's autofire config (interface order), so
+/// PlanB's wire layout is untouched.
+#[derive(Clone)]
+pub struct AfSpec {
+    /// method index in the TOP module's method list
+    pub method_idx: usize,
+    /// method name — EN_<m>/RDY_<m> sibling lookups
+    pub method: StrId,
+    /// constant argument values in method-arg order:
+    /// (width, limbs normalized to ceil(width/64) words)
+    pub argv: Vec<(u32, Vec<u64>)>,
+}
+
 /// One rule to compile.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuleSpec {
@@ -246,6 +261,12 @@ pub struct RuleSpec {
     /// index (callers use e.g. global_rule_ordinal << 16 so one shared
     /// callback can resolve the rule and the statement)
     pub token_base: u64,
+    /// Some = auto-fire pseudo-spec: `rule_idx` is a synthetic unique
+    /// key (never index rules with it) and the exec section inlines
+    /// the method body instead.  serde(skip): PlanB only ever carries
+    /// rule specs, and both sides re-derive pseudo-specs identically.
+    #[serde(skip)]
+    pub autofire: Option<AfSpec>,
 }
 
 /// One compiled foreign call site: everything the interpreter needs
