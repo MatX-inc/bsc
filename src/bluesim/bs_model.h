@@ -19,6 +19,18 @@ class Model
   virtual time_t get_creation_time() = 0;
   virtual void * get_instance() = 0;
 
+  /* The maximum number of events this design can have live in the
+   * kernel's event queue at any one time, ASSUMING NO HOST CALLS THAT
+   * ENQUEUE EVENTS.  This is a static per-design constant computed by
+   * the code generator from the clocks and reset primitives the
+   * generated model registers (the formula is documented at the
+   * computation, in SimBlocksToC).  Host calls that enqueue events
+   * (bk_quit_at, bk_schedule_ui_event, host-invoked
+   * bk_trigger_clock_edge, bk_enable_cycle_dumping, ...) come on top
+   * of this bound; see bluesim_kernel_api.h for the per-call costs.
+   */
+  virtual tUInt32 get_max_event_queue_depth() = 0;
+
  // Require construction be of the derived classes, not this class
  protected:
   Model() { };

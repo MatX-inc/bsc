@@ -190,6 +190,8 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                            , (ptr . ptr . constant . char) (mkVar "build") ]
               , decl $ function (userType "time_t") (mkVar "get_creation_time") []
               , decl $ function (ptr . void) (mkVar "get_instance") []
+              , decl $ function (userType "tUInt32")
+                           (mkVar "get_max_event_queue_depth") []
               ]
             ]
         class_decl =
@@ -322,6 +324,107 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                      ++ (if any_false then [mkGateConst False] else [])
                 else []
 
+        -- ----------------
+        -- The design's maximum event-queue depth: an upper bound on the
+        -- number of events the generated model can have live in the
+        -- kernel's event queue at any one time, ASSUMING NO HOST CALLS
+        -- THAT ENQUEUE EVENTS (bk_quit_at, host-scheduled UI events,
+        -- host-triggered clock edges, cycle dumping, host-defined
+        -- clocks).  It is exposed through the Model virtual
+        -- get_max_event_queue_depth() and the bk_max_event_queue_depth()
+        -- kernel accessor, so that an embedder can size the fixed
+        -- event-queue capacity it passes to bk_sync_init().
+        --
+        -- The formula, derived from the enqueue sites in the kernel and
+        -- the Bluesim primitives (kernel.cxx, reset.cxx,
+        -- bs_prim_mod_clockgen.h, bs_prim_mod_clockmux.h,
+        -- bs_prim_mod_resets.h):
+        --
+        --   max = 3 + C*(5 + 2*C) + 6*R
+        --
+        -- where C = number of clock domains the model registers (one
+        -- per SimCCClockGroup, each declared with bk_get_or_define_clock
+        -- in create_model) and R = number of primitive instances whose
+        -- Bluesim implementation schedules deferred reset events
+        -- (reset_init / reset_at_end_of_timeslice).
+        --
+        -- Per-source worst-case live-event counts:
+        --
+        --  * 2: the default reset waveform (bk_use_default_reset from
+        --    create_model when master): one assert event at time 0 and
+        --    one deassert event at time 2, both non-recurring.
+        --
+        --  * 1: the UI yield event.  $stop/$finish/$fatal and a reached
+        --    bk_quit_after_edge limit schedule one yield event at the
+        --    current time; it is deduplicated per target time, so the
+        --    model on its own never holds more than one.
+        --
+        --  * 5 + 2*C per clock:
+        --      - A clock with a periodic waveform holds at most 5 live
+        --        events (setup_clock_edges): posedge + negedge events,
+        --        their two post-edge combinational events, and possibly
+        --        a time-0 initial edge.  Recurring events are re-added
+        --        only after being popped, so re-scheduling is net zero.
+        --      - A primitive-driven (aperiodic) clock (MakeClock,
+        --        ClockInverter, ClockDivider, ClockSelect, ClockMux)
+        --        holds at most 1 initial edge event
+        --        (bk_enqueue_initial_clock_edge) plus 2 events per
+        --        pending bk_trigger_clock_edge pair.  Pending pairs for
+        --        one clock alternate direction (a primitive only
+        --        triggers an edge that changes its recorded clock
+        --        value), so a new pair requires one more edge execution
+        --        of the DRIVING clock at the same instant before the
+        --        pending pairs run.  A clock executes at most
+        --        1 + (its own pending pairs) edge events at one
+        --        instant, so along a chain of derived clocks the
+        --        pending-pair bound grows by at most 1 per level; with
+        --        at most C clocks in a chain and a root holding at most
+        --        2 pending-pair-equivalents (a periodic clock's edge
+        --        events at one instant, degenerate zero-width phases
+        --        included), pending pairs per clock are bounded by
+        --        2 + C, giving 1 + 2*(2 + C) = 5 + 2*C live events.
+        --        Since 5 <= 5 + 2*C, this uniform per-clock bound
+        --        covers both kinds.
+        --
+        --  * 6 per reset-scheduling primitive instance: deferred reset
+        --    events are scheduled at the current instant
+        --    (PG_INITIAL/PG_AFTER_LOGIC) and consumed within it; a
+        --    primitive schedules at most one event per entry-point
+        --    invocation, and the largest primitive (ClockSelect) has 5
+        --    entry points that can schedule in one instant (aClk, bClk,
+        --    xclk ticks, the select method and its reset), rounded up
+        --    to 6 for margin (e.g. InitialReset's create_model-time
+        --    reset_init coinciding with its first deassert).
+        --
+        -- VCD and state-dump events no longer exist in this runtime,
+        -- and generated module code itself never schedules events; the
+        -- above sources are exhaustive.
+        num_clocks = genericLength clk_groups :: Integer
+        prim_name_map = M.fromList [ (sb_id pb, sb_name pb) | pb <- primBlocks ]
+        reset_event_prims = [ "MakeReset", "MakeResetA", "MakeReset0"
+                            , "SyncReset", "SyncResetA", "InitialReset"
+                            , "ResetMux", "ClockSelect", "UngatedClockSelect"
+                            ]
+        num_reset_prims =
+            genericLength [ ()
+                          | (_, mid) <- mkInstanceMap sb_map top_id
+                          , maybe False (`elem` reset_event_prims)
+                                  (M.lookup mid prim_name_map)
+                          ] :: Integer
+        max_event_queue_depth =
+            3 + (num_clocks * (5 + 2 * num_clocks)) + (6 * num_reset_prims)
+
+        get_max_depth_decl = function (userType "tUInt32")
+                                 (mkScopedVar "get_max_event_queue_depth") []
+        gmqd_def =
+          define get_max_depth_decl
+                 (comment ("3 (reset waveform + UI yield) + " ++
+                           (show num_clocks) ++ " clocks * (5 + 2*" ++
+                           (show num_clocks) ++ ") + " ++
+                           (show num_reset_prims) ++
+                           " reset primitives * 6; see SimBlocksToC")
+                          (ret (Just (mkUInt32 max_event_queue_depth))))
+
         -- functions for creating, destroying and resetting the model
         create_model_decl  = function void (mkScopedVar "create_model")
                                  [ (userType "tSimStateHdl") (mkVar "simHdl")
@@ -405,6 +508,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                         , destroy_model_def
                         , reset_model_def
                         , get_instance_def
+                        , comment "Maximum event-queue depth assuming no host calls that enqueue events" gmqd_def
                         ]
 
 

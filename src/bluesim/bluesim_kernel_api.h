@@ -92,6 +92,29 @@ void bk_shutdown(tSimStateHdl simHdl);
 /* Get version information about the Bluesim model */
 void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
 
+/* Get the design's maximum event-queue depth: an upper bound on the
+ * number of events the model can have live in the kernel's event
+ * queue at any one time, ASSUMING NO HOST CALLS THAT ENQUEUE EVENTS.
+ * The value is a static per-design constant computed at code
+ * generation from the clocks and reset primitives the model
+ * registers; it takes the model handle from new_MODEL_*() (not a
+ * simulation handle) so that an embedder can query it before
+ * bk_sync_init(), which is where the embedder chooses the actual
+ * event-queue capacity.
+ *
+ * Host calls that enqueue events are NOT included in this bound and
+ * must be budgeted by the embedder on top of it; each such call
+ * documents its cost below.  They are: bk_quit_at(),
+ * bk_schedule_ui_event() at times beyond the single included yield
+ * event, bk_trigger_clock_edge() and bk_enqueue_initial_clock_edge()
+ * when invoked by the embedder rather than by clock primitives,
+ * bk_enable_cycle_dumping(), and bk_define_clock()/bk_alter_clock()
+ * for clocks the embedder adds beyond those the model registers.
+ *
+ * Returns 0 if 'model' is NULL.
+ */
+tUInt32 bk_max_event_queue_depth(tModel model);
+
 /*
  * Kernel clock definition
  */
@@ -113,6 +136,12 @@ void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
  *
  * Note: when the total period is 0, it indicates that the clock is
  * to be managed explicitly by calling bk_trigger_clock_edge().
+ *
+ * Event-queue depth cost: this call enqueues no events itself, but a
+ * clock with a waveform holds up to 5 live events once its schedule
+ * callbacks are registered (see bk_set_clock_event_fn()).  Clocks the
+ * model registers are counted in bk_max_event_queue_depth(); a clock
+ * the HOST defines is not, and costs up to 5 further events.
  */
 tClock bk_define_clock(tSimStateHdl simHdl,
 		       const char* name,
@@ -125,6 +154,14 @@ tClock bk_define_clock(tSimStateHdl simHdl,
 /* Allow a clock definition to be altered (overridden from the UI, etc.)
  *
  * Returns BK_ERROR on error, BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: re-derives the clock's schedule events
+ * (replacing any it had), leaving up to 5 live events for a clock
+ * with a waveform: the two edge events, the two post-edge
+ * combinational events and possibly a time-0 initial edge.  This is
+ * within the per-clock allotment of bk_max_event_queue_depth() for
+ * clocks the model registers; for a host-defined clock it is host
+ * cost (see bk_define_clock()).
  */
 tStatus bk_alter_clock(tSimStateHdl simHdl,
 		       tClock      handle,
@@ -143,6 +180,10 @@ tStatus bk_alter_clock(tSimStateHdl simHdl,
  *   dir                  - direction of the clock edge
  *
  * Returns BK_ERROR on error, BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: like bk_alter_clock(), re-derives the
+ * clock's schedule events -- up to 5 live per clock with a waveform,
+ * counted in bk_max_event_queue_depth() for model-registered clocks.
  */
 tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
 			      tClock handle,
@@ -156,6 +197,12 @@ tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
  *
  * Returns BK_ERROR on error, or the number of events scheduled
  * for the clock edge on success.
+ *
+ * Event-queue depth cost: 2 events per call (the edge event and its
+ * post-edge combinational event), consumed within the timeslice they
+ * are scheduled for.  Calls made by the clock primitives inside the
+ * model are counted in bk_max_event_queue_depth(); a call made by
+ * the HOST is not, and costs 2 further events until they execute.
  */
 tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
 			      tClock handle, tEdgeDirection dir, tTime at);
@@ -166,6 +213,11 @@ tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
  *
  * Returns BK_ERROR on error, or the number of events scheduled for the
  * clock edge on success.
+ *
+ * Event-queue depth cost: 1 event, live until time 0 executes.
+ * Calls made by clock primitives inside the model are counted in
+ * bk_max_event_queue_depth(); a HOST call is not, and costs 1
+ * further event.
  */
 tStatus bk_enqueue_initial_clock_edge(tSimStateHdl simHdl,
 				      tClock handle, tEdgeDirection dir);
@@ -207,6 +259,12 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
  * This should be called before the first bk_sync_run() call.
+ *
+ * Event-queue depth cost: 2 events (the assert and deassert), live
+ * until they execute at times 0 and 2.  The generated model calls
+ * this from create_model() when it is the master, and the 2 events
+ * are counted in bk_max_event_queue_depth(); a further HOST call
+ * costs 2 more.
  */
 void bk_use_default_reset(tSimStateHdl simHdl);
 
@@ -242,12 +300,24 @@ tBool bk_is_combo_sched(tSimStateHdl simHdl);
 tTime bk_clock_last_edge(tSimStateHdl simHdl, tClock handle);
 tTime bk_clock_combinational_time(tSimStateHdl simHdl, tClock handle);
 
-/* Quit simulation at the end of the current time slice. */
+/* Quit simulation at the end of the current time slice.
+ *
+ * Event-queue depth cost: 1 event per call, live until time t
+ * executes.  This is a HOST call: it is NOT counted in
+ * bk_max_event_queue_depth() and each call must be budgeted on top
+ * of that bound.
+ */
 void bk_quit_at(tSimStateHdl simHdl, tTime t);
 
 /* Quit simulation at the end of the given time slice.
  *
  * Returns BK_ERROR on error and BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: none at call time (it only sets a limit),
+ * but when the limit is reached the kernel schedules the
+ * deduplicated UI yield event for the current time -- the single
+ * yield event that IS counted in bk_max_event_queue_depth() (see
+ * bk_schedule_ui_event()).
  */
 tStatus bk_quit_after_edge(tSimStateHdl simHdl,
 			   tClock handle, tEdgeDirection dir, tUInt64 cycle);
@@ -321,6 +391,13 @@ void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
  * unless there is already one scheduled at that time.
  *
  * Returns BK_ERROR on error or BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: 1 event per distinct target time (a repeat
+ * for the same time is deduplicated).  bk_max_event_queue_depth()
+ * includes exactly ONE yield event -- the one the model itself
+ * schedules for the current time via $stop/$finish/$fatal or a
+ * reached edge limit.  Each ADDITIONAL pending yield event at some
+ * other time is a HOST cost on top of the bound.
  */
 tStatus bk_schedule_ui_event(tSimStateHdl simHdl, tTime at);
 
@@ -334,17 +411,35 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
  * Routines to control debugging functionality.
  */
 
+/* Event-queue depth cost of bk_enable_cycle_dumping(): one recurring
+ * cycle-dump event per live schedule event (so up to 4 per clock with
+ * a waveform, plus initial-edge dumps at time 0).  This is a HOST
+ * call, NOT counted in bk_max_event_queue_depth(); budget up to 5
+ * events per clock on top of the bound while dumping is enabled.
+ */
 void bk_enable_cycle_dumping(tSimStateHdl simHdl);
 void bk_disable_cycle_dumping(tSimStateHdl simHdl);
 tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl);
 void bk_dump_cycle_counts(tSimStateHdl simHdl,
 			  const char* label, tClock handle);
 
-/* Call to enable clock edges without logic (for interactive stepping) */
+/* Call to enable clock edges without logic (for interactive stepping)
+ *
+ * Event-queue depth cost: none beyond the per-clock allotment already
+ * counted in bk_max_event_queue_depth() -- it re-derives each clock's
+ * schedule events (keeping edges that have no logic), never exceeding
+ * the 5 live events a clock with a waveform is budgeted for.
+ */
 void bk_set_interactive(tSimStateHdl simHdl);
 
 /*
  * Callbacks to stop simulation within a schedule or model.
+ *
+ * Event-queue depth cost of bk_stop_now(), bk_finish_now() and
+ * bk_fatal_now(): each schedules the deduplicated UI yield event for
+ * the current time -- the single yield event already counted in
+ * bk_max_event_queue_depth() (these are called by the model's $stop,
+ * $finish and $fatal).
  */
 
 /* Pause the simulation and return to the UI at the end of this

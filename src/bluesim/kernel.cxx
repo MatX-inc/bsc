@@ -386,6 +386,19 @@ bool check_version(tBluesimVersionInfo* version)
           !strcmp(version_name,version->name));
 }
 
+/* Get the design's maximum event-queue depth, assuming no host calls
+ * that enqueue events.  This is a static per-design constant computed
+ * at code generation; it takes the model handle (not a simulation
+ * handle) so that an embedder can query it before bk_sync_init(),
+ * e.g. to size the event queue it asks for there.
+ */
+tUInt32 bk_max_event_queue_depth(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_max_event_queue_depth();
+}
+
 /* helper routine for checking that a host ops table is usable */
 static bool check_host_ops(const struct bs_host_ops* ops)
 {
