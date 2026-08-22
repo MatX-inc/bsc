@@ -5405,13 +5405,18 @@ doListMap f@(ICon prim_i (ICPrim {primOp = PrimListMap}))
     -- (a library case-match on the cons cell guards the whole suffix), so
     -- it is returned on this node and the tail keeps its own predicate
     -- structurally via pExprToHExpr.
+    -- The tail is heaped: consumers force the spine node by node, and
+    -- evalHeap re-heaps any non-ref constructor argument it meets
+    -- (eagerly computing its position), so a raw nested tail of size k
+    -- would cost O(k) per node and O(length^2) overall.
     let mapList e =
           evalListOp prim_i e a_ty' result_ty (listOpUndet result_ty)
             (\p -> return $ P p $ iMkNil b_ty')
             (\p e_h e_t -> do
               mapped_h <- toHeap "list-map-elem" b_ty' (pExprToHExpr (P p (iAp func' e_h))) Nothing
               mapped_t <- mapList e_t
-              return $ P p $ iMkCons b_ty' mapped_h (pExprToHExpr mapped_t))
+              mapped_t' <- toHeap "list-map-tail" result_ty (pExprToHExpr mapped_t) Nothing
+              return $ P p $ iMkCons b_ty' mapped_h mapped_t')
     mapList list_e
 
 doListMap f _ _ _ _ = internalError("IExpand.doListMap : " ++ ppReadable f)
@@ -5436,7 +5441,9 @@ doListZipWith f@(ICon prim_i (ICPrim {primOp = PrimListZipWith}))
                   let p12 = pConj p1 p2
                   mapped_h <- toHeap "list-zipwith-elem" c_ty' (pExprToHExpr (P p12 (iAp (iAp func' e_h1) e_h2))) Nothing
                   mapped_t <- zipLists e_t1 e_t2
-                  return $ P p12 $ iMkCons c_ty' mapped_h (pExprToHExpr mapped_t)))
+                  -- heap the tail; see doListMap
+                  mapped_t' <- toHeap "list-zipwith-tail" result_ty (pExprToHExpr mapped_t) Nothing
+                  return $ P p12 $ iMkCons c_ty' mapped_h mapped_t'))
     zipLists list1_e list2_e
 
 doListZipWith f _ _ _ _ _ _ = internalError("IExpand.doListZipWith : " ++ ppReadable f)
@@ -5491,13 +5498,15 @@ doListAppend f@(ICon prim_i (ICPrim {primOp = PrimListAppend}))
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
         result_ty = norm (itList elem_ty)
-    -- Node predicates guard the whole suffix; see doListMap.
+    -- Node predicates guard the whole suffix; see doListMap
+    -- (including why the tail is heaped).
     let appendList e =
           evalListOp prim_i e elem_ty' result_ty (listOpUndet result_ty)
             (\p -> eval1 ys >>= \(P py ys') -> return (P (pConj p py) ys'))
             (\p e_h e_t -> do
               rest <- appendList e_t
-              return $ P p $ iMkCons elem_ty' e_h (pExprToHExpr rest))
+              rest' <- toHeap "list-append-tail" result_ty (pExprToHExpr rest) Nothing
+              return $ P p $ iMkCons elem_ty' e_h rest')
     appendList xs
 doListAppend f _ _ _ = internalError ("IExpand.doListAppend : " ++ ppReadable f)
 
@@ -5507,13 +5516,15 @@ doListConcat f@(ICon prim_i (ICPrim {primOp = PrimListConcat}))
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
         list_ty  = norm (itList elem_ty)
-        -- Node predicates guard the whole suffix; see doListMap.
+        -- Node predicates guard the whole suffix; see doListMap
+        -- (including why the tail is heaped).
         appendList ys e =
           evalListOp prim_i e elem_ty' list_ty (listOpUndet list_ty)
             (\p -> eval1 ys >>= \(P py ys') -> return (P (pConj p py) ys'))
             (\p e_h e_t -> do
               rest <- appendList ys e_t
-              return $ P p $ iMkCons elem_ty' e_h (pExprToHExpr rest))
+              rest' <- toHeap "list-concat-tail" list_ty (pExprToHExpr rest) Nothing
+              return $ P p $ iMkCons elem_ty' e_h rest')
         concatList e =
           evalListOp prim_i e list_ty list_ty (listOpUndet list_ty)
             (\p -> return $ P p $ iMkNil elem_ty')
@@ -5580,10 +5591,20 @@ doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
     withNormalizedArray False arr_e arrType $ \p arr_e' ->
       case arr_e' of
         ICon _ (ICLazyArray _ arr _) -> do
-          let cellToExpr (ArrayCell ptr ref) =
+          let listType = norm (itList a_ty)
+              cellToExpr (ArrayCell ptr ref) =
                 pExprToHExpr (P p (IRefT a_ty' ptr S.empty ref))
-              elems = map cellToExpr (Array.elems arr)
-          return $ P p $ iMkList a_ty' elems
+              -- Build from the tail up, heaping each tail: consumers
+              -- force the spine node by node, and evalHeap re-heaps any
+              -- non-ref constructor argument it meets (eagerly
+              -- computing its position), so raw nested tails of size k
+              -- would cost O(k) per node and O(length^2) overall.
+              build tl [] = return tl
+              build tl (c:cs) = do
+                tl' <- toHeap "array-tolist-tail" listType tl Nothing
+                build (iMkCons a_ty' (cellToExpr c) tl') cs
+          e_list <- build (iMkNil a_ty') (Prelude.reverse (Array.elems arr))
+          return $ P p e_list
         _ -> nfError "primArrayToList" $ mkAp f [T a_ty, E arr_e']
 doArrayToList f _ _ = internalError("IExpand.doArrayToList : " ++ ppReadable f)
 
