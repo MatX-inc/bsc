@@ -3748,10 +3748,19 @@ impl Interp {
         // bitmaps on reset activity, clocks/params are domain-constant.
         // Masks use Cone.reads_all (a stability contract bounds INTRA-
         // edge movement; gating asks about CROSS-edge movement).
+        // OPT-IN (TRS_GATING=1): the Flute A/B measured the honest
+        // null — on an ACTIVE CPU core the Ir-dominant cones are the
+        // pipeline's own and they are genuinely dirty on busy AND on
+        // memory stalls (the fetch path keeps running), so the
+        // skippable mass is the small periphery cones (~2-4% of edge
+        // Ir) while guards+marks add ~38% more branches and an I1
+        // point.  Gating pays only for designs with LARGE idle
+        // subsystems; the dirty-model machinery (masks, marks,
+        // sabotage tripwire) stays sealed and available.
         let gating_on = gate.is_some()
             && nodes.len() == 1
             && !self.vcd_trace
-            && std::env::var("TRS_GATING").as_deref() != Ok("0");
+            && std::env::var("TRS_GATING").as_deref() == Ok("1");
         let mut gate_masks: Vec<Option<Vec<(u32, u64)>>> = Vec::new();
         let mut dirty_sync: Vec<Vec<(u32, u64)>> = Vec::new();
         let mut dirty_bypass: Vec<Vec<(u32, u64)>> = Vec::new();
@@ -3872,6 +3881,32 @@ impl Interp {
                     .filter_map(|gi| bit_of.get(gi).copied())
                     .collect();
                 gate_masks.push(Some(pairs(&bits)));
+            }
+            // TRS_GATE_MASK_CENSUS=1: per watched instance, how many
+            // gated masks contain its bit — the hot-bit poisoning
+            // census (a high-fanin instance that changes every cycle
+            // defeats every mask it appears in)
+            if std::env::var_os("TRS_GATE_MASK_CENSUS").is_some() {
+                let mut fanin: HashMap<u32, usize> = HashMap::new();
+                for gm in gate_masks.iter().flatten() {
+                    for &(w, m) in gm {
+                        for b in 0..64u32 {
+                            if m & (1 << b) != 0 {
+                                *fanin.entry(w * 64 + b).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+                let mut rows: Vec<(usize, u32)> =
+                    fanin.iter().map(|(&b, &c)| (c, b)).collect();
+                rows.sort_unstable_by(|a, b| b.cmp(a));
+                for (c, bit) in rows.iter().take(25) {
+                    let gi = written_all[*bit as usize];
+                    eprintln!(
+                        "trs gate census: bit {bit} in {c} masks — {}",
+                        self.insts[gi].path
+                    );
+                }
             }
             if std::env::var_os("TRS_JIT_TRACE").is_some() {
                 let gated = gate_masks.iter().filter(|m| m.is_some()).count();
