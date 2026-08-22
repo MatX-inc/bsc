@@ -4,10 +4,10 @@
 #include <string>
 
 #include "bluesim_kernel_api.h"
-#include "bluesim_probes.h"
 #include "bs_mem_file.h"
 #include "bs_str.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
 #include "bs_range_tracker.h"
 #include "bs_reset.h"
 
@@ -173,6 +173,10 @@ const unsigned int* index_bram_fn(void* base, tUInt64 addr);
 template<typename AT, typename DT, typename ET>
 class MOD_BRAM : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[3];
  public:
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
 	  tUInt8 is_pipelined,
@@ -183,8 +187,7 @@ class MOD_BRAM : public Module
       lo_addr(0), hi_addr(mem_size-1),
       chunk_size(data_width), num_wens(1), dual_port(num_ports == 2),
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
-      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -200,8 +203,7 @@ class MOD_BRAM : public Module
       lo_addr(0), hi_addr(mem_size-1),
       chunk_size(chunk_size), num_wens(num_wens), dual_port(num_ports == 2),
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
-      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -218,8 +220,7 @@ class MOD_BRAM : public Module
       lo_addr(0), hi_addr(mem_size-1),
       chunk_size(data_width), num_wens(1), dual_port(num_ports == 2),
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
-      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -243,8 +244,7 @@ class MOD_BRAM : public Module
       lo_addr(0), hi_addr(mem_size-1),
       chunk_size(data_width), num_wens(1), dual_port(num_ports == 2),
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
-      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -265,8 +265,7 @@ class MOD_BRAM : public Module
       lo_addr(0), hi_addr(mem_size-1),
       chunk_size(chunk_size), num_wens(num_wens), dual_port(num_ports == 2),
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
-      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -287,8 +286,7 @@ class MOD_BRAM : public Module
       lo_addr(0), hi_addr(mem_size-1),
       chunk_size(chunk_size), num_wens(num_wens), dual_port(num_ports == 2),
       upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
-      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -297,7 +295,7 @@ class MOD_BRAM : public Module
 
     init_symbols();
   }
- ~MOD_BRAM() { delete_blocks(top_level,0); delete proxy; }
+ ~MOD_BRAM() { delete_blocks(top_level,0); }
 
  // shared initialization routines
  private:
@@ -364,7 +362,7 @@ class MOD_BRAM : public Module
   {
     // initialize symbols
     symbol_count = 3;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     range.lo = (unsigned long long) lo_addr;
     range.hi = (unsigned long long) hi_addr;
@@ -828,44 +826,6 @@ class MOD_BRAM : public Module
 
   bool did_ena;
   bool did_enb;
-
- // proxy access facility
- private:
-  BluespecProbe<DT,AT>* proxy;
- public:
-  BluespecProbe<DT,AT>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<DT,AT>(this, bounds, has_elem, read_bram, write_bram);
-    return (*proxy);
-  }
- // static helper functions for probe implementation
- private:
-  static AT bounds(void* obj, bool hi)
-  {
-    MOD_BRAM<AT,DT,ET>* bram = (MOD_BRAM<AT,DT,ET>*) obj;
-    return (hi ? bram->hi_addr : bram->lo_addr);
-  }
-  static bool has_elem(void* obj, AT addr)
-  {
-    MOD_BRAM<AT,DT,ET>* bram = (MOD_BRAM<AT,DT,ET>*) obj;
-    return ((addr >= bram->lo_addr) && (addr <= bram->hi_addr));
-  }
-  static const DT& read_bram(void* obj, AT addr)
-  {
-    MOD_BRAM<AT,DT,ET>* bram = (MOD_BRAM<AT,DT,ET>*) obj;
-    DT* value_ptr = bram->lookup_value(addr, true);
-    if (value_ptr != NULL)
-      return *value_ptr;
-    else
-      return read_bram(obj, bram->lo_addr); // out-of-bounds
-  }
-  static bool write_bram(void* obj, AT addr, const DT& data)
-  {
-    MOD_BRAM<AT,DT,ET>* bram = (MOD_BRAM<AT,DT,ET>*) obj;
-    bram->METH_a_put(1, addr,data,true);
-    return has_elem(obj,addr);
-  }
 
  public:
   friend class BinFormatHandlerBRAM<AT,DT,ET>;

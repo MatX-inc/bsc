@@ -10,6 +10,10 @@
 template<typename T>
 class MOD_Wire : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[3];
  public:
   MOD_Wire(tSimStateHdl simHdl, const char* name, Module* parent,
            unsigned int width, const T& v, bool is_sync_wire)
@@ -17,7 +21,7 @@ class MOD_Wire : public Module
       bits(width), value(v), isValid(false), written(false)
   {
     symbol_count = 3;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -40,7 +44,7 @@ class MOD_Wire : public Module
     write_undet(&value, width);
 
     symbol_count = 3;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;

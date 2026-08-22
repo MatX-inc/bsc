@@ -4,10 +4,10 @@
 #include <string>
 
 #include "bluesim_kernel_api.h"
-#include "bluesim_probes.h"
 #include "bs_mem_file.h"
 #include "bs_str.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
 #include "bs_range_tracker.h"
 #include "bs_reset.h"
 
@@ -173,13 +173,17 @@ const unsigned int* index_rf_fn(void* base, tUInt64 addr);
 template<typename AT, typename DT>
 class MOD_RegFile : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[3];
  public:
   MOD_RegFile(tSimStateHdl simHdl, const char* name, Module* parent,
 	      unsigned int addr_width, unsigned int data_width,
 	      const AT& lo, const AT& hi)
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
-      upd_at(~bk_now(sim_hdl)), proxy(NULL)
+      upd_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -191,7 +195,7 @@ class MOD_RegFile : public Module
 	      const AT& lo, const AT& hi, bool bin_format)
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
-      upd_at(~bk_now(sim_hdl)), proxy(NULL)
+      upd_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -210,7 +214,7 @@ class MOD_RegFile : public Module
 	      const AT& lo, const AT& hi, bool bin_format)
     : Module(simHdl, name, parent), addr_bits(addr_width),
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
-      upd_at(~bk_now(sim_hdl)), proxy(NULL)
+      upd_at(~bk_now(sim_hdl))
   {
     init_storage();
 
@@ -219,7 +223,7 @@ class MOD_RegFile : public Module
 
     init_symbols();
   }
-  ~MOD_RegFile() { delete_blocks(top_level,0); delete proxy; }
+  ~MOD_RegFile() { delete_blocks(top_level,0); }
 
  // shared initialization routines
  private:
@@ -266,7 +270,7 @@ class MOD_RegFile : public Module
   {
     // initialize symbols
     symbol_count = 3;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     range.lo = (unsigned long long) lo_addr;
     range.hi = (unsigned long long) hi_addr;
@@ -475,44 +479,6 @@ class MOD_RegFile : public Module
 
   // range structure for symbolic access to RegFile data
   Range range;
-
- // proxy access facility
- private:
-  BluespecProbe<DT,AT>* proxy;
- public:
-  BluespecProbe<DT,AT>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<DT,AT>(this, bounds, has_elem, read_rf, write_rf);
-    return (*proxy);
-  }
- // static helper functions for probe implementation
- private:
-  static AT bounds(void* obj, bool hi)
-  {
-    MOD_RegFile<AT,DT>* rf = (MOD_RegFile<AT,DT>*) obj;
-    return (hi ? rf->hi_addr : rf->lo_addr);
-  }
-  static bool has_elem(void* obj, AT addr)
-  {
-    MOD_RegFile<AT,DT>* rf = (MOD_RegFile<AT,DT>*) obj;
-    return ((addr >= rf->lo_addr) && (addr <= rf->hi_addr));
-  }
-  static const DT& read_rf(void* obj, AT addr)
-  {
-    MOD_RegFile<AT,DT>* rf = (MOD_RegFile<AT,DT>*) obj;
-    DT* value_ptr = rf->lookup_value(addr, true);
-    if (value_ptr != NULL)
-      return *value_ptr;
-    else
-      return read_rf(obj, rf->lo_addr); // out-of-bounds
-  }
-  static bool write_rf(void* obj, AT addr, const DT& data)
-  {
-    MOD_RegFile<AT,DT>* rf = (MOD_RegFile<AT,DT>*) obj;
-    rf->METH_upd(addr,data,true);
-    return has_elem(obj,addr);
-  }
 
  public:
   friend class BinFormatHandler<AT,DT>;

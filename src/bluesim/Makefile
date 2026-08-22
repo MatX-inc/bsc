@@ -21,7 +21,6 @@ HEADERS = bluesim_kernel_api.h \
           bluesim_types.h \
           bluesim_primitives.h \
           bluesim_systemc.h \
-          bluesim_probes.h \
           bs_wide_data.h \
           bs_prim_ops.h \
           bs_prim_mod_reg.h bs_prim_mod_wire.h bs_prim_mod_probe.h \

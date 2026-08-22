@@ -457,6 +457,10 @@ static unsigned int index_size(unsigned int d)
 template<typename T, typename I>
 class MOD_SyncFIFO : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[3];
  public:
   MOD_SyncFIFO(tSimStateHdl simHdl, const char* name, Module* parent,
 	       unsigned int width, unsigned int depth, unsigned int hasClr)
@@ -496,7 +500,7 @@ class MOD_SyncFIFO : public Module
     did_dclear = false;
 
     symbol_count = 3;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     range.lo = 0;
     range.hi = depth - 1;

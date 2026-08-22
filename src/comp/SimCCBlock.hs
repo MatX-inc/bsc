@@ -1909,12 +1909,13 @@ instance PPrint Symbol where
   pPrint _ _ SymRule        = (text "Rule")
   pPrint _ _ SymUnknown     = (text "Unknown")
 
--- Setup for symbol data
+-- Setup for symbol data.  The symbol array is a member of the module
+-- class (declared in simCCBlockToClassDeclaration), so binding it
+-- makes no allocator calls.
 mkSymbolHdr :: Int -> [CCFragment]
 mkSymbolHdr n = [ (mkVar "symbol_count") `assign` (mkUInt32 (toInteger n)) ] ++
                 if (n > 0)
-                then [ (mkVar "symbols") `assign` (newArray (classType "tSym") (var "symbol_count"))
-                     ]
+                then [ (mkVar "symbols") `assign` (var "__symbols") ]
                 else []
 
 -- Call symbol init method
@@ -2003,6 +2004,17 @@ simCCBlockToClassDeclaration sb_map sb =
       num_symbol_groups = max 1 ((num_symbols + 200) `div` 500)
       sym_init_protos = map (decl . (symInitFnProto Nothing)) [0..(num_symbol_groups-1)]
       symbol_init_fns = [comment "Symbol init methods" (private sym_init_protos)]
+      -- embedded storage for the module's symbol table, bound to
+      -- Module::symbols in the constructor (no allocation).  The count
+      -- computed here can slightly overestimate the number of symbols
+      -- the constructor actually records (non-bit parameters are
+      -- dropped there), which only leaves unused trailing slots.
+      symbol_storage =
+          if (num_symbols > 0)
+          then [comment "Symbol table storage"
+                        (private [ decl $ arraySz (toInteger num_symbols) $
+                                     (userType "tSym") (mkVar "__symbols") ])]
+          else []
       adefs       = [ decl $ constant $
                                  (aTypeToCType ty) (aParamIdToCLval arg_id)
                     | (ty, arg_id, False) <- sb_parameters sb ]
@@ -2066,6 +2078,7 @@ simCCBlockToClassDeclaration sb_map sb =
                            , state
                            , constructor
                            , symbol_init_fns
+                           , symbol_storage
                            , reset_defs
                            , port_defs
                            , public_defs

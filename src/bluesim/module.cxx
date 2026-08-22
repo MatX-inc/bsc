@@ -124,7 +124,8 @@ Module::Module(tSimStateHdl hdl, const char* name, Module* parent_module)
 
 Module::~Module()
 {
-  delete[] symbols;
+  // 'symbols' points at storage embedded in the derived module object
+  // (or at a generated module's member array): nothing to free.
 }
 
 void Module::write_name(Target* dest) const

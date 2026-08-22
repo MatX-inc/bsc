@@ -3,8 +3,8 @@
 
 #include <cstring>
 #include "bluesim_kernel_api.h"
-#include "bluesim_probes.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
 
 typedef enum { FIFO_SIMPLE, FIFO_LOOPY, FIFO_BYPASS} tFifoType;
 
@@ -30,6 +30,10 @@ const unsigned int* index_fn_fifo(void* base, tUInt64 addr);
 template<typename T>
 class MOD_Fifo : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[3];
  public:
   MOD_Fifo(tSimStateHdl simHdl, const char* name, Module* parent,
 	   unsigned int width, unsigned int depth,
@@ -37,7 +41,7 @@ class MOD_Fifo : public Module
     : Module(simHdl, name, parent), bits(width), size(depth),
       guard(guarded != 0), type((tFifoType) fifo_type),
       enq_at(~bk_now(sim_hdl)), deq_at(~bk_now(sim_hdl)),
-      clear_at(~bk_now(sim_hdl)), proxy(NULL)
+      clear_at(~bk_now(sim_hdl))
   {
     data = new T[depth];
     for (unsigned int n = 0; n < depth; ++n)
@@ -54,7 +58,7 @@ class MOD_Fifo : public Module
     write_undet(&dummyval, width);
 
     symbol_count = 3;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     range.lo = 0;
     range.hi = depth - 1;
@@ -73,7 +77,7 @@ class MOD_Fifo : public Module
     symbols[2].info = SYM_DEF | (8*sizeof(unsigned int)) << 4;
     symbols[2].value = (void*)(&size);
   }
-  ~MOD_Fifo() { delete[] data; delete proxy; }
+  ~MOD_Fifo() { delete[] data; }
  public:
   // Note: first < (deq, clear) so we do *not* need to preserve
   // the first element to achieve registered behavior.  first CF enq,
@@ -267,54 +271,6 @@ class MOD_Fifo : public Module
   bool did_deq;
   bool did_clear;
 
- // proxy access facility
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, bounds, has_elem, read_fifo, write_fifo);
-    return (*proxy);
-  }
- private:
-  static unsigned int bounds(void* obj, bool hi)
-  {
-    MOD_Fifo<T>* fifo = (MOD_Fifo<T>*) obj;
-    if (hi)
-      return fifo->elems;
-    else
-      return 1;
-  }
-  static bool has_elem(void* obj, unsigned int addr)
-  {
-    MOD_Fifo<T>* fifo = (MOD_Fifo<T>*) obj;
-    return ((addr > 0) && (addr <= fifo->elems));
-  }
-  static const T& read_fifo(void* obj, unsigned int addr)
-  {
-    MOD_Fifo<T>* fifo = (MOD_Fifo<T>*) obj;
-    return (fifo->data[(fifo->fst + addr - 1) % fifo->size]);
-  }
-  static bool write_fifo(void* obj, unsigned int addr, const T& data)
-  {
-    MOD_Fifo<T>* fifo = (MOD_Fifo<T>*) obj;
-    if ((addr > 0) && (addr <= fifo->elems))
-    {
-      // overwrite fifo contents
-      fifo->data[(fifo->fst + addr - 1) % fifo->size] = data;
-      return true;
-    }
-    else if (fifo->elems < fifo->size)
-    {
-      // add to fifo contents
-      fifo->data[(fifo->fst + fifo->elems) % fifo->size] = data;
-      fifo->elems += 1;
-      return true;
-    }
-    else
-      return false; // indicates enq to full fifo
-  }
 };
 
 

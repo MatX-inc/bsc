@@ -2,8 +2,8 @@
 #define __BS_PRIM_MOD_REG_H__
 
 #include "bluesim_kernel_api.h"
-#include "bluesim_probes.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
 #include "bs_reset.h"
 
 #define NO_RESET_REG    0
@@ -16,13 +16,16 @@
 template<typename T>
 class MOD_Reg : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[1];
  public:
   // RegN, RegA, CrossingRegN, CrossingRegA
   MOD_Reg(tSimStateHdl simHdl, const char* name, Module* parent,
 	  unsigned int width, const T& v, unsigned int async)
     : Module(simHdl, name, parent), bits(width), reset_value(v),
-      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG),
-      proxy(NULL)
+      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
     init_val(prev_value, bits);
     write_undet(&prev_value, bits);
@@ -34,7 +37,7 @@ class MOD_Reg : public Module
     suppress_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -44,13 +47,13 @@ class MOD_Reg : public Module
   MOD_Reg(tSimStateHdl simHdl, const char* name, Module* parent,
 	  unsigned int width, const T& v)
     : Module(simHdl, name, parent), value(v), bits(width),
-      reset_type(NO_RESET_REG), proxy(NULL)
+      reset_type(NO_RESET_REG)
   {
     in_reset = false;
     suppress_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -59,8 +62,7 @@ class MOD_Reg : public Module
   // RegUN, CrossingRegUN
   MOD_Reg(tSimStateHdl simHdl, const char* name, Module* parent,
 	  unsigned int width)
-    : Module(simHdl, name, parent), bits(width), reset_type(NO_RESET_REG),
-      proxy(NULL)
+    : Module(simHdl, name, parent), bits(width), reset_type(NO_RESET_REG)
   {
     init_val(prev_value, bits);
     write_undet(&prev_value, bits);
@@ -74,13 +76,13 @@ class MOD_Reg : public Module
     suppress_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
     symbols[0].value = (void*)(&value);
   }
-  ~MOD_Reg() { delete proxy; }
+  
  public:
   // read method for single-domain register
   const T& METH_read()    const { return value; }
@@ -157,41 +159,6 @@ class MOD_Reg : public Module
   bool suppress_write;
   bool in_reset;
 
- // proxy access facility
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, one, eq_one, read_reg, write_reg);
-    return (*proxy);
-  }
- private:
-  static unsigned int one(void* /*obj */, bool /* hi */)
-  {
-    return 1;
-  }
-  static bool eq_one(void* /* obj */, unsigned int addr)
-  {
-    return (addr == 1);
-  }
-  static const T& read_reg(void* obj, unsigned int /* addr */)
-  {
-    MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-    return reg->value;
-  }
-  static bool write_reg(void* obj, unsigned int addr, const T& data)
-  {
-    if (addr == 1)
-    {
-      MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-      reg->value = data;
-      return true;
-    }
-    else
-      return false; // indicates write to invalid address
-  }
 };
 
 
@@ -201,13 +168,17 @@ class MOD_Reg : public Module
 template<typename T>
 class MOD_RegAligned : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[1];
  public:
   MOD_RegAligned(tSimStateHdl simHdl, const char* name, Module* parent,
 		 unsigned int width, const T& v, unsigned int async)
     : Module(simHdl, name, parent), bits(width), reset_value(v),
       reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG),
       __clk_handle_0(BAD_CLOCK_HANDLE), __clk_handle_1(BAD_CLOCK_HANDLE),
-      written_at(~bk_now(sim_hdl)), proxy(NULL)
+      written_at(~bk_now(sim_hdl))
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -218,7 +189,7 @@ class MOD_RegAligned : public Module
     did_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -228,8 +199,7 @@ class MOD_RegAligned : public Module
 		 unsigned int width)
     : Module(simHdl, name, parent), bits(width), tick_at(~bk_now(sim_hdl)),
       reset_type(NO_RESET_REG), __clk_handle_0(BAD_CLOCK_HANDLE),
-      __clk_handle_1(BAD_CLOCK_HANDLE), written_at(~bk_now(sim_hdl)),
-      proxy(NULL)
+      __clk_handle_1(BAD_CLOCK_HANDLE), written_at(~bk_now(sim_hdl))
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -240,13 +210,13 @@ class MOD_RegAligned : public Module
     did_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
     symbols[0].value = (void*)(&value);
   }
-  ~MOD_RegAligned() { delete proxy; }
+  
  public:
   const T& METH__read() const  { return value; }
   void METH__write(const T& x)
@@ -322,41 +292,6 @@ class MOD_RegAligned : public Module
   bool did_write;
   tTime written_at;
 
- // proxy access facility
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, one, eq_one, read_reg, write_reg);
-    return (*proxy);
-  }
- private:
-  static unsigned int one(void* /*obj */, bool /* hi */)
-  {
-    return 1;
-  }
-  static bool eq_one(void* /* obj */, unsigned int addr)
-  {
-    return (addr == 1);
-  }
-  static const T& read_reg(void* obj, unsigned int /* addr */)
-  {
-    MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-    return reg->value;
-  }
-  static bool write_reg(void* obj, unsigned int addr, const T& data)
-  {
-    if (addr == 1)
-    {
-      MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-      reg->value = data;
-      return true;
-    }
-    else
-      return false; // indicates write to invalid address
-  }
 };
 
 
@@ -366,13 +301,16 @@ class MOD_RegAligned : public Module
 template<typename T>
 class MOD_ConfigReg : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[1];
  public:
   MOD_ConfigReg(tSimStateHdl simHdl, const char* name, Module* parent,
 		unsigned int width, const T& v, unsigned int async)
     : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
       reset_value(v),
-      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG),
-      proxy(NULL)
+      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -382,7 +320,7 @@ class MOD_ConfigReg : public Module
     suppress_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -391,7 +329,7 @@ class MOD_ConfigReg : public Module
   MOD_ConfigReg(tSimStateHdl simHdl, const char* name, Module* parent,
 		unsigned int width)
     : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
-      reset_type(NO_RESET_REG), proxy(NULL)
+      reset_type(NO_RESET_REG)
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -403,13 +341,13 @@ class MOD_ConfigReg : public Module
     suppress_write = false;
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
     symbols[0].value = (void*)(&value);
   }
-  ~MOD_ConfigReg() { delete proxy; }
+  
  public:
   const T& METH_read() const
   {
@@ -471,41 +409,6 @@ class MOD_ConfigReg : public Module
   bool suppress_write;
   bool in_reset;
 
- // proxy access facility
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, one, eq_one, read_reg, write_reg);
-    return (*proxy);
-  }
- private:
-  static unsigned int one(void* /*obj */, bool /* hi */)
-  {
-    return 1;
-  }
-  static bool eq_one(void* /* obj */, unsigned int addr)
-  {
-    return (addr == 1);
-  }
-  static const T& read_reg(void* obj, unsigned int /* addr */)
-  {
-    MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-    return reg->value;
-  }
-  static bool write_reg(void* obj, unsigned int addr, const T& data)
-  {
-    if (addr == 1)
-    {
-      MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-      reg->value = data;
-      return true;
-    }
-    else
-      return false; // indicates write to invalid address
-  }
 };
 
 // This is the definition of the RegTwo register primitive.
@@ -520,8 +423,7 @@ class MOD_RegTwo : public Module
 	     unsigned int width, const T& v, unsigned int async)
     : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
       a_at(~bk_now(sim_hdl)), reset_value(v),
-      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG),
-      proxy(NULL)
+      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -534,7 +436,7 @@ class MOD_RegTwo : public Module
   MOD_RegTwo(tSimStateHdl simHdl, const char* name, Module* parent,
 	     unsigned int width)
     : Module(simHdl, name, parent), bits(width), written(~bk_now(sim_hdl)),
-      a_at(~bk_now(sim_hdl)), reset_type(NO_RESET_REG), proxy(NULL)
+      a_at(~bk_now(sim_hdl)), reset_type(NO_RESET_REG)
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -546,7 +448,7 @@ class MOD_RegTwo : public Module
     in_reset = false;
     suppress_write = false;
   }
-  ~MOD_RegTwo() { delete proxy; }
+  
  public:
   const T& METH_get() const
   {
@@ -619,41 +521,6 @@ class MOD_RegTwo : public Module
   bool suppress_write;
   bool in_reset;
 
- // proxy access facility
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, one, eq_one, read_reg, write_reg);
-    return (*proxy);
-  }
- private:
-  static unsigned int one(void* /*obj */, bool /* hi */)
-  {
-    return 1;
-  }
-  static bool eq_one(void* /* obj */, unsigned int addr)
-  {
-    return (addr == 1);
-  }
-  static const T& read_reg(void* obj, unsigned int /* addr */)
-  {
-    MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-    return reg->value;
-  }
-  static bool write_reg(void* obj, unsigned int addr, const T& data)
-  {
-    if (addr == 1)
-    {
-      MOD_Reg<T>* reg = (MOD_Reg<T>*) obj;
-      reg->value = data;
-      return true;
-    }
-    else
-      return false; // indicates write to invalid address
-  }
 };
 
 // This is the definition of the CReg concurrent register primitive.
@@ -661,6 +528,10 @@ class MOD_RegTwo : public Module
 template<typename T>
 class MOD_CReg : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[1];
  public:
   // CRegN, CRegA
   MOD_CReg(tSimStateHdl simHdl, const char* name, Module* parent,
@@ -669,8 +540,7 @@ class MOD_CReg : public Module
       ports(max_ports), // this should eventually be a parameter
       __clk_handle_0(BAD_CLOCK_HANDLE),
       bits(width), reset_value(v),
-      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG),
-      proxy(NULL)
+      reset_type(async ? ASYNC_RESET_REG : SYNC_RESET_REG)
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -691,7 +561,7 @@ class MOD_CReg : public Module
     }
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -703,8 +573,7 @@ class MOD_CReg : public Module
     : Module(simHdl, name, parent),
       ports(max_ports), // this should eventually be a parameter
       __clk_handle_0(BAD_CLOCK_HANDLE),
-      bits(width), reset_type(NO_RESET_REG),
-      proxy(NULL)
+      bits(width), reset_type(NO_RESET_REG)
   {
     init_val(value, bits);
     write_undet(&value, bits);
@@ -727,13 +596,13 @@ class MOD_CReg : public Module
     }
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
     symbols[0].value = (void*)(&value);
   }
-  ~MOD_CReg() { delete proxy; }
+  
  public:
   const T& METH_port0__read()    const { return value; }
   const T& METH_port1__read()    const { return value; }
@@ -842,41 +711,6 @@ class MOD_CReg : public Module
   bool did_write_rec[max_ports];
   T write_val[max_ports];
 
- // proxy access facility
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, one, eq_one, read_reg, write_reg);
-    return (*proxy);
-  }
- private:
-  static unsigned int one(void* /*obj */, bool /* hi */)
-  {
-    return 1;
-  }
-  static bool eq_one(void* /* obj */, unsigned int addr)
-  {
-    return (addr == 1);
-  }
-  static const T& read_reg(void* obj, unsigned int /* addr */)
-  {
-    MOD_CReg<T>* reg = (MOD_CReg<T>*) obj;
-    return reg->value;
-  }
-  static bool write_reg(void* obj, unsigned int addr, const T& data)
-  {
-    if (addr == 1)
-    {
-      MOD_CReg<T>* reg = (MOD_CReg<T>*) obj;
-      reg->value = data;
-      return true;
-    }
-    else
-      return false; // indicates write to invalid address
-  }
 };
 
 #endif /* __BS_PRIM_MOD_REG_H__ */
