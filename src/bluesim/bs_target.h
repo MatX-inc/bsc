@@ -2,8 +2,6 @@
 #define __TARGET_H__
 
 #include <algorithm>
-#include <list>
-#include <string>
 
 #include "bluesim_kernel_api.h"
 
@@ -15,8 +13,17 @@
 // registered with bk_sync_init() (see bluesim_host_ops.h).
 class Target
 {
+public:
+  // Errors are held in fixed storage: a bounded number of
+  // bounded-length messages.  Errors beyond the bound are dropped
+  // and over-long messages are truncated; both are harmless because
+  // the messages are diagnostics reported by handle_errors().
+  static const unsigned int MAX_ERRORS    = 8;
+  static const unsigned int MAX_ERROR_LEN = 256;  // including the NUL
+
 private:
-  std::list<std::string> errors;
+  char errors[MAX_ERRORS][MAX_ERROR_LEN];
+  unsigned int num_errors;
 
 protected:
   const struct bs_host_ops* host_ops;
@@ -24,12 +31,19 @@ protected:
 
 public:
   Target(const struct bs_host_ops* ops, void* ctx)
-    : errors(std::list<std::string>()), host_ops(ops), host_ctx(ctx) {};
+    : num_errors(0), host_ops(ops), host_ctx(ctx) {};
   virtual ~Target() { handle_errors(); };
 
-  void add_error(const char* error) {
-    errors.push_front(error);
-  };
+  // Targets are never heap-allocated -- they live on the stack of
+  // the system task writing to them -- but the virtual destructor
+  // makes the compiler emit deleting destructors that would
+  // otherwise reference the global operator delete.  This
+  // class-scope operator delete keeps that reference (and the
+  // allocator import it would create) out of the runtime; it can
+  // never actually run.
+  static void operator delete(void*) {}
+
+  void add_error(const char* error);
 
   void handle_errors();
 
@@ -72,7 +86,10 @@ public:
   void write_data(const void* data, unsigned int size, unsigned int num);
 };
 
-// Capture output in a string
+// Capture output in a string.  The character storage is provided by
+// the caller (typically a stack array in the calling system task's
+// frame): 'storage' must hold at least size + 1 bytes and must
+// outlive the BufferTarget, which never frees it.
 class BufferTarget : public Target
 {
 private:
@@ -81,7 +98,7 @@ private:
   unsigned int start;
   unsigned int end;
 public:
-  BufferTarget(tSimStateHdl simHdl, unsigned int size);
+  BufferTarget(tSimStateHdl simHdl, char* storage, unsigned int size);
   ~BufferTarget();
   void write_char(char c);
   void write_char(char c, unsigned int count);

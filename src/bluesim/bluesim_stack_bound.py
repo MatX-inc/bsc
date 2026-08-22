@@ -347,20 +347,31 @@ EXTERNAL_ALLOWANCES = [
 ]
 
 # The runtime's known VLA users (all sized by the width of the value
-# being formatted or divided): a plain-'dynamic' frame matching one of
-# these is charged its static part plus --format-vla-bytes; any other
-# plain-'dynamic' frame defeats the bound.
+# being formatted or divided, or by a format field's own length): a
+# plain-'dynamic' frame matching one of these is charged its static
+# part plus --format-vla-bytes; any other plain-'dynamic' frame
+# defeats the bound.
 DYNAMIC_VLA_FUNCTIONS = [
+    # dollar_display.cxx: string arguments staged on the stack
+    # (FILL_TVALUE_KEEPING_STRINGS), numeric values reinterpreted as
+    # format strings, the real-format field copy, and the $swrite
+    # family's caller-side BufferTarget storage
+    r"^const char\* print_(binary|decimal|hex|octal|real)\(tFieldDesc&",
+    r"^void format\(const char\*",
+    # the variadic system tasks are matched by mangled name: GCC's
+    # callgraph labels demangle their '...' prototypes to just ")"
+    r"^_Z12dollar_fatalP9tSimState",
+    r"^_Z1\ddollar_s(write[boh]?|format)AVP9tSimState",
     # tree-valued string names flattened into stack buffers sized by
     # the tree's own byte count: $fopen's file name and mode, the
     # plusargs name, and the RegFile/BRAM load-file constructors
-    # (see bs_str.h).  The variadic tasks are matched by mangled name:
-    # GCC's callgraph labels demangle their '...' prototypes to just ")"
+    # (see bs_str.h)
     r"^_Z12dollar_fopenPKc",
     r"^_Z26dollar_test_dollar_plusargsP9tSimState",
     r"\bMOD_RegFile<.*>::MOD_RegFile\(.*tStr",
     r"\bMOD_BRAM<.*>::MOD_BRAM\(.*tStr",
-    r"^const char\* print_binary\(tFieldDesc&",     # dollar_display.cxx
+    # target.cxx: over-long formatted reals retried on the stack
+    r"\bTarget::write_real\(",
     r"\bWideData::print_(binary|hex|octal|decimal)\(",
     r"\bWideData::max_decimal_digits\(",
     r"^WideData operator[/%]\(",                     # wide_data.cxx

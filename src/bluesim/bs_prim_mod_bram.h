@@ -379,7 +379,8 @@ class MOD_BRAM : public Module
    */
   BS_HOST_NORETURN void oob_panic(const char* access, const AT& addr) const
   {
-    BufferTarget name_buf(sim_hdl, 1024);
+    char name_store[1024 + 1];
+    BufferTarget name_buf(sim_hdl, name_store, 1024);
     write_name(&name_buf);
     bk_out_of_bounds(sim_hdl, "BRAM", name_buf.str(), access,
                      (tUInt64) addr, (tUInt64) lo_addr, (tUInt64) hi_addr);

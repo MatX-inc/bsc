@@ -2,8 +2,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
-#include <vector>
-#include <string>
 
 #include "bluesim_kernel_api.h"
 #include "bs_str.h"
@@ -12,6 +10,15 @@
 #include "bs_target.h"
 #include "mem_alloc.h"
 #include "portability.h"
+
+/* Formatting in this file works without heap allocation: values are
+ * read straight out of the argument list, string arguments are viewed
+ * in place or staged in stack arrays sized by their own descriptors,
+ * and the output is produced by the hand-rolled printers.  The only
+ * allocator use left in this file is the $fopen file table (VLFiles
+ * below), which grows through the Bluesim allocator the first time a
+ * file-based system task runs.
+ */
 
 // This structure is used to record information
 // parsed from a format field specifier.
@@ -24,12 +31,14 @@ typedef struct
   const char* after; // pointer to remainder of string (after mode char)
 } tFieldDesc;
 
-// This structure is used to unify different value representations
+// This structure is used to unify different value representations.
+// It never owns the wide data it points at: wideVal is either the
+// caller's own WideData argument or a view over a stack array in the
+// printing routine's frame.
 typedef struct
 {
   bool         isSigned;
   bool         usingWideVal;
-  bool         localStorage;
   unsigned int bits;
   union
   {
@@ -171,8 +180,10 @@ void pad(signed int requested_width,
 class ArgList
 {
  private:
-  char*        type_str;
+  // The size string is a literal in the generated code and outlives
+  // the call, so it is walked in place (no copy is made).
   const char*  cptr;
+  bool         done;
   va_list*     ap_ptr;
   bool         has_sign;
   bool         is_pointer;
@@ -183,20 +194,16 @@ class ArgList
 
  public:
   ArgList(const char* str, va_list* ap)
-    : ap_ptr(ap)
+    : cptr(str), done(false), ap_ptr(ap)
   {
-    type_str = strdup(str);  // use malloc(), so pair with free()
-    cptr = type_str;
     next();
   }
-
-  ~ArgList() { free(type_str); }
 
  private:
   void next();
 
  public:
-  bool isDone() const           { return (type_str == NULL); }
+  bool isDone() const           { return done; }
   unsigned int argSize() const  { return size; }
   bool isSigned() const         { return has_sign; }
   bool isPointer() const        { return is_pointer; }
@@ -221,13 +228,12 @@ class ArgList
 
 void ArgList::next()
 {
-  if (type_str == NULL)
+  if (done)
     return;
 
   if (*cptr == '\0')
   {
-    free(type_str);
-    type_str = NULL;
+    done = true;
     return;
   }
 
@@ -243,8 +249,7 @@ void ArgList::next()
   // process next size value from string
   if (*cptr == '\0')
   {
-    free(type_str);
-    type_str = NULL;
+    done = true;
     return;
   }
 
@@ -388,33 +393,17 @@ void* ArgList::getPointer()
   return ret;
 }
 
+// Fill a tValue from a non-string argument.  String arguments need
+// caller-provided storage; the printing routines consume them with
+// FILL_TVALUE_KEEPING_STRINGS below, which stages the string's bytes
+// in a stack array in the caller's own frame.
 void fill_tValue(tValue& v, ArgList* args, Target* dest)
 {
   v.isSigned = args->isSigned();
-  v.usingWideVal = args->isPointer() || args->isString() ||
-                   args->isStringTree();
-  v.localStorage = args->isString() || args->isStringTree();
+  v.usingWideVal = args->isPointer();
   v.bits = args->argSize();
   if (args->isPointer())
     v.data.wideVal = (WideData*) args->getPointer();
-  else if (args->isString())
-    v.data.wideVal = new WideData(v.bits,args->getString());
-  else if (args->isStringTree())
-  {
-    // stage the tree's bytes contiguously (heap storage, like the
-    // owning WideData about to copy them) and hand them to the
-    // string layout constructor
-    const tStr* t = args->getStringTree();
-    if (t)
-    {
-      v.bits = 8 * bs_str_len(t);
-      char* flat = new char[bs_str_len(t) + 1];
-      v.data.wideVal = new WideData(v.bits, bs_str_flatten(t, flat));
-      delete[] flat;
-    }
-    else
-      v.data.wideVal = NULL;
-  }
   else if (args->isDouble()) {
     dest->add_error("unexpected real number argument\n");
     v.data.sVal = (signed long long) args->getDouble();
@@ -444,48 +433,134 @@ void fill_tValue(tValue& v, ArgList* args, Target* dest)
   }
 }
 
-void discard_tValue(tValue& v)
+// Consume the next argument if it is a string (in either
+// representation: a plain character array with a sized descriptor,
+// stored in *chars, or a string tree with an unsized descriptor --
+// see bs_str.h -- stored in *tree), recording its bit count in
+// *bits.  Returns true when a string was consumed; returns false,
+// with the argument left unconsumed, when the next argument is not
+// a string.
+static bool take_string_arg(ArgList* args,
+                            const char** chars, const tStr** tree,
+                            unsigned int* bits)
 {
-  if (v.localStorage)
-    delete v.data.wideVal;
+  *chars = NULL;
+  *tree = NULL;
+  *bits = 0;
+  if (args->isDone())
+    return false;
+  if (args->isString())
+  {
+    *bits = args->argSize();
+    *chars = args->getString();
+    return true;
+  }
+  if (args->isStringTree())
+  {
+    *tree = args->getStringTree();
+    if (*tree == NULL)
+      *chars = "";  // an absent def prints as an empty string
+    else
+      *bits = 8u * bs_str_len(*tree);
+    return true;
+  }
+  return false;
 }
 
-const std::string* convert_to_string(ArgList* args, Target* dest)
+// Fill a non-owning WideData view (whose storage the caller
+// provides) with the bytes of a string, most significant byte first
+// -- the layout the old heap-owning WideData string constructor
+// produced.  The string arrives either as characters or as a string
+// tree, whose leaves are walked in place.
+static void fill_wide_from_string(WideData& w, const char* str,
+                                  const tStr* tree)
 {
-  if (args->isDone())
-    return NULL;
-
-  if (args->isString() || args->isStringTree())
-    return NULL;  // actually a bug if this occurs
-
-  // to interpret a number as a string, the characters start at the
-  // MSB and each byte is treated as a character moving toward the LSB,
-  // but leading zeros should be ignored.
-  tValue v;
-  fill_tValue(v, args, dest);
-  std::string* str = new std::string();
-  if (v.usingWideVal)
+  if (w.size() == 0)
+    return;
+  w.clear();
+  if (tree != NULL)
   {
-    unsigned int i = (v.data.wideVal->size() + 7) / 8;
-    while ((i > 0) && (v.data.wideVal->getByte(i-1) == 0)) --i;
-    while (i-- > 0)
-      str->push_back(v.data.wideVal->getByte(i));
-  }
-  else if (v.bits == 1)
-  {
-    if (v.data.bitVal == 1) str->push_back(1);
+    unsigned int nbytes = w.size() / 8;
+    tUInt32 pos = 0u;
+    while (pos < tree->len)
+    {
+      tUInt32 off;
+      const tStr* leaf = bs_str_leaf_at(tree, pos, &off);
+      for (tUInt32 i = 0u; i < leaf->len; ++i)
+        w.setByte(nbytes - 1u - (off + i), (unsigned char) leaf->data[i]);
+      pos = off + leaf->len;
+    }
   }
   else
   {
-    unsigned int i = (v.bits + 7) / 8;
-    while ((i > 0) && (((v.data.uVal >> (8*(i-1))) & 0xFF) == 0)) --i;
-    while (i-- > 0)
-      str->push_back((v.data.uVal >> (8*i)) & 0xFF);
+    const char* cp = str;
+    for (unsigned int i = w.size(); i > 0; i -= 8)
+      w.setByte((i - 1) / 8, (unsigned char) *(cp++));
   }
+}
 
-  discard_tValue(v);
+/* Fill tValue 'v' from the next argument.  A string argument's bytes
+ * are staged in a stack array declared here, in the expanding
+ * routine's own frame, so the view in 'v' lives exactly as long as
+ * the routine that prints it -- this replaces the old heap-owning
+ * WideData that string arguments used to allocate.  The array is a
+ * VLA sized by the argument's own descriptor; every routine using
+ * this macro is charged a VLA allowance by the stack-depth analysis
+ * (DYNAMIC_VLA_FUNCTIONS in bluesim_stack_bound.py).
+ */
+#define FILL_TVALUE_KEEPING_STRINGS(v, args, dest, tag)                 \
+  unsigned int tag##_bits = 0;                                          \
+  bool tag##_signed = (args)->isSigned();                               \
+  const char* tag##_chars = NULL;                                       \
+  const tStr* tag##_tree = NULL;                                        \
+  bool tag##_is_str =                                                   \
+    take_string_arg((args), &tag##_chars, &tag##_tree, &tag##_bits);    \
+  unsigned int tag##_store[NUM_WORDS(tag##_bits) + 1];                  \
+  WideData tag##_view(tag##_store, tag##_bits);                         \
+  if (tag##_is_str)                                                     \
+  {                                                                     \
+    fill_wide_from_string(tag##_view, tag##_chars, tag##_tree);         \
+    (v).isSigned = tag##_signed;                                        \
+    (v).usingWideVal = true;                                            \
+    (v).bits = tag##_bits;                                              \
+    (v).data.wideVal = &tag##_view;                                     \
+  }                                                                     \
+  else                                                                  \
+    fill_tValue((v), (args), (dest))
 
-  return str;
+// Write the characters of a numeric argument into 'buf': the
+// argument's bytes starting at the most significant one, with
+// leading zero bytes skipped, NUL-terminated.  The caller provides
+// at least (argSize() + 7) / 8 + 1 bytes.  This replaces the old
+// heap-allocating conversion to a std::string.
+static const char* convert_to_chars(ArgList* args, Target* dest, char* buf)
+{
+  char* p = buf;
+  if (!args->isDone() && !args->isString() && !args->isStringTree())
+  {
+    tValue v;
+    fill_tValue(v, args, dest);
+    if (v.usingWideVal)
+    {
+      unsigned int i = (v.data.wideVal->size() + 7) / 8;
+      while ((i > 0) && (v.data.wideVal->getByte(i-1) == 0)) --i;
+      while (i-- > 0)
+        *(p++) = (char) v.data.wideVal->getByte(i);
+    }
+    else if (v.bits == 1)
+    {
+      if (v.data.bitVal == 1) *(p++) = 1;
+    }
+    else
+    {
+      unsigned int i = (v.bits + 7) / 8;
+      while ((i > 0) && (((v.data.uVal >> (8*(i-1))) & 0xFF) == 0)) --i;
+      while (i-- > 0)
+        *(p++) = (char) ((v.data.uVal >> (8*i)) & 0xFF);
+    }
+  }
+  *p = '\0';
+  return buf;
 }
 
 // This function is used to handle escape sequences beginning with '\'
@@ -559,7 +634,7 @@ const char* print_decimal(tFieldDesc& spec, ArgList* args, Target* dest)
   }
 
   tValue v;
-  fill_tValue(v, args, dest);
+  FILL_TVALUE_KEEPING_STRINGS(v, args, dest, dec);
 
   /* There are 2 cases:
    *  %d  => width determined by type size, left-padded with spaces
@@ -609,7 +684,6 @@ const char* print_decimal(tFieldDesc& spec, ArgList* args, Target* dest)
     }
   }
 
-  discard_tValue(v);
   return spec.after;
 }
 
@@ -623,7 +697,7 @@ const char* print_hex(tFieldDesc& spec, ArgList* args, Target* dest)
   }
 
   tValue v;
-  fill_tValue(v, args, dest);
+  FILL_TVALUE_KEEPING_STRINGS(v, args, dest, hex);
 
   /* There are 2 cases:
    *  %h  => width determined by type size, all bits shown
@@ -662,7 +736,6 @@ const char* print_hex(tFieldDesc& spec, ArgList* args, Target* dest)
     }
   }
 
-  discard_tValue(v);
   return spec.after;
 }
 
@@ -676,7 +749,7 @@ const char* print_octal(tFieldDesc& spec, ArgList* args, Target* dest)
   }
 
   tValue v;
-  fill_tValue(v, args, dest);
+  FILL_TVALUE_KEEPING_STRINGS(v, args, dest, oct);
 
   /* There are 2 cases:
    *  %o  => width determined by type size, all bits shown
@@ -712,7 +785,6 @@ const char* print_octal(tFieldDesc& spec, ArgList* args, Target* dest)
     }
   }
 
-  discard_tValue(v);
   return spec.after;
 }
 
@@ -726,7 +798,7 @@ const char* print_binary(tFieldDesc& spec, ArgList* args, Target* dest)
   }
 
   tValue v;
-  fill_tValue(v, args, dest);
+  FILL_TVALUE_KEEPING_STRINGS(v, args, dest, bin);
 
   /* There are 2 cases:
    *  %b  => width determined by type size, all bits shown
@@ -752,7 +824,6 @@ const char* print_binary(tFieldDesc& spec, ArgList* args, Target* dest)
     dest->write_data(buf,value_width,sizeof(char));
   }
 
-  discard_tValue(v);
   return spec.after;
 }
 
@@ -780,46 +851,64 @@ const char* print_string(tFieldDesc& spec, ArgList* args, Target* dest)
     return spec.str;  // there is no argument, so do not treat as format
   }
 
-  if (args->isStringTree())
+  if (args->isString())
+  {
+    // a character-array argument: view it in place
+    unsigned int str_len = args->argSize() / 8;
+    const char* str = args->getString();
+    pad(spec.width, str_len, str_len, ' ', dest);
+    for (unsigned int i = 0; i < str_len; ++i)
+      dest->write_char(str[i]);
+  }
+  else if (args->isStringTree())
   {
     // a string-tree argument: stream its leaves straight to the
     // target, without flattening (see bs_str.h)
     const tStr* t = args->getStringTree();
-    unsigned int tree_len = bs_str_len(t);
-    pad(spec.width, tree_len, tree_len, ' ', dest);
+    unsigned int str_len = bs_str_len(t);
+    pad(spec.width, str_len, str_len, ' ', dest);
     tUInt32 pos = 0u;
-    while (pos < tree_len)
+    while (pos < str_len)
     {
       tUInt32 off;
       const tStr* leaf = bs_str_leaf_at(t, pos, &off);
       dest->write_data(leaf->data, sizeof(char), leaf->len);
       pos = off + leaf->len;
     }
-    return spec.after;
   }
-
-  // try to get string argument and determine length
-  const char* str = NULL;
-  unsigned int str_len = args->argSize() / 8;
-  const std::string* alloced_str = NULL;
-  if (args->isString())
-    str = args->getString();
   else
   {
-    alloced_str = convert_to_string(args, dest);
-    str = alloced_str->c_str();
-    str_len = alloced_str->length();
+    // interpret a number as a string: the characters start at the
+    // MSB and each byte is treated as a character moving toward the
+    // LSB, with leading zero bytes ignored.  The characters are
+    // written straight to the target (the old code built them into
+    // a heap-allocated intermediate string first).
+    tValue v;
+    fill_tValue(v, args, dest);
+    if (v.usingWideVal)
+    {
+      unsigned int n = (v.data.wideVal->size() + 7) / 8;
+      while ((n > 0) && (v.data.wideVal->getByte(n-1) == 0)) --n;
+      pad(spec.width, n, n, ' ', dest);
+      while (n-- > 0)
+        dest->write_char((char) v.data.wideVal->getByte(n));
+    }
+    else if (v.bits == 1)
+    {
+      unsigned int n = (v.data.bitVal == 1) ? 1 : 0;
+      pad(spec.width, n, n, ' ', dest);
+      if (n > 0)
+        dest->write_char(1);
+    }
+    else
+    {
+      unsigned int n = (v.bits + 7) / 8;
+      while ((n > 0) && (((v.data.uVal >> (8*(n-1))) & 0xFF) == 0)) --n;
+      pad(spec.width, n, n, ' ', dest);
+      while (n-- > 0)
+        dest->write_char((char) ((v.data.uVal >> (8*n)) & 0xFF));
+    }
   }
-
-  unsigned int value_width = str_len;
-  pad(spec.width, value_width, value_width, ' ', dest);
-
-  // print the string characters
-  for (unsigned int i = 0; i < str_len; ++i)
-    dest->write_char(str[i]);
-
-  if (alloced_str)
-    delete alloced_str;
 
   return spec.after;
 }
@@ -834,33 +923,23 @@ const char* print_time(tFieldDesc& spec, ArgList* args, Target* dest)
   return print_decimal(spec, args, dest);
 }
 
-// makes a string copy of the format in tFieldDesc
-char* copy_format(tFieldDesc& spec) {
-
-  // start with space for % and null
-  size_t format_size = 2;
-  const char* cur = spec.str;
-  while (cur != spec.after) {
-    cur++;
-    format_size++;
-  }
-
-  char* format_copy = (char*)malloc(format_size);
-  format_copy[0] = '%';
-  char* copy_start = format_copy+1;
-  strncpy(copy_start, spec.str, format_size - 2);
-  format_copy[format_size - 1] = '\0';
-
-  return(format_copy);
-}
-
 // Printing routine for real number formats
 // The formatting itself is done by the host through the format_real
 // host operation (the host re-uses printf's floating-point printing)
 const char* print_real(tFieldDesc& spec, ArgList* args, Target* dest)
 {
-
-  char* format_copy = copy_format(spec);
+  // make a NUL-terminated copy of the format field ("%" plus the
+  // field spec) on the stack; its length is bounded by the format
+  // string in the generated code
+  size_t format_size = 2 + (size_t)(spec.after - spec.str);
+  char format_copy[format_size];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+  format_copy[0] = '%';
+  {
+    char* q = format_copy + 1;
+    for (const char* cur = spec.str; cur != spec.after; ++cur)
+      *(q++) = *cur;
+    *q = '\0';
+  }
 
   double v; // value to print
 
@@ -871,16 +950,13 @@ const char* print_real(tFieldDesc& spec, ArgList* args, Target* dest)
     // non-real where real expected
     dest->add_error("expected real argument, found non-real argument\n");
     tValue tv;
-    fill_tValue(tv, args, dest);
+    FILL_TVALUE_KEEPING_STRINGS(tv, args, dest, real);
     v = tValueToDouble(tv);
-    discard_tValue(tv);
   }
 
   dest->write_real(format_copy, v);
 
-  free(format_copy);
   return spec.after;
-
 }
 
 
@@ -990,34 +1066,43 @@ void format(const char* default_format, Module* location, ArgList* args,
       // codes.  When one is found, print any prior characters
       // which haven't been printed and then process the special
       // character, possibly consuming arguments.
-      const char* cptr = NULL;
-      const std::string* alloced_str = NULL;
+
+      // The format parser needs contiguous, NUL-terminated
+      // characters.  A character-array argument is walked in place;
+      // a string tree or a numeric value reinterpreted as a format
+      // string is staged in stack storage first: one character per
+      // byte, plus a NUL terminator, sized by the tree's own byte
+      // count or the argument's descriptor (unused -- zero bytes --
+      // when the argument is a character array).
+      const char* direct = NULL;
+      const tStr* tree = NULL;
       if (args->isString())
-      {
-        cptr = args->getString();
-      }
+        direct = args->getString();
       else if (args->isStringTree())
       {
-        // flatten the tree's bytes for the format parser, which
-        // needs contiguous, NUL-terminated characters
-        const tStr* t = args->getStringTree();
-        if (t == NULL)
-          cptr = "";  // an absent def is an empty format
-        else
-        {
-          std::string* flat = new std::string();
-          flat->resize(bs_str_len(t));
-          if (bs_str_len(t) > 0)
-            bs_str_copy(t, &(*flat)[0]);
-          alloced_str = flat;
-          cptr = flat->c_str();
-        }
+        tree = args->getStringTree();
+        if (tree == NULL)
+          direct = "";  // an absent def is an empty format
+      }
+      unsigned int conv_bytes =
+        (direct != NULL) ? 0
+                         : (tree != NULL) ? bs_str_len(tree)
+                                          : (args->argSize() + 7) / 8;
+      char conv_buf[conv_bytes + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+
+      const char* cptr = NULL;
+      if (direct != NULL)
+      {
+        cptr = direct;
+      }
+      else if (tree != NULL)
+      {
+        cptr = bs_str_flatten(tree, conv_buf);
       }
       else
       {
         // The value is not a string but must be interpreted as one
-        alloced_str = convert_to_string(args, dest);
-        cptr = alloced_str->c_str();
+        cptr = convert_to_chars(args, dest, conv_buf);
       }
 
       unsigned int len = 0;
@@ -1041,9 +1126,6 @@ void format(const char* default_format, Module* location, ArgList* args,
 
       // write any trailing characters
       if (len > 0) dest->write_data(cptr, sizeof(char), len);
-
-      if (alloced_str)
-        delete alloced_str;
     } else if (is_str) {
       // display the argument as a string literal
       handle_format("s", location, args, dest);
@@ -1331,7 +1413,11 @@ void dollar_swriteAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest(simHdl, (bits + 7) / 8);
+      // the string buffer lives on the stack, sized by the
+      // destination argument's own width (one character per byte,
+      // plus the terminator BufferTarget maintains)
+      char dest_store[(bits + 7) / 8 + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+      BufferTarget dest(simHdl, dest_store, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("d", location, &args, &dest, false);
@@ -1364,7 +1450,11 @@ void dollar_swritebAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest(simHdl, (bits + 7) / 8);
+      // the string buffer lives on the stack, sized by the
+      // destination argument's own width (one character per byte,
+      // plus the terminator BufferTarget maintains)
+      char dest_store[(bits + 7) / 8 + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+      BufferTarget dest(simHdl, dest_store, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("b", location, &args, &dest, false);
@@ -1397,7 +1487,11 @@ void dollar_swriteoAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest(simHdl, (bits + 7) / 8);
+      // the string buffer lives on the stack, sized by the
+      // destination argument's own width (one character per byte,
+      // plus the terminator BufferTarget maintains)
+      char dest_store[(bits + 7) / 8 + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+      BufferTarget dest(simHdl, dest_store, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("o", location, &args, &dest, false);
@@ -1430,7 +1524,11 @@ void dollar_swritehAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest(simHdl, (bits + 7) / 8);
+      // the string buffer lives on the stack, sized by the
+      // destination argument's own width (one character per byte,
+      // plus the terminator BufferTarget maintains)
+      char dest_store[(bits + 7) / 8 + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+      BufferTarget dest(simHdl, dest_store, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("h", location, &args, &dest, false);
@@ -1464,7 +1562,11 @@ void dollar_sformatAV(tSimStateHdl simHdl,
     {
       unsigned int bits = args.argSize();
       void* target = args.getPointer();
-      BufferTarget dest(simHdl, (bits + 7) / 8);
+      // the string buffer lives on the stack, sized by the
+      // destination argument's own width (one character per byte,
+      // plus the terminator BufferTarget maintains)
+      char dest_store[(bits + 7) / 8 + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
+      BufferTarget dest(simHdl, dest_store, (bits + 7) / 8);
 
       // remaining arguments are for format
       format("d", location, &args, &dest, true);
@@ -1566,7 +1668,7 @@ void dollar_fatal(tSimStateHdl simHdl,
 
     // first argument is the exit status
     tValue v;
-    fill_tValue(v, &args, &dest);
+    FILL_TVALUE_KEEPING_STRINGS(v, &args, &dest, fat);
 
     int status = 0;
     if (v.usingWideVal)
@@ -1581,8 +1683,6 @@ void dollar_fatal(tSimStateHdl simHdl,
     dest.write_char('\n');
     dest.handle_errors();
     bk_fatal_now(simHdl, status);
-
-    discard_tValue(v);
   }
 
   va_end(ap);
@@ -1693,35 +1793,50 @@ public:
     return key ;
   }
 
-  // MCD can cause multiple files to be specified.
-  void findFiles( std::vector<bs_host_file*> & result, tUInt32 key )
+  // The largest number of files one key can name: an MCD key is a
+  // 31-bit one-hot mask (at most 31 files) and an fd key names
+  // exactly one file.  Callers provide a result array of this size.
+  static const unsigned int MAX_FILES_PER_KEY = 31 ;
+
+  // MCD can cause multiple files to be specified.  Fills the
+  // caller's fixed result array (MAX_FILES_PER_KEY entries suffice)
+  // and returns the number of files found.
+  unsigned int findFiles( bs_host_file* result[], tUInt32 key )
   {
     ensure_std_registered() ;
-    result.clear() ;
+    unsigned int count = 0 ;
     if ( key >= fdbase ) {     // fd type
       if ( fdfiles[key - fdbase] != 0 )
-        result.push_back( fdfiles[key - fdbase] ) ;
+        result[count++] = fdfiles[key - fdbase] ;
       // XXX check for valid index done by stl?
     } else { // mcd type
       tUInt32 position = 0  ;
       while (key != 0 ) {
         if ( (key & 0x01) && mcdfiles[position] ) {
-          result.push_back( mcdfiles[position] ) ;
+          result[count++] = mcdfiles[position] ;
         }
         key = key >> 1 ;
         position = position + 1 ;
       }
 
     }
+    return count ;
   }
-  void findAllFiles( std::vector<bs_host_file*> & result )
+
+  // Flush every registered file.  The fd table has no fixed bound,
+  // so this iterates the tables in place instead of copying them
+  // into a caller's array.
+  void flushAll()
   {
     ensure_std_registered() ;
-    result.clear() ;
+    const struct bs_host_ops* ops = bk_host_ops(NULL) ;
+    if ( ops == NULL )
+      return ;
+    void* ctx = bk_host_ctx(NULL) ;
     for ( tUInt32 i = 0 ; i < fd_count ; i = i + 1 )
-      result.push_back( fdfiles[i] ) ;
+      ops->flush( ctx, fdfiles[i] ) ;
     for ( tUInt32 i = 0 ; i < mcd_count ; i = i + 1 )
-      result.push_back( mcdfiles[i] ) ;
+      ops->flush( ctx, mcdfiles[i] ) ;
   }
   void closeFiles( tUInt32 key )
   {
@@ -1838,12 +1953,12 @@ void dollar_fclose(const char* /*unused*/, tUInt32 filehandle)
 // $fflush( filehandle )
 void dollar_fflush(const char* /*unused*/, tUInt32 filehandle)
 {
-  std::vector<bs_host_file*> files ;
-  vlfile.findFiles( files, filehandle ) ;
+  bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
+  unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
   const struct bs_host_ops* ops = bk_host_ops(NULL);
   if (ops == NULL)
     return ;
-  for ( unsigned int i = 0 ; i < files.size(); i ++ )
+  for ( unsigned int i = 0 ; i < nfiles ; i ++ )
     ops->flush( bk_host_ctx(NULL), files[i] );
 }
 
@@ -1851,13 +1966,7 @@ void dollar_fflush(const char* /*unused*/, tUInt32 filehandle)
 // $fflush()
 void dollar_fflush()
 {
-  std::vector<bs_host_file*> files ;
-  vlfile.findAllFiles(files) ;
-  const struct bs_host_ops* ops = bk_host_ops(NULL);
-  if (ops == NULL)
-    return ;
-  for (unsigned int i = 0 ; i < files.size(); i ++)
-    ops->flush( bk_host_ctx(NULL), files[i] );
+  vlfile.flushAll() ;
 }
 
 
@@ -1871,26 +1980,25 @@ void dollar_fdisplay(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("d", location, local_args, &dest, false);
+      format("d", location, &local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -1907,26 +2015,25 @@ void dollar_fdisplayb(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("b", location, local_args, &dest, false);
+      format("b", location, &local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -1943,26 +2050,25 @@ void dollar_fdisplayo(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("o", location, local_args, &dest, false);
+      format("o", location, &local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -1978,26 +2084,25 @@ void dollar_fdisplayh(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("h", location, local_args, &dest, false);
+      format("h", location, &local_args, &dest, false);
       dest.write_char('\n');
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -2013,25 +2118,24 @@ void dollar_fwrite(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("d", location, local_args, &dest, false);
+      format("d", location, &local_args, &dest, false);
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -2047,25 +2151,24 @@ void dollar_fwriteb(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("b", location, local_args, &dest, false);
+      format("b", location, &local_args, &dest, false);
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -2081,25 +2184,24 @@ void dollar_fwriteo(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("o", location, local_args, &dest, false);
+      format("o", location, &local_args, &dest, false);
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
@@ -2115,25 +2217,24 @@ void dollar_fwriteh(tSimStateHdl simHdl,
     va_start(ap,size_str);
     ArgList args(size_str, &ap);
 
-    std::vector<bs_host_file*> files ;
+    bs_host_file* files[VLFiles::MAX_FILES_PER_KEY] ;
     tUInt32 filehandle = args.getUInt() ;
 
     va_end(ap) ;
 
-    vlfile.findFiles( files, filehandle ) ;
+    unsigned int nfiles = vlfile.findFiles( files, filehandle ) ;
 
-    for( unsigned int i = 0 ; i < files.size() ; i ++ )
+    for( unsigned int i = 0 ; i < nfiles ; i ++ )
     {
       // Reset the arg and continue
       va_start( ap, size_str) ;
-      ArgList * local_args = new ArgList(size_str, &ap);
-      local_args->getUInt() ;
+      ArgList local_args(size_str, &ap);
+      local_args.getUInt() ;
 
       FileTarget dest(simHdl, files[i]);
-      format("h", location, local_args, &dest, false);
+      format("h", location, &local_args, &dest, false);
       dest.handle_errors();
 
-      delete local_args ;
       va_end(ap);
     }
   }
