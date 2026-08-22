@@ -38,9 +38,10 @@
 
 typedef void*        (*tNewModelFn)(void);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
+typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
                                     const struct bs_host_ops*, void*,
-                                    tUInt32);
+                                    tUInt32, void*);
 typedef tStatus      (*tSyncRunFn)(tSimStateHdl);
 typedef void         (*tQuitAtFn)(tSimStateHdl, tTime);
 typedef tUInt32      (*tHighWaterFn)(tSimStateHdl);
@@ -95,6 +96,7 @@ int main(int argc, char** argv)
 
   tNewModelFn   new_model   = (tNewModelFn)   find_sym(dl, new_model_name);
   tMaxDepthFn   max_depth   = (tMaxDepthFn)   find_sym(dl, "bk_max_event_queue_depth");
+  tCtxBytesFn   ctx_bytes   = (tCtxBytesFn)   find_sym(dl, "bk_context_bytes");
   tSyncInitFn   sync_init   = (tSyncInitFn)   find_sym(dl, "bk_sync_init");
   tSyncRunFn    sync_run    = (tSyncRunFn)    find_sym(dl, "bk_sync_run");
   tQuitAtFn     quit_at     = (tQuitAtFn)     find_sym(dl, "bk_quit_at");
@@ -121,20 +123,31 @@ int main(int argc, char** argv)
   const struct bs_host_ops* ops = bs_default_host_ops();
   void* ctx = bs_default_host_ctx();
 
+  void* ctx_buf = malloc(ctx_bytes(max));
+
   if (strcmp(mode, "exact") == 0)
   {
-    /* a capacity of 0 must be rejected */
-    if (sync_init(model, 1, ops, ctx, 0) != NULL)
+    /* a capacity of 0 must be rejected (and needs no context bytes) */
+    if ((ctx_bytes(0) != 0) ||
+        (sync_init(model, 1, ops, ctx, 0, ctx_buf) != NULL))
     {
       fprintf(stderr, "harness: capacity 0 was not rejected\n");
       return 1;
     }
     printf("harness: zero capacity rejected\n");
 
+    /* a missing context buffer must be rejected */
+    if (sync_init(model, 1, ops, ctx, max, NULL) != NULL)
+    {
+      fprintf(stderr, "harness: NULL context buffer was not rejected\n");
+      return 1;
+    }
+    printf("harness: null context buffer rejected\n");
+
     /* run the whole simulation in a queue of exactly the exposed
      * bound: any under-estimate in the formula aborts the run
      */
-    tSimStateHdl sim = sync_init(model, 1, ops, ctx, max);
+    tSimStateHdl sim = sync_init(model, 1, ops, ctx, max, ctx_buf);
     if (sim == NULL)
     {
       fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -152,11 +165,12 @@ int main(int argc, char** argv)
     printf("harness: high water within bound: %s\n",
            (high_water(sim) <= max) ? "yes" : "NO");
     shutdown_fn(sim);
+    free(ctx_buf);
     return 0;
   }
   else if (strcmp(mode, "overflow") == 0)
   {
-    tSimStateHdl sim = sync_init(model, 1, ops, ctx, max);
+    tSimStateHdl sim = sync_init(model, 1, ops, ctx, max, ctx_buf);
     if (sim == NULL)
     {
       fprintf(stderr, "harness: bk_sync_init failed\n");

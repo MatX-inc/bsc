@@ -38,9 +38,10 @@ typedef tUInt32             (*tCountFn)(tModel);
 typedef const tBkStateInfo* (*tGetStateFn)(tModel, tUInt32);
 typedef const tBkPortInfo*  (*tGetPortFn)(tModel, tUInt32);
 typedef tUInt64             (*tBytesFn)(tModel);
+typedef tUInt64             (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl        (*tSyncInitFn)(tModel, tBool,
                                            const struct bs_host_ops*, void*,
-                                           tUInt32);
+                                           tUInt32, void*);
 typedef void                (*tShutdownFn)(tSimStateHdl);
 
 static void* find_sym(void* dl, const char* name)
@@ -164,6 +165,7 @@ int main(int argc, char** argv)
   tCountFn    num_out    = (tCountFn)    find_sym(dl, "bk_num_output_ports");
   tGetPortFn  get_out    = (tGetPortFn)  find_sym(dl, "bk_get_output_port");
   tBytesFn    out_bytes  = (tBytesFn)    find_sym(dl, "bk_output_bytes");
+  tCtxBytesFn ctx_bytes  = (tCtxBytesFn) find_sym(dl, "bk_context_bytes");
   tSyncInitFn sync_init  = (tSyncInitFn) find_sym(dl, "bk_sync_init");
   tShutdownFn shutdown_fn = (tShutdownFn) find_sym(dl, "bk_shutdown");
 
@@ -282,7 +284,9 @@ int main(int argc, char** argv)
   const tBkStateInfo* s0 = get_state(model, 0);
   const struct bs_host_ops* ops = bs_default_host_ops();
   void* ctx = bs_default_host_ctx();
-  tSimStateHdl sim = sync_init(model, 1, ops, ctx, max_depth(model) + 16);
+  tUInt32 capacity = max_depth(model) + 16;
+  void* ctx_buf = malloc(ctx_bytes(capacity));
+  tSimStateHdl sim = sync_init(model, 1, ops, ctx, capacity, ctx_buf);
   if (sim == NULL)
   {
     fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -292,6 +296,7 @@ int main(int argc, char** argv)
   check(get_state(model, 0) == s0, "descriptors are static across init");
   check(state_bytes(model) == t_state, "state bytes unchanged by init");
   shutdown_fn(sim);
+  free(ctx_buf);
 
   if (failures != 0)
   {

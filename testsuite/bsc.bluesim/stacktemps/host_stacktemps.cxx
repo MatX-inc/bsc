@@ -74,9 +74,10 @@ extern "C" void* realloc(void* ptr, size_t size)
 
 typedef void*        (*tNewModelFn)(void);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
+typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
                                     const struct bs_host_ops*, void*,
-                                    tUInt32);
+                                    tUInt32, void*);
 typedef tStatus      (*tSyncRunFn)(tSimStateHdl);
 typedef tStatus      (*tSyncStepFn)(tSimStateHdl, tClock);
 typedef tClock       (*tGetClockFn)(tSimStateHdl, const char*);
@@ -149,6 +150,7 @@ int main(int argc, char** argv)
 
   tNewModelFn   new_model   = (tNewModelFn)   find_sym(dl, new_model_name);
   tMaxDepthFn   max_depth   = (tMaxDepthFn)   find_sym(dl, "bk_max_event_queue_depth");
+  tCtxBytesFn   ctx_bytes   = (tCtxBytesFn)   find_sym(dl, "bk_context_bytes");
   tSyncInitFn   sync_init   = (tSyncInitFn)   find_sym(dl, "bk_sync_init");
   tSyncRunFn    sync_run    = (tSyncRunFn)    find_sym(dl, "bk_sync_run");
   tSyncStepFn   sync_step   = (tSyncStepFn)   find_sym(dl, "bk_sync_step");
@@ -169,9 +171,11 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  tUInt32 capacity = max_depth(model) + 16;
+  void* ctx_buf = malloc(ctx_bytes(capacity));
   tSimStateHdl sim = sync_init(model, 1,
                                bs_default_host_ops(), bs_default_host_ctx(),
-                               max_depth(model) + 16);
+                               capacity, ctx_buf);
   if (sim == NULL)
   {
     fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -238,6 +242,7 @@ int main(int argc, char** argv)
   printf("harness: simulation finished with status %d\n",
          (int) exit_status(sim));
   shutdown_fn(sim);
+  free(ctx_buf);
 
   return (bad_segments == 0) ? 0 : 1;
 }

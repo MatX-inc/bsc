@@ -1,8 +1,6 @@
 #ifndef __EVENT_QUEUE_H__
 #define __EVENT_QUEUE_H__
 
-#include <vector>
-
 #include "bluesim_types.h"
 #include "priority.h"
 
@@ -43,15 +41,18 @@ typedef bool (*tEventPredicate)(tSimStateHdl, const tEvent&);
 // An EventQueue provides a simple priority queue interface.
 //
 // The queue has a fixed capacity, chosen by the host at
-// bk_sync_init() and preallocated at construction: it NEVER grows.
-// Scheduling an event into a full queue reports the fatal condition
-// through the host's event_queue_overflow operation (via
+// bk_sync_init(), and its storage lives in the host-provided context
+// buffer (the queue allocates nothing and NEVER grows).  Scheduling
+// an event into a full queue reports the fatal condition through the
+// host's event_queue_overflow operation (via
 // bk_event_queue_overflow), which does not return.
 class EventQueue
 {
  private:
   tSimStateHdl        sim_hdl;
-  std::vector<tEvent> events;   // fixed storage of 'capacity' slots
+  tEvent*             events;   // fixed storage of 'capacity' slots,
+                                // provided by the caller and borrowed
+                                // for the queue's lifetime
   unsigned int        capacity;
   unsigned int        count;
   unsigned int        max_count; // high-water mark of 'count'
@@ -66,7 +67,8 @@ class EventQueue
   mutable unsigned int curr_find_idx;
 
  public:
-  EventQueue(tSimStateHdl simHdl, unsigned int queue_capacity);
+  EventQueue(tSimStateHdl simHdl, unsigned int queue_capacity,
+             tEvent* storage);
   ~EventQueue();
 
   // schedule an event (calls the noreturn overflow hook when full)

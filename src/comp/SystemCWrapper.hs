@@ -185,6 +185,11 @@ wrapSystemC flags sim_system = do
         -- bluesim kernel state handle
         sim_hdl = decl $ (userType "tSimStateHdl") (mkVar "_sim_hdl")
 
+        -- storage for the kernel's simulation context, allocated by
+        -- the wrapper and handed to bk_sync_init (the kernel does
+        -- not allocate its context)
+        sim_ctx = decl $ (ptr . CCSyntax.char) (mkVar "_sim_ctx")
+
         -- constructor & destructor
         -- XXX: this is an ugly hack to deal with the macro
         ctor_hack   = ctor (mkVar "SC_CTOR") [mkVar name]
@@ -195,6 +200,7 @@ wrapSystemC flags sim_system = do
                       [ (var "_model_inst") `cCall` [mkNULL]
                       , (var "_model_hdl") `cCall` [mkNULL]
                       , (var "_sim_hdl") `cCall` [mkNULL]
+                      , (var "_sim_ctx") `cCall` [mkNULL]
                       ]
         setup_handler do_init i =
             let nm = getIdBaseString i
@@ -222,13 +228,21 @@ wrapSystemC flags sim_system = do
             -- bk_trigger_clock_edge pair per clock handler and the
             -- UI yield event of a reached bk_quit_after_edge limit);
             -- 16 matches the headroom documented at bk_sync_init().
+            , decl $ (userType "tUInt32") $ (mkVar "_capacity") `assign`
+                  (((var "bk_max_event_queue_depth") `cCall`
+                        [ var "_model_hdl" ]) `cAdd` (mkUInt32 16))
+            -- The kernel constructs its simulation context (state
+            -- and event queue) in a buffer the wrapper provides.
+            , (mkVar "_sim_ctx") `assign`
+                  (newArray (classType "char")
+                       ((var "bk_context_bytes") `cCall` [var "_capacity"]))
             , (mkVar "_sim_hdl") `assign`
                   ((var "bk_sync_init") `cCall`
                        [ var "_model_hdl", mkBool False
                        , (var "bs_default_host_ops") `cCall` []
                        , (var "bs_default_host_ctx") `cCall` []
-                       , ((var "bk_max_event_queue_depth") `cCall`
-                              [ var "_model_hdl" ]) `cAdd` (mkUInt32 16)
+                       , var "_capacity"
+                       , var "_sim_ctx"
                        ])
             , stmt $ (var "bk_set_interactive") `cCall` [var "_sim_hdl"]
             , (mkVar "_model_inst") `assign`
@@ -237,7 +251,12 @@ wrapSystemC flags sim_system = do
             ]
         sos_type = function void (mkVar "start_of_simulation") []
         start_of_sim_fn = virtual $ define sos_type (block start_of_sim_stmts)
-        end_of_sim_stmts = [ stmt $ (var "bk_shutdown") `cCall` [var "_sim_hdl"] ]
+        end_of_sim_stmts = [ stmt $ (var "bk_shutdown") `cCall` [var "_sim_hdl"]
+                           -- bk_shutdown tears the context down in
+                           -- place; the buffer is the wrapper's to free
+                           , stmt $ deleteArray (var "_sim_ctx")
+                           , (mkVar "_sim_ctx") `assign` mkNULL
+                           ]
         eos_type = function void (mkVar "end_of_simulation") []
         end_of_sim_fn = virtual $ define eos_type (block end_of_sim_stmts)
 
@@ -303,7 +322,7 @@ wrapSystemC flags sim_system = do
         class_sects   = [ comment "clock and reset inputs" (public clk_rst_decls)
                         , comment "method ports" (public port_decls)
                         , comment "implementation class" (public [sub_mod])
-                        , comment "Bluesim kernel state" (private [model_hdl, sim_hdl])
+                        , comment "Bluesim kernel state" (private [model_hdl, sim_hdl, sim_ctx])
                         , comment "constructor" (public [constructor])
                         , comment "destructor"  (public [destructor])
                         , comment "simulation callbacks" (public [start_of_sim_fn, end_of_sim_fn])

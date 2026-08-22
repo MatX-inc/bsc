@@ -323,10 +323,14 @@ foreign import ccall "dynamic"
                           (Ptr CUInt -> CUChar -> IO (Ptr CUInt))
 
 -- bk_sync_init: model handle, master flag, host ops, host context,
--- event-queue capacity
+-- event-queue capacity, context buffer
 foreign import ccall "dynamic"
-  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> IO (Ptr CUInt)) ->
-                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> IO (Ptr CUInt))
+  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> Ptr () -> IO (Ptr CUInt)) ->
+                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> Ptr () -> IO (Ptr CUInt))
+
+-- bk_context_bytes: event-queue capacity
+foreign import ccall "dynamic"
+  dl_uint_ret_ullong :: FunPtr (CUInt -> IO CULLong) -> (CUInt -> IO CULLong)
 
 foreign import ccall "dynamic"
   dl_ptr_uint_int_ullong_ret_int :: FunPtr (Ptr CUInt -> CUInt -> CInt -> CULLong -> IO CInt) ->
@@ -428,6 +432,9 @@ data BluesimModel =
     BS { model_so               :: DL
        , model_hdl              :: WordPtr
        , sim_hdl                :: WordPtr
+         -- the kernel context buffer: allocated here, handed to
+         -- bk_sync_init, and freed after bk_shutdown
+       , sim_ctx                :: Ptr ()
        , current_clock          :: BSClock
        , current_directory      :: [BSSymbol]
        , cleanup_handlers       :: [IO ()]
@@ -489,6 +496,7 @@ loadBluesimModel fname top_name = do
   -- lookup symbols in the shared object
   c_new_model              <- dlsym dl ("new_" ++ pfxModel ++ top_name)
   c_bk_max_event_queue_depth <- dlsym dl "bk_max_event_queue_depth"
+  c_bk_context_bytes       <- dlsym dl "bk_context_bytes"
   c_bk_sync_init           <- dlsym dl "bk_sync_init"
   c_bk_sync_run            <- dlsym dl "bk_sync_run"
   c_bk_now                 <- dlsym dl "bk_now"
@@ -536,10 +544,13 @@ loadBluesimModel fname top_name = do
       bk_max_event_queue_depth :: WordPtr -> IO Word32
       bk_max_event_queue_depth m =
           fromC $ dl_ptr_ret_uint c_bk_max_event_queue_depth (toC m)
-      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> Word32 -> IO WordPtr
-      bk_sync_init m mstr ops ctx cap =
+      bk_context_bytes :: Word32 -> IO Word64
+      bk_context_bytes cap =
+          fromC `fmap` dl_uint_ret_ullong c_bk_context_bytes (toC cap)
+      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> Word32 -> Ptr () -> IO WordPtr
+      bk_sync_init m mstr ops ctx cap ctx_buf =
           do p <- dl_sync_init_fn c_bk_sync_init (toC m) (toC mstr) ops ctx
-                                  (toC cap)
+                                  (toC cap) ctx_buf
              return (fromC p)
       -- string return must be handled specially for bk_clock_name, etc.
       clk_name_fn :: WordPtr -> BSClock -> IO String
@@ -617,7 +628,13 @@ loadBluesimModel fname top_name = do
   -- documented at bk_sync_init().
   model_max <- bk_max_event_queue_depth model_hdl
   let queue_capacity = model_max + 16
+  -- the kernel constructs its simulation context (state and event
+  -- queue) in a buffer the host provides; allocate it here and keep
+  -- it until after bk_shutdown
+  ctx_bytes <- bk_context_bytes queue_capacity
+  ctx_buf <- mallocBytes (fromIntegral ctx_bytes)
   sim_hdl <- bk_sync_init model_hdl True host_ops host_ctx queue_capacity
+                          ctx_buf
   -- start the simulation worker thread, which executes the model's
   -- event queue through the kernel's synchronous API
   worker_hdl <- if (sim_hdl == ptrToWordPtr nullPtr)
@@ -628,12 +645,14 @@ loadBluesimModel fname top_name = do
                                      c_bk_shutdown
                                      c_bk_now
   if (worker_hdl == nullPtr)
-   then return Nothing
+   then do free ctx_buf
+           return Nothing
    else do
         top_symbol <- (fromC $ dl_ptr_ret_ptr c_bk_top_symbol) sim_hdl
         return $ Just (BS { model_so               = dl
                           , model_hdl              = model_hdl
                           , sim_hdl                = sim_hdl
+                          , sim_ctx                = ctx_buf
                           , current_clock          = 0  -- default clock handle
                           , current_directory      = [top_symbol]
                           , cleanup_handlers       = []
@@ -683,6 +702,10 @@ loadBluesimModel fname top_name = do
 
 unloadBluesimModel :: BluesimModel -> IO ()
 unloadBluesimModel bs = do bk_shutdown bs
+                           -- bk_shutdown tears the kernel context
+                           -- down in place; the buffer is ours to
+                           -- free once the worker has shut down
+                           free (sim_ctx bs)
                            dlclose (model_so bs)
 
 -- fields are: clock handle, currently active, name, initial value,

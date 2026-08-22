@@ -1,6 +1,9 @@
 #include <list>
 #include <algorithm>
 #include <cstring>
+#include <cstddef>
+#include <cstdint>
+#include <new>
 
 #include "mem_alloc.h"
 #include "kernel.h"
@@ -491,6 +494,41 @@ tUInt64 bk_output_bytes(tModel model)
   return ((Model*) model)->get_output_bytes();
 }
 
+/* The kernel's simulation context lives in a single caller-provided
+ * buffer laid out as
+ *
+ *   [ tSimState | EventQueue | tEvent[event_queue_capacity] ]
+ *
+ * with each part aligned to its type.  bk_context_bytes() reports the
+ * total size for a given capacity, and bk_sync_init() constructs the
+ * parts in place at the offsets computed here; the buffer itself must
+ * be aligned like max_align_t (any malloc result qualifies), which
+ * covers every part's alignment.
+ */
+static size_t context_align_up(size_t n, size_t alignment)
+{
+  return (n + alignment - 1) & ~(alignment - 1);
+}
+
+static size_t context_queue_offset()
+{
+  return context_align_up(sizeof(tSimState), alignof(EventQueue));
+}
+
+static size_t context_events_offset()
+{
+  return context_align_up(context_queue_offset() + sizeof(EventQueue),
+                          alignof(tEvent));
+}
+
+tUInt64 bk_context_bytes(tUInt32 event_queue_capacity)
+{
+  if (event_queue_capacity == 0)
+    return 0llu;
+  return (tUInt64) (context_events_offset() +
+                    ((size_t) event_queue_capacity) * sizeof(tEvent));
+}
+
 /* helper routine for checking that a host ops table is usable */
 static bool check_host_ops(const struct bs_host_ops* ops)
 {
@@ -519,7 +557,8 @@ static bool check_host_ops(const struct bs_host_ops* ops)
 /* Initialize the Bluesim kernel */
 tSimStateHdl bk_sync_init(tModel model, tBool master,
                           const struct bs_host_ops* ops, void* ctx,
-                          tUInt32 event_queue_capacity)
+                          tUInt32 event_queue_capacity,
+                          void* context_buffer)
 {
   /* the runtime cannot do any I/O without host operations */
   if (!check_host_ops(ops))
@@ -529,7 +568,21 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   if (event_queue_capacity == 0)
     return NULL;
 
-  tSimStateHdl simHdl = new tSimState;
+  /* the caller provides the storage for the simulation context: at
+   * least bk_context_bytes(event_queue_capacity) bytes, aligned like
+   * max_align_t
+   */
+  if (context_buffer == NULL)
+    return NULL;
+  if ((((uintptr_t) context_buffer) % alignof(max_align_t)) != 0)
+    return NULL;
+
+  /* construct the context in the caller's buffer: the simulation
+   * state, then the event queue and its storage (see the layout
+   * comment at bk_context_bytes())
+   */
+  char* context_base = (char*) context_buffer;
+  tSimStateHdl simHdl = new (context_base) tSimState;
 
   simHdl->model = (Model*)model;
 
@@ -581,14 +634,18 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   }
   init_mem_allocator();
   simHdl->sim_time = 0llu;
-  /* The queue's storage is preallocated here and never grows: the
-   * host chose the capacity (normally bk_max_event_queue_depth() of
-   * the model plus headroom for its own event-enqueuing calls), and
-   * scheduling past it fails through the event_queue_overflow host
-   * operation.  create_model() below already schedules events (reset
-   * waveform, clock edges), so the queue must exist first.
+  /* The queue and its storage live in the context buffer and never
+   * grow: the host chose the capacity (normally
+   * bk_max_event_queue_depth() of the model plus headroom for its own
+   * event-enqueuing calls), and scheduling past it fails through the
+   * event_queue_overflow host operation.  create_model() below
+   * already schedules events (reset waveform, clock edges), so the
+   * queue must exist first.
    */
-  simHdl->queue = new EventQueue(simHdl, event_queue_capacity);
+  simHdl->queue =
+    new (context_base + context_queue_offset())
+      EventQueue(simHdl, event_queue_capacity,
+                 (tEvent*) (context_base + context_events_offset()));
   simHdl->need_dummy_edges = 0;
   simHdl->model->create_model(simHdl, master != 0);
   simHdl->top_symbol.key = "";
@@ -598,7 +655,11 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   return simHdl;
 }
 
-/* Shutdown the Bluesim kernel */
+/* Shutdown the Bluesim kernel.  The simulation context is torn down
+ * in place: nothing here frees the caller's context buffer, which
+ * afterwards is the caller's to reuse (including for another
+ * bk_sync_init()) or release.
+ */
 void bk_shutdown(tSimStateHdl simHdl)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL))
@@ -611,10 +672,10 @@ void bk_shutdown(tSimStateHdl simHdl)
   for (unsigned int i = 0; i < simHdl->clocks.size(); ++i)
     free(simHdl->clocks[i].name);
   simHdl->clocks.clear();
-  delete simHdl->queue;
+  simHdl->queue->~EventQueue();
   simHdl->queue = NULL;
   clear_plusargs(simHdl);
-  delete simHdl;
+  simHdl->~tSimState();
 }
 
 /* Get the host operations / host context registered with

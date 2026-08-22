@@ -2,6 +2,7 @@
 #define __KERNEL_H__
 
 #include <deque>
+#include <vector>
 
 #include "bluesim_kernel_api.h"
 #include "bs_model.h"

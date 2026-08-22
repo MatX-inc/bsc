@@ -30,6 +30,19 @@ extern "C" {
  * Kernel resource management routines.
  */
 
+/* Get the number of bytes of storage the kernel needs for its
+ * simulation context: the simulation state and an event queue of the
+ * given capacity.  The embedder allocates (or otherwise provides) a
+ * buffer of at least this size, aligned like max_align_t (any malloc
+ * result qualifies), and hands it to bk_sync_init(); the kernel
+ * itself never allocates its context.  The size depends only on the
+ * chosen event-queue capacity, so like bk_max_event_queue_depth()
+ * and bk_stack_depth_bound() it can be queried before
+ * bk_sync_init().  Returns 0 if 'event_queue_capacity' is 0 (an
+ * invalid capacity).
+ */
+tUInt64 bk_context_bytes(tUInt32 event_queue_capacity);
+
 /* This must be called before calling any other Bluesim
  * kernel API functions.
  * When master is non-zero, it indicates that the model
@@ -52,8 +65,8 @@ extern "C" {
  * they must all be initialized with the same 'ops' and 'ctx'.
  *
  * 'event_queue_capacity' fixes the capacity of the kernel's event
- * queue: the storage is preallocated here and NEVER grows, and
- * scheduling an event into a full queue fails through the host's
+ * queue: the storage lives in the context buffer and NEVER grows,
+ * and scheduling an event into a full queue fails through the host's
  * noreturn event_queue_overflow operation.  The host chooses the
  * capacity; the intended budget is
  *
@@ -66,13 +79,25 @@ extern "C" {
  * bk_quit_at event and one host-triggered edge pair at a time).  A
  * capacity of 0 is rejected (NULL is returned).
  *
- * Returns an owned handle to the simulation state, which is needed
- * as an argument to the other Bluesim kernel API functions and is
- * released by bk_shutdown().  Returns NULL on error.
+ * 'context_buffer' provides the storage for the kernel's simulation
+ * context: at least bk_context_bytes(event_queue_capacity) bytes,
+ * aligned like max_align_t.  The kernel constructs its state in this
+ * buffer instead of allocating it.  The buffer is borrowed, not
+ * owned: it must remain valid until bk_shutdown(), which tears the
+ * context down in place and frees nothing, after which the buffer is
+ * the caller's to reuse (including for another bk_sync_init()) or
+ * release.  A NULL or misaligned buffer is rejected (NULL is
+ * returned).
+ *
+ * Returns a handle to the simulation state, which is needed as an
+ * argument to the other Bluesim kernel API functions.  The handle
+ * points into 'context_buffer' and is invalidated by bk_shutdown().
+ * Returns NULL on error.
  */
-own tSimStateHdl bk_sync_init(tModel model, tBool master,
-                              const struct bs_host_ops* ops, void* ctx,
-                              tUInt32 event_queue_capacity);
+tSimStateHdl bk_sync_init(tModel model, tBool master,
+                          const struct bs_host_ops* ops, void* ctx,
+                          tUInt32 event_queue_capacity,
+                          void* context_buffer);
 
 /* Get the host operations / host context registered with
  * bk_sync_init().  A NULL simHdl returns the process-wide copy
@@ -114,11 +139,13 @@ BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
  */
 tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
 
-/* This should be called at the end of simulation
- * to free resources controlled by the simulation kernel.
- * After bk_shutdown() is called, no other Bluesim kernel
- * API functions may be called unless bk_sync_init() has been
- * called first.
+/* This should be called at the end of simulation to release the
+ * resources controlled by the simulation kernel.  The simulation
+ * context is torn down in place inside the caller-provided buffer;
+ * the buffer itself is never freed here, and afterwards it is the
+ * caller's to reuse or release.  After bk_shutdown() is called, the
+ * handle is invalid and no other Bluesim kernel API functions may be
+ * called unless bk_sync_init() has been called first.
  */
 void bk_shutdown(tSimStateHdl simHdl);
 
