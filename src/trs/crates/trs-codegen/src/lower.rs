@@ -1234,6 +1234,9 @@ fn lower_edge_ssa<'ctx>(
                 b.build_store(gep(g.next_base + i), i64t.const_zero())
                     .unwrap();
             }
+            // defensive: the write-mark scratch is consumed-and-cleared
+            // at every exec call site; a clean edge start costs one store
+            b.build_store(gep(g.scratch), i64t.const_zero()).unwrap();
         }
 
         section_sizes.push(Vec::new());
@@ -1584,80 +1587,87 @@ fn lower_edge_ssa<'ctx>(
                         None => lc.sched_section(&mut f)?,
                     }
                 }
-                // activity gating, same-cycle dirty: wires and bypass
-                // prims this body may write become visible to LATER
-                // readers this edge — OR the bypass mask into CURRENT
-                // when the rule fired (branchless: sign-extended WF)
+                // activity gating, consume the write-mark scratch: a
+                // watched write actually happened in this body (regs:
+                // value moved; wires/fifos/cregs: action taken) — OR
+                // the rule's write mask into NEXT (next-edge readers)
+                // and its same-cycle-visible subset into CURRENT
+                // (later-in-edge readers), then clear the scratch so
+                // the next body starts clean.
                 if is_exec && plan.gate.is_some() {
-                    if let Some(byp) =
-                        plan.dirty_bypass.get(o).filter(|b| !b.is_empty())
-                    {
-                        let g = plan.gate.as_ref().unwrap();
-                        let sel = if spec.autofire.is_some() {
-                            i64t.const_all_ones()
-                        } else {
-                            let wp = unsafe {
-                                lc.builder
-                                    .build_gep(
-                                        i64t,
-                                        arena,
-                                        &[i64t.const_int(
-                                            spec.wf_slot as u64,
-                                            false,
-                                        )],
-                                        "bw",
-                                    )
-                                    .unwrap()
-                            };
-                            let wf = lc
-                                .builder
-                                .build_load(i64t, wp, "bwv")
-                                .unwrap()
-                                .into_int_value();
-                            let nz = lc
-                                .builder
-                                .build_int_compare(
-                                    IntPredicate::NE,
-                                    wf,
-                                    i64t.const_zero(),
-                                    "bnz",
-                                )
-                                .unwrap();
-                            lc.builder
-                                .build_int_s_extend(nz, i64t, "bsel")
-                                .unwrap()
-                        };
-                        for &(w, m) in byp {
-                            let p = unsafe {
-                                lc.builder
-                                    .build_gep(
-                                        i64t,
-                                        arena,
-                                        &[i64t.const_int(
-                                            (g.cur_base + w) as u64,
-                                            false,
-                                        )],
-                                        "bc",
-                                    )
-                                    .unwrap()
-                            };
+                    let g = plan.gate.as_ref().unwrap();
+                    let gp = |slot: u32| unsafe {
+                        lc.builder
+                            .build_gep(
+                                i64t,
+                                arena,
+                                &[i64t.const_int(slot as u64, false)],
+                                "gs",
+                            )
+                            .unwrap()
+                    };
+                    let sync =
+                        plan.dirty_sync.get(o).map(|v| &v[..]).unwrap_or(&[]);
+                    if !sync.is_empty() {
+                        let s = lc
+                            .builder
+                            .build_load(i64t, gp(g.scratch), "gsv")
+                            .unwrap()
+                            .into_int_value();
+                        let nz = lc
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                s,
+                                i64t.const_zero(),
+                                "gsn",
+                            )
+                            .unwrap();
+                        let do_bb = ctx.append_basic_block(func, "gdo");
+                        let done_bb = ctx.append_basic_block(func, "gdn");
+                        lc.builder
+                            .build_conditional_branch(nz, do_bb, done_bb)
+                            .unwrap();
+                        lc.builder.position_at_end(do_bb);
+                        for &(w, m) in sync {
+                            let p = gp(g.next_base + w);
                             let old = lc
                                 .builder
-                                .build_load(i64t, p, "bo")
+                                .build_load(i64t, p, "gno")
                                 .unwrap()
                                 .into_int_value();
-                            let add = lc
+                            let nv = lc
                                 .builder
-                                .build_and(
-                                    i64t.const_int(m, false),
-                                    sel,
-                                    "bm",
-                                )
+                                .build_or(old, i64t.const_int(m, false), "gnn")
                                 .unwrap();
-                            let nv =
-                                lc.builder.build_or(old, add, "bn").unwrap();
                             lc.builder.build_store(p, nv).unwrap();
                         }
+                        if let Some(byp) = plan.dirty_bypass.get(o) {
+                            for &(w, m) in byp {
+                                let p = gp(g.cur_base + w);
+                                let old = lc
+                                    .builder
+                                    .build_load(i64t, p, "gco")
+                                    .unwrap()
+                                    .into_int_value();
+                                let nv = lc
+                                    .builder
+                                    .build_or(
+                                        old,
+                                        i64t.const_int(m, false),
+                                        "gcn",
+                                    )
+                                    .unwrap();
+                                lc.builder.build_store(p, nv).unwrap();
+                            }
+                        }
+                        lc.builder
+                            .build_unconditional_branch(done_bb)
+                            .unwrap();
+                        lc.builder.position_at_end(done_bb);
+                        lc.builder
+                            .build_store(gp(g.scratch), i64t.const_zero())
+                            .unwrap();
                     }
                 }
                 cur = lc.builder.get_insert_block().unwrap();
@@ -1762,119 +1772,6 @@ fn lower_edge_ssa<'ctx>(
                         )
                         .unwrap();
                     }
-                }
-            }
-            // activity gating, edge epilogue: a rule dirties its write
-            // set for the NEXT edge when it fired (values may have
-            // moved) OR when it fired LAST edge but not this one (its
-            // wires revert to defaults at the clear above — that
-            // transition is a change too).  Branchless per rule; the
-            // fresh WF bits become the new last-WF words.
-            if let Some(g) = &plan.gate {
-                let gepe = |slot: u32| unsafe {
-                    bend.build_gep(
-                        i64t,
-                        arena,
-                        &[i64t.const_int(slot as u64, false)],
-                        "ge",
-                    )
-                    .unwrap()
-                };
-                let old_lw: Vec<inkwell::values::IntValue> = (0..g
-                    .lastwf_words)
-                    .map(|i| {
-                        bend.build_load(i64t, gepe(g.lastwf_base + i), "lw")
-                            .unwrap()
-                            .into_int_value()
-                    })
-                    .collect();
-                let mut new_lw: Vec<inkwell::values::IntValue> =
-                    (0..g.lastwf_words).map(|_| i64t.const_zero()).collect();
-                for (o, sp) in specs.iter().enumerate() {
-                    let wf_nz = if sp.autofire.is_some() {
-                        bend.build_int_compare(
-                            IntPredicate::NE,
-                            i64t.const_int(1, false),
-                            i64t.const_zero(),
-                            "af",
-                        )
-                        .unwrap()
-                    } else {
-                        let wf = bend
-                            .build_load(i64t, gepe(sp.wf_slot), "ew")
-                            .unwrap()
-                            .into_int_value();
-                        bend.build_int_compare(
-                            IntPredicate::NE,
-                            wf,
-                            i64t.const_zero(),
-                            "en",
-                        )
-                        .unwrap()
-                    };
-                    let wf64 = bend
-                        .build_int_z_extend(wf_nz, i64t, "ez")
-                        .unwrap();
-                    let (lwi, lbit) = ((o / 64) as u32, (o % 64) as u64);
-                    new_lw[lwi as usize] = bend
-                        .build_or(
-                            new_lw[lwi as usize],
-                            bend.build_left_shift(
-                                wf64,
-                                i64t.const_int(lbit, false),
-                                "es",
-                            )
-                            .unwrap(),
-                            "eo",
-                        )
-                        .unwrap();
-                    let sync = &plan.dirty_sync[o];
-                    if sync.is_empty() {
-                        continue;
-                    }
-                    let old_bit = bend
-                        .build_and(
-                            bend.build_right_shift(
-                                old_lw[lwi as usize],
-                                i64t.const_int(lbit, false),
-                                false,
-                                "or",
-                            )
-                            .unwrap(),
-                            i64t.const_int(1, false),
-                            "ob",
-                        )
-                        .unwrap();
-                    let cond = bend
-                        .build_or(wf64, old_bit, "ec")
-                        .unwrap();
-                    let sel = bend
-                        .build_int_sub(
-                            i64t.const_zero(),
-                            // cond is 0/1: 0 - cond = 0 or all-ones
-                            cond,
-                            "esl",
-                        )
-                        .unwrap();
-                    for &(w, m) in sync {
-                        let p = gepe(g.next_base + w);
-                        let old = bend
-                            .build_load(i64t, p, "eno")
-                            .unwrap()
-                            .into_int_value();
-                        let add = bend
-                            .build_and(i64t.const_int(m, false), sel, "ena")
-                            .unwrap();
-                        let nv = bend.build_or(old, add, "enn").unwrap();
-                        bend.build_store(p, nv).unwrap();
-                    }
-                }
-                for i in 0..g.lastwf_words {
-                    bend.build_store(
-                        gepe(g.lastwf_base + i),
-                        new_lw[i as usize],
-                    )
-                    .unwrap();
                 }
             }
             bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
@@ -5630,6 +5527,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         r.map(|_| stable)
     }
 
+    /// Activity gating: OR an i1 into the shared write-mark scratch
+    /// word.  Emitted at arena-inline prim WRITE sites (the only prims
+    /// gated cones can watch), with per-site accuracy: regs and
+    /// ConfigRegs pass old!=new, wires/FIFOs pass the taken condition.
+    /// The exec call site consumes the word into the dirty bitmaps.
+    fn gate_mark(&mut self, f: &mut Frame<'ctx>, changed: IntValue<'ctx>) {
+        let Some(slot) = self.env.gate_scratch else {
+            return;
+        };
+        let i64t = self.ctx.i64_type();
+        let old = self.load_word(f, slot);
+        let z = self
+            .builder
+            .build_int_z_extend(changed, i64t, "gmz")
+            .unwrap();
+        let nv = self.builder.build_or(old, z, "gmo").unwrap();
+        self.store_word(f, slot, nv);
+    }
+
     fn action(
         &mut self,
         f: &mut Frame<'ctx>,
@@ -5665,6 +5581,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         .unwrap()
                         .into_int_value();
                     self.store_val(f, base, rw, sel);
+                    // gating: value-accurate mark (sel==old covers
+                    // both "not fired" and "rewrote the same value" —
+                    // the fires != dirty distinction the census proved)
+                    if self.env.gate_scratch.is_some() {
+                        let ne = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, sel, old, "gne")
+                            .unwrap();
+                        self.gate_mark(f, ne);
+                    }
                     return Ok(());
                 }
                 if let Some(&(base, rw)) = ie.creg_slot.get(instance) {
@@ -5704,6 +5630,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.store_val(f, base, rw, old2);
                     self.store_val(f, base + words, rw, v);
                     self.store_word(f, base + 2 * words, now);
+                    // gating: taken path, value-accurate vs the live value
+                    if self.env.gate_scratch.is_some() {
+                        let ne = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, v, cur, "gcne")
+                            .unwrap();
+                        self.gate_mark(f, ne);
+                    }
                     self.builder.build_unconditional_branch(sk_bb).unwrap();
                     self.builder.position_at_end(sk_bb);
                     return Ok(());
@@ -5908,6 +5842,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let sk_bb = self.ctx.append_basic_block(func, "fsk");
                         self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                         self.builder.position_at_end(go_bb);
+                        // gating: an executed enq/deq moves fifo state
+                        // (level, elements, bypass headers) — mark taken
+                        if self.env.gate_scratch.is_some() {
+                            let t = self.ctx.bool_type().const_int(1, false);
+                            self.gate_mark(f, t);
+                        }
                         let elems = self.load_word(f, base);
                         let saved = self.load_word(f, base + 1);
                         let other_at =
@@ -6133,6 +6073,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     } else {
                         None
                     };
+                    // gating: wire writes are fire-edge dirtiness —
+                    // condition-accurate (a same-value rewrite still
+                    // marks; the wire's revert-to-default transition is
+                    // covered because the mark propagates to NEXT)
+                    self.gate_mark(f, cz);
                     // branchless wset: valid |= cond; value = select
                     let ov = self.load_word(f, base);
                     let cz64 = self
@@ -6162,6 +6107,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let sk_bb = self.ctx.append_basic_block(func, "psk");
                     self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                     self.builder.position_at_end(go_bb);
+                    // gating: a trampolined action on a prim whose
+                    // VALUE reads are arena-inline (a watched class —
+                    // e.g. fifo clear, size-0 fifos) mutates watched
+                    // state outside the inline arms above: mark taken
+                    if self.env.gate_scratch.is_some()
+                        && (ie.reg_slot.contains_key(instance)
+                            || ie.creg_slot.contains_key(instance)
+                            || ie.wire_slot.contains_key(instance)
+                            || ie.fifo_slot.contains_key(instance))
+                    {
+                        let t = self.ctx.bool_type().const_int(1, false);
+                        self.gate_mark(f, t);
+                    }
                     self.emit_prim_call(f, child, *method, args, 0, true)?;
                     self.builder.build_unconditional_branch(sk_bb).unwrap();
                     self.builder.position_at_end(sk_bb);

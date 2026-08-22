@@ -216,6 +216,12 @@ pub struct PlanEnv<'a> {
     pub now_slot: u32,
     pub d: &'a Design,
     pub insts: &'a HashMap<usize, InstEnv>,
+    /// activity gating: the shared did-a-watched-write-change scratch
+    /// slot.  Some = arena-inline prim WRITE sites emit accurate marks
+    /// (regs/ConfigRegs compare old vs new; wires/FIFOs mark on the
+    /// taken path), which each exec call site consumes into the dirty
+    /// bitmaps.  None = ungated emission, no marking code.
+    pub gate_scratch: Option<u32>,
 }
 /// One auto-fired always_enabled top method, compiled as an appended
 /// pseudo-spec.  NEVER serialized: Emit and Load both derive the same
@@ -637,10 +643,13 @@ pub struct GateLayout {
     pub lastwf_base: u32,
     /// dirty words per bitmap (state bits + rule bits)
     pub words: u32,
-    /// last-WF words (ceil(n_rules/64))
+    /// last-WF words (ceil(n_rules/64)); allocated but unused since
+    /// the v1.5 scratch scheme (kept for geometry stability)
     pub lastwf_words: u32,
     /// first rule bit index (= number of state bits)
     pub rule_bit_base: u32,
+    /// the shared write-mark scratch word (see PlanEnv::gate_scratch)
+    pub scratch: u32,
 }
 
 /// Pack one BRAM port tick into trs_bram_tick's (a0, a1, a2) args.

@@ -303,6 +303,7 @@ impl LazyJit {
                     .expect("cold compile cell without a stashed design"),
                 insts: &self.insts,
                 now_slot: self.now_slot,
+                gate_scratch: None,
             };
             let reps: Vec<RuleSpec> =
                 (lo..hi).map(|c| self.specs[self.classes[c].0].clone()).collect();
@@ -923,7 +924,7 @@ fn aot_or_jit_scheds(
             .chunks(chunk)
             .map(|c| {
                 sc.spawn(move || {
-                    let env = PlanEnv { d, insts: inst_envs, now_slot };
+                    let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
                     compile_scheds(&env, c, helpers, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
                 })
             })
@@ -1086,7 +1087,13 @@ fn aot_emit(
                     .unwrap_or_default(),
             })
             .collect();
-        let env = PlanEnv { d, insts: inst_envs, now_slot };
+        let env = PlanEnv {
+            d,
+            insts: inst_envs,
+            now_slot,
+            gate_scratch: edge_plan
+                .and_then(|p| p.gate.as_ref().map(|g| g.scratch)),
+        };
         let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
         let obj = match compile_design_object(
@@ -1250,7 +1257,7 @@ fn aot_emit(
     let mut helper_obj: Option<Vec<u8>> = None;
     if helpers_on {
         let _g = trs_codegen::abi::AotModeGuard::set();
-        let env = PlanEnv { d, insts: inst_envs, now_slot };
+        let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
         let pseudo = specs[0].clone();
         match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
             Ok(o) => helper_obj = Some(o),
@@ -1267,14 +1274,14 @@ fn aot_emit(
         for c in specs.chunks(chunk) {
             handles.push(sc.spawn(move || {
                 let _g = trs_codegen::abi::AotModeGuard::set();
-                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
             }));
         }
         for c in reps.chunks(rchunk) {
             handles.push(sc.spawn(move || {
                 let _g = trs_codegen::abi::AotModeGuard::set();
-                let env = PlanEnv { d, insts: inst_envs, now_slot };
+                let env = PlanEnv { d, insts: inst_envs, now_slot, gate_scratch: None };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
             }));
         }
@@ -3849,6 +3856,13 @@ impl Interp {
                 });
                 if c.poison & 0b1111 != 0 || !reads_safe || !inhibitors_resolved
                 {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!(
+                            "trs gate: ordinal {o} UNGATED poison={:#b} \
+                             safe={reads_safe} inh={inhibitors_resolved}",
+                            c.poison
+                        );
+                    }
                     gate_masks.push(None);
                     continue;
                 }
@@ -3858,6 +3872,23 @@ impl Interp {
                     .filter_map(|gi| bit_of.get(gi).copied())
                     .collect();
                 gate_masks.push(Some(pairs(&bits)));
+            }
+            if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                let gated = gate_masks.iter().filter(|m| m.is_some()).count();
+                let bits: usize = gate_masks
+                    .iter()
+                    .flatten()
+                    .map(|m| {
+                        m.iter().map(|&(_, b)| b.count_ones() as usize).sum::<usize>()
+                    })
+                    .sum();
+                eprintln!(
+                    "trs gate: {gated}/{} sections gated, {} state bits, \
+                     {} mask bits total",
+                    gate_masks.len(),
+                    written_all.len(),
+                    bits
+                );
             }
             // SABOTAGE WITNESS (validation hook, not a product knob):
             // clear ONE dirty-sync bit that some gated cone actually
@@ -3979,7 +4010,7 @@ impl Interp {
         request: &JitRequest,
         trace: bool,
     ) -> Option<Vec<FnProtos>> {
-        let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+        let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot, gate_scratch: None };
         let t0 = std::time::Instant::now();
         match trial_lower(&env, specs) {
             Ok(p) => {
@@ -5477,6 +5508,7 @@ impl Interp {
             let cur_base = alloc(&mut nslots, words);
             let next_base = alloc(&mut nslots, words);
             let lastwf_base = alloc(&mut nslots, lastwf_words);
+            let scratch = alloc(&mut nslots, 1);
             trs_codegen::abi::GateLayout {
                 cur_base,
                 next_base,
@@ -5484,6 +5516,7 @@ impl Interp {
                 words,
                 lastwf_words,
                 rule_bit_base: self.insts.len() as u32,
+                scratch,
             }
         };
         // Load attempt FIRST: an artifact carrying protos skips
@@ -6028,7 +6061,7 @@ impl Interp {
                 return HelperMap::new();
             }
             trs_codegen::lower::llvm_init_once();
-            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot, gate_scratch: None };
             let pseudo = specs[0].clone();
             let t0 = std::time::Instant::now();
             match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
