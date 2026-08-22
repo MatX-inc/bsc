@@ -369,6 +369,38 @@ type DefClkFn = Ptr CUInt -> CString -> C_tClockValue -> CUChar -> C_tTime -> C_
 foreign import ccall "dynamic"
   dl_def_clk_fn :: FunPtr DefClkFn -> DefClkFn
 
+-- FFI routines for the simulation worker thread (bluesim_worker.cxx),
+-- which is linked into bluetcl itself.  The worker recreates the
+-- threaded run control (async running, interrupting, etc.) that used
+-- to live inside the Bluesim kernel, layered over the kernel's
+-- synchronous API, whose dynamically-loaded entry points it receives
+-- as function pointers.
+
+type BSWorkerHdl = Ptr ()
+
+foreign import ccall safe "bluesim_worker_create"
+  bworker_create :: Ptr CUInt                        -- tSimStateHdl
+                 -> FunPtr (Ptr CUInt -> IO CInt)    -- bk_sync_run
+                 -> FunPtr (Ptr CUInt -> IO ())      -- bk_abort_now
+                 -> FunPtr (Ptr CUInt -> IO ())      -- bk_shutdown
+                 -> FunPtr (Ptr CUInt -> IO CULLong) -- bk_now
+                 -> IO BSWorkerHdl
+
+foreign import ccall safe "bluesim_worker_advance"
+  bworker_advance :: BSWorkerHdl -> CUChar -> IO CInt
+
+foreign import ccall safe "bluesim_worker_is_running"
+  bworker_is_running :: BSWorkerHdl -> IO CUChar
+
+foreign import ccall safe "bluesim_worker_sync"
+  bworker_sync :: BSWorkerHdl -> IO CULLong
+
+foreign import ccall safe "bluesim_worker_abort_now"
+  bworker_abort_now :: BSWorkerHdl -> IO ()
+
+foreign import ccall safe "bluesim_worker_shutdown"
+  bworker_shutdown :: BSWorkerHdl -> IO ()
+
 -- Definition of the BluesimModel structure
 -- The fields of the model represent Bluesim kernel API functions for
 -- the model which have been dynamically linked and converted to use
@@ -439,7 +471,8 @@ loadBluesimModel fname top_name = do
   dl <- dlopen fname' [RTLD_NOW]
   -- lookup symbols in the shared object
   c_new_model              <- dlsym dl ("new_" ++ pfxModel ++ top_name)
-  c_bk_init                <- dlsym dl "bk_init"
+  c_bk_sync_init           <- dlsym dl "bk_sync_init"
+  c_bk_sync_run            <- dlsym dl "bk_sync_run"
   c_bk_now                 <- dlsym dl "bk_now"
   c_bk_set_timescale       <- dlsym dl "bk_set_timescale"
   c_bk_version             <- dlsym dl "bk_version"
@@ -460,9 +493,6 @@ loadBluesimModel fname top_name = do
   c_bk_schedule_ui_event   <- dlsym dl "bk_schedule_ui_event"
   c_bk_remove_ui_event     <- dlsym dl "bk_remove_ui_event"
   c_bk_set_interactive     <- dlsym dl "bk_set_interactive"
-  c_bk_advance             <- dlsym dl "bk_advance"
-  c_bk_is_running          <- dlsym dl "bk_is_running"
-  c_bk_sync                <- dlsym dl "bk_sync"
   c_bk_abort_now           <- dlsym dl "bk_abort_now"
   c_bk_finished            <- dlsym dl "bk_finished"
   c_bk_exit_status         <- dlsym dl "bk_exit_status"
@@ -485,8 +515,8 @@ loadBluesimModel fname top_name = do
   -- convert functions to Haskell types and build BluesimModel
   let new_model :: IO WordPtr
       new_model = fromC $ dl_ret_ptr c_new_model
-      bk_init :: WordPtr -> Bool -> IO WordPtr
-      bk_init = fromC $ dl_ptr_uchar_ret_ptr c_bk_init
+      bk_sync_init :: WordPtr -> Bool -> IO WordPtr
+      bk_sync_init = fromC $ dl_ptr_uchar_ret_ptr c_bk_sync_init
       -- string return must be handled specially for bk_clock_name, etc.
       clk_name_fn :: WordPtr -> BSClock -> IO String
       clk_name_fn simHdl c =
@@ -551,8 +581,17 @@ loadBluesimModel fname top_name = do
                       return $ Value { num_bits = (fromC sz), value = v }
               else return NoValue
   model_hdl <- new_model
-  sim_hdl <- bk_init model_hdl True
-  if (sim_hdl == ptrToWordPtr nullPtr)
+  sim_hdl <- bk_sync_init model_hdl True
+  -- start the simulation worker thread, which executes the model's
+  -- event queue through the kernel's synchronous API
+  worker_hdl <- if (sim_hdl == ptrToWordPtr nullPtr)
+                 then return nullPtr
+                 else bworker_create (toC sim_hdl)
+                                     c_bk_sync_run
+                                     c_bk_abort_now
+                                     c_bk_shutdown
+                                     c_bk_now
+  if (worker_hdl == nullPtr)
    then return Nothing
    else do
         top_symbol <- (fromC $ dl_ptr_ret_ptr c_bk_top_symbol) sim_hdl
@@ -583,10 +622,10 @@ loadBluesimModel fname top_name = do
                           , bk_schedule_ui_event   = (fromC $ dl_ptr_ullong_ret_int c_bk_schedule_ui_event) sim_hdl
                           , bk_remove_ui_event     = (fromC $ dl_ptr_ullong_ret_int c_bk_remove_ui_event) sim_hdl
                           , bk_set_interactive     = (fromC $ dl_ptr_ret_void c_bk_set_interactive) sim_hdl
-                          , bk_advance             = (fromC $ dl_ptr_uchar_ret_int c_bk_advance) sim_hdl
-                          , bk_is_running          = (fromC $ dl_ptr_ret_uchar c_bk_is_running) sim_hdl
-                          , bk_sync                = (fromC $ dl_ptr_ret_ullong c_bk_sync) sim_hdl
-                          , bk_abort_now           = (fromC $ dl_ptr_ret_void c_bk_abort_now) sim_hdl
+                          , bk_advance             = (fromC $ bworker_advance worker_hdl)
+                          , bk_is_running          = (fromC $ bworker_is_running worker_hdl)
+                          , bk_sync                = (fromC $ bworker_sync worker_hdl)
+                          , bk_abort_now           = bworker_abort_now worker_hdl
                           , bk_finished            = (fromC $ dl_ptr_ret_uchar c_bk_finished) sim_hdl
                           , bk_exit_status         = (fromC $ dl_ptr_ret_int c_bk_exit_status) sim_hdl
                           , bk_fataled             = (fromC $ dl_ptr_ret_uchar c_bk_fataled) sim_hdl
@@ -603,7 +642,7 @@ loadBluesimModel fname top_name = do
                           , bk_peek_range_value    = peek_range_fn
                           , bk_num_symbols         = (fromC . dl_ptr_ret_uint c_bk_num_symbols . toC)
                           , bk_get_nth_symbol      = (fromC . dl_ptr_uint_ret_ptr c_bk_get_nth_symbol . toC)
-                          , bk_shutdown            = (fromC $ dl_ptr_ret_void c_bk_shutdown) sim_hdl
+                          , bk_shutdown            = bworker_shutdown worker_hdl
                           })
 
 unloadBluesimModel :: BluesimModel -> IO ()

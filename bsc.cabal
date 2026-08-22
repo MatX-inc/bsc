@@ -11,6 +11,8 @@ author: Bluespec, Inc.
 maintainer: TODO
 copyright: TODO
 build-type: Hooks
+extra-source-files:
+  src/comp/app/bluesim_worker.h
 
 custom-setup
   setup-depends:
@@ -337,6 +339,10 @@ executable bluetcl
     syb          ^>=0.7.2,
     unix         ^>=2.8.6.0,
   c-sources: src/comp/app/bluetcl_shim.c
+  -- the simulation worker thread which drives a loaded Bluesim model
+  -- through its synchronous kernel API (used by BluesimLoader)
+  cxx-sources: src/comp/app/bluesim_worker.cxx
+  include-dirs: src/comp/app
   default-extensions:
     BangPatterns,
     FlexibleContexts,
