@@ -399,6 +399,78 @@ tUInt32 bk_max_event_queue_depth(tModel model)
   return ((Model*) model)->get_max_event_queue_depth();
 }
 
+/* Non-allocating introspection walkers over the static descriptor
+ * tables the code generator emits into the model: state elements and
+ * top-module input/output ports, with the flat layout documented in
+ * bluesim_introspection.h.  Like bk_max_event_queue_depth(), they
+ * take the model handle (not a simulation handle) so an embedder can
+ * size and inspect a design before bk_sync_init().  The returned
+ * descriptor pointers are borrowed (never freed by the caller) and
+ * stay valid for the lifetime of the loaded model.
+ */
+tUInt32 bk_num_state_elements(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_num_state_elements();
+}
+
+const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n)
+{
+  if (model == NULL)
+    return NULL;
+  return ((Model*) model)->get_state_element(n);
+}
+
+tUInt64 bk_state_bytes(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_state_bytes();
+}
+
+tUInt32 bk_num_input_ports(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_num_input_ports();
+}
+
+const tBkPortInfo* bk_get_input_port(tModel model, tUInt32 n)
+{
+  if (model == NULL)
+    return NULL;
+  return ((Model*) model)->get_input_port(n);
+}
+
+tUInt64 bk_input_bytes(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_input_bytes();
+}
+
+tUInt32 bk_num_output_ports(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_num_output_ports();
+}
+
+const tBkPortInfo* bk_get_output_port(tModel model, tUInt32 n)
+{
+  if (model == NULL)
+    return NULL;
+  return ((Model*) model)->get_output_port(n);
+}
+
+tUInt64 bk_output_bytes(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_output_bytes();
+}
+
 /* helper routine for checking that a host ops table is usable */
 static bool check_host_ops(const struct bs_host_ops* ops)
 {

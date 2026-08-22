@@ -3,6 +3,7 @@
 
 #include "bluesim_types.h"
 #include "bluesim_host_ops.h"
+#include "bluesim_introspection.h"
 
 /*
  * Declarations of all functions in the Bluesim kernel API.
@@ -146,6 +147,69 @@ void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
  * Returns 0 if 'model' is NULL.
  */
 tUInt32 bk_max_event_queue_depth(tModel model);
+
+/*
+ * Non-allocating introspection of a model's state elements and of
+ * its top-module input and output ports.
+ *
+ * These walk functions read static per-design descriptor tables
+ * emitted by the code generator: they allocate nothing, and like
+ * bk_max_event_queue_depth() they take the model handle from
+ * new_MODEL_*() (not a simulation handle) so a host can size and
+ * inspect a design before bk_sync_init().
+ *
+ * The descriptor types, the state-element kinds, and the documented
+ * ordering, alignment and flat-layout rules (byte offsets within
+ * planned contiguous state/input/output areas, and the total byte
+ * size of each area) live in bluesim_introspection.h.
+ *
+ * The bk_get_* functions return a borrowed pointer -- NOT 'own' --
+ * into 'static const' storage in the generated model: the caller
+ * must not free it, and it remains valid for the lifetime of the
+ * loaded model.  They return NULL if 'model' is NULL or the index is
+ * out of range; the counting and sizing functions return 0 if
+ * 'model' is NULL.
+ */
+
+/* Number of state elements (Bluesim primitive instances) in the
+ * design's whole module tree.
+ */
+tUInt32 bk_num_state_elements(tModel model);
+
+/* Descriptor of the nth state element (0-based), in the documented
+ * table order.
+ */
+const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n);
+
+/* Total byte size of the planned contiguous state area. */
+tUInt64 bk_state_bytes(tModel model);
+
+/* Number of top-module input ports (module argument ports, method
+ * enables and method arguments; clock and reset ports are driven
+ * through the kernel and are not included).
+ */
+tUInt32 bk_num_input_ports(tModel model);
+
+/* Descriptor of the nth input port (0-based), in the documented
+ * table order.
+ */
+const tBkPortInfo* bk_get_input_port(tModel model, tUInt32 n);
+
+/* Total byte size of the planned contiguous input area. */
+tUInt64 bk_input_bytes(tModel model);
+
+/* Number of top-module output ports (method results, ready results
+ * included).
+ */
+tUInt32 bk_num_output_ports(tModel model);
+
+/* Descriptor of the nth output port (0-based), in the documented
+ * table order.
+ */
+const tBkPortInfo* bk_get_output_port(tModel model, tUInt32 n);
+
+/* Total byte size of the planned contiguous output area. */
+tUInt64 bk_output_bytes(tModel model);
 
 /*
  * Kernel clock definition
