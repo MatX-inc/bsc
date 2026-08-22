@@ -689,6 +689,17 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         // arena code in trs_codegen — the same target the classic
         // loader wires (a BRAM design calls through it every edge;
         // leaving it NULL was the first driver segfault)
+        // activity gating: a gated artifact exports its dirty-bitmap
+        // geometry (absent = ungated); the mem-file overlays below
+        // change state the BAKED bitmaps never witnessed, so they
+        // saturate the bitmaps before the first steady edge
+        let gate_geom: Option<(u64, u64, u64)> = lib
+            .get::<*const u64>(b"trs_gate_geom")
+            .ok()
+            .map(|g| {
+                let p: *const u64 = *g;
+                (*p, *p.add(1), *p.add(2))
+            });
         if let Ok(g) = lib.get::<*mut usize>(b"trs_bram_tick_cb") {
             **g = trs_codegen::abi::trs_bram_tick as usize;
         }
@@ -776,6 +787,21 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
                 .get_mut(inst)
                 .expect("load row without a restored prim (parse gate)")
                 .runcore_overlay(file, *bin);
+        }
+        // overlays changed state the baked dirty bitmaps did not
+        // witness: saturate so every cone recomputes until real
+        // dirtiness re-establishes (bounds-guarded against skew)
+        if !boot.loads.is_empty() {
+            if let Some((cur, next, words)) = gate_geom {
+                if cur + words <= boot.nslots as u64
+                    && next + words <= boot.nslots as u64
+                {
+                    for i in 0..words {
+                        *ap.add((cur + i) as usize) = u64::MAX;
+                        *ap.add((next + i) as usize) = u64::MAX;
+                    }
+                }
+            }
         }
         let envp = &mut rc as *mut RunCore as *mut core::ffi::c_void;
         let pos_fns: Vec<

@@ -515,7 +515,7 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 22;
+pub const AOT_LAYOUT_REV: u64 = 23; // 23: activity-gating dirty words
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).
@@ -600,6 +600,47 @@ pub struct EdgeSsaPlan {
     /// ungated BRAM port ticks — the edge fn calls the helper through
     /// the trs_bram_tick_cb pointer-global (filled at artifact load)
     pub bram_ticks: Vec<Vec<[u64; 3]>>,
+    /// activity gating (single-composition designs): dirty-bitmap
+    /// geometry in the arena, None = gating not armed for this
+    /// artifact.  Bits [0, n_state_bits) are written prim instances;
+    /// bits [n_state_bits, n_state_bits + n_rules) are RULE bits (a
+    /// recomputed sched section sets its own bit for same-edge
+    /// CF-chain propagation; rule bits never survive the edge roll —
+    /// the epilogue writes only state bits into `next`).
+    pub gate: Option<GateLayout>,
+    /// per spec ordinal: the sched section's sensitivity mask as
+    /// (dirty word index, bit mask) pairs over the CURRENT dirty
+    /// words; None = ungateable (effectful/ported/boxed cone, or the
+    /// cone analysis declined) — the section always runs
+    pub gate_masks: Vec<Option<Vec<(u32, u64)>>>,
+    /// per spec ordinal: state bits its body may write (transitive,
+    /// conservative) — ORed into the NEXT-edge dirty words by the
+    /// edge epilogue when WF or last-edge WF is set (covers value
+    /// changes AND wire/bypass revert-to-default on the fire edge)
+    pub dirty_sync: Vec<Vec<(u32, u64)>>,
+    /// per spec ordinal: the same-cycle-visible subset (wires, CReg,
+    /// loopy/bypass FIFOs) — ORed into the CURRENT dirty words right
+    /// after the exec section when WF is set, so later-in-edge
+    /// readers see the write
+    pub dirty_bypass: Vec<Vec<(u32, u64)>>,
+}
+
+/// Arena geometry of the activity-gating dirty bitmaps.  Three
+/// consecutive regions: CURRENT dirty words (what sched guards test),
+/// NEXT dirty words (accumulates this edge's writes; rolled into
+/// CURRENT at the next edge's start), and last-WF bit words (one bit
+/// per spec ordinal, maintained by the epilogue).
+#[derive(Clone, Copy, Debug)]
+pub struct GateLayout {
+    pub cur_base: u32,
+    pub next_base: u32,
+    pub lastwf_base: u32,
+    /// dirty words per bitmap (state bits + rule bits)
+    pub words: u32,
+    /// last-WF words (ceil(n_rules/64))
+    pub lastwf_words: u32,
+    /// first rule bit index (= number of state bits)
+    pub rule_bit_base: u32,
 }
 
 /// Pack one BRAM port tick into trs_bram_tick's (a0, a1, a2) args.

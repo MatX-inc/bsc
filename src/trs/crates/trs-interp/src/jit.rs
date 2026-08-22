@@ -2967,6 +2967,10 @@ impl Interp {
         // replan pass): joined into outlined_execs before any sharing/
         // hoist/elision table is computed, so the plan stays coherent
         forced_outline: &std::collections::HashSet<usize>,
+        // activity-gating dirty-region geometry (allocated by
+        // jit_plan for every request kind); None = the caller forbids
+        // gating for this plan (stats runs, traced artifacts)
+        gate: Option<trs_codegen::abi::GateLayout>,
     ) -> trs_codegen::abi::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
             specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
@@ -2978,6 +2982,13 @@ impl Interp {
         struct Cone {
             /// prim instances this cone reads with NO stability contract
             reads: HashSet<usize>,
+            /// EVERY prim instance this cone reads, stability contract
+            /// or not: the activity-gate sensitivity masks are built
+            /// from this set — a stability contract says a value
+            /// cannot move INTRA-edge, but gating asks whether it
+            /// moved ACROSS edges, where stable reads change like any
+            /// other (using `reads` here was the unsound shortcut)
+            reads_all: HashSet<usize>,
             /// transitive def closure (inst, def), incl. the root
             defs: HashSet<(usize, StrId)>,
             /// root def's own expr node count (share-census units)
@@ -2988,7 +2999,13 @@ impl Interp {
         }
         impl Default for Cone {
             fn default() -> Self {
-                Cone { reads: HashSet::new(), defs: HashSet::new(), mass: 0, poison: 0 }
+                Cone {
+                    reads: HashSet::new(),
+                    reads_all: HashSet::new(),
+                    defs: HashSet::new(),
+                    mass: 0,
+                    poison: 0,
+                }
             }
         }
         impl Cone {
@@ -2997,6 +3014,7 @@ impl Interp {
             }
             fn absorb(&mut self, o: &Cone) {
                 self.reads.extend(o.reads.iter().copied());
+                self.reads_all.extend(o.reads_all.iter().copied());
                 self.defs.extend(o.defs.iter().copied());
                 self.poison |= o.poison;
             }
@@ -3106,6 +3124,7 @@ impl Interp {
                             if !stable_read(pc, cx.itp.s(*method)) {
                                 out.reads.insert(gi);
                             }
+                            out.reads_all.insert(gi);
                             // hoist purity: the read must be an
                             // arena-inline load for THIS instance
                             let ie = &cx.inst_envs[&inst];
@@ -3709,6 +3728,139 @@ impl Interp {
                 .collect();
             eprintln!("trs edge-ssa: poisoned shared defs: {}", po.join(" "));
         }
+        // ---- activity gating: sensitivity masks + dirty write masks ----
+        // Armed only for single-row untraced plans (multi-comp designs
+        // would need a cross-comp roll point; alts append variant rows
+        // and fail the row check).  A section is gateable only when its
+        // whole read cone — CF, WF, eager defs, plus the CF cones of
+        // its transitive ME inhibitors (explicit slot loads outside the
+        // def closure) — is pure arena-inline prim reads: poison bits
+        // 1/2/4/8 (ports, foreign/task/trap, boxed prims, EN reads) all
+        // mark inputs the dirty bitmap cannot see.  Reset/clock/param
+        // port reads (bit 16) are admissible: the runtime saturates the
+        // bitmaps on reset activity, clocks/params are domain-constant.
+        // Masks use Cone.reads_all (a stability contract bounds INTRA-
+        // edge movement; gating asks about CROSS-edge movement).
+        let gating_on = gate.is_some()
+            && nodes.len() == 1
+            && !self.vcd_trace
+            && std::env::var("TRS_GATING").as_deref() != Ok("0");
+        let mut gate_masks: Vec<Option<Vec<(u32, u64)>>> = Vec::new();
+        let mut dirty_sync: Vec<Vec<(u32, u64)>> = Vec::new();
+        let mut dirty_bypass: Vec<Vec<(u32, u64)>> = Vec::new();
+        if gating_on {
+            const SAFE: [&str; 7] =
+                ["reg", "configreg", "creg", "wire", "fifo", "regfile", "bram"];
+            // same-cycle-visible classes: wires (readers see this
+            // edge's write), CReg later ports, FIFOs conservatively as
+            // a class (cat does not distinguish loopy/bypass variants)
+            const BYPASS: [&str; 3] = ["wire", "creg", "fifo"];
+            // bit per WRITTEN instance: an instance nothing writes
+            // cannot go dirty (autonomous-tick prims are excluded by
+            // the SAFE-cat check on the read side)
+            let mut written_all: Vec<usize> = write_sets
+                .iter()
+                .flat_map(|w| w.iter().copied())
+                .collect();
+            written_all.sort_unstable();
+            written_all.dedup();
+            let bit_of: HashMap<usize, u32> = written_all
+                .iter()
+                .enumerate()
+                .map(|(i, &gi)| (gi, i as u32))
+                .collect();
+            let pairs = |bits: &std::collections::BTreeSet<u32>| {
+                let mut out: Vec<(u32, u64)> = Vec::new();
+                for &b in bits {
+                    let (w, m) = (b / 64, 1u64 << (b % 64));
+                    match out.last_mut() {
+                        Some((lw, lm)) if *lw == w => *lm |= m,
+                        _ => out.push((w, m)),
+                    }
+                }
+                out
+            };
+            // cf-slot -> owner ordinal, for the inhibitor closure
+            let cf_owner: HashMap<u32, usize> = specs
+                .iter()
+                .enumerate()
+                .map(|(o, sp)| (sp.cf_slot, o))
+                .collect();
+            for (o, sp) in specs.iter().enumerate() {
+                // write masks (every ordinal, autofire included)
+                let mut sync = std::collections::BTreeSet::new();
+                let mut byp = std::collections::BTreeSet::new();
+                for &gi in &exec_writes[o] {
+                    let b = bit_of[&gi];
+                    sync.insert(b);
+                    if cx
+                        .prim_cat
+                        .get(&gi)
+                        .is_some_and(|c| BYPASS.contains(c))
+                    {
+                        byp.insert(b);
+                    }
+                }
+                dirty_sync.push(pairs(&sync));
+                dirty_bypass.push(pairs(&byp));
+                // read mask: autofire pseudo-specs have no sched
+                // section to gate
+                if sp.autofire.is_some() {
+                    gate_masks.push(None);
+                    continue;
+                }
+                // transitive inhibitor closure over ordinals (an
+                // inhibited CF reads the inhibitor's latched CF, which
+                // its own inhibitors shaped, and so on)
+                let mut need: Vec<usize> = vec![o];
+                let mut seen: HashSet<usize> = need.iter().copied().collect();
+                let mut qi = 0;
+                while qi < need.len() {
+                    let q = need[qi];
+                    qi += 1;
+                    for sl in &specs[q].inhibit_slots {
+                        if let Some(&oo) = cf_owner.get(sl) {
+                            if seen.insert(oo) {
+                                need.push(oo);
+                            }
+                        }
+                    }
+                }
+                let mut c = Cone::default();
+                for (qi2, &q) in need.iter().enumerate() {
+                    let qs = &specs[q];
+                    let mir = inst_envs[&qs.inst].mir;
+                    let r = &self.d.modules[mir].rules[qs.rule_idx];
+                    c.absorb(&cone(&mut cx, qs.inst, r.can_fire));
+                    if qi2 == 0 {
+                        // own rule only: WF + eager defs
+                        c.absorb(&cone(&mut cx, qs.inst, r.will_fire));
+                        for &e in &qs.eager {
+                            c.absorb(&cone(&mut cx, qs.inst, e));
+                        }
+                    }
+                }
+                let inhibitors_resolved = specs[o]
+                    .inhibit_slots
+                    .iter()
+                    .all(|sl| cf_owner.contains_key(sl));
+                let reads_safe = c.reads_all.iter().all(|gi| {
+                    cx.prim_cat.get(gi).is_some_and(|pc| SAFE.contains(pc))
+                });
+                if c.poison & 0b1111 != 0 || !reads_safe || !inhibitors_resolved
+                {
+                    gate_masks.push(None);
+                    continue;
+                }
+                let bits: std::collections::BTreeSet<u32> = c
+                    .reads_all
+                    .iter()
+                    .filter_map(|gi| bit_of.get(gi).copied())
+                    .collect();
+                gate_masks.push(Some(pairs(&bits)));
+            }
+        }
+
         // export keep-set (specialized compile: slot stores survive
         // only for COMPILED consumers — inhibitor loads and outlined
         // bodies; the slot-level debug contract is not part of the
@@ -3717,6 +3869,18 @@ impl Interp {
             .iter()
             .flat_map(|sp| sp.inhibit_slots.iter().copied())
             .collect();
+        // gating consumers: a SKIPPED section's slots are the only
+        // carrier of its values, so every CF/WF/eager store must
+        // survive elision (readers hit def()'s slot fallbacks on
+        // edge-cache miss — the miss is NEW: ungated edges always
+        // insert into the cache).  The epilogue and exec-site bypass
+        // ORs also load every WF slot.  Same keep-set as has_early.
+        if gating_on {
+            for e in inst_envs.values() {
+                export_slots.extend(e.cfwf_slot.values().copied());
+                export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
+            }
+        }
         // interp-side consumers: with any early (clock-crossing) rule,
         // the PG_FINAL pass reads compiled CF slots (inhibitors via
         // latched_or_arena) and eager/WF defs via eval's arena
@@ -3765,6 +3929,10 @@ impl Interp {
             sched_over: Vec::new(),
             ord_fnodes: HashMap::new(),
             export_slots,
+            gate: gating_on.then_some(gate).flatten(),
+            gate_masks,
+            dirty_sync,
+            dirty_bypass,
         }
     }
 
@@ -4959,7 +5127,7 @@ impl Interp {
                 .collect();
             let _ = self.edge_ssa_plan(
                 &inst_envs, &nodes, &specs, has_early, true,
-                &Default::default(),
+                &Default::default(), None,
             );
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
@@ -5265,6 +5433,28 @@ impl Interp {
                 ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width, h.ports.clone()))
             })
             .collect();
+        // ---- activity-gating dirty region (geometry only; ARMING is
+        // the edge plan's decision) ----
+        // Allocated for EVERY request kind so Emit and Load agree on
+        // the arena length (the artifact bakes nslots and refuses a
+        // mismatch): CURRENT dirty words, NEXT dirty words, last-WF
+        // bits.  Bits cover all instances (pessimistic — masks only
+        // ever use written ones); a few hundred bytes at CPU scale.
+        let gate_layout = {
+            let words = (self.insts.len() as u32).div_ceil(64).max(1);
+            let lastwf_words = (specs.len() as u32).div_ceil(64).max(1);
+            let cur_base = alloc(&mut nslots, words);
+            let next_base = alloc(&mut nslots, words);
+            let lastwf_base = alloc(&mut nslots, lastwf_words);
+            trs_codegen::abi::GateLayout {
+                cur_base,
+                next_base,
+                lastwf_base,
+                words,
+                lastwf_words,
+                rule_bit_base: self.insts.len() as u32,
+            }
+        };
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
@@ -5510,6 +5700,7 @@ impl Interp {
                         has_early,
                         false,
                         forced,
+                        Some(gate_layout),
                     );
                     // traced artifacts keep wire ticks boxed: the tick
                     // latches `written` for the VCD dump (and clears
@@ -5668,8 +5859,25 @@ impl Interp {
                 for &slot in &memo_stamp_slots {
                     unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
                 }
+                // activity gating: dirty bitmaps start ALL-ONES so the
+                // first edges recompute every cone (slots hold no
+                // trustworthy values yet); harmless if the artifact
+                // was linked ungated (nothing reads the words)
+                for i in 0..gate_layout.words {
+                    unsafe {
+                        *arena_ptr.add((gate_layout.cur_base + i) as usize) =
+                            u64::MAX;
+                        *arena_ptr.add((gate_layout.next_base + i) as usize) =
+                            u64::MAX;
+                    }
+                }
                 self.jit_arena_ptr = arena_ptr;
                 self.jit_arena_len = nslots as usize;
+                self.jit_gate = Some((
+                    gate_layout.cur_base,
+                    gate_layout.next_base,
+                    gate_layout.words,
+                ));
                 self.runcore_pending = self.runcore_image_encode();
                 // Boot-descriptor stage A: capture what only the emit
                 // can see — per-comp tick coverage (needs inst_envs)
@@ -5925,9 +6133,22 @@ impl Interp {
         for &slot in &memo_stamp_slots {
             unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
         }
+        // activity gating: bitmaps start ALL-ONES (see the Emit-path
+        // twin); the runtime saturates them again on reset activity
+        for i in 0..gate_layout.words {
+            unsafe {
+                *arena_ptr.add((gate_layout.cur_base + i) as usize) = u64::MAX;
+                *arena_ptr.add((gate_layout.next_base + i) as usize) = u64::MAX;
+            }
+        }
         self.jit_arena_ptr = arena_ptr;
         self.jit_arena_len = nslots as usize;
         self.jit_reset_slots = reset_node_slot;
+        self.jit_gate = Some((
+            gate_layout.cur_base,
+            gate_layout.next_base,
+            gate_layout.words,
+        ));
         // two-fill bake gate: perturb every mem-file data region
         // (post-attach, pre-advance) so the window capture can prove
         // the rest of the state independent of file content

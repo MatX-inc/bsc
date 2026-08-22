@@ -1190,6 +1190,18 @@ fn lower_edge_ssa<'ctx>(
         .iter()
         .map(|v| v.iter().copied().collect())
         .collect();
+    // activity gating: export the bitmap geometry — the slim RunCore
+    // boot saturates the bitmaps after mem-file overlays, and the
+    // symbol's presence marks a gated artifact for A/B introspection
+    if let Some(g) = &plan.gate {
+        let arr = i64t.const_array(&[
+            i64t.const_int(g.cur_base as u64, false),
+            i64t.const_int(g.next_base as u64, false),
+            i64t.const_int(g.words as u64, false),
+        ]);
+        let gg = module.add_global(i64t.array_type(3), None, "trs_gate_geom");
+        gg.set_initializer(&arr);
+    }
     for (k, comp) in fused.iter().enumerate() {
         let sym = format!("edge_c{k}");
         let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
@@ -1208,6 +1220,20 @@ fn lower_edge_ssa<'ctx>(
         b.build_store(gep(comp.now_slot), now).unwrap();
         for &en in &comp.en_slots {
             b.build_store(gep(en), i64t.const_zero()).unwrap();
+        }
+        // activity gating: roll the dirty bitmaps — CURRENT = NEXT
+        // (last edge's writes), NEXT = 0.  Same-cycle writers (wires,
+        // bypass prims) OR into CURRENT mid-edge; the epilogue refills
+        // NEXT from WF | last-WF per rule.
+        if let Some(g) = &plan.gate {
+            for i in 0..g.words {
+                let n = b
+                    .build_load(i64t, gep(g.next_base + i), "gn")
+                    .unwrap();
+                b.build_store(gep(g.cur_base + i), n).unwrap();
+                b.build_store(gep(g.next_base + i), i64t.const_zero())
+                    .unwrap();
+            }
         }
 
         section_sizes.push(Vec::new());
@@ -1483,7 +1509,156 @@ fn lower_edge_ssa<'ctx>(
                             .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
                     });
                 } else {
-                    lc.sched_section(&mut f)?;
+                    // activity gating: pure sched cones sit behind a
+                    // dirty test — (mask AND current-dirty) == 0 means
+                    // no input moved since this section last ran, so
+                    // its CF/WF/eager slots already hold the values a
+                    // recompute would produce (determinism), and the
+                    // whole section is jumped over
+                    let gm = plan
+                        .gate
+                        .as_ref()
+                        .and_then(|_| plan.gate_masks.get(o))
+                        .and_then(|m| m.as_ref())
+                        .filter(|m| !m.is_empty());
+                    match gm {
+                        Some(mask) => {
+                            let g = plan.gate.as_ref().unwrap();
+                            let mut acc = i64t.const_zero();
+                            for &(w, m) in mask {
+                                let p = unsafe {
+                                    lc.builder
+                                        .build_gep(
+                                            i64t,
+                                            arena,
+                                            &[i64t.const_int(
+                                                (g.cur_base + w) as u64,
+                                                false,
+                                            )],
+                                            "gw",
+                                        )
+                                        .unwrap()
+                                };
+                                let v = lc
+                                    .builder
+                                    .build_load(i64t, p, "gv")
+                                    .unwrap()
+                                    .into_int_value();
+                                let a = lc
+                                    .builder
+                                    .build_and(
+                                        v,
+                                        i64t.const_int(m, false),
+                                        "ga",
+                                    )
+                                    .unwrap();
+                                acc = lc.builder.build_or(acc, a, "go").unwrap();
+                            }
+                            let dirty = lc
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::NE,
+                                    acc,
+                                    i64t.const_zero(),
+                                    "gd",
+                                )
+                                .unwrap();
+                            let run_bb =
+                                ctx.append_basic_block(func, "grun");
+                            let cont_bb =
+                                ctx.append_basic_block(func, "gcont");
+                            lc.builder
+                                .build_conditional_branch(
+                                    dirty, run_bb, cont_bb,
+                                )
+                                .unwrap();
+                            lc.builder.position_at_end(run_bb);
+                            lc.edge.as_mut().unwrap().gate_no_latch = true;
+                            lc.sched_section(&mut f)?;
+                            lc.edge.as_mut().unwrap().gate_no_latch = false;
+                            lc.builder
+                                .build_unconditional_branch(cont_bb)
+                                .unwrap();
+                            lc.builder.position_at_end(cont_bb);
+                        }
+                        None => lc.sched_section(&mut f)?,
+                    }
+                }
+                // activity gating, same-cycle dirty: wires and bypass
+                // prims this body may write become visible to LATER
+                // readers this edge — OR the bypass mask into CURRENT
+                // when the rule fired (branchless: sign-extended WF)
+                if is_exec && plan.gate.is_some() {
+                    if let Some(byp) =
+                        plan.dirty_bypass.get(o).filter(|b| !b.is_empty())
+                    {
+                        let g = plan.gate.as_ref().unwrap();
+                        let sel = if spec.autofire.is_some() {
+                            i64t.const_all_ones()
+                        } else {
+                            let wp = unsafe {
+                                lc.builder
+                                    .build_gep(
+                                        i64t,
+                                        arena,
+                                        &[i64t.const_int(
+                                            spec.wf_slot as u64,
+                                            false,
+                                        )],
+                                        "bw",
+                                    )
+                                    .unwrap()
+                            };
+                            let wf = lc
+                                .builder
+                                .build_load(i64t, wp, "bwv")
+                                .unwrap()
+                                .into_int_value();
+                            let nz = lc
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::NE,
+                                    wf,
+                                    i64t.const_zero(),
+                                    "bnz",
+                                )
+                                .unwrap();
+                            lc.builder
+                                .build_int_s_extend(nz, i64t, "bsel")
+                                .unwrap()
+                        };
+                        for &(w, m) in byp {
+                            let p = unsafe {
+                                lc.builder
+                                    .build_gep(
+                                        i64t,
+                                        arena,
+                                        &[i64t.const_int(
+                                            (g.cur_base + w) as u64,
+                                            false,
+                                        )],
+                                        "bc",
+                                    )
+                                    .unwrap()
+                            };
+                            let old = lc
+                                .builder
+                                .build_load(i64t, p, "bo")
+                                .unwrap()
+                                .into_int_value();
+                            let add = lc
+                                .builder
+                                .build_and(
+                                    i64t.const_int(m, false),
+                                    sel,
+                                    "bm",
+                                )
+                                .unwrap();
+                            let nv =
+                                lc.builder.build_or(old, add, "bn").unwrap();
+                            lc.builder.build_store(p, nv).unwrap();
+                        }
+                    }
                 }
                 cur = lc.builder.get_insert_block().unwrap();
                 edge_ctx = lc.edge.take().unwrap();
@@ -1589,6 +1764,119 @@ fn lower_edge_ssa<'ctx>(
                     }
                 }
             }
+            // activity gating, edge epilogue: a rule dirties its write
+            // set for the NEXT edge when it fired (values may have
+            // moved) OR when it fired LAST edge but not this one (its
+            // wires revert to defaults at the clear above — that
+            // transition is a change too).  Branchless per rule; the
+            // fresh WF bits become the new last-WF words.
+            if let Some(g) = &plan.gate {
+                let gepe = |slot: u32| unsafe {
+                    bend.build_gep(
+                        i64t,
+                        arena,
+                        &[i64t.const_int(slot as u64, false)],
+                        "ge",
+                    )
+                    .unwrap()
+                };
+                let old_lw: Vec<inkwell::values::IntValue> = (0..g
+                    .lastwf_words)
+                    .map(|i| {
+                        bend.build_load(i64t, gepe(g.lastwf_base + i), "lw")
+                            .unwrap()
+                            .into_int_value()
+                    })
+                    .collect();
+                let mut new_lw: Vec<inkwell::values::IntValue> =
+                    (0..g.lastwf_words).map(|_| i64t.const_zero()).collect();
+                for (o, sp) in specs.iter().enumerate() {
+                    let wf_nz = if sp.autofire.is_some() {
+                        bend.build_int_compare(
+                            IntPredicate::NE,
+                            i64t.const_int(1, false),
+                            i64t.const_zero(),
+                            "af",
+                        )
+                        .unwrap()
+                    } else {
+                        let wf = bend
+                            .build_load(i64t, gepe(sp.wf_slot), "ew")
+                            .unwrap()
+                            .into_int_value();
+                        bend.build_int_compare(
+                            IntPredicate::NE,
+                            wf,
+                            i64t.const_zero(),
+                            "en",
+                        )
+                        .unwrap()
+                    };
+                    let wf64 = bend
+                        .build_int_z_extend(wf_nz, i64t, "ez")
+                        .unwrap();
+                    let (lwi, lbit) = ((o / 64) as u32, (o % 64) as u64);
+                    new_lw[lwi as usize] = bend
+                        .build_or(
+                            new_lw[lwi as usize],
+                            bend.build_left_shift(
+                                wf64,
+                                i64t.const_int(lbit, false),
+                                "es",
+                            )
+                            .unwrap(),
+                            "eo",
+                        )
+                        .unwrap();
+                    let sync = &plan.dirty_sync[o];
+                    if sync.is_empty() {
+                        continue;
+                    }
+                    let old_bit = bend
+                        .build_and(
+                            bend.build_right_shift(
+                                old_lw[lwi as usize],
+                                i64t.const_int(lbit, false),
+                                false,
+                                "or",
+                            )
+                            .unwrap(),
+                            i64t.const_int(1, false),
+                            "ob",
+                        )
+                        .unwrap();
+                    let cond = bend
+                        .build_or(wf64, old_bit, "ec")
+                        .unwrap();
+                    let sel = bend
+                        .build_int_sub(
+                            i64t.const_zero(),
+                            // cond is 0/1: 0 - cond = 0 or all-ones
+                            cond,
+                            "esl",
+                        )
+                        .unwrap();
+                    for &(w, m) in sync {
+                        let p = gepe(g.next_base + w);
+                        let old = bend
+                            .build_load(i64t, p, "eno")
+                            .unwrap()
+                            .into_int_value();
+                        let add = bend
+                            .build_and(i64t.const_int(m, false), sel, "ena")
+                            .unwrap();
+                        let nv = bend.build_or(old, add, "enn").unwrap();
+                        bend.build_store(p, nv).unwrap();
+                    }
+                }
+                for i in 0..g.lastwf_words {
+                    bend.build_store(
+                        gepe(g.lastwf_base + i),
+                        new_lw[i as usize],
+                    )
+                    .unwrap();
+                }
+            }
             bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
         }
         let bstop = ctx.create_builder();
@@ -1657,6 +1945,12 @@ struct EdgeCtx<'ctx> {
     /// the driver); the driver evicts after any exec section whose
     /// write-set intersects the def's unstable-read set.
     shared: HashMap<(usize, StrId), IntValue<'ctx>>,
+    /// activity gating: the CURRENT section body sits behind a dirty
+    /// test and may be SKIPPED at runtime — its SSA values do not
+    /// dominate later sections, so it must not publish position-
+    /// latched values (readers fall back to slot loads, which a
+    /// skipped section leaves holding last edge's — correct — values)
+    gate_no_latch: bool,
 }
 
 struct Lower<'a, 'ctx> {
@@ -4087,7 +4381,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // (what the slots hold); later sections read them in place of
         // slot loads.  Never evicted — eviction would change latched
         // semantics, not just performance.
-        if self.edge.is_some() {
+        if self.edge.is_some() && !self.edge.as_ref().unwrap().gate_no_latch {
             let inst = self.spec.inst;
             let e = self.edge.as_mut().unwrap();
             e.latched.insert((inst, r.can_fire), cf);
