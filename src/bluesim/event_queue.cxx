@@ -97,7 +97,8 @@ bool EventQueue::isValid()
 
 /* Construct an EventQueue */
 EventQueue::EventQueue()
-  : events(), count(0), in_event(false), last_find_pred(NULL), curr_find_idx(0)
+  : events(), count(0), in_event(false), halted(false),
+    last_find_pred(NULL), curr_find_idx(0)
 {}
 
 /* Destroy an EventQueue and free its memory. */
@@ -117,7 +118,8 @@ void EventQueue::schedule(const tEvent& e)
 /* Execute events in sequence */
 void EventQueue::execute(tSimStateHdl simHdl)
 {
-  while (count > 0)
+  halted = false;
+  while ((count > 0) && !halted)
   {
     // We must copy the event rather than passing a reference
     // to the first event on the queue, since the event function
@@ -146,6 +148,12 @@ void EventQueue::execute(tSimStateHdl simHdl)
       schedule(executing_event);
     }
   }
+}
+
+/* Stop the current execute() loop after the current event */
+void EventQueue::halt()
+{
+  halted = true;
 }
 
 /* Get the number of events in the queue */
