@@ -1,14 +1,35 @@
 #ifndef __KERNEL_H__
 #define __KERNEL_H__
 
-#include <deque>
-#include <vector>
-
 #include "bluesim_kernel_api.h"
 #include "bs_model.h"
 #include "bs_symbol.h"
 #include "event_queue.h"
 
+/* The kernel keeps no growable containers: everything lives in the
+ * caller-provided context buffer, in fixed-capacity storage embedded
+ * in tSimState (bk_context_bytes() covers it automatically because
+ * it is computed from sizeof(tSimState)).  The capacities below are
+ * documented limits of the kernel:
+ *
+ *  - BK_MAX_CLOCKS bounds the number of clocks a simulation can
+ *    define (the design's clock domains plus any host-defined
+ *    clocks); bk_define_clock() returns BAD_CLOCK_HANDLE when full.
+ *  - BK_CLOCK_NAME_MAX bounds a clock's name; longer names are
+ *    truncated.
+ *  - BK_MAX_LABELS bounds the pending hierarchy labels of the
+ *    rule-firing dump; it comfortably exceeds any realistic module
+ *    nesting depth, and on overflow the oldest pending label is
+ *    dropped (only dump formatting is affected).
+ *  - BK_MAX_PLUS_ARGS / BK_PLUS_ARG_MAX bound the number and length
+ *    of recorded simulator plus-args; bk_append_argument() ignores
+ *    arguments past those limits.
+ */
+#define BK_MAX_CLOCKS     64u
+#define BK_CLOCK_NAME_MAX 128u
+#define BK_MAX_LABELS     64u
+#define BK_MAX_PLUS_ARGS  64u
+#define BK_PLUS_ARG_MAX   128u
 
 /* A tLabel provides the information for creating a label when
  * dumping rule firing information.
@@ -18,12 +39,23 @@ typedef struct {
   const char*  text;
 } tLabel;
 
+/* The pending rule-firing labels, kept in a fixed-capacity ring
+ * (used like a deque: pushed and popped at the back as the module
+ * hierarchy is walked, drained from the front when a rule is
+ * printed).
+ */
+typedef struct {
+  tLabel       items[BK_MAX_LABELS];
+  unsigned int head;    /* index of the front element */
+  unsigned int count;   /* number of live elements */
+} tLabelQueue;
+
 /* A tClockInfo is a complete description a clock waveform
  * and the schedules which execute on its edges.
  */
 typedef struct
 {
-  char* name;                       /* clock name */
+  char name[BK_CLOCK_NAME_MAX];     /* clock name (truncated to fit) */
   tClockValue current_value;        /* current clock value */
   tClockValue initial_value;        /* initial clock value */
   bool has_initial_value;           /* whether the initial value is set */
@@ -85,8 +117,9 @@ struct tSimState {
   // flag that records current cycle dump setting
   bool call_dump_cycle_counts;
 
-  // an array of all clock definitions
-  std::vector<tClockInfo> clocks;
+  // all clock definitions (fixed capacity, see BK_MAX_CLOCKS)
+  tClockInfo clocks[BK_MAX_CLOCKS];
+  unsigned int num_clocks;
 
   // a symbol for the top module
   tSym top_symbol;
@@ -98,12 +131,13 @@ struct tSimState {
   tTime target_yield_time;
   unsigned int data_to_match;
 
-  // for dumping rule firings
-  std::deque<tLabel> labels;
+  // for dumping rule firings (fixed capacity, see BK_MAX_LABELS)
+  tLabelQueue labels;
   unsigned int rule_name_indent;
 
-  // simulator arguments
-  std::vector<const char*> plus_args;
+  // simulator arguments (fixed capacity, see BK_MAX_PLUS_ARGS)
+  char plus_args[BK_MAX_PLUS_ARGS][BK_PLUS_ARG_MAX];
+  unsigned int num_plus_args;
 
   // Count the number of primitives that have requested reset ticks
   unsigned int reset_tick_requests;

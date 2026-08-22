@@ -58,6 +58,12 @@ extern "C" {
  *    output port areas, at least bk_input_bytes(model) /
  *    bk_output_bytes(model) bytes, 8-byte aligned; either may be
  *    NULL when its area is empty.  Borrowed until bk_shutdown().
+ *    The top module's ports are bound to these buffers at their
+ *    published descriptor offsets: the host drives input ports
+ *    (method arguments and enables) by writing 'inputs' before a
+ *    clock edge, and reads output ports (method results and
+ *    readies, refreshed by the schedule) from 'outputs' after it
+ *    (see bluesim_introspection.h for the exact semantics).
  *
  * All five pointers may be NULL for a SIZING call: the returned
  * handle then supports the pre-initialization queries (the bk_*
@@ -350,6 +356,12 @@ tUInt64 bk_output_bytes(tModel model);
  * callbacks are registered (see bk_set_clock_event_fn()).  Clocks the
  * model registers are counted in bk_max_event_queue_depth(); a clock
  * the HOST defines is not, and costs up to 5 further events.
+ *
+ * The clock table is fixed-capacity storage in the caller-provided
+ * context buffer (nothing is allocated): at most 64 clocks can be
+ * defined, and 'name' is copied into the entry's embedded buffer,
+ * truncated to 127 characters if longer.  Defining a 65th clock
+ * fails with BAD_CLOCK_HANDLE.
  */
 tClock bk_define_clock(tSimStateHdl simHdl,
 		       const char* name,
@@ -697,7 +709,11 @@ tBool bk_aborted(tSimStateHdl simHdl);
  * Routines for setting and testing arguments (eg., plusargs).
  */
 
-/* Add an argument string */
+/* Add an argument string.  The string is copied into fixed-capacity
+ * storage in the simulation context (nothing is allocated): at most
+ * 64 arguments of at most 127 characters each are recorded, and an
+ * argument beyond either limit is silently ignored.
+ */
 void bk_append_argument(tSimStateHdl simHdl, const char* arg);
 
 /* Retrieve the trailing portion of the first matching argument */

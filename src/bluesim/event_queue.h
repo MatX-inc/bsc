@@ -7,14 +7,24 @@
 // Forward declaration of the recursive type tEvent
 typedef struct tEvent tEvent;
 
+// A pending reset call, embedded directly in its event (see
+// reset.cxx) so that scheduling a reset allocates nothing.
+typedef struct
+{
+  tResetFn fn;
+  void*    parent;
+  tUInt8   rst;
+} tResetRequest;
+
 // A tEventData is a union type used to pass data to an event
 // handler function.
 typedef union
 {
-  void*        ptr;
-  bool         flag;
-  tClock       clk;
-  unsigned int value;
+  void*         ptr;
+  bool          flag;
+  tClock        clk;
+  unsigned int  value;
+  tResetRequest reset;
 } tEventData;
 
 // A tEventFn is the type of functions which can be scheduled for

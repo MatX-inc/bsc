@@ -4,21 +4,37 @@
 #include "bs_module.h"
 #include "kernel.h"
 
-/* Utility functions used for dumping rule firings */
+/* Utility functions used for dumping rule firings.
+ *
+ * The pending labels live in a fixed-capacity ring embedded in the
+ * simulation context (tLabelQueue, see kernel.h): pushed and popped
+ * at the back while the module hierarchy is walked, drained from the
+ * front when a rule is printed.  Nothing is allocated.  If more than
+ * BK_MAX_LABELS labels are ever pending (which would take a module
+ * hierarchy nested deeper than the capacity), the oldest pending
+ * label is dropped; only dump formatting is affected.
+ */
 
 // save state needed to print label
 void print_rule_label(tSimStateHdl simHdl,
 		      unsigned int indent, const char* text)
 {
-  tLabel label;
+  tLabelQueue& q = simHdl->labels;
+
+  while ((q.count > 0) &&
+	 (q.items[(q.head + q.count - 1) % BK_MAX_LABELS].indent >= indent))
+    --(q.count);
+
+  if (q.count == BK_MAX_LABELS)
+  {
+    // drop the oldest pending label
+    q.head = (q.head + 1) % BK_MAX_LABELS;
+    --(q.count);
+  }
+  tLabel& label = q.items[(q.head + q.count) % BK_MAX_LABELS];
   label.indent = indent;
   label.text = text;
-
-  while ((! simHdl->labels.empty()) &&
-	 (simHdl->labels.back().indent >= indent))
-    simHdl->labels.pop_back();
-
-  simHdl->labels.push_back(label);
+  ++(q.count);
   simHdl->rule_name_indent = indent + 2;
 }
 
@@ -31,13 +47,15 @@ void print_rule(tSimStateHdl simHdl,
     return;
 
   FileTarget dest(simHdl);
-  while (! simHdl->labels.empty())
+  tLabelQueue& q = simHdl->labels;
+  while (q.count > 0)
   {
-    const tLabel& label = simHdl->labels.front();
+    const tLabel& label = q.items[q.head];
     dest.write_char(' ', label.indent);
     dest.write_string(label.text);
     dest.write_string(":\n");
-    simHdl->labels.pop_front();
+    q.head = (q.head + 1) % BK_MAX_LABELS;
+    --(q.count);
   }
   const char* msg = did_fire ? "fired" : "inhibited by more urgent rule";
   dest.write_char(' ', simHdl->rule_name_indent);
