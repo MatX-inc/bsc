@@ -423,9 +423,10 @@ static tTime yield_event(tSimStateHdl simHdl, tEvent& ev)
   unlock_sim_state(simHdl);
   if (simHdl->sync_mode)
   {
-    /* return control to the caller of bk_sync_run() */
+    /* return control to the caller of bk_sync_run();
+     * sync_run_events() flushes file buffers before returning
+     */
     simHdl->queue->halt();
-    fflush(NULL); /* flush open file buffers */
     return (0llu);
   }
   pause_sim(simHdl);
@@ -655,6 +656,7 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   simHdl->queue = NULL;
 
   simHdl->sync_mode = false;
+  simHdl->flush_on_pause = true;
   simHdl->sim_running = false;
   simHdl->sim_shutting_down = false;
   simHdl->start_semaphore = NULL;
@@ -1473,7 +1475,12 @@ static tStatus sync_run_events(tSimStateHdl simHdl)
   simHdl->sim_running = false;
   unlock_sim_state(simHdl);
 
-  fflush(NULL); /* flush open file buffers */
+  /* flush open file buffers once per return to the caller, matching
+   * the one flush per pause performed on the threaded path (unless
+   * the embedder disabled it with bk_set_flush_on_pause())
+   */
+  if (simHdl->flush_on_pause)
+    fflush(NULL);
 
   return BK_SUCCESS;
 }
@@ -1548,6 +1555,17 @@ tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk)
   bk_quit_after_edge(simHdl, clk, dir, old_limit);
 
   return status;
+}
+
+/* Control whether the sync path flushes open file buffers when it
+ * returns control to the caller (default: enabled).
+ */
+void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled)
+{
+  if (simHdl == NULL)
+    return;
+
+  simHdl->flush_on_pause = (enabled != 0);
 }
 
 /* Test whether any events remain in the simulation queue. */
