@@ -47,7 +47,6 @@ Subcommands:
   timescale <timescale>         Specify simulation timescale
   unload                        Unload the current bluesim model
   up [<N>]                      Move up the module hierarchy
-  vcd [on | off | <file>]       Control dumping waveforms to a VCD file
   version                       Show Bluesim model version information
 Command: sim step - Advance simulation a given number of cycles
 
