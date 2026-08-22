@@ -55,6 +55,11 @@ class WideData
  private:
   unsigned int  nBits;
   unsigned int  nWords;
+  // When true, the object owns its data buffer and the destructor
+  // returns it to the allocator.  When false, the object is a
+  // non-owning view over caller-provided storage (typically a stack
+  // array in generated code) and never frees it.
+  bool          ownsData;
 
  // This is public only for the purpose of passing values to foreign C functions.
  // Please don't abuse it!
@@ -72,8 +77,13 @@ class WideData
   // special constructor used for literal values
   WideData(unsigned int bits, const unsigned int array[]);
 
-  // special constructor for static-wide-data -- no initialization
-  //  WideData(unsigned int * data, unsigned int bits);
+  // special constructor for caller-provided storage -- no initialization.
+  // The resulting object is a non-owning view: 'buf' must hold at least
+  // NUM_WORDS(bits) words and must outlive the view.  The destructor
+  // does not free the buffer.  Copy construction FROM a view makes an
+  // ordinary owning deep copy; assignment TO a view copies words into
+  // the caller's buffer and never frees or reallocates it.
+  WideData(unsigned int* buf, unsigned int bits);
 
   // special constructors used to promote non-wide values
   WideData(unsigned int bits, unsigned int value);
@@ -92,6 +102,9 @@ class WideData
   ~WideData();
 
  public:
+  // (Re)allocate owned storage for 'width' bits.  On a non-owning view
+  // this detaches from the caller's buffer (which is left untouched)
+  // and switches the object to freshly allocated owned storage.
   void setSize(unsigned int width);
   unsigned int size() const { return nBits; }
   unsigned int numWords() const { return nWords; }

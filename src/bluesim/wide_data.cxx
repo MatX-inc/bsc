@@ -372,6 +372,7 @@ WideData::WideData()
 {
   nBits = 0;    // creates 0-bit values, use setSize to initialize
   nWords = 0;
+  ownsData = true;
   data = NULL;
 }
 
@@ -380,6 +381,7 @@ WideData::WideData(unsigned int bits, bool init)
 {
   nBits = bits;
   nWords = NUM_WORDS(bits);
+  ownsData = true;
   if (nWords == 0)
   {
     data = NULL;
@@ -397,6 +399,7 @@ WideData::WideData(unsigned int bits, const unsigned int array[])
 {
   nBits = bits;
   nWords = NUM_WORDS(bits);
+  ownsData = true;
   if (nWords == 0)
   {
     data = NULL;
@@ -414,6 +417,7 @@ WideData::WideData(unsigned int bits, unsigned int value)
 {
   nBits = bits;
   nWords = NUM_WORDS(bits);
+  ownsData = true;
   if (nWords == 0)
   {
     data = NULL;
@@ -430,6 +434,7 @@ WideData::WideData(unsigned int bits, unsigned long long value)
 {
   nBits = bits;
   nWords = NUM_WORDS(bits);
+  ownsData = true;
   if (nWords == 0)
   {
     data = NULL;
@@ -448,6 +453,7 @@ WideData::WideData(unsigned int bits, const char* str)
 {
   nBits = bits;
   nWords = NUM_WORDS(bits);
+  ownsData = true;
   if (nWords == 0)
   {
     data = NULL;
@@ -462,12 +468,26 @@ WideData::WideData(unsigned int bits, const char* str)
   }
 }
 
+// special constructor for caller-provided storage -- a non-owning view.
+// No initialization is performed; the buffer must hold at least
+// NUM_WORDS(bits) words and must outlive the view.
+WideData::WideData(unsigned int* buf, unsigned int bits)
+{
+  nBits = bits;
+  nWords = NUM_WORDS(bits);
+  ownsData = false;
+  data = buf;
+}
+
 
 // copy constructor
+// Always makes an owning deep copy, even when the source is a
+// non-owning view of caller-provided storage.
 WideData::WideData(const WideData& v)
 {
   nBits  = v.nBits;
   nWords = v.nWords;
+  ownsData = true;
   if (nWords == 0)
   {
     data = NULL;
@@ -481,6 +501,9 @@ WideData::WideData(const WideData& v)
 }
 
 // copy assignment
+// Copies words into the existing storage; it never frees or
+// reallocates, so assigning to a non-owning view fills the caller's
+// buffer without taking ownership of anything.
 WideData& WideData::operator=(const WideData& v)
 {
 
@@ -493,7 +516,8 @@ WideData& WideData::operator=(const WideData& v)
 // destructor
 WideData::~WideData()
 {
-  free_mem(data, nWords);
+  if (ownsData)
+    free_mem(data, nWords);
   data = NULL;
   nBits = 0;
   nWords = 0;
@@ -502,9 +526,13 @@ WideData::~WideData()
 
 void WideData::setSize(unsigned int width)
 {
-  free_mem(data, nWords);
+  // a non-owning view detaches from the caller's buffer (which is
+  // left untouched) and becomes an owning object
+  if (ownsData)
+    free_mem(data, nWords);
   nBits  = width;
   nWords = NUM_WORDS(width);
+  ownsData = true;
   if (nWords == 0)
     data = NULL;
   else
