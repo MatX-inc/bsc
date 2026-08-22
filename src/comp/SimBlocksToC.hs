@@ -3,28 +3,24 @@ module SimBlocksToC ( simBlocksToC
                     , mkSchedName
                     ) where
 
-import Data.List(nub, (\\), find, genericLength, sortBy, groupBy)
-import Data.List.Split(wordsBy)
-import Data.Maybe(catMaybes, isJust, fromJust)
-import Data.Function(on)
+import Data.List(nub, genericLength)
+import Data.Maybe(catMaybes)
 import Control.Monad.State(runState)
 import System.Time -- XXX: in old-time package
 import qualified Data.Map as M
 
 import ErrorUtil(internalError)
 import Flags
-import Id(getIdString, getIdQual, getIdQualString, unQualId)
+import Id(getIdString)
 import SimCCBlock
 import ASyntax
 import ASyntaxUtil(exprForeignCalls,actionForeignCalls)
 import ForeignFunctions
 import FileNameUtil(mkCxxName, mkHName)
-import FStringCompat(mkFString)
 import CCSyntax
-import Wires(ClockDomain)
 import VModInfo(vName_to_id)
 import PPrint(ppReadable) -- hiding (int, char)
-import Util(concatMapM, mapFst, mapSnd)
+import Util(concatMapM, mapFst)
 import SimFileUtils(codeGenOptionDescr)
 import TopUtils(TimeInfo(..))
 import Version(versionname)
@@ -44,43 +40,7 @@ simBlocksToC :: Flags -> TimeInfo -> SBId ->
 simBlocksToC flags time top_block def_clk def_rst
              sb_map ff_map reused mod_blocks scheds
              clk_groups gate_info writeFileC = do
-    let sub_ids = [ i | sb <- M.elems sb_map, (i, _, _) <- sb_state sb ]
-        top_mod_id = find (not . isPrimBlock) ((M.keys sb_map) \\ sub_ids)
-        -- Build up a structure to map a module block id and the signal name
-        -- within that block to the clock domain on which that signal is written.
-        -- Since the Ids can be both in the port and def namespace, they are encoded as a pair
-        -- "Bool,Id").
-        matchesInst i1 = \(i2,_) -> q1' == getIdQual i2
-          where q1  = getIdQualString i1
-                q1' = mkFString $ if q1 == "top" then "" else drop 4 q1
-        lookupDom (c,i) clk_groups =
-            do (SimCCClockGroup _ ds) <- find (\g -> aclock_osc (grp_canonical g) == c) clk_groups
-               (_,d) <- find (matchesInst i) ds
-               return d
-        maps = [ M.singleton sbid [(fromJust d, nub (mapSnd unQualId ids_in_instance))]
-               | (SimCCSched clk _ fn _) <- scheds
-               -- all Ids written in this schedule function
-               , let ids_written = concatMap defs_written (sf_body fn)
-               -- sorted and grouped based on their instance qualifier
-               , let sorted_ids = sortBy (compare `on` (getIdQual . snd)) ids_written
-               , ids_in_instance <- groupBy ((==) `on` (getIdQual . snd)) sorted_ids
-               -- find the Id of the module block for this instance
-               , let inst_name = getIdQualString $ snd (head ids_in_instance)
-               , let sbid = lookupInstance sb_map top_mod_id inst_name
-               -- lookup the clock domain for this clock in this instance
-               , let i = snd (head ids_in_instance)
-               , let d = lookupDom (clk,i) clk_groups
-               , isJust d
-               ]
-        -- put the maps together into a single map pairing:
-        -- module Id with a map from signal Id to its clock
-        clk_list = [ (fromJust m, M.fromList (map (\i->(i,d)) ids))
-                   | (m, xs) <- M.toList $ M.unionsWith (++) maps
-                   , isJust m
-                   , (d, ids) <- xs
-                   ]
-        clk_map = M.fromListWith (M.union) clk_list
-        wdef_mod_map =
+    let wdef_mod_map =
             M.fromList
             [ (sb_id sb, wide_defs) |
                   sb <- mod_blocks,
@@ -93,26 +53,11 @@ simBlocksToC flags time top_block def_clk def_rst
                   (inst, mod) <- mkInstanceMap sb_map top_block,
                   let wide_defs = M.findWithDefault [] mod wdef_mod_map ]
 
-    let cvtModBlock = convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_block
+    let cvtModBlock = convertModuleBlock flags sb_map ff_map wdef_mod_map reused top_block
     module_names <- concatMapM (cvtModBlock writeFileC) mod_blocks
     schedule_names <- convertSchedules flags time top_block def_clk def_rst sb_map ff_map
                                        wdef_inst_map scheds clk_groups gate_info writeFileC
     return $ module_names ++ schedule_names
-
-lookupInstance :: SBMap -> Maybe SBId -> String -> Maybe SBId
-lookupInstance _ Nothing _ = Nothing
-lookupInstance sb_map (Just top_id) s =
-  let path = wordsBy (=='.') s
-  in case path of
-       ("top":rest) -> helper rest top_id
-       otherwise    -> Nothing
-  where helper []     i = Just i
-        helper (p:ps) i =
-          case M.lookup i sb_map of
-            (Just sb) -> case find (\(_,x,_) -> getIdString x == p) (sb_state sb) of
-                           (Just (i',_,_)) -> helper ps i'
-                           Nothing         -> Nothing
-            Nothing   -> Nothing
 
 -- Given a top block Id, it makes a list of pairs of (inst,mod)
 -- qualified with "top"
@@ -172,13 +117,11 @@ schedCallsForeignFn sched = fnCallsForeignFn (sched_fn sched)
 
 -- Convert the block for a module into .cxx and .h files
 convertModuleBlock :: Flags -> SBMap -> ForeignFuncMap ->
-                       M.Map SBId (M.Map (Bool,AId) ClockDomain) ->
                        M.Map SBId [AId] -> [String] -> SBId ->
                        (String -> String -> IO String)-> SimCCBlock ->
                        IO [String]
-convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk writeFileC sb = do
+convertModuleBlock flags sb_map ff_map wdef_mod_map reused top_blk writeFileC sb = do
     let name = sb_name sb
-        dom_map = M.findWithDefault M.empty (sb_id sb) clk_map
         wide_defs = M.findWithDefault [] (sb_id sb) wdef_mod_map
         wdef_inst_map = M.fromList [("", wide_defs)]
         uses_foreign_fn = blockCallsForeignFn sb
@@ -192,7 +135,7 @@ convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk write
 
         -- method definitions (for the CXX file)
         (method_defs, state) =
-            runState (simCCBlockToClassDefinition sb_map dom_map sb)
+            runState (simCCBlockToClassDefinition sb_map sb)
                      (initialState ff_map wdef_inst_map (unSpecTo flags))
         lit_defs = mkLiteralDecls (nub (literals state))
         str_defs = mkStringDecls (M.toList (str_map state))
@@ -247,10 +190,6 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                            , (ptr . ptr . constant . char) (mkVar "build") ]
               , decl $ function (userType "time_t") (mkVar "get_creation_time") []
               , decl $ function (ptr . void) (mkVar "get_instance") []
-              , decl $ function void (mkVar "dump_state") []
-              , decl $ function void (mkVar "dump_VCD_defs") []
-              , decl $ function void (mkVar "dump_VCD")
-                           [ (userType "tVCDDumpType") (mkVar "dt") ]
               ]
             ]
         class_decl =
@@ -308,7 +247,6 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                   [ cpp_system_include "cstdlib"
                   , cpp_system_include "time.h"
                   , cpp_include "bluesim_kernel_api.h"
-                  , cpp_include "bs_vcd.h"
                   , cpp_include "bs_reset.h"
                   , blankLines 1 ]
 
@@ -499,35 +437,6 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                           , comment "Get the model creation time" gct_def
                           ]
 
-        -- functions for dumping state values and rule firings
-        state_dump    = function void (mkScopedVar "dump_state") []
-        mkDumpCall sb fn_name args =
-          let inst = var ((modName sb) ++ "_instance")
-          in stmt $ ((inst `cArrow` fn_name) `cCall` args)
-        state_dump_def = define state_dump
-                                (block [mkDumpCall top_blk "dump_state" [mkUInt32 0]])
-        dump_methods  = [ comment "State dumping function" state_dump_def ]
-
-        -- function for dumping VCDs
-        top_backing    = [mkBacking top_blk]
-        dump_type      = (userType "tVCDDumpType") (mkVar "dt")
-        vcd_depth      = (var "vcd_depth") `cCall` [ var "sim_hdl" ]
-        vcd_hdr_proto  = function void (mkScopedVar "dump_VCD_defs") []
-        vcd_hdr_def    = define vcd_hdr_proto
-                                (block [ mkDumpCall top_blk "dump_VCD_defs"
-                                                    [ vcd_depth ]])
-        backing_fn sb  = (var ((sb_name sb) ++ "_backing")) `cCall` [ var "sim_hdl" ]
-        vcd_proto      = function void (mkScopedVar "dump_VCD") [ dump_type ]
-        vcd_def        = define vcd_proto
-                                (block [ mkDumpCall top_blk "dump_VCD"
-                                                    [ var "dt"
-                                                    , vcd_depth
-                                                    , backing_fn top_blk
-                                                    ]
-                                       ])
-        vcd_methods = [ comment "VCD dumping functions" (blankLines 0) ] ++
-                      top_backing ++ [ vcd_hdr_def, vcd_def ]
-
         fname = "model_" ++ (modName top_blk)
 
     mkCxxAndH flags sb_map fname uses_foreign False
@@ -541,9 +450,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                  new_fn_def ++
                  sched_fns ++
                  model_methods ++
-                 version_methods ++
-                 dump_methods ++
-                 vcd_methods
+                 version_methods
                 )
               )
               writeFileC
@@ -583,30 +490,6 @@ mkStringDecls lits = [comment "String declarations" (blankLines 0)]
                            (mkVar name) `ofType` (classType "std::string")
            in static $ construct str_var [ mkStr s, mkUInt32 (genericLength s) ]
 
--- Make a function implementing "construct-on-first-use", but
--- specialized for th VCD backing structures
-mkBacking :: SimCCBlock -> CCFragment
-mkBacking sb =
-  let mod_type = moduleType sb []
-      fn_name  = (sb_name sb) ++ "_backing"
-      fn_proto = function (reference . mod_type) (mkVar fn_name)
-                     [ (userType "tSimStateHdl") (mkVar "simHdl") ]
-      new_expr = new (classType (pfxMod ++ (modName sb)))
-                     (Just [var "simHdl", mkStr "top", mkNULL])
-      backing_fn = (var "vcd_set_backing_instance")
-      fn_body  = [ static . ptr . mod_type $
-                         (mkVar "instance") `assign` mkNULL
-                 , if_cond ((var "instance") `cEq` mkNULL)
-                           (block [ stmt $ backing_fn `cCall` [ var "simHdl", mkBool True ]
-                                  , (mkVar "instance") `assign` new_expr
-                                  , stmt $ backing_fn `cCall` [ var "simHdl", mkBool False ]
-                                  ]
-                           )
-                           Nothing
-                 , ret (Just (cDeref (var "instance")))
-                 ]
-  in define fn_proto (block fn_body)
-
 -- Create one .cxx and one .h file, given a list of
 -- referenced blocks, class declarations and method definitions.
 mkCxxAndH :: Flags -> SBMap -> String -> Bool -> Bool ->
@@ -624,7 +507,6 @@ mkCxxAndH flags sb_map name include_foreign is_top (ids,decls,meths) writeFileC 
       h_includes  = [ cpp_include "bluesim_types.h"
                     , cpp_include "bs_module.h"
                     , cpp_include "bluesim_primitives.h"
-                    , cpp_include "bs_vcd.h"
                     ] ++
                     (map cpp_include state_files)
       c_fragments = c_includes ++ foreign_includes ++ [blankLines 1] ++ meths

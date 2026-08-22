@@ -1153,6 +1153,7 @@ data ErrMsg =
 
         -- Bluesim-specific errors/warnings
         | EBluesimNoXZ String
+        | WBluesimVCDUnsupported String -- ^ $dump* task name
 
         -- Errors/warnings from the SystemC wrapper generator
         | ESystemCWrapperComboPaths String
@@ -4165,6 +4166,10 @@ getErrorText (EBluesimNoXZ target_value) =
     (System 43, empty,
      s2par ("Bluesim does not support '" ++ target_value ++
             "' for undetermined values -- use '0', '1' or 'A' instead."))
+getErrorText (WBluesimVCDUnsupported task) =
+    (Generate 129, empty,
+     s2par ("VCD dumping is not supported by Bluesim; " ++ task ++
+            " ignored."))
 getErrorText (EWrongBackend source_backend flag_backend) =
     (System 44, empty,
      s2par ("The chosen back end does not match the source files.  " ++
