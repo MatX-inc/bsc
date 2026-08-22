@@ -1,0 +1,86 @@
+# Tests that steady-state evaluation of a Bluesim model makes no
+# allocator calls for wide temporaries:
+#
+#  * function-local wide temporaries are backed by fixed stack arrays
+#    with non-owning WideData views over them;
+#  * wide concatenation intermediates and nested wide primitive
+#    results are built in hoisted stack-backed temporaries;
+#  * generated methods return wide values as non-owning views of the
+#    method's return port and take wide arguments by const reference,
+#    so neither returning nor passing wide data copy-constructs an
+#    allocated temporary.
+#
+# sysStackTemps is a wide-heavy design (256/512-bit registers and
+# arithmetic, wide concatenations, wide shifts and extracts, a wide
+# FIFO, and wide-returning/wide-argument/ActionValue methods active
+# every cycle).  It is first run to completion through the normal
+# flow, then the host_stacktemps harness dlopen()s the model, warms
+# it up, and steps it through five 100-cycle segments, requiring the
+# per-segment deltas of alloc_mem()/free_mem() (via the
+# bs_mem_alloc_counters test accessor) and of malloc/free/calloc/
+# realloc (via interposed counting wrappers in the harness
+# executable) to be exactly zero.  Bluesim only; the allocator under
+# test is Bluesim's own runtime.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set status [catch "exec ./$cmd >& $logfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the design runs to completion through the normal flow
+    compile_object_pass sysStackTemps.bsv sysStackTemps
+    link_objects_pass {sysStackTemps} sysStackTemps
+    sim_output sysStackTemps
+    compare_file sysStackTemps.out
+
+    if [build_host_harness host_stacktemps host_stacktemps.cxx] {
+
+        # step the model through fixed cycle segments and require the
+        # allocator-call deltas of every steady-state segment to be zero
+        run_host_harness \
+            "host_stacktemps sysStackTemps.cexe.so sysStackTemps" \
+            [list 0] host_stacktemps.out
+        compare_file host_stacktemps.out
+    }
+}
