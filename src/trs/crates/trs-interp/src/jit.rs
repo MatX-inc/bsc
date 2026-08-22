@@ -3859,6 +3859,37 @@ impl Interp {
                     .collect();
                 gate_masks.push(Some(pairs(&bits)));
             }
+            // SABOTAGE WITNESS (validation hook, not a product knob):
+            // clear ONE dirty-sync bit that some gated cone actually
+            // watches — a deliberately incomplete dirty model.  The
+            // corpus/battery must classify the affected design DIFF;
+            // if it does not, the tripwire is not trustworthy.
+            if std::env::var_os("TRS_GATING_SABOTAGE").is_some() {
+                'sab: for o in 0..dirty_sync.len() {
+                    for pi in 0..dirty_sync[o].len() {
+                        let (w, m) = dirty_sync[o][pi];
+                        let watched: u64 = gate_masks
+                            .iter()
+                            .flatten()
+                            .flat_map(|gm| gm.iter())
+                            .filter(|&&(gw, _)| gw == w)
+                            .map(|&(_, gm)| gm)
+                            .fold(0, |a, b| a | b);
+                        let hit = m & watched;
+                        if hit != 0 {
+                            let bit = hit.trailing_zeros();
+                            dirty_sync[o][pi].1 &= !(1u64 << bit);
+                            eprintln!(
+                                "trs gating SABOTAGE: dropped dirty bit \
+                                 {} (word {w}) from ordinal {o}'s sync \
+                                 mask — expect byte DIFFs",
+                                w * 64 + bit
+                            );
+                            break 'sab;
+                        }
+                    }
+                }
+            }
         }
 
         // export keep-set (specialized compile: slot stores survive
