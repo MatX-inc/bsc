@@ -90,6 +90,13 @@ pub trait Prim {
     fn sym_transient(&self) -> bool {
         false
     }
+    /// Same-cycle visibility (activity census): reads of this prim can
+    /// observe writes made EARLIER IN THE SAME CYCLE (CReg ports,
+    /// loopy/bypass FIFOs) — a sensitivity mask must treat a write to
+    /// it like a wire write, not just a next-edge state change.
+    fn sym_bypass(&self) -> bool {
+        false
+    }
     /// Architectural state for the ORACLE compare — a superset of
     /// sym_children.  The bk symbol tree must MIRROR the reference's
     /// registrations exactly (extra nodes would break `sim ls` byte
@@ -3047,6 +3054,9 @@ impl CReg {
 }
 
 impl Prim for CReg {
+    fn sym_bypass(&self) -> bool {
+        true // later ports read earlier same-cycle writes
+    }
     // no sym_children: the reference registers NO symbols for CReg
     // (`sim ls` parity); the oracle compares the registered value
     fn state_children(&self) -> Vec<PrimSym> {
@@ -3392,6 +3402,11 @@ impl Fifo {
 }
 
 impl Prim for Fifo {
+    fn sym_bypass(&self) -> bool {
+        // loopy: deq/first see same-instant enq effects; bypass:
+        // one-deep same-instant enq→first bypass
+        !matches!(self.ftype, FifoType::Simple)
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         // bs_prim_mod_fifo.h: "" SYM_RANGE over the storage, depth
         // (u32 param), level (u32, current element count)

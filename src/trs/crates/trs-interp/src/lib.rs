@@ -22,6 +22,7 @@ use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
+mod census;
 mod foreign;
 pub mod out;
 pub use out::{flush as stdout_flush, force_line as stdout_force_line};
@@ -212,6 +213,9 @@ pub struct Interp {
     #[cfg(feature = "aot")]
     plan_a_bytes: Option<Vec<u8>>,
     trace_wf: bool,
+    /// activity census (TRS_ACTIVITY_CENSUS=1): gating-rung
+    /// measurement instrument; None in normal runs
+    census: Option<Box<census::Census>>,
     /// batch waveform request (-V / +bscvcd / +bscfst), consumed at
     /// the stepper build: format + file (None = the format's default)
     wave_pending: Option<(WaveFormat, Option<String>)>,
@@ -810,6 +814,7 @@ impl Interp {
             #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
+            census: census::Census::from_env(),
             wave_pending: None,
             wave_engine: false,
             vcd_def_vals: HashMap::new(),
@@ -1279,6 +1284,9 @@ impl Interp {
     }
 
     fn set_latched(&mut self, inst: usize, name: StrId, v: Value) {
+        if let Some(c) = self.census.as_mut() {
+            c.exec_latch(inst, name, &v); // self-filters on exec context
+        }
         if let InstKind::User { latched, .. } = &mut self.insts[inst].kind {
             latched.insert(name, v);
         }
@@ -1401,6 +1409,9 @@ impl Interp {
                     return v.clone();
                 }
                 if let Some(v) = self.latched(inst, *name) {
+                    if let Some(c) = self.census.as_mut() {
+                        c.lread(inst, *name);
+                    }
                     return v;
                 }
                 // JIT mode: fire signals and schedule-position defs live
@@ -1498,6 +1509,9 @@ impl Interp {
                     // uncalled method's EN reads 0
                     Some(&(w, ir::PortKind::MethodEnable)) => {
                         if let Some(v) = self.latched(inst, *name) {
+                            if let Some(c) = self.census.as_mut() {
+                                c.lread(inst, *name);
+                            }
                             return v;
                         }
                         // compiled call sites store EN only in the
@@ -1813,6 +1827,15 @@ impl Interp {
     }
 
     fn call_value(&mut self, callee: usize, method: StrId, argv: &[Value], w: u32) -> Value {
+        if self.census.is_some() {
+            if let InstKind::Prim(_) = &self.insts[callee].kind {
+                if let Some(c) = self.census.as_mut() {
+                    if c.active_capture() {
+                        c.read(callee);
+                    }
+                }
+            }
+        }
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
                 // borrow, don't clone: this is the per-event prim
@@ -1858,6 +1881,13 @@ impl Interp {
                 let args: Vec<String> = argv.iter().map(|v| v.to_hex_string()).collect();
                 eprintln!("[{}] {}.{}({})", self.cycle, self.insts[callee].path,
                           mname, args.join(","));
+            }
+        }
+        if self.census.is_some() {
+            if let InstKind::Prim(_) = &self.insts[callee].kind {
+                if let Some(c) = self.census.as_mut() {
+                    c.write(callee);
+                }
             }
         }
         match &mut self.insts[callee].kind {
@@ -1922,6 +1952,9 @@ impl Interp {
         }
         let en = format!("EN_{}", self.s(method));
         if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
+            if let Some(c) = self.census.as_mut() {
+                c.exec_latch(callee, en_id as StrId, &Value::from_u64(1, 1));
+            }
             if let InstKind::User { latched, .. } = &mut self.insts[callee].kind {
                 latched.insert(en_id as StrId, Value::from_u64(1, 1));
             }
@@ -3052,6 +3085,9 @@ impl Interp {
             None => return, // method node in a segment: nothing to latch
         };
         let r = self.d.modules[mir].rules[ri].clone();
+        if let Some(c) = self.census.as_mut() {
+            c.begin_latch(inst, rule_name, r.can_fire, r.will_fire);
+        }
         let mut ctx = Ctx { memo: true, ..Default::default() };
 
         let mut cf = self.eval(inst, &mut ctx, &Expr::Def(r.can_fire));
@@ -3064,6 +3100,9 @@ impl Interp {
         for other in &r.me_inhibits {
             let other_ri = self.mods[module].rules[other];
             let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
+            if let Some(c) = self.census.as_mut() {
+                c.lread(inst, other_cf);
+            }
             if let Some(v) = self.latched_or_arena(inst, other_cf) {
                 if v.as_bool() {
                     cf = Value::zero(1);
@@ -3072,12 +3111,16 @@ impl Interp {
         }
         // cross-module inhibitors targeting this rule
         for (other_inst, other_cf) in cross_inh {
+            if let Some(c) = self.census.as_mut() {
+                c.lread(*other_inst, *other_cf);
+            }
             if let Some(v) = self.latched_or_arena(*other_inst, *other_cf) {
                 if v.as_bool() {
                     cf = Value::zero(1);
                 }
             }
         }
+        let cf_b = cf.as_bool();
         self.set_latched(inst, r.can_fire, cf);
         // recompute the WILL_FIRE cone against the (possibly inhibited)
         // latched CAN_FIRE, not the memoized pre-inhibitor values
@@ -3087,7 +3130,11 @@ impl Interp {
             eprintln!("[{}] FIRE {}.{}", self.cycle, self.insts[inst].path,
                       self.s(rule_name));
         }
+        let wf_b = wf.as_bool();
         self.set_latched(inst, r.will_fire, wf);
+        if let Some(c) = self.census.as_mut() {
+            c.end_latch(cf_b, wf_b);
+        }
     }
 
     fn exec_rule(&mut self, inst: usize, rule_name: StrId) {
@@ -3115,9 +3162,15 @@ impl Interp {
             None => return,
         };
         let r = self.d.modules[mir].rules[ri].clone();
+        if let Some(c) = self.census.as_mut() {
+            c.begin_exec(inst, rule_name);
+        }
         let mut ctx = Ctx::default();
         for st in r.body.iter() {
             self.exec_stmt(inst, &mut ctx, st);
+        }
+        if let Some(c) = self.census.as_mut() {
+            c.end_exec();
         }
     }
 
@@ -4389,7 +4442,8 @@ impl Interp {
                 heap.push(Reverse((t, prio, ci, pos)));
                 break;
             }
-            if pos && Some(clocks[ci]) == self.d.default_clock {
+            let is_default_pos = pos && Some(clocks[ci]) == self.d.default_clock;
+            if is_default_pos {
                 if self.cycle >= max_cycles {
                     final_now = t;
                     // put the unprocessed edge back for a later advance()
@@ -4592,6 +4646,10 @@ impl Interp {
                     };
                     for (ei, en) in walk_entries.iter().enumerate() {
                         let inst = en.inst;
+                        if let Some(c) = self.census.as_mut() {
+                            c.begin_entry(rci, ei);
+                            c.begin_eager();
+                        }
                         // this entry's schedule-position cone defs: computed
                         // eagerly here like the C++ schedule function — side
                         // effects (hoisted prim value-method calls) included
@@ -4599,6 +4657,12 @@ impl Interp {
                             let mut c = Ctx::default();
                             let v = self.eval(inst, &mut c, &Expr::Def(dn));
                             self.set_latched(inst, dn, v);
+                            if let Some(c) = self.census.as_mut() {
+                                c.eager_def(inst, dn);
+                            }
+                        }
+                        if let Some(c) = self.census.as_mut() {
+                            c.end_eager();
                         }
                         for &node in &en.nodes {
                             // clock-crossing rules run in the after-edge pass
@@ -4706,6 +4770,16 @@ impl Interp {
                 #[cfg(feature = "aot")]
                 if let Some(t0) = _tt0 {
                     jit::prof::add(&jit::prof::TICK_NS, t0);
+                }
+            }
+
+            // activity census: classify this cycle's writes, replay the
+            // edge's latch events against the sensitivity masks, roll
+            // the changed-set (take/put keeps the &mut Interp free)
+            if is_default_pos && self.census.is_some() {
+                if let Some(mut c) = self.census.take() {
+                    c.end_of_cycle(self);
+                    self.census = Some(c);
                 }
             }
 
@@ -4828,6 +4902,14 @@ impl Interp {
             final_now,
             jit,
         });
+        // activity census report: once, when the advance that ends the
+        // run returns (batch exits via _exit, so no Drop-time chance)
+        if self.census.is_some() {
+            if let Some(mut c) = self.census.take() {
+                c.report(self);
+                self.census = Some(c);
+            }
+        }
         if self.fe.fataled { 1 } else { 0 }
     }
 
