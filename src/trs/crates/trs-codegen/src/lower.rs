@@ -198,6 +198,26 @@ const IR_PASS_WIDTH_CAP: u32 = 4096;
 /// Max integer bit-width appearing as an instruction result type.
 /// Wide values only exist by being ASSEMBLED (zext/shl/or chains from
 /// arena slots), so result types are a complete witness.
+/// Largest single function in the module, in IR instructions — the
+/// O1 size tier's measurement (see run_ir_passes).
+fn module_max_fn_insns(module: &Module) -> u64 {
+    let mut max = 0u64;
+    let mut f = module.get_first_function();
+    while let Some(func) = f {
+        let mut insns = 0u64;
+        for bb in func.get_basic_blocks() {
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                insns += 1;
+                ins = i.get_next_instruction();
+            }
+        }
+        max = max.max(insns);
+        f = func.get_next_function();
+    }
+    max
+}
+
 fn module_max_int_width(module: &Module) -> u32 {
     let mut w = 0;
     let mut f = module.get_first_function();
@@ -301,9 +321,12 @@ impl IrTally {
 /// that retired the old O1 shape tier was FALSIFIED at Toooba scale:
 /// early-cse<memssa>'s dominated-use rewrites are superlinear in
 /// FUNCTION size (the monolithic edge fn wedged >39min, DNF).  The
-/// replacements are structural — the dispatcher outlines sched
-/// sections into bounded functions (EdgeSsaPlan::outline_sched), and
-/// the per-function insn backstop below optnones any straggler.
+/// replacements: the dispatcher outlines sched sections into bounded
+/// functions (EdgeSsaPlan::outline_sched), and the O1 size tier below
+/// is REINSTATED for stragglers — default<O1> runs EarlyCSE WITHOUT
+/// MemorySSA (no dominated-use rewriting) and measured 1.78s runtime
+/// vs O3's 1.83s / O0's 2.74s on the opt ladder, so the tier costs ~3%
+/// on the module it demotes instead of optnone's 1.5x.
 /// instcombine must be spelled no-verify-fixpoint: the textual pass
 /// defaults to max-iterations=1 and ABORTS on non-convergence.
 const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
@@ -331,7 +354,38 @@ fn run_ir_passes(
             if width > IR_PASS_WIDTH_CAP {
                 return Ok(());
             }
-            AOT_PIPELINE.to_string()
+            // O1 size tier (the DEFAULT pipeline only — explicit
+            // TRS_JIT_OPT / TRS_JIT_PIPELINE still force): a function
+            // over the budget is pathological (one giant cone the
+            // dispatcher could not split), and feeding it to
+            // early-cse<memssa> risks the measured superlinear wedge.
+            // default<O1>'s EarlyCSE runs without MemorySSA and stays
+            // near-linear; the demoted module keeps ~O3-class runtime
+            // (opt-ladder: O1 1.78s vs O3 1.83s vs O0 2.74s).
+            // TRS_JIT_FN_INSN_BUDGET overrides the threshold; 0
+            // disables the tier.
+            let fn_budget: u64 =
+                std::env::var("TRS_JIT_FN_INSN_BUDGET")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(2_000_000);
+            let max_fn = if fn_budget > 0 {
+                module_max_fn_insns(module)
+            } else {
+                0
+            };
+            if fn_budget > 0 && max_fn > fn_budget {
+                if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                    eprintln!(
+                        "trs jit: a function measures {max_fn} insns \
+                         (budget {fn_budget}) — module drops to the \
+                         default<O1> size tier"
+                    );
+                }
+                "default<O1>".to_string()
+            } else {
+                AOT_PIPELINE.to_string()
+            }
         }
         Err(_) => return Ok(()),
     };
@@ -345,53 +399,6 @@ fn run_ir_passes(
     // (miscompile bisection — e.g. "default<O1>,gvn")
     let pipeline =
         std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
-    // per-function insn backstop: a function over budget here is
-    // pathological (one giant cone the dispatcher could not split) —
-    // mark it optnone (+noinline, which optnone requires) so it
-    // codegens at O0 instead of feeding a superlinear function pass
-    // (early-cse<memssa> wedged >39min on a Toooba-scale monolith).
-    // TRS_JIT_FN_INSN_BUDGET overrides; 0 disables.
-    let fn_budget: u64 = std::env::var("TRS_JIT_FN_INSN_BUDGET")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2_000_000);
-    if fn_budget > 0 {
-        let mctx = module.get_context();
-        let kind = |n: &str| {
-            inkwell::attributes::Attribute::get_named_enum_kind_id(n)
-        };
-        let mut fo = module.get_first_function();
-        while let Some(func) = fo {
-            if func.count_basic_blocks() > 0 {
-                let mut insns = 0u64;
-                for bb in func.get_basic_blocks() {
-                    let mut ins = bb.get_first_instruction();
-                    while let Some(i) = ins {
-                        insns += 1;
-                        ins = i.get_next_instruction();
-                    }
-                }
-                if insns > fn_budget {
-                    func.add_attribute(
-                        inkwell::attributes::AttributeLoc::Function,
-                        mctx.create_enum_attribute(kind("noinline"), 0),
-                    );
-                    func.add_attribute(
-                        inkwell::attributes::AttributeLoc::Function,
-                        mctx.create_enum_attribute(kind("optnone"), 0),
-                    );
-                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
-                        eprintln!(
-                            "trs jit: {} over the fn insn budget \
-                             ({insns} > {fn_budget}) — optnone backstop",
-                            func.get_name().to_string_lossy()
-                        );
-                    }
-                }
-            }
-            fo = func.get_next_function();
-        }
-    }
     module.run_passes(&pipeline, &tm, opts).map_err(|e| {
         // LOUD on stderr, not just the Ineligible fallback chain: a
         // rejected pipeline string (an LLVM upgrade renaming a pass in

@@ -5972,8 +5972,8 @@ impl Interp {
                         // link outright (>39min DNF).  Already
                         // outlined and still over, or the round cap:
                         // accept — every remaining function is bounded
-                        // and the per-function insn backstop in
-                        // run_ir_passes covers stragglers.
+                        // and run_ir_passes's O1 size tier covers
+                        // stragglers.
                         if victims.is_empty() {
                             let sched_budget: u64 = std::env::var(
                                 "TRS_JIT_SCHED_OUTLINE_BUDGET",
