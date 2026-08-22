@@ -273,10 +273,10 @@ check_dyn() { # name top errtag
     $BSC -sim -sched-dynamic -bir -trs -e "$top" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (bsc -trs link)"; fail=1; return; }
     "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
-    "$TRS" link "$top.bir" -o dynart >dynlink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
-    # the compiled engine does not execute dynamic schedules yet; a
-    # compiled artifact here would mean the jit gate silently vanished
-    grep -q "run interpreted" dynlink.out || { echo "FAIL $name (expected interpreted artifact)"; fail=1; return; }
+    # compiled alts: the artifact's edge fns carry the per-edge guard
+    # dispatch, so the link must COMPILE — TRS_REQUIRE_AOT trips (rc 86)
+    # if the engine silently falls back to interp again
+    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o dynart >dynlink.out 2>&1 || { echo "FAIL $name (trs link, compiled)"; fail=1; return; }
     TRS="$TRS" ./dynart > gota.out 2>&1 || { echo "FAIL $name (art run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
     echo "PASS $name"

@@ -562,6 +562,19 @@ pub struct EdgeSsaPlan {
     /// the registered value (arena words [base, base+w) -> [base+w,
     /// base+2w)); the boxed per-port history only feeds VCD
     pub creg_copies: Vec<Vec<(u32, u32)>>,
+    /// per composition: compiled dynamic-scheduling alternatives in
+    /// guard-evaluation order (first matching guard wins; none -> the
+    /// composition's own base row).  Empty everywhere = no dispatch.
+    pub alt_rows: Vec<Vec<AltRow>>,
+    /// per ROW, per spec ordinal: sched-section overrides for the
+    /// order-derived RuleSpec fields (inhibitors, owned-earlier
+    /// shares).  Base rows carry empty maps — a RuleSpec bakes the
+    /// BASE interleaving's values and is correct there.
+    pub sched_over: Vec<HashMap<usize, SchedOver>>,
+    /// per exec ordinal: the outlined-call node (class-rep symbol +
+    /// region/token bases).  Variant rows have no FusedComp node
+    /// stream to index by section, so outlined execs resolve here.
+    pub ord_fnodes: HashMap<usize, FusedNode>,
     /// per composition: packed trs_bram_tick argument triples of
     /// ungated BRAM port ticks — the edge fn calls the helper through
     /// the trs_bram_tick_cb pointer-global (filled at artifact load)
@@ -881,6 +894,32 @@ unsafe fn mask_top(p: *mut u64, width: u32, words: usize) {
 }
 
 /// One node of a fused per-composition edge function.
+/// One compiled dynamic-scheduling alternative of a composition: the
+/// edge fn's prologue evaluates `guard` against pre-edge state
+/// (registers only, by the SchedAlt exporter contract) and branches to
+/// the alternative's body — the compiled twin of the interpreter's
+/// per-edge selection.
+#[derive(Clone)]
+pub struct AltRow {
+    /// row index into EdgeSsaPlan::nodes/hoists (variant rows are
+    /// appended after the per-composition base rows)
+    pub row: usize,
+    /// instance the guard expression is scoped to
+    pub guard_inst: usize,
+    /// the guard, first-match-wins in declaration order
+    pub guard: trs_ir::Expr,
+}
+
+/// Order-derived RuleSpec overrides for a sched section emitted inside
+/// an alternative's body: ME inhibitors follow the interleaving, and
+/// owned-earlier share claims only hold for defs whose owner entry
+/// runs earlier in THIS interleaving.
+#[derive(Clone)]
+pub struct SchedOver {
+    pub inhibit_slots: Vec<u32>,
+    pub shared: Vec<StrId>,
+}
+
 pub enum FusedNode {
     /// sched fn: baked address (JIT) or symbol (AOT)
     Sched(HelperRef),

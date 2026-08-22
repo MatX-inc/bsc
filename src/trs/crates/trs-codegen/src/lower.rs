@@ -1210,267 +1210,390 @@ fn lower_edge_ssa<'ctx>(
             b.build_store(gep(en), i64t.const_zero()).unwrap();
         }
 
-        let mut edge_ctx = EdgeCtx {
-            exports: plan.export_slots.clone(),
-            ..Default::default()
-        };
         section_sizes.push(Vec::new());
-        // checkpoint for exact per-section attribution: new blocks
-        // PLUS growth of the carried-over insert block (straight-line
-        // sections often append no block at all — block-count deltas
-        // alone attribute their code to the next block creator)
-        let mut blocks_seen = func.count_basic_blocks() as usize;
-        let mut carry = entry;
-        let mut carry_insns = count_block(entry);
-        let mut cur = entry;
-        for (s, &(is_exec, o)) in plan.nodes[k].iter().enumerate() {
-            let spec = &specs[o];
-            let mut lc = Lower {
-                env,
-                ctx,
-                module,
-                builder: ctx.create_builder(),
-                cbs,
-                spec,
-                token_kind: if is_exec { TOKEN_KIND_EXEC } else { 0 },
-                outlined,
-                helper_self: None,
-                dedup: None,
-                foreign_stmts: Vec::new(),
-                prim_calls: Vec::new(),
-                edge: Some(std::mem::take(&mut edge_ctx)),
-            };
-            lc.builder.position_at_end(cur);
-            // hoist prelude: shared pure defs whose first consumer is
-            // this section, computed unconditionally on the spine (so
-            // the values dominate every later section)
-            for &(hi, hd) in &plan.hoists[k][s] {
-                let mut hf = Frame {
+        // dynamic-scheduling dispatch (compiled alts): evaluate the
+        // guards in declaration order against pre-edge state — pure
+        // register/const cones by the SchedAlt exporter contract —
+        // and branch to the first match's body; none matching walks
+        // the base row.  Interp parity: Value::as_bool is "nonzero",
+        // so the taken test is a plain != 0 on the guard value.
+        let alt_refs: &[crate::abi::AltRow] =
+            plan.alt_rows.get(k).map(|v| &v[..]).unwrap_or(&[]);
+        let mut bodies = Vec::new();
+        if alt_refs.is_empty() {
+            bodies.push((k, entry));
+        } else {
+            let gspec = specs.first().ok_or_else(|| {
+                Ineligible("alts plan without specs".into())
+            })?;
+            let mut chk = entry;
+            for (vi, ar) in alt_refs.iter().enumerate() {
+                let body_bb =
+                    ctx.append_basic_block(func, &format!("alt{vi}"));
+                let next_bb =
+                    ctx.append_basic_block(func, &format!("chk{vi}"));
+                // the guard Lower never reaches spec-derived state
+                // (pure cone, no tokens/foreign) — any spec anchors it
+                let mut lcg = Lower {
+                    env,
+                    ctx,
+                    module,
+                    builder: ctx.create_builder(),
+                    cbs,
+                    spec: gspec,
+                    token_kind: 0,
+                    // no helper memoization on the guard path: a
+                    // memo filled at this extra pre-edge evaluation
+                    // point would serve stale values to the body's
+                    // own cone reads later in the instant
+                    outlined: None,
+                    helper_self: None,
+                    dedup: None,
+                    foreign_stmts: Vec::new(),
+                    prim_calls: Vec::new(),
+                    edge: None,
+                };
+                lcg.builder.position_at_end(chk);
+                let mut gf = Frame {
                     arena,
                     envp: Some(envp),
-                    inst: hi,
+                    inst: ar.guard_inst,
                     method_idx: None,
                     args: HashMap::new(),
                     ssa: HashMap::new(),
                     expanding: Vec::new(),
                     thunks: HashMap::new(),
                     av_widths: HashMap::new(),
-            dead_defs: Default::default(),
+                    dead_defs: Default::default(),
                     tasks: HashMap::new(),
                     av_slots: HashMap::new(),
                     av_args: HashMap::new(),
-                    is_exec: true,
+                    is_exec: false,
                     depth: 0,
                 };
-                let v = lc.def(&mut hf, hd)?;
-                lc.edge.as_mut().unwrap().shared.insert((hi, hd), v);
-            }
-            let mut f = Frame {
-                arena,
-                envp: Some(envp),
-                inst: spec.inst,
-                method_idx: None,
-                args: HashMap::new(),
-                ssa: HashMap::new(),
-                expanding: Vec::new(),
-                thunks: HashMap::new(),
-                av_widths: HashMap::new(),
-            dead_defs: Default::default(),
-                tasks: HashMap::new(),
-                av_slots: HashMap::new(),
-                av_args: HashMap::new(),
-                is_exec,
-                depth: 0,
-            };
-            if is_exec {
-                // PRE-evict (review-fleet critical finding): a rule
-                // whose own actions invalidate a shared def must not
-                // consume the pre-body value — tsort body-position
-                // semantics.  The plan already refuses to HOIST at
-                // self-killing sections; this refuses CONSUMPTION of
-                // earlier anchors too.
+                let gv = lcg.expr(&mut gf, &ar.guard)?;
+                // SchedAlt contract: the guard cone is pure (register
+                // and const reads only).  A callback emitted here
+                // would carry gspec's tokens — wrong rule, wrong
+                // proto — so refuse LOUDLY instead of miswiring.
+                if !lcg.foreign_stmts.is_empty() || !lcg.prim_calls.is_empty()
                 {
+                    return Err(Ineligible(
+                        "alts guard cone is not pure (callback emitted)"
+                            .into(),
+                    ));
+                }
+                let nz = lcg
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        gv,
+                        gv.get_type().const_zero(),
+                        "g",
+                    )
+                    .unwrap();
+                lcg.builder
+                    .build_conditional_branch(nz, body_bb, next_bb)
+                    .unwrap();
+                bodies.push((ar.row, body_bb));
+                chk = next_bb;
+            }
+            bodies.push((k, chk));
+        }
+        for (row, start) in bodies {
+            let mut edge_ctx = EdgeCtx {
+                exports: plan.export_slots.clone(),
+                ..Default::default()
+            };
+            // checkpoint for exact per-section attribution: new blocks
+            // PLUS growth of the carried-over insert block (straight-line
+            // sections often append no block at all — block-count deltas
+            // alone attribute their code to the next block creator)
+            let mut blocks_seen = func.count_basic_blocks() as usize;
+            let mut carry = start;
+            let mut carry_insns = count_block(start);
+            let mut cur = start;
+            for (s, &(is_exec, o)) in plan.nodes[row].iter().enumerate() {
+                let base_spec = &specs[o];
+                // order-derived sched overrides (variant rows only):
+                // ME inhibitors and owned-earlier share claims follow
+                // the selected interleaving, not the base order
+                let spec_owned: RuleSpec;
+                let spec: &RuleSpec = match plan
+                    .sched_over
+                    .get(row)
+                    .and_then(|m| m.get(&o))
+                {
+                    Some(ov) if !is_exec => {
+                        spec_owned = RuleSpec {
+                            inhibit_slots: ov.inhibit_slots.clone(),
+                            shared: ov.shared.clone(),
+                            ..base_spec.clone()
+                        };
+                        &spec_owned
+                    }
+                    _ => base_spec,
+                };
+                let mut lc = Lower {
+                    env,
+                    ctx,
+                    module,
+                    builder: ctx.create_builder(),
+                    cbs,
+                    spec,
+                    token_kind: if is_exec { TOKEN_KIND_EXEC } else { 0 },
+                    outlined,
+                    helper_self: None,
+                    dedup: None,
+                    foreign_stmts: Vec::new(),
+                    prim_calls: Vec::new(),
+                    edge: Some(std::mem::take(&mut edge_ctx)),
+                };
+                lc.builder.position_at_end(cur);
+                // hoist prelude: shared pure defs whose first consumer is
+                // this section, computed unconditionally on the spine (so
+                // the values dominate every later section)
+                for &(hi, hd) in &plan.hoists[row][s] {
+                    let mut hf = Frame {
+                        arena,
+                        envp: Some(envp),
+                        inst: hi,
+                        method_idx: None,
+                        args: HashMap::new(),
+                        ssa: HashMap::new(),
+                        expanding: Vec::new(),
+                        thunks: HashMap::new(),
+                        av_widths: HashMap::new(),
+                dead_defs: Default::default(),
+                        tasks: HashMap::new(),
+                        av_slots: HashMap::new(),
+                        av_args: HashMap::new(),
+                        is_exec: true,
+                        depth: 0,
+                    };
+                    let v = lc.def(&mut hf, hd)?;
+                    lc.edge.as_mut().unwrap().shared.insert((hi, hd), v);
+                }
+                let mut f = Frame {
+                    arena,
+                    envp: Some(envp),
+                    inst: spec.inst,
+                    method_idx: None,
+                    args: HashMap::new(),
+                    ssa: HashMap::new(),
+                    expanding: Vec::new(),
+                    thunks: HashMap::new(),
+                    av_widths: HashMap::new(),
+                dead_defs: Default::default(),
+                    tasks: HashMap::new(),
+                    av_slots: HashMap::new(),
+                    av_args: HashMap::new(),
+                    is_exec,
+                    depth: 0,
+                };
+                if is_exec {
+                    // PRE-evict (review-fleet critical finding): a rule
+                    // whose own actions invalidate a shared def must not
+                    // consume the pre-body value — tsort body-position
+                    // semantics.  The plan already refuses to HOIST at
+                    // self-killing sections; this refuses CONSUMPTION of
+                    // earlier anchors too.
+                    {
+                        let ws = &writes[o];
+                        lc.edge.as_mut().unwrap().shared.retain(|key, _| {
+                            plan.def_reads
+                                .get(key)
+                                .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
+                        });
+                    }
+                    if plan.outlined_execs.contains(&o) {
+                        // outline dial: call the standalone class body (it
+                        // gates itself on the stored WF slot; stores are
+                        // all kept) — bounds the mega-function while the
+                        // body keeps its per-module-type dedup
+                        // variant rows have no FusedComp stream: the
+                        // outlined call resolves per ordinal instead
+                        let fnode = if row == k {
+                            &fused[k].nodes[s]
+                        } else {
+                            plan.ord_fnodes.get(&o).ok_or_else(|| {
+                                Ineligible(
+                                    "variant outlined exec without ord node"
+                                        .into(),
+                                )
+                            })?
+                        };
+                        let FusedNode::Exec(href, base, tok) = fnode else {
+                            return Err(Ineligible(
+                                "outlined exec node mismatch".into(),
+                            ));
+                        };
+                        let exec_ty = i32t.fn_type(
+                            &[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()],
+                            false,
+                        );
+                        let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                            arena.into(),
+                            envp.into(),
+                            i64t.const_int(*base, false).into(),
+                            i64t.const_int(*tok, false).into(),
+                        ];
+                        let cs = match href {
+                            HelperRef::Sym(name) => {
+                                let cf = module.get_function(name).unwrap_or_else(|| {
+                                    module.add_function(name, exec_ty, None)
+                                });
+                                lc.builder.build_call(cf, &args, "oe").unwrap()
+                            }
+                            HelperRef::Addr(a) => {
+                                let fp = i64t
+                                    .const_int(*a as u64, false)
+                                    .const_to_pointer(ptrt);
+                                lc.builder
+                                    .build_indirect_call(exec_ty, fp, &args, "oe")
+                                    .unwrap()
+                            }
+                        };
+                        let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value()
+                        else {
+                            return Err(Ineligible("outlined exec returned void".into()));
+                        };
+                        let stop = lc
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                rv.into_int_value(),
+                                i32t.const_zero(),
+                                "st",
+                            )
+                            .unwrap();
+                        let cont = ctx.append_basic_block(func, "oc");
+                        lc.builder
+                            .build_conditional_branch(stop, stop_bb, cont)
+                            .unwrap();
+                        lc.builder.position_at_end(cont);
+                    } else {
+                        lc.exec_section(&mut f, func, stop_bb)?;
+                    }
+                    // evict shares whose cone the body may have invalidated
                     let ws = &writes[o];
                     lc.edge.as_mut().unwrap().shared.retain(|key, _| {
                         plan.def_reads
                             .get(key)
                             .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
                     });
+                } else {
+                    lc.sched_section(&mut f)?;
                 }
-                if plan.outlined_execs.contains(&o) {
-                    // outline dial: call the standalone class body (it
-                    // gates itself on the stored WF slot; stores are
-                    // all kept) — bounds the mega-function while the
-                    // body keeps its per-module-type dedup
-                    let FusedNode::Exec(href, base, tok) = &fused[k].nodes[s] else {
-                        return Err(Ineligible(
-                            "outlined exec node mismatch".into(),
-                        ));
+                cur = lc.builder.get_insert_block().unwrap();
+                edge_ctx = lc.edge.take().unwrap();
+                let (nb, new_insns) = count_new(func, blocks_seen);
+                let carry_now = count_block(carry);
+                let insns = new_insns + carry_now.saturating_sub(carry_insns);
+                blocks_seen = nb;
+                carry = cur;
+                carry_insns = count_block(cur);
+                if is_exec && !plan.outlined_execs.contains(&o) {
+                    section_sizes[k].push((o, insns));
+                }
+            }
+            let bend = ctx.create_builder();
+            bend.position_at_end(cur);
+            // compiled wire ticks: end-of-edge valid-bit clears
+            if let Some(clears) = plan.wire_clears.get(row) {
+                for &slot in clears {
+                    let gepw = unsafe {
+                        bend.build_gep(
+                            i64t,
+                            arena,
+                            &[i64t.const_int(slot as u64, false)],
+                            "wc",
+                        )
+                        .unwrap()
                     };
-                    let exec_ty = i32t.fn_type(
-                        &[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()],
+                    bend.build_store(gepw, i64t.const_zero()).unwrap();
+                }
+            }
+            // compiled CReg ticks: copy the live value into the registered
+            // value (the whole untraced semantics of CReg::tick)
+            if let Some(copies) = plan.creg_copies.get(row) {
+                for &(base, words) in copies {
+                    for i in 0..words {
+                        let s = unsafe {
+                            bend.build_gep(
+                                i64t,
+                                arena,
+                                &[i64t.const_int((base + i) as u64, false)],
+                                "cs",
+                            )
+                            .unwrap()
+                        };
+                        let v = bend.build_load(i64t, s, "cv").unwrap();
+                        let d = unsafe {
+                            bend.build_gep(
+                                i64t,
+                                arena,
+                                &[i64t
+                                    .const_int((base + words + i) as u64, false)],
+                                "cd",
+                            )
+                            .unwrap()
+                        };
+                        bend.build_store(d, v).unwrap();
+                    }
+                }
+            }
+            // compiled BRAM ticks: one helper call per port tick, through
+            // the trs_bram_tick_cb pointer-global (filled at load).  Call
+            // order preserves the rc.ticks walk — the cross-port bypass
+            // reads the other port's just-latched written_at.
+            if let Some(ticks) = plan.bram_ticks.get(row) {
+                if !ticks.is_empty() {
+                    // external declaration: the meta object owns the single
+                    // definition (loader fills it after dlopen)
+                    let cbg = module
+                        .get_global("trs_bram_tick_cb")
+                        .unwrap_or_else(|| {
+                            module.add_global(i64t, None, "trs_bram_tick_cb")
+                        });
+                    let fp64 = bend
+                        .build_load(i64t, cbg.as_pointer_value(), "btc")
+                        .unwrap()
+                        .into_int_value();
+                    let fp =
+                        bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
+                    let tick_ty = ctx.void_type().fn_type(
+                        &[
+                            ptrt.into(),
+                            i64t.into(),
+                            i64t.into(),
+                            i64t.into(),
+                            i64t.into(),
+                        ],
                         false,
                     );
-                    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
-                        arena.into(),
-                        envp.into(),
-                        i64t.const_int(*base, false).into(),
-                        i64t.const_int(*tok, false).into(),
-                    ];
-                    let cs = match href {
-                        HelperRef::Sym(name) => {
-                            let cf = module.get_function(name).unwrap_or_else(|| {
-                                module.add_function(name, exec_ty, None)
-                            });
-                            lc.builder.build_call(cf, &args, "oe").unwrap()
-                        }
-                        HelperRef::Addr(a) => {
-                            let fp = i64t
-                                .const_int(*a as u64, false)
-                                .const_to_pointer(ptrt);
-                            lc.builder
-                                .build_indirect_call(exec_ty, fp, &args, "oe")
-                                .unwrap()
-                        }
-                    };
-                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value()
-                    else {
-                        return Err(Ineligible("outlined exec returned void".into()));
-                    };
-                    let stop = lc
-                        .builder
-                        .build_int_compare(
-                            IntPredicate::NE,
-                            rv.into_int_value(),
-                            i32t.const_zero(),
-                            "st",
+                    for a in ticks {
+                        bend.build_indirect_call(
+                            tick_ty,
+                            fp,
+                            &[
+                                arena.into(),
+                                now.into(),
+                                i64t.const_int(a[0], false).into(),
+                                i64t.const_int(a[1], false).into(),
+                                i64t.const_int(a[2], false).into(),
+                            ],
+                            "bt",
                         )
                         .unwrap();
-                    let cont = ctx.append_basic_block(func, "oc");
-                    lc.builder
-                        .build_conditional_branch(stop, stop_bb, cont)
-                        .unwrap();
-                    lc.builder.position_at_end(cont);
-                } else {
-                    lc.exec_section(&mut f, func, stop_bb)?;
-                }
-                // evict shares whose cone the body may have invalidated
-                let ws = &writes[o];
-                lc.edge.as_mut().unwrap().shared.retain(|key, _| {
-                    plan.def_reads
-                        .get(key)
-                        .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
-                });
-            } else {
-                lc.sched_section(&mut f)?;
-            }
-            cur = lc.builder.get_insert_block().unwrap();
-            edge_ctx = lc.edge.take().unwrap();
-            let (nb, new_insns) = count_new(func, blocks_seen);
-            let carry_now = count_block(carry);
-            let insns = new_insns + carry_now.saturating_sub(carry_insns);
-            blocks_seen = nb;
-            carry = cur;
-            carry_insns = count_block(cur);
-            if is_exec && !plan.outlined_execs.contains(&o) {
-                section_sizes[k].push((o, insns));
-            }
-        }
-        let bend = ctx.create_builder();
-        bend.position_at_end(cur);
-        // compiled wire ticks: end-of-edge valid-bit clears
-        if let Some(clears) = plan.wire_clears.get(k) {
-            for &slot in clears {
-                let gepw = unsafe {
-                    bend.build_gep(
-                        i64t,
-                        arena,
-                        &[i64t.const_int(slot as u64, false)],
-                        "wc",
-                    )
-                    .unwrap()
-                };
-                bend.build_store(gepw, i64t.const_zero()).unwrap();
-            }
-        }
-        // compiled CReg ticks: copy the live value into the registered
-        // value (the whole untraced semantics of CReg::tick)
-        if let Some(copies) = plan.creg_copies.get(k) {
-            for &(base, words) in copies {
-                for i in 0..words {
-                    let s = unsafe {
-                        bend.build_gep(
-                            i64t,
-                            arena,
-                            &[i64t.const_int((base + i) as u64, false)],
-                            "cs",
-                        )
-                        .unwrap()
-                    };
-                    let v = bend.build_load(i64t, s, "cv").unwrap();
-                    let d = unsafe {
-                        bend.build_gep(
-                            i64t,
-                            arena,
-                            &[i64t
-                                .const_int((base + words + i) as u64, false)],
-                            "cd",
-                        )
-                        .unwrap()
-                    };
-                    bend.build_store(d, v).unwrap();
+                    }
                 }
             }
+            bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
         }
-        // compiled BRAM ticks: one helper call per port tick, through
-        // the trs_bram_tick_cb pointer-global (filled at load).  Call
-        // order preserves the rc.ticks walk — the cross-port bypass
-        // reads the other port's just-latched written_at.
-        if let Some(ticks) = plan.bram_ticks.get(k) {
-            if !ticks.is_empty() {
-                // external declaration: the meta object owns the single
-                // definition (loader fills it after dlopen)
-                let cbg = module
-                    .get_global("trs_bram_tick_cb")
-                    .unwrap_or_else(|| {
-                        module.add_global(i64t, None, "trs_bram_tick_cb")
-                    });
-                let fp64 = bend
-                    .build_load(i64t, cbg.as_pointer_value(), "btc")
-                    .unwrap()
-                    .into_int_value();
-                let fp =
-                    bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
-                let tick_ty = ctx.void_type().fn_type(
-                    &[
-                        ptrt.into(),
-                        i64t.into(),
-                        i64t.into(),
-                        i64t.into(),
-                        i64t.into(),
-                    ],
-                    false,
-                );
-                for a in ticks {
-                    bend.build_indirect_call(
-                        tick_ty,
-                        fp,
-                        &[
-                            arena.into(),
-                            now.into(),
-                            i64t.const_int(a[0], false).into(),
-                            i64t.const_int(a[1], false).into(),
-                            i64t.const_int(a[2], false).into(),
-                        ],
-                        "bt",
-                    )
-                    .unwrap();
-                }
-            }
-        }
-        bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
-        bend.position_at_end(stop_bb);
-        bend.build_return(Some(&i32t.const_int(1, false))).unwrap();
+        let bstop = ctx.create_builder();
+        bstop.position_at_end(stop_bb);
+        bstop.build_return(Some(&i32t.const_int(1, false))).unwrap();
     }
     Ok(())
 }

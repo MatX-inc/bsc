@@ -1,4 +1,3 @@
 flags=-sched-dynamic
 refuse=S0015
-engine=interp
-why=dynamic_schedule
+engine=aot

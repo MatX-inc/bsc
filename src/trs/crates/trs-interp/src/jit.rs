@@ -1942,11 +1942,11 @@ impl Interp {
             ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
         }
         // dynamic scheduling: alternative interleavings select per
-        // edge, so no single baked comp order (or window image taken
-        // under one order) is valid across selections.  Alts designs
-        // never reach the Emit stash today (the jit declines them and
-        // desc_finish only runs post-Emit), so this gate is explicit
-        // belt-and-braces against that ever changing.
+        // edge.  Compiled-alts artifacts DO reach Emit now (the edge
+        // fns carry the guard dispatch), so this gate is load-bearing:
+        // the RunCore boot replays baked plan state under one comp
+        // order, and no single baked window/plan order is valid
+        // across selections — alts designs boot classic (v1).
         if rcomps.iter().any(|rc| !rc.alts.is_empty()) {
             ineligible(&mut r_reason, "dynamic scheduling (alts)");
         }
@@ -3739,6 +3739,13 @@ impl Interp {
             wire_clears: Vec::new(),
             creg_copies: Vec::new(),
             bram_ticks: Vec::new(),
+            // dynamic-scheduling variants are the CALLER's to fill
+            // (jit_plan owns guard/inhibitor resolution); the plan
+            // tables above already cover any variant rows appended to
+            // `nodes` — this fn is row-uniform
+            alt_rows: Vec::new(),
+            sched_over: Vec::new(),
+            ord_fnodes: HashMap::new(),
             export_slots,
         }
     }
@@ -3874,6 +3881,33 @@ impl Interp {
             }
             return None;
         }
+        // dynamic-scheduling alternatives compile ONLY as edge-SSA
+        // artifact emission — per-alternative bodies behind a
+        // guard-dispatch prologue INSIDE each comp's edge fn — or a
+        // Load of such an artifact (the dispatch ships in the .so;
+        // the loader needs no variant plan).  Every other mode keeps
+        // the interp fallback: the in-process JIT tier and
+        // TRS_EDGE_SSA=0 emission drive standalone sched fns whose
+        // inhibitor slots bake the BASE order (wrong under a selected
+        // alternative), and traced plans would need per-variant
+        // recording.  The alternative cap bounds edge-fn growth
+        // (bodies multiply per alternative).
+        let have_alts = rcomps.iter().any(|rc| !rc.alts.is_empty());
+        let edge_ssa_on = std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0");
+        let alts_capped = rcomps.iter().all(|rc| rc.alts.len() <= 16);
+        let alts_compiled = have_alts
+            && alts_capped
+            && match &request {
+                JitRequest::Emit { .. } => edge_ssa_on && !self.vcd_trace,
+                JitRequest::Load { .. } => true,
+                JitRequest::Run => false,
+            };
+        if have_alts && !alts_compiled {
+            if trace {
+                eprintln!("trs jit: off (dynamic schedule)");
+            }
+            return None;
+        }
 
         let mut sl = crate::startup::StartupLap::new();
         let mut nslots: u32 = 0;
@@ -3906,14 +3940,6 @@ impl Interp {
             // exactly like a cold exec cell — so they are SKIPPED here
             // (kept out of rule_ord and the node stream), not refused.
             // The central fast loop already bails on early comps.
-            // dynamic-scheduling alternatives select the interleaving
-            // per edge; compiled dispatch bakes one order (v1: interp)
-            if !rc.alts.is_empty() {
-                if trace {
-                    eprintln!("trs jit: off (dynamic schedule)");
-                }
-                return None;
-            }
             // eager defs owned by entries already walked in THIS comp,
             // per instance: later rules of the same instance may load
             // their slots instead of re-expanding the cone
@@ -3954,6 +3980,39 @@ impl Interp {
                         shared,
                     });
                     let _ = mir;
+                }
+            }
+            // alternative interleavings reference the same segment
+            // space as the base entries; a rule reachable ONLY
+            // through an alternative still needs an ordinal.  Its
+            // base-order share claims don't transfer, so it makes
+            // none (the sched section re-expands its cone) — the
+            // per-alternative override below never widens a claim.
+            for alt in &rc.alts {
+                for en in &alt.entries {
+                    for &node in &en.nodes {
+                        let SchedNode::Sched(r) = node else { continue };
+                        if rc.early.contains(&(en.inst, r))
+                            || rule_ord.contains_key(&(en.inst, r))
+                        {
+                            continue;
+                        }
+                        let module = self.module_of(en.inst);
+                        let Some(&ri) = self.mods[module].rules.get(&r)
+                        else {
+                            continue;
+                        };
+                        rule_ord.insert((en.inst, r), rules.len());
+                        rules.push(RuleInfo {
+                            inst: en.inst,
+                            rule_idx: ri,
+                            ordinal: rules.len(),
+                            cf_slot: 0,
+                            wf_slot: 0,
+                            eager: en.eager.clone(),
+                            shared: Vec::new(),
+                        });
+                    }
                 }
             }
         }
@@ -4685,6 +4744,12 @@ impl Interp {
         sl.lap("plan sigs (inst_sig hashing)");
         // one design-wide spec list (ordinal order)
         let mut specs = Vec::new();
+        // per ordinal: (ME-inhibitor slot count, per-comp base cross
+        // slots) — the compiled-alts variant builder recomposes
+        // inhibitors as ME + other comps' base cross + this comp's
+        // ALTERNATIVE cross (a union over interleavings would inhibit
+        // rules that do not precede the victim in the selected order)
+        let mut sched_parts: Vec<(usize, Vec<Vec<u32>>)> = Vec::new();
         for ri in &rules {
             let mir = inst_envs[&ri.inst].mir;
             let rr = &self.d.modules[mir].rules[ri.rule_idx];
@@ -4703,11 +4768,15 @@ impl Interp {
                     }
                 }
             }
+            let me_len = inhibit_slots.len();
+            let mut cross_by_comp: Vec<Vec<u32>> =
+                Vec::with_capacity(rcomps.len());
             for rc in rcomps {
+                let mut cv = Vec::new();
                 if let Some(cs) = rc.cross.get(&(ri.inst, rr.name)) {
                     for (oi, ocf) in cs {
                         match inst_envs.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
-                            Some(&s) => inhibit_slots.push(s),
+                            Some(&s) => cv.push(s),
                             None => {
                                 if trace {
                                     eprintln!(
@@ -4719,7 +4788,10 @@ impl Interp {
                         }
                     }
                 }
+                inhibit_slots.extend(cv.iter().copied());
+                cross_by_comp.push(cv);
             }
+            sched_parts.push((me_len, cross_by_comp));
             // always-fire detection (task #23): the WILL_FIRE def
             // resolves (through Def aliases) to a constant-true value.
             // Only WF is the truth: bsc bakes preemption/urgency gating
@@ -5175,7 +5247,7 @@ impl Interp {
             // legality tables the edge emitter consumes
             // DEFAULT ON for AOT links (the specialized fast compile);
             // TRS_EDGE_SSA=0 restores the classic emission
-            let nodes_for_plan: Vec<Vec<(bool, usize)>> = comp_nodes
+            let mut nodes_for_plan: Vec<Vec<(bool, usize)>> = comp_nodes
                 .iter()
                 .map(|ns| {
                     ns.as_ref()
@@ -5190,6 +5262,142 @@ impl Interp {
                         .unwrap_or_default()
                 })
                 .collect();
+            // compiled dynamic-scheduling variants (Emit only — a Load
+            // runs the dispatch already baked into the artifact): one
+            // appended plan row per (composition, alternative), plus
+            // the order-derived sched overrides for that row.  Guard
+            // evaluation order = declaration order (interp parity:
+            // first match wins, none matching walks the base row).
+            struct AltVar {
+                comp: usize,
+                guard_inst: usize,
+                guard: trs_ir::Expr,
+                nodes: Vec<(bool, usize)>,
+                over: HashMap<usize, trs_codegen::abi::SchedOver>,
+            }
+            let mut alt_vars: Vec<AltVar> = Vec::new();
+            if alts_compiled {
+                for (k, rc) in rcomps.iter().enumerate() {
+                    for alt in &rc.alts {
+                        let mut vnodes: Vec<(bool, usize)> = Vec::new();
+                        // owned-earlier eager defs per instance in
+                        // THIS interleaving: base share claims only
+                        // survive where the owner still runs earlier
+                        let mut owned: HashMap<
+                            usize,
+                            std::collections::HashSet<StrId>,
+                        > = HashMap::new();
+                        let mut over: HashMap<
+                            usize,
+                            trs_codegen::abi::SchedOver,
+                        > = HashMap::new();
+                        for en in &alt.entries {
+                            for &node in &en.nodes {
+                                let (r, is_sched) = match node {
+                                    SchedNode::Sched(r) => (r, true),
+                                    SchedNode::Exec(r) => (r, false),
+                                };
+                                if rc.early.contains(&(en.inst, r)) {
+                                    continue;
+                                }
+                                let Some(&o) = rule_ord.get(&(en.inst, r))
+                                else {
+                                    continue;
+                                };
+                                vnodes.push((!is_sched, o));
+                                if !is_sched {
+                                    continue;
+                                }
+                                // inhibitors: ME + the OTHER comps'
+                                // base cross + this alternative's own
+                                // cross (never the base order's)
+                                let (me_len, ref cbc) = sched_parts[o];
+                                let mut inh: Vec<u32> =
+                                    specs[o].inhibit_slots[..me_len].to_vec();
+                                for (j, cv) in cbc.iter().enumerate() {
+                                    if j != k {
+                                        inh.extend(cv.iter().copied());
+                                    }
+                                }
+                                if let Some(cs) = alt.cross.get(&(en.inst, r)) {
+                                    for (oi, ocf) in cs {
+                                        match inst_envs
+                                            .get(oi)
+                                            .and_then(|e| e.cfwf_slot.get(ocf))
+                                        {
+                                            Some(&s) => inh.push(s),
+                                            None => {
+                                                if trace {
+                                                    eprintln!(
+                                                        "trs jit: off (unslotted \
+                                                         alt cross inhibitor)"
+                                                    );
+                                                }
+                                                return None;
+                                            }
+                                        }
+                                    }
+                                }
+                                let shared: Vec<StrId> = specs[o]
+                                    .shared
+                                    .iter()
+                                    .filter(|d| {
+                                        owned
+                                            .get(&en.inst)
+                                            .is_some_and(|s| s.contains(d))
+                                    })
+                                    .copied()
+                                    .collect();
+                                over.insert(
+                                    o,
+                                    trs_codegen::abi::SchedOver {
+                                        inhibit_slots: inh,
+                                        shared,
+                                    },
+                                );
+                                owned
+                                    .entry(en.inst)
+                                    .or_default()
+                                    .extend(en.eager.iter().copied());
+                            }
+                        }
+                        alt_vars.push(AltVar {
+                            comp: k,
+                            guard_inst: alt.guard_inst,
+                            guard: alt.guard.clone(),
+                            nodes: vnodes,
+                            over,
+                        });
+                    }
+                }
+            }
+            let base_rows = nodes_for_plan.len();
+            let mut alt_row_refs: Vec<Vec<trs_codegen::abi::AltRow>> =
+                vec![Vec::new(); base_rows];
+            let mut sched_over_rows: Vec<
+                HashMap<usize, trs_codegen::abi::SchedOver>,
+            > = vec![HashMap::new(); base_rows];
+            // per appended row: its composition (tick-table inheritance)
+            let mut alt_row_comp: Vec<usize> = Vec::new();
+            for av in alt_vars {
+                let row = nodes_for_plan.len();
+                nodes_for_plan.push(av.nodes);
+                sched_over_rows.push(av.over);
+                alt_row_comp.push(av.comp);
+                alt_row_refs[av.comp].push(trs_codegen::abi::AltRow {
+                    row,
+                    guard_inst: av.guard_inst,
+                    guard: av.guard,
+                });
+            }
+            // exec class representatives, for the variant rows'
+            // outlined-call nodes (FusedComp streams cover base rows)
+            let mut rep_of: Vec<usize> = (0..specs.len()).collect();
+            for (rep, members) in &classes {
+                for &m in members {
+                    rep_of[m] = *rep;
+                }
+            }
             let mk_edge_plan = |forced: &std::collections::HashSet<usize>| {
                 (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
                     let mut plan = self.edge_ssa_plan(
@@ -5209,6 +5417,43 @@ impl Interp {
                         plan.wire_clears = cov.wire_clears;
                         plan.creg_copies = cov.creg_copies;
                         plan.bram_ticks = cov.bram_ticks;
+                    }
+                    if !alt_row_comp.is_empty() {
+                        plan.alt_rows = alt_row_refs.clone();
+                        plan.sched_over = sched_over_rows.clone();
+                        // variant rows resolve outlined execs per
+                        // ordinal (no FusedComp stream to index)
+                        for (o, sp) in specs.iter().enumerate() {
+                            plan.ord_fnodes.insert(
+                                o,
+                                trs_codegen::abi::FusedNode::Exec(
+                                    trs_codegen::abi::HelperRef::Sym(
+                                        format!(
+                                            "exec_{}",
+                                            specs[rep_of[o]].label
+                                        ),
+                                    ),
+                                    inst_envs[&sp.inst].region.0 as u64,
+                                    sp.token_base,
+                                ),
+                            );
+                        }
+                        // variant rows inherit their composition's
+                        // tick tables (ticks are per comp, not per
+                        // interleaving); rows were appended in
+                        // alt_row_comp order.  Length guard: traced
+                        // plans leave the tables empty (and decline
+                        // alts anyway) — never mis-index rows.
+                        if plan.wire_clears.len() == base_rows {
+                            for &c in &alt_row_comp {
+                                let wc = plan.wire_clears[c].clone();
+                                let cc = plan.creg_copies[c].clone();
+                                let bt = plan.bram_ticks[c].clone();
+                                plan.wire_clears.push(wc);
+                                plan.creg_copies.push(cc);
+                                plan.bram_ticks.push(bt);
+                            }
+                        }
                     }
                     plan
                 })
