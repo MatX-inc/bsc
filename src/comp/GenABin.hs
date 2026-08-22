@@ -39,9 +39,9 @@ header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-8"
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-genABinFile :: ErrorHandle -> String -> ABin -> IO ()
-genABinFile errh fn abin =
-    writeBinaryFileCatch errh fn (header ++ encode abin)
+genABinFile :: ErrorHandle -> (Position -> Position) -> String -> ABin -> IO ()
+genABinFile errh remapP fn abin =
+    writeBinaryFileCatch errh fn (header ++ encodeWith remapP abin)
 
 readABinFile :: ErrorHandle -> String -> B.ByteString -> (ABin, String)
 readABinFile errh nm s =
