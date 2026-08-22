@@ -291,6 +291,20 @@ tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
  */
 tBool bk_sync_pending(tSimStateHdl simHdl);
 
+/* Control whether bk_sync_run() and bk_sync_step() flush open file
+ * buffers (fflush(NULL)) each time they return control to the caller.
+ *
+ * The default is enabled.  Embedders whose I/O does not go through
+ * the C library's buffered streams can disable it to reduce per-step
+ * overhead; with flushing disabled, pending $display and VCD output
+ * stays in the C library's buffers until the embedder flushes them
+ * itself or bk_shutdown() is called.
+ *
+ * The threaded path (bk_init/bk_advance) is unaffected by this
+ * setting.
+ */
+void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
+
 /* Schedule a UI callback for the end of a given timeslice,
  * unless there is already one scheduled at that time.
  *

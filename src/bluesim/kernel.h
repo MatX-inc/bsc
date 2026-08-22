@@ -132,6 +132,10 @@ struct tSimState {
   // (bk_sync_init) instead of on a separate simulation thread (bk_init)
   bool sync_mode;
 
+  // flag controlling whether the sync path flushes open file buffers
+  // each time it returns control to the caller (bk_set_flush_on_pause)
+  bool flush_on_pause;
+
   // semaphores, etc. used for synchronization between API and sim_thread
   volatile bool sim_running;
   volatile bool sim_shutting_down;
