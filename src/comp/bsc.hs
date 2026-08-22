@@ -35,7 +35,7 @@ import SCC(scc)
 import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
-import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName,
+import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
