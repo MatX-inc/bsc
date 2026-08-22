@@ -2,6 +2,7 @@
 #define __BS_MODEL_H__
 
 #include "bluesim_types.h"
+#include "bluesim_introspection.h"
 
 /* This is the (pure virtual) base class for Bluesim-generated designs.
  * It declares the functions that the kernel requires from a design.
@@ -30,6 +31,27 @@ class Model
    * of this bound; see bluesim_kernel_api.h for the per-call costs.
    */
   virtual tUInt32 get_max_event_queue_depth() = 0;
+
+  /* Non-allocating introspection of the design's state elements and
+   * of the top module's input and output ports (see
+   * bluesim_introspection.h for the descriptor types and for the
+   * documented ordering, alignment and layout rules).  These are
+   * static per-design tables emitted by the code generator: the
+   * walkers allocate nothing, return pointers to 'static const'
+   * storage inside the generated code, and are usable before
+   * create_model().  The get_*_element/get_*_port accessors return
+   * NULL when the index is out of range; the get_*_bytes accessors
+   * return the total byte size of the corresponding planned area.
+   */
+  virtual tUInt32 get_num_state_elements() = 0;
+  virtual const tBkStateInfo* get_state_element(tUInt32 n) = 0;
+  virtual tUInt64 get_state_bytes() = 0;
+  virtual tUInt32 get_num_input_ports() = 0;
+  virtual const tBkPortInfo* get_input_port(tUInt32 n) = 0;
+  virtual tUInt64 get_input_bytes() = 0;
+  virtual tUInt32 get_num_output_ports() = 0;
+  virtual const tBkPortInfo* get_output_port(tUInt32 n) = 0;
+  virtual tUInt64 get_output_bytes() = 0;
 
  // Require construction be of the derived classes, not this class
  protected:

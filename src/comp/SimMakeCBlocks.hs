@@ -303,6 +303,26 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
       ports = sortOn (\(_,a,_) -> getIdBaseString a) (meth_ens ++ meth_args ++ meth_rets)
 
       -- ----------
+      -- interface ports with direction, for the introspection
+      -- descriptors of the top module (recorded here, BEFORE
+      -- optimization, so the described interface is stable):
+      -- inputs are the module argument ports (declaration order)
+      -- followed by the method enable and argument ports in
+      -- case-sensitive name order; outputs are the method result
+      -- ports (readies included, since ready methods are separate
+      -- value methods) in case-sensitive name order.  Clock and
+      -- reset ports are excluded (arg_defs already drops them):
+      -- they are driven through the kernel, not through port
+      -- storage.  The documented ordering contract lives in
+      -- src/bluesim/bluesim_introspection.h.
+      byPortName = sortOn (\(_,_,vn) -> getVNameString vn)
+      ifc_ports = [ (True, t, getIdBaseString n) | (t,n,True) <- arg_defs ] ++
+                  [ (True, t, getVNameString vn)
+                  | (t,_,vn) <- byPortName (meth_ens ++ meth_args) ] ++
+                  [ (False, t, getVNameString vn)
+                  | (t,_,vn) <- byPortName meth_rets ]
+
+      -- ----------
       -- clock domains
       findClkDom aid [] = internalError $ "No domain for clock input: " ++ (ppReadable aid)
       findClkDom aid ((dom,aclks):rest) =
@@ -417,6 +437,7 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
                               arg_defs
                               rst_defs
                               ports
+                              ifc_ports
                               pub_defs
                               pri_defs
                               rule_fns

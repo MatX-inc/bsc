@@ -3,7 +3,7 @@ module SimBlocksToC ( simBlocksToC
                     , mkSchedName
                     ) where
 
-import Data.List(nub, genericLength)
+import Data.List(nub, genericLength, mapAccumL)
 import Data.Maybe(catMaybes)
 import Control.Monad.State(runState)
 import System.Time -- XXX: in old-time package
@@ -12,9 +12,10 @@ import qualified Data.Map as M
 import ErrorUtil(internalError)
 import Flags
 import Id(getIdString)
+import IntLit(ilValue)
 import SimCCBlock
 import ASyntax
-import ASyntaxUtil(exprForeignCalls,actionForeignCalls)
+import ASyntaxUtil(exprForeignCalls,actionForeignCalls,aSize)
 import ForeignFunctions
 import FileNameUtil(mkCxxName, mkHName)
 import CCSyntax
@@ -192,6 +193,24 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
               , decl $ function (ptr . void) (mkVar "get_instance") []
               , decl $ function (userType "tUInt32")
                            (mkVar "get_max_event_queue_depth") []
+              , decl $ function (userType "tUInt32")
+                           (mkVar "get_num_state_elements") []
+              , decl $ function (ptr . constant . (userType "tBkStateInfo"))
+                           (mkVar "get_state_element")
+                           [ (userType "tUInt32") (mkVar "n") ]
+              , decl $ function (userType "tUInt64") (mkVar "get_state_bytes") []
+              , decl $ function (userType "tUInt32")
+                           (mkVar "get_num_input_ports") []
+              , decl $ function (ptr . constant . (userType "tBkPortInfo"))
+                           (mkVar "get_input_port")
+                           [ (userType "tUInt32") (mkVar "n") ]
+              , decl $ function (userType "tUInt64") (mkVar "get_input_bytes") []
+              , decl $ function (userType "tUInt32")
+                           (mkVar "get_num_output_ports") []
+              , decl $ function (ptr . constant . (userType "tBkPortInfo"))
+                           (mkVar "get_output_port")
+                           [ (userType "tUInt32") (mkVar "n") ]
+              , decl $ function (userType "tUInt64") (mkVar "get_output_bytes") []
               ]
             ]
         class_decl =
@@ -425,6 +444,101 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                            " reset primitives * 6; see SimBlocksToC")
                           (ret (Just (mkUInt32 max_event_queue_depth))))
 
+        -- ----------------
+        -- Non-allocating introspection: static descriptor tables for
+        -- the design's state elements and the top module's input and
+        -- output ports, with a flat layout (byte offsets in planned
+        -- contiguous areas).  The tables are 'static const' data --
+        -- walking them through the Model virtuals (and the bk_*
+        -- kernel accessors over them) allocates nothing and works
+        -- before create_model().  The ordering, alignment and layout
+        -- contract is documented in bluesim_introspection.h; the
+        -- collection and layout code is at the bottom of this file.
+        state_elems = collectStateElements sb_map top_id
+        (state_places, state_bytes) =
+            layoutArea [ (b, e) | (_, _, b, e) <- state_elems ]
+        state_rows =
+            [ mkInitBraces [ mkStr nm
+                           , var (stateKindCName k)
+                           , mkUInt32 b
+                           , mkUInt64 e
+                           , mkUInt64 off
+                           , mkUInt64 sz
+                           ]
+            | ((nm, k, b, e), (off, sz)) <- zip state_elems state_places ]
+
+        ifc_ports    = sb_ifcPorts top_blk
+        input_ports  = [ (nm, aSize t) | (True,  t, nm) <- ifc_ports ]
+        output_ports = [ (nm, aSize t) | (False, t, nm) <- ifc_ports ]
+        (input_places, input_bytes) =
+            layoutArea [ (b, 1) | (_, b) <- input_ports ]
+        (output_places, output_bytes) =
+            layoutArea [ (b, 1) | (_, b) <- output_ports ]
+        port_rows ports places =
+            [ mkInitBraces [ mkStr nm
+                           , mkUInt32 b
+                           , mkUInt64 off
+                           , mkUInt64 sz
+                           ]
+            | ((nm, b), (off, sz)) <- zip ports places ]
+
+        desc_table ty nm rows =
+            -- C++ has no zero-length arrays; an empty table is
+            -- simply not emitted and its walkers return NULL/0
+            if null rows
+            then []
+            else [ static $ constant . array . (userType ty) $
+                       (mkVar nm) `assign` (mkInitBraces rows) ]
+        desc_tables =
+            (desc_table "tBkStateInfo" "bk_state_elements" state_rows) ++
+            (desc_table "tBkPortInfo" "bk_input_ports" (port_rows input_ports input_places)) ++
+            (desc_table "tBkPortInfo" "bk_output_ports" (port_rows output_ports output_places))
+        desc_defs =
+            if (null desc_tables)
+            then []
+            else [ comment ("Introspection descriptor tables " ++
+                            "(static; see bluesim_introspection.h)")
+                           (blankLines 0) ] ++ desc_tables
+
+        mk_num_def fn_name n =
+            define (function (userType "tUInt32") (mkScopedVar fn_name) [])
+                   (block [ ret (Just (mkUInt32 n)) ])
+        mk_bytes_def fn_name n =
+            define (function (userType "tUInt64") (mkScopedVar fn_name) [])
+                   (block [ ret (Just (mkUInt64 n)) ])
+        mk_elem_def fn_name ty arr n =
+            define (function (ptr . constant . (userType ty))
+                             (mkScopedVar fn_name)
+                             [ (userType "tUInt32") (mkVar "n") ])
+                   (block (if (n == (0 :: Integer))
+                           then [ ret (Just mkNULL) ]
+                           else [ if_cond ((var "n") `cGe` (mkUInt32 n))
+                                          (ret (Just mkNULL))
+                                          Nothing
+                                , ret (Just (cAddr (cIndex (var arr)
+                                                           (var "n"))))
+                                ]))
+        num_state_elems  = genericLength state_elems
+        num_input_ports  = genericLength input_ports
+        num_output_ports = genericLength output_ports
+        introspect_methods =
+            [ comment ("State element and top-module port introspection " ++
+                       "(see bluesim_introspection.h)")
+                      (blankLines 0)
+            , mk_num_def "get_num_state_elements" num_state_elems
+            , mk_elem_def "get_state_element" "tBkStateInfo"
+                          "bk_state_elements" num_state_elems
+            , mk_bytes_def "get_state_bytes" state_bytes
+            , mk_num_def "get_num_input_ports" num_input_ports
+            , mk_elem_def "get_input_port" "tBkPortInfo"
+                          "bk_input_ports" num_input_ports
+            , mk_bytes_def "get_input_bytes" input_bytes
+            , mk_num_def "get_num_output_ports" num_output_ports
+            , mk_elem_def "get_output_port" "tBkPortInfo"
+                          "bk_output_ports" num_output_ports
+            , mk_bytes_def "get_output_bytes" output_bytes
+            ]
+
         -- functions for creating, destroying and resetting the model
         create_model_decl  = function void (mkScopedVar "create_model")
                                  [ (userType "tSimStateHdl") (mkVar "simHdl")
@@ -509,7 +623,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                         , reset_model_def
                         , get_instance_def
                         , comment "Maximum event-queue depth assuming no host calls that enqueue events" gmqd_def
-                        ]
+                        ] ++ introspect_methods
 
 
         -- functions for getting the version information and creation time
@@ -550,6 +664,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                  meth_lits ++
                  str_lits ++
                  gate_lits ++
+                 desc_defs ++
                  ctor_def ++
                  new_fn_def ++
                  sched_fns ++
@@ -558,6 +673,203 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                 )
               )
               writeFileC
+
+-- ----------------
+-- Non-allocating introspection descriptors
+--
+-- The generated model carries three 'static const' descriptor
+-- tables: the design's state elements (the Bluesim primitive
+-- instances of the whole module tree, with dotted instance names)
+-- and the top module's input and output ports.  Along with the
+-- descriptors the code generator defines a flat layout, assigning
+-- each element a byte offset in a planned contiguous area (one area
+-- for state, one for inputs, one for outputs).  The ordering,
+-- alignment and layout rules are the documented contract in
+-- src/bluesim/bluesim_introspection.h; keep this code and that
+-- header in sync.
+
+-- The kind of a state element: which Bluesim primitive family
+-- implements it.  Mirrors tBkStateKind in bluesim_introspection.h.
+data StateKind = SkReg | SkWire | SkRegFile | SkBRAM | SkFifo
+               | SkProbe | SkCounter | SkSync | SkClock | SkReset
+  deriving (Eq)
+
+stateKindCName :: StateKind -> String
+stateKindCName SkReg     = "BK_STATE_REG"
+stateKindCName SkWire    = "BK_STATE_WIRE"
+stateKindCName SkRegFile = "BK_STATE_REGFILE"
+stateKindCName SkBRAM    = "BK_STATE_BRAM"
+stateKindCName SkFifo    = "BK_STATE_FIFO"
+stateKindCName SkProbe   = "BK_STATE_PROBE"
+stateKindCName SkCounter = "BK_STATE_COUNTER"
+stateKindCName SkSync    = "BK_STATE_SYNC"
+stateKindCName SkClock   = "BK_STATE_CLOCK"
+stateKindCName SkReset   = "BK_STATE_RESET"
+
+-- One state element: dotted instance name, kind, bit width of one
+-- entry, number of entries.
+type StateElem = (String, StateKind, Integer, Integer)
+
+-- Enumerate the state elements of the design: a depth-first
+-- pre-order walk of the module instance tree from the top block,
+-- taking the sub-instances of each module in sb_state order (the
+-- code generator records them alphabetically by instance name).
+-- Only Bluesim primitive instances are state elements; a generated
+-- submodule contributes its subtree at its position.  Names are
+-- dotted instance names rooted at "top", matching the runtime name
+-- of the top-module instance.
+collectStateElements :: SBMap -> SBId -> [StateElem]
+collectStateElements sb_map top_id =
+  let prim_map = M.fromList [ (sb_id pb, pb) | pb <- primBlocks ]
+      -- note: the sb_map handed to simBlocksToC contains the
+      -- primitive blocks too (with an empty sb_state), so the
+      -- primitive test must come first
+      walk pfx sbid args =
+        case (M.lookup sbid prim_map) of
+          Just pb -> [ classifyPrim pfx pb args ]
+          Nothing ->
+            case (M.lookup sbid sb_map) of
+              Just sb -> concat [ walk (pfx ++ "." ++ getIdString inst)
+                                       sub_id sub_args
+                                | (sub_id, inst, sub_args) <- sb_state sb ]
+              -- neither a generated module nor a Bluesim primitive
+              -- (e.g. a noinline function): no state to describe
+              Nothing -> []
+  in  walk "top" top_id []
+
+-- Classify one primitive instance: map its BSV primitive name to a
+-- state kind and extract its geometry (entry bit width and entry
+-- count) from its instantiation arguments.  Width and geometry
+-- arguments are always compile-time literals (the naming functions
+-- in SimPrimitiveModules already require this for widths).
+classifyPrim :: String -> SimCCBlock -> [AExpr] -> StateElem
+classifyPrim inst pb args =
+  let prim = sb_name pb
+      -- the naming fn normalizes the argument list to the C++
+      -- constructor's shape; for every sized primitive the entry
+      -- width is then the first argument, and for the FIFO families
+      -- the depth is the second
+      norm_args = snd (sb_naming_fn pb args)
+      geomNat what e =
+        case e of
+          (ASInt _ _ il) -> ilValue il
+          _ -> internalError ("SimBlocksToC.classifyPrim: non-constant " ++
+                              what ++ " argument of " ++ prim ++
+                              " instance " ++ inst ++ ": " ++ ppReadable e)
+      argNat what as n =
+        case (drop n as) of
+          (e:_) -> geomNat what e
+          []    -> internalError ("SimBlocksToC.classifyPrim: missing " ++
+                                  what ++ " argument of " ++ prim ++
+                                  " instance " ++ inst)
+      width    = argNat "width" norm_args 0
+      -- raw argument positions (Verilog parameter order, clocks and
+      -- resets already dropped) for the memory primitives
+      dataW  n = argNat "data width" args n
+      loA    n = argNat "low address" args n
+      hiA    n = argNat "high address" args n
+      addrW  n = argNat "address width" args n
+      memSz  n = argNat "memory size" args n
+      reg_prims   = [ "RegN", "RegUN", "RegA"
+                    , "CRegN5", "CRegUN5", "CRegA5"
+                    , "CrossingRegN", "CrossingRegUN", "CrossingRegA"
+                    , "ConfigRegN", "ConfigRegUN", "ConfigRegA"
+                    , "RegTwoN", "RegTwoUN", "RegTwoA"
+                    , "RevertReg", "RegAligned"
+                    ]
+      wire_prims  = [ "RWire", "RWire0", "BypassWire", "BypassWire0"
+                    , "CrossingBypassWire", "BypassCrossingWire"
+                    ]
+      fifo_prims  = [ "FIFO1", "FIFO10", "FIFO2", "FIFO20"
+                    , "SizedFIFO", "SizedFIFO0"
+                    , "FIFOL1", "FIFOL10", "FIFOL2", "FIFOL20"
+                    , "SizedFIFOL", "SizedFIFOL0"
+                    , "SyncFIFO", "SyncFIFO0", "SyncFIFO1", "SyncFIFO10"
+                    , "SyncFIFOLevel", "SyncFIFOLevel0"
+                    ]
+      probe_prims = [ "Probe", "ProbeWire" ]
+      sync1_prims = [ "SyncBit05", "SyncBit1", "SyncBit15", "SyncBit"
+                    , "SyncPulse", "SyncHandshake"
+                    ]
+      syncN_prims = [ "SyncRegister", "LatchCrossingReg" ]
+      clock_prims = [ "ClockGen", "MakeClock", "GatedClock"
+                    , "ClockInverter", "GatedClockInverter"
+                    , "ClockDiv", "GatedClockDiv"
+                    , "ClockSelect", "UngatedClockSelect"
+                    , "ClockMux", "UngatedClockMux"
+                    ]
+      reset_prims = [ "MakeReset", "MakeResetA", "MakeReset0"
+                    , "SyncReset", "SyncResetA", "SyncReset0"
+                    , "InitialReset", "ResetMux", "ResetEither"
+                    , "ResetToBool"
+                    ]
+      (kind, bits, entries)
+        | prim `elem` reg_prims   = (SkReg,     width, 1)
+        | prim `elem` wire_prims  = (SkWire,    width, 1)
+        | prim `elem` fifo_prims  = (SkFifo,    width,
+                                     argNat "depth" norm_args 1)
+        | prim `elem` probe_prims = (SkProbe,   width, 1)
+        | prim == "Counter"       = (SkCounter, width, 1)
+        | prim `elem` sync1_prims = (SkSync,    1,     1)
+        | prim `elem` syncN_prims = (SkSync,    width, 1)
+        | prim `elem` clock_prims = (SkClock,   1,     1)
+        | prim `elem` reset_prims = (SkReset,   1,     1)
+        -- RegFile: ADDR_WIDTH, DATA_WIDTH, LO, HI
+        | prim == "RegFile"       = (SkRegFile, dataW 1, (hiA 3) - (loA 2) + 1)
+        -- RegFileLoad: FILE, ADDR_WIDTH, DATA_WIDTH, LO, HI, BINARY
+        | prim == "RegFileLoad"   = (SkRegFile, dataW 2, (hiA 4) - (loA 3) + 1)
+        -- DualPortRam: ADDR_WIDTH, DATA_WIDTH (2^ADDR_WIDTH entries)
+        | prim == "DualPortRam"   = (SkRegFile, dataW 1, 2 ^ (addrW 0))
+        -- BRAM1/BRAM2: PIPELINED, ADDR_WIDTH, DATA_WIDTH, MEMSIZE
+        | prim `elem` ["BRAM1","BRAM2"] = (SkBRAM, dataW 2, memSz 3)
+        -- BRAM1Load/BRAM2Load: FILE, PIPELINED, ADDR_WIDTH,
+        --                      DATA_WIDTH, MEMSIZE, BINARY
+        | prim `elem` ["BRAM1Load","BRAM2Load"] = (SkBRAM, dataW 3, memSz 4)
+        -- BRAM1BE/BRAM2BE: PIPELINED, ADDR_WIDTH, DATA_WIDTH,
+        --                  CHUNKSIZE, WE_WIDTH, MEMSIZE
+        | prim `elem` ["BRAM1BE","BRAM2BE"] = (SkBRAM, dataW 2, memSz 5)
+        -- BRAM1BELoad/BRAM2BELoad: FILE, PIPELINED, ADDR_WIDTH,
+        --                          DATA_WIDTH, CHUNKSIZE, WE_WIDTH,
+        --                          MEMSIZE, BINARY
+        | prim `elem` ["BRAM1BELoad","BRAM2BELoad"] = (SkBRAM, dataW 3, memSz 6)
+        | otherwise =
+            internalError ("SimBlocksToC.classifyPrim: unclassified " ++
+                           "Bluesim primitive '" ++ prim ++ "' (instance " ++
+                           inst ++ "); assign it a tBkStateKind here")
+  in  (inst, kind, bits, entries)
+
+-- The storage unit (in bytes) of one entry of a given bit width, and
+-- its required alignment.  These are the documented rules of
+-- bluesim_introspection.h: 1/4/8 bytes for up to 8/32/64 bits (as
+-- tUInt8/tUInt32/tUInt64), and a 4-byte-aligned array of 32-bit
+-- words for wide data.
+entryUnitBytes :: Integer -> Integer
+entryUnitBytes b | b <= 8    = 1
+                 | b <= 32   = 4
+                 | b <= 64   = 8
+                 | otherwise = 4 * ((b + 31) `div` 32)
+
+entryAlignBytes :: Integer -> Integer
+entryAlignBytes b | b <= 8    = 1
+                  | b <= 32   = 4
+                  | b <= 64   = 8
+                  | otherwise = 4
+
+-- Lay out one area: walk the elements (entry bit width, entry count)
+-- in table order with a running offset starting at 0, rounding up to
+-- each element's alignment and advancing by its size.  Returns the
+-- (offset, size) of each element and the total area size, which is
+-- the final offset rounded up to a multiple of 8 so the area itself
+-- can be placed at any 8-byte-aligned address.
+layoutArea :: [(Integer, Integer)] -> ([(Integer, Integer)], Integer)
+layoutArea elems =
+  let alignUp x a = ((x + a - 1) `div` a) * a
+      step off (b, e) =
+        let off' = alignUp off (entryAlignBytes b)
+            sz   = e * (entryUnitBytes b)
+        in  (off' + sz, (off', sz))
+      (end, places) = mapAccumL step 0 elems
+  in  (places, alignUp end 8)
 
 -- Some literals cannot be written inline in the generated C, so they are
 -- declared as separate variables at the beginning of the file.

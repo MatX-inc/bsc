@@ -107,6 +107,15 @@ data SimCCBlock =
              , sb_resetDefs :: [(AType,AId)]       -- reset values
              -- method enable, argument and return value ports
              , sb_methodPorts :: [(AType,AId,VName)]
+             -- interface ports with direction, for introspection
+             -- descriptors: (is_input, type, Verilog port name).
+             -- True = input to the module (module argument ports,
+             -- method enables and method arguments), False = output
+             -- (method results, readies included).  Clock and reset
+             -- ports are excluded.  Recorded at block construction,
+             -- BEFORE optimization, so the described interface does
+             -- not depend on which ports SimCOpt moves or deletes.
+             , sb_ifcPorts :: [(Bool,AType,String)]
              , sb_publicDefs :: [(AType,AId)]      -- defs available outside
              , sb_privateDefs :: [(AType,AId)]     -- defs private to the block
              , sb_rules :: [SBFnSet]               -- functions for rules
@@ -136,6 +145,7 @@ instance Eq SimCCBlock where
                , (sb_parameters a) == (sb_parameters b)
                , (sb_resetDefs a) == (sb_resetDefs b)
                , (sb_methodPorts a) == (sb_methodPorts b)
+               , (sb_ifcPorts a) == (sb_ifcPorts b)
                , (sb_publicDefs a) == (sb_publicDefs b)
                , (sb_privateDefs a) == (sb_privateDefs b)
                , (sb_rules a) == (sb_rules b)
@@ -157,6 +167,7 @@ instance Show SimCCBlock where
                          , show (sb_parameters sb)
                          , show (sb_resetDefs sb)
                          , show (sb_methodPorts sb)
+                         , show (sb_ifcPorts sb)
                          , show (sb_publicDefs sb)
                          , show (sb_privateDefs sb)
                          , show (sb_rules sb)
@@ -521,7 +532,7 @@ primBlocks :: [SimCCBlock]
 primBlocks =
   let mods = [ (name, (f name mod)) | (name, mod, f, _) <- primMap ]
       mkMod n (name,fn) = SimCCBlock n name fn
-                              [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
+                              [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
   in zipWith mkMod [1..] mods
 
 -- Test if a block is one of the primitive blocks
@@ -1960,8 +1971,8 @@ instance PPrint SimCCReset where
 -- NFData instances (needed by phase dumping routines)
 
 instance NFData SimCCBlock where
-  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19) =
-    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19
+  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20) =
+    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf n20
 
 instance NFData SimCCFn where
   rnf (SimCCFn n a r b) = rnf4 n a r b
