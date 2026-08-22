@@ -173,18 +173,23 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  /* the model's caller-provided storage (constructor ABI) */
+  /* the model's caller-provided storage (constructor ABI); taken
+   * straight from __libc_malloc so the harness's own allocations
+   * stay out of the counters
+   */
   tBytesFn state_bytes = (tBytesFn) find_sym(dl, "bk_state_bytes");
   tBytesFn in_bytes    = (tBytesFn) find_sym(dl, "bk_input_bytes");
   tBytesFn out_bytes   = (tBytesFn) find_sym(dl, "bk_output_bytes");
-  void* state_buf = malloc(state_bytes(model));
-  void* in_buf  = (in_bytes(model) > 0)  ? malloc(in_bytes(model))  : NULL;
-  void* out_buf = (out_bytes(model) > 0) ? malloc(out_bytes(model)) : NULL;
+  void* state_buf = __libc_malloc(state_bytes(model));
+  void* in_buf  = (in_bytes(model) > 0)
+                      ? __libc_malloc(in_bytes(model))  : NULL;
+  void* out_buf = (out_bytes(model) > 0)
+                      ? __libc_malloc(out_bytes(model)) : NULL;
   model = new_model(bs_default_host_ops(), bs_default_host_ctx(),
                     state_buf, in_buf, out_buf);
 
   tUInt32 capacity = max_depth(model) + 16;
-  void* ctx_buf = malloc(ctx_bytes(capacity));
+  void* ctx_buf = __libc_malloc(ctx_bytes(capacity));
   tSimStateHdl sim = sync_init(model, 1,
                                bs_default_host_ops(), bs_default_host_ctx(),
                                capacity, ctx_buf);
@@ -196,11 +201,16 @@ int main(int argc, char** argv)
 
   tCounts after_init;
   sample(&after_init);
-  /* (the model itself now constructs into caller-provided storage;
-   * the remaining init-time C-allocator use -- kernel bookkeeping --
-   * is removed by a later change) */
-  printf("harness: construction and init use the allocators: %s\n",
-         (after_init.c_allocs > before_init.c_allocs) ? "yes" : "NO");
+  /* the model constructs into caller-provided storage and the
+   * kernel's bookkeeping is fixed storage in the caller-provided
+   * context, so the whole of construction and initialization must
+   * touch no allocator at all
+   */
+  printf("harness: construction and init are allocation-free: %s\n",
+         ((after_init.c_allocs == before_init.c_allocs) &&
+          (after_init.c_frees == before_init.c_frees) &&
+          (after_init.mem_allocs == before_init.mem_allocs) &&
+          (after_init.mem_frees == before_init.mem_frees)) ? "yes" : "NO");
 
   tClock clk = get_clock(sim, "CLK");
 
@@ -256,7 +266,7 @@ int main(int argc, char** argv)
   printf("harness: simulation finished with status %d\n",
          (int) exit_status(sim));
   shutdown_fn(sim);
-  free(ctx_buf);
+  __libc_free(ctx_buf);
 
   return (bad_segments == 0) ? 0 : 1;
 }
