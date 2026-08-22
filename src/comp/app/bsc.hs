@@ -1880,10 +1880,17 @@ genStackBoundObj errh flags toplevel su_ok ci_files = do
 cxxLink :: ErrorHandle -> Flags -> String -> [String] -> Bool -> [String] ->
            TimeInfo -> IO ()
 cxxLink errh flags toplevel names su_ok ci_files creation_time = do
-    -- Construct the Bluesim object names
+    -- Construct the Bluesim object names.  The vendored string/ctype
+    -- routines (libbsstring.a, see src/vendor/musl/) go last so that
+    -- they resolve the references of every other object; they give the
+    -- ELF shared object local definitions of the C library leaf
+    -- functions (memcpy and friends) instead of dynamic imports.
     let bsimLibDir = (bluespecDir flags) ++ "/Bluesim/"
+        bsim_lib_list = case getBinFmtType of
+                          ELF -> ["bskernel", "bsprim", "bsstring"]
+                          _   -> ["bskernel", "bsprim"]
         bsim_names = [ bsimLibDir ++ "lib" ++ name ++ ".a"
-                     | name <- ["bskernel", "bsprim"] ]
+                     | name <- bsim_lib_list ]
 
     -- Inject the design's static stack-depth bound (the strong
     -- definition of bs_stack_depth_bound; the kernel carries a weak

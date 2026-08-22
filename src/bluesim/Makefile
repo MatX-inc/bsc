@@ -115,6 +115,76 @@ ifeq ($(STACK_USAGE_OK),yes)
 CXXFLAGS += $(STACK_USAGE_FLAGS)
 endif
 
+# The vendored musl string/ctype routines (see src/vendor/musl/README.md),
+# compiled into their own archive and linked into every generated model
+# shared object so that the model provides these symbols locally (with
+# hidden visibility) instead of importing them from the host's C library.
+# The compiler emits memcpy/memset/memmove calls on its own, so they are
+# built exactly as musl builds them: freestanding, with the builtins off
+# (otherwise GCC can turn their own loops back into calls to themselves).
+MUSLDIR = ../vendor/musl
+MUSL_CFLAGS = -std=c99 -g $(COPT) -fPIC \
+	-ffreestanding -fno-builtin -fno-stack-protector \
+	-fvisibility=hidden \
+	-Wall -Wno-parentheses -Wno-unused-parameter \
+	-I$(MUSLDIR)/include
+ifeq ($(STACK_USAGE_OK),yes)
+MUSL_SU_FLAGS = $(STACK_USAGE_FLAGS)
+endif
+
+# Use the assembly implementations where musl has them for the build
+# architecture (ELF only; the assembly uses ELF directives).  Every
+# routine without assembly here comes from the generic C sources.
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+MUSL_MEM_ASM =
+ifeq ($(UNAME_S),Linux)
+ifeq ($(UNAME_M),x86_64)
+MUSL_MEM_ASM = x86_64/memcpy.s x86_64/memmove.s x86_64/memset.s
+endif
+ifeq ($(UNAME_M),aarch64)
+MUSL_MEM_ASM = aarch64/memcpy.S aarch64/memset.S
+endif
+endif
+
+MUSL_MEM_ALL = memcpy memmove memset
+MUSL_MEM_C = $(filter-out $(basename $(notdir $(MUSL_MEM_ASM))),$(MUSL_MEM_ALL))
+MUSL_STR_C = strlen strcmp strncmp strchr strchrnul strcpy stpcpy \
+             strncpy stpncpy
+MUSL_CTYPE_C = isblank isdigit isupper isxdigit tolower
+
+# Objects are prefixed to keep them apart from the runtime's own; the
+# .su/.ci stack-usage data of the C-compiled members (the objects that
+# are actually linked) ships with the runtime libraries below, while
+# the assembly members are covered by the stack-depth analysis's
+# conservative per-call allowances for string primitives.
+STRING_C_OBJS = $(addprefix musl_,$(addsuffix .o,\
+                    $(MUSL_MEM_C) $(MUSL_STR_C) $(MUSL_CTYPE_C)))
+STRING_ASM_OBJS = $(addprefix musl_asm_,$(addsuffix .o,\
+                    $(basename $(notdir $(MUSL_MEM_ASM)))))
+STRING_OBJS = $(STRING_C_OBJS) $(STRING_ASM_OBJS)
+LIB_STRING = libbsstring.a
+
+vpath %.c $(MUSLDIR)/src/string $(MUSLDIR)/src/ctype
+
+musl_%.o: %.c
+	$(CC) $(MUSL_CFLAGS) $(MUSL_SU_FLAGS) -c -o $@ $<
+
+# one assembly rule per architecture, so the same stem (e.g. memcpy)
+# can never resolve to another architecture's source
+ifeq ($(UNAME_M),x86_64)
+musl_asm_%.o: $(MUSLDIR)/src/string/x86_64/%.s
+	$(CC) -fPIC -Wa,--noexecstack -c -o $@ $<
+endif
+ifeq ($(UNAME_M),aarch64)
+musl_asm_%.o: $(MUSLDIR)/src/string/aarch64/%.S
+	$(CC) -fPIC -Wa,--noexecstack -c -o $@ $<
+endif
+
+$(LIB_STRING): $(STRING_OBJS)
+	$(RM) $(LIB_STRING)
+	$(AR) cr $(LIB_STRING) $(STRING_OBJS)
+
 # Description of library of Bluesim primitives
 LIB_PRIM = libbsprim.a
 PRIM_OBJS = prim_ops.o wide_data.o mem_alloc.o target.o \
@@ -135,7 +205,7 @@ LIB_KERNEL = libbskernel.a
 KERNEL_OBJS = kernel.o event_queue.o priority.o symbol.o \
               reset.o plusargs.o portability.o stack_bound_default.o
 
-LIBS = $(LIB_PRIM) $(LIB_KERNEL)
+LIBS = $(LIB_PRIM) $(LIB_KERNEL) $(LIB_STRING)
 
 vpath %.cxx ../
 
@@ -187,7 +257,7 @@ install: $(LIBS) test-headers
 	$(INSTALL) -m 755 $(SCRIPTS) $(INSTALLDIR)
 ifeq ($(STACK_USAGE_OK),yes)
 	$(INSTALL) -m 755 -d $(INSTALLDIR)/stack-usage
-	$(INSTALL) -m 644 $(sort $(DEPEND_OBJS:.o=.su) $(DEPEND_OBJS:.o=.ci)) \
+	$(INSTALL) -m 644 $(sort $(SU_SHIP_OBJS:.o=.su) $(SU_SHIP_OBJS:.o=.ci)) \
 		$(INSTALLDIR)/stack-usage
 endif
 
@@ -201,6 +271,9 @@ full_clean: clean
 
 TAGS:	*.h *.c *.cxx
 	etags *.h *.c *.cxx
+
+# the objects whose stack-usage data (.su/.ci) ships with the runtime
+SU_SHIP_OBJS = $(PRIM_OBJS) $(KERNEL_OBJS) $(STRING_C_OBJS)
 
 # include dependency information
 DEPEND_OBJS = $(PRIM_OBJS) $(KERNEL_OBJS)
