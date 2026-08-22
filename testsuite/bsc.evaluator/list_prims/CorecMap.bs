@@ -1,0 +1,25 @@
+package CorecMap where
+
+import List
+
+-- Mutually corecursive lists knotted through List.map.  The lazy
+-- library map unfolded these on demand, but primListMap walks the
+-- whole spine of its argument, so the knot must now exhaust the steps
+-- budget with a reportable error (like CyclicList), not hang the
+-- compiler or overflow its stack.  bsc.compile/MyProg.bs keeps the
+-- old pattern working with a local recursive map.
+
+{-# properties sysCorecMap = { verilog } #-}
+sysCorecMap :: Module Empty
+sysCorecMap =
+  module
+    r :: Reg (Bit 8) <- mkRegU
+    let inc :: Integer -> Integer
+        inc x = x + 1
+        evens :: List Integer
+        evens = Cons 0 (List.map inc odds)
+        odds :: List Integer
+        odds = List.map inc evens
+    addRules $
+      rules
+        "go": when True ==> r := fromInteger (evens !! 4)

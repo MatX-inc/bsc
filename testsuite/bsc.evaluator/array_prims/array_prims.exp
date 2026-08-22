@@ -89,3 +89,14 @@ compile_verilog_pass ZipWithLazy.bsv sysZipWithLazy
 # (cells copy lazily), whether or not the undefined half is consumed.
 compile_verilog_pass UninitAppendOk.bsv sysUninitAppendOk
 compile_verilog_pass UninitAppendUse.bsv sysUninitAppendUse
+
+# --- Value semantics: order, traversal direction, argument order ---
+# staticAssert-based elaboration tests with order-sensitive encodings.
+# ArrayValueSemantics pins the primitives directly (genWith/map/foldl/
+# foldr/zipWith incl. min-length and swapped arguments/append order/
+# ragged concat/reverse/round trips/empty edges); VectorValueSemantics
+# pins the Vector layer on top (fold's halving tree shape, scanl/scanr
+# contents, take/drop direction, pack/unpack bit layout, empty-vector
+# any/all/elem).
+compile_verilog_pass ArrayValueSemantics.bsv sysArrayValueSemantics {-check-assert}
+compile_verilog_pass VectorValueSemantics.bsv sysVectorValueSemantics {-check-assert}

@@ -77,3 +77,20 @@ find_regexp sysMapMNames.v {xs_1}
 find_regexp sysMapMNames.v {xs_2}
 find_regexp sysMapMNames.v {ls_1}
 find_regexp sysMapMNames.v {ls_2}
+
+# --- Value semantics: order, traversal direction, argument order ---
+# staticAssert-based elaboration test with order-sensitive encodings:
+# map/append/concat with embedded Nils/length/select/foldl vs foldr/
+# foldl1/foldr1/zipWith incl. min-length and swapped arguments/zip/
+# unzip/update (which drives listPrimNum)/reverse/elem/any/all.
+compile_verilog_pass ListValueSemantics.bsv sysListValueSemantics {-check-assert}
+
+# --- zipWith walks its first spine only as far as needed ---
+# The second list is infinite (the listPrimNum pattern); zipping a
+# finite first list against it must terminate with correct values.
+compile_verilog_pass InfiniteZip.bsv sysInfiniteZip {-check-assert}
+
+# --- Corecursive lists knotted through map exhaust the steps budget ---
+# The lazy library map unfolded evens/odds on demand; primListMap walks
+# the whole spine, so the knot now reports G0024 (not a hang).
+compile_verilog_fail_error CorecMap.bs G0024 1 "" {-steps-warn-interval 5000 -steps-max-intervals 1}
