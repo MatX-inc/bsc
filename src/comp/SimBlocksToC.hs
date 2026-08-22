@@ -3,7 +3,7 @@ module SimBlocksToC ( simBlocksToC
                     , mkSchedName
                     ) where
 
-import Data.List(nub, genericLength, mapAccumL)
+import Data.List(nub, genericLength)
 import Data.Maybe(catMaybes)
 import qualified Data.Set as S
 import Control.Monad.State(runState)
@@ -133,11 +133,11 @@ convertModuleBlock flags sb_map ff_map wdef_mod_map reused top_blk writeFileC sb
         include_ids = nub (map (\(id,_,_)->id) (sb_state sb))
 
         -- class declaration (for the H file)
-        class_decl = simCCBlockToClassDeclaration sb_map sb
+        class_decl = simCCBlockToClassDeclaration is_top sb_map sb
 
         -- method definitions (for the CXX file)
         (method_defs, state) =
-            runState (simCCBlockToClassDefinition sb_map sb)
+            runState (simCCBlockToClassDefinition is_top sb_map sb)
                      (initialState ff_map wdef_inst_map (unSpecTo flags))
         lit_defs = mkLiteralDecls (nub (literals state))
         str_defs = mkStringDecls (M.toList (str_map state)) (str_objs state)
@@ -617,7 +617,12 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                 new_expr = (var ("new (state_storage) " ++
                                  pfxMod ++ (modName sb))) `cCall`
                                [ var "sim_hdl", mkStr "top", mkNULL
-                               , var "&__layout" ]
+                               , var "&__layout"
+                               -- borrowed: the caller's input and
+                               -- output port buffers, recorded by
+                               -- new_MODEL_*()
+                               , var "(unsigned char*) input_storage"
+                               , var "(unsigned char*) output_storage" ]
             in  [ decl $ (userType "tStateLayout") (mkVar "__layout")
                 , (mkVar "__layout.elems") `assign`
                       (var ("((unsigned char*) state_storage) + " ++
@@ -920,38 +925,10 @@ classifyPrim inst pb args =
                            inst ++ "); assign it a tBkStateKind here")
   in  (inst, kind, bits, entries)
 
--- The storage unit (in bytes) of one entry of a given bit width, and
--- its required alignment.  These are the documented rules of
--- bluesim_introspection.h: 1/4/8 bytes for up to 8/32/64 bits (as
--- tUInt8/tUInt32/tUInt64), and a 4-byte-aligned array of 32-bit
--- words for wide data.
-entryUnitBytes :: Integer -> Integer
-entryUnitBytes b | b <= 8    = 1
-                 | b <= 32   = 4
-                 | b <= 64   = 8
-                 | otherwise = 4 * ((b + 31) `div` 32)
-
-entryAlignBytes :: Integer -> Integer
-entryAlignBytes b | b <= 8    = 1
-                  | b <= 32   = 4
-                  | b <= 64   = 8
-                  | otherwise = 4
-
--- Lay out one area: walk the elements (entry bit width, entry count)
--- in table order with a running offset starting at 0, rounding up to
--- each element's alignment and advancing by its size.  Returns the
--- (offset, size) of each element and the total area size, which is
--- the final offset rounded up to a multiple of 8 so the area itself
--- can be placed at any 8-byte-aligned address.
-layoutArea :: [(Integer, Integer)] -> ([(Integer, Integer)], Integer)
-layoutArea elems =
-  let alignUp x a = ((x + a - 1) `div` a) * a
-      step off (b, e) =
-        let off' = alignUp off (entryAlignBytes b)
-            sz   = e * (entryUnitBytes b)
-        in  (off' + sz, (off', sz))
-      (end, places) = mapAccumL step 0 elems
-  in  (places, alignUp end 8)
+-- The flat-area layout helpers (entryUnitBytes, entryAlignBytes,
+-- layoutArea) live in SimCCBlock, shared with the top-module port
+-- bindings so the published offsets and the constructed reality
+-- cannot drift apart.
 
 -- Some literals cannot be written inline in the generated C, so their
 -- words are declared as plain file-scope arrays at the beginning of

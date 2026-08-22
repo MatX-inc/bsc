@@ -39,6 +39,10 @@ module SimCCBlock( SBId
                  , pfxPort
                  , pfxMeth
                  , renameIds
+                 , entryUnitBytes
+                 , entryAlignBytes
+                 , layoutArea
+                 , ifcPortOffsets
                  ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -51,7 +55,7 @@ import ASyntax
 import ASyntaxUtil
 import SimDomainInfo(DomainId)
 import Wires(ClockDomain, noClockDomain, writeClockDomain)
-import VModInfo(VName(..), vName_to_id)
+import VModInfo(VName(..), vName_to_id, getVNameString)
 import CCSyntax
 import ForeignFunctions
 import SimPrimitiveModules
@@ -66,7 +70,7 @@ import Eval
 import ErrorUtil(internalError)
 
 import Data.Maybe
-import Data.List(partition, intersperse, intercalate, nub, sortBy)
+import Data.List(partition, intersperse, intercalate, nub, sortBy, mapAccumL)
 import Data.List.Split(wordsBy)
 import Numeric(showHex)
 import Control.Monad(when)
@@ -1772,12 +1776,22 @@ primAuxDecl sb_map (sbid, aid, args)
 -- Constructors are not represented as SimCCFn, because
 -- they have additional initializer lists and implicit
 -- return types.
-mkCtor :: Maybe String -> SimCCBlock  -> CCFragment
-mkCtor scope sb =
+mkCtor :: Bool -> Maybe String -> SimCCBlock  -> CCFragment
+mkCtor is_top scope sb =
   let prefix = maybe "" (++ "::") scope
       args = [ (aTypeToCType ty) (aArgIdToCLval arg_id)
              | (ty, arg_id, isPort) <- sb_parameters sb
              ]
+      -- the top module binds its interface ports into the caller's
+      -- input and output port buffers (borrowed; see the model
+      -- construction contract in bluesim_kernel_api.h)
+      port_bufs = if is_top
+                  then [ ptr . (userType "unsigned char") $
+                             (mkVar "__ports_in")
+                       , ptr . (userType "unsigned char") $
+                             (mkVar "__ports_out")
+                       ]
+                  else []
   in ctor (mkVar (prefix ++ pfxMod ++ (sb_name sb)))
           ([ (userType "tSimStateHdl") $ (mkVar "simHdl")
            , ptr . constant . CCSyntax.char $ (mkVar "name")
@@ -1785,7 +1799,7 @@ mkCtor scope sb =
            -- the element-storage cursor the module tree is being
            -- constructed against (see bs_prim_storage.h)
            , ptr . (userType "tStateLayout") $ (mkVar "__sto")
-           ] ++ args)
+           ] ++ port_bufs ++ args)
 
 -- Add arguments for a constructor determined by the SimCCBlock.
 -- This is used for FIFOs, where we want to use the same C++ module
@@ -2132,8 +2146,8 @@ isOkId i = not ((isInternal i) || (isBadId i) || (isFromRHSId i))
 -- Generate a class declaration for the SimCCBlock.
 -- The declaration will include all of the state elements and local
 -- defs, along with rule and method declarations.
-simCCBlockToClassDeclaration :: SBMap -> SimCCBlock -> CCFragment
-simCCBlockToClassDeclaration sb_map sb =
+simCCBlockToClassDeclaration :: Bool -> SBMap -> SimCCBlock -> CCFragment
+simCCBlockToClassDeclaration is_top sb_map sb =
   let clks        = [ decl $ clockType (mkVar (mkClkDefName dom))
                     | dom <- sb_domains sb]
       clk_defs    = [comment "Clock handles" (private clks)]
@@ -2145,7 +2159,7 @@ simCCBlockToClassDeclaration sb_map sb =
                              [ memberDecl sb_map sbid aid args ]
                     | s@(sbid,aid,args) <- sb_state sb]
       state       = [comment "Module state" (public st)]
-      ctr         = decl $ mkCtor Nothing sb
+      ctr         = decl $ mkCtor is_top Nothing sb
       constructor = [comment "Constructor" (public [ctr])]
       num_symbols = sum [ length (sb_parameters sb)
                         , length (sb_methodPorts sb)
@@ -2188,8 +2202,17 @@ simCCBlockToClassDeclaration sb_map sb =
                     | (ty,id) <- sb_resetDefs sb ]
       reset_defs  = [comment "Reset signal definitions" (private rdefs)]
       -- a wide port or def is a non-owning view; it is declared right
-      -- after the embedded word array that backs it
-      portDecl (ty, i) =
+      -- after the embedded word array that backs it.  The top module's
+      -- ports live in the caller's input and output port buffers at
+      -- their published introspection offsets instead: a narrow port
+      -- is a reference into the buffer and a wide port is a view over
+      -- it, so no embedded array is declared.
+      portDecl (ty, i)
+        | is_top =
+          if wideDataType ty
+          then [ decl $ (aTypeToCType ty) (aPortIdToCLval i) ]
+          else [ decl $ reference $ (aTypeToCType ty) (aPortIdToCLval i) ]
+        | otherwise =
           (if wideDataType ty
            then [ mkWideArrDecl pfxPort i (aSize ty) ]
            else []) ++
@@ -2291,8 +2314,8 @@ symOrd (str1,sym1) (str2,sym2) =
                       GT -> GT
               GT -> GT
 
-simCCBlockToClassDefinition :: SBMap -> SimCCBlock -> StmtsConv
-simCCBlockToClassDefinition sb_map sb =
+simCCBlockToClassDefinition :: Bool -> SBMap -> SimCCBlock -> StmtsConv
+simCCBlockToClassDefinition is_top sb_map sb =
   do let scope = Just (pfxMod ++ (sb_name sb))
          state_defs = sb_state sb
          task_id_set = S.fromList (sb_taskDefs sb)
@@ -2354,6 +2377,28 @@ simCCBlockToClassDefinition sb_map sb =
                     return $ cCall (aDefIdToC aid) arg_list
          in  mapM mkOne (pub_def_inits ++ pri_def_inits)
      let wide_arg_port_set = S.fromList (map fst wide_arg_ports)
+         -- the top module's ports are bound into the caller's input
+         -- and output port buffers at their published introspection
+         -- offsets (shared with the descriptor tables through
+         -- ifcPortOffsets): a narrow port is a reference to the
+         -- buffer entry, a wide port is a non-owning view over it
+         (in_offs, out_offs) = ifcPortOffsets sb
+         topPortBind (t, aid, nm) =
+           let (bufv, off) =
+                   case (M.lookup nm in_offs, M.lookup nm out_offs) of
+                     (Just o, _) -> ("__ports_in", o)
+                     (_, Just o) -> ("__ports_out", o)
+                     _ -> internalError ("SimCCBlock.topPortBind: no " ++
+                                         "published offset for port " ++ nm)
+               base = (var bufv) `cAdd` (mkUInt64 off)
+           in if wideDataType t
+              then (aPortIdToC aid) `cCall`
+                       [ cCast (ptrType (bitsType 32 CTunsigned)) base
+                       , mkUInt32 (aSize t) ]
+              else (aPortIdToC aid) `cCall`
+                       [ cDeref (cCast (ptrType (bitsType (aSize t)
+                                                          CTunsigned))
+                                       base) ]
          initlist' =
              -- call the superclass constructor
              [ (var "Module") `cCall` [var "simHdl", var "name", var "parent"] ] ++
@@ -2377,14 +2422,24 @@ simCCBlockToClassDefinition sb_map sb =
              ] ++
              -- initialize module argument ports (a wide one becomes a
              -- view over its embedded array; the value is copied in
-             -- the constructor body)
-             [ if (aid `S.member` wide_arg_port_set)
-               then mkWideViewInit pfxPort aPortIdToC (aid, aSize t)
-               else (aPortIdToC aid) `cCall` [aArgIdToC aid]
+             -- the constructor body).  In the top module every port
+             -- is instead bound into the caller's port buffers, and
+             -- argument values are copied in the constructor body.
+             [ if is_top
+               then topPortBind (t, aid, getIdBaseString aid)
+               else if (aid `S.member` wide_arg_port_set)
+                    then mkWideViewInit pfxPort aPortIdToC (aid, aSize t)
+                    else (aPortIdToC aid) `cCall` [aArgIdToC aid]
              | (t,aid,True) <- sb_parameters sb
              ] ++
-             -- bind wide method ports to their embedded arrays
-             (map (mkWideViewInit pfxPort aPortIdToC) wide_meth_ports) ++
+             -- bind method ports: in the top module all of them are
+             -- bound into the caller's port buffers; elsewhere only
+             -- the wide ones need initializers (views over their
+             -- embedded arrays)
+             (if is_top
+              then [ topPortBind (t, vName_to_id vn, getVNameString vn)
+                   | (t,_,vn) <- sb_methodPorts sb ]
+              else map (mkWideViewInit pfxPort aPortIdToC) wide_meth_ports) ++
              -- initialize narrow task defs
              taskinitlist ++
              -- point concat-valued string defs at their nodes (their
@@ -2396,10 +2451,18 @@ simCCBlockToClassDefinition sb_map sb =
              ] ++
              -- bind wide defs to their embedded arrays
              (map (mkWideViewInit pfxDef aDefIdToC) wide_defs)
-         -- copy wide module argument values through their views
+         -- copy wide module argument values through their views; in
+         -- the top module the narrow argument ports are references
+         -- into the caller's input buffer, so their values are also
+         -- copied here rather than in the initializer list
          wide_arg_copies =
              [ (aPortIdToCLval aid) `assign` (aArgIdToC aid)
-             | (aid,_) <- wide_arg_ports ]
+             | (aid,_) <- wide_arg_ports ] ++
+             (if is_top
+              then [ (aPortIdToCLval aid) `assign` (aArgIdToC aid)
+                   | (t,aid,True) <- sb_parameters sb
+                   , not (wideDataType t) ]
+              else [])
          -- wide defs start at the undetermined-value pattern, like
          -- the owning WideData objects they used to be
          wide_def_undets =
@@ -2417,7 +2480,7 @@ simCCBlockToClassDefinition sb_map sb =
          ctor_body = wide_arg_copies ++ port_inits ++ wide_def_undets ++
                      reset_inits ++
                      output_reset_inits ++ symbol_inits
-         constructor = define (mkCtor scope sb) (block ctor_body)
+         constructor = define (mkCtor is_top scope sb) (block ctor_body)
                            `withInits` initlist'
      rules   <- mapM (simFnToCDefinition False scope [] []) (get_rule_fns sb)
      methods <- mapM (simFnToCDefinition False scope [] []
@@ -2497,6 +2560,58 @@ wideDataType :: AType -> Bool
 wideDataType (ATBit sz) = sz > 64
 wideDataType (ATTuple _) = True
 wideDataType _ = False
+
+-- ========================
+-- Flat-area layout (the documented rules of bluesim_introspection.h)
+
+-- The storage unit (in bytes) of one entry of a given bit width, and
+-- its required alignment.  These are the documented rules of
+-- bluesim_introspection.h: 1/4/8 bytes for up to 8/32/64 bits (as
+-- tUInt8/tUInt32/tUInt64), and a 4-byte-aligned array of 32-bit
+-- words for wide data.
+entryUnitBytes :: Integer -> Integer
+entryUnitBytes b | b <= 8    = 1
+                 | b <= 32   = 4
+                 | b <= 64   = 8
+                 | otherwise = 4 * ((b + 31) `div` 32)
+
+entryAlignBytes :: Integer -> Integer
+entryAlignBytes b | b <= 8    = 1
+                  | b <= 32   = 4
+                  | b <= 64   = 8
+                  | otherwise = 4
+
+-- Lay out one area: walk the elements (entry bit width, entry count)
+-- in table order with a running offset starting at 0, rounding up to
+-- each element's alignment and advancing by its size.  Returns the
+-- (offset, size) of each element and the total area size, which is
+-- the final offset rounded up to a multiple of 8 so the area itself
+-- can be placed at any 8-byte-aligned address.
+layoutArea :: [(Integer, Integer)] -> ([(Integer, Integer)], Integer)
+layoutArea elems =
+  let alignUp x a = ((x + a - 1) `div` a) * a
+      step off (b, e) =
+        let off' = alignUp off (entryAlignBytes b)
+            sz   = e * (entryUnitBytes b)
+        in  (off' + sz, (off', sz))
+      (end, places) = mapAccumL step 0 elems
+  in  (places, alignUp end 8)
+
+-- Byte offsets of a module's interface ports in the caller's input
+-- and output port buffers, keyed by port name.  This is shared
+-- between the introspection descriptor tables (SimBlocksToC) and the
+-- port bindings in the generated top-module class, so the published
+-- offsets and the constructed reality cannot drift apart.
+ifcPortOffsets :: SimCCBlock -> (M.Map String Integer, M.Map String Integer)
+ifcPortOffsets sb =
+  let ins  = [ (nm, aSize t) | (True,  t, nm) <- sb_ifcPorts sb ]
+      outs = [ (nm, aSize t) | (False, t, nm) <- sb_ifcPorts sb ]
+      place ps = M.fromList
+                     [ (nm, off)
+                     | ((nm, _), (off, _)) <-
+                           zip ps (fst (layoutArea [ (b, 1) | (_, b) <- ps ]))
+                     ]
+  in  (place ins, place outs)
 
 
 -- ========================

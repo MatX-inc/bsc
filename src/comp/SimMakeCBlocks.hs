@@ -180,8 +180,28 @@ simMakeCBlocks flags sim_system =
             scheds
       stmt_map = M.unionsWith combineStmtGroups stmt_infos
 
+      -- The top module's value-method output ports live in the
+      -- caller's output buffer, so they are refreshed at the end of
+      -- every edge (after the rules and the primitive ticks): the
+      -- buffer then holds each result computed from the post-edge
+      -- state, exactly like the corresponding Verilog output ports.
+      -- The refresh calls are pure reads (RDY-gated method calls, see
+      -- mkValueMethodExecStmts), so appending them to every edge
+      -- cannot affect rule execution.
+      top_meth_map = findModMeth full_mmap (getModuleName top_pkg)
+      vmeth_refresh_stmts =
+          concatMap (mkValueMethodExecStmts top_methods top_meth_map)
+                    [ rid | m <- top_vmeths, rid <- aIfaceResIds m ]
+      stmt_map' =
+          if (null vmeth_refresh_stmts)
+          then stmt_map
+          else M.map (\ssg -> ssg { sched_ticks =
+                                        (sched_ticks ssg) ++
+                                        vmeth_refresh_stmts })
+                     stmt_map
+
       -- make the SimCCScheds from the stmt pairs in the map
-      schedules = mapMaybe mkOneSchedule (M.toList stmt_map)
+      schedules = mapMaybe mkOneSchedule (M.toList stmt_map')
 
       -- make the SimCCClockGroups from the schedules
       clock_groups = map mkClockGroup scheds
@@ -1046,10 +1066,10 @@ mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
              calls_by_rule gate_substs sched_conflicts sched_me_inhibits
              (Exec rid) =
   if (rid `S.member` top_vmeth_set)
-  then mkValueMethodExecStmts top_ifc top_vmeth_set top_ameth_set
-                              inst_map full_dmap
-                              gate_substs sched_conflicts sched_me_inhibits
-                              rid
+  then -- nothing executes at a value method's schedule position; its
+       -- output port is refreshed at the end of every edge instead
+       -- (see mkValueMethodExecStmts)
+       []
   else if (rid `S.member` top_ameth_set)
        then mkActionMethodExecStmts top_ifc top_vmeth_set top_ameth_set
                                     inst_map
@@ -1214,14 +1234,41 @@ mkRuleSchedStmts inst_map full_dmap method_calls
       -- we add the top module instance to all identifiers
       map (addScope top_blk_name) (rdy_calls ++ qual_stmts2)
 
--- Make statements for computing value method outputs
-mkValueMethodExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
-                          InstModMap -> ModDefMap -> GateSubstMap ->
-                          [(AId, [AId])] -> M.Map AId [AId] ->
+-- Make the statements that refresh one top value method's output
+-- port.  The top module's output ports live in the caller's
+-- output-port buffer, and the refresh calls for all the value
+-- methods are appended at the END of every edge's statements (after
+-- the rules and the primitive ticks), so after an edge the buffer
+-- holds each result computed from the post-edge state -- the same
+-- values the corresponding Verilog output ports would settle to.
+-- Calling the method computes the value and writes it through the
+-- port.  The call is gated on the method's RDY port (recomputed just
+-- before): a not-ready method body may read values that are not
+-- meaningful, and evaluating it anyway could trip runtime checks
+-- (for example an out-of-bounds RegFile read).  A RDY method, and a
+-- method without a RDY port (always_ready), is called
+-- unconditionally.
+mkValueMethodExecStmts :: [AIFace] -> MethMap ->
                           AId -> [SimCCFnStmt]
-mkValueMethodExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
-                       gate_substs sched_conflicts sched_me_inhibits rid =
-  []
+mkValueMethodExecStmts top_ifc top_meth_map rid =
+  let blk_id = mk_homeless_id top_blk_name
+      method = headOrErr ("method not in interface: " ++ (ppReadable rid))
+                         [ m | m <- top_ifc, aif_name m == rid ]
+      args = [ ASPort t (i `inlineIdFrom` top_blk_name)
+             | (i,t) <- aIfaceArgs method ]
+      meth_call = SFSMethodCall blk_id rid args
+      -- the method's RDY port, if it has one
+      rdy_id = mkRdyId rid
+      rdy_port = do (_,_,mr,_,_) <- M.lookup rdy_id top_meth_map
+                    (_, vn) <- mr
+                    return ((vName_to_id vn) `inlineIdFrom` top_blk_name)
+  in if (isRdyId rid)
+     then [meth_call]
+     else case rdy_port of
+            (Just p) -> [ SFSMethodCall blk_id rdy_id []
+                        , SFSCond (ASPort aTBool p) [meth_call] []
+                        ]
+            Nothing  -> [meth_call]
 
 -- Make statements for executing an action method
 mkActionMethodExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->

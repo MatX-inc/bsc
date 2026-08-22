@@ -42,6 +42,27 @@
  * whole buffers of their own; port descriptor offsets are relative
  * to their starts.
  *
+ * The INPUT buffer (bk_input_bytes(model) bytes) is where the model
+ * reads the top module's input ports: the caller writes method
+ * argument values and method enables at their published offsets
+ * before triggering a clock edge, and the schedule reads them there
+ * (an enabled action method executes on the edge, exactly as if the
+ * corresponding Verilog input were driven).  The model writes each
+ * input port once during construction (enables to 0, other ports to
+ * 0); after that the buffer belongs to the caller.
+ *
+ * The OUTPUT buffer (bk_output_bytes(model) bytes) is where the
+ * model writes the top module's output ports.  Value-method results
+ * and RDY_* readies are refreshed at the END of every clock edge,
+ * computed from the post-edge state -- the same values the
+ * corresponding Verilog output ports would settle to -- so after an
+ * edge has executed the caller reads current values at the
+ * published offsets.  A value method's result is recomputed only
+ * when its RDY is true (a not-ready result holds its previous
+ * bytes), and an ActionValue result updates when the method
+ * executes (its enable was set).  Hosts should treat the output
+ * buffer as read-only.
+ *
  * Elements of the CLOCK and RESET kinds (and PROBE elements of the
  * stateless ProbeWire primitive) occupy their published slots but
  * store no defined value: their bytes are unspecified and writing

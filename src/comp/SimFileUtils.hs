@@ -35,6 +35,11 @@ codeGenOptionDescr :: Flags -> Bool -> String
 codeGenOptionDescr flags is_top =
     unwords $ [ "Generation options:" ] ++
               (if (keepFires flags) then ["keep-fires"] else []) ++
+              -- the top module is generated differently from a
+              -- submodule (its constructor binds the interface ports
+              -- into the caller's port buffers), so a file generated
+              -- as one cannot be reused as the other
+              (if is_top then ["top"] else []) ++
               (if (is_top && (genSysC flags)) then ["sysc-top"] else [])
 
 readCodeGenOptionDescr :: FilePath -> IO (Maybe String)
