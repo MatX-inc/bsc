@@ -1,0 +1,75 @@
+package OverApplyClassic where
+
+import Vector
+
+addOne :: Bit 8 -> Bit 8
+addOne x = x + 1
+
+timesTwo :: Bit 8 -> Bit 8
+timesTwo x = x * 2
+
+addTen :: Bit 8 -> Bit 8
+addTen x = x + 10
+
+mkFn :: Integer -> Bit 8 -> Bit 8
+mkFn 0 = addOne
+mkFn 1 = timesTwo
+mkFn 2 = addTen
+mkFn _ = addOne
+
+{-# verilog sysOverApplyClassic #-}
+sysOverApplyClassic :: Module Empty
+sysOverApplyClassic =
+  module
+    let fns :: Vector 3 (Bit 8 -> Bit 8)
+        fns = genWith mkFn
+        ops :: Vector 3 (Bit 8 -> Bit 8)
+        ops = genWith mkFn
+
+        composeLR acc f = compose f acc
+        composeRL f acc = compose f acc
+
+        -- Direct over-application: extra arg on the same spine
+        sel_d1 :: Bit 8
+        sel_d1 = select fns 1 $ 10
+        sel_d2 :: Bit 8
+        sel_d2 = select fns 1 $ 7
+        foldl_d1 :: Bit 8
+        foldl_d1 = foldl composeLR id ops $ 5
+        foldl_d2 :: Bit 8
+        foldl_d2 = foldl composeLR id ops $ 0
+        foldr_d1 :: Bit 8
+        foldr_d1 = foldr composeRL id ops $ 5
+        foldr_d2 :: Bit 8
+        foldr_d2 = foldr composeRL id ops $ 0
+
+        -- Stored result applied multiple times
+        sel_fn :: Bit 8 -> Bit 8
+        sel_fn = select fns 1
+        sel_s1 :: Bit 8
+        sel_s1 = sel_fn 10
+        sel_s2 :: Bit 8
+        sel_s2 = sel_fn 7
+
+        composed :: Bit 8 -> Bit 8
+        composed = foldl composeLR id ops
+        foldl_s1 :: Bit 8
+        foldl_s1 = composed 5
+        foldl_s2 :: Bit 8
+        foldl_s2 = composed 0
+
+        composedR :: Bit 8 -> Bit 8
+        composedR = foldr composeRL id ops
+        foldr_s1 :: Bit 8
+        foldr_s1 = composedR 5
+        foldr_s2 :: Bit 8
+        foldr_s2 = composedR 0
+
+    rules
+      "test": when True ==>
+        action
+          $display "direct:  %0d %0d %0d %0d %0d %0d" sel_d1 sel_d2 foldl_d1 foldl_d2 foldr_d1 foldr_d2
+          $display "select:  %0d %0d" sel_s1 sel_s2
+          $display "foldl:   %0d %0d" foldl_s1 foldl_s2
+          $display "foldr:   %0d %0d" foldr_s1 foldr_s2
+          $finish 0

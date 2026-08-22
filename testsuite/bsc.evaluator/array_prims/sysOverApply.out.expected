@@ -1,0 +1,4 @@
+direct:  20 14 22 12 31 21
+select:  20 14
+foldl:   22 12
+foldr:   31 21

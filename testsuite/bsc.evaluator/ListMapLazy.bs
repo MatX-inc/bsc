@@ -1,0 +1,17 @@
+package ListMapLazy where
+
+import List
+
+{-# verilog sysListMapLazy #-}
+sysListMapLazy :: Module Empty
+sysListMapLazy =
+  module
+    let xs :: List (Bit 8)
+        xs = Cons 1 (Cons 2 Nil)
+        len :: Integer
+        len = length (map (\_ -> error "should not evaluate") xs)
+    rules
+      "test": when True ==>
+        action
+          $display "length = %0d" len
+          $finish 0

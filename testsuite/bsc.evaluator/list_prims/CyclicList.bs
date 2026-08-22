@@ -1,0 +1,17 @@
+package CyclicList where
+
+import List
+
+-- A self-referential list must exhaust the steps budget with a
+-- reportable error, not hang the compiler or overflow its stack.
+
+{-# properties sysCyclicList = { verilog } #-}
+sysCyclicList :: Module Empty
+sysCyclicList =
+  module
+    r :: Reg (Bit 8) <- mkRegU
+    let ones :: List (Bit 8)
+        ones = Cons 1 ones
+    addRules $
+      rules
+        "go": when True ==> r := fromInteger (length ones)

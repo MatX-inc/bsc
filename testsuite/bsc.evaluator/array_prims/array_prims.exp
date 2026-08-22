@@ -1,0 +1,91 @@
+# Tests for array primitive implicit condition propagation.
+#
+# Each test has a Vec version (using Vector / array primitives) and a
+# SimpleList version (pure recursive reference implementation).  Both
+# must produce identical sorted simulation output.
+#
+# SimpleList.bs is a library dependency — compile it first.
+
+compile_pass SimpleList.bs
+
+# --- Compile-pass tests: patterns that should compile ---
+
+compile_verilog_pass ImplCondTest.bsv sysImplCondTest
+compile_verilog_pass ImplCondConcat.bsv sysImplCondConcat
+compile_verilog_pass ImplCondLarge.bsv sysImplCondLarge
+compile_verilog_pass ImplCondUnfunnel.bsv sysImplCondUnfunnel
+compile_verilog_pass ImplCondUnfunnel.bsv sysImplCondUnfunnelTest
+
+# Contextual conditions: array primitives inside guarded rules must not
+# promote the guard condition to a container condition on the result array.
+compile_verilog_pass ContextCondMap.bsv sysContextCondMap
+compile_verilog_pass ContextCondZip.bsv sysContextCondZip
+
+# --- Compile-fail: conditions must NOT be dropped by primitives ---
+# One rule per primitive, each with (* no_implicit_conditions *).
+# If any primitive drops the condition, the error count decreases.
+
+compile_verilog_fail_error ImplCondFail.bsv G0005 10
+compile_verilog_fail_error ImplCondFailClassic.bs G0005 10
+
+# --- List/array conversion primitives ---
+
+# Compile-fail: conditions through list<->array conversions
+compile_verilog_fail_error ImplCondListConvert.bsv G0005 5
+
+# Simulation: round-trip and cross-primitive through conversions
+test_c_veri_bsv ListArrayConvert
+
+# --- Simulation tests: Vec vs SimpleList implicit condition equivalence ---
+# sort_output=1 because rule scheduling order is non-deterministic.
+# SL versions share the Vec expected output file.
+# Classic (.bs) versions use pure construction and share expected output.
+
+# Per-element condition propagation through map
+test_c_veri_bsv ImplCondMapVec "" "" "" 1
+test_c_veri_bsv ImplCondMapSL "sysImplCondMapVec.out.expected" "" "" 1
+test_c_veri ImplCondMapVecClassic "sysImplCondMapVec.out.expected" "" "" 1
+test_c_veri ImplCondMapSLClassic "sysImplCondMapVec.out.expected" "" "" 1
+
+# Conjunction propagation through fold/any/all/elem
+test_c_veri_bsv ImplCondFoldVec "" "" "" 1
+test_c_veri_bsv ImplCondFoldSL "sysImplCondFoldVec.out.expected" "" "" 1
+test_c_veri ImplCondFoldVecClassic "sysImplCondFoldVec.out.expected" "" "" 1
+test_c_veri ImplCondFoldSLClassic "sysImplCondFoldVec.out.expected" "" "" 1
+
+# Per-element condition propagation through zipWith (two sources)
+test_c_veri_bsv ImplCondZipVec "" "" "" 1
+test_c_veri_bsv ImplCondZipSL "sysImplCondZipVec.out.expected" "" "" 1
+test_c_veri ImplCondZipVecClassic "sysImplCondZipVec.out.expected" "" "" 1
+test_c_veri ImplCondZipSLClassic "sysImplCondZipVec.out.expected" "" "" 1
+
+# Condition propagation through dynamic select and update
+test_c_veri_bsv ImplCondDynSelVec "" "" "" 1
+test_c_veri_bsv ImplCondDynSelSL "sysImplCondDynSelVec.out.expected" "" "" 1
+test_c_veri ImplCondDynSelVecClassic "sysImplCondDynSelVec.out.expected" "" "" 1
+test_c_veri ImplCondDynSelSLClassic "sysImplCondDynSelVec.out.expected" "" "" 1
+
+# --- Partial application of array primitives ---
+# Tests that partially-applied primitives fall through to bldAp'
+# instead of crashing in the do* handler.
+test_c_veri_bsv PartialApply
+test_c_veri PartialApplyClassic "sysPartialApply.out.expected"
+
+# --- Over-application of array primitives ---
+# Tests that polymorphic-result primitives (select, foldl, foldr)
+# forward trailing args when the result is a function.
+test_c_veri_bsv OverApply
+test_c_veri OverApplyClassic "sysOverApply.out.expected"
+
+# --- zipWithAny with unequal sizes, in either argument order ---
+# (longer-first used to crash the compiler with a bounds exception)
+test_c_veri_bsv ZipWithAnyUneq
+
+# --- zipWith cells stay lazy: unconsumed elements are never forced ---
+compile_verilog_pass ZipWithLazy.bsv sysZipWithLazy
+
+# --- Undefined vectors through append stay lazy ---
+# newVector elements are don't-cares; append must not force them
+# (cells copy lazily), whether or not the undefined half is consumed.
+compile_verilog_pass UninitAppendOk.bsv sysUninitAppendOk
+compile_verilog_pass UninitAppendUse.bsv sysUninitAppendUse

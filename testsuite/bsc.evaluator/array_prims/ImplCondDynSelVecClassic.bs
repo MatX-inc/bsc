@@ -1,0 +1,53 @@
+package ImplCondDynSelVecClassic where
+
+import Vector
+import FIFOF
+
+{-# properties sysImplCondDynSelVecClassic = { verilog } #-}
+sysImplCondDynSelVecClassic :: Module Empty
+sysImplCondDynSelVecClassic =
+  module
+    fs :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    cycle :: Reg (Bit 8) <- mkReg 0
+    idx :: Reg (UInt 2) <- mkReg 0
+
+    let bitSet :: Bit 8 -> Integer -> Bool
+        bitSet v i = ((v >> fromInteger i) & 1) /= 0
+
+    addRules $
+      rules
+        "fill_0": when bitSet cycle 0 ==>
+          (Vector.select fs 0).enq (0x00 + (cycle & 0x0F))
+        "fill_1": when bitSet cycle 1 ==>
+          (Vector.select fs 1).enq (0x10 + (cycle & 0x0F))
+        "fill_2": when bitSet cycle 2 ==>
+          (Vector.select fs 2).enq (0x20 + (cycle & 0x0F))
+        "fill_3": when bitSet cycle 3 ==>
+          (Vector.select fs 3).enq (0x30 + (cycle & 0x0F))
+
+        "observe_sel": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+          in action {
+            $display "DS c=%0d i=%0d v=%0h" cycle idx (select vals idx);
+            (select fs idx).deq
+          }
+
+        "observe_upd": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              updated = update vals idx 0xFF
+          in $display "DU c=%0d i=%0d v=%0h" cycle idx (Vector.select updated 0)
+
+        "observe_supd": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              supdated = update vals 2 0xFF
+          in $display "SU c=%0d v=%0h" cycle (Vector.select supdated 0)
+
+        "tick": when True ==>
+          action {
+            cycle := cycle + 1;
+            idx := idx + 1;
+            if cycle == 32 then $finish 0 else noAction
+          }

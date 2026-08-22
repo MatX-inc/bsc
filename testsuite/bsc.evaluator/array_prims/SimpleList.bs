@@ -1,0 +1,138 @@
+package SimpleList(
+  SimpleList(..),
+  slMap, slFoldr, slFoldl,
+  slZip, slZipWith, slUnzip,
+  slLength, slAny, slAll, slElem,
+  slAppend, slConcat, slReverse, slGenWith,
+  vectorToSL, slNumber,
+  slSelect, slUpdate,
+  slStaticUpdate
+  ) where
+
+import Vector
+
+data SimpleList a = SLNil | SLCons a (SimpleList a)
+
+slMap :: (a -> b) -> SimpleList a -> SimpleList b
+slMap _ SLNil = SLNil
+slMap f (SLCons x xs) = SLCons (f x) (slMap f xs)
+
+slFoldr :: (a -> b -> b) -> b -> SimpleList a -> b
+slFoldr _ z SLNil = z
+slFoldr f z (SLCons x xs) = f x (slFoldr f z xs)
+
+slFoldl :: (b -> a -> b) -> b -> SimpleList a -> b
+slFoldl _ z SLNil = z
+slFoldl f z (SLCons x xs) = slFoldl f (f z x) xs
+
+slZip :: SimpleList a -> SimpleList b -> SimpleList (a, b)
+slZip SLNil _ = SLNil
+slZip _ SLNil = SLNil
+slZip (SLCons x xs) (SLCons y ys) = SLCons (x, y) (slZip xs ys)
+
+slZipWith :: (a -> b -> c) -> SimpleList a -> SimpleList b -> SimpleList c
+slZipWith _ SLNil _ = SLNil
+slZipWith _ _ SLNil = SLNil
+slZipWith f (SLCons x xs) (SLCons y ys) = SLCons (f x y) (slZipWith f xs ys)
+
+slUnzip :: SimpleList (a, b) -> (SimpleList a, SimpleList b)
+slUnzip SLNil = (SLNil, SLNil)
+slUnzip (SLCons xy xs) =
+  let (as, bs) = slUnzip xs
+  in (SLCons (tpl_1 xy) as, SLCons (tpl_2 xy) bs)
+
+slLength :: SimpleList a -> Integer
+slLength SLNil = 0
+slLength (SLCons _ xs) = 1 + slLength xs
+
+slAny :: (a -> Bool) -> SimpleList a -> Bool
+slAny _ SLNil = False
+slAny f (SLCons x xs) = f x || slAny f xs
+
+slAll :: (a -> Bool) -> SimpleList a -> Bool
+slAll _ SLNil = True
+slAll f (SLCons x xs) = f x && slAll f xs
+
+slElem :: (Eq a) => a -> SimpleList a -> Bool
+slElem x = slAny ((==) x)
+
+slAppend :: SimpleList a -> SimpleList a -> SimpleList a
+slAppend SLNil ys = ys
+slAppend (SLCons x xs) ys = SLCons x (slAppend xs ys)
+
+slConcat :: SimpleList (SimpleList a) -> SimpleList a
+slConcat SLNil = SLNil
+slConcat (SLCons x xs) = slAppend x (slConcat xs)
+
+slReverse :: SimpleList a -> SimpleList a
+slReverse xs =
+  let go :: SimpleList a -> SimpleList a -> SimpleList a
+      go SLNil acc = acc
+      go (SLCons x rest) acc = go rest (SLCons x acc)
+  in go xs SLNil
+
+slGenWith :: Integer -> (Integer -> a) -> SimpleList a
+slGenWith n f =
+  let go :: Integer -> SimpleList a
+      go i = if i >= n then SLNil else SLCons (f i) (go (i+1))
+  in go 0
+
+slNumber :: SimpleList a -> SimpleList (a, Integer)
+slNumber xs =
+  let go :: SimpleList a -> Integer -> SimpleList (a, Integer)
+      go SLNil _ = SLNil
+      go (SLCons x rest) i = SLCons (x, i) (go rest (i+1))
+  in go xs 0
+
+-- Static select: recursive descent
+slStaticSelect :: Position__ -> SimpleList a -> Integer -> a
+slStaticSelect _ SLNil _ = error "SimpleList: static select out of range"
+slStaticSelect _ (SLCons x _) 0 = x
+slStaticSelect pos (SLCons _ xs) n = slStaticSelect pos xs (n-1)
+
+-- Dynamic select: mux tree via foldr (matches Prelude List implementation)
+slDynamicSelect :: (PrimIndex ix dx) => Position__ -> SimpleList a -> ix -> a
+slDynamicSelect pos xs idx =
+  let rangeTest = inLiteralRange idx
+      f p r = if rangeTest (tpl_2 p)
+              then if idx == fromInteger (tpl_2 p) then tpl_1 p else r
+              else primBuildUndefined pos 1
+  in slFoldr f (primBuildUndefined pos 1) (slNumber xs)
+
+-- Static update: rebuild list replacing nth element
+slStaticUpdate :: SimpleList a -> Integer -> a -> SimpleList a
+slStaticUpdate SLNil _ _ = error "SimpleList: static update out of range"
+slStaticUpdate (SLCons _ xs) 0 v = SLCons v xs
+slStaticUpdate (SLCons x xs) n v = SLCons x (slStaticUpdate xs (n-1) v)
+
+-- Explicit select/update wrappers
+slSelect :: (PrimIndex ix dx) => SimpleList a -> ix -> a
+slSelect xs idx = primSelectFn (getStringPosition "") xs idx
+
+slUpdate :: (PrimIndex ix dx) => SimpleList a -> ix -> a -> SimpleList a
+slUpdate xs idx val = primUpdateFn (getStringPosition "") xs idx val
+
+-- Conversion from Vector
+vectorToSL :: Vector n a -> SimpleList a
+vectorToSL v =
+  let arr = vectorToArray v
+      len = arrayLength arr
+      go :: Integer -> SimpleList a
+      go i = if i >= len then SLNil
+             else SLCons (Vector.select v i) (go (i+1))
+  in go 0
+
+instance PrimSelectable (SimpleList a) a
+  where
+    primSelectFn pos xs idx =
+      if isStaticIndex idx
+      then slStaticSelect pos xs (toStaticIndex idx)
+      else slDynamicSelect pos xs idx
+
+instance PrimUpdateable (SimpleList a) a
+  where
+    primUpdateFn _ xs idx val =
+      let rangeTest = inLiteralRange idx
+      in slMap (\ p -> if rangeTest (tpl_2 p) && idx == fromInteger (tpl_2 p)
+                       then val else tpl_1 p)
+               (slNumber xs)

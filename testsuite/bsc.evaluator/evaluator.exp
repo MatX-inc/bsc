@@ -135,3 +135,6 @@ test_c_veri FullMult
 test_c_veri_bsv StaticInteger
 
 test_c_veri_bsv StaticIndex
+
+# list map must not eagerly evaluate mapped elements
+test_c_veri ListMapLazy

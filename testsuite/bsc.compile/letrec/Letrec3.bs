@@ -2,13 +2,17 @@ package Letrec3(sysLetrec3) where
 
 import List
 
+recMap :: (a -> b) -> List a -> List b
+recMap f Nil = Nil
+recMap f (Cons x xs) = Cons (f x) (recMap f xs)
+
 eleven :: Integer
 eleven = let
             evens :: List Integer
-            evens = cons 0 (map ((+) 1) treys)
-            odds  :: List Integer = map ((+) 1) evens
+            evens = cons 0 (recMap ((+) 1) treys)
+            odds  :: List Integer = recMap ((+) 1) evens
             treys :: List Integer
-            treys = map ((+) 1) odds
+            treys = recMap ((+) 1) odds
         in treys !! 3
 
 sysLetrec3 :: Module Empty

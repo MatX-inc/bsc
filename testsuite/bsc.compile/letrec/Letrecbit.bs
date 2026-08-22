@@ -2,11 +2,15 @@ package Letrecbit(sysLetrecbit) where
 
 import List
 
+recMap :: (a -> b) -> List a -> List b
+recMap f Nil = Nil
+recMap f (Cons x xs) = Cons (f x) (recMap f xs)
+
 -- testing if type variables survive letrec mangling
 seven :: Bit n
 seven = let evens :: List (Bit n)
-            evens = cons 0 (map ((+) 1) odds)
-            odds  :: List (Bit n) = map ((+) 1) evens
+            evens = cons 0 (recMap ((+) 1) odds)
+            odds  :: List (Bit n) = recMap ((+) 1) evens
         in odds !! 3
 
 sysLetrecbit :: Module Empty

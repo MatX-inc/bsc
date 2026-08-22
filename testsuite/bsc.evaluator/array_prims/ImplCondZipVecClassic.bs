@@ -1,0 +1,88 @@
+package ImplCondZipVecClassic where
+
+import Vector
+import FIFOF
+
+{-# properties sysImplCondZipVecClassic = { verilog } #-}
+sysImplCondZipVecClassic :: Module Empty
+sysImplCondZipVecClassic =
+  module
+    fa :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    fb :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    cycle :: Reg (Bit 8) <- mkReg 0
+
+    let bitSet :: Bit 8 -> Integer -> Bool
+        bitSet v i = ((v >> fromInteger i) & 1) /= 0
+
+    addRules $
+      rules
+        "fill_a0": when bitSet cycle 0 ==>
+          (Vector.select fa 0).enq (0 + (cycle & 0x0F))
+        "fill_a1": when bitSet cycle 1 ==>
+          (Vector.select fa 1).enq (1 + (cycle & 0x0F))
+        "fill_a2": when bitSet cycle 2 ==>
+          (Vector.select fa 2).enq (2 + (cycle & 0x0F))
+        "fill_a3": when bitSet cycle 3 ==>
+          (Vector.select fa 3).enq (3 + (cycle & 0x0F))
+        "fill_b0": when bitSet cycle 2 ==>
+          (Vector.select fb 0).enq (0x00 + (cycle & 0x0F))
+        "fill_b1": when bitSet cycle 3 ==>
+          (Vector.select fb 1).enq (0x10 + (cycle & 0x0F))
+        "fill_b2": when bitSet cycle 0 ==>
+          (Vector.select fb 2).enq (0x20 + (cycle & 0x0F))
+        "fill_b3": when bitSet cycle 1 ==>
+          (Vector.select fb 3).enq (0x30 + (cycle & 0x0F))
+
+        "observe_0": when True ==>
+          let avals :: Vector 4 (Bit 8)
+              avals = map (\ f -> f.first) fa
+              bvals :: Vector 4 (Bit 8)
+              bvals = map (\ f -> f.first) fb
+              zipped = zipWith (+) avals bvals
+          in action {
+            $display "Z0 c=%0d v=%0h" cycle (Vector.select zipped 0);
+            (Vector.select fa 0).deq;
+            (Vector.select fb 0).deq
+          }
+
+        "observe_1": when True ==>
+          let avals :: Vector 4 (Bit 8)
+              avals = map (\ f -> f.first) fa
+              bvals :: Vector 4 (Bit 8)
+              bvals = map (\ f -> f.first) fb
+              zipped = zipWith (+) avals bvals
+          in action {
+            $display "Z1 c=%0d v=%0h" cycle (Vector.select zipped 1);
+            (Vector.select fa 1).deq;
+            (Vector.select fb 1).deq
+          }
+
+        "observe_2": when True ==>
+          let avals :: Vector 4 (Bit 8)
+              avals = map (\ f -> f.first) fa
+              bvals :: Vector 4 (Bit 8)
+              bvals = map (\ f -> f.first) fb
+              zipped = zipWith (+) avals bvals
+          in action {
+            $display "Z2 c=%0d v=%0h" cycle (Vector.select zipped 2);
+            (Vector.select fa 2).deq;
+            (Vector.select fb 2).deq
+          }
+
+        "observe_3": when True ==>
+          let avals :: Vector 4 (Bit 8)
+              avals = map (\ f -> f.first) fa
+              bvals :: Vector 4 (Bit 8)
+              bvals = map (\ f -> f.first) fb
+              zipped = zipWith (+) avals bvals
+          in action {
+            $display "Z3 c=%0d v=%0h" cycle (Vector.select zipped 3);
+            (Vector.select fa 3).deq;
+            (Vector.select fb 3).deq
+          }
+
+        "tick": when True ==>
+          action {
+            cycle := cycle + 1;
+            if cycle == 32 then $finish 0 else noAction
+          }

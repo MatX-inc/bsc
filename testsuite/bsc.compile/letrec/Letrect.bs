@@ -2,6 +2,10 @@ package Letrect(sysLetrect) where
 
 import List
 
+recMap :: (a -> b) -> List a -> List b
+recMap f Nil = Nil
+recMap f (Cons x xs) = Cons (f x) (recMap f xs)
+
 -- Testing whether the handling of the qualified type
 -- is OK (def_qtype in IConv).  It is not.
 
@@ -16,9 +20,9 @@ import List
 eleven :: (Integer, Bit 16)
 eleven = let
             evens :: (Arith a) => List a
-            evens = cons 0 (map ((+) 1) odds)
+            evens = cons 0 (recMap ((+) 1) odds)
             odds :: (Arith a) => List a
-            odds  = map ((+) 1) evens
+            odds  = recMap ((+) 1) evens
         in (odds !! 3, evens !! 4)
 
 sysLetrect :: Module Empty

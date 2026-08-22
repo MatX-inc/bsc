@@ -314,6 +314,32 @@ data PrimOp =
         | PrimArrayUpdate
         | PrimArrayDynSelect
         | PrimArrayDynUpdate
+        -- Array and list traversal/construction operators evaluated
+        -- natively (and iteratively) by IExpand, so that large
+        -- containers do not elaborate as per-element recursion (array
+        -- update chains, list spine recursion).  They never survive
+        -- past IExpand.
+        -- NB: .bo files encode PrimOp via fromEnum (see writePrimOp
+        -- below), so this insertion required bumping the .bo/.ba
+        -- format tags (GenBin.header, GenABin.header).
+        | PrimArrayMap
+        | PrimArrayFoldL
+        | PrimArrayFoldR
+        | PrimArrayZipWith
+        | PrimArrayGenWith
+        | PrimArrayToList
+        | PrimListToArray
+        | PrimArrayAppend
+        | PrimArrayConcat
+        | PrimArrayReverse
+        | PrimListMap
+        | PrimListFoldL
+        | PrimListFoldR
+        | PrimListAppend
+        | PrimListConcat
+        | PrimListLength
+        | PrimListSelect
+        | PrimListZipWith
         | PrimBuildArray -- only exists after IExpand and in ASyntax
 
         | PrimSetSelPosition
@@ -332,12 +358,6 @@ data PrimOp =
         | PrimPack
         | PrimUnpack
 
-        -- Array constructors evaluated natively (and iteratively) by
-        -- IExpand, so that building a large array does not elaborate
-        -- as a chain of PrimArrayUpdate applications whose forcing
-        -- recurses once per element.  They never survive past IExpand.
-        | PrimArrayGenWith
-        | PrimArrayFromList
         deriving (Eq, Ord, Show, Enum, Bounded, Generic.Data, Generic.Typeable)
 
 -- Just some size, have to be coordinated with Prelude.bs
@@ -579,14 +599,30 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primArrayUpdate" = PrimArrayUpdate
         tp "primArrayDynSelect" = PrimArrayDynSelect
         tp "primArrayDynUpdate" = PrimArrayDynUpdate
+        tp "primArrayMap" = PrimArrayMap
+        tp "primArrayFoldL" = PrimArrayFoldL
+        tp "primArrayFoldR" = PrimArrayFoldR
+        tp "primArrayZipWith" = PrimArrayZipWith
+        tp "primArrayGenWith" = PrimArrayGenWith
+        tp "primArrayToList" = PrimArrayToList
+        tp "primListToArray" = PrimListToArray
+        tp "primArrayAppend" = PrimArrayAppend
+        tp "primArrayConcat" = PrimArrayConcat
+        tp "primArrayReverse" = PrimArrayReverse
+        tp "primListMap" = PrimListMap
+        tp "primListFoldL" = PrimListFoldL
+        tp "primListFoldR" = PrimListFoldR
+        tp "primListAppend" = PrimListAppend
+        tp "primListConcat" = PrimListConcat
+        tp "primListLength" = PrimListLength
+        tp "primListSelect" = PrimListSelect
+        tp "primListZipWith" = PrimListZipWith
         tp "primBuildArray" = PrimBuildArray
 
         tp "primSetSelPosition" = PrimSetSelPosition
 
         tp "primPack" = PrimPack
         tp "primUnpack" = PrimUnpack
-        tp "primArrayGenWith" = PrimArrayGenWith
-        tp "primArrayFromList" = PrimArrayFromList
         tp s = internalError ("unknown primitive: " ++ s ++ " " ++ prPosition (getIdPosition i))
 
 instance PPrint PrimOp where
@@ -891,14 +927,30 @@ instance NFData PrimOp where
     rnf PrimArrayUpdate = ()
     rnf PrimArrayDynSelect = ()
     rnf PrimArrayDynUpdate = ()
+    rnf PrimArrayMap = ()
+    rnf PrimArrayFoldL = ()
+    rnf PrimArrayFoldR = ()
+    rnf PrimArrayZipWith = ()
+    rnf PrimArrayGenWith = ()
+    rnf PrimArrayToList = ()
+    rnf PrimListToArray = ()
+    rnf PrimArrayAppend = ()
+    rnf PrimArrayConcat = ()
+    rnf PrimArrayReverse = ()
+    rnf PrimListMap = ()
+    rnf PrimListFoldL = ()
+    rnf PrimListFoldR = ()
+    rnf PrimListAppend = ()
+    rnf PrimListConcat = ()
+    rnf PrimListLength = ()
+    rnf PrimListSelect = ()
+    rnf PrimListZipWith = ()
     rnf PrimBuildArray = ()
     rnf PrimSetSelPosition = ()
     rnf PrimGetParamName = ()
     rnf PrimEQ3 = ()
     rnf PrimPack = ()
     rnf PrimUnpack = ()
-    rnf PrimArrayGenWith = ()
-    rnf PrimArrayFromList = ()
 
 -----
 

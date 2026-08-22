@@ -1,0 +1,73 @@
+package PartialApplyClassic where
+
+import Vector
+
+inc :: Bit 8 -> Bit 8
+inc x = x + 1
+
+addPair :: Bit 8 -> Bit 8 -> Bit 8
+addPair a b = a + b
+
+sumFn :: Bit 8 -> Bit 8 -> Bit 8
+sumFn acc x = acc + x
+
+{-# verilog sysPartialApplyClassic #-}
+sysPartialApplyClassic :: Module Empty
+sysPartialApplyClassic =
+  module
+    let v1 :: Vector 4 (Bit 8)
+        v1 = genWith fromInteger
+        v2 :: Vector 4 (Bit 8)
+        v2 = replicate 10
+
+        -- Partial application of map
+        mapInc = map inc
+        m1 :: Vector 4 (Bit 8)
+        m1 = mapInc v1
+        m2 :: Vector 4 (Bit 8)
+        m2 = mapInc v2
+
+        -- Partial application of foldl
+        sumOf = foldl sumFn 0
+        s1 :: Bit 8
+        s1 = sumOf v1
+        s2 :: Bit 8
+        s2 = sumOf v2
+
+        -- Partial application of foldr
+        xorOf = foldr (\ x acc -> x ^ acc) 0
+        x1 :: Bit 8
+        x1 = xorOf v1
+        x2 :: Bit 8
+        x2 = xorOf v2
+
+        -- Partial application of zipWith
+        addVecs = zipWith addPair
+        z1 :: Vector 4 (Bit 8)
+        z1 = addVecs v1 v2
+        z2 :: Vector 4 (Bit 8)
+        z2 = addVecs v2 v2
+
+        -- Partial application of append
+        va :: Vector 2 (Bit 8)
+        va = replicate 100
+        vb :: Vector 2 (Bit 8)
+        vb = replicate 200
+        appendVa = append va
+        a1 :: Vector 4 (Bit 8)
+        a1 = appendVa vb
+        a2 :: Vector 4 (Bit 8)
+        a2 = appendVa (replicate 50)
+
+    rules
+      "test": when True ==>
+        action
+          $display "map1:    %0d %0d %0d %0d" (m1 !! 0) (m1 !! 1) (m1 !! 2) (m1 !! 3)
+          $display "map2:    %0d %0d %0d %0d" (m2 !! 0) (m2 !! 1) (m2 !! 2) (m2 !! 3)
+          $display "foldl:   %0d %0d" s1 s2
+          $display "foldr:   %0d %0d" x1 x2
+          $display "zip1:    %0d %0d %0d %0d" (z1 !! 0) (z1 !! 1) (z1 !! 2) (z1 !! 3)
+          $display "zip2:    %0d %0d %0d %0d" (z2 !! 0) (z2 !! 1) (z2 !! 2) (z2 !! 3)
+          $display "append1: %0d %0d %0d %0d" (a1 !! 0) (a1 !! 1) (a1 !! 2) (a1 !! 3)
+          $display "append2: %0d %0d %0d %0d" (a2 !! 0) (a2 !! 1) (a2 !! 2) (a2 !! 3)
+          $finish 0

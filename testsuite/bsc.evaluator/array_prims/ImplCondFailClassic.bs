@@ -1,0 +1,78 @@
+package ImplCondFailClassic where
+
+import Vector
+import FIFOF
+
+{-# properties sysImplCondFailClassic = { verilog } #-}
+sysImplCondFailClassic :: Module Empty
+sysImplCondFailClassic =
+  module
+    fs :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    gs :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    idx :: Reg (UInt 2) <- mkReg 0
+    out :: Reg (Bit 8) <- mkRegU
+    outb :: Reg Bool <- mkRegU
+
+    let vals :: Vector 4 (Bit 8)
+        vals = map (\ f -> f.first) fs
+
+    addRules $
+      rules
+        {-# ASSERT no implicit conditions #-}
+        "r_map": when True ==>
+          out := Vector.select (map invert vals) 0
+
+        {-# ASSERT no implicit conditions #-}
+        "r_fold": when True ==>
+          out := foldr (\ a b -> a ^ b) 0 vals
+
+        {-# ASSERT no implicit conditions #-}
+        "r_zip": when True ==>
+          let gvals :: Vector 4 (Bit 8)
+              gvals = map (\ g -> g.first) gs
+          in out := Vector.select (zipWith (+) vals gvals) 0
+
+        {-# ASSERT no implicit conditions #-}
+        "r_any": when True ==>
+          let isNonZero :: Bit 8 -> Bool
+              isNonZero x = x /= 0
+          in outb := any isNonZero vals
+
+        {-# ASSERT no implicit conditions #-}
+        "r_dynsel": when True ==>
+          out := select vals idx
+
+        {-# ASSERT no implicit conditions #-}
+        "r_update": when True ==>
+          out := Vector.select (update vals idx 0xFF) 1
+
+        {-# ASSERT no implicit conditions #-}
+        "r_container_map": when True ==>
+          let cvals :: Vector 4 (Bit 8)
+              cvals = genWith (\ i -> fromInteger (i * 16))
+              f0 = Vector.select fs 0
+          in out := Vector.select (map invert (_when_ f0.notEmpty cvals)) 0
+
+        {-# ASSERT no implicit conditions #-}
+        "r_container_foldr": when True ==>
+          let cvals :: Vector 4 (Bit 8)
+              cvals = genWith (\ i -> fromInteger (i * 16))
+              f0 = Vector.select fs 0
+          in out := foldr (\ x y -> x ^ y) 0 (_when_ f0.notEmpty cvals)
+
+        {-# ASSERT no implicit conditions #-}
+        "r_container_foldl": when True ==>
+          let cvals :: Vector 4 (Bit 8)
+              cvals = genWith (\ i -> fromInteger (i * 16))
+              f0 = Vector.select fs 0
+          in out := foldl (\ x y -> x ^ y) 0 (_when_ f0.notEmpty cvals)
+
+        {-# ASSERT no implicit conditions #-}
+        "r_container_zip": when True ==>
+          let avals :: Vector 4 (Bit 8)
+              avals = genWith (\ i -> fromInteger (i * 16))
+              bvals :: Vector 4 (Bit 8)
+              bvals = genWith (\ i -> fromInteger (i * 32))
+              f0 = Vector.select fs 0
+              f1 = Vector.select fs 1
+          in out := Vector.select (zipWith (+) (_when_ f0.notEmpty avals) (_when_ f1.notEmpty bvals)) 0

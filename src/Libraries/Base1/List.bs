@@ -89,8 +89,7 @@ infixr  8 :>
 --@ function List#(b) map (function b f(a), List#(a) xs);
 --@ \end{libverbatim}
 map :: (a -> b) -> List a -> List b
-map _ Nil = Nil
-map f (Cons x xs) = Cons (f x) (map f xs)
+map = primListMap
 
 --@ Return elements that satisfy the predicate
 --@ \index{filter@\te{filter} (\te{List} function)}
@@ -149,8 +148,7 @@ lookupAll _ Nil = Nil
 --@ function List#(a) append (List#(a) xs, List#(a) ys);
 --@ \end{libverbatim}
 append :: List a -> List a -> List a
-append Nil ys = ys
-append (Cons x xs) ys = Cons x (append xs ys)
+append = primListAppend
 
 --@ Append many lists.
 --@ \index{concat@\te{concat} (\te{List} function)}
@@ -158,8 +156,7 @@ append (Cons x xs) ys = Cons x (append xs ys)
 --@ function List#(a) concat (List#(List#(a)) xss);
 --@ \end{libverbatim}
 concat :: List (List a) -> List a
-concat Nil = Nil
-concat (Cons x xs) = append x (concat xs)
+concat = primListConcat
 
 --@ Generate a {\te{List}} of elements generated replicating
 --@ the given argument.
@@ -176,8 +173,7 @@ replicate n c = map (const c) (upto 1 n)
 --@ function b foldr (b function f(a x, b y), b e, List#(a) xs);
 --@ \end{libverbatim}
 foldr :: (a -> b -> b) -> b -> List a -> b
-foldr _ z Nil = z
-foldr f z (Cons x xs) = f x (foldr f z xs)
+foldr = primListFoldR
 
 --@ Reduction (from the right) over a non-empty list.
 --@ \index{foldr1@\te{foldr1} (\te{List} function)}
@@ -195,8 +191,7 @@ foldr1 _ Nil = error "List.foldr1: empty list"
 --@ function b foldl (b function f(b y, a x), b e, List#(a) xs);
 --@ \end{libverbatim}
 foldl :: (b -> a -> b) -> b -> List a -> b
-foldl _ z Nil = z
-foldl f z (Cons x xs) = foldl f (f z x) xs
+foldl = primListFoldL
 
 --@ Reduction (from the left) over a non-empty list.
 --@ \index{foldl1@\te{foldl1} (\te{List} function)}
@@ -253,8 +248,7 @@ rotateR xs = Cons (last xs) (init xs)
 --@ function List#(c) zipWith (function c f(a x, b y), List#(a) xs, List#(b) ys);
 --@ \end{libverbatim}
 zipWith :: (a -> b -> c) -> List a -> List b -> List c
-zipWith f (Cons x xs) (Cons y ys) = Cons (f x y) (zipWith f xs ys)
-zipWith _ _ _ = Nil
+zipWith = primListZipWith
 
 --@ Combine three lists with a function.
 --@ \index{zipWith3@\te{zipWith3} (\te{List} function)}
@@ -383,6 +377,9 @@ init (Cons x xs) = Cons x (init xs)
 --@ \begin{libverbatim}
 --@ function Integer length (List#(a) xs);
 --@ \end{libverbatim}
+-- Prelude.listLength is the accelerated primListLength plus the
+-- undetermined-list check; the raw primitive is silent on undetermined
+-- lists because the select/update wrappers probe with it.
 length :: List a -> Integer
 length = Prelude.listLength
 
@@ -392,12 +389,7 @@ length = Prelude.listLength
 --@ function a (!!)(List#(a) xs, Integer n);
 --@ \end{libverbatim}
 (!!) :: List a -> Integer -> a
-(!!) xs n = (!!!) xs n n
-
---old:
---(!!) Nil _          = error "bad index to !!"
---(!!) (Cons x xs) 0  = x
---(!!) (Cons x xs) n  = (!!) xs (n-1)
+(!!) = primListSelect
 
 --@ In BSV, the square-bracket notation is available instead of "!!".
 --@ \begin{libverbatim}
@@ -406,13 +398,8 @@ length = Prelude.listLength
 -- in Prelude.bs:
 -- instance PrimSelectable (List a) Integer a
 --   where
---    primSelectFn = (!!)
---    primUpdateFn = update
-
-(!!!) :: List a -> Integer -> Integer -> a
-(!!!) Nil _ n0         = error $ "bad index to !!: " +++ integerToString n0
-(!!!) (Cons x _) 0 _  = x
-(!!!) (Cons _ xs) n n0 = (!!!) xs (n-1) n0
+--    primSelectFn = listPrimSelect
+--    primUpdateFn = listPrimUpdate
 
 --@ Similar to \te{(!!)}, but can generate code (a mux).
 -- @ {\sf Combine with (!!)?}

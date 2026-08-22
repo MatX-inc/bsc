@@ -1,0 +1,114 @@
+A3 c=0 v=c1
+L c=0 l=4 n=4
+A3 c=1 v=c1
+L c=1 l=4 n=4
+A3 c=2 v=c1
+M1 c=2 v=5e
+A0 c=2 v=a0
+L c=2 l=4 n=4
+A3 c=3 v=c1
+K2 c=3 v=12
+L c=3 l=4 n=4
+A3 c=4 v=c1
+K2 c=4 v=13
+M1 c=4 v=5e
+A0 c=4 v=a0
+L c=4 l=4 n=4
+A3 c=5 v=c1
+L c=5 l=4 n=4
+A3 c=6 v=c1
+M1 c=6 v=5e
+A0 c=6 v=a0
+L c=6 l=4 n=4
+A3 c=7 v=c1
+K2 c=7 v=16
+L c=7 l=4 n=4
+A3 c=8 v=c1
+K2 c=8 v=17
+M1 c=8 v=5e
+A0 c=8 v=a0
+L c=8 l=4 n=4
+A3 c=9 v=c1
+L c=9 l=4 n=4
+A3 c=10 v=c1
+M1 c=10 v=5e
+A0 c=10 v=a0
+L c=10 l=4 n=4
+A3 c=11 v=c1
+K2 c=11 v=1a
+L c=11 l=4 n=4
+A3 c=12 v=c1
+K2 c=12 v=1b
+M1 c=12 v=5e
+A0 c=12 v=a0
+L c=12 l=4 n=4
+A3 c=13 v=c1
+L c=13 l=4 n=4
+A3 c=14 v=c1
+M1 c=14 v=5e
+A0 c=14 v=a0
+L c=14 l=4 n=4
+A3 c=15 v=c1
+K2 c=15 v=1e
+L c=15 l=4 n=4
+A3 c=16 v=c1
+K2 c=16 v=1f
+M1 c=16 v=5e
+A0 c=16 v=a0
+L c=16 l=4 n=4
+A3 c=17 v=c1
+L c=17 l=4 n=4
+A3 c=18 v=c1
+M1 c=18 v=5e
+A0 c=18 v=a0
+L c=18 l=4 n=4
+A3 c=19 v=c1
+K2 c=19 v=12
+L c=19 l=4 n=4
+A3 c=20 v=c1
+K2 c=20 v=13
+M1 c=20 v=5e
+A0 c=20 v=a0
+L c=20 l=4 n=4
+A3 c=21 v=c1
+L c=21 l=4 n=4
+A3 c=22 v=c1
+M1 c=22 v=5e
+A0 c=22 v=a0
+L c=22 l=4 n=4
+A3 c=23 v=c1
+K2 c=23 v=16
+L c=23 l=4 n=4
+A3 c=24 v=c1
+K2 c=24 v=17
+M1 c=24 v=5e
+A0 c=24 v=a0
+L c=24 l=4 n=4
+A3 c=25 v=c1
+L c=25 l=4 n=4
+A3 c=26 v=c1
+M1 c=26 v=5e
+A0 c=26 v=a0
+L c=26 l=4 n=4
+A3 c=27 v=c1
+K2 c=27 v=1a
+L c=27 l=4 n=4
+A3 c=28 v=c1
+K2 c=28 v=1b
+M1 c=28 v=5e
+A0 c=28 v=a0
+L c=28 l=4 n=4
+A3 c=29 v=c1
+L c=29 l=4 n=4
+A3 c=30 v=c1
+M1 c=30 v=5e
+A0 c=30 v=a0
+L c=30 l=4 n=4
+A3 c=31 v=c1
+K2 c=31 v=1e
+L c=31 l=4 n=4
+A3 c=32 v=c1
+K2 c=32 v=1f
+M1 c=32 v=5e
+A0 c=32 v=a0
+L c=32 l=4 n=4

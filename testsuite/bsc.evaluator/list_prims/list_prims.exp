@@ -1,0 +1,79 @@
+# Tests for list primitive implicit condition propagation and correctness.
+
+# --- Compile-fail: conditions must NOT be dropped by list primitives ---
+# One rule per primitive, each with (* no_implicit_conditions *).
+# If any primitive drops the condition, the error count decreases.
+
+compile_verilog_fail_error ImplCondListFail.bsv G0005 12
+
+# --- Compile-fail: conditions through list<->array conversions ---
+# Tests that conditions survive primListToArray / primArrayToList round-trips
+# and cross-primitive chains (list→array→arrayMap, array→list→listFoldL, etc.)
+
+compile_verilog_fail_error ImplCondConvertFail.bsv G0005 15
+
+# --- Simulation tests: list primitive implicit condition equivalence ---
+# sort_output=1 because rule scheduling order is non-deterministic.
+
+# Per-element condition propagation through primListMap
+test_c_veri_bsv ImplCondMapList "" "" "" 1
+# Reference: recursive Cons/Nil pattern matching
+test_c_veri_bsv ImplCondMapListRef "sysImplCondMapList.out.expected" "" "" 1
+# Reference: list->array->map->list via primListToArray/primArrayMap/primArrayToList
+test_c_veri_bsv ImplCondMapListArr "sysImplCondMapList.out.expected" "" "" 1
+
+# Conjunction propagation through primListFoldL/R, any/all/elem via map+fold
+test_c_veri_bsv ImplCondFoldList "" "" "" 1
+# Reference: recursive Cons/Nil pattern matching
+test_c_veri_bsv ImplCondFoldListRef "sysImplCondFoldList.out.expected" "" "" 1
+# Reference: list->array->fold via primListToArray/primArrayFoldL/R
+test_c_veri_bsv ImplCondFoldListArr "sysImplCondFoldList.out.expected" "" "" 1
+
+# Per-element condition propagation through primListZipWith (two sources)
+test_c_veri_bsv ImplCondZipList "" "" "" 1
+# Reference: recursive head/tail zipWith
+test_c_veri_bsv ImplCondZipListRef "sysImplCondZipList.out.expected" "" "" 1
+# Reference: list->array->zipWith->list via primArrayZipWith
+test_c_veri_bsv ImplCondZipListArr "sysImplCondZipList.out.expected" "" "" 1
+
+# --- Basic correctness: select and length ---
+test_c_veri_bsv ListSelectTest
+
+# --- Spine conditions: the list structure itself is guarded ---
+# The spine is a PrimIf whose condition carries an implicit condition;
+# append/concat/map/length must keep that condition on the nodes they
+# guard.  Reference version uses explicit head/tail recursion.
+test_c_veri_bsv ListSpineCond "" "" "" 1
+test_c_veri_bsv ListSpineCondRef "sysListSpineCond.out.expected" "" "" 1
+
+# --- Select and length diagnostics ---
+# Static out-of-range select is a compile error (as recursive (!!) was)
+compile_verilog_fail_error ListSelectOOB.bsv S0015
+# Length of an undetermined list reports the Prelude's G0080 error
+compile_verilog_fail_error ListLengthUndet.bsv G0080
+
+# --- Select with a muxed constant index selects both arms ---
+test_c_veri_bsv ListSelectDyn
+
+# --- toVector of a conditional list muxes the arms ---
+test_c_veri_bsv ListToVectorIf
+
+# --- ListN pack keeps element conditions (routes through list prims) ---
+compile_verilog_fail_error ListNPackCond.bsv G0005 1
+
+# --- Over-application: selecting a function from a list and applying it ---
+test_c_veri_bsv OverApplyListSelect
+
+# --- A self-referential list dies with too-many-steps, not a hang ---
+compile_verilog_fail_error CyclicList.bs G0024 1 "" {-steps-warn-interval 5000 -steps-max-intervals 1}
+
+# --- Instance naming pins for monadic traversals ---
+# Vector mapM/replicateM yields indexed names; List yields collision
+# suffixes.  These names are user-visible hierarchy; do not let library
+# or evaluator changes shift them silently.
+compile_verilog_pass MapMNames.bsv sysMapMNames
+find_regexp sysMapMNames.v {xs_0}
+find_regexp sysMapMNames.v {xs_1}
+find_regexp sysMapMNames.v {xs_2}
+find_regexp sysMapMNames.v {ls_1}
+find_regexp sysMapMNames.v {ls_2}

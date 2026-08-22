@@ -46,7 +46,7 @@ module IExpandUtils(
         makeDomainToBoundaryIdsMap, getDomainToBoundaryIdsMap,
         findBoundaryClock, isClockAncestor,
         isPrimType, isParamOnlyType,
-        HeapPointer, unheap, unheapU, shallowUnheap, unheapAll,
+        HeapPointer, unheap, unheapContext, unheapU, shallowUnheap, unheapAll,
         toHeap, toHeapCon, toHeapWHNFCon,
         toHeapWHNF,
         realPrimOp,
@@ -2724,12 +2724,20 @@ updNewRuleSuffix suf = do
 
 -----------------------------------------------------------------------------
 
+unheapContext :: String -> PExpr -> G PExpr
+unheapContext ctx (P p e_orig@(IRefT _ _ _ r)) = do
+        e <- getHeap r
+        case e of
+            (HUnev { hc_hexpr = unev_e }) -> internalError ("IExpandUtils.unheap [" ++ ctx ++ "]: unevaluated: ref=" ++ showTypeless e_orig ++ " body=" ++ showTypeless unev_e)
+            _ -> unheap (P p e_orig)
+unheapContext _ pe = return pe
+
 {-# INLINE unheap #-}
 unheap :: PExpr -> G PExpr
 unheap (P p e_orig@(IRefT _ _ _ r)) = do
         e <- getHeap r
         case e of
-            (HUnev {}) -> internalError ("IExpandUtils.unheap: unevaluated")
+            (HUnev { hc_hexpr = unev_e }) -> internalError ("IExpandUtils.unheap: unevaluated: ref=" ++ showTypeless e_orig ++ " body=" ++ showTypeless unev_e)
             (HLoop name) -> internalError("IExpandUtils.unheap: HLoop " ++ ppReadable name)
             (HWHNF { hc_pexpr = P _ (IRefT _ _ _ _) }) ->
                 internalError ("IExpandUtils.unheap: WHNF IRefT")
@@ -2876,7 +2884,7 @@ toHeapWHNF tag _ (P p e) cell_name
     toHeapWHNF tag t (P (pConj p p') e') cell_name
 toHeapWHNF tag t pe@(P p e) cell_name = do
     -- Pointing to an IRefT (because p /= pTrue) is not WHNF
-    pe' <- unheap pe
+    pe' <- unheapContext "toHeapWHNF" pe
     addHeapWHNF tag t pe' cell_name
 
 {-# INLINE toHeapWHNFCon #-}

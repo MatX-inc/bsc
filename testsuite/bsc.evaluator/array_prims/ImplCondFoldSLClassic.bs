@@ -1,0 +1,57 @@
+package ImplCondFoldSLClassic where
+
+import Vector
+import FIFOF
+import SimpleList
+
+{-# properties sysImplCondFoldSLClassic = { verilog } #-}
+sysImplCondFoldSLClassic :: Module Empty
+sysImplCondFoldSLClassic =
+  module
+    fs :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    cycle :: Reg (Bit 8) <- mkReg 0
+
+    let bitSet :: Bit 8 -> Integer -> Bool
+        bitSet v i = ((v >> fromInteger i) & 1) /= 0
+
+    addRules $
+      rules
+        "fill_0": when bitSet cycle 0 ==>
+          (Vector.select fs 0).enq (0x00 + (cycle & 0x0F))
+        "fill_1": when bitSet cycle 1 ==>
+          (Vector.select fs 1).enq (0x10 + (cycle & 0x0F))
+        "fill_2": when bitSet cycle 2 ==>
+          (Vector.select fs 2).enq (0x20 + (cycle & 0x0F))
+        "fill_3": when bitSet cycle 3 ==>
+          (Vector.select fs 3).enq (0x30 + (cycle & 0x0F))
+
+        "observe": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              tvals = vectorToSL vals
+              r = slFoldr (\ x y -> x ^ y) 0 tvals
+              l = slFoldl (\ x y -> x ^ y) 0 tvals
+              isNonZero :: Bit 8 -> Bool
+              isNonZero x = x /= 0
+              isEven :: Bit 8 -> Bool
+              isEven x = (x & 1) == 0
+              a = slAny isNonZero tvals
+              b = slAll isEven tvals
+              c = slElem 0x00 tvals
+          in action {
+            $display "FR c=%0d v=%0h" cycle r;
+            $display "FL c=%0d v=%0h" cycle l;
+            $display "AN c=%0d v=%b" cycle a;
+            $display "AL c=%0d v=%b" cycle b;
+            $display "EL c=%0d v=%b" cycle c;
+            (Vector.select fs 0).deq;
+            (Vector.select fs 1).deq;
+            (Vector.select fs 2).deq;
+            (Vector.select fs 3).deq
+          }
+
+        "tick": when True ==>
+          action {
+            cycle := cycle + 1;
+            if cycle == 32 then $finish 0 else noAction
+          }

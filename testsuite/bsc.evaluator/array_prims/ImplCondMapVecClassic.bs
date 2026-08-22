@@ -1,0 +1,67 @@
+package ImplCondMapVecClassic where
+
+import Vector
+import FIFOF
+
+{-# properties sysImplCondMapVecClassic = { verilog } #-}
+sysImplCondMapVecClassic :: Module Empty
+sysImplCondMapVecClassic =
+  module
+    fs :: Vector 4 (FIFOF (Bit 8)) <- replicateM mkFIFOF
+    cycle :: Reg (Bit 8) <- mkReg 0
+
+    let bitSet :: Bit 8 -> Integer -> Bool
+        bitSet v i = ((v >> fromInteger i) & 1) /= 0
+
+    addRules $
+      rules
+        "fill_0": when bitSet cycle 0 ==>
+          (Vector.select fs 0).enq (0x00 + (cycle & 0x0F))
+        "fill_1": when bitSet cycle 1 ==>
+          (Vector.select fs 1).enq (0x10 + (cycle & 0x0F))
+        "fill_2": when bitSet cycle 2 ==>
+          (Vector.select fs 2).enq (0x20 + (cycle & 0x0F))
+        "fill_3": when bitSet cycle 3 ==>
+          (Vector.select fs 3).enq (0x30 + (cycle & 0x0F))
+
+        "observe_0": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              mapped = map invert vals
+          in action {
+            $display "M0 c=%0d v=%0h" cycle (Vector.select mapped 0);
+            (Vector.select fs 0).deq
+          }
+
+        "observe_1": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              mapped = map invert vals
+          in action {
+            $display "M1 c=%0d v=%0h" cycle (Vector.select mapped 1);
+            (Vector.select fs 1).deq
+          }
+
+        "observe_2": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              mapped = map invert vals
+          in action {
+            $display "M2 c=%0d v=%0h" cycle (Vector.select mapped 2);
+            (Vector.select fs 2).deq
+          }
+
+        "observe_3": when True ==>
+          let vals :: Vector 4 (Bit 8)
+              vals = map (\ f -> f.first) fs
+              mapped = map invert vals
+          in action {
+            $display "M3 c=%0d v=%0h" cycle (Vector.select mapped 3);
+            (Vector.select fs 3).deq
+          }
+
+        "tick": when True ==>
+          action {
+            cycle := cycle + 1;
+            if cycle == 32 then $finish 0 else noAction
+          }

@@ -5,13 +5,17 @@ import List
 inc :: Integer -> Integer
 inc x = x + 1
 
+recMap :: (a -> b) -> List a -> List b
+recMap f Nil = Nil
+recMap f (Cons x xs) = Cons (f x) (recMap f xs)
+
 evens :: List Integer
 evens = let i_evens :: List Integer
-            i_evens = 0 :> (map inc i_odds)
+            i_evens = 0 :> (recMap inc i_odds)
             i_odds :: List Integer
-            i_odds = (map inc i_evens)
+            i_odds = (recMap inc i_evens)
         in i_evens
 
 odds :: List Integer
-odds = map inc evens
+odds = recMap inc evens
 

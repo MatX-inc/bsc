@@ -2,10 +2,14 @@ package Letrecmod(sysLetrecmod) where
 
 import List
 
+recMap :: (a -> b) -> List a -> List b
+recMap f Nil = Nil
+recMap f (Cons x xs) = Cons (f x) (recMap f xs)
+
 seven :: Integer
 seven = let evens :: List Integer
-            evens = cons 0 (map ((+) 1) odds)
-            odds  :: List Integer = map ((+) 1) evens
+            evens = cons 0 (recMap ((+) 1) odds)
+            odds  :: List Integer = recMap ((+) 1) evens
         in odds !! 3
 
 sysLetrecmod :: Module Empty

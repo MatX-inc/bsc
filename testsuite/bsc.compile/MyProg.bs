@@ -5,9 +5,13 @@ import List
 inc :: Integer -> Integer
 inc x = x + 1
 
+recMap :: (a -> b) -> List a -> List b
+recMap f Nil = Nil
+recMap f (Cons x xs) = Cons (f x) (recMap f xs)
+
 evens :: List Integer
-evens = 0 :> (map inc odds)
+evens = 0 :> (recMap inc odds)
 
 odds :: List Integer
-odds = map inc evens
+odds = recMap inc evens
 
