@@ -26,6 +26,17 @@ extern "C" {
  */
 tSimStateHdl bk_init(tModel model, tBool master);
 
+/* Like bk_init(), but initializes the kernel in synchronous mode:
+ * no simulation thread is created and no SIGINT/SIGPIPE handlers
+ * are installed.  Simulation events are executed on the caller's
+ * thread by calling bk_sync_run(); bk_advance() and bk_sync() may
+ * not be used with a handle returned by this function.
+ *
+ * Returns a handle to the simulation state, which is needed
+ * as an argument to the other Bluesim kernel API functions.
+ */
+tSimStateHdl bk_sync_init(tModel model, tBool master);
+
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.
  * After bk_shutdown() is called, no other Bluesim kernel
@@ -209,6 +220,8 @@ tStatus bk_quit_after_edge(tSimStateHdl simHdl,
  * thread.
  *
  * Returns BK_ERROR on error and BK_SUCCESS on success.
+ * Handles created with bk_sync_init() have no simulation thread,
+ * so this returns BK_ERROR for them; use bk_sync_run() instead.
  */
 tStatus bk_advance(tSimStateHdl simHdl, tBool async);
 
@@ -223,8 +236,37 @@ tBool bk_is_running(tSimStateHdl simHdl);
  * to complete.
  *
  * Returns the simulation time at which execution stopped.
+ * For handles created with bk_sync_init() there is no simulation
+ * thread to wait for, so this returns the current simulation time
+ * immediately.
  */
 tTime bk_sync(tSimStateHdl simHdl);
+
+/* Execute simulation events on the caller's thread, for handles
+ * created with bk_sync_init().  Despite the similar name, this is
+ * unrelated to bk_sync(), which waits for the simulation thread
+ * of a bk_init() handle to pause.
+ *
+ * Returns when the event queue drains or at the end of a stopping
+ * timeslice: $stop/$finish/$fatal, bk_abort_now(), an edge limit
+ * set with bk_quit_after_edge(), or a UI event scheduled with
+ * bk_schedule_ui_event() (which is how running to a target time is
+ * composed).  The cause can be distinguished using bk_stopped(),
+ * bk_finished(), bk_fataled(), bk_aborted() and bk_sync_pending().
+ * Calling it again resumes the simulation.  Note that no signal
+ * handlers are installed in sync mode, so Ctrl-C is not converted
+ * into bk_abort_now().
+ *
+ * Returns BK_ERROR on error (including a non-sync-mode handle or a
+ * call while the simulation is running) and BK_SUCCESS on success.
+ */
+tStatus bk_sync_run(tSimStateHdl simHdl);
+
+/* Test whether any events remain in the simulation queue.
+ *
+ * Returns 0 if the queue is empty and non-zero otherwise.
+ */
+tBool bk_sync_pending(tSimStateHdl simHdl);
 
 /* Schedule a UI callback for the end of a given timeslice,
  * unless there is already one scheduled at that time.

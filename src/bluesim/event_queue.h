@@ -50,6 +50,7 @@ class EventQueue
   bool                in_event;
   tEvent              executing_event;
   bool                removed_self;
+  bool                halted;
 
   // queue search state
   mutable tEventPredicate last_find_pred;
@@ -64,6 +65,9 @@ class EventQueue
 
   // execute events in sequence
   void execute(tSimStateHdl simHdl);
+
+  // stop the current execute() loop after the current event
+  void halt();
 
   // get the number of events in the queue
   unsigned int size() const;

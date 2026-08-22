@@ -128,6 +128,10 @@ struct tSimState {
   // a priority queue of locally-defined clock edges
   EventQueue* queue;
 
+  // flag set when the kernel runs events on the caller's thread
+  // (bk_sync_init) instead of on a separate simulation thread (bk_init)
+  bool sync_mode;
+
   // semaphores, etc. used for synchronization between API and sim_thread
   volatile bool sim_running;
   volatile bool sim_shutting_down;
