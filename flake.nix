@@ -124,6 +124,16 @@
             main = defaultMainWithSetupHooks setupHooks
             EOF
           '';
+
+          # Assemble the BLUESPECDIR runtime (lib/Libraries, Bluesim, the
+          # Verilog primitives, ...) next to the installed binaries, like
+          # `make install-src` does.  The runtime Makefiles pick the compiler
+          # up from $(PREFIX)/bin, where the Haskell builder just installed
+          # it; NO_DEPS_CHECKS skips src/Makefile's tool probe, which insists
+          # on cabal (the builder drives Setup.hs directly).
+          postInstall = ''
+            make -C src install-runtime PREFIX=$out NO_DEPS_CHECKS=1
+          '';
         };
       }
     ) nixpkgs.legacyPackages;

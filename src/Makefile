@@ -114,9 +114,17 @@ endif
 #
 # Order matters: Libraries compiles the standard library with the
 # newly-installed $(PREFIX)/bin/bsc.
+#
+# 'install-runtime' assembles just these runtime pieces, assuming the
+# binaries are already in $(PREFIX)/bin; the Nix build uses it (with
+# NO_DEPS_CHECKS=1, as cabal is not available there) after the Haskell
+# builder has installed the executables.
 
 .PHONY: install
-install: install-bin install-pkginfo
+install: install-bin install-pkginfo install-runtime
+
+.PHONY: install-runtime
+install-runtime:
 	$(MAKE)  -C Libraries  PREFIX=$(PREFIX)  install
 	$(MAKE)  -C exec       PREFIX=$(PREFIX)  install
 	$(MAKE)  -C VPI        PREFIX=$(PREFIX)  install
