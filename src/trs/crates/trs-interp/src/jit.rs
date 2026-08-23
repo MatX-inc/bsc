@@ -4488,7 +4488,21 @@ impl Interp {
         // function of design + comps) and type-uniform (keys are
         // (module type, name)), so baked artifact slot numbers and
         // twin-instance dedup stay sound.
-        let touch_rank = self.layout_touch_ranks(rcomps);
+        let (touch_rank, live_en) = self.layout_touch_ranks(rcomps);
+        // rung 40 (keep-fires tier split): fast plans allocate EN slots
+        // only for enables some runtime reader actually loads — the
+        // walk above covers every tier's readers (rule CF/WF cones and
+        // bodies incl. early rules, eager defs, child method bodies,
+        // autofire).  keep-fires method-WF defs are never evaluated at
+        // runtime, so their EN reads never execute: an unallocated slot
+        // drops the per-edge zeroing AND every call-site store for free
+        // (compiled and interp stores are `if let Some(slot)`; interp
+        // reads fall through to 0 — the value an untouched zeroed slot
+        // would hold).  Traced plans keep every slot: VCD selection
+        // under keep-fires reads them (the plan hash keys on vcd_trace).
+        // Precedent: Bluesim's SimMakeCBlocks init_port zeroes only
+        // used ENs; Verilator DCEs keep-fires nets in non-trace builds.
+        let en_prune = !self.vcd_trace;
         let mut inst_envs: HashMap<usize, InstEnv> = HashMap::new();
         let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
         let reset_node_slot: Vec<u32> =
@@ -4738,8 +4752,9 @@ impl Interp {
                 .iter()
                 .map(|(port, node)| (*port, reset_node_slot[*node]))
                 .collect();
-            // every EN_* port gets a slot (zeroed per dispatch, stored
-            // by compiled call sites; method WF cones read them)
+            // EN_* slots (zeroed per dispatch, stored by compiled call
+            // sites); fast plans allocate only the LIVE-read ones —
+            // see en_prune above (rung 40)
             let mut en_slot = HashMap::new();
             let mut enps: Vec<StrId> = self.mods[module]
                 .ports
@@ -4749,6 +4764,9 @@ impl Interp {
                 .collect();
             enps.sort_unstable();
             for pname in enps {
+                if en_prune && !live_en.contains(&(mir, pname)) {
+                    continue;
+                }
                 en_slot.insert(pname, alloc(&mut nslots, 1));
             }
             // per-rule cf/wf slots in module-canonical rule order, then
@@ -6598,6 +6616,15 @@ struct LcWalk<'a> {
     out: Vec<(u32, u32, u8)>,
     /// touches that leave the arena (boxed prims, foreign servicing)
     boxed: u32,
+    /// rung-40 liveness: EN ports actually READ by evaluated code
+    /// (Port loads against en_slot entries) and defs actually visited
+    /// — the RUNTIME live set, vs the table read-set (bsc's -keep-fires
+    /// keeps defs in the .ba that nothing evaluates)
+    en_reads: std::collections::HashSet<(usize, StrId)>,
+    live_defs: std::collections::HashSet<(usize, StrId)>,
+    /// MethCall/Foreign encountered inside the CURRENT walk (impurity
+    /// witness for the eager-mirror classification)
+    impure: bool,
 }
 
 impl<'a> LcWalk<'a> {
@@ -6681,6 +6708,7 @@ impl<'a> LcWalk<'a> {
         if !self.seen_defs.insert((inst, name)) {
             return;
         }
+        self.live_defs.insert((inst, name));
         // fire signals and schedule-position defs of OTHER rules load
         // their arena slots — the compiled code never re-expands them
         if let Some(env) = self.envs.get(&inst) {
@@ -6706,10 +6734,12 @@ impl<'a> LcWalk<'a> {
         match e {
             E::Def(n) => self.def(inst, *n),
             E::MethCall { instance, method, args, .. } => {
+                self.impure = true;
                 self.meth(inst, *instance, *method, args, false)
             }
             E::MethValue { .. } | E::TaskValue { .. } => {}
             E::ForeignCall { args, .. } => {
+                self.impure = true;
                 self.boxed += 1;
                 for a in args {
                     self.expr(inst, a);
@@ -6737,8 +6767,16 @@ impl<'a> LcWalk<'a> {
                 self.expr(inst, gate);
             }
             E::Reset { wire } => self.expr(inst, wire),
+            E::Port(p) => {
+                if self
+                    .envs
+                    .get(&inst)
+                    .is_some_and(|e| e.en_slot.contains_key(p))
+                {
+                    self.en_reads.insert((inst, *p));
+                }
+            }
             E::Const { .. }
-            | E::Port(_)
             | E::Param(_)
             | E::Str(_)
             | E::Real(_)
@@ -6816,6 +6854,14 @@ impl Interp {
             )
             .unwrap();
         }
+        // rung-40 liveness aggregation: what the compiled artifact
+        // actually evaluates (vs what bsc's -keep-fires left in the
+        // table) — EN ports with at least one LIVE reader, and the
+        // live def set
+        let mut live_en: std::collections::HashSet<(usize, StrId)> =
+            std::collections::HashSet::new();
+        let mut live_defs: std::collections::HashSet<(usize, StrId)> =
+            std::collections::HashSet::new();
         for (rci, nodes) in comp_nodes.iter().enumerate() {
             let Some(nodes) = nodes else { continue };
             let rc = &rcomps[rci];
@@ -6834,6 +6880,9 @@ impl Interp {
                     seen_meths: std::collections::HashSet::new(),
                     out: Vec::new(),
                     boxed: 0,
+                    en_reads: std::collections::HashSet::new(),
+                    live_defs: std::collections::HashSet::new(),
+                    impure: false,
                 };
                 let mir = inst_envs[&sp.inst].mir;
                 if is_sched {
@@ -6895,6 +6944,8 @@ impl Interp {
                     write!(f, "{b}:{ww}:{c} ").unwrap();
                 }
                 writeln!(f).unwrap();
+                live_en.extend(w.en_reads.iter().copied());
+                live_defs.extend(w.live_defs.iter().copied());
             }
         }
         // ---- rung-39 enable-store census ----
@@ -7068,8 +7119,13 @@ impl Interp {
                     }
                 }
             }
-            let (mut n_en, mut n_read, mut n_stay1, mut n_dead_or_stay1) =
-                (0usize, 0usize, 0usize, 0usize);
+            let (
+                mut n_en,
+                mut n_read,
+                mut n_live,
+                mut n_stay1,
+                mut n_dead_or_stay1,
+            ) = (0usize, 0usize, 0usize, 0usize, 0usize);
             let mut iis2: Vec<usize> = inst_envs.keys().copied().collect();
             iis2.sort_unstable();
             for i in iis2 {
@@ -7081,15 +7137,18 @@ impl Interp {
                 for (pname, slot) in ens {
                     let read =
                         refs.is_some_and(|r| r.contains(&pname));
+                    let live = live_en.contains(&(i, pname));
                     let s1 = stay1.contains(&(i, pname));
                     n_en += 1;
                     n_read += read as usize;
+                    n_live += live as usize;
                     n_stay1 += s1 as usize;
-                    n_dead_or_stay1 += (!read || s1) as usize;
+                    n_dead_or_stay1 += (!live || s1) as usize;
                     writeln!(
                         f,
-                        "EN {i} {slot} read={} stay1={} {}",
+                        "EN {i} {slot} read={} live={} stay1={} {}",
                         read as u8,
+                        live as u8,
                         s1 as u8,
                         self.s(pname)
                     )
@@ -7128,9 +7187,10 @@ impl Interp {
             }
             writeln!(
                 f,
-                "ENSUM total={n_en} read={n_read} stay1={n_stay1} skippable_dead_or_stay1={n_dead_or_stay1}"
+                "ENSUM total={n_en} table_read={n_read} LIVE_read={n_live} stay1={n_stay1} skippable_notlive_or_stay1={n_dead_or_stay1}"
             )
             .unwrap();
+            writeln!(f, "LIVEDEFS {}", live_defs.len()).unwrap();
         }
         eprintln!("trs jit: layout census -> {}", p.display());
     }
@@ -7154,6 +7214,10 @@ struct LcRank<'a> {
     n: u32,
     seen_defs: std::collections::HashSet<(usize, StrId)>,
     seen_meths: std::collections::HashSet<(usize, StrId)>,
+    /// rung 40: EN ports the walked cones actually load — the fast
+    /// tier allocates slots only for these (keyed by mir: twin
+    /// instances must stay layout-identical for dedup)
+    live_en: std::collections::HashSet<(usize, StrId)>,
 }
 
 impl<'a> LcRank<'a> {
@@ -7268,8 +7332,22 @@ impl<'a> LcRank<'a> {
                 self.expr(inst, gate);
             }
             E::Reset { wire } => self.expr(inst, wire),
+            E::Port(p) => {
+                // rung 40: a loaded MethodEnable port is a LIVE enable —
+                // fast plans allocate slots only for these
+                let module = self.it.module_of(inst);
+                if self.it.mods[module]
+                    .ports
+                    .get(p)
+                    .is_some_and(|&(_w, k)| {
+                        k == trs_ir::PortKind::MethodEnable
+                    })
+                {
+                    let mir = self.it.mods[module].ir;
+                    self.live_en.insert((mir, *p));
+                }
+            }
             E::Const { .. }
-            | E::Port(_)
             | E::Param(_)
             | E::Str(_)
             | E::Real(_)
@@ -7318,7 +7396,10 @@ impl Interp {
     fn layout_touch_ranks(
         &self,
         rcomps: &[RComp],
-    ) -> HashMap<(usize, StrId), u32> {
+    ) -> (
+        HashMap<(usize, StrId), u32>,
+        std::collections::HashSet<(usize, StrId)>,
+    ) {
         // name-stop sets: every rule's CF/WF and every entry's eager
         // defs, unioned per module type
         let mut stop: HashMap<usize, std::collections::HashSet<StrId>> =
@@ -7350,6 +7431,7 @@ impl Interp {
             n: 0,
             seen_defs: std::collections::HashSet::new(),
             seen_meths: std::collections::HashSet::new(),
+            live_en: std::collections::HashSet::new(),
         };
         for rc in rcomps {
             for en in &rc.entries {
@@ -7400,6 +7482,28 @@ impl Interp {
                 }
             }
         }
-        w.rank
+        // autofire pseudo-specs invoke top-instance methods outside any
+        // rule; their cones are runtime readers too (the comp-node
+        // census skips them, liveness must not)
+        let top_mir = self.mods[self.module_of(0)].ir;
+        for (mname, _argv) in &self.autofire {
+            if !w.seen_meths.insert((top_mir, *mname)) {
+                continue;
+            }
+            if let Some(me) =
+                self.d.modules[top_mir].methods.iter().find(|m| m.name == *mname)
+            {
+                if let Some(r) = &me.ready {
+                    w.expr(0, r);
+                }
+                for st in &me.body {
+                    w.stmt(0, st);
+                }
+                if let Some(res) = &me.result {
+                    w.expr(0, res);
+                }
+            }
+        }
+        (w.rank, w.live_en)
     }
 }
