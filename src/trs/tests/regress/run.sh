@@ -282,6 +282,10 @@ check_dyn() { # name top errtag
     if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
     echo "PASS $name"
 }
+# coincident MakeClock domains + CrossingReg crossed-read semantics:
+# destination-domain logic backdates to pre-edge, the after-edge combo
+# pass reads post-edge (gate detectors break as steady-0 otherwise)
+check MakeClkCross sysMakeClkCross
 check_dyn DynSched sysDynSched G0100
 check_dyn DynSchedBoth sysDynSchedBoth G0101
 check_dyn DynSchedSelf sysDynSchedSelf G0096
