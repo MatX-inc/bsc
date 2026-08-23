@@ -72,6 +72,15 @@ if { $ctest == 1 && [which_os] == "Linux" } {
     run_elf_check "" sysElfFile.cexe.so elf_check_file.out [list 0]
     compare_file elf_check_file.out
 
+    # string values built from module parameters (concatenation
+    # trees; the construct that used to keep libstdc++ referenced)
+    compile_object_pass sysElfStrCat.bsv sysElfStrCat
+    link_objects_pass {sysElfStrCat} sysElfStrCat
+    sim_output sysElfStrCat
+    compare_file sysElfStrCat.out
+    run_elf_check "" sysElfStrCat.cexe.so elf_check_strcat.out [list 0]
+    compare_file elf_check_strcat.out
+
     # BDPI: passes only with the documented exclusions admitted, and
     # the strict check must reject the same object
     compile_object_pass sysElfBdpi.bsv sysElfBdpi

@@ -1,0 +1,8 @@
+name: sysElfStrCat
+even -> rf[0]=11
+name: sysElfStrCat
+sysElfStrCat_odd -> rf[1]=22
+name: sysElfStrCat
+even -> rf[2]=33
+name: sysElfStrCat
+sysElfStrCat_odd -> rf[3]=44

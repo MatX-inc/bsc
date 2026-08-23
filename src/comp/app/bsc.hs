@@ -1952,6 +1952,15 @@ cxxLink errh flags toplevel names su_ok ci_files creation_time = do
         --     references none of them: a model without BDPI imports
         --     gets no DT_NEEDED at all, and the documented BDPI
         --     fallback's malloc/free keep libc;
+        --   * -static-libstdc++ -static-libgcc guarantee the same
+        --     when a toolchain would otherwise emit a stray C++
+        --     runtime reference.  With string values represented as
+        --     tStr trees (see bs_str.h) nothing in a model calls
+        --     out-of-line into libstdc++, so these are true no-ops
+        --     today -- nothing gets pulled from the static archives,
+        --     no load-time allocation appears (the loadalloc and
+        --     elfcheck suites hold this) -- and they keep a future
+        --     leak from silently re-adding a DT_NEEDED entry;
         --   * -z relro -z now: every relocation is resolved at load
         --     and the relocated sections are then made read-only, so
         --     no PLT/GOT entry needs runtime resolution.
@@ -1962,6 +1971,7 @@ cxxLink errh flags toplevel names su_ok ci_files creation_time = do
           case getBinFmtType of
             ELF   -> ["-shared", "-fPIC", "-Wl,-Bsymbolic"] ++
                      [ "-nostartfiles"
+                     , "-static-libstdc++", "-static-libgcc"
                      , "-Wl,--as-needed"
                      , "-Wl,-z,relro", "-Wl,-z,now"
                      ] ++ libdirflags ++

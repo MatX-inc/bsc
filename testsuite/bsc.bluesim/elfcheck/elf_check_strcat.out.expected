@@ -1,0 +1,6 @@
+bluesim_elf_check: sysElfStrCat.cexe.so
+  DT_NEEDED entries: none
+  unresolved dynamic symbols: none
+  dynamic relocations: relative-only
+  system-call instructions: none
+  PASS
