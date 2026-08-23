@@ -351,6 +351,15 @@ EXTERNAL_ALLOWANCES = [
 # these is charged its static part plus --format-vla-bytes; any other
 # plain-'dynamic' frame defeats the bound.
 DYNAMIC_VLA_FUNCTIONS = [
+    # tree-valued string names flattened into stack buffers sized by
+    # the tree's own byte count: $fopen's file name and mode, the
+    # plusargs name, and the RegFile/BRAM load-file constructors
+    # (see bs_str.h).  The variadic tasks are matched by mangled name:
+    # GCC's callgraph labels demangle their '...' prototypes to just ")"
+    r"^_Z12dollar_fopenPKc",
+    r"^_Z26dollar_test_dollar_plusargsP9tSimState",
+    r"\bMOD_RegFile<.*>::MOD_RegFile\(.*tStr",
+    r"\bMOD_BRAM<.*>::MOD_BRAM\(.*tStr",
     r"^const char\* print_binary\(tFieldDesc&",     # dollar_display.cxx
     r"\bWideData::print_(binary|hex|octal|decimal)\(",
     r"\bWideData::max_decimal_digits\(",

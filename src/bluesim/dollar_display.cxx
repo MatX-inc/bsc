@@ -6,6 +6,7 @@
 #include <string>
 
 #include "bluesim_kernel_api.h"
+#include "bs_str.h"
 #include "bs_wide_data.h"
 #include "bs_module.h"
 #include "bs_target.h"
@@ -175,7 +176,7 @@ class ArgList
   bool         has_sign;
   bool         is_pointer;
   bool         is_string;
-  bool         is_cxx_string;
+  bool         is_str_tree;
   bool         is_double;
   unsigned int size;
 
@@ -199,7 +200,7 @@ class ArgList
   bool isSigned() const         { return has_sign; }
   bool isPointer() const        { return is_pointer; }
   bool isString() const         { return is_string; }
-  bool isCxxString() const      { return is_cxx_string; }
+  bool isStringTree() const     { return is_str_tree; }
   bool isDouble() const         { return is_double; }
 
   bool getBit();
@@ -211,7 +212,7 @@ class ArgList
   signed long long getSLongLong();
   double getDouble();
   char* getString();
-  std::string* getCxxString();
+  const tStr* getStringTree();
   void* getPointer();
 
   void skip() { next(); }
@@ -261,7 +262,7 @@ void ArgList::next()
     case 's':
     {
       is_string     = has_size;
-      is_cxx_string = !has_size;
+      is_str_tree   = !has_size;
       is_pointer    = false;
       is_double     = false;
       ++cptr;
@@ -271,7 +272,7 @@ void ArgList::next()
     {
       is_pointer    = true;
       is_string     = false;
-      is_cxx_string = false;
+      is_str_tree   = false;
       is_double     = false;
       ++cptr;
       break;
@@ -279,7 +280,7 @@ void ArgList::next()
       is_double     = true;
       is_pointer    = false;
       is_string     = false;
-      is_cxx_string = false;
+      is_str_tree   = false;
       // we will convert to a signed long long
       // if a real number is not expected
       has_sign      = true;
@@ -290,7 +291,7 @@ void ArgList::next()
     {
       is_pointer    = false;
       is_string     = false;
-      is_cxx_string = false;
+      is_str_tree   = false;
       is_double     = false;
     }
   }
@@ -372,9 +373,9 @@ char* ArgList::getString()
   return ret;
 }
 
-std::string* ArgList::getCxxString()
+const tStr* ArgList::getStringTree()
 {
-  std::string* ret = va_arg(*ap_ptr,std::string*);
+  const tStr* ret = va_arg(*ap_ptr,const tStr*);
   next();
   return ret;
 }
@@ -389,20 +390,26 @@ void* ArgList::getPointer()
 void fill_tValue(tValue& v, ArgList* args, Target* dest)
 {
   v.isSigned = args->isSigned();
-  v.usingWideVal = args->isPointer() || args->isString() || args->isCxxString();
-  v.localStorage = args->isString() || args->isCxxString();
+  v.usingWideVal = args->isPointer() || args->isString() ||
+                   args->isStringTree();
+  v.localStorage = args->isString() || args->isStringTree();
   v.bits = args->argSize();
   if (args->isPointer())
     v.data.wideVal = (WideData*) args->getPointer();
   else if (args->isString())
     v.data.wideVal = new WideData(v.bits,args->getString());
-  else if (args->isCxxString())
+  else if (args->isStringTree())
   {
-    const std::string* s = args->getCxxString();
-    if (s)
+    // stage the tree's bytes contiguously (heap storage, like the
+    // owning WideData about to copy them) and hand them to the
+    // string layout constructor
+    const tStr* t = args->getStringTree();
+    if (t)
     {
-      v.bits = 8 * s->length();
-      v.data.wideVal = new WideData(v.bits,s->c_str());
+      v.bits = 8 * bs_str_len(t);
+      char* flat = new char[bs_str_len(t) + 1];
+      v.data.wideVal = new WideData(v.bits, bs_str_flatten(t, flat));
+      delete[] flat;
     }
     else
       v.data.wideVal = NULL;
@@ -447,7 +454,7 @@ const std::string* convert_to_string(ArgList* args, Target* dest)
   if (args->isDone())
     return NULL;
 
-  if (args->isString() || args->isCxxString())
+  if (args->isString() || args->isStringTree())
     return NULL;  // actually a bug if this occurs
 
   // to interpret a number as a string, the characters start at the
@@ -772,18 +779,30 @@ const char* print_string(tFieldDesc& spec, ArgList* args, Target* dest)
     return spec.str;  // there is no argument, so do not treat as format
   }
 
+  if (args->isStringTree())
+  {
+    // a string-tree argument: stream its leaves straight to the
+    // target, without flattening (see bs_str.h)
+    const tStr* t = args->getStringTree();
+    unsigned int tree_len = bs_str_len(t);
+    pad(spec.width, tree_len, tree_len, ' ', dest);
+    tUInt32 pos = 0u;
+    while (pos < tree_len)
+    {
+      tUInt32 off;
+      const tStr* leaf = bs_str_leaf_at(t, pos, &off);
+      dest->write_data(leaf->data, sizeof(char), leaf->len);
+      pos = off + leaf->len;
+    }
+    return spec.after;
+  }
+
   // try to get string argument and determine length
   const char* str = NULL;
   unsigned int str_len = args->argSize() / 8;
   const std::string* alloced_str = NULL;
   if (args->isString())
     str = args->getString();
-  else if (args->isCxxString())
-  {
-    const std::string* s = args->getCxxString();
-    str = s->c_str();
-    str_len = s->length();
-  }
   else
   {
     alloced_str = convert_to_string(args, dest);
@@ -960,7 +979,7 @@ void format(const char* default_format, Module* location, ArgList* args,
   while (!args->isDone())
   {
     ++arg_num;
-    bool is_str = args->isString() || args->isCxxString();
+    bool is_str = args->isString() || args->isStringTree();
     bool is_fmt = (!restricted && is_str) || (restricted && (arg_num == 1));
     if (is_fmt)
     {
@@ -976,10 +995,22 @@ void format(const char* default_format, Module* location, ArgList* args,
       {
         cptr = args->getString();
       }
-      else if (args->isCxxString())
+      else if (args->isStringTree())
       {
-        const std::string* s = args->getCxxString();
-        cptr = s->c_str();
+        // flatten the tree's bytes for the format parser, which
+        // needs contiguous, NUL-terminated characters
+        const tStr* t = args->getStringTree();
+        if (t == NULL)
+          cptr = "";  // an absent def is an empty format
+        else
+        {
+          std::string* flat = new std::string();
+          flat->resize(bs_str_len(t));
+          if (bs_str_len(t) > 0)
+            bs_str_copy(t, &(*flat)[0]);
+          alloced_str = flat;
+          cptr = flat->c_str();
+        }
       }
       else
       {
@@ -1707,29 +1738,60 @@ static VLFiles vlfile ;
  * These are the "file" based system tasks
  */
 
-// $fopen( filename,mode ) ;
-tUInt32 dollar_fopen(const char* /*unused*/, const std::string* filename,
-                                             const std::string* mode)
+// Read one string argument off an ArgList.  Generated code passes
+// string literals as plain character arrays (with a sized
+// descriptor, already NUL-terminated; stored in *chars) and string
+// defs as string trees (with an unsized descriptor; stored in
+// *tree).  The names used here (file names, open modes) have
+// C-string semantics, so the caller flattens a tree into a stack
+// buffer of bs_str_len(*tree) + 1 bytes.  Both outputs are NULL for
+// a missing or non-string argument.
+static void string_arg(ArgList* args, const char** chars, const tStr** tree)
 {
-  const struct bs_host_ops* ops = bk_host_ops(NULL);
-  if (ops == NULL)
-    return 0 ;
-  bs_host_file* nowopened =
-    ops->open(bk_host_ctx(NULL), filename->c_str(), mode->c_str());
-  tUInt32 key = vlfile.registerFile(false, nowopened);
-  return key ;
+  *chars = NULL ;
+  *tree = NULL ;
+  if (args->isDone())
+    return ;
+  if (args->isString())
+    *chars = args->getString() ;
+  else if (args->isStringTree())
+    *tree = args->getStringTree() ;
+  else
+    args->skip() ;
 }
 
-// $fopen ( filename )
-// MCD file type
-tUInt32 dollar_fopen(const char* /*unused*/ , const std::string* filename)
+// $fopen( filename ) opens a multi-channel descriptor;
+// $fopen( filename, mode ) opens an fd-style descriptor.
+tUInt32 dollar_fopen(const char* size_str, ...)
 {
+  va_list ap;
+  va_start(ap, size_str);
+  ArgList args(size_str, &ap);
+  const char* fname_chars; const tStr* fname_tree;
+  string_arg(&args, &fname_chars, &fname_tree);
+  bool mcd = args.isDone();
+  const char* mode_chars = mcd ? "w" : NULL; const tStr* mode_tree = NULL;
+  if (!mcd)
+    string_arg(&args, &mode_chars, &mode_tree);
+  va_end(ap);
+
+  // flatten tree-valued names into stack storage with C-string
+  // semantics (VLAs, see DYNAMIC_VLA_FUNCTIONS)
+  char fname_buf[bs_str_len(fname_tree) + 1];
+  char mode_buf[bs_str_len(mode_tree) + 1];
+  const char* filename = (fname_tree != NULL)
+                           ? bs_str_flatten(fname_tree, fname_buf)
+                           : fname_chars;
+  const char* mode = (mode_tree != NULL)
+                       ? bs_str_flatten(mode_tree, mode_buf)
+                       : mode_chars;
+
   const struct bs_host_ops* ops = bk_host_ops(NULL);
-  if (ops == NULL)
+  if ((ops == NULL) || (filename == NULL) || (mode == NULL))
     return 0 ;
   bs_host_file* nowopened =
-    ops->open(bk_host_ctx(NULL), filename->c_str(), "w");
-  tUInt32 key = vlfile.registerFile(true, nowopened);
+    ops->open(bk_host_ctx(NULL), filename, mode);
+  tUInt32 key = vlfile.registerFile(mcd, nowopened);
   return key ;
 }
 

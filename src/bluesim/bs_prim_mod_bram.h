@@ -6,6 +6,7 @@
 #include "bluesim_kernel_api.h"
 #include "bluesim_probes.h"
 #include "bs_mem_file.h"
+#include "bs_str.h"
 #include "bs_module.h"
 #include "bs_range_tracker.h"
 #include "bs_reset.h"
@@ -226,6 +227,32 @@ class MOD_BRAM : public Module
 
     init_symbols();
   }
+ // as above, with the file name given as a string tree (a
+ // concatenation built in the enclosing module's constructor, see
+ // bs_str.h): the name is flattened into a stack buffer with
+ // C-string semantics for the load (a VLA, see
+ // DYNAMIC_VLA_FUNCTIONS)
+ MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
+	  const tStr* memfile,
+	  tUInt8 is_pipelined,
+	  unsigned int addr_width, unsigned int data_width,
+	  unsigned long long mem_size,
+	  bool bin_format, unsigned int num_ports)
+    : Module(simHdl, name, parent), pipelined(is_pipelined),
+      addr_bits(addr_width), data_bits(data_width),
+      lo_addr(0), hi_addr(mem_size-1),
+      chunk_size(data_width), num_wens(1), dual_port(num_ports == 2),
+      upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
+      proxy(NULL)
+  {
+    init_storage();
+
+    char memfile_buf[bs_str_len(memfile) + 1];
+    init_from_file(bs_str_flatten(memfile, memfile_buf), bin_format);
+
+    init_symbols();
+  }
  MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
 	  const std::string& memfile,
 	  tUInt8 is_pipelined,
@@ -244,6 +271,29 @@ class MOD_BRAM : public Module
     init_storage();
 
     init_from_file(memfile, bin_format);
+
+    init_symbols();
+  }
+ // the byte-enable form, with the file name given as a string tree
+ MOD_BRAM(tSimStateHdl simHdl, const char* name, Module* parent,
+	  const tStr* memfile,
+	  tUInt8 is_pipelined,
+	  unsigned int addr_width, unsigned int data_width,
+	  unsigned int chunk_size, unsigned int num_wens,
+	  unsigned long long mem_size,
+	  bool bin_format, unsigned int num_ports)
+    : Module(simHdl, name, parent), pipelined(is_pipelined),
+      addr_bits(addr_width), data_bits(data_width),
+      lo_addr(0), hi_addr(mem_size-1),
+      chunk_size(chunk_size), num_wens(num_wens), dual_port(num_ports == 2),
+      upd_a_at(~bk_now(sim_hdl)), written_a_at(~bk_now(sim_hdl)),
+      upd_b_at(~bk_now(sim_hdl)), written_b_at(~bk_now(sim_hdl)),
+      proxy(NULL)
+  {
+    init_storage();
+
+    char memfile_buf[bs_str_len(memfile) + 1];
+    init_from_file(bs_str_flatten(memfile, memfile_buf), bin_format);
 
     init_symbols();
   }

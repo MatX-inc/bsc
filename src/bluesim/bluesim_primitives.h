@@ -3,6 +3,8 @@
 
 #include "bluesim_types.h"
 
+#include "bs_str.h"
+
 #include "bs_prim_mod_reg.h"
 #include "bs_prim_mod_wire.h"
 #include "bs_prim_mod_fifo.h"

@@ -5,6 +5,7 @@ module SimBlocksToC ( simBlocksToC
 
 import Data.List(nub, genericLength, mapAccumL)
 import Data.Maybe(catMaybes)
+import qualified Data.Set as S
 import Control.Monad.State(runState)
 import System.Time -- XXX: in old-time package
 import qualified Data.Map as M
@@ -139,7 +140,7 @@ convertModuleBlock flags sb_map ff_map wdef_mod_map reused top_blk writeFileC sb
             runState (simCCBlockToClassDefinition sb_map sb)
                      (initialState ff_map wdef_inst_map (unSpecTo flags))
         lit_defs = mkLiteralDecls (nub (literals state))
-        str_defs = mkStringDecls (M.toList (str_map state))
+        str_defs = mkStringDecls (M.toList (str_map state)) (str_objs state)
         class_defs = lit_defs ++ str_defs ++ method_defs
     if (name `elem` reused)
     then return [] -- don't generate any files for reused blocks
@@ -260,7 +261,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
         -- wide literals used in the methods
         meth_lits = mkLiteralDecls (nub (literals state))
 
-        str_lits = mkStringDecls (M.toList (str_map state))
+        str_lits = mkStringDecls (M.toList (str_map state)) (str_objs state)
 
         -- include files needed for kernel callbacks, etc.
         uses_foreign = any schedCallsForeignFn scheds
@@ -893,18 +894,30 @@ mkLiteralDecls lits = [comment "Literal declarations" (blankLines 0)]
            in [static $ arr_decl, static $ lit]
 
 
--- String literals may have embedded null characters, so we must
--- construct std::strings for them based on their known size.
-mkStringDecls :: [(String,Integer)] -> [CCFragment]
-mkStringDecls [] = [blankLines 0]
-mkStringDecls lits = [comment "String declarations" (blankLines 0)]
-                      ++ (map mkStrDecl lits)
-                      ++ [blankLines 1]
+-- String literals are declared as plain file-scope char arrays:
+-- constant-initialized data, so loading a model runs no global
+-- constructors and makes no allocator calls for them.  They may have
+-- embedded null characters, so consumers do not measure them with
+-- strlen(): the generated calls carry the length in their argument
+-- descriptor string or pass it explicitly.  A literal used as a
+-- string value additionally gets a tStr leaf object (see bs_str.h)
+-- carrying the array and its byte count; its constexpr constructor
+-- makes it constant-initialized as well.
+mkStringDecls :: [(String,Integer)] -> S.Set String -> [CCFragment]
+mkStringDecls [] _ = [blankLines 0]
+mkStringDecls lits objs = [comment "String declarations" (blankLines 0)]
+                           ++ (concatMap mkStrDecl lits)
+                           ++ [blankLines 1]
   where mkStrDecl (s,n) =
            let name = mkStringLiteralName n
-               str_var = constant $
-                           (mkVar name) `ofType` (classType "std::string")
-           in static $ construct str_var [ mkStr s, mkUInt32 (genericLength s) ]
+               str_var = constant . array . CCSyntax.char $
+                           (mkVar name) `assign` (mkStr s)
+               obj = construct (constant $ (userType "tStr")
+                                    (mkVar (mkStringObjName n)))
+                               [ var name
+                               , mkUInt32 (genericLength s) ]
+           in (static $ str_var) :
+              (if (s `S.member` objs) then [static $ obj] else [])
 
 -- Create one .cxx and one .h file, given a list of
 -- referenced blocks, class declarations and method definitions.

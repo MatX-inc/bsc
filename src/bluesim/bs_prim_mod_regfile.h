@@ -6,6 +6,7 @@
 #include "bluesim_kernel_api.h"
 #include "bluesim_probes.h"
 #include "bs_mem_file.h"
+#include "bs_str.h"
 #include "bs_module.h"
 #include "bs_range_tracker.h"
 #include "bs_reset.h"
@@ -195,6 +196,26 @@ class MOD_RegFile : public Module
     init_storage();
 
     init_from_file(memfile, bin_format);
+
+    init_symbols();
+  }
+  // as above, with the file name given as a string tree (a
+  // concatenation built in the enclosing module's constructor, see
+  // bs_str.h): the name is flattened into a stack buffer with
+  // C-string semantics for the load (a VLA, see
+  // DYNAMIC_VLA_FUNCTIONS)
+  MOD_RegFile(tSimStateHdl simHdl, const char* name, Module* parent,
+	      const tStr* memfile,
+	      unsigned int addr_width, unsigned int data_width,
+	      const AT& lo, const AT& hi, bool bin_format)
+    : Module(simHdl, name, parent), addr_bits(addr_width),
+      data_bits(data_width), lo_addr(lo), hi_addr(hi),
+      upd_at(~bk_now(sim_hdl)), proxy(NULL)
+  {
+    init_storage();
+
+    char memfile_buf[bs_str_len(memfile) + 1];
+    init_from_file(bs_str_flatten(memfile, memfile_buf), bin_format);
 
     init_symbols();
   }

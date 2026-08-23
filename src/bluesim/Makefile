@@ -33,6 +33,7 @@ HEADERS = bluesim_kernel_api.h \
           bs_prim_mod_clockmux.h \
           bs_prim_mod_resets.h \
           bs_reset.h \
+          bs_str.h \
           bs_symbol.h \
           bs_system_tasks.h \
           bs_mem_defines.h bs_mem_file.h bs_range_tracker.h \

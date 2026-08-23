@@ -1,7 +1,6 @@
 #ifndef __BS_SYSTEM_TASKS_H__
 #define __BS_SYSTEM_TASKS_H__
 
-#include <string>
 #include "bluesim_types.h"
 class Module; // forward declaration
 
@@ -43,10 +42,13 @@ extern void dollar_writeh(tSimStateHdl simHdl, Module* location,
 			  const char* size_str ...);
 extern void dollar_writeh(tSimStateHdl simHdl, Module* location);
 
-// File operations
-extern tUInt32 dollar_fopen(const char* size_str, const std::string* filename,
-			                          const std::string* mode);
-extern tUInt32 dollar_fopen(const char* size_str, const std::string* filename);
+// File operations.  $fopen(filename) opens a multi-channel
+// descriptor and $fopen(filename, mode) an fd-style descriptor; the
+// string arguments arrive as plain character arrays (literals, sized
+// descriptor) or as string trees (defs, unsized descriptor; see
+// bs_str.h), so they are read through the descriptor like the
+// display tasks'.
+extern tUInt32 dollar_fopen(const char* size_str, ...);
 
 extern void dollar_fclose(const char* size_str,const tUInt32 filehandle);
 extern void dollar_fflush();
@@ -104,9 +106,10 @@ extern void dollar_fatal(tSimStateHdl simHdl, Module* location,
 extern tUInt64 dollar_time(tSimStateHdl simHdl);
 extern tUInt32 dollar_stime(tSimStateHdl simHdl);
 
-// plusargs tasks
+// plusargs tasks.  The name argument arrives as a plain character
+// array (a literal, sized descriptor) or as a string tree (a def,
+// unsized descriptor; see bs_str.h).
 extern bool dollar_test_dollar_plusargs(tSimStateHdl simHdl,
-					const char* size_str,
-					const std::string* name);
+					const char* size_str, ...);
 
 #endif /* __BS_SYSTEM_TASKS_H__ */

@@ -8,11 +8,11 @@
  */
 
 #include <vector>
-#include <string>
 #include <cstring>
 
 #include "bluesim_types.h"
 #include "bs_mem_defines.h"
+#include "bs_str.h"
 #include "mem_alloc.h"
 
 // Used internally to record argument copies which have been
@@ -66,14 +66,27 @@ unsigned int* copy_arg(const unsigned int* data, unsigned int n)
   return copy;
 }
 
-// Copy a string argument
-char* copy_arg(const std::string& str)
+// Copy a string argument held as a string tree (see bs_str.h): the
+// tree's bytes are flattened, NUL-terminated, into argument storage.
+char* copy_arg(const tStr* str)
 {
-  unsigned int n = (str.length() / BYTES_PER_WORD) + 1;
+  unsigned int n = (bs_str_len(str) / BYTES_PER_WORD) + 1;
   char* copy = (char*) alloc_mem(n);
   argument_copies_char.push_back(copy);
   argument_sizes_char.push_back(n);
-  strcpy(copy, str.c_str());
+  bs_str_flatten(str, copy);
+  return copy;
+}
+
+// Copy a string argument held in a plain character array
+// (the form in which generated code stores its string literals)
+char* copy_arg(const char* str)
+{
+  unsigned int n = (strlen(str) / BYTES_PER_WORD) + 1;
+  char* copy = (char*) alloc_mem(n);
+  argument_copies_char.push_back(copy);
+  argument_sizes_char.push_back(n);
+  strcpy(copy, str);
   return copy;
 }
 
