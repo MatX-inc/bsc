@@ -5206,15 +5206,156 @@ expandDynUpdateToLazy _ = return Nothing
 --   array->array ops push it to elements; scalar ops use addPredG.
 -- doUH=False for lazy ops (map) that preserve uninit arrays;
 -- doUH=True for strict ops (fold, zipWith) that error on uninit.
+--
+-- A conditional structure over equal-shaped arrays (a dynamic
+-- selection between rows, a bounds check whose other arm is a
+-- don't-care) is first transposed into a single array whose cell k
+-- selects among the arms' k-th cells — the same leaf-level residual
+-- shape the old library's per-leaf accesses produced.  Without this,
+-- evalStaticOp' pushes the whole operation into each arm, which for a
+-- Module- or List-elemented result manufactures per-arm module
+-- computations that can never elaborate.  Anything the transpose does
+-- not recognize falls back to the per-arm push, preserving the old
+-- behavior exactly.
 withNormalizedArray :: Bool -> HExpr -> IType
                     -> (HPred -> HExpr -> G PExpr) -> G PExpr
-withNormalizedArray doUH arr_e arrType handler =
-    let handler' _ (p, e') = do
-          mArr <- expandDynUpdateToLazy e'
-          case mArr of
-            Just lazyArr -> handler p lazyArr
-            Nothing      -> handler p e'
-    in evalStaticOp' doUH True True arr_e arrType handler'
+withNormalizedArray doUH arr_e arrType handler = do
+    let elem_ty = case arrType of
+                    ITAp c t | (c == itPrimArray) -> t
+                    _ -> internalError ("withNormalizedArray: type: " ++
+                                        ppReadable arrType)
+    m <- normCondArray doUH arrType elem_ty arr_e
+    case m of
+      Just (p, Right lazyArr) -> handler p lazyArr
+      _ ->
+        let handler' _ (p, e') = do
+              mArr <- expandDynUpdateToLazy e'
+              case mArr of
+                Just lazyArr -> handler p lazyArr
+                Nothing      -> handler p e'
+        in evalStaticOp' doUH True True arr_e arrType handler'
+
+-- The transpose behind withNormalizedArray.  Right = a normalized
+-- ICLazyArray; Left = a container-level don't-care (position, kind),
+-- which a conditional parent shapes into per-cell don't-cares;
+-- Nothing = an unrecognized shape, which makes the whole normalization
+-- fall back.
+normCondArray :: Bool -> IType -> IType -> HExpr ->
+                 G (Maybe (HPred, Either (Position, UndefKind) HExpr))
+normCondArray doUH arrType elem_ty e0 = do
+  P p e' <- if doUH then (snd <$> evalUH e0)
+            else (eval1 e0 >>= unheap)
+  let mkIfCells cnd arr1 mk1 arr2 mk2 = do
+        -- cellwise if between two same-bounds arrays (Left side
+        -- expands to per-cell don't-cares)
+        let bnds = Array.bounds (case (arr1, arr2) of
+                                   (Just a, _) -> a
+                                   (_, Just a) -> a
+                                   _ -> internalError "normCondArray: bounds")
+            cellE (Just a) _ k = let ArrayCell ptr ref = a Array.! k
+                                 in  IRefT elem_ty ptr S.empty ref
+            cellE Nothing (Just (pos, u)) _ = icUndetAt pos elem_ty u
+            cellE Nothing Nothing _ = internalError "normCondArray: cellE"
+        cells <- mapM (\k -> do
+                         let e1 = cellE arr1 mk1 k
+                             e2 = cellE arr2 mk2 k
+                             cell' = IAps icIf [elem_ty] [cnd, e1, e2]
+                         IRefT _ cp _ cr <- toHeapCon "norm-cond-array"
+                                                elem_ty cell' Nothing
+                         return (ArrayCell cp cr))
+                      (Array.range bnds)
+        return (Array.listArray bnds cells)
+  case e' of
+    ICon _ (ICLazyArray {}) -> return (Just (p, Right e'))
+
+    ICon i (ICUndet { iuKind = k }) ->
+        return (Just (p, Left (getPosition i, k)))
+
+    IAps (ICon _ (ICPrim _ PrimArrayDynUpdate)) _ _ -> do
+        mArr <- expandDynUpdateToLazy e'
+        case mArr of
+          Just lazyArr -> return (Just (p, Right lazyArr))
+          Nothing -> return Nothing
+
+    IAps (ICon _ (ICPrim _ PrimWhenPred)) [_]
+         [ICon _ (ICPred _ p_when), e_body] -> do
+        m <- normCondArray doUH arrType elem_ty e_body
+        case m of
+          Just (p_b, r) -> return (Just (pConj p (pConj p_when p_b), r))
+          Nothing -> return Nothing
+
+    IAps (ICon _ (ICPrim _ PrimIf)) [_] [cnd, thn, els] -> do
+        mt <- normCondArray doUH arrType elem_ty thn
+        me <- normCondArray doUH arrType elem_ty els
+        case (mt, me) of
+          (Just (pt, rt), Just (pe, re)) -> do
+            p_if <- pIf cnd pt pe
+            let p' = pConj p p_if
+            case (rt, re) of
+              (Left _, Left _) -> return (Just (p', rt))
+              (Right (ICon ci (ICLazyArray at a1 _)),
+               Right (ICon _  (ICLazyArray _  a2 _)))
+                | Array.bounds a1 == Array.bounds a2 -> do
+                  arr' <- mkIfCells cnd (Just a1) Nothing (Just a2) Nothing
+                  return (Just (p', Right (ICon ci (ICLazyArray at arr' Nothing))))
+              (Right (ICon ci (ICLazyArray at a1 _)), Left mk) -> do
+                  arr' <- mkIfCells cnd (Just a1) Nothing Nothing (Just mk)
+                  return (Just (p', Right (ICon ci (ICLazyArray at arr' Nothing))))
+              (Left mk, Right (ICon ci (ICLazyArray at a2 _))) -> do
+                  arr' <- mkIfCells cnd Nothing (Just mk) (Just a2) Nothing
+                  return (Just (p', Right (ICon ci (ICLazyArray at arr' Nothing))))
+              _ -> return Nothing
+          _ -> return Nothing
+
+    IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
+             [_, sz_t@(ITNum idx_sz)] [rows_e, idx_e] -> do
+        (idx_e', _) <- evalUH idx_e
+        (_, P p_rows rows') <- evalUH rows_e
+        case rows' of
+          ICon rows_i (ICLazyArray rows_ty rows _) -> do
+            ms <- mapM (\(ArrayCell ptr ref) ->
+                          normCondArray doUH arrType elem_ty
+                              (IRefT arrType ptr S.empty ref))
+                       (Array.elems rows)
+            case sequence ms of
+              Nothing -> return Nothing
+              Just prs -> do
+                let p_arms = pSel idx_e' idx_sz (map fst prs)
+                    rs = map snd prs
+                    bndss = [ Array.bounds a
+                            | Right (ICon _ (ICLazyArray _ a _)) <- rs ]
+                case bndss of
+                  [] -> return Nothing  -- every arm undetermined
+                  (b0:brest) | all (== b0) brest -> do
+                    let n_rows = toInteger (length rs)
+                        armCell (Right (ICon _ (ICLazyArray _ a _))) k =
+                            return (a Array.! k)
+                        armCell (Left (pos, u)) _ = do
+                            IRefT _ cp _ cr <- toHeapCon "norm-cond-array"
+                                elem_ty (icUndetAt pos elem_ty u) Nothing
+                            return (ArrayCell cp cr)
+                        armCell _ _ = internalError "normCondArray: armCell"
+                    cells <- mapM (\k -> do
+                                     acs <- mapM (\r -> armCell r k) rs
+                                     let arm_arr = Array.listArray
+                                                       (0, n_rows - 1) acs
+                                         arm_e = ICon rows_i
+                                                   (ICLazyArray arrType
+                                                        arm_arr Nothing)
+                                         cell' = IAps ic [elem_ty, sz_t]
+                                                     [arm_e, idx_e']
+                                     IRefT _ cp _ cr <- toHeapCon
+                                         "norm-cond-array" elem_ty cell' Nothing
+                                     return (ArrayCell cp cr))
+                                  (Array.range b0)
+                    let arr' = Array.listArray b0 cells
+                        res = ICon rows_i (ICLazyArray arrType arr' Nothing)
+                        p' = pConjs [p, p_rows, p_arms]
+                    return (Just (p', Right res))
+                  _ -> return Nothing
+          _ -> return Nothing
+
+    _ -> return Nothing
 
 doArrayMap :: HExpr -> IType -> IType -> HExpr -> HExpr -> G PExpr
 doArrayMap f@(ICon _ (ICPrim {primOp = PrimArrayMap}))
@@ -5807,41 +5948,6 @@ improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
      -- XXX use i1 or i2?
      return ((ICon i1 (ICLazyArray { iConType = ct1, iArray = Array.listArray (Array.bounds arr1) refs', uninit = Nothing })), True)
 
--- An undefined arm takes the shape of the array on the other side.
--- An array's length lives only in its structure (not its type), so a
--- container-level don't-care blocks every static op that needs the
--- structure (toList, map, a module bind of a selected element);
--- resolving the don't-care's shape to the defined arm's bounds is a
--- legal refinement and leaves per-cell don't-cares, which is where
--- the old library loops kept them.
-improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
-                  (ICon i2 (ICUndet { iuKind = k })) = do
-  when doTraceIf $ traceM("improveIf array/undet triggered" ++ show i1 ++ show i2)
-  let elemType = case t of
-                   ITAp _ te -> te -- type must be (PrimArray t)
-                   _ -> internalError "IExpand.improveIf arr/undet: elemType"
-      und = icUndetAt (getIdPosition i2) elemType k
-  refs' <- mapM (\ref1 -> do let e1 = IRefT elemType (ac_ptr ref1) S.empty (ac_ref ref1)
-                             let cell' = IAps f [elemType] [cnd, e1, und]
-                             IRefT _ p _ r <- toHeapCon "improve-if" elemType cell' Nothing
-                             return (ArrayCell p r))
-                (Array.elems arr1)
-  return ((ICon i1 (ICLazyArray { iConType = ct1, iArray = Array.listArray (Array.bounds arr1) refs', uninit = Nothing })), True)
-
-improveIf f t cnd (ICon i1 (ICUndet { iuKind = k }))
-                  (ICon i2 (ICLazyArray { iConType = ct2, iArray = arr2 })) = do
-  when doTraceIf $ traceM("improveIf undet/array triggered" ++ show i1 ++ show i2)
-  let elemType = case t of
-                   ITAp _ te -> te -- type must be (PrimArray t)
-                   _ -> internalError "IExpand.improveIf undet/arr: elemType"
-      und = icUndetAt (getIdPosition i1) elemType k
-  refs' <- mapM (\ref2 -> do let e2 = IRefT elemType (ac_ptr ref2) S.empty (ac_ref ref2)
-                             let cell' = IAps f [elemType] [cnd, und, e2]
-                             IRefT _ p _ r <- toHeapCon "improve-if" elemType cell' Nothing
-                             return (ArrayCell p r))
-                (Array.elems arr2)
-  return ((ICon i2 (ICLazyArray { iConType = ct2, iArray = Array.listArray (Array.bounds arr2) refs', uninit = Nothing })), True)
-
 -- XXX This can lead to a static array not evaluating away?
 {-
 -- XXX test if this ever gets used
@@ -6060,16 +6166,6 @@ improveDynSel ic idx_e idx_sz arr_i arr_ty arr_bounds elem_es =
             (e:es) -> (e, es)
             _ -> internalError ("improveDynSel: head")
       all_eq = all (== elems_head) elems_tail
-      -- Arms improveIf can merge structurally.  Deliberately arrays
-      -- only: an array's structure must be transposed through the
-      -- selection for any consumer that needs it (the length is not in
-      -- the type), whereas constructor/struct arms are consumable in
-      -- residual form (field selection pushes into the arms) and
-      -- merging them eagerly perturbs programs that elaborate fine.
-      sameShape (ICon _ (ICLazyArray {iArray = a1}))
-                (ICon _ (ICLazyArray {iArray = a2})) =
-          Array.bounds a1 == Array.bounds a2
-      sameShape _ _ = False
   in
     if all_eq
     then -- still need to check the bounds
@@ -6098,32 +6194,6 @@ improveDynSel ic idx_e idx_sz arr_i arr_ty arr_bounds elem_es =
             ... move the array into the Chr ...
             -- improveIf has specific arms for Chr and Undet
 -}
-        _ | all (sameShape elems_head) elems_tail -> do
-          -- The XXX sketch above, realized for same-shaped arms: pull
-          -- the shared constructor out by lowering the selection to an
-          -- if-chain and letting improveIf's ICCon/ICTuple/ICLazyArray/
-          -- PrimChr arms push the choice into the arguments.  The
-          -- structure then stays static with per-leaf selections, which
-          -- module binds and the list-primitive walks can consume — a
-          -- residual select is fatal for non-synthesizable element
-          -- types (Array (Module a), Array (List a)), reachable since
-          -- the primitives operate on whole containers where the old
-          -- library loops selected each leaf individually.
-          let sz_t = ITNum idx_sz
-              sel_pos = getIExprPosition ic
-              mkEq k = iePrimEQ sz_t idx_e (iMkLitAt sel_pos (aitBit sz_t) k)
-              (init_arms, (_, last_arm)) =
-                  case reverse arms of
-                    (l:rest) -> (reverse rest, l)
-                    [] -> internalError ("improveDynSel: no arms")
-              foldFn (k, arm) rest = do
-                (e'', _) <- improveIf icIf elem_ty (mkEq k) arm rest
-                return e''
-          chain <- foldrM foldFn last_arm init_arms
-          let e' = mkDynSelBoundsCheck sel_pos idx_sz arr_bounds
-                       idx_e elem_ty chain
-          return (e', True)
-
         _ -> do
           let mkCell e = do
                 IRefT _ ref_p _ ref_r <- toHeapWHNFCon "improveDynSel" elem_ty e Nothing
