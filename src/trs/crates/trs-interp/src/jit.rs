@@ -6897,6 +6897,241 @@ impl Interp {
                 writeln!(f).unwrap();
             }
         }
+        // ---- rung-39 enable-store census ----
+        // The compiled edge zeroes EVERY MethodEnable slot of every
+        // instance, one u64 store each, every edge.  Classify each EN:
+        // READ = the owning module references the port in any
+        // expression (Port(p) loads in WF cones/inhibitors — lower.rs
+        // Port lowering; the reference's own backend zeroes ONLY these,
+        // SimMakeCBlocks getEnWFPort init_port); STAY1 = some call site
+        // provably stores 1 every edge (always-fire caller with a
+        // const-true call condition at a top-level statement, or an
+        // autofire pseudo-spec), making the slot constant after the
+        // first edge.  Conservative on nesting: calls under Stmt::Cond
+        // are not counted stay-1.
+        {
+            fn pe(
+                e: &trs_ir::Expr,
+                out: &mut std::collections::HashSet<StrId>,
+            ) {
+                use trs_ir::Expr as E;
+                match e {
+                    E::Port(p) => {
+                        out.insert(*p);
+                    }
+                    E::MethCall { args, .. }
+                    | E::ForeignCall { args, .. }
+                    | E::Prim { args, .. } => {
+                        for a in args {
+                            pe(a, out)
+                        }
+                    }
+                    E::If { cond, then_, else_, .. } => {
+                        pe(cond, out);
+                        pe(then_, out);
+                        pe(else_, out);
+                    }
+                    E::Case { scrutinee, arms, default, .. } => {
+                        pe(scrutinee, out);
+                        for (_, a) in arms {
+                            pe(a, out);
+                        }
+                        pe(default, out);
+                    }
+                    E::Clock { osc, gate } => {
+                        pe(osc, out);
+                        pe(gate, out);
+                    }
+                    E::Reset { wire } => pe(wire, out),
+                    _ => {}
+                }
+            }
+            fn pa(
+                a: &trs_ir::Action,
+                out: &mut std::collections::HashSet<StrId>,
+            ) {
+                use trs_ir::Action as A;
+                match a {
+                    A::MethCall { cond, args, .. }
+                    | A::Foreign { cond, args, .. }
+                    | A::Task { cond, args, .. } => {
+                        pe(cond, out);
+                        for x in args {
+                            pe(x, out)
+                        }
+                    }
+                }
+            }
+            fn ps(
+                s: &trs_ir::Stmt,
+                out: &mut std::collections::HashSet<StrId>,
+            ) {
+                use trs_ir::Stmt as S;
+                match s {
+                    S::Def { expr, .. } => pe(expr, out),
+                    S::Action(a) | S::AvAction { action: a, .. } => {
+                        pa(a, out)
+                    }
+                    S::Cond { cond, then_, else_ } => {
+                        pe(cond, out);
+                        for x in then_ {
+                            ps(x, out);
+                        }
+                        for x in else_ {
+                            ps(x, out);
+                        }
+                    }
+                }
+            }
+            let mut port_refs: HashMap<
+                usize,
+                std::collections::HashSet<StrId>,
+            > = HashMap::new();
+            for env in inst_envs.values() {
+                let mir = env.mir;
+                if port_refs.contains_key(&mir) {
+                    continue;
+                }
+                let mut set = std::collections::HashSet::new();
+                let m = &self.d.modules[mir];
+                for dd in &m.defs {
+                    pe(&dd.expr, &mut set);
+                }
+                for rr in &m.rules {
+                    let body: &Vec<trs_ir::Stmt> = &rr.body;
+                    for st in body {
+                        ps(st, &mut set);
+                    }
+                }
+                for me in &m.methods {
+                    if let Some(r) = &me.ready {
+                        pe(r, &mut set);
+                    }
+                    if let Some(r) = &me.result {
+                        pe(r, &mut set);
+                    }
+                    for st in &me.body {
+                        ps(st, &mut set);
+                    }
+                }
+                port_refs.insert(mir, set);
+            }
+            // string -> id reverse map, once
+            let sid: HashMap<&str, StrId> = self
+                .d
+                .strings
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.as_str(), i as StrId))
+                .collect();
+            let mut stay1: std::collections::HashSet<(usize, StrId)> =
+                std::collections::HashSet::new();
+            for sp in specs {
+                if let Some(af) = &sp.autofire {
+                    let en = format!("EN_{}", self.s(af.method));
+                    if let Some(&id) = sid.get(en.as_str()) {
+                        stay1.insert((sp.inst, id));
+                    }
+                    continue;
+                }
+                if !sp.always_fire {
+                    continue;
+                }
+                let Some(env) = inst_envs.get(&sp.inst) else { continue };
+                let mir = env.mir;
+                let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                let body: &Vec<trs_ir::Stmt> = &rr.body;
+                for st in body {
+                    let trs_ir::Stmt::Action(trs_ir::Action::MethCall {
+                        instance,
+                        method,
+                        cond,
+                        ..
+                    }) = st
+                    else {
+                        continue;
+                    };
+                    let ctrue = matches!(
+                        cond,
+                        trs_ir::Expr::Const { limbs, .. }
+                            if limbs.iter().any(|&l| l != 0)
+                    );
+                    if !ctrue {
+                        continue;
+                    }
+                    let Some(&ci) = env.children.get(instance) else {
+                        continue;
+                    };
+                    let en = format!("EN_{}", self.s(*method));
+                    if let Some(&id) = sid.get(en.as_str()) {
+                        stay1.insert((ci, id));
+                    }
+                }
+            }
+            let (mut n_en, mut n_read, mut n_stay1, mut n_dead_or_stay1) =
+                (0usize, 0usize, 0usize, 0usize);
+            let mut iis2: Vec<usize> = inst_envs.keys().copied().collect();
+            iis2.sort_unstable();
+            for i in iis2 {
+                let env = &inst_envs[&i];
+                let refs = port_refs.get(&env.mir);
+                let mut ens: Vec<(StrId, u32)> =
+                    env.en_slot.iter().map(|(&k, &v)| (k, v)).collect();
+                ens.sort_unstable();
+                for (pname, slot) in ens {
+                    let read =
+                        refs.is_some_and(|r| r.contains(&pname));
+                    let s1 = stay1.contains(&(i, pname));
+                    n_en += 1;
+                    n_read += read as usize;
+                    n_stay1 += s1 as usize;
+                    n_dead_or_stay1 += (!read || s1) as usize;
+                    writeln!(
+                        f,
+                        "EN {i} {slot} read={} stay1={} {}",
+                        read as u8,
+                        s1 as u8,
+                        self.s(pname)
+                    )
+                    .unwrap();
+                }
+            }
+            // per-edge store totals for the main comp: EN zeroing
+            // (design-wide list, every comp), CF/WF stores (2 per Sched
+            // node), eager stores (words)
+            for (rci, nodes) in comp_nodes.iter().enumerate() {
+                let Some(nodes) = nodes else { continue };
+                let (mut nsched, mut eagw) = (0usize, 0usize);
+                for node in nodes {
+                    if let JitNode::Sched(sn) = node {
+                        nsched += 1;
+                        if let Some(sp) = specs.get(*sn as usize) {
+                            if let Some(env) = inst_envs.get(&sp.inst) {
+                                for e in &sp.eager {
+                                    if let Some(&(_, w)) =
+                                        env.eager_slot.get(e)
+                                    {
+                                        eagw += w.max(1).div_ceil(64)
+                                            as usize;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                writeln!(
+                    f,
+                    "STORESUM comp={rci} en_zero={n_en} cfwf_words={} eager_words={eagw}",
+                    2 * nsched
+                )
+                .unwrap();
+            }
+            writeln!(
+                f,
+                "ENSUM total={n_en} read={n_read} stay1={n_stay1} skippable_dead_or_stay1={n_dead_or_stay1}"
+            )
+            .unwrap();
+        }
         eprintln!("trs jit: layout census -> {}", p.display());
     }
 }
