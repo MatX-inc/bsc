@@ -2573,6 +2573,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let word = self.load_word(f, slot);
                     return Ok(self.to_w(word, 64, 1, false));
                 }
+                // rung-40 tripwire (external review): a MethodEnable
+                // port reaching lowering WITHOUT a slot means the
+                // liveness pre-pass missed a runtime reader — never
+                // fall through toward a silent 0; fail loudly naming
+                // the port so a reach mismatch is a bug report, not a
+                // miscompile.  (Pruned plans only: traced plans keep
+                // every EN slot, so this arm is unreachable there.)
+                if self.env.d.modules[ie.mir]
+                    .inputs
+                    .iter()
+                    .any(|q| q.name == *p && q.kind == trs_ir::PortKind::MethodEnable)
+                {
+                    panic!(
+                        "trs: BUG: enable port '{}' was pruned by the \
+                         fast-plan liveness walk but is read by compiled \
+                         lowering — report this (rung-40 EN pruning)",
+                        self.env.d.strings[*p as usize]
+                    );
+                }
                 if let Some(&(w, v)) = ie.port_consts.get(p) {
                     if w == 0 {
                         return Ok(self.ity(0).const_zero()); // empty bit-vector

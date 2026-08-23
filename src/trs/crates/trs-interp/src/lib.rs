@@ -66,6 +66,18 @@ fn is_lib_bdpi(c_name: &str) -> bool {
     matches!(c_name, "rand32" | "srand")
 }
 
+/// rung-40 strict trap arming: panic instead of serving 0 when a
+/// pruned EN slot is read interp-side (TRS_STRICT_EN=1, and the
+/// lockstep selfcheck implies it — a missed reader must never be
+/// papered over during an oracle run).
+fn strict_en() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("TRS_STRICT_EN").is_some()
+            || std::env::var_os("TRS_SELFCHECK").is_some()
+    })
+}
+
 /// glibc random() (TYPE_3, trinomial x^31 + x^3 + 1), reimplemented so
 /// every Interp owns its OWN stream.  The reference's rand32.cxx calls
 /// libc random(), whose state is process-global — fine for one model
@@ -256,6 +268,9 @@ pub struct Interp {
     /// (instance, EN port) -> arena slot: interpreted method calls
     /// during body fallback write EN through so native scheds see them
     jit_en_slots: HashMap<(usize, StrId), u32>,
+    /// the current fast plan pruned at least one EN slot (rung 40) —
+    /// arms the strict trap in the EN-read fallthrough below
+    jit_en_pruned: bool,
     /// (instance, def) -> (arena base, width) for fire signals and
     /// schedule-position defs: interpreted evaluation falls through to
     /// the slots the native scheds keep current
@@ -833,6 +848,7 @@ impl Interp {
             stepper: None,
             jit_shared: None,
             jit_en_slots: HashMap::new(),
+            jit_en_pruned: false,
             jit_eager_slots: HashMap::new(),
             jit_request: Default::default(),
             jit_emit_result: None,
@@ -1552,6 +1568,21 @@ impl Interp {
                                     *self.jit_arena_ptr.add(slot as usize)
                                 };
                                 return Value::from_u64(w, word);
+                            }
+                            // rung-40 strict trap (external review): a
+                            // pruned fast plan reaching this fallthrough
+                            // means the liveness walk missed an
+                            // interp-side reader — 0 is what an
+                            // untouched zeroed slot would hold, but the
+                            // miss itself is a bug; trap when asked.
+                            if self.jit_en_pruned && strict_en() {
+                                panic!(
+                                    "trs: BUG: enable port '{}' was \
+                                     pruned by the fast-plan liveness \
+                                     walk but read interp-side — report \
+                                     this (rung-40 EN pruning)",
+                                    self.d.strings[*name as usize]
+                                );
                             }
                         }
                         Value::from_u64(w, 0)

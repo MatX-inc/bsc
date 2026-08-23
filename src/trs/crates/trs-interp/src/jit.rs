@@ -4503,6 +4503,7 @@ impl Interp {
         // Precedent: Bluesim's SimMakeCBlocks init_port zeroes only
         // used ENs; Verilator DCEs keep-fires nets in non-trace builds.
         let en_prune = !self.vcd_trace;
+        let mut en_pruned_any = false;
         let mut inst_envs: HashMap<usize, InstEnv> = HashMap::new();
         let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
         let reset_node_slot: Vec<u32> =
@@ -4765,6 +4766,7 @@ impl Interp {
             enps.sort_unstable();
             for pname in enps {
                 if en_prune && !live_en.contains(&(mir, pname)) {
+                    en_pruned_any = true;
                     continue;
                 }
                 en_slot.insert(pname, alloc(&mut nslots, 1));
@@ -4936,6 +4938,9 @@ impl Interp {
                 },
             );
         }
+        // the interp-side strict trap (lib.rs EN fallthrough) fires
+        // only when a pruned plan is actually in effect
+        self.jit_en_pruned = en_pruned_any;
         // subtree extents (known only after the whole subtree walked)
         for (i, &(s0, s1)) in &subtree {
             if let Some(e) = inst_envs.get_mut(i) {
@@ -7504,6 +7509,30 @@ impl Interp {
                 }
             }
         }
+        // clock-gate cones evaluate interp-side in the OWNER instance's
+        // context (lower.rs Port lowering bails dynamic ones) — retain
+        // their EN reads conservatively (external review: never let a
+        // gate-cone reader be pruned).  A SEPARATE walker: the gates
+        // map iterates in process-seeded order, so it must not touch
+        // the schedule-affinity ranks; live_en is a set, where order
+        // cannot matter.
+        let mut gw = LcRank {
+            it: self,
+            stop: HashMap::new(),
+            rank: HashMap::new(),
+            n: 0,
+            seen_defs: std::collections::HashSet::new(),
+            seen_meths: std::collections::HashSet::new(),
+            live_en: std::collections::HashSet::new(),
+        };
+        for inst in &self.insts {
+            if let InstKind::User { gates, .. } = &inst.kind {
+                for (owner, g) in gates.values() {
+                    gw.expr(*owner, g);
+                }
+            }
+        }
+        w.live_en.extend(gw.live_en);
         (w.rank, w.live_en)
     }
 }
