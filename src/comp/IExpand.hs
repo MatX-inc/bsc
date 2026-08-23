@@ -5375,6 +5375,19 @@ evalListOp prim_i e elem_ty result_ty undetHandler nilHandler consHandler = do
       P p_body e_body' <- recurse e_body
       return (P (pConj p (pConj p_when p_body)) e_body')
 
+    -- A dynamic selection between lists (differing arms residualize as
+    -- PrimArrayDynSelect; see improveDynSel): push the walk into the
+    -- reachable elements, as evalStaticOp' does for static ops and as
+    -- the old recursive library functions got from case-pushing.
+    -- Ground-typed arm results merge in improveDynSel/improveIf; a
+    -- still-listy result re-residualizes and a later walk consumes it.
+    IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
+             [_, ITNum idx_sz] [arr_e, idx_e] -> do
+      let handler _ (p2, e2) = addPredG p2 $ recurse e2
+      addPredG p $
+          evalStaticOpInArray' True True True ic idx_e idx_sz
+                               arr_e result_ty handler
+
     IAps (ICon i _) _ [a]
       | i == idPrimChr -> nilHandler p
       | i == idCons noPosition -> do
