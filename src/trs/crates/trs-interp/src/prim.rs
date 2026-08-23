@@ -317,6 +317,7 @@ pub(crate) const RC_PRIM_COUNTER: u64 = 5;
 pub(crate) const RC_PRIM_REGFILE: u64 = 6;
 pub(crate) const RC_PRIM_FIFO: u64 = 7;
 pub(crate) const RC_PRIM_BRAM: u64 = 8;
+pub(crate) const RC_PRIM_BYPASSWIRE: u64 = 9;
 
 /// Rebuild a native bounce servicer from its baked seed: the prim
 /// (dynamic state = the live slots it will adopt) plus its arena
@@ -364,6 +365,11 @@ pub(crate) fn runcore_restore(
                 RWire::new(&[Value::from_u64(32, w as u64)], false)
             };
             Some((Box::new(p), 1 + vw(w)))
+        }
+        (RC_PRIM_BYPASSWIRE, &[w], []) => {
+            let w = width_of(w)?;
+            let p = BypassWire::new(&[Value::from_u64(32, w as u64)], false);
+            Some((Box::new(p), vw(w)))
         }
         (RC_PRIM_CONFIGREG, &[w], []) => {
             let w = width_of(w)?;
@@ -495,6 +501,12 @@ pub enum ArenaKind {
     /// ceil(max(width,1)/64) words after it.  The end-of-edge tick
     /// clears the valid word (interpreted, like all ticks).
     Wire { width: u32 },
+    /// BypassWire/CrossingBypassWire: value in ceil(max(width,1)/64)
+    /// words at the base slot, nothing else — no valid word (whas is
+    /// const-true: always written by contract) and no tick protocol
+    /// (the value never reverts).  Rung 36: these accesses were 99.99%
+    /// of Toooba's trampoline traffic before attachment.
+    BypassWire { width: u32 },
     /// ConfigReg: reads must see the begin-of-instant value even after
     /// a same-instant write.  Layout: old value (w words), current
     /// value (w words), written_at instant (1 word).  Compiled reads
@@ -2953,13 +2965,51 @@ impl Prim for RWire {
 
 /// BypassWire: combinational wire, always written each cycle.
 struct BypassWire {
+    width: u32,
     value: Value,
+    /// JIT arena backing: value words at the base slot — NO valid word
+    /// (whas is const-true by the always-written contract) and no tick
+    /// protocol (nothing reverts), which is why this is its own
+    /// ArenaKind rather than a Wire with a phantom valid bit
+    slot: Option<*mut u64>,
 }
 
 impl BypassWire {
     fn new(consts: &[Value], zero_width: bool) -> BypassWire {
         let width = if zero_width { 1 } else { carg(consts, 0) as u32 };
-        BypassWire { value: Value::zero(width.max(1)) }
+        BypassWire {
+            width,
+            value: Value::zero(width.max(1)),
+            slot: None,
+        }
+    }
+    fn value_words(&self) -> usize {
+        ((self.width.max(1) as usize) + 63) / 64
+    }
+    fn get_value(&self) -> Value {
+        match self.slot {
+            Some(p) => {
+                let limbs = unsafe {
+                    std::slice::from_raw_parts(p, self.value_words())
+                }
+                .to_vec();
+                Value::from_limbs64(self.width.max(1), limbs)
+            }
+            None => self.value.clone(),
+        }
+    }
+    fn set_value(&mut self, v: &Value) {
+        match self.slot {
+            Some(p) => {
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(p, self.value_words())
+                };
+                for (i, d) in dst.iter_mut().enumerate() {
+                    *d = v.limbs64().get(i).copied().unwrap_or(0);
+                }
+            }
+            None => self.value = v.clone(),
+        }
     }
 }
 
@@ -2969,7 +3019,7 @@ impl Prim for BypassWire {
     }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
-            "wget" | "read" => self.value.clone(),
+            "wget" | "read" => self.get_value(),
             "whas" => Value::from_u64(1, 1),
             m => panic!("BypassWire: unknown value method {m:?}"),
         }
@@ -2979,13 +3029,34 @@ impl Prim for BypassWire {
             // zero-width wires (BypassWire0) are set with no argument
             "wset" | "write" => {
                 if let Some(v) = args.first() {
-                    self.value = v.clone();
+                    self.set_value(v);
                 }
             }
             m => panic!("BypassWire: unknown action method {m:?}"),
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        Some(ArenaKind::BypassWire { width: self.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        let words = self.value_words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot, words) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = self.value.limbs64().get(i).copied().unwrap_or(0);
+        }
+        self.slot = Some(slot);
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_BYPASSWIRE, vec![self.width as u64], Vec::new()))
+    }
     // the empty tick above must also be DECLARED no-op or the per-edge
     // walk dispatches it per instance per cycle anyway — on Toooba
     // (RISCY-OOO bypass networks) that walk measured 47% of the wall

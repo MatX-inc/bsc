@@ -4418,6 +4418,10 @@ impl Interp {
                         Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
                         Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
                         Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
+                        // attachment is not a stability reclassification:
+                        // BypassWire keeps the opaque class it had when
+                        // unattached (any upgrade is its own rung)
+                        Some(ArenaKind::BypassWire { .. }) => ChildClass::Other,
                         Some(ArenaKind::Fifo { loopy, .. }) => ChildClass::Fifo { loopy },
                         // arena-backed but NO stability contract and
                         // reads can WARN (bounds): the split analyzer
@@ -4533,6 +4537,7 @@ impl Interp {
                 children.iter().map(|(k, v)| (*k, *v)).collect();
             let mut reg_slot = HashMap::new();
             let mut wire_slot = HashMap::new();
+            let mut bypass_slot = HashMap::new();
             let mut creg_slot = HashMap::new();
             let mut fifo_slot = HashMap::new();
             let mut regfile_slot = HashMap::new();
@@ -4556,6 +4561,11 @@ impl Interp {
                     Some(ArenaKind::Wire { width }) => {
                         let base = alloc(&mut nslots, 1 + width.max(1).div_ceil(64));
                         wire_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::BypassWire { width }) => {
+                        let base = alloc(&mut nslots, width.max(1).div_ceil(64));
+                        bypass_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::ConfigReg { width }) => {
@@ -4852,6 +4862,7 @@ impl Interp {
                     children,
                     reg_slot,
                     wire_slot,
+                    bypass_slot,
                     creg_slot,
                     fifo_slot,
                     regfile_slot,

@@ -3080,6 +3080,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 _ => nope("wire read mismatch"),
             };
         }
+        if let Some(&(base, ww)) = ie.bypass_slot.get(&instance) {
+            return match mname.as_str() {
+                // always-written by contract: whas is constant true
+                "whas" => {
+                    let one = self.ctx.i64_type().const_int(1, false);
+                    Ok(self.to_w(one, 64, 1, false))
+                }
+                "wget" | "read" if ww >= 1 && ww == width => {
+                    Ok(self.load_val(f, base, ww))
+                }
+                _ => nope("bypass wire read mismatch"),
+            };
+        }
         if let Some(&(base, rw)) = ie.creg_slot.get(&instance) {
             if !matches!(mname.as_str(), "read" | "get" | "_read") || !args.is_empty() {
                 return nope("non-read ConfigReg method in expression");
@@ -3427,6 +3440,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     && matches!(mname.as_str(), "read" | "get" | "_read")
                     || ie.wire_slot.contains_key(instance)
                         && matches!(mname.as_str(), "whas" | "wget")
+                    || ie.bypass_slot.contains_key(instance)
+                        && matches!(mname.as_str(), "whas" | "wget" | "read")
                     || ie.fifo_slot.contains_key(instance)
                         && matches!(
                             mname.as_str(),
@@ -6399,6 +6414,30 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     }
                     return Ok(());
                 }
+                if let Some(&(base, ww)) = ie.bypass_slot.get(instance) {
+                    if !matches!(mname.as_str(), "wset" | "write") {
+                        return nope("non-wset bypass wire action");
+                    }
+                    // gating: same fire-edge dirtiness contract as
+                    // RWire wset (mark the taken condition)
+                    self.gate_mark(f, cz);
+                    // branchless conditional store; no valid word to
+                    // maintain (whas is const-true by contract) and a
+                    // zero-width wset (no argument) moves no state
+                    if ww >= 1 && !args.is_empty() {
+                        let wv = self.expr_width(f, &args[0])?;
+                        let v0 = self.expr(f, &args[0])?;
+                        let v = self.to_w(v0, wv, ww, false);
+                        let oldv = self.load_val(f, base, ww);
+                        let selv = self
+                            .builder
+                            .build_select(cz, v, oldv, "bwv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base, ww, selv);
+                    }
+                    return Ok(());
+                }
 
                 let Some(&child) = ie.children.get(instance) else {
                     return nope("action on unknown child");
@@ -6417,6 +6456,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         && (ie.reg_slot.contains_key(instance)
                             || ie.creg_slot.contains_key(instance)
                             || ie.wire_slot.contains_key(instance)
+                            || ie.bypass_slot.contains_key(instance)
                             || ie.fifo_slot.contains_key(instance))
                     {
                         let t = self.ctx.bool_type().const_int(1, false);
