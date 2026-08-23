@@ -6025,6 +6025,18 @@ improveDynSel ic idx_e idx_sz arr_i arr_ty arr_bounds elem_es =
             (e:es) -> (e, es)
             _ -> internalError ("improveDynSel: head")
       all_eq = all (== elems_head) elems_tail
+      -- arms improveIf can merge structurally (its corresponding arms)
+      sameShape (IAps (ICon _ (ICCon {conTagInfo = cti1})) _ _)
+                (IAps (ICon _ (ICCon {conTagInfo = cti2})) _ _) =
+          conNo cti1 == conNo cti2
+      sameShape (IAps (ICon _ (ICTuple {})) _ _)
+                (IAps (ICon _ (ICTuple {})) _ _) = True
+      sameShape (IAps (ICon _ (ICPrim _ PrimChr)) _ _)
+                (IAps (ICon _ (ICPrim _ PrimChr)) _ _) = True
+      sameShape (ICon _ (ICLazyArray {iArray = a1}))
+                (ICon _ (ICLazyArray {iArray = a2})) =
+          Array.bounds a1 == Array.bounds a2
+      sameShape _ _ = False
   in
     if all_eq
     then -- still need to check the bounds
@@ -6053,6 +6065,32 @@ improveDynSel ic idx_e idx_sz arr_i arr_ty arr_bounds elem_es =
             ... move the array into the Chr ...
             -- improveIf has specific arms for Chr and Undet
 -}
+        _ | all (sameShape elems_head) elems_tail -> do
+          -- The XXX sketch above, realized for same-shaped arms: pull
+          -- the shared constructor out by lowering the selection to an
+          -- if-chain and letting improveIf's ICCon/ICTuple/ICLazyArray/
+          -- PrimChr arms push the choice into the arguments.  The
+          -- structure then stays static with per-leaf selections, which
+          -- module binds and the list-primitive walks can consume — a
+          -- residual select is fatal for non-synthesizable element
+          -- types (Array (Module a), Array (List a)), reachable since
+          -- the primitives operate on whole containers where the old
+          -- library loops selected each leaf individually.
+          let sz_t = ITNum idx_sz
+              sel_pos = getIExprPosition ic
+              mkEq k = iePrimEQ sz_t idx_e (iMkLitAt sel_pos (aitBit sz_t) k)
+              (init_arms, (_, last_arm)) =
+                  case reverse arms of
+                    (l:rest) -> (reverse rest, l)
+                    [] -> internalError ("improveDynSel: no arms")
+              foldFn (k, arm) rest = do
+                (e'', _) <- improveIf icIf elem_ty (mkEq k) arm rest
+                return e''
+          chain <- foldrM foldFn last_arm init_arms
+          let e' = mkDynSelBoundsCheck sel_pos idx_sz arr_bounds
+                       idx_e elem_ty chain
+          return (e', True)
+
         _ -> do
           let mkCell e = do
                 IRefT _ ref_p _ ref_r <- toHeapWHNFCon "improveDynSel" elem_ty e Nothing
