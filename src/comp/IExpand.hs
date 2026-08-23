@@ -5807,6 +5807,41 @@ improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
      -- XXX use i1 or i2?
      return ((ICon i1 (ICLazyArray { iConType = ct1, iArray = Array.listArray (Array.bounds arr1) refs', uninit = Nothing })), True)
 
+-- An undefined arm takes the shape of the array on the other side.
+-- An array's length lives only in its structure (not its type), so a
+-- container-level don't-care blocks every static op that needs the
+-- structure (toList, map, a module bind of a selected element);
+-- resolving the don't-care's shape to the defined arm's bounds is a
+-- legal refinement and leaves per-cell don't-cares, which is where
+-- the old library loops kept them.
+improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
+                  (ICon i2 (ICUndet { iuKind = k })) = do
+  when doTraceIf $ traceM("improveIf array/undet triggered" ++ show i1 ++ show i2)
+  let elemType = case t of
+                   ITAp _ te -> te -- type must be (PrimArray t)
+                   _ -> internalError "IExpand.improveIf arr/undet: elemType"
+      und = icUndetAt (getIdPosition i2) elemType k
+  refs' <- mapM (\ref1 -> do let e1 = IRefT elemType (ac_ptr ref1) S.empty (ac_ref ref1)
+                             let cell' = IAps f [elemType] [cnd, e1, und]
+                             IRefT _ p _ r <- toHeapCon "improve-if" elemType cell' Nothing
+                             return (ArrayCell p r))
+                (Array.elems arr1)
+  return ((ICon i1 (ICLazyArray { iConType = ct1, iArray = Array.listArray (Array.bounds arr1) refs', uninit = Nothing })), True)
+
+improveIf f t cnd (ICon i1 (ICUndet { iuKind = k }))
+                  (ICon i2 (ICLazyArray { iConType = ct2, iArray = arr2 })) = do
+  when doTraceIf $ traceM("improveIf undet/array triggered" ++ show i1 ++ show i2)
+  let elemType = case t of
+                   ITAp _ te -> te -- type must be (PrimArray t)
+                   _ -> internalError "IExpand.improveIf undet/arr: elemType"
+      und = icUndetAt (getIdPosition i1) elemType k
+  refs' <- mapM (\ref2 -> do let e2 = IRefT elemType (ac_ptr ref2) S.empty (ac_ref ref2)
+                             let cell' = IAps f [elemType] [cnd, und, e2]
+                             IRefT _ p _ r <- toHeapCon "improve-if" elemType cell' Nothing
+                             return (ArrayCell p r))
+                (Array.elems arr2)
+  return ((ICon i2 (ICLazyArray { iConType = ct2, iArray = Array.listArray (Array.bounds arr2) refs', uninit = Nothing })), True)
+
 -- XXX This can lead to a static array not evaluating away?
 {-
 -- XXX test if this ever gets used
