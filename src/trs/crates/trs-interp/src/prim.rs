@@ -90,6 +90,11 @@ pub trait Prim {
     fn sym_transient(&self) -> bool {
         false
     }
+    /// Prim class label for TRS_PROF attribution: bounce/tick
+    /// histograms aggregate by class (instances are too many to read).
+    fn class_name(&self) -> &'static str {
+        "prim"
+    }
     /// Same-cycle visibility (activity census): reads of this prim can
     /// observe writes made EARLIER IN THE SAME CYCLE (CReg ports,
     /// loopy/bypass FIFOs) — a sensitivity mask must treat a write to
@@ -1001,6 +1006,9 @@ impl Counter {
 }
 
 impl Prim for Counter {
+    fn class_name(&self) -> &'static str {
+        "Counter"
+    }
     // no sym_children: the reference registers NO symbols for
     // Counter (`sim ls` parity); the oracle still compares its
     // architectural value via state_children
@@ -1795,6 +1803,9 @@ thread_local! {
 }
 
 impl Prim for RegFile {
+    fn class_name(&self) -> &'static str {
+        "RegFile"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         // bs_prim_mod_regfile.h: "" SYM_RANGE, high_addr/low_addr params
         vec![
@@ -2184,6 +2195,9 @@ impl DualPortRam {
 }
 
 impl Prim for DualPortRam {
+    fn class_name(&self) -> &'static str {
+        "DualPortRam"
+    }
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
             "read" | "sub" => {
@@ -2323,6 +2337,9 @@ impl Reg {
 }
 
 impl Prim for Reg {
+    fn class_name(&self) -> &'static str {
+        "Reg"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         vec![PrimSym { key: "", width: self.width, range: None }]
     }
@@ -2613,6 +2630,9 @@ impl ConfigReg {
 }
 
 impl Prim for ConfigReg {
+    fn class_name(&self) -> &'static str {
+        "ConfigReg"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         vec![PrimSym { key: "", width: self.value.width, range: None }]
     }
@@ -2802,6 +2822,9 @@ impl RWire {
 }
 
 impl Prim for RWire {
+    fn class_name(&self) -> &'static str {
+        "RWire"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         // bs_prim_mod_wire.h: "" and "value" share the data member;
         // isValid is the 1-bit valid member
@@ -2941,6 +2964,9 @@ impl BypassWire {
 }
 
 impl Prim for BypassWire {
+    fn class_name(&self) -> &'static str {
+        "BypassWire"
+    }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
             "wget" | "read" => self.value.clone(),
@@ -3054,6 +3080,9 @@ impl CReg {
 }
 
 impl Prim for CReg {
+    fn class_name(&self) -> &'static str {
+        "CReg"
+    }
     fn sym_bypass(&self) -> bool {
         true // later ports read earlier same-cycle writes
     }
@@ -3402,6 +3431,9 @@ impl Fifo {
 }
 
 impl Prim for Fifo {
+    fn class_name(&self) -> &'static str {
+        "Fifo"
+    }
     fn sym_bypass(&self) -> bool {
         // loopy: deq/first see same-instant enq effects; bypass:
         // one-deep same-instant enq→first bypass
@@ -6014,6 +6046,9 @@ impl Bram {
 }
 
 impl Prim for Bram {
+    fn class_name(&self) -> &'static str {
+        "Bram"
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,

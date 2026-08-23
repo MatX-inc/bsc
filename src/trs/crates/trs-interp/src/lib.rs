@@ -4760,6 +4760,17 @@ impl Interp {
                         }
                     };
                     if let InstKind::Prim(p) = &mut self.insts[inst].kind {
+                        #[cfg(feature = "aot")]
+                        if _tt0.is_some() {
+                            // residual-tick attribution: every entry in
+                            // this loop is a per-cycle dyn dispatch the
+                            // compiled edge did NOT cover
+                            let k = if *is_rst { "rst" } else { "clk" };
+                            jit::prof::hist_bump(
+                                &jit::prof::TICK_HIST,
+                                &format!("{}:{k}", p.class_name()),
+                            );
+                        }
                         if *is_rst {
                             if gate {
                                 p.rst_tick(t);
