@@ -78,7 +78,6 @@ package MxParityClk where
 
 import Clocks
 import Rules
-import RegExtra
 import ClocksExtra
 
 mkMxParityClk :: Module Empty
@@ -157,7 +156,9 @@ absent behaves differently per engine path:
 
 Corpus witnesses: `PbuAlu0Fp{Exp2,Exp2Add1,AbsExp2Add1,Cos}Test` — all
 call `bdpi_mufu_result` on an early cycle; the same BIR crashes the
-trs/33 and trs/36 linkers identically (a 512MB stack does not help).
+trs/33 and trs/36 linkers identically (a 512MB stack does not help), and
+the kernel log confirms a call through a null pointer:
+`trs[...]: segfault at 0 ip 0000000000000000 sp ... error 14`.
 Contrast: the cosim tests die in the *guarded* path (lib.rs:2183 panic
 during link measurement), and a design that merely imports BDPI without
 calling it is fine (MxSimdAluBench passes byte-exact; its mufu import is
