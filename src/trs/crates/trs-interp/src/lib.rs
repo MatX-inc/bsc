@@ -1421,18 +1421,39 @@ impl Interp {
                     return v;
                 }
                 // JIT mode: fire signals and schedule-position defs live
-                // in arena slots kept current by the native scheds
+                // in arena slots kept current by the native scheds.  In
+                // the combo (PG_FINAL early-rule) pass, DATA defs must
+                // recompute at post-edge state — Bluesim's after-edge
+                // schedule computes its def cone as fresh locals — so
+                // only rule-fire defs (edge-schedule state the combo fn
+                // reads as ports) still serve from their slots; a data
+                // slot holds the EDGE-time value, where a crossed read
+                // was still backdated
                 if !self.jit_arena_ptr.is_null() {
                     if let Some(&(base, w)) = self.jit_eager_slots.get(&(inst, *name)) {
-                        let words = ((w.max(1) as usize) + 63) / 64;
-                        let limbs = unsafe {
-                            std::slice::from_raw_parts(
-                                self.jit_arena_ptr.add(base as usize),
-                                words,
-                            )
+                        let use_slot = if crate::prim::in_combo_sched() {
+                            let module = self.module_of(inst);
+                            let mir = self.mods[module].ir;
+                            // a name with no def-table entry has no expr
+                            // to recompute — its slot stays authoritative
+                            self.mods[module].defs.get(name).map_or(true, |&di| {
+                                let p = &self.d.modules[mir].defs[di].props;
+                                p.can_fire || p.will_fire
+                            })
+                        } else {
+                            true
+                        };
+                        if use_slot {
+                            let words = ((w.max(1) as usize) + 63) / 64;
+                            let limbs = unsafe {
+                                std::slice::from_raw_parts(
+                                    self.jit_arena_ptr.add(base as usize),
+                                    words,
+                                )
+                            }
+                            .to_vec();
+                            return Value::from_limbs64(w.max(1), limbs);
                         }
-                        .to_vec();
-                        return Value::from_limbs64(w.max(1), limbs);
                     }
                 }
                 let module = self.module_of(inst);
@@ -4855,6 +4876,11 @@ impl Interp {
                 if self.vcd.is_active() {
                     self.vcd_event(t);
                 }
+                // kernel combinational schedule (bk_is_combo_sched):
+                // crossed reads inside this pass see POST-edge state —
+                // the same-instant backdate applies to destination-
+                // domain logic only (MOD_Reg::METH_crossed)
+                crate::prim::set_combo_sched(true);
                 for rci in std::mem::take(&mut fired_this_slice) {
                     let rc = &rcomps[rci];
                     if rc.early.is_empty() {
@@ -4892,6 +4918,7 @@ impl Interp {
                         }
                     }
                 }
+                crate::prim::set_combo_sched(false);
             }
 
             // steady state may only begin here (fusion compiles after

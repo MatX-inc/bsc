@@ -24,6 +24,26 @@ pub(crate) fn quiet_engine() -> bool {
 }
 
 thread_local! {
+    /// Kernel combinational-schedule flag (bk_is_combo_sched): true
+    /// while the after-edge PG_FINAL pass runs clock-crossing "early"
+    /// rules.  The owning Interp stamps it around that pass; early
+    /// rules always execute on the interp tier (compiled edges skip
+    /// them), so one flag covers every artifact tier.
+    pub(crate) static IN_COMBO_SCHED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// See `IN_COMBO_SCHED`: the advance loop stamps this around the
+/// after-edge early-rule pass.
+pub(crate) fn set_combo_sched(on: bool) {
+    IN_COMBO_SCHED.with(|c| c.set(on));
+}
+
+pub(crate) fn in_combo_sched() -> bool {
+    IN_COMBO_SCHED.with(|c| c.get())
+}
+
+thread_local! {
     /// Reference Bluesim reads a RegFile/BRAM load file when the model
     /// object is constructed, which is run time; a `.mem` is an input to
     /// the simulation, not to the build.  `trs link` instantiates a
@@ -2382,9 +2402,15 @@ impl Prim for Reg {
         match method {
             "read" | "get" | "_read" => self.load(),
             // crossing read: a same-instant write is not yet visible
+            // to destination-domain LOGIC — but the after-edge combo
+            // pass (clock-crossing early rules) reads post-edge state,
+            // exactly like METH_crossed's !bk_is_combo_sched guard
+            // (bs_prim_mod_reg.h:92).  Without the exemption a gate
+            // detector's export wire re-reads the pre-edge value and
+            // its coincident-edge sampler never observes a change.
             // (crossing regs are never arena-backed)
             "crossed" => {
-                if self.written_at == now {
+                if self.written_at == now && !in_combo_sched() {
                     self.prev.clone()
                 } else {
                     self.value.clone()
