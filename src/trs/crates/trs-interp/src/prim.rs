@@ -2823,7 +2823,11 @@ impl RWire {
         let width = if zero_width { 0 } else { carg(consts, 0) as u32 };
         RWire {
             width,
-            value: Value::zero(width.max(1)),
+            // the unset value plane is OBSERVABLE: aDropUndet collapses
+            // `if whas then wget else _` to bare wget at compile, so an
+            // unwritten wire's data must match Bluesim's write_undet
+            // fill (MOD_Wire ctor), not zero
+            value: Value::undet(width.max(1)),
             valid: false,
             written: false,
             slot: None,
@@ -2979,7 +2983,9 @@ impl BypassWire {
         let width = if zero_width { 1 } else { carg(consts, 0) as u32 };
         BypassWire {
             width,
-            value: Value::zero(width.max(1)),
+            // same contract as RWire: pre-first-write reads must see
+            // Bluesim's write_undet fill (see RWire::new)
+            value: Value::undet(width.max(1)),
             slot: None,
         }
     }
