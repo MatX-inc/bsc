@@ -299,6 +299,12 @@ jobs:
           name: test-logs-verilator-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}
           path: logs.tar.gz
 
+  # (No MatX-verilator leg on macOS: the deployed simulator is
+  # linux-x86_64, the 3-core/7GB runners OOM under verilator g++, and
+  # macOS queue starvation was observed to delay jobs by a day.  The
+  # linux shard+verdict leg in build-and-test-ubuntu.yml is the
+  # deployed-verilator check.)
+
   test-toooba-macOS:
     name: "Test Toooba ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
     runs-on: ${{ inputs.os }}

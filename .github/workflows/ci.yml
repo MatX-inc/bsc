@@ -54,7 +54,6 @@ jobs:
       ghc_version: 9.6.7
       hls_version: 2.13.0.0
       timeout_override: ${{ matrix.timeout_override }}
-      verilator_testsuite: true
     secrets: inherit
 
   build-and-test-macos:
@@ -72,7 +71,6 @@ jobs:
       hls_version: 2.13.0.0
       timeout_override: ${{ matrix.timeout_override }}
       brew_update: ${{ matrix.brew_update }}
-      verilator_testsuite: true
     secrets: inherit
 
   # ------------------------------
