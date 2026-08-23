@@ -395,6 +395,24 @@ fn run_ir_passes(
         opts.set_loop_vectorization(false);
         opts.set_loop_slp_vectorization(false);
     }
+    // link-rung instrumentation: name the passes inside the ir-passes
+    // block (the dominant link phase at Toooba scale).  inkwell has no
+    // TimePasses API; inject LLVM's own flag once — the new-PM
+    // StandardInstrumentations honor the -time-passes cl::opt and
+    // print the timing report to stderr.
+    if std::env::var_os("TRS_JIT_TIME_PASSES").is_some() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let args = [c"trs".as_ptr(), c"-time-passes".as_ptr()];
+            unsafe {
+                inkwell::llvm_sys::support::LLVMParseCommandLineOptions(
+                    args.len() as i32,
+                    args.as_ptr(),
+                    std::ptr::null(),
+                );
+            }
+        });
+    }
     // debugging escape: run an arbitrary pipeline string instead
     // (miscompile bisection — e.g. "default<O1>,gvn")
     let pipeline =
