@@ -6060,14 +6060,12 @@ improveDynSel ic idx_e idx_sz arr_i arr_ty arr_bounds elem_es =
             (e:es) -> (e, es)
             _ -> internalError ("improveDynSel: head")
       all_eq = all (== elems_head) elems_tail
-      -- arms improveIf can merge structurally (its corresponding arms)
-      sameShape (IAps (ICon _ (ICCon {conTagInfo = cti1})) _ _)
-                (IAps (ICon _ (ICCon {conTagInfo = cti2})) _ _) =
-          conNo cti1 == conNo cti2
-      sameShape (IAps (ICon _ (ICTuple {})) _ _)
-                (IAps (ICon _ (ICTuple {})) _ _) = True
-      sameShape (IAps (ICon _ (ICPrim _ PrimChr)) _ _)
-                (IAps (ICon _ (ICPrim _ PrimChr)) _ _) = True
+      -- Arms improveIf can merge structurally.  Deliberately arrays
+      -- only: an array's structure must be transposed through the
+      -- selection for any consumer that needs it (the length is not in
+      -- the type), whereas constructor/struct arms are consumable in
+      -- residual form (field selection pushes into the arms) and
+      -- merging them eagerly perturbs programs that elaborate fine.
       sameShape (ICon _ (ICLazyArray {iArray = a1}))
                 (ICon _ (ICLazyArray {iArray = a2})) =
           Array.bounds a1 == Array.bounds a2
