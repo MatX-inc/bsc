@@ -5,7 +5,7 @@ module Pred(
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
             PredAncestor(..),
             getPredAncestors, mkPredAncestor, addPredAncestors,
-            expandSyn, predToType, qualToType, mkInst,
+            expandSyn, expandSynPred, predToType, qualToType, mkInst,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -157,7 +157,11 @@ instance PVPrint PredWithPositions where
 
 instance Types PredWithPositions where
     -- the ancestors are deliberately not substituted (see above)
-    apSub s (PredWithPositions p poss anc) = PredWithPositions (apSub s p) poss anc
+    apSub s pwp = fromMaybe pwp (apSubM s pwp)
+    apSubM s (PredWithPositions p poss anc) =
+        case apSubM s p of
+          Nothing -> Nothing
+          Just p' -> Just (PredWithPositions p' poss anc)
     tv      (PredWithPositions p poss anc) = tv p
 
 instance NFData PredWithPositions where
