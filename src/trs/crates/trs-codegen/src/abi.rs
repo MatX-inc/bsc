@@ -111,6 +111,9 @@ pub struct InstEnv {
     /// local RWire/PulseWire instance name -> (base slot, width): valid
     /// word at base, value words after it
     pub wire_slot: HashMap<StrId, (u32, u32)>,
+    /// local BypassWire instance name -> (base slot, width): value
+    /// words only — no valid word (whas is const-true) and no tick
+    pub bypass_slot: HashMap<StrId, (u32, u32)>,
     /// local ConfigReg instance name -> (base slot, width): old value,
     /// current value, written_at instant (see ArenaKind::CReg)
     pub creg_slot: HashMap<StrId, (u32, u32)>,
@@ -521,7 +524,7 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 23; // 23: activity-gating dirty words
+pub const AOT_LAYOUT_REV: u64 = 24; // 24: BypassWire arena slots (rung 36)
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).

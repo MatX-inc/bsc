@@ -41,10 +41,28 @@ pub(crate) mod prof {
     pub static FOREIGN_CALLS: AtomicU64 = AtomicU64::new(0);
     pub static DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
     pub static TICK_NS: AtomicU64 = AtomicU64::new(0);
-    /// per prim-method call counts (TRS_PROF=1)
+    /// per prim-method call counts (TRS_PROF=1), keyed Class.method
     pub static PRIM_HIST: std::sync::Mutex<
         Option<std::collections::HashMap<String, u64>>,
     > = std::sync::Mutex::new(None);
+    /// per prim-class end-of-edge tick counts (TRS_PROF=1): the tick
+    /// loop walks every residual (not-compiled-into-the-edge) ticked
+    /// prim each cycle — attribution for that mass lives here
+    pub static TICK_HIST: std::sync::Mutex<
+        Option<std::collections::HashMap<String, u64>>,
+    > = std::sync::Mutex::new(None);
+    pub fn hist_bump(
+        h: &std::sync::Mutex<Option<std::collections::HashMap<String, u64>>>,
+        key: &str,
+    ) {
+        let mut g = h.lock().unwrap();
+        let m = g.get_or_insert_with(Default::default);
+        if let Some(n) = m.get_mut(key) {
+            *n += 1;
+        } else {
+            m.insert(key.to_string(), 1);
+        }
+    }
     pub fn on() -> bool {
         static P: OnceLock<bool> = OnceLock::new();
         *P.get_or_init(|| std::env::var_os("TRS_PROF").is_some())
@@ -58,6 +76,13 @@ pub(crate) mod prof {
             v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
             for (meth, n) in v.into_iter().take(12) {
                 eprintln!("trs prof:   {n:>9}  .{meth}");
+            }
+        }
+        if let Some(h) = TICK_HIST.lock().unwrap().as_ref() {
+            let mut v: Vec<_> = h.iter().collect();
+            v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
+            for (class, n) in v.into_iter().take(12) {
+                eprintln!("trs prof:   {n:>9}  tick {class}");
             }
         }
         let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
@@ -152,13 +177,14 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         } else {
             interp.s(method).to_string()
         };
-        prof::PRIM_HIST
-            .lock()
-            .unwrap()
-            .get_or_insert_with(Default::default)
-            .entry(meth)
-            .and_modify(|n| *n += 1)
-            .or_insert(1);
+        // keyed Class.method: the class decides the fix shape (e.g.
+        // BypassWire has no arena kind — every access bounces by
+        // construction — where an RWire bounce means a declined site)
+        let class = match &interp.insts[inst].kind {
+            InstKind::Prim(p) => p.class_name(),
+            _ => "user",
+        };
+        prof::hist_bump(&prof::PRIM_HIST, &format!("{class}.{meth}"));
     }
 }
 
@@ -4392,6 +4418,10 @@ impl Interp {
                         Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
                         Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
                         Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
+                        // attachment is not a stability reclassification:
+                        // BypassWire keeps the opaque class it had when
+                        // unattached (any upgrade is its own rung)
+                        Some(ArenaKind::BypassWire { .. }) => ChildClass::Other,
                         Some(ArenaKind::Fifo { loopy, .. }) => ChildClass::Fifo { loopy },
                         // arena-backed but NO stability contract and
                         // reads can WARN (bounds): the split analyzer
@@ -4507,6 +4537,7 @@ impl Interp {
                 children.iter().map(|(k, v)| (*k, *v)).collect();
             let mut reg_slot = HashMap::new();
             let mut wire_slot = HashMap::new();
+            let mut bypass_slot = HashMap::new();
             let mut creg_slot = HashMap::new();
             let mut fifo_slot = HashMap::new();
             let mut regfile_slot = HashMap::new();
@@ -4530,6 +4561,11 @@ impl Interp {
                     Some(ArenaKind::Wire { width }) => {
                         let base = alloc(&mut nslots, 1 + width.max(1).div_ceil(64));
                         wire_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::BypassWire { width }) => {
+                        let base = alloc(&mut nslots, width.max(1).div_ceil(64));
+                        bypass_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::ConfigReg { width }) => {
@@ -4826,6 +4862,7 @@ impl Interp {
                     children,
                     reg_slot,
                     wire_slot,
+                    bypass_slot,
                     creg_slot,
                     fifo_slot,
                     regfile_slot,
@@ -6131,6 +6168,13 @@ impl Interp {
                             }
                         })
                         .collect::<Result<Vec<_>, String>>();
+                    if prof::on() {
+                        eprintln!(
+                            "trs prof: prims {nprims} attached {} (boxed {})",
+                            attach.len(),
+                            nprims - attach.len(),
+                        );
+                    }
                     self.runcore_stage_a = Some(RunCoreStageA {
                         covered,
                         edge_ssa: std::env::var("TRS_EDGE_SSA").as_deref()

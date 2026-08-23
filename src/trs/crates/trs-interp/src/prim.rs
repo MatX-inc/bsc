@@ -90,6 +90,11 @@ pub trait Prim {
     fn sym_transient(&self) -> bool {
         false
     }
+    /// Prim class label for TRS_PROF attribution: bounce/tick
+    /// histograms aggregate by class (instances are too many to read).
+    fn class_name(&self) -> &'static str {
+        "prim"
+    }
     /// Same-cycle visibility (activity census): reads of this prim can
     /// observe writes made EARLIER IN THE SAME CYCLE (CReg ports,
     /// loopy/bypass FIFOs) — a sensitivity mask must treat a write to
@@ -312,6 +317,7 @@ pub(crate) const RC_PRIM_COUNTER: u64 = 5;
 pub(crate) const RC_PRIM_REGFILE: u64 = 6;
 pub(crate) const RC_PRIM_FIFO: u64 = 7;
 pub(crate) const RC_PRIM_BRAM: u64 = 8;
+pub(crate) const RC_PRIM_BYPASSWIRE: u64 = 9;
 
 /// Rebuild a native bounce servicer from its baked seed: the prim
 /// (dynamic state = the live slots it will adopt) plus its arena
@@ -359,6 +365,11 @@ pub(crate) fn runcore_restore(
                 RWire::new(&[Value::from_u64(32, w as u64)], false)
             };
             Some((Box::new(p), 1 + vw(w)))
+        }
+        (RC_PRIM_BYPASSWIRE, &[w], []) => {
+            let w = width_of(w)?;
+            let p = BypassWire::new(&[Value::from_u64(32, w as u64)], false);
+            Some((Box::new(p), vw(w)))
         }
         (RC_PRIM_CONFIGREG, &[w], []) => {
             let w = width_of(w)?;
@@ -490,6 +501,12 @@ pub enum ArenaKind {
     /// ceil(max(width,1)/64) words after it.  The end-of-edge tick
     /// clears the valid word (interpreted, like all ticks).
     Wire { width: u32 },
+    /// BypassWire/CrossingBypassWire: value in ceil(max(width,1)/64)
+    /// words at the base slot, nothing else — no valid word (whas is
+    /// const-true: always written by contract) and no tick protocol
+    /// (the value never reverts).  Rung 36: these accesses were 99.99%
+    /// of Toooba's trampoline traffic before attachment.
+    BypassWire { width: u32 },
     /// ConfigReg: reads must see the begin-of-instant value even after
     /// a same-instant write.  Layout: old value (w words), current
     /// value (w words), written_at instant (1 word).  Compiled reads
@@ -1001,6 +1018,9 @@ impl Counter {
 }
 
 impl Prim for Counter {
+    fn class_name(&self) -> &'static str {
+        "Counter"
+    }
     // no sym_children: the reference registers NO symbols for
     // Counter (`sim ls` parity); the oracle still compares its
     // architectural value via state_children
@@ -1795,6 +1815,9 @@ thread_local! {
 }
 
 impl Prim for RegFile {
+    fn class_name(&self) -> &'static str {
+        "RegFile"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         // bs_prim_mod_regfile.h: "" SYM_RANGE, high_addr/low_addr params
         vec![
@@ -2184,6 +2207,9 @@ impl DualPortRam {
 }
 
 impl Prim for DualPortRam {
+    fn class_name(&self) -> &'static str {
+        "DualPortRam"
+    }
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {
             "read" | "sub" => {
@@ -2323,6 +2349,9 @@ impl Reg {
 }
 
 impl Prim for Reg {
+    fn class_name(&self) -> &'static str {
+        "Reg"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         vec![PrimSym { key: "", width: self.width, range: None }]
     }
@@ -2613,6 +2642,9 @@ impl ConfigReg {
 }
 
 impl Prim for ConfigReg {
+    fn class_name(&self) -> &'static str {
+        "ConfigReg"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         vec![PrimSym { key: "", width: self.value.width, range: None }]
     }
@@ -2802,6 +2834,9 @@ impl RWire {
 }
 
 impl Prim for RWire {
+    fn class_name(&self) -> &'static str {
+        "RWire"
+    }
     fn sym_children(&self) -> Vec<PrimSym> {
         // bs_prim_mod_wire.h: "" and "value" share the data member;
         // isValid is the 1-bit valid member
@@ -2930,20 +2965,61 @@ impl Prim for RWire {
 
 /// BypassWire: combinational wire, always written each cycle.
 struct BypassWire {
+    width: u32,
     value: Value,
+    /// JIT arena backing: value words at the base slot — NO valid word
+    /// (whas is const-true by the always-written contract) and no tick
+    /// protocol (nothing reverts), which is why this is its own
+    /// ArenaKind rather than a Wire with a phantom valid bit
+    slot: Option<*mut u64>,
 }
 
 impl BypassWire {
     fn new(consts: &[Value], zero_width: bool) -> BypassWire {
         let width = if zero_width { 1 } else { carg(consts, 0) as u32 };
-        BypassWire { value: Value::zero(width.max(1)) }
+        BypassWire {
+            width,
+            value: Value::zero(width.max(1)),
+            slot: None,
+        }
+    }
+    fn value_words(&self) -> usize {
+        ((self.width.max(1) as usize) + 63) / 64
+    }
+    fn get_value(&self) -> Value {
+        match self.slot {
+            Some(p) => {
+                let limbs = unsafe {
+                    std::slice::from_raw_parts(p, self.value_words())
+                }
+                .to_vec();
+                Value::from_limbs64(self.width.max(1), limbs)
+            }
+            None => self.value.clone(),
+        }
+    }
+    fn set_value(&mut self, v: &Value) {
+        match self.slot {
+            Some(p) => {
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(p, self.value_words())
+                };
+                for (i, d) in dst.iter_mut().enumerate() {
+                    *d = v.limbs64().get(i).copied().unwrap_or(0);
+                }
+            }
+            None => self.value = v.clone(),
+        }
     }
 }
 
 impl Prim for BypassWire {
+    fn class_name(&self) -> &'static str {
+        "BypassWire"
+    }
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
         match method {
-            "wget" | "read" => self.value.clone(),
+            "wget" | "read" => self.get_value(),
             "whas" => Value::from_u64(1, 1),
             m => panic!("BypassWire: unknown value method {m:?}"),
         }
@@ -2953,13 +3029,40 @@ impl Prim for BypassWire {
             // zero-width wires (BypassWire0) are set with no argument
             "wset" | "write" => {
                 if let Some(v) = args.first() {
-                    self.value = v.clone();
+                    self.set_value(v);
                 }
             }
             m => panic!("BypassWire: unknown action method {m:?}"),
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        Some(ArenaKind::BypassWire { width: self.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        let words = self.value_words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot, words) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = self.value.limbs64().get(i).copied().unwrap_or(0);
+        }
+        self.slot = Some(slot);
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_BYPASSWIRE, vec![self.width as u64], Vec::new()))
+    }
+    // the empty tick above must also be DECLARED no-op or the per-edge
+    // walk dispatches it per instance per cycle anyway — on Toooba
+    // (RISCY-OOO bypass networks) that walk measured 47% of the wall
+    fn tick_is_noop(&self) -> bool {
+        true
+    }
 }
 
 // ===============
@@ -3054,6 +3157,9 @@ impl CReg {
 }
 
 impl Prim for CReg {
+    fn class_name(&self) -> &'static str {
+        "CReg"
+    }
     fn sym_bypass(&self) -> bool {
         true // later ports read earlier same-cycle writes
     }
@@ -3402,6 +3508,9 @@ impl Fifo {
 }
 
 impl Prim for Fifo {
+    fn class_name(&self) -> &'static str {
+        "Fifo"
+    }
     fn sym_bypass(&self) -> bool {
         // loopy: deq/first see same-instant enq effects; bypass:
         // one-deep same-instant enq→first bypass
@@ -6014,6 +6123,9 @@ impl Bram {
 }
 
 impl Prim for Bram {
+    fn class_name(&self) -> &'static str {
+        "Bram"
+    }
     fn vcd_defs(
         &mut self,
         w: &mut crate::vcd::Vcd,
