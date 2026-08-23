@@ -139,6 +139,18 @@ endif
 endif
 endif
 
+# Generate deterministic object code when the compiler supports it
+# (GHC 9.14+).  Beyond making rebuilds bit-for-bit reproducible, this
+# removes a source of performance variance in the built compiler:
+# nondeterministic uniques can perturb optimization decisions (such as
+# inlining and strictness), so two builds of identical source could
+# otherwise differ measurably in the performance of the bsc they
+# produce.
+GHCOBJDET := $(shell $(GHC) --show-options 2>/dev/null | grep -x -m 1 -e -fobject-determinism)
+ifneq ($(GHCOBJDET),)
+GHC += -fobject-determinism
+endif
+
 GHCPROFAUTO = -fprof-auto
 
 PACKAGES = \
