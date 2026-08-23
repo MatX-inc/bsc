@@ -1636,6 +1636,29 @@ fn aot_load(
         if let Ok(g) = lib.get::<*mut usize>(b"trs_bram_tick_cb") {
             **g = trs_codegen::abi::trs_bram_tick as usize;
         }
+        // task #58: BDPI call sites null-check their callee global and
+        // trap here when no loaded BDPI library provided the import —
+        // the trap names the import; a dead import never reaches it
+        unsafe extern "C" fn missing_bdpi_trap(
+            name: *const std::os::raw::c_char,
+        ) {
+            let n = if name.is_null() {
+                "?".to_string()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(name) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            eprintln!(
+                "trs: BDPI import '{n}' was called, but no loaded BDPI \
+                 library provides it — compile/link the import's C \
+                 source (the interpreter raises the same error)"
+            );
+            std::process::abort();
+        }
+        if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_bdpi_missing") {
+            **g = missing_bdpi_trap as usize;
+        }
         let pl: libloading::Symbol<*const u64> =
             lib.get(b"trs_protos_len").map_err(|e| e.to_string())?;
         let pg: libloading::Symbol<*const u8> =

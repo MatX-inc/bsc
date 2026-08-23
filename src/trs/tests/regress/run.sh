@@ -286,6 +286,40 @@ check_dyn() { # name top errtag
 # destination-domain logic backdates to pre-edge, the after-edge combo
 # pass reads post-edge (gate detectors break as steady-0 otherwise)
 check MakeClkCross sysMakeClkCross
+check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
+    # with no partner .c/.so must die LOUDLY naming the import on both
+    # trs tiers (the old compiled path called through a NULL global =
+    # segfault).  Bluesim cannot even link this shape (undefined C
+    # symbol), so there is no reference leg.
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    # the .bir is emitted by the -e elaboration; its C++ link FAILS on
+    # the undefined import symbol, which is Bluesim's (acceptable)
+    # failure mode for this shape — only the .bir is needed here
+    $BSC -sim -bir -e "$top" -o refx.exe >/dev/null 2>&1
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir from -e)"; fail=1; return; }
+    # the trap may fire during link (the window bake / reset protocol
+    # executes early cycles — the field repro died exactly there) or,
+    # if link-time execution never reaches the call, at run time.
+    # Either way: loud, named, never a segfault.
+    "$TRS" link "$top.bir" -o bdm >bdm-link.out 2>&1; lrc=$?
+    if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
+    if [ "$lrc" -ne 0 ]; then
+        grep -q "BDPI import 'bdpi_mystery'" bdm-link.out || { echo "FAIL $name (link failed without naming the import)"; head -2 bdm-link.out; fail=1; return; }
+    else
+        TRS="$TRS" ./bdm > bdm.out 2>&1; rc=$?
+        if [ "$rc" -eq 139 ]; then echo "FAIL $name (segfault)"; fail=1; return; fi
+        if [ "$rc" -eq 0 ]; then echo "FAIL $name (ran clean without the import)"; fail=1; return; fi
+        grep -q "BDPI import 'bdpi_mystery'" bdm.out || { echo "FAIL $name (aot trap message missing)"; head -2 bdm.out; fail=1; return; }
+    fi
+    TRS_NO_JIT=1 "$TRS" run "$top.bir" > bdmi.out 2>&1; irc=$?
+    if [ "$irc" -eq 139 ] || [ "$irc" -eq 0 ]; then echo "FAIL $name (interp rc $irc)"; fail=1; return; fi
+    grep -qi "bdpi" bdmi.out || { echo "FAIL $name (interp error message missing)"; head -2 bdmi.out; fail=1; return; }
+    echo "PASS $name"
+}
+check_bdpi_missing BdpiMissing sysBdpiMissing
+check BdpiDead sysBdpiDead
 check_dyn DynSched sysDynSched G0100
 check_dyn DynSchedBoth sysDynSchedBoth G0101
 check_dyn DynSchedSelf sysDynSchedSelf G0096

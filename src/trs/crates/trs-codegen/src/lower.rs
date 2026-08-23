@@ -689,7 +689,15 @@ pub fn compile_meta_object(
     wt.set_initializer(&i64t.const_int(edge_tick_level, false));
     // single definition of the callback pointer-globals every chunk
     // object references; the loader fills them after dlopen
-    for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim", "trs_cb_stdio"] {
+    for name in [
+        "trs_cb_foreign",
+        "trs_cb_sigfpe",
+        "trs_cb_prim",
+        "trs_cb_stdio",
+        // task #58: BDPI call sites null-check their callee and trap
+        // through this pointer when the import's .so never provided it
+        "trs_cb_bdpi_missing",
+    ] {
         let g = module.add_global(ptrt, None, name);
         g.set_initializer(&ptrt.const_null());
     }
@@ -2908,6 +2916,56 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .unwrap()
                 .into_pointer_value()
         };
+        // task #58 (external-review design): the loader leaves
+        // trs_bdpi_<name> NULL when no companion .so provides the
+        // import — a call through it was the field segfault (ip=0).
+        // Null-check the call site and branch to a noreturn trap that
+        // names the import: dead imports stay harmless (never called,
+        // never trapped), and an executed missing import dies as
+        // loudly as the interp guard.  Baked (JIT) callees are
+        // resolved constants and already nope when missing.
+        if !baked {
+            let func = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+            let trap_bb = self.ctx.append_basic_block(func, "bdpi_missing");
+            let ok_bb = self.ctx.append_basic_block(func, "bdpi_ok");
+            let is_null = self.builder.build_is_null(callee, "bdn").unwrap();
+            self.builder
+                .build_conditional_branch(is_null, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            let nname = format!("trs_bdpiname_{c_name}");
+            let ng = self.module.get_global(&nname).unwrap_or_else(|| {
+                let arr = self.ctx.const_string(c_name.as_bytes(), true);
+                let g = self.module.add_global(arr.get_type(), None, &nname);
+                g.set_initializer(&arr);
+                g.set_constant(true);
+                g
+            });
+            let tg = self.module.get_global("trs_cb_bdpi_missing").unwrap_or_else(
+                || self.module.add_global(ptrt, None, "trs_cb_bdpi_missing"),
+            );
+            let tcb = self
+                .builder
+                .build_load(ptrt, tg.as_pointer_value(), "bdt")
+                .unwrap()
+                .into_pointer_value();
+            let trap_ty = self.ctx.void_type().fn_type(&[ptrt.into()], false);
+            self.builder
+                .build_indirect_call(
+                    trap_ty,
+                    tcb,
+                    &[ng.as_pointer_value().into()],
+                    "bdmiss",
+                )
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+        }
         let stdio: PointerValue<'ctx> = if baked {
             let Some(&addr) = STDIO_CB.get() else {
                 return nope("stdio cb not registered");
