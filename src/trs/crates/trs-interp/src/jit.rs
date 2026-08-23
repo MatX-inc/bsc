@@ -4478,6 +4478,17 @@ impl Interp {
         // ENs, rule cf/wf/eager, and everything in its submodule
         // subtree) lands in one contiguous region, at offsets that are
         // uniform across instances of the same module type.
+        // rung 38 (schedule-affinity arena layout): per-module-TYPE
+        // first-touch ranks from a slot-free walk of the compositions.
+        // Each allocation group below orders its blocks by (rank, name)
+        // instead of name alone, packing co-touched state onto shared
+        // D1 lines (census: 12,862 -> 8,642 distinct lines per Toooba
+        // edge; the DFS region structure and group boundaries carry
+        // ~none of the win and stay unchanged).  Deterministic (a pure
+        // function of design + comps) and type-uniform (keys are
+        // (module type, name)), so baked artifact slot numbers and
+        // twin-instance dedup stay sound.
+        let touch_rank = self.layout_touch_ranks(rcomps);
         let mut inst_envs: HashMap<usize, InstEnv> = HashMap::new();
         let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
         let reset_node_slot: Vec<u32> =
@@ -4544,12 +4555,19 @@ impl Interp {
             let mut bram_slot = HashMap::new();
             let mut creg5_slot = HashMap::new();
             let mut counter_slot = HashMap::new();
-            // sorted iteration: slot assignment must be deterministic
-            // across processes so an AOT artifact's baked slot numbers
-            // match a fresh planning walk at load time
+            // deterministic iteration: slot assignment must match a
+            // fresh planning walk at artifact load time.  Order = the
+            // module type's schedule first-touch rank (rung 38), name-
+            // sorted within a rank and for untouched prims.
             let mut kids: Vec<(StrId, usize)> =
                 children.iter().map(|(&k, &v)| (k, v)).collect();
-            kids.sort_unstable();
+            kids.sort_unstable_by_key(|&(n, c)| {
+                (
+                    touch_rank.get(&(mir, n)).copied().unwrap_or(u32::MAX),
+                    n,
+                    c,
+                )
+            });
             for &(name, ci) in &kids {
                 let InstKind::Prim(p) = &self.insts[ci].kind else { continue };
                 match p.arena_kind() {
@@ -4741,7 +4759,17 @@ impl Interp {
             let mut cfwf_slot = HashMap::new();
             let mut eager_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
             if let Some(rks) = per_inst_rules.get(&i) {
-                for &k in rks {
+                // rule pairs in first-touch order (rung 38); ties and
+                // untouched rules keep module-canonical order
+                let mut rks2: Vec<usize> = rks.clone();
+                rks2.sort_by_key(|&k| {
+                    let rr = &self.d.modules[mir].rules[rules[k].rule_idx];
+                    touch_rank
+                        .get(&(mir, rr.can_fire))
+                        .copied()
+                        .unwrap_or(u32::MAX)
+                });
+                for &k in &rks2 {
                     let cf_slot = alloc(&mut nslots, 1);
                     let wf_slot = alloc(&mut nslots, 1);
                     let rr = &self.d.modules[mir].rules[rules[k].rule_idx];
@@ -4758,7 +4786,12 @@ impl Interp {
                         }
                     }
                 }
-                union.sort_unstable();
+                union.sort_unstable_by_key(|&e| {
+                    (
+                        touch_rank.get(&(mir, e)).copied().unwrap_or(u32::MAX),
+                        e,
+                    )
+                });
                 for e in union {
                     let Some(ed) = self.mods[mir]
                         .defs
@@ -5527,6 +5560,22 @@ impl Interp {
                 Some(nodes)
             })
             .collect();
+        // TRS_LAYOUT_CENSUS=1|<path>: dump the fused schedule's arena
+        // access sequence (sched cones + exec bodies, inlined child
+        // methods included) plus the instance region table, then stop.
+        // The offline model scores layout candidates on distinct D1
+        // lines per edge BEFORE any allocator change is built (rung 38
+        // constraint of record: TOTAL touches, rule bodies included,
+        // not just the sched phase).
+        if let Some(cpath) = std::env::var_os("TRS_LAYOUT_CENSUS") {
+            self.layout_census(
+                rcomps, &specs, &inst_envs, &comp_nodes, nslots, &cpath,
+            );
+            eprintln!(
+                "trs jit: layout census written; stopping (census mode)"
+            );
+            std::process::exit(0);
+        }
         // sorted: HashMap order is process-seeded, and this order is baked
         // into the edge fns' EN-zeroing store sequence (deterministic IR)
         let mut en_slots: Vec<u32> =
@@ -6528,5 +6577,829 @@ impl Interp {
                 cell
             },
         })
+    }
+}
+
+/// Rung-38 locality census walker: collects the arena slots the
+/// compiled code touches for one schedule node, mirroring lowering's
+/// access behavior — other rules' CF/WF and eager defs are SLOT LOADS
+/// (recorded, not expanded), the node's own cone expands, and child
+/// METHOD calls recurse (inlined child bodies are where a hierarchical
+/// design's exec-phase traffic lives).  Indexed prims (RegFile/BRAM/
+/// FIFO) count a bounded footprint: their interiors are contiguous
+/// under any allocation order, so they cannot distinguish candidates.
+struct LcWalk<'a> {
+    it: &'a Interp,
+    envs: &'a HashMap<usize, InstEnv>,
+    seen_defs: std::collections::HashSet<(usize, StrId)>,
+    seen_meths: std::collections::HashSet<(usize, StrId)>,
+    /// (slot base, word footprint, class): 0 = prim data, 1 = indexed
+    /// prim (bounded), 2 = def/fire-signal slot
+    out: Vec<(u32, u32, u8)>,
+    /// touches that leave the arena (boxed prims, foreign servicing)
+    boxed: u32,
+}
+
+impl<'a> LcWalk<'a> {
+    fn prim_touch(&mut self, inst: usize, name: StrId) -> bool {
+        let Some(env) = self.envs.get(&inst) else { return false };
+        let t = if let Some(&(b, w)) = env.reg_slot.get(&name) {
+            Some((b, w.max(1).div_ceil(64), 0u8))
+        } else if let Some(&(b, w)) = env.wire_slot.get(&name) {
+            Some((b, 1 + w.max(1).div_ceil(64), 0))
+        } else if let Some(&(b, w)) = env.bypass_slot.get(&name) {
+            Some((b, w.max(1).div_ceil(64), 0))
+        } else if let Some(&(b, w)) = env.creg_slot.get(&name) {
+            Some((b, (2 * w.max(1).div_ceil(64) + 1).min(8), 0))
+        } else if let Some(t) = env.fifo_slot.get(&name) {
+            Some((t.0, 8, 1))
+        } else if let Some(t) = env.regfile_slot.get(&name) {
+            Some((t.0, 8, 1))
+        } else if let Some(t) = env.bram_slot.get(&name) {
+            Some((t.0, 8, 1))
+        } else if let Some(&(b, w)) = env.creg5_slot.get(&name) {
+            Some((b, (2 * w.max(1).div_ceil(64)).min(8), 0))
+        } else if let Some(&(b, w)) = env.counter_slot.get(&name) {
+            Some((b, (4 * w.max(1).div_ceil(64) + 4).min(8), 0))
+        } else {
+            None
+        };
+        match t {
+            Some(x) => {
+                self.out.push(x);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn meth(
+        &mut self,
+        inst: usize,
+        child: StrId,
+        method: StrId,
+        args: &[trs_ir::Expr],
+        is_action: bool,
+    ) {
+        // arguments evaluate in the CALLER's context
+        for a in args {
+            self.expr(inst, a);
+        }
+        if self.prim_touch(inst, child) {
+            return;
+        }
+        let Some(env) = self.envs.get(&inst) else { return };
+        let Some(&ci) = env.children.get(&child) else { return };
+        match &self.it.insts[ci].kind {
+            InstKind::Prim(_) => self.boxed += 1,
+            InstKind::User { .. } => {
+                if !self.seen_meths.insert((ci, method)) {
+                    return;
+                }
+                let Some(cenv) = self.envs.get(&ci) else { return };
+                let it = self.it;
+                let m = &it.d.modules[cenv.mir];
+                if let Some(me) = m.methods.iter().find(|me| me.name == method)
+                {
+                    if let Some(r) = &me.ready {
+                        self.expr(ci, r);
+                    }
+                    if is_action {
+                        for st in &me.body {
+                            self.stmt(ci, st);
+                        }
+                    }
+                    if let Some(res) = &me.result {
+                        self.expr(ci, res);
+                    }
+                }
+            }
+        }
+    }
+
+    fn def(&mut self, inst: usize, name: StrId) {
+        if !self.seen_defs.insert((inst, name)) {
+            return;
+        }
+        // fire signals and schedule-position defs of OTHER rules load
+        // their arena slots — the compiled code never re-expands them
+        if let Some(env) = self.envs.get(&inst) {
+            if let Some(&s) = env.cfwf_slot.get(&name) {
+                self.out.push((s, 1, 2));
+                return;
+            }
+            if let Some(&(b, w)) = env.eager_slot.get(&name) {
+                self.out.push((b, w.max(1).div_ceil(64), 2));
+                return;
+            }
+        }
+        let it = self.it;
+        let module = it.module_of(inst);
+        let mir = it.mods[module].ir;
+        let Some(&di) = it.mods[module].defs.get(&name) else { return };
+        let e: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+        self.expr(inst, e);
+    }
+
+    fn expr(&mut self, inst: usize, e: &trs_ir::Expr) {
+        use trs_ir::Expr as E;
+        match e {
+            E::Def(n) => self.def(inst, *n),
+            E::MethCall { instance, method, args, .. } => {
+                self.meth(inst, *instance, *method, args, false)
+            }
+            E::MethValue { .. } | E::TaskValue { .. } => {}
+            E::ForeignCall { args, .. } => {
+                self.boxed += 1;
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::Prim { args, .. } => {
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::If { cond, then_, else_, .. } => {
+                self.expr(inst, cond);
+                self.expr(inst, then_);
+                self.expr(inst, else_);
+            }
+            E::Case { scrutinee, arms, default, .. } => {
+                self.expr(inst, scrutinee);
+                for (_, a) in arms {
+                    self.expr(inst, a);
+                }
+                self.expr(inst, default);
+            }
+            E::Clock { osc, gate } => {
+                self.expr(inst, osc);
+                self.expr(inst, gate);
+            }
+            E::Reset { wire } => self.expr(inst, wire),
+            E::Const { .. }
+            | E::Port(_)
+            | E::Param(_)
+            | E::Str(_)
+            | E::Real(_)
+            | E::Gate { .. } => {}
+        }
+    }
+
+    fn stmt(&mut self, inst: usize, st: &trs_ir::Stmt) {
+        use trs_ir::Stmt as S;
+        match st {
+            S::Def { expr, .. } => self.expr(inst, expr),
+            S::Action(a) => self.action(inst, a),
+            S::AvAction { action, .. } => self.action(inst, action),
+            S::Cond { cond, then_, else_ } => {
+                self.expr(inst, cond);
+                for s in then_ {
+                    self.stmt(inst, s);
+                }
+                for s in else_ {
+                    self.stmt(inst, s);
+                }
+            }
+        }
+    }
+
+    fn action(&mut self, inst: usize, a: &trs_ir::Action) {
+        use trs_ir::Action as A;
+        match a {
+            A::MethCall { instance, method, cond, args, .. } => {
+                self.expr(inst, cond);
+                self.meth(inst, *instance, *method, args, true);
+            }
+            A::Foreign { cond, args, .. } | A::Task { cond, args, .. } => {
+                self.boxed += 1;
+                self.expr(inst, cond);
+                for x in args {
+                    self.expr(inst, x);
+                }
+            }
+        }
+    }
+}
+
+impl Interp {
+    /// Rung-38 locality census (TRS_LAYOUT_CENSUS): dump the instance
+    /// region table and, per composition, the per-node arena access
+    /// sequence.  See the jit_plan hook for the contract.
+    fn layout_census(
+        &self,
+        rcomps: &[RComp],
+        specs: &[RuleSpec],
+        inst_envs: &HashMap<usize, InstEnv>,
+        comp_nodes: &[Option<Vec<JitNode>>],
+        nslots: u32,
+        out_path: &std::ffi::OsStr,
+    ) {
+        use std::io::Write;
+        let p = if out_path == "1" {
+            std::path::PathBuf::from("layout-census.txt")
+        } else {
+            std::path::PathBuf::from(out_path)
+        };
+        let f = std::fs::File::create(&p)
+            .unwrap_or_else(|e| panic!("layout census {}: {e}", p.display()));
+        let mut f = std::io::BufWriter::new(f);
+        writeln!(f, "NSLOTS {nslots}").unwrap();
+        let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+        iis.sort_unstable();
+        for i in iis {
+            let e = &inst_envs[&i];
+            writeln!(
+                f,
+                "INST {i} {} {} {} {}",
+                e.region.0, e.region.1, e.mir, self.insts[i].path
+            )
+            .unwrap();
+        }
+        for (rci, nodes) in comp_nodes.iter().enumerate() {
+            let Some(nodes) = nodes else { continue };
+            let rc = &rcomps[rci];
+            writeln!(f, "COMP {rci} clk={} pos={}", rc.clk, rc.posedge)
+                .unwrap();
+            for (seq, node) in nodes.iter().enumerate() {
+                let (s, is_sched) = match node {
+                    JitNode::Sched(s) => (*s as usize, true),
+                    JitNode::Exec(s) => (*s as usize, false),
+                };
+                let Some(sp) = specs.get(s) else { continue };
+                let mut w = LcWalk {
+                    it: self,
+                    envs: inst_envs,
+                    seen_defs: std::collections::HashSet::new(),
+                    seen_meths: std::collections::HashSet::new(),
+                    out: Vec::new(),
+                    boxed: 0,
+                };
+                let mir = inst_envs[&sp.inst].mir;
+                if is_sched {
+                    for &sl in &sp.inhibit_slots {
+                        w.out.push((sl, 1, 2));
+                    }
+                    if sp.autofire.is_none() {
+                        let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                        // the rule's OWN cone expands (mark its defs
+                        // seen so the slot-stop shortcut doesn't fire)
+                        w.seen_defs.insert((sp.inst, rr.can_fire));
+                        w.seen_defs.insert((sp.inst, rr.will_fire));
+                        let module = self.module_of(sp.inst);
+                        for name in [rr.can_fire, rr.will_fire] {
+                            if let Some(&di) =
+                                self.mods[module].defs.get(&name)
+                            {
+                                let e: &trs_ir::Expr =
+                                    &self.d.modules[mir].defs[di].expr;
+                                w.expr(sp.inst, e);
+                            }
+                        }
+                        for &en in &sp.eager {
+                            w.seen_defs.insert((sp.inst, en));
+                            if let Some(&di) = self.mods[module].defs.get(&en)
+                            {
+                                let e: &trs_ir::Expr =
+                                    &self.d.modules[mir].defs[di].expr;
+                                w.expr(sp.inst, e);
+                            }
+                            if let Some(&(b, ew)) =
+                                inst_envs[&sp.inst].eager_slot.get(&en)
+                            {
+                                w.out.push((b, ew.max(1).div_ceil(64), 2));
+                            }
+                        }
+                    }
+                    w.out.push((sp.cf_slot, 1, 2));
+                    w.out.push((sp.wf_slot, 1, 2));
+                } else {
+                    w.out.push((sp.wf_slot, 1, 2));
+                    if sp.autofire.is_none() {
+                        let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                        let body: &Vec<trs_ir::Stmt> = &rr.body;
+                        for st in body {
+                            w.stmt(sp.inst, st);
+                        }
+                    }
+                }
+                write!(
+                    f,
+                    "N {seq} {} {s} {} {} ",
+                    if is_sched { 'S' } else { 'E' },
+                    sp.inst,
+                    w.boxed
+                )
+                .unwrap();
+                for (b, ww, c) in &w.out {
+                    write!(f, "{b}:{ww}:{c} ").unwrap();
+                }
+                writeln!(f).unwrap();
+            }
+        }
+        // ---- rung-39 enable-store census ----
+        // The compiled edge zeroes EVERY MethodEnable slot of every
+        // instance, one u64 store each, every edge.  Classify each EN:
+        // READ = the owning module references the port in any
+        // expression (Port(p) loads in WF cones/inhibitors — lower.rs
+        // Port lowering; the reference's own backend zeroes ONLY these,
+        // SimMakeCBlocks getEnWFPort init_port); STAY1 = some call site
+        // provably stores 1 every edge (always-fire caller with a
+        // const-true call condition at a top-level statement, or an
+        // autofire pseudo-spec), making the slot constant after the
+        // first edge.  Conservative on nesting: calls under Stmt::Cond
+        // are not counted stay-1.
+        {
+            fn pe(
+                e: &trs_ir::Expr,
+                out: &mut std::collections::HashSet<StrId>,
+            ) {
+                use trs_ir::Expr as E;
+                match e {
+                    E::Port(p) => {
+                        out.insert(*p);
+                    }
+                    E::MethCall { args, .. }
+                    | E::ForeignCall { args, .. }
+                    | E::Prim { args, .. } => {
+                        for a in args {
+                            pe(a, out)
+                        }
+                    }
+                    E::If { cond, then_, else_, .. } => {
+                        pe(cond, out);
+                        pe(then_, out);
+                        pe(else_, out);
+                    }
+                    E::Case { scrutinee, arms, default, .. } => {
+                        pe(scrutinee, out);
+                        for (_, a) in arms {
+                            pe(a, out);
+                        }
+                        pe(default, out);
+                    }
+                    E::Clock { osc, gate } => {
+                        pe(osc, out);
+                        pe(gate, out);
+                    }
+                    E::Reset { wire } => pe(wire, out),
+                    _ => {}
+                }
+            }
+            fn pa(
+                a: &trs_ir::Action,
+                out: &mut std::collections::HashSet<StrId>,
+            ) {
+                use trs_ir::Action as A;
+                match a {
+                    A::MethCall { cond, args, .. }
+                    | A::Foreign { cond, args, .. }
+                    | A::Task { cond, args, .. } => {
+                        pe(cond, out);
+                        for x in args {
+                            pe(x, out)
+                        }
+                    }
+                }
+            }
+            fn ps(
+                s: &trs_ir::Stmt,
+                out: &mut std::collections::HashSet<StrId>,
+            ) {
+                use trs_ir::Stmt as S;
+                match s {
+                    S::Def { expr, .. } => pe(expr, out),
+                    S::Action(a) | S::AvAction { action: a, .. } => {
+                        pa(a, out)
+                    }
+                    S::Cond { cond, then_, else_ } => {
+                        pe(cond, out);
+                        for x in then_ {
+                            ps(x, out);
+                        }
+                        for x in else_ {
+                            ps(x, out);
+                        }
+                    }
+                }
+            }
+            let mut port_refs: HashMap<
+                usize,
+                std::collections::HashSet<StrId>,
+            > = HashMap::new();
+            for env in inst_envs.values() {
+                let mir = env.mir;
+                if port_refs.contains_key(&mir) {
+                    continue;
+                }
+                let mut set = std::collections::HashSet::new();
+                let m = &self.d.modules[mir];
+                for dd in &m.defs {
+                    pe(&dd.expr, &mut set);
+                }
+                for rr in &m.rules {
+                    let body: &Vec<trs_ir::Stmt> = &rr.body;
+                    for st in body {
+                        ps(st, &mut set);
+                    }
+                }
+                for me in &m.methods {
+                    if let Some(r) = &me.ready {
+                        pe(r, &mut set);
+                    }
+                    if let Some(r) = &me.result {
+                        pe(r, &mut set);
+                    }
+                    for st in &me.body {
+                        ps(st, &mut set);
+                    }
+                }
+                port_refs.insert(mir, set);
+            }
+            // string -> id reverse map, once
+            let sid: HashMap<&str, StrId> = self
+                .d
+                .strings
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.as_str(), i as StrId))
+                .collect();
+            let mut stay1: std::collections::HashSet<(usize, StrId)> =
+                std::collections::HashSet::new();
+            for sp in specs {
+                if let Some(af) = &sp.autofire {
+                    let en = format!("EN_{}", self.s(af.method));
+                    if let Some(&id) = sid.get(en.as_str()) {
+                        stay1.insert((sp.inst, id));
+                    }
+                    continue;
+                }
+                if !sp.always_fire {
+                    continue;
+                }
+                let Some(env) = inst_envs.get(&sp.inst) else { continue };
+                let mir = env.mir;
+                let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                let body: &Vec<trs_ir::Stmt> = &rr.body;
+                for st in body {
+                    let trs_ir::Stmt::Action(trs_ir::Action::MethCall {
+                        instance,
+                        method,
+                        cond,
+                        ..
+                    }) = st
+                    else {
+                        continue;
+                    };
+                    let ctrue = matches!(
+                        cond,
+                        trs_ir::Expr::Const { limbs, .. }
+                            if limbs.iter().any(|&l| l != 0)
+                    );
+                    if !ctrue {
+                        continue;
+                    }
+                    let Some(&ci) = env.children.get(instance) else {
+                        continue;
+                    };
+                    let en = format!("EN_{}", self.s(*method));
+                    if let Some(&id) = sid.get(en.as_str()) {
+                        stay1.insert((ci, id));
+                    }
+                }
+            }
+            let (mut n_en, mut n_read, mut n_stay1, mut n_dead_or_stay1) =
+                (0usize, 0usize, 0usize, 0usize);
+            let mut iis2: Vec<usize> = inst_envs.keys().copied().collect();
+            iis2.sort_unstable();
+            for i in iis2 {
+                let env = &inst_envs[&i];
+                let refs = port_refs.get(&env.mir);
+                let mut ens: Vec<(StrId, u32)> =
+                    env.en_slot.iter().map(|(&k, &v)| (k, v)).collect();
+                ens.sort_unstable();
+                for (pname, slot) in ens {
+                    let read =
+                        refs.is_some_and(|r| r.contains(&pname));
+                    let s1 = stay1.contains(&(i, pname));
+                    n_en += 1;
+                    n_read += read as usize;
+                    n_stay1 += s1 as usize;
+                    n_dead_or_stay1 += (!read || s1) as usize;
+                    writeln!(
+                        f,
+                        "EN {i} {slot} read={} stay1={} {}",
+                        read as u8,
+                        s1 as u8,
+                        self.s(pname)
+                    )
+                    .unwrap();
+                }
+            }
+            // per-edge store totals for the main comp: EN zeroing
+            // (design-wide list, every comp), CF/WF stores (2 per Sched
+            // node), eager stores (words)
+            for (rci, nodes) in comp_nodes.iter().enumerate() {
+                let Some(nodes) = nodes else { continue };
+                let (mut nsched, mut eagw) = (0usize, 0usize);
+                for node in nodes {
+                    if let JitNode::Sched(sn) = node {
+                        nsched += 1;
+                        if let Some(sp) = specs.get(*sn as usize) {
+                            if let Some(env) = inst_envs.get(&sp.inst) {
+                                for e in &sp.eager {
+                                    if let Some(&(_, w)) =
+                                        env.eager_slot.get(e)
+                                    {
+                                        eagw += w.max(1).div_ceil(64)
+                                            as usize;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                writeln!(
+                    f,
+                    "STORESUM comp={rci} en_zero={n_en} cfwf_words={} eager_words={eagw}",
+                    2 * nsched
+                )
+                .unwrap();
+            }
+            writeln!(
+                f,
+                "ENSUM total={n_en} read={n_read} stay1={n_stay1} skippable_dead_or_stay1={n_dead_or_stay1}"
+            )
+            .unwrap();
+        }
+        eprintln!("trs jit: layout census -> {}", p.display());
+    }
+}
+
+/// Rung-38 pre-pass: per-module-TYPE first-touch ranks from a slot-free
+/// walk of the compositions (allocation has not happened yet, so this
+/// is the census walker with a name-stop instead of a slot-stop).
+/// Memoization is TYPE-keyed — twin instances contribute identical
+/// local patterns, which is exactly the type-uniformity the allocator
+/// needs — so the walk is O(module types), not O(instances), and adds
+/// nothing measurable to artifact boot.
+struct LcRank<'a> {
+    it: &'a Interp,
+    /// per-mir names that are rule fire signals or eager defs: the
+    /// compiled code loads their slots instead of expanding, so the
+    /// walk marks and stops there (the owning rule's own cone is
+    /// expanded explicitly by the driver, bypassing the stop)
+    stop: HashMap<usize, std::collections::HashSet<StrId>>,
+    rank: HashMap<(usize, StrId), u32>,
+    n: u32,
+    seen_defs: std::collections::HashSet<(usize, StrId)>,
+    seen_meths: std::collections::HashSet<(usize, StrId)>,
+}
+
+impl<'a> LcRank<'a> {
+    fn mark(&mut self, mir: usize, name: StrId) {
+        if let std::collections::hash_map::Entry::Vacant(v) =
+            self.rank.entry((mir, name))
+        {
+            v.insert(self.n);
+            self.n += 1;
+        }
+    }
+
+    fn mir_of(&self, inst: usize) -> usize {
+        let module = self.it.module_of(inst);
+        self.it.mods[module].ir
+    }
+
+    fn meth(
+        &mut self,
+        inst: usize,
+        child: StrId,
+        method: StrId,
+        args: &[trs_ir::Expr],
+        is_action: bool,
+    ) {
+        for a in args {
+            self.expr(inst, a);
+        }
+        let InstKind::User { children, .. } = &self.it.insts[inst].kind
+        else {
+            return;
+        };
+        let Some(&ci) = children.get(&child) else { return };
+        match &self.it.insts[ci].kind {
+            InstKind::Prim(_) => {
+                let mir = self.mir_of(inst);
+                self.mark(mir, child);
+            }
+            InstKind::User { .. } => {
+                let cmir = self.mir_of(ci);
+                if !self.seen_meths.insert((cmir, method)) {
+                    return;
+                }
+                let it = self.it;
+                let m = &it.d.modules[cmir];
+                if let Some(me) = m.methods.iter().find(|me| me.name == method)
+                {
+                    if let Some(r) = &me.ready {
+                        self.expr(ci, r);
+                    }
+                    if is_action {
+                        for st in &me.body {
+                            self.stmt(ci, st);
+                        }
+                    }
+                    if let Some(res) = &me.result {
+                        self.expr(ci, res);
+                    }
+                }
+            }
+        }
+    }
+
+    fn def(&mut self, inst: usize, name: StrId) {
+        let mir = self.mir_of(inst);
+        if !self.seen_defs.insert((mir, name)) {
+            return;
+        }
+        if self.stop.get(&mir).is_some_and(|s| s.contains(&name)) {
+            self.mark(mir, name);
+            return;
+        }
+        let it = self.it;
+        let module = it.module_of(inst);
+        let Some(&di) = it.mods[module].defs.get(&name) else { return };
+        let e: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+        self.expr(inst, e);
+    }
+
+    fn expr(&mut self, inst: usize, e: &trs_ir::Expr) {
+        use trs_ir::Expr as E;
+        match e {
+            E::Def(n) => self.def(inst, *n),
+            E::MethCall { instance, method, args, .. } => {
+                self.meth(inst, *instance, *method, args, false)
+            }
+            E::MethValue { .. } | E::TaskValue { .. } => {}
+            E::ForeignCall { args, .. } => {
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::Prim { args, .. } => {
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::If { cond, then_, else_, .. } => {
+                self.expr(inst, cond);
+                self.expr(inst, then_);
+                self.expr(inst, else_);
+            }
+            E::Case { scrutinee, arms, default, .. } => {
+                self.expr(inst, scrutinee);
+                for (_, a) in arms {
+                    self.expr(inst, a);
+                }
+                self.expr(inst, default);
+            }
+            E::Clock { osc, gate } => {
+                self.expr(inst, osc);
+                self.expr(inst, gate);
+            }
+            E::Reset { wire } => self.expr(inst, wire),
+            E::Const { .. }
+            | E::Port(_)
+            | E::Param(_)
+            | E::Str(_)
+            | E::Real(_)
+            | E::Gate { .. } => {}
+        }
+    }
+
+    fn stmt(&mut self, inst: usize, st: &trs_ir::Stmt) {
+        use trs_ir::Stmt as S;
+        match st {
+            S::Def { expr, .. } => self.expr(inst, expr),
+            S::Action(a) => self.action(inst, a),
+            S::AvAction { action, .. } => self.action(inst, action),
+            S::Cond { cond, then_, else_ } => {
+                self.expr(inst, cond);
+                for s in then_ {
+                    self.stmt(inst, s);
+                }
+                for s in else_ {
+                    self.stmt(inst, s);
+                }
+            }
+        }
+    }
+
+    fn action(&mut self, inst: usize, a: &trs_ir::Action) {
+        use trs_ir::Action as A;
+        match a {
+            A::MethCall { instance, method, cond, args, .. } => {
+                self.expr(inst, cond);
+                self.meth(inst, *instance, *method, args, true);
+            }
+            A::Foreign { cond, args, .. } | A::Task { cond, args, .. } => {
+                self.expr(inst, cond);
+                for x in args {
+                    self.expr(inst, x);
+                }
+            }
+        }
+    }
+}
+
+impl Interp {
+    /// Rung-38: derive the per-module-TYPE first-touch rank map the
+    /// arena allocator orders its groups by.  See LcRank.
+    fn layout_touch_ranks(
+        &self,
+        rcomps: &[RComp],
+    ) -> HashMap<(usize, StrId), u32> {
+        // name-stop sets: every rule's CF/WF and every entry's eager
+        // defs, unioned per module type
+        let mut stop: HashMap<usize, std::collections::HashSet<StrId>> =
+            HashMap::new();
+        for rc in rcomps {
+            for en in &rc.entries {
+                let module = self.module_of(en.inst);
+                let mir = self.mods[module].ir;
+                let s = stop.entry(mir).or_default();
+                for &e in &en.eager {
+                    s.insert(e);
+                }
+                for node in &en.nodes {
+                    let r = match node {
+                        SchedNode::Sched(r) | SchedNode::Exec(r) => *r,
+                    };
+                    if let Some(&ri) = self.mods[module].rules.get(&r) {
+                        let rr = &self.d.modules[mir].rules[ri];
+                        s.insert(rr.can_fire);
+                        s.insert(rr.will_fire);
+                    }
+                }
+            }
+        }
+        let mut w = LcRank {
+            it: self,
+            stop,
+            rank: HashMap::new(),
+            n: 0,
+            seen_defs: std::collections::HashSet::new(),
+            seen_meths: std::collections::HashSet::new(),
+        };
+        for rc in rcomps {
+            for en in &rc.entries {
+                let inst = en.inst;
+                let module = self.module_of(inst);
+                let mir = self.mods[module].ir;
+                for &e in &en.eager {
+                    w.mark(mir, e);
+                    // own-position expansion bypasses the name-stop
+                    w.seen_defs.insert((mir, e));
+                    if let Some(&di) = self.mods[module].defs.get(&e) {
+                        let ex: &trs_ir::Expr =
+                            &self.d.modules[mir].defs[di].expr;
+                        w.expr(inst, ex);
+                    }
+                }
+                for node in &en.nodes {
+                    let (r, is_sched) = match node {
+                        SchedNode::Sched(r) => (*r, true),
+                        SchedNode::Exec(r) => (*r, false),
+                    };
+                    let Some(&ri) = self.mods[module].rules.get(&r) else {
+                        continue;
+                    };
+                    let rr = &self.d.modules[mir].rules[ri];
+                    if is_sched {
+                        w.mark(mir, rr.can_fire);
+                        w.mark(mir, rr.will_fire);
+                        for name in [rr.can_fire, rr.will_fire] {
+                            w.seen_defs.insert((mir, name));
+                            if let Some(&di) =
+                                self.mods[module].defs.get(&name)
+                            {
+                                let ex: &trs_ir::Expr =
+                                    &self.d.modules[mir].defs[di].expr;
+                                w.expr(inst, ex);
+                            }
+                        }
+                    } else if !w.seen_meths.insert((mir, r)) {
+                        // twin instance: this type's exec body walked
+                        continue;
+                    } else {
+                        let body: &Vec<trs_ir::Stmt> = &rr.body;
+                        for st in body {
+                            w.stmt(inst, st);
+                        }
+                    }
+                }
+            }
+        }
+        w.rank
     }
 }
