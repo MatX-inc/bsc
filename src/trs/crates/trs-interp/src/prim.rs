@@ -2986,6 +2986,12 @@ impl Prim for BypassWire {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
+    // the empty tick above must also be DECLARED no-op or the per-edge
+    // walk dispatches it per instance per cycle anyway — on Toooba
+    // (RISCY-OOO bypass networks) that walk measured 47% of the wall
+    fn tick_is_noop(&self) -> bool {
+        true
+    }
 }
 
 // ===============
