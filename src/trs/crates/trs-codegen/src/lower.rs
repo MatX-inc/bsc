@@ -2962,6 +2962,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let g = self.module.add_global(arr.get_type(), None, &nname);
                 g.set_initializer(&arr);
                 g.set_constant(true);
+                // private: this diagnostic string is per-module local —
+                // with default External linkage every chunk object under
+                // TRS_AOT_ONE_MODULE=0 exported a strong definition and
+                // the cc -shared link died on the duplicates (external
+                // review); nothing looks the symbol up, the pointer is
+                // only passed by value to the trap callback
+                g.set_linkage(inkwell::module::Linkage::Private);
+                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
                 g
             });
             let tg = self.module.get_global("trs_cb_bdpi_missing").unwrap_or_else(

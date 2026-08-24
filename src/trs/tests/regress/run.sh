@@ -320,6 +320,49 @@ check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
 }
 check_bdpi_missing BdpiMissing sysBdpiMissing
 check BdpiDead sysBdpiDead
+# repeated BDPI import under CHUNKED AOT (TRS_AOT_ONE_MODULE=0): call
+# sites land in several emitted modules; the per-module diagnostic
+# string trs_bdpiname_<name> must carry private linkage or the
+# cc -shared link dies on duplicate strong definitions (the one-module
+# battery cannot see this topology).  Byte parity proves the chunked
+# artifact runs compiled.
+check_chunked() { # name top cfile
+    name=$1; top=$2; cfile=$3
+    cp "$SRC/$name.bsv" .
+    [ -n "$cfile" ] && cp "$SRC/$cfile" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o bc_ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./bc_ref.exe > bc_ref.out 2>&1; refrc=$?
+    rm -f bcart.so
+    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o bcart >bc_link.out 2>&1 || { echo "FAIL $name (chunked link)"; tail -2 bc_link.out; fail=1; return; }
+    [ -f bcart.so ] || { echo "FAIL $name (no chunked artifact)"; fail=1; return; }
+    TRS="$TRS" ./bcart > bc_got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ] || ! cmp -s bc_ref.out bc_got.out; then echo "FAIL $name (parity)"; diff bc_ref.out bc_got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_chunked BdpiChunk sysBdpiChunk ops.c
+# the missing-.so trap must survive chunking: calls gated past the
+# link's window bake so the chunked link completes, then the run dies
+# loudly naming the import — never a segfault
+check_chunked_missing() {
+    name=BdpiChunkMissing; top=sysBdpiChunkMissing
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o bcm_ref.exe >/dev/null 2>&1
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir from -e)"; fail=1; return; }
+    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 "$TRS" link "$top.bir" -o bcm >bcm_link.out 2>&1; lrc=$?
+    if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
+    if [ "$lrc" -ne 0 ]; then
+        grep -q "BDPI import 'bdpi_mystery'" bcm_link.out || { echo "FAIL $name (link failed without naming the import)"; head -2 bcm_link.out; fail=1; return; }
+    else
+        TRS="$TRS" ./bcm > bcm.out 2>&1; rc=$?
+        if [ "$rc" -eq 139 ]; then echo "FAIL $name (segfault)"; fail=1; return; fi
+        if [ "$rc" -eq 0 ]; then echo "FAIL $name (ran clean without the import)"; fail=1; return; fi
+        grep -q "BDPI import 'bdpi_mystery'" bcm.out || { echo "FAIL $name (trap message missing)"; head -2 bcm.out; fail=1; return; }
+    fi
+    echo "PASS $name"
+}
+check_chunked_missing
 check_dyn DynSched sysDynSched G0100
 check_dyn DynSchedBoth sysDynSchedBoth G0101
 check_dyn DynSchedSelf sysDynSchedSelf G0096
