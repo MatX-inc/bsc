@@ -449,4 +449,23 @@ check_revcompat() {
     echo "PASS $name"
 }
 check_revcompat
+# the demoted size tier is a distinct codegen path (lever 1 replaced
+# default<O1> with a pinned O1-minus-MemCpyOpt expansion): force a
+# tiny design over the budget and pin the tier trace, the pinned
+# string PARSING (a stale string under a future LLVM must fail this
+# check, not silently deoptimize), and byte parity
+check_demoted() {
+    name=DemotedTier; top=sysEdgeSelfKill
+    cp "$SRC/EdgeSelfKill.bsv" .
+    $BSC -sim -bir -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o dt_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./dt_ref.exe < /dev/null > dt_ref.out 2>&1; refrc=$?
+    TRS_JIT_FN_INSN_BUDGET=10 TRS_JIT_TRACE=1 "$TRS" link "$top.bir" -o dtart >dt_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    grep -q "demoted size tier" dt_link.out || { echo "FAIL $name (tier did not engage)"; fail=1; return; }
+    grep -q "IR pass pipeline rejected" dt_link.out && { echo "FAIL $name (pinned pipeline rejected)"; fail=1; return; }
+    TRS="$TRS" ./dtart < /dev/null > dt_got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ] || ! cmp -s dt_ref.out dt_got.out; then echo "FAIL $name (parity)"; diff dt_ref.out dt_got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_demoted
 exit $fail

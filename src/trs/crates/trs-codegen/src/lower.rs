@@ -333,6 +333,76 @@ const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
     instcombine<no-verify-fixpoint>,simplifycfg,jump-threading,gvn,dse,\
     instcombine<no-verify-fixpoint>,simplifycfg)";
 
+/// The size-tier pipeline for a module carrying a function over the
+/// insn budget: LLVM 18.1's OWN default<O1> expansion (generated via
+/// opt -passes='default<O1>' -print-pipeline-passes) with EXACTLY
+/// MemCpyOptPass removed (and opt's trailing verify/BitcodeWriterPass
+/// stripped).  MemCpyOpt was measured as the single most expensive
+/// pass in the Toooba link (254s of a 478s block on this box; 877s
+/// on its predecessor) hunting copy/fill structure in code our
+/// lowering emits as unrolled word stores — while the rest of the O1
+/// bundle is load-bearing: a minimal 3-pass tier and a +sroa variant
+/// both regressed runtime +2.75% Ir / +7% wall (lever-1 ledger), and
+/// this string measures +0.01% Ir vs default<O1> with byte parity
+/// and a 20:30 -> 15:57 relink (-22%).  Pinned literally so the tier
+/// is REPRODUCIBLE across LLVM upgrades; REGENERATE AND RE-AUDIT the
+/// expansion when the LLVM major changes (the parser rejects unknown
+/// passes loudly and falls back, so a stale string cannot silently
+/// miscompile — it silently deoptimizes, which the version rung's
+/// A/B catches).
+const AOT_DEMOTED_PIPELINE: &str = "annotation2metadata,forceattrs,inferattrs,coro-early,function<eager-\
+    inv>(lower-expect,simplifycfg<bonus-inst-threshold=1;no-forward-swit\
+    ch-cond;no-switch-range-to-icmp;no-switch-to-lookup;keep-loops;no-ho\
+    ist-common-insts;no-sink-common-insts;speculate-blocks;simplify-cond\
+    -branch>,sroa<modify-cfg>,early-cse<>),openmp-opt,ipsccp,called-valu\
+    e-propagation,globalopt,function<eager-inv>(mem2reg,instcombine<max-\
+    iterations=1;no-use-loop-info;no-verify-fixpoint>,simplifycfg<bonus-\
+    inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-swit\
+    ch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-common-insts;s\
+    peculate-blocks;simplify-cond-branch>),always-inline,require<globals\
+    -aa>,function(invalidate<aa>),require<profile-summary>,cgscc(devirt<\
+    4>(inline,function-attrs<skip-non-recursive-function-attrs>,function\
+    <eager-inv;no-rerun>(sroa<modify-cfg>,early-cse<memssa>,simplifycfg<\
+    bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;n\
+    o-switch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-common-i\
+    nsts;speculate-blocks;simplify-cond-branch>,instcombine<max-iteratio\
+    ns=1;no-use-loop-info;no-verify-fixpoint>,libcalls-shrinkwrap,simpli\
+    fycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-\
+    icmp;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-co\
+    mmon-insts;speculate-blocks;simplify-cond-branch>,reassociate,loop-m\
+    ssa(loop-instsimplify,loop-simplifycfg,licm<no-allowspeculation>,loo\
+    p-rotate<header-duplication;no-prepare-for-lto>,licm<allowspeculatio\
+    n>,simple-loop-unswitch<no-nontrivial;trivial>),simplifycfg<bonus-in\
+    st-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch\
+    -to-lookup;keep-loops;no-hoist-common-insts;no-sink-common-insts;spe\
+    culate-blocks;simplify-cond-branch>,instcombine<max-iterations=1;no-\
+    use-loop-info;no-verify-fixpoint>,loop(loop-idiom,indvars,loop-delet\
+    ion,loop-unroll-full),sroa<modify-cfg>,sccp,bdce,instcombine<max-ite\
+    rations=1;no-use-loop-info;no-verify-fixpoint>,coro-elide,adce,simpl\
+    ifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to\
+    -icmp;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-c\
+    ommon-insts;speculate-blocks;simplify-cond-branch>,instcombine<max-i\
+    terations=1;no-use-loop-info;no-verify-fixpoint>),function-attrs,fun\
+    ction(require<should-not-run-function-passes>),coro-split)),deadarge\
+    lim,coro-cleanup,globalopt,globaldce,elim-avail-extern,rpo-function-\
+    attrs,recompute-globalsaa,function<eager-inv>(float2int,lower-consta\
+    nt-intrinsics,loop(loop-rotate<header-duplication;no-prepare-for-lto\
+    >,loop-deletion),loop-distribute,inject-tli-mappings,loop-vectorize<\
+    no-interleave-forced-only;vectorize-forced-only;>,infer-alignment,lo\
+    op-load-elim,instcombine<max-iterations=1;no-use-loop-info;no-verify\
+    -fixpoint>,simplifycfg<bonus-inst-threshold=1;forward-switch-cond;sw\
+    itch-range-to-icmp;switch-to-lookup;no-keep-loops;hoist-common-insts\
+    ;sink-common-insts;speculate-blocks;simplify-cond-branch>,vector-com\
+    bine,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoin\
+    t>,loop-unroll<O1>,transform-warning,sroa<preserve-cfg>,infer-alignm\
+    ent,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoint\
+    >,loop-mssa(licm<allowspeculation>),alignment-from-assumptions,loop-\
+    sink,instsimplify,div-rem-pairs,tailcallelim,simplifycfg<bonus-inst-\
+    threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to\
+    -lookup;keep-loops;no-hoist-common-insts;no-sink-common-insts;specul\
+    ate-blocks;simplify-cond-branch>),globaldce,constmerge,cg-profile,re\
+    l-lookup-table-converter,function(annotation-remarks)";
+
 fn run_ir_passes(
     module: &Module,
     tracked: Option<&IrTally>,
@@ -354,16 +424,17 @@ fn run_ir_passes(
             if width > IR_PASS_WIDTH_CAP {
                 return Ok(());
             }
-            // O1 size tier (the DEFAULT pipeline only — explicit
+            // demoted size tier (the DEFAULT pipeline only — explicit
             // TRS_JIT_OPT / TRS_JIT_PIPELINE still force): a function
             // over the budget is pathological (one giant cone the
             // dispatcher could not split), and feeding it to
             // early-cse<memssa> risks the measured superlinear wedge.
-            // default<O1>'s EarlyCSE runs without MemorySSA and stays
-            // near-linear; the demoted module keeps ~O3-class runtime
-            // (opt-ladder: O1 1.78s vs O3 1.83s vs O0 2.74s).
-            // TRS_JIT_FN_INSN_BUDGET overrides the threshold; 0
-            // disables the tier.
+            // AOT_DEMOTED_PIPELINE runs EarlyCSE without MemorySSA
+            // and stays near-linear; the demoted module keeps
+            // ~O3-class runtime (opt-ladder: O1 1.78s vs O3 1.83s vs
+            // O0 2.74s, and the lever-1 ccg A/B guards the swap away
+            // from default<O1>).  TRS_JIT_FN_INSN_BUDGET overrides
+            // the threshold; 0 disables the tier.
             let fn_budget: u64 =
                 std::env::var("TRS_JIT_FN_INSN_BUDGET")
                     .ok()
@@ -379,10 +450,10 @@ fn run_ir_passes(
                     eprintln!(
                         "trs jit: a function measures {max_fn} insns \
                          (budget {fn_budget}) — module drops to the \
-                         default<O1> size tier"
+                         demoted size tier (reduced explicit pipeline)"
                     );
                 }
-                "default<O1>".to_string()
+                AOT_DEMOTED_PIPELINE.to_string()
             } else {
                 AOT_PIPELINE.to_string()
             }
