@@ -16,7 +16,7 @@ pub mod startup;
 pub use vcd::WaveFormat;
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 
 use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
@@ -497,7 +497,11 @@ struct RComp {
     clk: usize,
     posedge: bool,
     entries: Vec<REntry>,
-    cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
+    // BTreeMap, not HashMap: the map is serialized into trs_plan_a,
+    // and artifact bytes must not depend on hash iteration order
+    // (bincode wire format is identical — len + entries — so blobs
+    // decode across the change; only the entry ORDER becomes fixed)
+    cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>>,
     // (prim instance, resolved port name, is_reset_tick, owner instance
     // for gate evaluation, gate expr)
     ticks: Vec<(usize, String, bool, usize, Option<Expr>)>,
@@ -525,7 +529,8 @@ struct RAlt {
     /// its cone reads nothing written mid-edge by this composition)
     guard: Expr,
     entries: Vec<REntry>,
-    cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
+    // BTreeMap for byte-deterministic trs_plan_a, like RComp::cross
+    cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>>,
 }
 
 /// prime()'s derivation half, baked into AOT artifacts as trs_plan_a:
@@ -3113,8 +3118,9 @@ impl Interp {
     fn resolve_cross(
         &mut self,
         pairs: &[(StrId, StrId)],
-    ) -> HashMap<(usize, StrId), Vec<(usize, StrId)>> {
-        let mut cross: HashMap<(usize, StrId), Vec<(usize, StrId)>> = HashMap::new();
+    ) -> BTreeMap<(usize, StrId), Vec<(usize, StrId)>> {
+        let mut cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>> =
+            BTreeMap::new();
         for (earlier, later) in pairs {
             let (e_inst, e_rule) = self.split_qual(*earlier);
             let (l_inst, l_rule) = self.split_qual(*later);
