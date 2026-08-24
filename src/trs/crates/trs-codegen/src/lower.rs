@@ -694,7 +694,7 @@ pub fn compile_meta_object(
     let hr = module.add_global(i64t, None, "trs_bir_hash_raw");
     hr.set_initializer(&i64t.const_int(bir_hash_raw, false));
     let r = module.add_global(i64t, None, "trs_layout_rev");
-    r.set_initializer(&i64t.const_int(AOT_LAYOUT_REV, false));
+    r.set_initializer(&i64t.const_int(crate::abi::baked_layout_rev(), false));
     // split threshold changes the arena layout (memo slots): the
     // loader must plan with the SAME value or refuse the artifact
     let t = module.add_global(i64t, None, "trs_split_thresh");

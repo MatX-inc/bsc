@@ -1623,19 +1623,6 @@ fn aot_load(
                 **t
             ));
         }
-        for (name, addr) in [
-            (&b"trs_cb_foreign"[..], jit_foreign_cb as ForeignCb as usize),
-            (&b"trs_cb_sigfpe"[..], jit_sigfpe_cb as SigfpeCb as usize),
-            (&b"trs_cb_prim"[..], jit_prim_cb as PrimCb as usize),
-        ] {
-            let g: libloading::Symbol<*mut usize> =
-                lib.get(name).map_err(|e| e.to_string())?;
-            **g = addr;
-        }
-        // compiled-BRAM-tick helper (level-2 tick artifacts)
-        if let Ok(g) = lib.get::<*mut usize>(b"trs_bram_tick_cb") {
-            **g = trs_codegen::abi::trs_bram_tick as usize;
-        }
         // task #58: BDPI call sites null-check their callee global and
         // trap here when no loaded BDPI library provided the import —
         // the trap names the import; a dead import never reaches it
@@ -1656,8 +1643,32 @@ fn aot_load(
             );
             std::process::abort();
         }
-        if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_bdpi_missing") {
-            **g = missing_bdpi_trap as usize;
+        // The callback ABI: every trs_cb_* pointer (and the BRAM tick
+        // helper) is REQUIRED — compile_meta_object has defined them
+        // all unconditionally since before rev 26, and the rev gate
+        // above already refused any artifact old enough to lack one,
+        // so a missing symbol here is a stripped or misbuilt artifact
+        // and the load fails closed instead of arming a null call
+        // (the rev-26 lesson: trs_cb_bdpi_missing was optional, so an
+        // old runtime could load a newer same-rev artifact and null-
+        // call the unfilled trap pointer from a BDPI trap block).
+        // Only the per-import trs_bdpi_* callee fills stay tolerant:
+        // that symbol set is design- and user-library-dependent, and
+        // an unfilled callee is exactly what the trap guards.
+        for (name, addr) in [
+            (&b"trs_cb_foreign"[..], jit_foreign_cb as ForeignCb as usize),
+            (&b"trs_cb_sigfpe"[..], jit_sigfpe_cb as SigfpeCb as usize),
+            (&b"trs_cb_prim"[..], jit_prim_cb as PrimCb as usize),
+            (&b"trs_cb_stdio"[..], jit_stdio_cb as usize),
+            (&b"trs_cb_bdpi_missing"[..], missing_bdpi_trap as usize),
+            (
+                &b"trs_bram_tick_cb"[..],
+                trs_codegen::abi::trs_bram_tick as usize,
+            ),
+        ] {
+            let g: libloading::Symbol<*mut usize> =
+                lib.get(name).map_err(|e| e.to_string())?;
+            **g = addr;
         }
         let pl: libloading::Symbol<*const u64> =
             lib.get(b"trs_protos_len").map_err(|e| e.to_string())?;
@@ -1773,11 +1784,9 @@ fn aot_load(
             };
             fused.push(ef);
         }
-        // stdio-flush + direct-BDPI callee globals (all optional:
-        // absent in old or BDPI-free artifacts)
-        if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_stdio") {
-            unsafe { **g = jit_stdio_cb as usize };
-        }
+        // direct-BDPI callee globals (tolerant on purpose: the symbol
+        // set is design-dependent, and an unfilled callee is what the
+        // missing-import trap guards)
         for (gname, addr) in bdpi_fill {
             if let Ok(g) = lib.get::<*mut usize>(gname.as_bytes()) {
                 unsafe { **g = *addr };
@@ -1942,7 +1951,7 @@ impl Interp {
         out.extend_from_slice(b"TRSARENA");
         for v in [
             1u64,
-            trs_codegen::abi::AOT_LAYOUT_REV,
+            trs_codegen::abi::baked_layout_rev(),
             salted,
             self.jit_arena_len as u64,
         ] {

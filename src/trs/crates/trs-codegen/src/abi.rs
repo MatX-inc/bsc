@@ -524,7 +524,26 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 26; // 26: live-EN-only fast slots (rung 40)
+// 27: trs_cb_bdpi_missing joined the callback ABI as a REQUIRED symbol
+//     (a rev-26 runtime never fills it, so a rev-26-labeled artifact
+//     carrying BDPI trap blocks would null-call it on a missing
+//     import), and the liveness walk grew MethValue result cones and
+//     dynamic-schedule alternates (live_en can only grow, but baked
+//     slot layouts change).  26: live-EN-only fast slots (rung 40).
+pub const AOT_LAYOUT_REV: u64 = 27;
+
+/// The revision stamped into artifacts being EMITTED.  Equal to
+/// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
+/// override, which lets the battery bake a deliberately mismatched
+/// artifact and witness the load-side refusal in both skew directions.
+/// Emit-side only by design: the CHECK side has no override, so the
+/// refusal is unbypassable.
+pub fn baked_layout_rev() -> u64 {
+    std::env::var("TRS_TEST_LAYOUT_REV")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(AOT_LAYOUT_REV)
+}
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).

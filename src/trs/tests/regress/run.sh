@@ -324,4 +324,39 @@ check_dyn DynSched sysDynSched G0100
 check_dyn DynSchedBoth sysDynSchedBoth G0101
 check_dyn DynSchedSelf sysDynSchedSelf G0096
 check_dyn DynSchedLoop sysDynSchedLoop G0116
+# layout-rev compat negatives: the load gate is an exact-equality
+# check, so ONE binary witnesses BOTH skew directions — baking REV-1
+# plays new-runtime/old-artifact, REV+1 plays old-runtime/new-artifact
+# (the rev-26 field hazard: trs_cb_bdpi_missing joined the callback
+# ABI without a bump, so an old runtime loaded the new artifact and
+# null-called the unfilled trap pointer).  TRS_TEST_LAYOUT_REV is the
+# emit-side-only bake override; the check side has none on purpose.
+# The mismatched artifact must refuse LOUDLY on stderr, fall back to
+# an in-process compile, and still match the reference byte-for-byte
+# (never rc 139 — the null-call regression this test pins).
+check_revcompat() {
+    name=RevCompat; top=sysEdgeSelfKill
+    cp "$SRC/EdgeSelfKill.bsv" .
+    $BSC -sim -bir -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o rev_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./rev_ref.exe > rev_ref.out 2>&1; refrc=$?
+    # control: a matched-rev artifact loads with no refusal note
+    "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
+    if grep -q "layout revision" revgot.err; then echo "FAIL $name (control run refused)"; fail=1; return; fi
+    if [ "$refrc" != "$gotrc" ] || ! cmp -s rev_ref.out revgot.out; then echo "FAIL $name (control)"; fail=1; return; fi
+    # the link's own window bake loads the just-baked mismatched .so
+    # and prints the same fallback note into revlink.out — expected;
+    # only the RUN's stderr is asserted
+    for rev in 26 28; do
+        TRS_TEST_LAYOUT_REV=$rev "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link rev $rev)"; fail=1; return; }
+        TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
+        if [ "$gotrc" = 139 ]; then echo "FAIL $name (rev $rev segfault)"; fail=1; return; fi
+        grep -q "layout revision $rev" revgot.err || { echo "FAIL $name (rev $rev: no refusal note)"; sed -n 1,3p revgot.err; fail=1; return; }
+        grep -q "compiling in-process instead" revgot.err || { echo "FAIL $name (rev $rev: no fallback note)"; fail=1; return; }
+        if [ "$refrc" != "$gotrc" ] || ! cmp -s rev_ref.out revgot.out; then echo "FAIL $name (rev $rev: fallback parity)"; fail=1; return; fi
+    done
+    echo "PASS $name"
+}
+check_revcompat
 exit $fail
