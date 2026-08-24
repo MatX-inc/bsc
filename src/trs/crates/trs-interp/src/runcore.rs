@@ -668,8 +668,13 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             bail("corrupt protos table");
             return None;
         };
-        // callback globals: foreign/prim/stdio.  BDPI globals cannot
-        // exist (any foreign import is an eligibility gate).
+        // callback globals: foreign/prim/stdio/sigfpe.  BDPI globals
+        // cannot exist (any foreign import is an eligibility gate).
+        // ALL of these bail on a miss (external review): the sidecar
+        // boot bypasses aot_load, so a tolerant fill here would arm a
+        // null call on a misbuilt artifact that the classic loader now
+        // refuses fail-closed — bailing falls through to the classic
+        // boot, where that refusal happens.
         if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_foreign") {
             **g = runcore_foreign_cb as usize;
         } else {
@@ -678,12 +683,21 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         }
         if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_prim") {
             **g = runcore_prim_cb as usize;
+        } else {
+            bail("no prim callback global");
+            return None;
         }
         if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_stdio") {
             **g = crate::jit::jit_stdio_cb as usize;
+        } else {
+            bail("no stdio callback global");
+            return None;
         }
         if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_sigfpe") {
             **g = crate::jit::jit_sigfpe_cb as usize;
+        } else {
+            bail("no sigfpe callback global");
+            return None;
         }
         // compiled-BRAM-tick helper (level-2 tick artifacts): pure
         // arena code in trs_codegen — the same target the classic
@@ -702,6 +716,9 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             });
         if let Ok(g) = lib.get::<*mut usize>(b"trs_bram_tick_cb") {
             **g = trs_codegen::abi::trs_bram_tick as usize;
+        } else {
+            bail("no bram tick callback global");
+            return None;
         }
         // the artifact stays mapped for the process lifetime
         std::mem::forget(lib);

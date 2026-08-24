@@ -1,11 +1,16 @@
-// rung-40 EN liveness: an ActionValue method whose BODY and RESULT
-// cones both read a sibling method's enable — inside the synthesized
-// child the RWire's whas IS the EN_ping input port, so grab's cones
-// carry Port(EN_ping) reads that reach lowering through value_call
-// (Expr::MethValue) as well as the action call.  Pins the walker's
-// MethValue recursion and the memo rule that a value-context visit
-// must never suppress a later action visit's body walk.  Byte parity
-// vs Bluesim on all three tiers (interp, hybrid jit, aot artifact).
+// rung-40 EN liveness, the PRUNING direction: an ActionValue method
+// whose body and result cones read a sibling-set wire.  Under -sim
+// the wire stays an RWire PRIM, so both walkers reach it as prim
+// method calls (wget/whas), never as a Port(EN_ping) read — EN_ping
+// is referenced only by the keep-fires method-WF defs in the table,
+// i.e. it is LEGITIMATELY table-read-only and the fast plan prunes
+// its slot (the census pin below asserts read=1 live=0 alloc=0, and
+// the de-circularized census must SHOW that row).  What this fixture
+// pins at runtime: the Expr::MethValue consumers (compiled
+// value_call, interp call_value) across all three tiers, and the
+// is_action-keyed memo rule that a value-context visit must never
+// suppress a later action visit's body walk.  Byte parity vs Bluesim
+// on interp, hybrid jit, and the aot artifact.
 
 interface MvSub;
    method Action ping(Bit#(8) v);
@@ -22,10 +27,10 @@ module mkMethValueEnSub(MvSub);
    endmethod
 
    method ActionValue#(Bit#(8)) grab();
-      // body reads EN_ping (the wire's whas) through the mux
+      // body reads the wire through the mux (RWire prim methods)
       acc <= acc + fromMaybe(0, w.wget);
-      // result cone reads EN_ping too — this is the read that must
-      // stay live through the MethValue path
+      // result cone reads the wire too — evaluated at every consumer
+      // through the MethValue path
       return fromMaybe(8'hAA, w.wget) + acc;
    endmethod
 endmodule

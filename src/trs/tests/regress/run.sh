@@ -411,6 +411,9 @@ census_pin MethValueEnCensus sysMethValueEn '^EN [0-9]+ - read=1 live=0 stay1=. 
 # composition, and an AV peek consumed via MethValue from an alt-
 # reordered rule — the alternates walk must keep EN_kick's slot
 check_dyn DynSchedEn sysDynSchedEn G0100
+# ...and the census must agree on an ALTS design (its live column
+# walks alternate cones too): EN_kick live-allocated, EN_put pruned
+census_pin DynSchedEnCensus sysDynSchedEn '^EN [0-9]+ [0-9]+ read=1 live=1 stay1=. alloc=1 EN_kick'
 # layout-rev compat negatives: the load gate is an exact-equality
 # check, so ONE binary witnesses BOTH skew directions — baking REV-1
 # plays new-runtime/old-artifact, REV+1 plays old-runtime/new-artifact

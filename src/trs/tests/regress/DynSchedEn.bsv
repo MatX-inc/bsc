@@ -1,15 +1,16 @@
 // Dynamic scheduling x rung-40 EN liveness: DynSched's G0100 shape
 // (put SB r SB get vs the wire-forced doGet SB mid SB doPut, disjoint
-// CAN_FIREs) plus an ActionValue method peek() whose RESULT cone reads
-// EN_put (the RWire's whas inside the child), called from doPeek —
-// scheduled after doPut by the put-SB-peek method order, inside the
-// composition the dynamic schedule reorders.  The alternate rows'
-// cones must keep EN_put live in fast plans (the liveness walk unions
-// alternate guards and entries), and the per-edge guard dispatch must
-// read it compiled.  peek's takings accumulate in a register printed
-// once at $finish so the golden is independent of where the schedule
-// places doPeek relative to r.  Goldens are hand-derived: no
-// reference Bluesim exists for this class by design.
+// CAN_FIREs) with a LIVE enable inside the alt-carrying composition:
+// kick() conflicts with rule r (both write acc), so the scheduler
+// puts a real Port(EN_kick) read into r's CAN_FIRE cone — which the
+// alternate rows re-expand, so the liveness walk's alternates union
+// must keep its slot in fast plans (census: EN_kick read=1 live=1
+// alloc=1, while EN_put/EN_peek route through the RWire prim and are
+// legitimately pruned).  peek() additionally pins the Expr::MethValue
+// consumer from an alt-reordered rule; its takings accumulate in a
+// register printed once at $finish so the golden is independent of
+// where the schedule places doPeek relative to r.  Goldens are
+// hand-derived: no reference Bluesim exists for this class by design.
 
 import FIFO::*;
 
@@ -45,8 +46,8 @@ module mkDynSchedEnSub(Sub);
    endmethod
 
    method ActionValue#(Bit#(8)) peek();
-      // result cone reads EN_put (w1's whas): 1 + pre-edge acc when
-      // put latched this cycle
+      // result cone reads the wire (RWire prim): 1 + acc when put
+      // latched this cycle — consumed via MethValue in doPeek
       return (isValid(w1.wget) ? 8'd1 : 8'd0) + acc;
    endmethod
 
@@ -73,9 +74,9 @@ module sysDynSchedEn(Empty);
       end
    endrule
 
-   // put SB peek (wset SB whas-read) schedules this after doPut; the
-   // EN_put read lives in peek's result cone, reached through the
-   // AvAction and the Expr::MethValue consumer
+   // put SB peek (wset SB wget-read) schedules this after doPut;
+   // peek's value is consumed through the AvAction + Expr::MethValue
+   // pair from a rule the dynamic schedule reorders
    rule doPeek (cnt < 10 && cnt[0] == 1);
       let m <- s.peek();
       seen <= seen + m;

@@ -7004,6 +7004,74 @@ impl Interp {
                 live_defs.extend(w.live_defs.iter().copied());
             }
         }
+        // dynamic-schedule alternates: the allocation walk unions
+        // their guards and entries into live_en (layout_touch_ranks),
+        // so the census LIVE column must see them too — otherwise an
+        // alt-only reader prints live=0 alloc=1 and pollutes the
+        // skippable count (external review).  Same LcWalk, no per-node
+        // N lines: alts-free census output stays byte-identical.
+        for rc in rcomps {
+            for alt in &rc.alts {
+                let mut w = LcWalk {
+                    it: self,
+                    envs: inst_envs,
+                    seen_defs: std::collections::HashSet::new(),
+                    seen_meths: std::collections::HashSet::new(),
+                    out: Vec::new(),
+                    boxed: 0,
+                    en_reads: std::collections::HashSet::new(),
+                    live_defs: std::collections::HashSet::new(),
+                    impure: false,
+                };
+                w.expr(alt.guard_inst, &alt.guard);
+                for en in &alt.entries {
+                    let inst = en.inst;
+                    let module = self.module_of(inst);
+                    let Some(env) = inst_envs.get(&inst) else { continue };
+                    let mir = env.mir;
+                    for &eg in &en.eager {
+                        w.seen_defs.insert((inst, eg));
+                        if let Some(&di) = self.mods[module].defs.get(&eg) {
+                            w.expr(
+                                inst,
+                                &self.d.modules[mir].defs[di].expr,
+                            );
+                        }
+                    }
+                    for node in &en.nodes {
+                        let (r, is_sched) = match node {
+                            SchedNode::Sched(r) => (*r, true),
+                            SchedNode::Exec(r) => (*r, false),
+                        };
+                        let Some(&ri) = self.mods[module].rules.get(&r)
+                        else {
+                            continue;
+                        };
+                        let rr = &self.d.modules[mir].rules[ri];
+                        if is_sched {
+                            for name in [rr.can_fire, rr.will_fire] {
+                                w.seen_defs.insert((inst, name));
+                                if let Some(&di) =
+                                    self.mods[module].defs.get(&name)
+                                {
+                                    w.expr(
+                                        inst,
+                                        &self.d.modules[mir].defs[di].expr,
+                                    );
+                                }
+                            }
+                        } else {
+                            let body: &Vec<trs_ir::Stmt> = &rr.body;
+                            for st in body {
+                                w.stmt(inst, st);
+                            }
+                        }
+                    }
+                }
+                live_en.extend(w.en_reads.iter().copied());
+                live_defs.extend(w.live_defs.iter().copied());
+            }
+        }
         // ---- rung-39 enable-store census ----
         // The compiled edge zeroes EVERY MethodEnable slot of every
         // instance, one u64 store each, every edge.  Classify each EN:
