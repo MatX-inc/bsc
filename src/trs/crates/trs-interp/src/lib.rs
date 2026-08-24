@@ -66,18 +66,6 @@ fn is_lib_bdpi(c_name: &str) -> bool {
     matches!(c_name, "rand32" | "srand")
 }
 
-/// rung-40 strict trap arming: panic instead of serving 0 when a
-/// pruned EN slot is read interp-side (TRS_STRICT_EN=1, and the
-/// lockstep selfcheck implies it — a missed reader must never be
-/// papered over during an oracle run).
-fn strict_en() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var_os("TRS_STRICT_EN").is_some()
-            || std::env::var_os("TRS_SELFCHECK").is_some()
-    })
-}
-
 /// glibc random() (TYPE_3, trinomial x^31 + x^3 + 1), reimplemented so
 /// every Interp owns its OWN stream.  The reference's rand32.cxx calls
 /// libc random(), whose state is process-global — fine for one model
@@ -1569,13 +1557,17 @@ impl Interp {
                                 };
                                 return Value::from_u64(w, word);
                             }
-                            // rung-40 strict trap (external review): a
-                            // pruned fast plan reaching this fallthrough
-                            // means the liveness walk missed an
-                            // interp-side reader — 0 is what an
-                            // untouched zeroed slot would hold, but the
-                            // miss itself is a bug; trap when asked.
-                            if self.jit_en_pruned && strict_en() {
+                            // rung-40 trap (external review): a pruned
+                            // fast plan reaching this fallthrough means
+                            // the liveness walk missed an interp-side
+                            // reader — 0 is what an untouched zeroed
+                            // slot would hold, but the miss itself is a
+                            // bug, so every tier fails CLOSED (the old
+                            // TRS_STRICT_EN opt-in gate left the plain
+                            // interp path failing open).  Reachable
+                            // only past the plan-time subset audit, so
+                            // firing means a shared walker blind spot.
+                            if self.jit_en_pruned {
                                 panic!(
                                     "trs: BUG: enable port '{}' was \
                                      pruned by the fast-plan liveness \

@@ -324,6 +324,50 @@ check_dyn DynSched sysDynSched G0100
 check_dyn DynSchedBoth sysDynSchedBoth G0101
 check_dyn DynSchedSelf sysDynSchedSelf G0096
 check_dyn DynSchedLoop sysDynSchedLoop G0116
+# rung-40 EN liveness (external review): byte parity on ALL THREE
+# tiers — interp, hybrid jit, and the aot artifact — for designs
+# whose enables exercise the liveness walk; a pruned-but-read EN now
+# fails CLOSED on every tier, so parity here also witnesses that no
+# trap fires
+check_en() { # name top
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o en_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./en_ref.exe > en_ref.out 2>&1; refrc=$?
+    "$TRS" run "$top.bir" > en_i.out 2>&1; irc=$?
+    if [ "$irc" != "$refrc" ] || ! cmp -s en_ref.out en_i.out; then echo "FAIL $name (interp)"; diff en_ref.out en_i.out | head -3; fail=1; return; fi
+    TRS_JIT=1 "$TRS" run "$top.bir" > en_j.out 2>&1; jrc=$?
+    if [ "$jrc" != "$refrc" ] || ! cmp -s en_ref.out en_j.out; then echo "FAIL $name (jit)"; diff en_ref.out en_j.out | head -3; fail=1; return; fi
+    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o en_art >en_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    TRS="$TRS" ./en_art > en_a.out 2>&1; arc=$?
+    if [ "$arc" != "$refrc" ] || ! cmp -s en_ref.out en_a.out; then echo "FAIL $name (aot)"; diff en_ref.out en_a.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+# the REAL live-EN shape (rule-vs-method conflict: CAN_FIRE_bump reads
+# EN_poke) — the battery's only design with a runtime-live enable
+check_en EnConflict sysEnConflict
+# MethValue path pin: an AV method whose body+result cones read the
+# child wire's whas, consumed through Expr::MethValue on every tier
+check_en MethValueEn sysMethValueEn
+# census pins (the de-circularized ENSUM enumerates the PORT TABLE,
+# so pruned-but-read enables are VISIBLE): EnConflict's EN_poke must
+# stay live-allocated; MethValueEn's EN_ping is legitimately pruned
+# (table-read only — the wire routes through the RWire prim) and the
+# census must say so instead of hiding the row
+census_pin() { # name top pattern
+    name=$1; top=$2; pat=$3
+    TRS_LAYOUT_CENSUS="cens_$name.txt" "$TRS" link "$top.bir" -o "censart_$name" >/dev/null 2>&1
+    grep -Eq "$pat" "cens_$name.txt" || { echo "FAIL $name (census pin: $pat)"; grep "^EN " "cens_$name.txt" | head -3; fail=1; return; }
+    echo "PASS $name"
+}
+census_pin EnConflictCensus sysEnConflict '^EN [0-9]+ [0-9]+ read=1 live=1 stay1=. alloc=1 EN_poke'
+census_pin MethValueEnCensus sysMethValueEn '^EN [0-9]+ - read=1 live=0 stay1=. alloc=0 EN_ping'
+# dynamic scheduling x EN liveness: DynSched's shape plus a live
+# enable (kick conflicts with rule r) inside the alt-carrying
+# composition, and an AV peek consumed via MethValue from an alt-
+# reordered rule — the alternates walk must keep EN_kick's slot
+check_dyn DynSchedEn sysDynSchedEn G0100
 # layout-rev compat negatives: the load gate is an exact-equality
 # check, so ONE binary witnesses BOTH skew directions — baking REV-1
 # plays new-runtime/old-artifact, REV+1 plays old-runtime/new-artifact

@@ -6647,7 +6647,10 @@ struct LcWalk<'a> {
     it: &'a Interp,
     envs: &'a HashMap<usize, InstEnv>,
     seen_defs: std::collections::HashSet<(usize, StrId)>,
-    seen_meths: std::collections::HashSet<(usize, StrId)>,
+    /// memo key carries is_action (lockstep with LcRank): a value
+    /// visit walks ready+result only and must not suppress a later
+    /// action visit's body walk
+    seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
     /// (slot base, word footprint, class): 0 = prim data, 1 = indexed
     /// prim (bounded), 2 = def/fire-signal slot
     out: Vec<(u32, u32, u8)>,
@@ -6717,7 +6720,7 @@ impl<'a> LcWalk<'a> {
         match &self.it.insts[ci].kind {
             InstKind::Prim(_) => self.boxed += 1,
             InstKind::User { .. } => {
-                if !self.seen_meths.insert((ci, method)) {
+                if !self.seen_meths.insert((ci, method, is_action)) {
                     return;
                 }
                 let Some(cenv) = self.envs.get(&ci) else { return };
@@ -6774,7 +6777,15 @@ impl<'a> LcWalk<'a> {
                 self.impure = true;
                 self.meth(inst, *instance, *method, args, false)
             }
-            E::MethValue { .. } | E::TaskValue { .. } => {}
+            // lockstep with LcRank: a MethValue re-evaluates the child
+            // method's result cone at runtime, so the census must see
+            // its reads too (TaskValue reads the paired Task action's
+            // cookie store — nothing to walk)
+            E::MethValue { instance, method, .. } => {
+                self.impure = true;
+                self.meth(inst, *instance, *method, &[], false)
+            }
+            E::TaskValue { .. } => {}
             E::ForeignCall { args, .. } => {
                 self.impure = true;
                 self.boxed += 1;
@@ -6805,10 +6816,18 @@ impl<'a> LcWalk<'a> {
             }
             E::Reset { wire } => self.expr(inst, wire),
             E::Port(p) => {
-                if self
-                    .envs
-                    .get(&inst)
-                    .is_some_and(|e| e.en_slot.contains_key(p))
+                // classify by the module PORT TABLE, not by en_slot
+                // presence: recording only slot-backed reads made the
+                // census circular with the allocation it audits — a
+                // pruned-but-read EN was invisible by construction
+                // (external review)
+                let module = self.it.module_of(inst);
+                if self.it.mods[module]
+                    .ports
+                    .get(p)
+                    .is_some_and(|&(_w, k)| {
+                        k == trs_ir::PortKind::MethodEnable
+                    })
                 {
                     self.en_reads.insert((inst, *p));
                 }
@@ -7158,35 +7177,53 @@ impl Interp {
             }
             let (
                 mut n_en,
+                mut n_alloc,
                 mut n_read,
                 mut n_live,
                 mut n_stay1,
                 mut n_dead_or_stay1,
-            ) = (0usize, 0usize, 0usize, 0usize, 0usize);
+            ) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
             let mut iis2: Vec<usize> = inst_envs.keys().copied().collect();
             iis2.sort_unstable();
             for i in iis2 {
                 let env = &inst_envs[&i];
                 let refs = port_refs.get(&env.mir);
-                let mut ens: Vec<(StrId, u32)> =
-                    env.en_slot.iter().map(|(&k, &v)| (k, v)).collect();
+                // enumerate the module PORT TABLE, not env.en_slot:
+                // iterating the post-pruning slot map made every
+                // counted EN live by construction, so a wrongly-pruned
+                // EN was invisible and "allocated == live-counted" was
+                // never a completeness proof (external review) — a
+                // pruned port now prints with alloc=0 and slot '-'
+                let module = self.module_of(i);
+                let mut ens: Vec<StrId> = self.mods[module]
+                    .ports
+                    .iter()
+                    .filter(|&(_, &(_w, k))| {
+                        k == trs_ir::PortKind::MethodEnable
+                    })
+                    .map(|(&p, _)| p)
+                    .collect();
                 ens.sort_unstable();
-                for (pname, slot) in ens {
+                for pname in ens {
+                    let slot = env.en_slot.get(&pname).copied();
                     let read =
                         refs.is_some_and(|r| r.contains(&pname));
                     let live = live_en.contains(&(i, pname));
                     let s1 = stay1.contains(&(i, pname));
                     n_en += 1;
+                    n_alloc += slot.is_some() as usize;
                     n_read += read as usize;
                     n_live += live as usize;
                     n_stay1 += s1 as usize;
                     n_dead_or_stay1 += (!live || s1) as usize;
                     writeln!(
                         f,
-                        "EN {i} {slot} read={} live={} stay1={} {}",
+                        "EN {i} {} read={} live={} stay1={} alloc={} {}",
+                        slot.map_or("-".into(), |s| s.to_string()),
                         read as u8,
                         live as u8,
                         s1 as u8,
+                        slot.is_some() as u8,
                         self.s(pname)
                     )
                     .unwrap();
@@ -7217,14 +7254,14 @@ impl Interp {
                 }
                 writeln!(
                     f,
-                    "STORESUM comp={rci} en_zero={n_en} cfwf_words={} eager_words={eagw}",
+                    "STORESUM comp={rci} en_zero={n_alloc} cfwf_words={} eager_words={eagw}",
                     2 * nsched
                 )
                 .unwrap();
             }
             writeln!(
                 f,
-                "ENSUM total={n_en} table_read={n_read} LIVE_read={n_live} stay1={n_stay1} skippable_notlive_or_stay1={n_dead_or_stay1}"
+                "ENSUM total={n_en} alloc={n_alloc} table_read={n_read} LIVE_read={n_live} stay1={n_stay1} skippable_notlive_or_stay1={n_dead_or_stay1}"
             )
             .unwrap();
             writeln!(f, "LIVEDEFS {}", live_defs.len()).unwrap();
@@ -7250,7 +7287,10 @@ struct LcRank<'a> {
     rank: HashMap<(usize, StrId), u32>,
     n: u32,
     seen_defs: std::collections::HashSet<(usize, StrId)>,
-    seen_meths: std::collections::HashSet<(usize, StrId)>,
+    /// memo key carries is_action: a value visit walks ready+result
+    /// only, so it must not suppress a later ACTION visit's body walk
+    /// (the body's EN reads would be invisibly pruned)
+    seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
     /// rung 40: EN ports the walked cones actually load — the fast
     /// tier allocates slots only for these (keyed by mir: twin
     /// instances must stay layout-identical for dedup)
@@ -7295,7 +7335,7 @@ impl<'a> LcRank<'a> {
             }
             InstKind::User { .. } => {
                 let cmir = self.mir_of(ci);
-                if !self.seen_meths.insert((cmir, method)) {
+                if !self.seen_meths.insert((cmir, method, is_action)) {
                     return;
                 }
                 let it = self.it;
@@ -7341,7 +7381,18 @@ impl<'a> LcRank<'a> {
             E::MethCall { instance, method, args, .. } => {
                 self.meth(inst, *instance, *method, args, false)
             }
-            E::MethValue { .. } | E::TaskValue { .. } => {}
+            // the value half of an ActionValue call re-evaluates the
+            // child method's RESULT cone at runtime (compiled
+            // value_call, interp call_value), so its EN reads are live
+            // even when the paired action call is not reachable from
+            // this walk's roots (external review: the empty arm was a
+            // liveness hole)
+            E::MethValue { instance, method, .. } => {
+                self.meth(inst, *instance, *method, &[], false)
+            }
+            // a TaskValue reads the paired Task action's cookie store
+            // (ctx locals), never a method cone — nothing to walk
+            E::TaskValue { .. } => {}
             E::ForeignCall { args, .. } => {
                 for a in args {
                     self.expr(inst, a);
@@ -7438,11 +7489,15 @@ impl Interp {
         std::collections::HashSet<(usize, StrId)>,
     ) {
         // name-stop sets: every rule's CF/WF and every entry's eager
-        // defs, unioned per module type
+        // defs, unioned per module type — across BASE AND ALTERNATE
+        // entries (dynamic-schedule alternates execute at runtime like
+        // base entries, so their fire signals are slot-served stops
+        // and their cones are walk roots; external review: the walk
+        // previously covered base entries only)
         let mut stop: HashMap<usize, std::collections::HashSet<StrId>> =
             HashMap::new();
-        for rc in rcomps {
-            for en in &rc.entries {
+        {
+            let mut add_stops = |en: &REntry| {
                 let module = self.module_of(en.inst);
                 let mir = self.mods[module].ir;
                 let s = stop.entry(mir).or_default();
@@ -7459,6 +7514,64 @@ impl Interp {
                         s.insert(rr.will_fire);
                     }
                 }
+            };
+            for rc in rcomps {
+                for en in &rc.entries {
+                    add_stops(en);
+                }
+                for alt in &rc.alts {
+                    for en in &alt.entries {
+                        add_stops(en);
+                    }
+                }
+            }
+        }
+        // one entry's walk, shared verbatim by the base loop, the
+        // alternates loop, and the stop-free audit walker below so the
+        // enumerations cannot drift
+        fn walk_entry(w: &mut LcRank, en: &REntry) {
+            let it = w.it;
+            let inst = en.inst;
+            let module = it.module_of(inst);
+            let mir = it.mods[module].ir;
+            for &e in &en.eager {
+                w.mark(mir, e);
+                // own-position expansion bypasses the name-stop
+                w.seen_defs.insert((mir, e));
+                if let Some(&di) = it.mods[module].defs.get(&e) {
+                    let ex: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+                    w.expr(inst, ex);
+                }
+            }
+            for node in &en.nodes {
+                let (r, is_sched) = match node {
+                    SchedNode::Sched(r) => (*r, true),
+                    SchedNode::Exec(r) => (*r, false),
+                };
+                let Some(&ri) = it.mods[module].rules.get(&r) else {
+                    continue;
+                };
+                let rr = &it.d.modules[mir].rules[ri];
+                if is_sched {
+                    w.mark(mir, rr.can_fire);
+                    w.mark(mir, rr.will_fire);
+                    for name in [rr.can_fire, rr.will_fire] {
+                        w.seen_defs.insert((mir, name));
+                        if let Some(&di) = it.mods[module].defs.get(&name) {
+                            let ex: &trs_ir::Expr =
+                                &it.d.modules[mir].defs[di].expr;
+                            w.expr(inst, ex);
+                        }
+                    }
+                } else if !w.seen_meths.insert((mir, r, true)) {
+                    // twin instance: this type's exec body walked
+                    continue;
+                } else {
+                    let body: &Vec<trs_ir::Stmt> = &rr.body;
+                    for st in body {
+                        w.stmt(inst, st);
+                    }
+                }
             }
         }
         let mut w = LcRank {
@@ -7472,50 +7585,22 @@ impl Interp {
         };
         for rc in rcomps {
             for en in &rc.entries {
-                let inst = en.inst;
-                let module = self.module_of(inst);
-                let mir = self.mods[module].ir;
-                for &e in &en.eager {
-                    w.mark(mir, e);
-                    // own-position expansion bypasses the name-stop
-                    w.seen_defs.insert((mir, e));
-                    if let Some(&di) = self.mods[module].defs.get(&e) {
-                        let ex: &trs_ir::Expr =
-                            &self.d.modules[mir].defs[di].expr;
-                        w.expr(inst, ex);
-                    }
-                }
-                for node in &en.nodes {
-                    let (r, is_sched) = match node {
-                        SchedNode::Sched(r) => (*r, true),
-                        SchedNode::Exec(r) => (*r, false),
-                    };
-                    let Some(&ri) = self.mods[module].rules.get(&r) else {
-                        continue;
-                    };
-                    let rr = &self.d.modules[mir].rules[ri];
-                    if is_sched {
-                        w.mark(mir, rr.can_fire);
-                        w.mark(mir, rr.will_fire);
-                        for name in [rr.can_fire, rr.will_fire] {
-                            w.seen_defs.insert((mir, name));
-                            if let Some(&di) =
-                                self.mods[module].defs.get(&name)
-                            {
-                                let ex: &trs_ir::Expr =
-                                    &self.d.modules[mir].defs[di].expr;
-                                w.expr(inst, ex);
-                            }
-                        }
-                    } else if !w.seen_meths.insert((mir, r)) {
-                        // twin instance: this type's exec body walked
-                        continue;
-                    } else {
-                        let body: &Vec<trs_ir::Stmt> = &rr.body;
-                        for st in body {
-                            w.stmt(inst, st);
-                        }
-                    }
+                walk_entry(&mut w, en);
+            }
+        }
+        // dynamic-schedule alternates: guards evaluate and the winning
+        // alternative's entries execute at runtime on every tier (the
+        // interp edge walk, and the compiled per-edge guard dispatch),
+        // so their cones are liveness roots too.  Walked AFTER all
+        // base entries so alts-free designs keep byte-identical ranks;
+        // rc.alts is a Vec — deterministic order.  Guards are
+        // contractually pure register cones, but walking them is free
+        // defense-in-depth against a guard that reads an EN.
+        for rc in rcomps {
+            for alt in &rc.alts {
+                w.expr(alt.guard_inst, &alt.guard);
+                for en in &alt.entries {
+                    walk_entry(&mut w, en);
                 }
             }
         }
@@ -7524,7 +7609,7 @@ impl Interp {
         // census skips them, liveness must not)
         let top_mir = self.mods[self.module_of(0)].ir;
         for (mname, _argv) in &self.autofire {
-            if !w.seen_meths.insert((top_mir, *mname)) {
+            if !w.seen_meths.insert((top_mir, *mname, true)) {
                 continue;
             }
             if let Some(me) =
@@ -7565,6 +7650,93 @@ impl Interp {
             }
         }
         w.live_en.extend(gw.live_en);
+        // always-on plan-time audit (external review): re-derive the
+        // reader set with a STOP-FREE walker over the same roots and
+        // assert it adds nothing.  Name-stops elide exactly the cones
+        // whose defs are themselves walk roots (eager defs and rule
+        // fire signals are slot-served), so any EN the stop-free walk
+        // reaches that live_en lacks is a stop/root-duality bug in
+        // this function — fail the PLAN loudly (every compiled tier
+        // passes through here: in-process JIT, Emit at link time, and
+        // Load re-planning at artifact boot) instead of letting
+        // compiled lowering trap later or the interpreter read a
+        // wrong 0.  Derived before allocation and without consulting
+        // any slot map, so it cannot inherit the census's circularity
+        // (the post-allocation LIVE census counts through en_slot and
+        // is a determinism witness, never a completeness proof).
+        // Armed only when pruning will happen: traced plans allocate
+        // every EN slot, so a miss there cannot miscompile.
+        if !self.vcd_trace {
+            let mut aw = LcRank {
+                it: self,
+                stop: HashMap::new(),
+                rank: HashMap::new(),
+                n: 0,
+                seen_defs: std::collections::HashSet::new(),
+                seen_meths: std::collections::HashSet::new(),
+                live_en: std::collections::HashSet::new(),
+            };
+            for rc in rcomps {
+                for en in &rc.entries {
+                    walk_entry(&mut aw, en);
+                }
+                for alt in &rc.alts {
+                    aw.expr(alt.guard_inst, &alt.guard);
+                    for en in &alt.entries {
+                        walk_entry(&mut aw, en);
+                    }
+                }
+            }
+            for (mname, _argv) in &self.autofire {
+                if !aw.seen_meths.insert((top_mir, *mname, true)) {
+                    continue;
+                }
+                if let Some(me) = self.d.modules[top_mir]
+                    .methods
+                    .iter()
+                    .find(|m| m.name == *mname)
+                {
+                    if let Some(r) = &me.ready {
+                        aw.expr(0, r);
+                    }
+                    for st in &me.body {
+                        aw.stmt(0, st);
+                    }
+                    if let Some(res) = &me.result {
+                        aw.expr(0, res);
+                    }
+                }
+            }
+            for inst in &self.insts {
+                if let InstKind::User { gates, .. } = &inst.kind {
+                    for (owner, g) in gates.values() {
+                        aw.expr(*owner, g);
+                    }
+                }
+            }
+            let mut missing: Vec<String> = aw
+                .live_en
+                .difference(&w.live_en)
+                .map(|&(mir, p)| {
+                    format!(
+                        "{}.{}",
+                        self.d.strings[self.d.modules[mir].name as usize],
+                        self.d.strings[p as usize]
+                    )
+                })
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                panic!(
+                    "trs: BUG: rung-40 EN liveness audit: {} \
+                     runtime-reachable enable read(s) missing from the \
+                     allocation walk: {:?} — report this (stop/root \
+                     duality in layout_touch_ranks)",
+                    missing.len(),
+                    missing
+                );
+            }
+        }
         (w.rank, w.live_en)
     }
 }
