@@ -399,8 +399,17 @@ fn run_ir_passes(
     // block (the dominant link phase at Toooba scale).  inkwell has no
     // TimePasses API; inject LLVM's own flag once — the new-PM
     // StandardInstrumentations honor the -time-passes cl::opt and
-    // print the timing report to stderr.
-    if std::env::var_os("TRS_JIT_TIME_PASSES").is_some() {
+    // print the timing report to stderr.  Unset, empty, or =0 leaves
+    // timing OFF (external review: any set value used to enable it,
+    // including =0); any other value turns the global cl::opt on for
+    // the REST OF THE PROCESS — there is no un-parse, so later calls
+    // keep timing even if the variable changes (the Once only guards
+    // the unsafe flag parse against the chunked path's parallel
+    // workers).  Built as a one-shot CLI diagnostic; per-action scoped
+    // instrumentation belongs to the persistent-worker rung.
+    if std::env::var_os("TRS_JIT_TIME_PASSES")
+        .is_some_and(|v| !v.is_empty() && v != "0")
+    {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             let args = [c"trs".as_ptr(), c"-time-passes".as_ptr()];
