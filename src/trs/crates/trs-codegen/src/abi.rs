@@ -592,6 +592,7 @@ pub enum HelperRef {
 pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32, Vec<(StrId, u32)>)>;
 
 /// One outlined def piece to compile as a helper function.
+#[derive(Clone)]
 pub struct HelperSpec {
     /// module ir + def being outlined
     pub mir: usize,

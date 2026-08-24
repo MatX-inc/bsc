@@ -926,6 +926,10 @@ fn lower_boundary_fns<'ctx>(
     cbs: Callbacks<'ctx>,
     reqs: &[BoundaryReq],
     refs: Option<&HelperMap>,
+    // sharded emission: the fns are called from OTHER objects, so the
+    // definitions must survive the static link (still not dlsym'd —
+    // -Bsymbolic-functions binds them intra-.so)
+    external: bool,
 ) -> BoundaryMap {
     // sentinel spec: inst matches NO frame, so the spec-owned eager
     // publish/reload arms in def() stay as cold as they are in the
@@ -960,7 +964,7 @@ fn lower_boundary_fns<'ctx>(
             prim_calls: Vec::new(),
             edge: None,
         };
-        match lc.lower_boundary_fn(rq) {
+        match lc.lower_boundary_fn(rq, external) {
             Ok(ret_w)
                 if lc.foreign_stmts.is_empty() && lc.prim_calls.is_empty() =>
             {
@@ -999,6 +1003,10 @@ fn lower_boundary_fns<'ctx>(
 /// on an over-budget module).
 pub enum DesignObject {
     Object(Vec<u8>),
+    /// sharded emission (TRS_JIT_SHARD): design object first, then one
+    /// object per module type in ascending mir order — the caller
+    /// appends meta.o and links them exactly like the one-module pair
+    Objects(Vec<Vec<u8>>),
     /// (per-comp inlined section sizes, largest measured edge-fn size
     /// in IR instructions) — the caller replans on the sizes and uses
     /// the edge measurement to decide between accepting the inline
@@ -1046,7 +1054,7 @@ pub fn compile_design_object(
             );
         }
         let bmap =
-            lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt);
+            lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, false);
         eprintln!(
             "trs boundary: {} of {} method fns emitted",
             bmap.len(),
@@ -1266,6 +1274,340 @@ pub fn compile_design_object(
         eprintln!("trs aot: backend emit {:?}", t1.elapsed());
     }
     Ok(DesignObject::Object(buf.as_slice().to_vec()))
+}
+
+/// One per-type module of the sharded emission: the type's outlined
+/// helper pieces, its boundary method fns (External — cross-object
+/// callees), and its exec class reps, lowered in that order.  The
+/// boundary fns lower with NO map installed (child cones inline),
+/// matching the phase-1 trial exactly — the realized entries are then
+/// checked against the trial's map, so a drift can never produce
+/// mismatched declaration types in other modules; the FULL map is
+/// installed only for the exec reps (their cross-type method calls
+/// divert).  gate_scratch rides in `env` — an outlined rep's write
+/// marks are consumed by the design module's edge spine, so the
+/// legacy chunked arm's gate_scratch:None would silently break gating.
+#[allow(clippy::too_many_arguments)]
+fn compile_type_module(
+    env: &PlanEnv,
+    helpers: &[HelperSpec],
+    reqs: &[BoundaryReq],
+    reps: &[RuleSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+    full_map: &BoundaryMap,
+    mir: usize,
+) -> Result<Vec<u8>, Ineligible> {
+    let _am = crate::abi::AotModeGuard::set();
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    let refs_opt = (!refs.is_empty()).then_some(refs);
+    let _bguard = BoundaryGuard;
+    if !helpers.is_empty() {
+        lower_helpers(env, &ctx, &module, cbs, helpers, refs, pseudo)
+            .map_err(|e| Ineligible(format!("shard mir {mir} helpers: {e}")))?;
+    }
+    if !reqs.is_empty() {
+        let local =
+            lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, true);
+        // the phase-1 trial decided the map every other module lowered
+        // against; a divergence here would mean call sites elsewhere
+        // declared a type this module never defined — fail loudly
+        for rq in reqs {
+            let k = (rq.mir, rq.method, rq.kind);
+            if local.get(&k) != full_map.get(&k) {
+                return Err(Ineligible(format!(
+                    "shard mir {mir}: boundary realization drift on {}",
+                    rq.sym
+                )));
+            }
+        }
+    }
+    BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
+    for spec in reps {
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            token_kind: TOKEN_KIND_EXEC,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_exec()
+            .map_err(|e| Ineligible(format!("shard mir {mir} exec: {e}")))?;
+    }
+    run_ir_passes(&module, None)?;
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("shard mir {mir} object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
+/// Sharded AOT emission (TRS_JIT_SHARD=1 — sharding rung step 2): the
+/// one-module design splits into a DESIGN module (sched fns, fused
+/// edge fns, fn tables, gate geometry) plus one module per module
+/// TYPE (see compile_type_module), pass pipelines running in parallel
+/// (per-type workers + the design module on this thread), linked by
+/// the caller exactly like the one-module artifact with meta.o
+/// appended.  Cross-module method calls ride the boundary ABI
+/// (step-1 measured: +0.32% Ir, wall neutral-or-better on the
+/// specimen; the Toooba control +0.031%).  EdgeOverBudget is measured
+/// BEFORE any pass pipeline runs and propagates for the caller's
+/// replan unchanged.  Byte-determinism: types in ascending mir order,
+/// jobs chunked contiguously, output order [design, mir asc].
+#[allow(clippy::too_many_arguments)]
+pub fn compile_design_objects_split(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    rep_ords: &[usize],
+    helper_specs: &[HelperSpec],
+    refs: &HelperMap,
+    fused: &[FusedComp],
+    edge_plan: Option<&EdgeSsaPlan>,
+    edge_insn_budget: u64,
+    boundary_reqs: &[BoundaryReq],
+    nworkers: usize,
+) -> Result<DesignObject, Ineligible> {
+    let t_low = std::time::Instant::now();
+    let refs_opt = (!refs.is_empty()).then_some(refs);
+    // phase 1: realize the boundary map on a throwaway module — the
+    // eligibility/width decisions every module lowers against.  The
+    // per-type modules re-lower the same fns (ms-scale) and verify.
+    let full_map = {
+        let ctx = Context::create();
+        let (module, cbs) = make_module(&ctx, None);
+        let _bg = BoundaryGuard;
+        lower_boundary_fns(env, &ctx, &module, cbs, boundary_reqs, refs_opt, false)
+    };
+    eprintln!(
+        "trs shard: {} of {} boundary method fns realized",
+        full_map.len(),
+        boundary_reqs.len()
+    );
+    // partition by module type (ascending mir = deterministic)
+    let mut per_type: std::collections::BTreeMap<
+        usize,
+        (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>),
+    > = std::collections::BTreeMap::new();
+    for hs in helper_specs {
+        per_type.entry(hs.mir).or_default().0.push(hs.clone());
+    }
+    for rq in boundary_reqs {
+        per_type.entry(rq.mir).or_default().1.push(rq.clone());
+    }
+    for &o in rep_ords {
+        let inst = specs[o].inst;
+        let Some(ie) = env.insts.get(&inst) else {
+            return Err(Ineligible(format!("shard: rep inst {inst} unknown")));
+        };
+        per_type.entry(ie.mir).or_default().2.push(specs[o].clone());
+    }
+    // phase 2a: the design module — sched fns + fused edge fns, with
+    // the full map installed (their method-call sites divert), NO
+    // helpers/boundary/reps.  Mirrors compile_design_object.
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    let mut tally = IrTally::default();
+    let _bguard = BoundaryGuard;
+    BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
+    let covered: std::collections::HashSet<usize> = edge_plan
+        .map(|p| {
+            p.nodes
+                .iter()
+                .flatten()
+                .filter(|&&(is_exec, _)| !is_exec)
+                .map(|&(_, o)| o)
+                .collect()
+        })
+        .unwrap_or_default();
+    for (o, spec) in specs.iter().enumerate() {
+        if covered.contains(&o) {
+            continue;
+        }
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            token_kind: 0,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_sched()?;
+    }
+    let mut section_sizes: Vec<Vec<(usize, u64)>> = Vec::new();
+    match edge_plan {
+        Some(p) => lower_edge_ssa(
+            env,
+            &ctx,
+            &module,
+            cbs,
+            specs,
+            refs_opt,
+            p,
+            fused,
+            &mut section_sizes,
+        )?,
+        None => {
+            let _ = lower_fused(&ctx, &module, fused);
+        }
+    }
+    // measured edge budget BEFORE any pass pipeline runs (one-module
+    // contract: an over-budget module never reaches the passes)
+    if edge_insn_budget > 0 {
+        let mut max_insns = 0u64;
+        for k in 0..fused.len() {
+            if let Some(f) = module.get_function(&format!("edge_c{k}")) {
+                let mut insns = 0u64;
+                for bb in f.get_basic_blocks() {
+                    let mut ins = bb.get_first_instruction();
+                    while let Some(i) = ins {
+                        insns += 1;
+                        ins = i.get_next_instruction();
+                    }
+                }
+                max_insns = max_insns.max(insns);
+            }
+        }
+        if max_insns > edge_insn_budget {
+            return Ok(DesignObject::EdgeOverBudget(section_sizes, max_insns));
+        }
+    }
+    // ordinal fn tables: exec reps live in per-type modules — declare
+    // the emitted ones so their table entries become link relocations
+    // instead of null ("elided"), which the loader would stub to a
+    // panic.  Only rep ordinals are ever read from the exec table.
+    {
+        let ptrt = ctx.ptr_type(AddressSpace::default());
+        let i64t = ctx.i64_type();
+        let i32t = ctx.i32_type();
+        let exec_ty = i32t.fn_type(
+            &[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()],
+            false,
+        );
+        for &o in rep_ords {
+            let name = format!("exec_{}", specs[o].label);
+            if module.get_function(&name).is_none() {
+                module.add_function(&name, exec_ty, None);
+            }
+        }
+        let fnptr = |name: String| {
+            module
+                .get_function(&name)
+                .map(|f| f.as_global_value().as_pointer_value())
+                .unwrap_or_else(|| ptrt.const_null())
+        };
+        let scheds: Vec<_> = specs
+            .iter()
+            .map(|sp| fnptr(format!("sched_{}", sp.label)))
+            .collect();
+        let execs: Vec<_> = specs
+            .iter()
+            .map(|sp| fnptr(format!("exec_{}", sp.label)))
+            .collect();
+        let edges: Vec<_> =
+            (0..fused.len()).map(|k| fnptr(format!("edge_c{k}"))).collect();
+        for (name, vals) in [
+            ("trs_sched_tab", scheds),
+            ("trs_exec_tab", execs),
+            ("trs_edge_tab", edges),
+        ] {
+            let arr = ptrt.const_array(&vals);
+            let g = module.add_global(arr.get_type(), None, name);
+            g.set_initializer(&arr);
+            let l = module.add_global(i64t, None, &format!("{name}_len"));
+            l.set_initializer(&i64t.const_int(vals.len() as u64, false));
+        }
+    }
+    tally.add_all(&module);
+    let timing = std::env::var_os("TRS_JIT_TIME").is_some();
+    if timing {
+        eprintln!(
+            "trs shard: design lowering {:?} ({} type modules)",
+            t_low.elapsed(),
+            per_type.len()
+        );
+    }
+    // phase 2b: per-type pipelines on workers, the design pipeline on
+    // this thread (its Context cannot move), all overlapped
+    let jobs: Vec<(usize, (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>))> =
+        per_type.into_iter().collect();
+    let pseudo = specs[0].clone();
+    let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
+    let t0 = std::time::Instant::now();
+    let (design_obj, type_objs) = std::thread::scope(|sc| {
+        let mut handles = Vec::new();
+        for group in jobs.chunks(chunk) {
+            let pseudo = &pseudo;
+            let full_map = &full_map;
+            handles.push(sc.spawn(move || {
+                let wenv = PlanEnv {
+                    now_slot: env.now_slot,
+                    d: env.d,
+                    insts: env.insts,
+                    gate_scratch: env.gate_scratch,
+                };
+                let mut out = Vec::new();
+                for (mir, (hs, rqs, reps)) in group {
+                    out.push((
+                        *mir,
+                        compile_type_module(
+                            &wenv, hs, rqs, reps, refs, pseudo, full_map,
+                            *mir,
+                        ),
+                    ));
+                }
+                out
+            }));
+        }
+        let design: Result<Vec<u8>, Ineligible> = (|| {
+            run_ir_passes(&module, Some(&tally))?;
+            let tm = aot_target_machine()?;
+            let buf = tm
+                .write_to_memory_buffer(
+                    &module,
+                    inkwell::targets::FileType::Object,
+                )
+                .map_err(|e| {
+                    Ineligible(format!("shard design object emit: {e}"))
+                })?;
+            Ok(buf.as_slice().to_vec())
+        })();
+        let mut typed: Vec<(usize, Result<Vec<u8>, Ineligible>)> = Vec::new();
+        for h in handles {
+            typed.extend(h.join().expect("shard compile thread"));
+        }
+        (design, typed)
+    });
+    let mut objs = vec![design_obj?];
+    let mut typed: Vec<(usize, Vec<u8>)> = Vec::new();
+    for (mir, r) in type_objs {
+        typed.push((mir, r?));
+    }
+    typed.sort_by_key(|(mir, _)| *mir);
+    objs.extend(typed.into_iter().map(|(_, o)| o));
+    if timing {
+        eprintln!(
+            "trs shard: parallel pipelines + emit {:?} ({} objects)",
+            t0.elapsed(),
+            objs.len()
+        );
+    }
+    Ok(DesignObject::Objects(objs))
 }
 
 /// JIT: compile a helper batch into one engine; returns (sym, addr).
@@ -3291,6 +3633,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let g = self.module.add_global(arr.get_type(), None, &gname);
                         g.set_initializer(&arr);
                         g.set_constant(true);
+                        // per-module duplicate must stay LOCAL: two
+                        // objects whose code passes the same literal
+                        // would otherwise both export a strong
+                        // definition and kill the multi-object link
+                        // (same class as the trs_bdpiname fix); the
+                        // content is a pure function of the design
+                        // string table, and the pointer is only
+                        // passed by value
+                        g.set_linkage(inkwell::module::Linkage::Private);
+                        g.set_unnamed_address(
+                            inkwell::values::UnnamedAddress::Global,
+                        );
                         g
                     });
                     ptys.push(ptrt.into());
@@ -5244,7 +5598,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// fired (the caller branches to its stop block).  internal +
     /// noinline: the boundary must survive the pipeline for the tax to
     /// be measurable.  Returns the result width recorded in the map.
-    fn lower_boundary_fn(&mut self, rq: &BoundaryReq) -> Result<u32, Ineligible> {
+    fn lower_boundary_fn(
+        &mut self,
+        rq: &BoundaryReq,
+        external: bool,
+    ) -> Result<u32, Ineligible> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i32t = self.ctx.i32_type();
         let i64t = self.ctx.i64_type();
@@ -5296,7 +5654,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             _ => i32t.fn_type(&ptys, false),
         };
         let func = self.module.add_function(&rq.sym, fnty, None);
-        func.set_linkage(inkwell::module::Linkage::Internal);
+        if !external {
+            func.set_linkage(inkwell::module::Linkage::Internal);
+        }
         let ni = self.ctx.create_enum_attribute(
             inkwell::attributes::Attribute::get_named_enum_kind_id("noinline"),
             0,

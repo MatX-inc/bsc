@@ -1123,98 +1123,139 @@ fn aot_emit(
             gate_scratch: edge_plan
                 .and_then(|p| p.gate.as_ref().map(|g| g.scratch)),
         };
-        // boundary-tax experiment (TRS_BOUNDARY_MODULE=<module name or
-        // mir index>): request per-method boundary fns for one module
-        // type.  V1 excludes always_enabled methods (their rdy-gated
-        // call protocol differs); callback-carrying methods drop out at
-        // emission and stay inline.
-        let boundary_reqs: Option<Vec<trs_codegen::abi::BoundaryReq>> = std::env
-            ::var("TRS_BOUNDARY_MODULE")
-            .ok()
-            .filter(|v| !v.is_empty())
-            .map(|sel| {
-                let mir = sel
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|&i| i < env.d.modules.len())
-                    .or_else(|| {
-                        env.d.modules.iter().position(|m| {
-                            env.d.strings[m.name as usize] == sel
-                        })
-                    });
-                let Some(mir) = mir else {
-                    eprintln!(
-                        "trs boundary: module '{sel}' not found; flag ignored"
-                    );
-                    return Vec::new();
-                };
-                let Some(exemplar) = env
-                    .insts
-                    .iter()
-                    .filter(|(_, ie)| ie.mir == mir)
-                    .map(|(&i, _)| i)
-                    .min()
-                else {
-                    eprintln!(
-                        "trs boundary: no instance of mir {mir}; flag ignored"
-                    );
-                    return Vec::new();
-                };
-                let mut reqs = Vec::new();
-                for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
-                    if m.always_enabled {
+        // boundary method fns (sharding rung).  V1 excludes
+        // always_enabled methods (their rdy-gated call protocol
+        // differs); callback-carrying methods drop out at emission and
+        // stay inline.  quiet=true suppresses the per-method notes for
+        // the all-types sweep (TRS_JIT_SHARD).
+        let reqs_for_mir = |mir: usize,
+                            quiet: bool|
+         -> Vec<trs_codegen::abi::BoundaryReq> {
+            let Some(exemplar) = env
+                .insts
+                .iter()
+                .filter(|(_, ie)| ie.mir == mir)
+                .map(|(&i, _)| i)
+                .min()
+            else {
+                return Vec::new();
+            };
+            let mut reqs = Vec::new();
+            for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
+                if m.always_enabled {
+                    if !quiet {
                         eprintln!(
                             "trs boundary: {} stays inline: always_enabled",
                             env.d.strings[m.name as usize]
                         );
+                    }
+                    continue;
+                }
+                let args: Vec<(trs_ir::StrId, u32)> =
+                    m.args.iter().map(|p| (p.name, p.width)).collect();
+                let kinds: &[u8] = match m.kind {
+                    trs_ir::MethodKind::Value => &[0],
+                    trs_ir::MethodKind::Action => &[1],
+                    trs_ir::MethodKind::ActionValue => &[2, 3],
+                };
+                for &kind in kinds {
+                    if kind != 1 && m.result.is_none() {
                         continue;
                     }
-                    let args: Vec<(trs_ir::StrId, u32)> =
-                        m.args.iter().map(|p| (p.name, p.width)).collect();
-                    let kinds: &[u8] = match m.kind {
-                        trs_ir::MethodKind::Value => &[0],
-                        trs_ir::MethodKind::Action => &[1],
-                        trs_ir::MethodKind::ActionValue => &[2, 3],
-                    };
-                    for &kind in kinds {
-                        if kind != 1 && m.result.is_none() {
-                            continue;
-                        }
-                        reqs.push(trs_codegen::abi::BoundaryReq {
-                            mir,
-                            exemplar,
-                            mi,
-                            method: m.name,
-                            kind,
-                            sym: format!("trs_bnd{mir}_{mi}_{kind}"),
-                            args: args.clone(),
-                        });
-                    }
+                    reqs.push(trs_codegen::abi::BoundaryReq {
+                        mir,
+                        exemplar,
+                        mi,
+                        method: m.name,
+                        kind,
+                        sym: format!("trs_bnd{mir}_{mi}_{kind}"),
+                        args: args.clone(),
+                    });
                 }
-                eprintln!(
-                    "trs boundary: module {} (mir {mir}), {} method fns \
-                     requested, exemplar inst {exemplar}",
-                    env.d.strings[env.d.modules[mir].name as usize],
-                    reqs.len()
-                );
-                reqs
-            });
+            }
+            reqs
+        };
+        // sharded emission: TRS_JIT_SHARD=1 (note: TRS_JIT_SPLIT is
+        // the unrelated memo-split threshold)
+        let shard = std::env::var("TRS_JIT_SHARD").as_deref() == Ok("1");
+        // boundary-tax experiment (TRS_BOUNDARY_MODULE=<module name or
+        // mir index>): per-method boundary fns for ONE module type
+        let boundary_reqs: Option<Vec<trs_codegen::abi::BoundaryReq>> = if shard
+        {
+            // every instantiated module type
+            let mirs: std::collections::BTreeSet<usize> =
+                env.insts.values().map(|ie| ie.mir).collect();
+            Some(
+                mirs.into_iter().flat_map(|m| reqs_for_mir(m, true)).collect(),
+            )
+        } else {
+            std::env::var("TRS_BOUNDARY_MODULE")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|sel| {
+                    let mir = sel
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|&i| i < env.d.modules.len())
+                        .or_else(|| {
+                            env.d.modules.iter().position(|m| {
+                                env.d.strings[m.name as usize] == sel
+                            })
+                        });
+                    let Some(mir) = mir else {
+                        eprintln!(
+                            "trs boundary: module '{sel}' not found; flag ignored"
+                        );
+                        return Vec::new();
+                    };
+                    let reqs = reqs_for_mir(mir, false);
+                    if reqs.is_empty() {
+                        eprintln!(
+                            "trs boundary: no instance of mir {mir}; flag ignored"
+                        );
+                    } else {
+                        eprintln!(
+                            "trs boundary: module {} (mir {mir}), {} method fns \
+                             requested",
+                            env.d.strings[env.d.modules[mir].name as usize],
+                            reqs.len()
+                        );
+                    }
+                    reqs
+                })
+        };
         let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
-        let obj = match compile_design_object(
-            &env,
-            specs,
-            &rep_ords,
-            helper_specs,
-            refs_sym,
-            &comps,
-            edge_plan,
-            edge_insn_budget,
-            boundary_reqs.as_deref(),
-        )
-        .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?
-        {
-            trs_codegen::lower::DesignObject::Object(o) => o,
+        let raw = if shard {
+            trs_codegen::lower::compile_design_objects_split(
+                &env,
+                specs,
+                &rep_ords,
+                helper_specs,
+                refs_sym,
+                &comps,
+                edge_plan,
+                edge_insn_budget,
+                boundary_reqs.as_deref().unwrap_or(&[]),
+                nworkers,
+            )
+        } else {
+            compile_design_object(
+                &env,
+                specs,
+                &rep_ords,
+                helper_specs,
+                refs_sym,
+                &comps,
+                edge_plan,
+                edge_insn_budget,
+                boundary_reqs.as_deref(),
+            )
+        }
+        .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
+        let objs: Vec<Vec<u8>> = match raw {
+            trs_codegen::lower::DesignObject::Object(o) => vec![o],
+            trs_codegen::lower::DesignObject::Objects(v) => v,
             trs_codegen::lower::DesignObject::EdgeOverBudget(
                 sizes,
                 edge_insns,
@@ -1256,8 +1297,18 @@ fn aot_emit(
         let tmp =
             std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).map_err(|e| EmitFail::Infra(e.to_string()))?;
-        let f = tmp.join("design.o");
-        std::fs::write(&f, obj).map_err(|e| EmitFail::Infra(e.to_string()))?;
+        // fixed object order (byte-determinism): design first, then
+        // the sharded per-type objects in ascending mir order
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for (i, o) in objs.into_iter().enumerate() {
+            let f = if i == 0 {
+                tmp.join("design.o")
+            } else {
+                tmp.join(format!("shard{i}.o"))
+            };
+            std::fs::write(&f, o).map_err(|e| EmitFail::Infra(e.to_string()))?;
+            files.push(f);
+        }
         let meta = compile_meta_object(
             bir_hash,
             bir_hash_raw,
@@ -1298,7 +1349,8 @@ fn aot_emit(
         let st = std::process::Command::new(cc_tool())
             .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
             .arg(&so_tmp)
-            .args([&f, &mf])
+            .args(&files)
+            .arg(&mf)
             .status()
             .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
         if !st.success() {
@@ -1330,7 +1382,8 @@ fn aot_emit(
             let exe_tmp = exe_out.with_extension("exe.tmp");
             let st = std::process::Command::new(cc_tool())
                 .arg(&mc)
-                .args([&f, &mf])
+                .args(&files)
+                .arg(&mf)
                 .arg("-Wl,--export-dynamic")
                 .arg("-Wl,--no-as-needed")
                 .arg(format!("-L{}", libdir.display()))
