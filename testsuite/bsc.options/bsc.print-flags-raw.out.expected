@@ -136,5 +136,6 @@ Flags {
 	vsim = Nothing,
 	warnActionShadowing = True,
 	warnMethodUrgency = True,
-	warnUndetPred = False
+	warnUndetPred = False,
+	semanticPortsComment = False
 }
