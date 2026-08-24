@@ -286,8 +286,186 @@ check_dyn() { # name top errtag
 # destination-domain logic backdates to pre-edge, the after-edge combo
 # pass reads post-edge (gate detectors break as steady-0 otherwise)
 check MakeClkCross sysMakeClkCross
+check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
+    # with no partner .c/.so must die LOUDLY naming the import on both
+    # trs tiers (the old compiled path called through a NULL global =
+    # segfault).  Bluesim cannot even link this shape (undefined C
+    # symbol), so there is no reference leg.
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    # the .bir is emitted by the -e elaboration; its C++ link FAILS on
+    # the undefined import symbol, which is Bluesim's (acceptable)
+    # failure mode for this shape — only the .bir is needed here
+    $BSC -sim -bir -e "$top" -o refx.exe >/dev/null 2>&1
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir from -e)"; fail=1; return; }
+    # the trap may fire during link (the window bake / reset protocol
+    # executes early cycles — the field repro died exactly there) or,
+    # if link-time execution never reaches the call, at run time.
+    # Either way: loud, named, never a segfault.
+    "$TRS" link "$top.bir" -o bdm >bdm-link.out 2>&1; lrc=$?
+    if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
+    if [ "$lrc" -ne 0 ]; then
+        grep -q "BDPI import 'bdpi_mystery'" bdm-link.out || { echo "FAIL $name (link failed without naming the import)"; head -2 bdm-link.out; fail=1; return; }
+    else
+        TRS="$TRS" ./bdm > bdm.out 2>&1; rc=$?
+        if [ "$rc" -eq 139 ]; then echo "FAIL $name (segfault)"; fail=1; return; fi
+        if [ "$rc" -eq 0 ]; then echo "FAIL $name (ran clean without the import)"; fail=1; return; fi
+        grep -q "BDPI import 'bdpi_mystery'" bdm.out || { echo "FAIL $name (aot trap message missing)"; head -2 bdm.out; fail=1; return; }
+    fi
+    TRS_NO_JIT=1 "$TRS" run "$top.bir" > bdmi.out 2>&1; irc=$?
+    if [ "$irc" -eq 139 ] || [ "$irc" -eq 0 ]; then echo "FAIL $name (interp rc $irc)"; fail=1; return; fi
+    grep -qi "bdpi" bdmi.out || { echo "FAIL $name (interp error message missing)"; head -2 bdmi.out; fail=1; return; }
+    echo "PASS $name"
+}
+check_bdpi_missing BdpiMissing sysBdpiMissing
+check BdpiDead sysBdpiDead
+# repeated BDPI import under CHUNKED AOT (TRS_AOT_ONE_MODULE=0): call
+# sites land in several emitted modules; the per-module diagnostic
+# string trs_bdpiname_<name> must carry private linkage or the
+# cc -shared link dies on duplicate strong definitions (the one-module
+# battery cannot see this topology).  Byte parity proves the chunked
+# artifact runs compiled.
+check_chunked() { # name top cfile
+    name=$1; top=$2; cfile=$3
+    cp "$SRC/$name.bsv" .
+    [ -n "$cfile" ] && cp "$SRC/$cfile" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o bc_ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./bc_ref.exe > bc_ref.out 2>&1; refrc=$?
+    rm -f bcart.so
+    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o bcart >bc_link.out 2>&1 || { echo "FAIL $name (chunked link)"; tail -2 bc_link.out; fail=1; return; }
+    [ -f bcart.so ] || { echo "FAIL $name (no chunked artifact)"; fail=1; return; }
+    TRS="$TRS" ./bcart > bc_got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ] || ! cmp -s bc_ref.out bc_got.out; then echo "FAIL $name (parity)"; diff bc_ref.out bc_got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_chunked BdpiChunk sysBdpiChunk ops.c
+# the missing-.so trap must survive chunking: calls gated past the
+# link's window bake so the chunked link completes, then the run dies
+# loudly naming the import — never a segfault
+check_chunked_missing() {
+    name=BdpiChunkMissing; top=sysBdpiChunkMissing
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o bcm_ref.exe >/dev/null 2>&1
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir from -e)"; fail=1; return; }
+    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 "$TRS" link "$top.bir" -o bcm >bcm_link.out 2>&1; lrc=$?
+    if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
+    if [ "$lrc" -ne 0 ]; then
+        grep -q "BDPI import 'bdpi_mystery'" bcm_link.out || { echo "FAIL $name (link failed without naming the import)"; head -2 bcm_link.out; fail=1; return; }
+    else
+        TRS="$TRS" ./bcm > bcm.out 2>&1; rc=$?
+        if [ "$rc" -eq 139 ]; then echo "FAIL $name (segfault)"; fail=1; return; fi
+        if [ "$rc" -eq 0 ]; then echo "FAIL $name (ran clean without the import)"; fail=1; return; fi
+        grep -q "BDPI import 'bdpi_mystery'" bcm.out || { echo "FAIL $name (trap message missing)"; head -2 bcm.out; fail=1; return; }
+    fi
+    echo "PASS $name"
+}
+check_chunked_missing
 check_dyn DynSched sysDynSched G0100
 check_dyn DynSchedBoth sysDynSchedBoth G0101
 check_dyn DynSchedSelf sysDynSchedSelf G0096
 check_dyn DynSchedLoop sysDynSchedLoop G0116
+# rung-40 EN liveness (external review): byte parity on ALL THREE
+# tiers — interp, hybrid jit, and the aot artifact — for designs
+# whose enables exercise the liveness walk; a pruned-but-read EN now
+# fails CLOSED on every tier, so parity here also witnesses that no
+# trap fires
+check_en() { # name top
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o en_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./en_ref.exe > en_ref.out 2>&1; refrc=$?
+    "$TRS" run "$top.bir" > en_i.out 2>&1; irc=$?
+    if [ "$irc" != "$refrc" ] || ! cmp -s en_ref.out en_i.out; then echo "FAIL $name (interp)"; diff en_ref.out en_i.out | head -3; fail=1; return; fi
+    TRS_JIT=1 "$TRS" run "$top.bir" > en_j.out 2>&1; jrc=$?
+    if [ "$jrc" != "$refrc" ] || ! cmp -s en_ref.out en_j.out; then echo "FAIL $name (jit)"; diff en_ref.out en_j.out | head -3; fail=1; return; fi
+    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o en_art >en_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    TRS="$TRS" ./en_art > en_a.out 2>&1; arc=$?
+    if [ "$arc" != "$refrc" ] || ! cmp -s en_ref.out en_a.out; then echo "FAIL $name (aot)"; diff en_ref.out en_a.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+# the REAL live-EN shape (rule-vs-method conflict: CAN_FIRE_bump reads
+# EN_poke) — the battery's only design with a runtime-live enable
+check_en EnConflict sysEnConflict
+# MethValue path pin: an AV method whose body+result cones read the
+# child wire's whas, consumed through Expr::MethValue on every tier
+check_en MethValueEn sysMethValueEn
+# census pins (the de-circularized ENSUM enumerates the PORT TABLE,
+# so pruned-but-read enables are VISIBLE): EnConflict's EN_poke must
+# stay live-allocated; MethValueEn's EN_ping is legitimately pruned
+# (table-read only — the wire routes through the RWire prim) and the
+# census must say so instead of hiding the row
+census_pin() { # name top pattern
+    name=$1; top=$2; pat=$3
+    TRS_LAYOUT_CENSUS="cens_$name.txt" "$TRS" link "$top.bir" -o "censart_$name" >/dev/null 2>&1
+    grep -Eq "$pat" "cens_$name.txt" || { echo "FAIL $name (census pin: $pat)"; grep "^EN " "cens_$name.txt" | head -3; fail=1; return; }
+    echo "PASS $name"
+}
+census_pin EnConflictCensus sysEnConflict '^EN [0-9]+ [0-9]+ read=1 live=1 stay1=. alloc=1 EN_poke'
+census_pin MethValueEnCensus sysMethValueEn '^EN [0-9]+ - read=1 live=0 stay1=. alloc=0 EN_ping'
+# dynamic scheduling x EN liveness: DynSched's shape plus a live
+# enable (kick conflicts with rule r) inside the alt-carrying
+# composition, and an AV peek consumed via MethValue from an alt-
+# reordered rule — the alternates walk must keep EN_kick's slot
+check_dyn DynSchedEn sysDynSchedEn G0100
+# ...and the census must agree on an ALTS design (its live column
+# walks alternate cones too): EN_kick live-allocated, EN_put pruned
+census_pin DynSchedEnCensus sysDynSchedEn '^EN [0-9]+ [0-9]+ read=1 live=1 stay1=. alloc=1 EN_kick'
+# layout-rev compat negatives: the load gate is an exact-equality
+# check, so ONE binary witnesses BOTH skew directions — baking REV-1
+# plays new-runtime/old-artifact, REV+1 plays old-runtime/new-artifact
+# (the rev-26 field hazard: trs_cb_bdpi_missing joined the callback
+# ABI without a bump, so an old runtime loaded the new artifact and
+# null-called the unfilled trap pointer).  TRS_TEST_LAYOUT_REV is the
+# emit-side-only bake override; the check side has none on purpose.
+# The mismatched artifact must refuse LOUDLY on stderr, fall back to
+# an in-process compile, and still match the reference byte-for-byte
+# (never rc 139 — the null-call regression this test pins).
+check_revcompat() {
+    name=RevCompat; top=sysEdgeSelfKill
+    cp "$SRC/EdgeSelfKill.bsv" .
+    $BSC -sim -bir -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o rev_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./rev_ref.exe > rev_ref.out 2>&1; refrc=$?
+    # control: a matched-rev artifact loads with no refusal note
+    "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
+    if grep -q "layout revision" revgot.err; then echo "FAIL $name (control run refused)"; fail=1; return; fi
+    if [ "$refrc" != "$gotrc" ] || ! cmp -s rev_ref.out revgot.out; then echo "FAIL $name (control)"; fail=1; return; fi
+    # the link's own window bake loads the just-baked mismatched .so
+    # and prints the same fallback note into revlink.out — expected;
+    # only the RUN's stderr is asserted
+    for rev in 26 28; do
+        TRS_TEST_LAYOUT_REV=$rev "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link rev $rev)"; fail=1; return; }
+        TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
+        if [ "$gotrc" = 139 ]; then echo "FAIL $name (rev $rev segfault)"; fail=1; return; fi
+        grep -q "layout revision $rev" revgot.err || { echo "FAIL $name (rev $rev: no refusal note)"; sed -n 1,3p revgot.err; fail=1; return; }
+        grep -q "compiling in-process instead" revgot.err || { echo "FAIL $name (rev $rev: no fallback note)"; fail=1; return; }
+        if [ "$refrc" != "$gotrc" ] || ! cmp -s rev_ref.out revgot.out; then echo "FAIL $name (rev $rev: fallback parity)"; fail=1; return; fi
+    done
+    echo "PASS $name"
+}
+check_revcompat
+# the demoted size tier is a distinct codegen path (lever 1 replaced
+# default<O1> with a pinned O1-minus-MemCpyOpt expansion): force a
+# tiny design over the budget and pin the tier trace, the pinned
+# string PARSING (a stale string under a future LLVM must fail this
+# check, not silently deoptimize), and byte parity
+check_demoted() {
+    name=DemotedTier; top=sysEdgeSelfKill
+    cp "$SRC/EdgeSelfKill.bsv" .
+    $BSC -sim -bir -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o dt_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./dt_ref.exe < /dev/null > dt_ref.out 2>&1; refrc=$?
+    TRS_JIT_FN_INSN_BUDGET=10 TRS_JIT_TRACE=1 "$TRS" link "$top.bir" -o dtart >dt_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    grep -q "demoted size tier" dt_link.out || { echo "FAIL $name (tier did not engage)"; fail=1; return; }
+    grep -q "IR pass pipeline rejected" dt_link.out && { echo "FAIL $name (pinned pipeline rejected)"; fail=1; return; }
+    TRS="$TRS" ./dtart < /dev/null > dt_got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ] || ! cmp -s dt_ref.out dt_got.out; then echo "FAIL $name (parity)"; diff dt_ref.out dt_got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_demoted
 exit $fail

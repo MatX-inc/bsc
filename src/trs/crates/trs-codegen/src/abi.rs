@@ -521,10 +521,64 @@ pub const GATE_OUT_METHOD: StrId = u32::MAX;
 /// result, returning the new string id (compiled PrimOp::StringConcat,
 /// mirroring the interp's per-evaluation intern_dyn).
 pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
+/// Boundary-tax experiment (sharding rung, step 1): request one
+/// module TYPE's methods be emitted as standalone functions on the
+/// proposed slot ABI (arena, env, inst_base, token_base, args...) and
+/// CALLED at every cross-module site instead of inlined.  Selected by
+/// TRS_BOUNDARY_MODULE=<module name> at plan time; absent = the
+/// default path, byte-identical to today.  V1 constraints (enforced
+/// at plan + emission): no always_enabled methods, no callback sites
+/// (foreign/task/prim trampolines) in method cones — so caller token
+/// tables stay flag-invariant — and the one-module AOT path only.
+#[derive(Clone, Debug)]
+pub struct BoundaryReq {
+    /// module type (Design.modules index)
+    pub mir: usize,
+    /// exemplar instance of the type (region source for base-relative
+    /// addressing; all instances share type-uniform offsets)
+    pub exemplar: usize,
+    /// method index in the module's methods table
+    pub mi: usize,
+    /// method name id
+    pub method: StrId,
+    /// BK_* kind: 0 = value result fn, 1 = action body fn,
+    /// 2 = actionvalue body+result fn, 3 = actionvalue result-only fn
+    pub kind: u8,
+    /// symbol name
+    pub sym: String,
+    /// declared arg ports (name, width) in call order
+    pub args: Vec<(StrId, u32)>,
+}
+
+/// The realized boundary map, built while the functions are emitted
+/// (result widths are known only at lowering): call sites consult it
+/// to divert.  Keyed (mir, method, kind).
+pub type BoundaryMap =
+    HashMap<(usize, StrId, u8), (String, u32, Vec<(StrId, u32)>)>;
+
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 25; // 25: schedule-affinity slot order (rung 38)
+// 27: trs_cb_bdpi_missing joined the callback ABI as a REQUIRED symbol
+//     (a rev-26 runtime never fills it, so a rev-26-labeled artifact
+//     carrying BDPI trap blocks would null-call it on a missing
+//     import), and the liveness walk grew MethValue result cones and
+//     dynamic-schedule alternates (live_en can only grow, but baked
+//     slot layouts change).  26: live-EN-only fast slots (rung 40).
+pub const AOT_LAYOUT_REV: u64 = 27;
+
+/// The revision stamped into artifacts being EMITTED.  Equal to
+/// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
+/// override, which lets the battery bake a deliberately mismatched
+/// artifact and witness the load-side refusal in both skew directions.
+/// Emit-side only by design: the CHECK side has no override, so the
+/// refusal is unbypassable.
+pub fn baked_layout_rev() -> u64 {
+    std::env::var("TRS_TEST_LAYOUT_REV")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(AOT_LAYOUT_REV)
+}
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).
@@ -538,6 +592,7 @@ pub enum HelperRef {
 pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32, Vec<(StrId, u32)>)>;
 
 /// One outlined def piece to compile as a helper function.
+#[derive(Clone)]
 pub struct HelperSpec {
     /// module ir + def being outlined
     pub mir: usize,

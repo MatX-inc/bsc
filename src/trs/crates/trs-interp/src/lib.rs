@@ -16,7 +16,7 @@ pub mod startup;
 pub use vcd::WaveFormat;
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 
 use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
@@ -256,6 +256,9 @@ pub struct Interp {
     /// (instance, EN port) -> arena slot: interpreted method calls
     /// during body fallback write EN through so native scheds see them
     jit_en_slots: HashMap<(usize, StrId), u32>,
+    /// the current fast plan pruned at least one EN slot (rung 40) —
+    /// arms the strict trap in the EN-read fallthrough below
+    jit_en_pruned: bool,
     /// (instance, def) -> (arena base, width) for fire signals and
     /// schedule-position defs: interpreted evaluation falls through to
     /// the slots the native scheds keep current
@@ -494,7 +497,11 @@ struct RComp {
     clk: usize,
     posedge: bool,
     entries: Vec<REntry>,
-    cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
+    // BTreeMap, not HashMap: the map is serialized into trs_plan_a,
+    // and artifact bytes must not depend on hash iteration order
+    // (bincode wire format is identical — len + entries — so blobs
+    // decode across the change; only the entry ORDER becomes fixed)
+    cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>>,
     // (prim instance, resolved port name, is_reset_tick, owner instance
     // for gate evaluation, gate expr)
     ticks: Vec<(usize, String, bool, usize, Option<Expr>)>,
@@ -522,7 +529,8 @@ struct RAlt {
     /// its cone reads nothing written mid-edge by this composition)
     guard: Expr,
     entries: Vec<REntry>,
-    cross: HashMap<(usize, StrId), Vec<(usize, StrId)>>,
+    // BTreeMap for byte-deterministic trs_plan_a, like RComp::cross
+    cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>>,
 }
 
 /// prime()'s derivation half, baked into AOT artifacts as trs_plan_a:
@@ -833,6 +841,7 @@ impl Interp {
             stepper: None,
             jit_shared: None,
             jit_en_slots: HashMap::new(),
+            jit_en_pruned: false,
             jit_eager_slots: HashMap::new(),
             jit_request: Default::default(),
             jit_emit_result: None,
@@ -1552,6 +1561,25 @@ impl Interp {
                                     *self.jit_arena_ptr.add(slot as usize)
                                 };
                                 return Value::from_u64(w, word);
+                            }
+                            // rung-40 trap (external review): a pruned
+                            // fast plan reaching this fallthrough means
+                            // the liveness walk missed an interp-side
+                            // reader — 0 is what an untouched zeroed
+                            // slot would hold, but the miss itself is a
+                            // bug, so every tier fails CLOSED (the old
+                            // TRS_STRICT_EN opt-in gate left the plain
+                            // interp path failing open).  Reachable
+                            // only past the plan-time subset audit, so
+                            // firing means a shared walker blind spot.
+                            if self.jit_en_pruned {
+                                panic!(
+                                    "trs: BUG: enable port '{}' was \
+                                     pruned by the fast-plan liveness \
+                                     walk but read interp-side — report \
+                                     this (rung-40 EN pruning)",
+                                    self.d.strings[*name as usize]
+                                );
                             }
                         }
                         Value::from_u64(w, 0)
@@ -3090,8 +3118,9 @@ impl Interp {
     fn resolve_cross(
         &mut self,
         pairs: &[(StrId, StrId)],
-    ) -> HashMap<(usize, StrId), Vec<(usize, StrId)>> {
-        let mut cross: HashMap<(usize, StrId), Vec<(usize, StrId)>> = HashMap::new();
+    ) -> BTreeMap<(usize, StrId), Vec<(usize, StrId)>> {
+        let mut cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>> =
+            BTreeMap::new();
         for (earlier, later) in pairs {
             let (e_inst, e_rule) = self.split_qual(*earlier);
             let (l_inst, l_rule) = self.split_qual(*later);
@@ -5071,7 +5100,20 @@ pub enum AotEmit {
 /// artifacts and checked at load (the impl lives in trs-ir so
 /// snapshots can checksum their payload with the same function).
 pub fn bir_fingerprint(bytes: &[u8]) -> u64 {
-    ir::fnv1a(bytes)
+    let mut h = ir::fnv1a(bytes);
+    // boundary-tax experiment (TRS_BOUNDARY_MODULE) and sharded
+    // emission (TRS_JIT_SHARD): the flags change generated code, so
+    // they must change the design identity — a flag-on run never
+    // reuses a flag-off artifact (and vice versa)
+    if let Ok(v) = std::env::var("TRS_BOUNDARY_MODULE") {
+        if !v.is_empty() {
+            h ^= ir::fnv1a(v.as_bytes()) ^ 0xB0DA;
+        }
+    }
+    if std::env::var("TRS_JIT_SHARD").as_deref() == Ok("1") {
+        h ^= 0x5348_4152_44;
+    }
+    h
 }
 
 #[cfg(feature = "aot")]
