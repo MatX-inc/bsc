@@ -1123,6 +1123,82 @@ fn aot_emit(
             gate_scratch: edge_plan
                 .and_then(|p| p.gate.as_ref().map(|g| g.scratch)),
         };
+        // boundary-tax experiment (TRS_BOUNDARY_MODULE=<module name or
+        // mir index>): request per-method boundary fns for one module
+        // type.  V1 excludes always_enabled methods (their rdy-gated
+        // call protocol differs); callback-carrying methods drop out at
+        // emission and stay inline.
+        let boundary_reqs: Option<Vec<trs_codegen::abi::BoundaryReq>> = std::env
+            ::var("TRS_BOUNDARY_MODULE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(|sel| {
+                let mir = sel
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|&i| i < env.d.modules.len())
+                    .or_else(|| {
+                        env.d.modules.iter().position(|m| {
+                            env.d.strings[m.name as usize] == sel
+                        })
+                    });
+                let Some(mir) = mir else {
+                    eprintln!(
+                        "trs boundary: module '{sel}' not found; flag ignored"
+                    );
+                    return Vec::new();
+                };
+                let Some(exemplar) = env
+                    .insts
+                    .iter()
+                    .filter(|(_, ie)| ie.mir == mir)
+                    .map(|(&i, _)| i)
+                    .min()
+                else {
+                    eprintln!(
+                        "trs boundary: no instance of mir {mir}; flag ignored"
+                    );
+                    return Vec::new();
+                };
+                let mut reqs = Vec::new();
+                for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
+                    if m.always_enabled {
+                        eprintln!(
+                            "trs boundary: {} stays inline: always_enabled",
+                            env.d.strings[m.name as usize]
+                        );
+                        continue;
+                    }
+                    let args: Vec<(trs_ir::StrId, u32)> =
+                        m.args.iter().map(|p| (p.name, p.width)).collect();
+                    let kinds: &[u8] = match m.kind {
+                        trs_ir::MethodKind::Value => &[0],
+                        trs_ir::MethodKind::Action => &[1],
+                        trs_ir::MethodKind::ActionValue => &[2, 3],
+                    };
+                    for &kind in kinds {
+                        if kind != 1 && m.result.is_none() {
+                            continue;
+                        }
+                        reqs.push(trs_codegen::abi::BoundaryReq {
+                            mir,
+                            exemplar,
+                            mi,
+                            method: m.name,
+                            kind,
+                            sym: format!("trs_bnd{mir}_{mi}_{kind}"),
+                            args: args.clone(),
+                        });
+                    }
+                }
+                eprintln!(
+                    "trs boundary: module {} (mir {mir}), {} method fns \
+                     requested, exemplar inst {exemplar}",
+                    env.d.strings[env.d.modules[mir].name as usize],
+                    reqs.len()
+                );
+                reqs
+            });
         let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
         let obj = match compile_design_object(
@@ -1134,6 +1210,7 @@ fn aot_emit(
             &comps,
             edge_plan,
             edge_insn_budget,
+            boundary_reqs.as_deref(),
         )
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?
         {

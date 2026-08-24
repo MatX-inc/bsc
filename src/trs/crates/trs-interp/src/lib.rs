@@ -5094,7 +5094,14 @@ pub enum AotEmit {
 /// artifacts and checked at load (the impl lives in trs-ir so
 /// snapshots can checksum their payload with the same function).
 pub fn bir_fingerprint(bytes: &[u8]) -> u64 {
-    ir::fnv1a(bytes)
+    let h = ir::fnv1a(bytes);
+    // boundary-tax experiment (TRS_BOUNDARY_MODULE): the flag changes
+    // generated code, so it must change the design identity — a
+    // flag-on run never reuses a flag-off artifact (and vice versa)
+    match std::env::var("TRS_BOUNDARY_MODULE") {
+        Ok(v) if !v.is_empty() => h ^ ir::fnv1a(v.as_bytes()) ^ 0xB0DA,
+        _ => h,
+    }
 }
 
 #[cfg(feature = "aot")]

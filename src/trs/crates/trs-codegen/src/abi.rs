@@ -521,6 +521,41 @@ pub const GATE_OUT_METHOD: StrId = u32::MAX;
 /// result, returning the new string id (compiled PrimOp::StringConcat,
 /// mirroring the interp's per-evaluation intern_dyn).
 pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
+/// Boundary-tax experiment (sharding rung, step 1): request one
+/// module TYPE's methods be emitted as standalone functions on the
+/// proposed slot ABI (arena, env, inst_base, token_base, args...) and
+/// CALLED at every cross-module site instead of inlined.  Selected by
+/// TRS_BOUNDARY_MODULE=<module name> at plan time; absent = the
+/// default path, byte-identical to today.  V1 constraints (enforced
+/// at plan + emission): no always_enabled methods, no callback sites
+/// (foreign/task/prim trampolines) in method cones — so caller token
+/// tables stay flag-invariant — and the one-module AOT path only.
+#[derive(Clone, Debug)]
+pub struct BoundaryReq {
+    /// module type (Design.modules index)
+    pub mir: usize,
+    /// exemplar instance of the type (region source for base-relative
+    /// addressing; all instances share type-uniform offsets)
+    pub exemplar: usize,
+    /// method index in the module's methods table
+    pub mi: usize,
+    /// method name id
+    pub method: StrId,
+    /// BK_* kind: 0 = value result fn, 1 = action body fn,
+    /// 2 = actionvalue body+result fn, 3 = actionvalue result-only fn
+    pub kind: u8,
+    /// symbol name
+    pub sym: String,
+    /// declared arg ports (name, width) in call order
+    pub args: Vec<(StrId, u32)>,
+}
+
+/// The realized boundary map, built while the functions are emitted
+/// (result widths are known only at lowering): call sites consult it
+/// to divert.  Keyed (mir, method, kind).
+pub type BoundaryMap =
+    HashMap<(usize, StrId, u8), (String, u32, Vec<(StrId, u32)>)>;
+
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
