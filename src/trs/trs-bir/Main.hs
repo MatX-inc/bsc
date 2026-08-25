@@ -25,12 +25,16 @@ import qualified Data.Set as S
 import System.Console.GetOpt
 import System.Directory(getCurrentDirectory)
 import System.Environment(getArgs, getProgName)
-import System.Exit(exitFailure, exitSuccess)
+import System.Exit(exitFailure, exitSuccess, ExitCode(..))
+import System.FilePath(takeExtension, takeFileName, replaceExtension)
+import System.Process(rawSystem)
 import System.IO(hSetBuffering, hSetEncoding, stdout, stderr, hPutStr,
-                 BufferMode(..), utf8)
+                 hPutStrLn, BufferMode(..), utf8)
 
 import ABinUtil(readAndCheckABin)
 import Backend(Backend(..))
+import ForeignFunctions(ForeignFunction(..))
+import Id(getIdString)
 import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK)
 import Exceptions(bsCatch)
 import FileNameUtil(baseName, dirName, createEncodedFullFilePath)
@@ -39,12 +43,13 @@ import FlagsDecode(defaultFlags)
 import IOUtil(getEnvDef)
 import SimCCBlock
 import SimCOpt(simCOpt)
-import SimExpand(simExpand)
+import SimExpand(simExpandWith)
 import SimExportIR(writeBirFile)
 import SimMakeCBlocks(simMakeCBlocks)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
 import TopUtils(dfltBluespecDir)
+import TrsTopLevel(checkTrsTop)
 import Version(bscVersionStr)
 
 -- ========================================================================
@@ -55,6 +60,9 @@ data Options = Options
     { optOut       :: Maybe FilePath
     , optPath      :: [FilePath]
     , optKeepFires :: Bool
+    , optBdpi      :: [FilePath]
+    , optLibPath   :: [String]
+    , optLibs      :: [String]
     , optVerbose   :: Bool
     , optVersion   :: Bool
     , optHelp      :: Bool
@@ -65,6 +73,9 @@ defaultOptions = Options
     { optOut       = Nothing
     , optPath      = []
     , optKeepFires = False
+    , optBdpi      = []
+    , optLibPath   = []
+    , optLibs      = []
     , optVerbose   = False
     , optVersion   = False
     , optHelp      = False
@@ -81,6 +92,15 @@ options =
     , Option []    ["keep-fires"]
         (NoArg (\o -> o { optKeepFires = True }))
         "export CAN_FIRE/WILL_FIRE definitions"
+    , Option []    ["bdpi"]
+        (ReqArg (\d o -> o { optBdpi = optBdpi o ++ [d] }) "FILE")
+        "a BDPI implementation: .c/.cxx compiled here, .o/.a taken as is"
+    , Option ['L'] []
+        (ReqArg (\d o -> o { optLibPath = optLibPath o ++ [d] }) "DIR")
+        "search DIR for BDPI libraries (repeatable)"
+    , Option ['l'] []
+        (ReqArg (\d o -> o { optLibs = optLibs o ++ [d] }) "LIB")
+        "link LIB into the BDPI companion (repeatable)"
     , Option ['v'] ["verbose"]
         (NoArg (\o -> o { optVerbose = True }))
         "report progress while reading the hierarchy"
@@ -109,6 +129,9 @@ usage prog = usageInfo header options ++ trailer
         [ ""
         , "The search path ends with the working directory and the"
         , "libraries under $BLUESPECDIR, in that order."
+        , ""
+        , "Given --bdpi or -l, a <top>.bdpi.so companion is written beside"
+        , "the BIR for the runtime to load.  CC and CXX name the compilers."
         ]
 
 -- ========================================================================
@@ -149,7 +172,7 @@ hmain argv = do
     let flags = birFlags cdir opts
     errh <- initErrorHandle
     setErrorHandleFlags errh flags
-    exportBir errh flags (optOut opts) toplevel abinFiles
+    exportBir errh flags opts toplevel abinFiles
     exitOK errh
 
 die :: String -> String -> IO a
@@ -160,18 +183,13 @@ die prog msg = do
 
 -- | The compiler settings the export actually reads.
 --
--- Everything else keeps bsc's default.  Two of these are a seam rather
--- than a setting: genTrs and genBir pick the trs backend's answers in
--- SimExpand, which refuses a narrower set of top-level modules for the
--- C++ backend than for this one.  Those checks belong to this program.
+-- Everything else keeps bsc's default.
 birFlags :: String -> Options -> Flags
 birFlags bluespecdir opts = (defaultFlags bluespecdir)
     { backend   = Just Bluesim
     , ifcPath   = optPath opts ++ [".", bluespecdir ++ "/Libraries"]
     , keepFires = optKeepFires opts
     , verbosity = if optVerbose opts then Verbose else Normal
-    , genTrs    = True
-    , genBir    = True
     }
 
 -- | The BIR export, following bsc's genModuleC through the point where
@@ -183,18 +201,17 @@ birFlags bluespecdir opts = (defaultFlags bluespecdir)
 -- being run.  And it analyzes which generated C++ objects a previous
 -- link left reusable, which feeds the C++ code generator further down
 -- and never reaches the exported IR.
-exportBir :: ErrorHandle -> Flags -> Maybe FilePath -> String -> [String]
-          -> IO ()
-exportBir errh flags out toplevel afilenames = do
+exportBir :: ErrorHandle -> Flags -> Options -> String -> [String] -> IO ()
+exportBir errh flags opts toplevel afilenames = do
     pwd <- getCurrentDirectory
     let prefix = dirName (createEncodedFullFilePath "placeholder" pwd) ++ "/"
-        birfile = fromMaybe (prefix ++ toplevel ++ ".bir") out
+        birfile = fromMaybe (prefix ++ toplevel ++ ".bir") (optOut opts)
 
     -- the same file twice on the command line is not an error; two .ba
     -- for one module is, and simExpand is what catches it
     abis <- mapM (readAndCheckABin errh (Just Bluesim)) (nub afilenames)
 
-    sim_system <- simExpand errh flags toplevel abis
+    sim_system <- simExpandWith errh flags (checkTrsTop errh) toplevel abis
     sim_system_opt <- simPackageOpt errh flags sim_system
 
     -- The debug-tier symbol set: the defs that survive as C++ members,
@@ -211,3 +228,54 @@ exportBir errh flags out toplevel afilenames = do
                      | sb <- sbs_opt ]
 
     writeBirFile birfile (keepFires flags) symMap sim_system_opt
+    writeBdpiSo opts toplevel prefix sim_system_opt
+
+-- | The companion the trs runtime dlopens for BDPI imports.
+--
+-- The runtime resolves each import out of <top>.bdpi.so beside the .bir,
+-- so the implementations go into a shared object of their own rather
+-- than into an executable.  Nothing inside that object references them.
+-- An object file contributes its symbols anyway; an archive contributes
+-- only the members something asks for, so when one is on the line every
+-- foreign function the design calls is named with -u to hold it in.  The
+-- hierarchy's own foreign-function map is the authority on which those
+-- are.
+writeBdpiSo :: Options -> String -> FilePath -> SimSystem -> IO ()
+writeBdpiSo opts toplevel prefix ssys
+    | null (optBdpi opts) && null (optLibs opts) = return ()
+    | otherwise = do
+        cxx <- getEnvDef "CXX" "c++"
+        objs <- mapM (compileBdpi opts) (optBdpi opts)
+        let so = prefix ++ toplevel ++ ".bdpi.so"
+            undef | null (optLibs opts) = []
+                  | otherwise =
+                      [ "-Wl,-u," ++ getIdString (ff_name ff)
+                      | ff <- M.elems (ssys_ffuncmap ssys) ]
+        tool opts cxx $ ["-shared", "-fPIC"]
+                        ++ map ("-L" ++) (optLibPath opts)
+                        ++ undef ++ ["-o", so]
+                        ++ objs ++ map ("-l" ++) (optLibs opts)
+
+-- | A BDPI source becomes an object here; an object or archive is taken
+-- as given.  The object lands in the working directory, beside the rest
+-- of the output, rather than next to the source.
+compileBdpi :: Options -> FilePath -> IO FilePath
+compileBdpi opts f
+    | ext `elem` [".o", ".a"] = return f
+    | otherwise = do
+        cc <- getEnvDef (if ext == ".c" then "CC" else "CXX")
+                        (if ext == ".c" then "cc" else "c++")
+        let o = replaceExtension (takeFileName f) ".bdpi.o"
+        tool opts cc ["-fPIC", "-c", "-o", o, f]
+        return o
+  where ext = takeExtension f
+
+tool :: Options -> String -> [String] -> IO ()
+tool opts prog args = do
+    when (optVerbose opts) $ hPutStrLn stderr (unwords (prog : args))
+    rc <- rawSystem prog args
+    case rc of
+        ExitSuccess -> return ()
+        ExitFailure n -> do
+            hPutStrLn stderr (prog ++ " exited " ++ show n)
+            exitFailure

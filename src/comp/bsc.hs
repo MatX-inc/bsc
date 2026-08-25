@@ -140,7 +140,6 @@ import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
 import SimPackage(SimSystem(..), SimSchedule(..))
 import SimPackageOpt(simPackageOpt)
-import SimExportIR(writeBirFile)
 import qualified Data.ByteString.Lazy as L
 import SimMakeCBlocks(simMakeCBlocks)
 import SimCOpt(simCOpt)
@@ -1317,17 +1316,16 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system <- simExpand errh flags toplevel abis
        time <- dump errh flags time0 DFsimExpand dumpnames sim_system
 
-       -- dynamic scheduling selects the execution order per cycle; the
-       -- C++ Bluesim codegen bakes in one static order, so only the trs
-       -- backend can execute such a design
+       -- dynamic scheduling selects the execution order per cycle,
+       -- while this code generator bakes in one static order
        let has_dyn_sched =
                any (not . null . ss_alts) (ssys_schedules sim_system)
-       when (has_dyn_sched && not (genTrs flags)) $
+       when has_dyn_sched $
             bsError errh
                 [(noPosition,
                   EGeneric ("This design uses dynamic scheduling " ++
-                            "(-sched-dynamic), which is supported only " ++
-                            "by the trs backend; link with -trs"))]
+                            "(-sched-dynamic), which the Bluesim code " ++
+                            "generator cannot execute"))]
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
@@ -1340,33 +1338,8 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system_opt <- simPackageOpt errh flags sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
-       -- export the TRS IR when requested
-       when (genBir flags) $ do
-            -- the debug-tier symbol set: defs surviving as C++
-            -- members (post-SimCOpt public defs, isOkId-filtered) —
-            -- blocks are recomputed here (pure) so the export stays
-            -- decoupled from the C++ generation path below
-            let (sbs, sscheds, scgs, sgis, _sbtop) =
-                    simMakeCBlocks flags sim_system_opt
-                (sbs_opt, _, _, _) =
-                    simCOpt flags (ssys_instmap sim_system_opt)
-                            (sbs, sscheds, scgs, sgis)
-                symMap = M.fromListWith S.union
-                    [ (sb_name sb,
-                       S.fromList [ i | (_, i) <- sb_publicDefs sb
-                                      , isOkId i ])
-                    | sb <- sbs_opt ]
-            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags)
-                         symMap sim_system_opt
-
-       -- the -trs backend stops here: the .bir plus the user's C files
-       -- (compiled separately for dlopen) are the whole simulation
-       if (genTrs flags)
-        then do let TimeInfo _ t_TOD = time
-                _ <- return t_TOD
-                return (time, [], [], time)
-        else genModuleC_cxx errh flags dumpnames time toplevel prefix reused
-                            sim_system_opt
+       genModuleC_cxx errh flags dumpnames time toplevel prefix reused
+                       sim_system_opt
 
 genModuleC_cxx :: ErrorHandle
                -> Flags
@@ -1546,35 +1519,13 @@ simLink errh flags toplevel afilenames cfilenames = do
                  user_ofiles ++ compiled_user_ofiles ++
                  ofiles_reused
 
-    bdpi_undef <- bdpiUndefinedFlags errh flags toplevel abis
-
-    -- under -bir, also package the user's BDPI objects for the trs
-    -- runtime (dlopen), named next to the .bir
-    when (genBir flags && not (genTrs flags)
-          && not (null (user_ofiles ++ compiled_user_ofiles))) $ do
-        pwd3 <- getCurrentDirectory
-        let name3 = createEncodedFullFilePath "placeholder" pwd3
-            prefix3 = (dirName name3) ++ "/"
-            so3 = prefix3 ++ toplevel ++ ".bdpi.so"
-        -- The user's -L/-l reach this link too: BDPI implementations may
-        -- live in a library rather than the objects, and an unresolved
-        -- symbol here surfaces only when the runtime dlopens the result.
-        -- show is used for quoting, as in cxxLink.
-        let libdirflags3 = map (("-L" ++) . show) (cLibPath flags)
-            userlibs3    = map (("-l" ++) . show) (cLibs flags)
-        cxxCompile errh flags
-                   (["-shared", "-fPIC"] ++ libdirflags3 ++ bdpi_undef
-                    ++ ["-o", so3])
-                   (map show (user_ofiles ++ compiled_user_ofiles) ++ userlibs3)
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
     -- if not generating a SystemC model, link to a Bluesim executable
     start flags DFbluesimlink
-    if (genTrs flags)
-      then trsLink errh flags toplevel user_cfiles user_ofiles bdpi_undef
-      else when (not (genSysC flags)) $
-             cxxLink errh flags toplevel ofiles creation_time
+    when (not (genSysC flags)) $
+        cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
     -- final verbose message
@@ -1954,125 +1905,6 @@ cleanseSharedLib errh flags soFile = do
     case rc of
         ExitSuccess   -> return ()
         ExitFailure n -> exitFailWith errh n
-
--- The trs runtime resolves each BDPI function out of the .bdpi.so with
--- dlsym, so nothing inside that shared object refers to them.  A static
--- library named with -l therefore contributes no members of its own: the
--- linker extracts only what resolves an outstanding reference.  Naming the
--- design's BDPI symbols as undefined asks for exactly the members that
--- define them, leaving the rest of the archive out.
-bdpiUndefinedFlags :: ErrorHandle -> Flags -> String -> [(String, ABin)] ->
-                      IO [String]
-bdpiUndefinedFlags errh flags toplevel abis
-    | null (cLibs flags) = return []
-    | otherwise = do
-        -- a foreign function reaches the link either way round: named
-        -- directly as a .ba on the command line, or reached from a module
-        -- that calls it, whose .ba sits on the search path
-        let cmdline_ffs =
-                [ abffi_foreign_func abffi
-                | (_, ABinForeignFunc { ab_ffuncinfo = abffi }) <- abis ]
-            called = nub [ n
-                         | (_, ABinMod { ab_modinfo = abmi }) <- abis
-                         , n <- getForeignCallNames (abmi_apkg abmi) ]
-            readFF n =
-                let err = (noPosition,
-                           EMissingABinForeignFuncFile n toplevel)
-                in  readAndCheckABinPathCatch errh (verbose flags)
-                        (ifcPath flags) (Just Bluesim) n err
-        called_abis <- mapM readFF called
-        called_ffs <- M.elems `fmap` buildForeignFunctionMap errh called_abis
-        return $ nub [ "-Wl,-u," ++ getIdString (ff_name ff)
-                     | ff <- cmdline_ffs ++ called_ffs ]
-
--- ===============
--- trsLink: the TRS backend's link step.  The simulation is the
--- exported .bir executed by the trs runtime; user BDPI C files are
--- compiled into a companion shared object that the runtime dlopens.
-
-trsLink :: ErrorHandle -> Flags -> String -> [String] -> [String] ->
-           [String] -> IO ()
-trsLink errh flags toplevel user_cfiles user_ofiles bdpi_undef = do
-    pwd <- getCurrentDirectory
-    let name = createEncodedFullFilePath "placeholder" pwd
-        prefix = (dirName name) ++ "/"
-        birFile = prefix ++ toplevel ++ ".bir"
-        outFile = oFile flags
-        soFile = outFile ++ ".bdpi.so"
-    -- place the .bir next to the executable, where the wrapper (and the
-    -- runtime's .bdpi.so search) expect it.  Textual inequality is not
-    -- file identity (a relative -o names the exported .bir relatively,
-    -- e.g. plain `-o <top>`), so compare absolute paths -- and read
-    -- strictly so that even an aliased self-copy (symlinked directory)
-    -- rewrites the file instead of truncating it mid-read.
-    let outBir = outFile ++ ".bir"
-    absBir <- makeAbsolute birFile
-    absOut <- makeAbsolute outBir
-    when (absOut /= absBir) $ do
-        contents <- L.readFile birFile
-        CE.evaluate (L.length contents)
-        L.writeFile outBir contents
-    -- compile the user's BDPI C files (with the C compiler, so symbols
-    -- keep C linkage) and link the objects into one dlopen-able object
-    when (not (null user_cfiles) || not (null user_ofiles)) $ do
-        cofs <- mapM (compileUserCFile errh flags False) user_cfiles
-        cxxCompile errh flags
-                   (["-shared", "-fPIC"]
-                    ++ map (("-L" ++) . show) (cLibPath flags)
-                    ++ bdpi_undef
-                    ++ ["-o", soFile])
-                   (map show (cofs ++ user_ofiles)
-                    ++ map (("-l" ++) . show) (cLibs flags))
-        unless (quiet flags) $
-            putStrLnF ("BDPI shared library created: " ++ soFile)
-    -- AOT: let the trs driver compile the design and write the
-    -- artifact (wrapper script + model .so + pinned options) — the
-    -- same amortization as the C++ backend's g++ link, at a fraction
-    -- of the cost.
-    -- like the C++ backend, trs dumps waveforms only in VCD and FST
-    let bad_fmts2 = filter (`notElem` ["vcd", "fst"]) (dumpFormats flags)
-    when (not (null bad_fmts2)) $
-        bsError errh
-            [(cmdPosition,
-              EGeneric ("Bluesim does not support waveform dump format `" ++
-                        f ++ "' (supported: vcd, fst)"))
-            | f <- bad_fmts2]
-    let dumpFmtsArg = case dumpFormats flags of
-                        [] -> "none"
-                        fs -> intercalate "," fs
-    let linkCmd = "\"${TRS:-trs}\" link \"" ++ outFile ++ ".bir\" -o \""
-                  ++ outFile ++ "\" --dump-formats " ++ dumpFmtsArg
-    rc <- system linkCmd
-    case rc of
-      ExitSuccess -> do
-        -- the ENGINE truth lives in the artifact itself: trs link's
-        -- wrapper execs `trs run --code` iff a compiled model was
-        -- emitted.  (The old feature-set probe misreported every
-        -- ineligible design as compiled: a jit-featured binary still
-        -- emits interpreter wrappers for designs it cannot compile.)
-        engRc <- system ("grep -q -- \"--code\" \"" ++ outFile ++ "\"")
-        let how = case engRc of
-                    ExitSuccess -> " (compiled)"
-                    _           -> " (interpreted)"
-        unless (quiet flags) $
-            putStrLnF ("TRS simulation created" ++ how ++ ": " ++ outFile)
-      ExitFailure 86 ->
-        -- `trs link`'s own strict-mode refusal (TRS_REQUIRE_AOT):
-        -- propagate the code so strict callers see the same contract
-        -- at every layer
-        exitFailWith errh 86
-      ExitFailure n ->
-        -- -trs asks for a trs simulation specifically: `trs link`
-        -- exits 0 for everything it handles (ineligible designs get
-        -- its own interpreter wrapper), so a non-zero exit is a
-        -- genuine failure (trs not on PATH, unresolved BDPI symbol,
-        -- infra error).  Standing in an interpreter wrapper here
-        -- turned those into silent successes that failed later, far
-        -- from the cause.  Report the failure and stop.
-        bsError errh
-            [(cmdPosition,
-              EGeneric ("TRS link failed with exit code " ++ show n ++
-                        ": " ++ linkCmd))]
 
 -- ===============
 -- vLink

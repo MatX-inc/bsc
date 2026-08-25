@@ -8,6 +8,11 @@ BINDIR=$(PREFIX)/bin
 
 CARGO ?= cargo
 
+# The side tree has two halves: the Rust simulator here, and the BIR
+# exporter in trs-bir, which is Haskell built against the compiler's own
+# modules.  Both install into the same bin, and one command builds them.
+BIRDIR = trs-bir
+
 .PHONY: all
 all: install
 
@@ -85,7 +90,7 @@ build:
 	$(CARGO) build --release --locked -p trs-capi $(CAPI_FLAGS)
 
 .PHONY: install
-install: build
+install: build install-bir
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 target/release/trs $(BINDIR)/trs
 	# the slim runner fast wrappers exec (falls back to trs when
@@ -109,6 +114,13 @@ install: build
 	$(BINDIR)/trs capi-so --rt -o $(BINDIR)/libtrs_rt.so \
 	  || echo "trs: note: libtrs_rt.so not built; trs link --exe will fall back to libtrs_capi.so"
 
+# The exporter needs no LLVM and does not share the cargo build, so it
+# is independent of everything above it.
+.PHONY: install-bir
+install-bir:
+	$(MAKE) -C $(BIRDIR) PREFIX=$(PREFIX) install
+
 .PHONY: clean full_clean
 clean full_clean:
+	$(MAKE) -C $(BIRDIR) $@
 	$(CARGO) clean
