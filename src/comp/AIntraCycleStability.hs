@@ -12,9 +12,7 @@
 --     change during the cycle, the submodule observes the value as if
 --     all writers preceded all readers — silently outside the atomic
 --     model.  (Bluesim sidesteps this by requiring constants,
---     EBSimDynamicArg; the trs backend's future dynamic-module-args
---     support will REFUSE what this warns about, with this same
---     predicate.)
+--     EBSimDynamicArg.)
 --
 --   * dynamic scheduling's guard inlining (aDynSchedGuard in
 --     ASchedule.hs, on the -sched-dynamic branch): a guard usable for

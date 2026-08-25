@@ -10,13 +10,11 @@ CC_TOOLS=$(CC) $(CXX) $(LD)
 BSC_TOOLS=ghc ghc-pkg
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
-TRS_TOOLS=cargo
 
 TOOLS=$(CC_TOOLS) \
       $(BSC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
-      $(TRS_TOOLS) \
 
 GHC_PKGS=regex-compat syb old-time split strict-concurrency
 

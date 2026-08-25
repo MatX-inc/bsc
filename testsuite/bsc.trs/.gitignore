@@ -1,0 +1,9 @@
+# Artifacts of a trs run: the exported IR, its startup sidecar, the
+# linked model, and the BDPI companion the runtime loads beside it.
+*.bir
+*.birsnap
+*.cexe.so
+*.bdpi.so
+
+# pre-O3 IR dumps the determinism battery compares between links
+*.ir[0-9]
