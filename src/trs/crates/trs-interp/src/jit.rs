@@ -1011,6 +1011,29 @@ enum EmitFail {
     EdgeOverBudget(std::collections::HashSet<usize>, u64),
 }
 
+/// Linker flags that bind the artifact's calls to its own definitions.
+///
+/// The artifact calls its OWN exec/sched fns, and their symbols must
+/// stay dynamically exported because the table-less loader path dlsyms
+/// them.  On ELF that combination costs a PLT stub and a GOT load at
+/// every intra-.so call (FloatTest: 415 call sites, 5.5M indirect
+/// branches per run) unless the link asks for local binding.
+/// Function-only binding leaves the callback DATA globals (trs_cb_*) on
+/// their normal GOT path, which the loader writes through dlsym.
+///
+/// Mach-O resolves a call to a definition in the same image without
+/// being asked -- that is what its two-level namespace does -- and
+/// Apple's ld rejects -Bsymbolic-functions as an unknown option, so
+/// there is nothing to pass.
+#[cfg(feature = "jit")]
+fn local_binding_flags() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &[]
+    } else {
+        &["-Wl,-Bsymbolic-functions"]
+    }
+}
+
 #[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
 fn aot_emit(
@@ -1339,15 +1362,10 @@ fn aot_emit(
         // .so at the final path (it would dlopen-fail or worse on the
         // next run before the gates can judge it)
         let so_tmp = so.with_extension("so.tmp");
-        // -Bsymbolic-functions: the artifact calls its OWN exec/sched
-        // fns, but their symbols must stay dynamically exported (the
-        // table-less loader path dlsyms them) — without local binding
-        // every intra-.so call pays a PLT stub + GOT load (FloatTest:
-        // 415 call sites, 5.5M indirect branches/run).  Function-only
-        // binding keeps the callback DATA globals (trs_cb_*) on their
-        // normal GOT path, which the loader writes through dlsym.
         let st = std::process::Command::new(cc_tool())
-            .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
+            .arg("-shared")
+            .args(local_binding_flags())
+            .arg("-o")
             .arg(&so_tmp)
             .args(&files)
             .arg(&mf)
@@ -1533,10 +1551,12 @@ fn aot_emit(
     std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
     // temp+rename, same discipline as the single-object emit; local
-    // function binding for the same reason (see the one-module link)
+    // function binding for the same reason (see local_binding_flags)
     let so_tmp = so.with_extension("so.tmp");
     let st = std::process::Command::new("cc")
-        .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
+        .arg("-shared")
+        .args(local_binding_flags())
+        .arg("-o")
         .arg(&so_tmp)
         .args(&files)
         .status()

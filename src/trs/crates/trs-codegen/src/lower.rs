@@ -663,6 +663,22 @@ fn gate_static(e: &Expr) -> bool {
 }
 
 
+/// The portable tuning baseline for the architecture this runs on.
+///
+/// A CPU name belongs to one architecture: LLVM ignores a name its
+/// target does not recognize and warns once per module, which loses the
+/// baseline and buries the log.  On x86-64, v3 measures within noise of
+/// host-native on the bench pool (wide-value memcpy code is the only
+/// vector consumer).  Elsewhere the empty string leaves the choice to
+/// LLVM, whose per-triple default is the portable one.
+fn portable_cpu() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86-64-v3"
+    } else {
+        ""
+    }
+}
+
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
     llvm_init_once();
@@ -673,10 +689,8 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     // artifacts are cached and shipped (.so, trs link --exe), and the
     // load gates check design identity, not CPU features — a
     // host-native artifact from an AVX-512 box SIGILLs elsewhere with
-    // no fallback.  Measured on the bench pool, x86-64-v3 matches
-    // host-native runtime within noise (wide-value memcpy code is the
-    // only vector consumer); TRS_JIT_CPU overrides: "native" restores
-    // host tuning, or any LLVM cpu name (x86-64, x86-64-v4, znver4...).
+    // no fallback.  TRS_JIT_CPU overrides: "native" restores host
+    // tuning, or any LLVM cpu name (x86-64, x86-64-v4, znver4...).
     let cpu_env = std::env::var("TRS_JIT_CPU").ok();
     let (cpu, feats) = match cpu_env.as_deref() {
         Some("native") => (
@@ -684,7 +698,7 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
             TargetMachine::get_host_cpu_features().to_string(),
         ),
         Some(name) => (name.to_string(), String::new()),
-        None => ("x86-64-v3".to_string(), String::new()),
+        None => (portable_cpu().to_string(), String::new()),
     };
     target
         .create_target_machine(
