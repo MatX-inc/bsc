@@ -2853,7 +2853,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return Ok(1);
         }
         let m = &self.env.d.modules[ie.mir];
-        match m.defs.iter().find(|d| d.name == name) {
+        match m.def(name) {
             Some(d) if d.width >= 1 => Ok(d.width),
             Some(_) => Ok(0), // zero-width def: the empty bit-vector
             None => Err(Ineligible(format!(
@@ -4417,9 +4417,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return true;
                 };
                 let m = &self.env.d.modules[ie.mir];
-                m.defs
-                    .iter()
-                    .find(|d| d.name == *n)
+                m.def(*n)
                     .is_some_and(|d| self.effectful_expr(inst, &d.expr, seen))
             }
             E::MethCall { instance, method, args, .. } => {
@@ -4437,10 +4435,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // result closure only
                     let cm = &self.env.d.modules[ce.mir];
                     return cm
-                        .methods
-                        .iter()
-                        .find(|mm| mm.name == *method)
-                        .and_then(|mm| mm.result.as_ref())
+                        .method_idx(*method)
+                        .and_then(|mi| cm.methods[mi].result.as_ref())
                         .is_some_and(|r| self.effectful_expr(child, r, seen));
                 }
                 // prim child: dynamic-arg value reads may warn —
@@ -4857,7 +4853,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return nope("cyclic def");
         }
         let m = &self.env.d.modules[ie.mir];
-        let Some(d) = m.defs.iter().find(|d| d.name == n) else {
+        let Some(d) = m.def(n) else {
             let chain: Vec<&str> = f
                 .expanding
                 .iter()
@@ -5261,7 +5257,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 return nope("eager def without slot");
             }
             let m = &self.env.d.modules[self.ie(f.inst)?.mir];
-            let Some(d) = m.defs.iter().find(|d| d.name == e) else {
+            let Some(d) = m.def(e) else {
                 continue;
             };
             let dex = d.expr.clone();
@@ -5796,7 +5792,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return false;
                 };
                 seen.push(*n);
@@ -5842,7 +5838,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return false;
                 };
                 seen.push(*n);
@@ -5900,7 +5896,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return false;
                 };
                 seen.push(*n);
@@ -6003,7 +5999,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let ie = self.ie(f.inst)?;
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return nope("unknown string def");
                 };
                 if f.expanding.contains(n) {

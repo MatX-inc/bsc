@@ -65,7 +65,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 4
+birVersion = 5
 
 -- ===============
 -- String interning
@@ -1163,6 +1163,20 @@ encSiblings sibs name hasActions = do
                 else Nothing)
     return (encMaybe id rdyEnc, encMaybe id wfEnc)
 
+-- bsc's interface ready predicate can name the pre-block-conversion
+-- RDY_<m> signal, which is not a def and so resolves to nothing on its
+-- own; the backend reads the method's CAN_FIRE def in that position
+-- (mkGCD.cxx: PORT_RDY_result = DEF_CAN_FIRE_result).  Emit the
+-- reference that resolves, rather than one the reader has to repair.
+resolveReady :: Siblings -> Id -> AExpr -> AExpr
+resolveReady sibs name e@(ASDef t i)
+  | not (getIdBaseString i `S.member` sibDefs sibs)
+  , cf <- mkIdCanFire name
+  , getIdBaseString cf `S.member` sibDefs sibs
+  = ASDef t cf
+  | otherwise = e
+resolveReady _ _ e = e
+
 -- Interface methods.  Clock/reset/inout interface entries carry no
 -- executable content (they are in the clock/reset lists); skip them.
 encMethod :: Siblings -> SimPackage -> AIFace -> EncM [C.Encoding]
@@ -1190,7 +1204,7 @@ encMethodStructAV sibs pkg name inputs mpred body retdef props = do
     nameId <- idE name
     (rdyEnc, wfEnc) <- encSiblings sibs name True
     argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
-    readyEnc <- traverse encExpr mpred
+    readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg name props (Just retdef) body)
     let ADef ret_id rt _ _ = retdef
@@ -1218,7 +1232,7 @@ encMethodStruct sibs pkg name kind inputs mpred body mresult props = do
     nameId <- idE name
     (rdyEnc, wfEnc) <- encSiblings sibs name (kind /= "Value")
     argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
-    readyEnc <- traverse encExpr mpred
+    readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg name props Nothing body)
     resultEnc <- traverse (encExpr . snd) mresult

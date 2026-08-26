@@ -700,7 +700,7 @@ impl<'a> ConeAnalyzer<'a> {
         if self.seen.contains(&(mir, n)) {
             return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false, ports: Vec::new() };
         }
-        let Some(di) = self.d.modules[mir].defs.iter().position(|dd| dd.name == n) else {
+        let Some(di) = self.d.modules[mir].def_idx(n) else {
             return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false, ports: Vec::new() };
         };
         self.seen.push((mir, n));
@@ -5429,11 +5429,7 @@ impl Interp {
             for (afi, (mname, argv)) in
                 self.autofire.clone().iter().enumerate()
             {
-                let Some(mi) = self.d.modules[tmir]
-                    .methods
-                    .iter()
-                    .position(|m| m.name == *mname)
-                else {
+                let Some(mi) = self.d.modules[tmir].method_idx(*mname) else {
                     if trace {
                         eprintln!("trs jit: off (autofire method missing)");
                     }

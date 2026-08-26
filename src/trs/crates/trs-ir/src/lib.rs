@@ -26,7 +26,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 4;
+pub const BIR_VERSION: u32 = 5;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -228,6 +228,13 @@ pub struct Design {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
     pub name: StrId,
+    /// name -> index over `defs` and `methods`, so a reference resolves
+    /// without a scan.  Read them through `def`/`def_idx`/`method_idx`.
+    /// Derived, not serialized: the decode paths build them.
+    #[serde(skip)]
+    def_ix: HashMap<StrId, usize>,
+    #[serde(skip)]
+    method_ix: HashMap<StrId, usize>,
     /// Hash of the module's exported content, for the object cache.
     pub content_hash: [u8; 32],
     pub clock_domains: Vec<ClockDomain>,
@@ -405,6 +412,24 @@ pub struct Method {
     /// The def this method's function writes to record that it fired
     /// (cvtIFace wf_stmts).  Action and ActionValue methods only.
     pub will_fire: Option<StrId>,
+}
+
+impl Module {
+    /// Index of a def by name, or None if this module has no such def.
+    pub fn def_idx(&self, name: StrId) -> Option<usize> {
+        self.def_ix.get(&name).copied()
+    }
+
+    /// A def by name, or None if this module has no such def.
+    pub fn def(&self, name: StrId) -> Option<&Def> {
+        self.def_idx(name).map(|i| &self.defs[i])
+    }
+
+    /// Index of a method by name, or None if this module has no such
+    /// method.
+    pub fn method_idx(&self, name: StrId) -> Option<usize> {
+        self.method_ix.get(&name).copied()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -599,6 +624,12 @@ impl Design {
             .enumerate()
             .map(|(i, s)| (s.clone(), i as StrId))
             .collect();
+        for m in &mut self.modules {
+            m.def_ix =
+                m.defs.iter().enumerate().map(|(k, d)| (d.name, k)).collect();
+            m.method_ix =
+                m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect();
+        }
     }
 
     /// The id of an interned string, or None if the design has no such
@@ -632,6 +663,8 @@ mod tests {
             top: 0,
             modules: vec![Module {
                 name: 0,
+                def_ix: HashMap::new(),
+                method_ix: HashMap::new(),
                 content_hash: [0; 32],
                 clock_domains: vec![],
                 resets: vec![],

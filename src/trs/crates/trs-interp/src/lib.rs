@@ -5489,25 +5489,7 @@ impl Interp {
                     None => return Value::zero(width.max(1)),
                 };
                 let m = &self.d.modules[mir].methods[mi];
-                let mut e = m.ready.clone();
-                // the exported ready pred can reference the
-                // PRE-block-conversion name (Def(RDY_<m>)) that no
-                // def table carries; the reference resolves it to
-                // the method's CAN_FIRE def (mkGCD.cxx:
-                // PORT_RDY_result = DEF_CAN_FIRE_result)
-                if let Some(Expr::Def(dn)) = &e {
-                    if !self.mods[module].defs.contains_key(dn) {
-                        let cf = format!("CAN_FIRE_{}", self.s(method));
-                        if let Some(id) =
-                            self.d.str_id(&cf).map(|i| i as usize)
-                        {
-                            if self.mods[module].defs.contains_key(&(id as StrId))
-                            {
-                                e = Some(Expr::Def(id as StrId));
-                            }
-                        }
-                    }
-                }
+                let e = m.ready.clone();
                 match e {
                     Some(e) => {
                         let mut ctx = Ctx::default();
