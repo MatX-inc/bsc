@@ -62,7 +62,9 @@ check FinishEdge sysFinishEdge -m 20
 # embed a timestamp, so parity is semantic (fstcmp.py).
 if command -v fst2vcd > /dev/null 2>&1; then
     rm -f fe.fst fe.vcd
-    $TRS run sysFinishEdge.bir +bscfst=fe.fst > /dev/null 2>&1
+    # the FST writer is present but not permitted by default, the
+    # reference's -dump-formats contract mirrored
+    $TRS run sysFinishEdge.bir --formats vcd,fst +bscfst=fe.fst > /dev/null 2>&1
     $TRS run sysFinishEdge.bir -V fe.vcd > /dev/null 2>&1
     if fst2vcd fe.fst > fe_dec.vcd 2>/dev/null \
        && python3 "$SRC/fstcmp.py" fe_dec.vcd fe.vcd > /dev/null; then
