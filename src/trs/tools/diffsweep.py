@@ -2,7 +2,8 @@
 """P1 differential sweep: interpreter vs Bluesim over the testsuite.
 
 For every testsuite `sys*.out.expected` whose top module can be located:
-compile with `bsc -sim`, link with `-bir`, run the reference Bluesim
+compile with `bsc -sim`, export the .bir with trs-bir, run the reference
+Bluesim
 executable and `trs run` on the exported BIR, and diff stdout.
 
 Every failure is classified so the output is a work list, not a score:
@@ -30,6 +31,7 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
+TRSBIR = os.path.join(REPO, "inst", "bin", "trs-bir")
 # the release build keeps heavyweight tests (SHA512, GlibcRandom) well
 # under the timeout; fall back to debug if it hasn't been built.
 # DIFFSWEEP_TRS (set by --trs) is read at module level because pool
@@ -334,14 +336,12 @@ def one_test(job):
     # ConflictFree*Large pair measures 489s cold on a 4-CPU box —
     # DIFFSWEEP_BUILD_TIMEOUT raises the ceiling for such rechecks.
     build_limit = int(os.environ.get("DIFFSWEEP_BUILD_TIMEOUT", "420"))
-    r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common + cfiles,
+    r = run([BSC, "-sim", "-e", top, "-o", "sim.exe"] + common + cfiles,
             cwd=wk, timeout=build_limit)
     ref_build_secs = _time.monotonic() - tb0
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
-        if "SimExportIR" in msg:
-            cls = "EXPORT_FAIL"
-        elif "(G0084)" in msg or ("Bluesim" in msg and "import" in msg):
+        if "(G0084)" in msg or ("Bluesim" in msg and "import" in msg):
             # reference Bluesim cannot run this design either (BVI import)
             cls = "NOT_SUPPORTED"
         else:
@@ -352,9 +352,13 @@ def one_test(job):
             _gold_terminal(gdir, cls, first_error(msg))
         return (rel, top, cls, first_error(msg))
 
+    bdpi = [a for c in cfiles for a in ("--bdpi", c)]
+    rb = run([TRSBIR] + bdpi + [top], cwd=wk, timeout=build_limit)
     bir = os.path.join(wk, top + ".bir")
-    if not os.path.exists(bir):
-        return (rel, top, "EXPORT_FAIL", "no .bir produced")
+    if rb is None or rb.returncode != 0 or not os.path.exists(bir):
+        msg = "" if rb is None else (rb.stderr + rb.stdout)
+        return (rel, top, "EXPORT_FAIL",
+                first_error(msg) or "no .bir produced")
 
     t0 = _time.monotonic()
     ref = run(["./sim.exe", "-m", MAX_CYCLES], cwd=wk)
@@ -419,7 +423,7 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
 
     # the classic refusal is part of the contract: these designs are
     # trs-only, and classic Bluesim's error must not drift
-    r = run([BSC, "-sim"] + flags + ["-bir", "-e", top, "-o", "classic.exe"]
+    r = run([BSC, "-sim"] + flags + ["-e", top, "-o", "classic.exe"]
             + common, cwd=wk, timeout=420)
     if r is None:
         return (rel, top, "LINK_FAIL", "classic-refusal probe timeout")
@@ -430,12 +434,9 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
         return (rel, top, "DIFF", "classic refusal drifted (expected " +
                 refuse + "): " + first_error(r.stderr + r.stdout))
 
-    # export the .bir through bsc's own -trs link; for designs with
-    # required bindings that link step fails (loudly) AFTER exporting,
-    # so only the .bir's existence gates here
-    env = dict(ENV, TRS=TRS)
-    run([BSC, "-sim"] + flags + ["-bir", "-trs", "-e", top, "-o", "trs.exe"]
-        + common, cwd=wk, timeout=420, env=env)
+    # a trs-only design has no reference build, so the exporter is the
+    # whole of it; only the .bir's existence gates here
+    run([TRSBIR, top], cwd=wk, timeout=420)
     bir = os.path.join(wk, top + ".bir")
     if not os.path.exists(bir):
         return (rel, top, "EXPORT_FAIL", "no .bir produced")

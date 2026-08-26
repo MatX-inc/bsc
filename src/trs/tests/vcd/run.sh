@@ -6,6 +6,7 @@
 #   BSC=/path/to/bsc TRS=/path/to/trs sh run.sh [workdir]
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
+TRSBIR=${TRSBIR:-trs-bir}
 SRC=$(cd "$(dirname "$0")" && pwd)
 # the reference executable is a script that needs bluetcl on PATH
 case "$BSC" in
@@ -27,8 +28,9 @@ check() { # name top args...
     name=$1; top=$2; shift 2
     rm -f test1.vcd test2.vcd ref.test1.vcd ref.test2.vcd ref.vcd mine.vcd ref.out mine.out
     cp "$SRC/$name.bsv" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1
-    $BSC -sim -bir -e "$top" -o "$top.exe" >/dev/null 2>&1
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1
+    $BSC -sim -e "$top" -o "$top.exe" >/dev/null 2>&1
+    $TRSBIR "$top" >/dev/null 2>&1
     ./"$top.exe" -V ref.vcd "$@" > ref.out 2>/dev/null
     for f in test1.vcd test2.vcd; do [ -f "$f" ] && mv "$f" "ref.$f"; done
     $TRS run "$top.bir" -V mine.vcd "$@" > mine.out 2>&1

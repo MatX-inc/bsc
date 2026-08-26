@@ -18,6 +18,7 @@
 # `expected-status` entries: the wrapper's exit code must ALSO match.
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
+TRSBIR=${TRSBIR:-trs-bir}
 
 # A run that hangs must not hang the battery, but the command that
 # bounds it is not portable: coreutils calls it timeout, Homebrew
@@ -60,10 +61,18 @@ build() { # src top [flags and/or C link files]...
             *) flags="$flags $a";;
         esac
     done
-    $BSC -sim -bir -u -g "$top" "$src" > "$top.bsc.log" 2>&1 \
+    $BSC -sim -u -g "$top" "$src" > "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc compile)"; fail=1; return 1; }
-    $BSC -sim -bir $flags -e "$top" -o "ref_$top" $cfiles >> "$top.bsc.log" 2>&1 \
+    $BSC -sim $flags -e "$top" -o "ref_$top" $cfiles >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc link)"; fail=1; return 1; }
+    # the exporter takes the one bsc flag that reaches the IR, and the
+    # BDPI sources one at a time
+    birflags=""
+    case " $flags " in *" -keep-fires "*) birflags="--keep-fires";; esac
+    bdpi=""
+    for c in $cfiles; do bdpi="$bdpi --bdpi $c"; done
+    $TRSBIR $birflags $bdpi "$top" >> "$top.bsc.log" 2>&1 \
+        || { echo "FAIL $top (trs-bir)"; fail=1; return 1; }
     "$TRS" link "$top.bir" --interactive -o "trs_$top" \
         > "$top.trs.log" 2>&1 \
         || { echo "FAIL $top (trs link --interactive)"; fail=1; return 1; }

@@ -104,9 +104,6 @@ files_exist { bfiles/mkDummyModule.ba }
 if {$ctest == 1} {
 mkdir simfiles
 link_objects_pass bfiles/mkDummyModule mkDummyModule "-simdir simfiles"
-# The generated C++ files and "object created" messages are specific
-# to the C++ Bluesim backend
-if { [cxx_codegen_tests] } {
 find_n_strings [make_bsc_ccomp_output_name mkDummyModule] \
                "Bluesim object created: simfiles/mkDummyModule.{h,o}" 1
 find_n_strings [make_bsc_ccomp_output_name mkDummyModule] \
@@ -117,7 +114,6 @@ files_exist { simfiles/mkDummyModule.cxx \
               simfiles/model_mkDummyModule.cxx \
               simfiles/model_mkDummyModule.h \
               simfiles/model_mkDummyModule.o }
-}
 # It is a design choice whether linking with -e outputs to the simdir/vdir.
 # One could insist that the user use -o to direct the output somewhere else.
 # Thus, commenting out this test:

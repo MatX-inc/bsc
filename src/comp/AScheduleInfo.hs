@@ -75,8 +75,10 @@ data AScheduleInfo = AScheduleInfo
       asi_v_sched_info         :: VSchedInfo,
 
       -- Rule pairs whose cross-boundary execution order (via method calls
-      -- with rules between them) could not be pinned statically, resolved
-      -- dynamically instead (-sched-dynamic; trs backend only).
+      -- with rules between them) cannot be pinned statically.  Under
+      -- -sched-dynamic the schedule records the alternatives and the
+      -- guard that selects between them per cycle, for a backend able to
+      -- choose at run time; without it such a pair is an error.
       asi_dyn_scheds           :: [ADynSched]
     } deriving (Show)
 

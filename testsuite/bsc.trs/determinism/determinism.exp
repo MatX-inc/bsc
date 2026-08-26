@@ -26,7 +26,9 @@ proc trs_det_test { trs name top } {
     set log "$name.det-out"
     set flags "-no-show-timestamps -no-show-version"
 
-    if { [catch {exec sh -c "$bsc $flags -sim -u -g $top $name.bs > $log 2>&1 && $bsc $flags -sim -bir -e $top -o $top.ref >> $log 2>&1"}] } {
+    # trs-bir writes the .bir, and installs beside bsc
+    set trsbir [file join [file dirname $bsc] trs-bir]
+    if { [catch {exec sh -c "$bsc $flags -sim -u -g $top $name.bs > $log 2>&1 && $bsc $flags -sim -e $top -o $top.ref >> $log 2>&1 && $trsbir $top >> $log 2>&1"}] } {
         fail "trs determinism compile/export of $name (log `$log')"
         cd $here
         return

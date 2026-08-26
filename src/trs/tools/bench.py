@@ -5,7 +5,7 @@ Two axes per design:
   build   bsc frontend (elab) + backend-specific build:
             bluesim  = bsc -sim -e (C++ codegen + g++)
             verilator= bsc -verilog -u -g + verilator --cc + make
-            trs      = bsc -sim -bir -e (.bir export) + trs link
+            trs      = bsc -sim -e + trs-bir (.bir export) + trs link
   run     wall time to natural $finish (median of --runs), peak RSS.
           cycles/s where the design's cycle count is known.
 
@@ -39,6 +39,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 BSC = os.environ.get("BSC", "bsc")
+TRSBIR = os.environ.get("TRSBIR", "trs-bir")
 TRS = os.environ.get("TRS", "trs")
 
 # The pool: closed ($finish-terminating) testbenches chosen from sweep
@@ -257,10 +258,14 @@ def bench_one(d, legs, runs, work):
                 m, r = run_measured(["./simb"], wk, runs)
                 exe = "./simb"
             else:
-                r, t = sh([BSC, "-sim", "-bir", "-e", top, "-o", "simr"] + common + cfiles, wk)
+                r, t = sh([BSC, "-sim", "-e", top, "-o", "simr"] + common + cfiles, wk)
+                # the export is part of what this leg costs
+                bdpi = [a for c in cfiles for a in ("--bdpi", c)]
+                rb, tb = sh([TRSBIR] + bdpi + [top], wk)
+                t += tb
                 bir = os.path.join(wk, top + ".bir")
                 if not os.path.exists(bir):
-                    L["error"] = "no .bir: " + _err(r)
+                    L["error"] = "no .bir: " + _err(rb)
                     res["legs"][leg] = L
                     continue
                 r2, t2 = sh([TRS, "link", bir, "-o", "art", "--dump-formats", "none"], wk)

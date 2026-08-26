@@ -5,6 +5,7 @@
 # exit codes.  BSC=/path/bsc TRS=/path/trs sh run.sh [workdir]
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
+TRSBIR=${TRSBIR:-trs-bir}
 SRC=$(cd "$(dirname "$0")" && pwd)
 case "$BSC" in
     */*) PATH="$(cd "$(dirname "$BSC")" && pwd):$PATH"; export PATH;;
@@ -12,12 +13,25 @@ esac
 WK=${1:-$(mktemp -d)}
 cd "$WK" || exit 2
 fail=0
+
+# The reference executable and the trs inputs come from two programs:
+# bsc links the Bluesim executable, trs-bir writes the .bir and, for a
+# design with BDPI, the companion object the runtime loads beside it.
+ref_link() { # top outexe [cfile]
+    rl_top=$1; rl_exe=$2; rl_c=$3
+    $BSC -sim -e "$rl_top" -o "$rl_exe" $rl_c || return 1
+    if [ -n "$rl_c" ]; then
+        $TRSBIR --bdpi "$rl_c" "$rl_top"
+    else
+        $TRSBIR "$rl_top"
+    fi
+}
 check() { # name top [cfile]
     name=$1; top=$2; cfile=$3
     cp "$SRC/$name.bsv" .
     [ -n "$cfile" ] && cp "$SRC/$cfile" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
     "$TRS" link "$top.bir" -o art >link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     # byte parity cannot distinguish engines (that is the oracle
@@ -71,8 +85,8 @@ check_memload() {
     name=RegFileLoadLink; top=sysRegFileLoadLink
     cp "$SRC/$name.bsv" .
     rm -f "$name.mem"
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o ref.exe > reflink.out 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" ref.exe > reflink.out 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     "$TRS" link "$top.bir" -o art > link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     # neither link may so much as name the file (a missing load file is
     # only a diagnostic, so silence -- not exit status -- is the contract)
@@ -102,8 +116,8 @@ check_compiled() { # name top [cfile]
     cp "$SRC/$name.bsv" .
     [ -n "$cfile" ] && cp "$SRC/$cfile" .
     rm -f art.so
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
     "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     [ -f art.so ] || { echo "FAIL $name (fell back to interpreted)"; fail=1; return; }
@@ -136,8 +150,8 @@ check CollideEq sysCollideEq
 check_vcd() { # name top
     name=$1; top=$2
     cp "$SRC/$name.bsv" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     rm -f dump.vcd
     ./ref.exe > ref.out 2>&1; refrc=$?
     sed '/^\$date/,/^\$end/d' dump.vcd > ref.vcd 2>/dev/null
@@ -155,7 +169,7 @@ check_vcd FifoVcd sysFifoVcd
 # port_consts (a single-u64 store once folded them to 0/1 and the run
 # went silently empty)
 check WideArgConst sysWideArgConst
-# ---- top-level restriction lifts (-trs only; no reference Bluesim
+# ---- top-level restriction lifts (trs only; no reference Bluesim
 # executable exists for these BY DESIGN — classic Bluesim refuses the
 # design class, so stdout gates against stored hand-derived goldens
 # and the classic refusal tags are pinned) ----
@@ -170,15 +184,15 @@ check_topparam() {
     bigv=0x0123456789ABCDEF0FEDCBA9
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    if $BSC -sim -bir -e "$top" -o tp_ref.exe >tp_err1.out 2>&1; then
+    if $BSC -sim -e "$top" -o tp_ref.exe >tp_err1.out 2>&1; then
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "(G0099)" tp_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
-    # bsc's own -trs link supplies no bindings: the trs link inside it
-    # must fail with the loud missing-binding error (and still export
-    # the .bir, which everything below consumes)
-    if TRS="$TRS" $BSC -sim -bir -trs -e "$top" -o tp.exe >tp_err2.out 2>&1; then
-        echo "FAIL $name (-trs link without bindings unexpectedly succeeded)"; fail=1; return
+    # the .bir every check below consumes
+    $TRSBIR "$top" >tp_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    # a link with no bindings must fail with the loud missing-binding error
+    if TRS="$TRS" "$TRS" link "$top.bir" -o tp.exe >tp_err2.out 2>&1; then
+        echo "FAIL $name (link without bindings unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "requires bindings for" tp_err2.out || { echo "FAIL $name (expected missing-binding error)"; fail=1; return; }
     [ -f "$top.bir" ] || { echo "FAIL $name (no .bir exported)"; fail=1; return; }
@@ -212,12 +226,13 @@ check_topae() {
     name=TopAlwaysEn; top=sysTopAlwaysEn
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    if $BSC -sim -bir -e "$top" -o ae_ref.exe >ae_err1.out 2>&1; then
+    if $BSC -sim -e "$top" -o ae_ref.exe >ae_err1.out 2>&1; then
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "(G0062)" ae_err1.out || { echo "FAIL $name (expected G0062)"; fail=1; return; }
-    if TRS="$TRS" $BSC -sim -bir -trs -e "$top" -o ae.exe >ae_err2.out 2>&1; then
-        echo "FAIL $name (-trs link without bindings unexpectedly succeeded)"; fail=1; return
+    $TRSBIR "$top" >ae_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    if TRS="$TRS" "$TRS" link "$top.bir" -o ae.exe >ae_err2.out 2>&1; then
+        echo "FAIL $name (link without bindings unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "requires bindings for" ae_err2.out || { echo "FAIL $name (expected missing-binding error)"; fail=1; return; }
     "$TRS" run "$top.bir" +setStep.v=2 > got.out 2>&1; gotrc=$?
@@ -236,18 +251,18 @@ check_topae() {
 }
 check_topae
 # NEGATIVE: bindable arguments plus an additional input clock — a
-# binding supplies a constant, never a waveform, so the -trs link
+# binding supplies a constant, never a waveform, so the trs link
 # refuses loudly (and classic keeps G0099 via the Bit# argument)
 check_topclk() {
     name=TopClkArg; top=sysTopClkArg
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    if $BSC -sim -bir -e "$top" -o ck_ref.exe >ck_err1.out 2>&1; then
+    if $BSC -sim -e "$top" -o ck_ref.exe >ck_err1.out 2>&1; then
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "(G0099)" ck_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
-    if TRS="$TRS" $BSC -sim -bir -trs -e "$top" -o ck.exe >ck_err2.out 2>&1; then
-        echo "FAIL $name (-trs link unexpectedly succeeded)"; fail=1; return
+    if $TRSBIR "$top" >ck_err2.out 2>&1; then
+        echo "FAIL $name (export unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "does not support additional input" ck_err2.out || { echo "FAIL $name (expected input-clock refusal)"; fail=1; return; }
     echo "PASS $name"
@@ -257,7 +272,7 @@ check_topclk
 # reference Bluesim exe exists by design — the classic C++ backend
 # refuses these designs — so stdout diffs against a stored golden
 # whose values are hand-derived.  Also gates the two refusals: plain
-# -sim errors with the class's tag, and -sched-dynamic without -trs
+# -sim errors with the class's tag, and the Bluesim link of a
 # errors at link.
 check_dyn() { # name top errtag
     name=$1; top=$2; tag=$3
@@ -267,11 +282,12 @@ check_dyn() { # name top errtag
     fi
     grep -q "$tag" dyn_err1.out || { echo "FAIL $name (expected $tag)"; fail=1; return; }
     $BSC -sim -sched-dynamic -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc -sched-dynamic)"; fail=1; return; }
-    if $BSC -sim -sched-dynamic -bir -e "$top" -o dyn_ref.exe >dyn_err2.out 2>&1; then
+    if $BSC -sim -sched-dynamic -e "$top" -o dyn_ref.exe >dyn_err2.out 2>&1; then
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
-    grep -q "trs backend" dyn_err2.out || { echo "FAIL $name (expected trs-backend refusal)"; fail=1; return; }
-    $BSC -sim -sched-dynamic -bir -trs -e "$top" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (bsc -trs link)"; fail=1; return; }
+    grep -q "dynamic scheduling" dyn_err2.out || { echo "FAIL $name (expected dynamic-scheduling refusal)"; fail=1; return; }
+    $TRSBIR "$top" >dyn_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    "$TRS" link "$top.bir" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
     # compiled alts: the artifact's edge fns carry the per-edge guard
@@ -293,12 +309,12 @@ check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
     # symbol), so there is no reference leg.
     name=$1; top=$2
     cp "$SRC/$name.bsv" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    # the .bir is emitted by the -e elaboration; its C++ link FAILS on
-    # the undefined import symbol, which is Bluesim's (acceptable)
-    # failure mode for this shape — only the .bir is needed here
-    $BSC -sim -bir -e "$top" -o refx.exe >/dev/null 2>&1
-    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir from -e)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    # no reference leg: the import has no implementation, so a Bluesim
+    # link would fail on the undefined symbol.  The export does not care
+    # -- only the .bir is needed here
+    $TRSBIR "$top" >/dev/null 2>&1
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
     # the trap may fire during link (the window bake / reset protocol
     # executes early cycles — the field repro died exactly there) or,
     # if link-time execution never reaches the call, at run time.
@@ -330,8 +346,8 @@ check_chunked() { # name top cfile
     name=$1; top=$2; cfile=$3
     cp "$SRC/$name.bsv" .
     [ -n "$cfile" ] && cp "$SRC/$cfile" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o bc_ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" bc_ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./bc_ref.exe > bc_ref.out 2>&1; refrc=$?
     rm -f bcart.so
     TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o bcart >bc_link.out 2>&1 || { echo "FAIL $name (chunked link)"; tail -2 bc_link.out; fail=1; return; }
@@ -347,9 +363,9 @@ check_chunked BdpiChunk sysBdpiChunk ops.c
 check_chunked_missing() {
     name=BdpiChunkMissing; top=sysBdpiChunkMissing
     cp "$SRC/$name.bsv" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o bcm_ref.exe >/dev/null 2>&1
-    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir from -e)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $TRSBIR "$top" >/dev/null 2>&1
+    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
     TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 "$TRS" link "$top.bir" -o bcm >bcm_link.out 2>&1; lrc=$?
     if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
     if [ "$lrc" -ne 0 ]; then
@@ -375,8 +391,8 @@ check_dyn DynSchedLoop sysDynSchedLoop G0116
 check_en() { # name top
     name=$1; top=$2
     cp "$SRC/$name.bsv" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o en_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" en_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./en_ref.exe > en_ref.out 2>&1; refrc=$?
     "$TRS" run "$top.bir" > en_i.out 2>&1; irc=$?
     if [ "$irc" != "$refrc" ] || ! cmp -s en_ref.out en_i.out; then echo "FAIL $name (interp)"; diff en_ref.out en_i.out | head -3; fail=1; return; fi
@@ -427,8 +443,8 @@ census_pin DynSchedEnCensus sysDynSchedEn '^EN [0-9]+ [0-9]+ read=1 live=1 stay1
 check_revcompat() {
     name=RevCompat; top=sysEdgeSelfKill
     cp "$SRC/EdgeSelfKill.bsv" .
-    $BSC -sim -bir -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o rev_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" rev_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./rev_ref.exe > rev_ref.out 2>&1; refrc=$?
     # control: a matched-rev artifact loads with no refusal note
     "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
@@ -457,8 +473,8 @@ check_revcompat
 check_demoted() {
     name=DemotedTier; top=sysEdgeSelfKill
     cp "$SRC/EdgeSelfKill.bsv" .
-    $BSC -sim -bir -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $BSC -sim -bir -e "$top" -o dt_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    $BSC -sim -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    ref_link "$top" dt_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./dt_ref.exe < /dev/null > dt_ref.out 2>&1; refrc=$?
     TRS_JIT_FN_INSN_BUDGET=10 TRS_JIT_TRACE=1 "$TRS" link "$top.bir" -o dtart >dt_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
     grep -q "demoted size tier" dt_link.out || { echo "FAIL $name (tier did not engage)"; fail=1; return; }
