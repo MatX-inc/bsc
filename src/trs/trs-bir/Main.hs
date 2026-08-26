@@ -27,6 +27,7 @@ import System.Directory(getCurrentDirectory)
 import System.Environment(getArgs, getProgName)
 import System.Exit(exitFailure, exitSuccess, ExitCode(..))
 import System.FilePath(takeExtension, takeFileName, replaceExtension)
+import System.Info(os)
 import System.Process(rawSystem)
 import System.IO(hSetBuffering, hSetEncoding, stdout, stderr, hPutStr,
                  hPutStrLn, BufferMode(..), utf8)
@@ -249,7 +250,7 @@ writeBdpiSo opts toplevel prefix ssys
         let so = prefix ++ toplevel ++ ".bdpi.so"
             undef | null (optLibs opts) = []
                   | otherwise =
-                      [ "-Wl,-u," ++ getIdString (ff_name ff)
+                      [ "-Wl,-u," ++ asmName (getIdString (ff_name ff))
                       | ff <- M.elems (ssys_ffuncmap ssys) ]
         tool opts cxx $ ["-shared", "-fPIC"]
                         ++ map ("-L" ++) (optLibPath opts)
@@ -269,6 +270,12 @@ compileBdpi opts f
         tool opts cc ["-fPIC", "-c", "-o", o, f]
         return o
   where ext = takeExtension f
+
+-- | A C function's name as the linker spells it.  Mach-O prefixes an
+-- underscore to every C symbol; ELF does not.  -u names a symbol for
+-- the linker to demand, so it has to be the linker's spelling.
+asmName :: String -> String
+asmName n = if os == "darwin" then '_' : n else n
 
 tool :: Options -> String -> [String] -> IO ()
 tool opts prog args = do
