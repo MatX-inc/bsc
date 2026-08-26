@@ -1011,28 +1011,6 @@ enum EmitFail {
     EdgeOverBudget(std::collections::HashSet<usize>, u64),
 }
 
-/// Linker flags that bind the artifact's calls to its own definitions.
-///
-/// The artifact calls its OWN exec/sched fns, and their symbols must
-/// stay dynamically exported because the table-less loader path dlsyms
-/// them.  On ELF that combination costs a PLT stub and a GOT load at
-/// every intra-.so call (FloatTest: 415 call sites, 5.5M indirect
-/// branches per run) unless the link asks for local binding.
-/// Function-only binding leaves the callback DATA globals (trs_cb_*) on
-/// their normal GOT path, which the loader writes through dlsym.
-///
-/// Mach-O resolves a call to a definition in the same image without
-/// being asked -- that is what its two-level namespace does -- and
-/// Apple's ld rejects -Bsymbolic-functions as an unknown option, so
-/// there is nothing to pass.
-#[cfg(feature = "jit")]
-fn local_binding_flags() -> &'static [&'static str] {
-    if cfg!(target_os = "macos") {
-        &[]
-    } else {
-        &["-Wl,-Bsymbolic-functions"]
-    }
-}
 
 #[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
@@ -1364,7 +1342,7 @@ fn aot_emit(
         let so_tmp = so.with_extension("so.tmp");
         let st = std::process::Command::new(cc_tool())
             .arg("-shared")
-            .args(local_binding_flags())
+            .args(crate::hostlink::local_binding())
             .arg("-o")
             .arg(&so_tmp)
             .args(&files)
@@ -1387,9 +1365,9 @@ fn aot_emit(
             // statically-linked LLVM whose constructors cost ~5ms at
             // every exec of the produced binary.
             let rt = if libdir.join("libtrs_rt.so").exists() {
-                "-l:libtrs_rt.so"
+                "libtrs_rt.so"
             } else {
-                "-l:libtrs_capi.so"
+                "libtrs_capi.so"
             };
             let mc = tmp.join("trs_main.c");
             std::fs::write(
@@ -1402,10 +1380,10 @@ fn aot_emit(
                 .arg(&mc)
                 .args(&files)
                 .arg(&mf)
-                .arg("-Wl,--export-dynamic")
-                .arg("-Wl,--no-as-needed")
+                .args(crate::hostlink::export_dynamic())
+                .args(crate::hostlink::no_as_needed())
                 .arg(format!("-L{}", libdir.display()))
-                .arg(rt)
+                .arg(crate::hostlink::link_shared(&libdir.join(rt), rt))
                 .arg(format!("-Wl,-rpath,{}", libdir.display()))
                 .args(["-o"])
                 .arg(&exe_tmp)
@@ -1551,11 +1529,11 @@ fn aot_emit(
     std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
     // temp+rename, same discipline as the single-object emit; local
-    // function binding for the same reason (see local_binding_flags)
+    // function binding for the same reason (see hostlink::local_binding)
     let so_tmp = so.with_extension("so.tmp");
     let st = std::process::Command::new("cc")
         .arg("-shared")
-        .args(local_binding_flags())
+        .args(crate::hostlink::local_binding())
         .arg("-o")
         .arg(&so_tmp)
         .args(&files)

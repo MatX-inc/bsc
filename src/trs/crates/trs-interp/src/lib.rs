@@ -29,6 +29,7 @@ pub use out::{flush as stdout_flush, force_line as stdout_force_line};
 pub mod topbind;
 pub use topbind::{parse_bind, TopBind};
 #[cfg(feature = "aot")]
+pub mod hostlink;
 mod jit;
 #[cfg(feature = "aot")]
 pub use jit::{runcore_bake_commit, RunCoreBake};

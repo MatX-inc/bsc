@@ -18,6 +18,20 @@
 # `expected-status` entries: the wrapper's exit code must ALSO match.
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
+
+# A run that hangs must not hang the battery, but the command that
+# bounds it is not portable: coreutils calls it timeout, Homebrew
+# installs it as gtimeout, and a stock macOS has neither.  Where none
+# exists the run is simply unbounded -- a battery that reports nothing
+# because `timeout` was missing is worse than one that can hang.
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT="timeout 120"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT="gtimeout 120"
+else
+    TIMEOUT=""
+    echo "note: no timeout command; runs are unbounded"
+fi
 SRC=$(cd "$(dirname "$0")" && pwd)
 TSRC=$(cd "$SRC/../../../../testsuite/bsc.bluesim/interactive" && pwd)
 case "$BSC" in
@@ -56,9 +70,9 @@ build() { # src top [flags and/or C link files]...
 }
 check() { # top cmd [expected-status]
     top=$1; cmd=$2; want=${3:-0}
-    timeout 120 ./"ref_$top" -f "$cmd" > "ref_${top}_${cmd%.cmd}.out" 2>&1
+    $TIMEOUT ./"ref_$top" -f "$cmd" > "ref_${top}_${cmd%.cmd}.out" 2>&1
     ref_rc=$?
-    timeout 120 ./"trs_$top" -f "$cmd" > "trs_${top}_${cmd%.cmd}.out" 2>&1
+    $TIMEOUT ./"trs_$top" -f "$cmd" > "trs_${top}_${cmd%.cmd}.out" 2>&1
     trs_rc=$?
     [ "$ref_rc" = "$want" ] \
         || echo "WARN $top $cmd: reference exit $ref_rc (expected $want)"
@@ -215,11 +229,11 @@ vcdtcldiff() { # ref got
 }
 if [ -x ./ref_mkTbGCD ]; then
     rm -f waves.vcd
-    timeout 120 ./ref_mkTbGCD -f vcdtcl.cmd > ref_mkTbGCD_vcdtcl.out 2>&1
+    $TIMEOUT ./ref_mkTbGCD -f vcdtcl.cmd > ref_mkTbGCD_vcdtcl.out 2>&1
     ref_rc=$?
     mv waves.vcd ref_waves.vcd 2>/dev/null
     rm -f waves.vcd
-    timeout 120 ./trs_mkTbGCD -f vcdtcl.cmd > trs_mkTbGCD_vcdtcl.out 2>&1
+    $TIMEOUT ./trs_mkTbGCD -f vcdtcl.cmd > trs_mkTbGCD_vcdtcl.out 2>&1
     trs_rc=$?
     ok=1
     [ "$ref_rc" = "$trs_rc" ] || ok=0
@@ -233,11 +247,11 @@ fi
 # fstcmp.py: FST bytes embed timestamps, so no byte compare)
 if [ -x ./ref_mkTbGCD ] && command -v fst2vcd > /dev/null 2>&1; then
     rm -f waves.fst
-    timeout 120 ./ref_mkTbGCD -f fsttcl.cmd > ref_mkTbGCD_fsttcl.out 2>&1
+    $TIMEOUT ./ref_mkTbGCD -f fsttcl.cmd > ref_mkTbGCD_fsttcl.out 2>&1
     ref_rc=$?
     mv waves.fst ref_waves.fst 2>/dev/null
     rm -f waves.fst
-    timeout 120 ./trs_mkTbGCD -f fsttcl.cmd > trs_mkTbGCD_fsttcl.out 2>&1
+    $TIMEOUT ./trs_mkTbGCD -f fsttcl.cmd > trs_mkTbGCD_fsttcl.out 2>&1
     trs_rc=$?
     ok=1
     [ "$ref_rc" = "$trs_rc" ] || ok=0

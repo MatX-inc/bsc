@@ -9,6 +9,8 @@
 
 use std::process::ExitCode;
 
+use trs_interp::hostlink;
+
 fn usage() -> ExitCode {
     eprintln!("trs {} (phase P0 scaffold)", env!("CARGO_PKG_VERSION"));
     eprintln!("usage: trs ir dump <module.bir>");
@@ -774,7 +776,8 @@ fn main() -> ExitCode {
                 eprintln!("trs capi-so: write {}: {e}", map.display());
                 return ExitCode::FAILURE;
             }
-            let r = capi_cc_link(&out, &[], &lib, &map, !rt);
+            let r = capi_cc_link(&out, &[], &lib, &map,
+                                 &["bk_*", "trs_*", "new_MODEL_*"], !rt);
             let _ = std::fs::remove_dir_all(&tmp);
             match r {
                 Ok(()) => {
@@ -1147,8 +1150,14 @@ fn capi_cc_link(
     inputs: &[&std::path::Path],
     lib: &std::path::Path,
     map: &std::path::Path,
+    keep: &[&str],
     llvm: bool,
 ) -> Result<(), String> {
+    // the export list's format is the host's business, not the
+    // caller's: a version script and an exported-symbols list say the
+    // same thing in different shapes
+    let export_flags = hostlink::export_list(map, keep)
+        .map_err(|e| format!("write {}: {e}", map.display()))?;
     let mut cc = std::process::Command::new("cc");
     cc.arg("-shared").arg("-fPIC").arg("-o").arg(out);
     for i in inputs {
@@ -1159,17 +1168,16 @@ fn capi_cc_link(
     // stubs) into the .so; -u pulls only what the bk_*/new_MODEL
     // closure actually needs
     for sym in BK_EXPORTS {
-        cc.arg(format!("-Wl,-u,{sym}"));
+        cc.arg(hostlink::undefined(sym));
     }
     cc.arg(lib)
         // rust emits function sections: dead-strip everything the
         // -u keep-list doesn't reach, and drop symbols (166MB -> )
-        .arg("-Wl,--gc-sections")
-        .arg("-Wl,-s")
-        .arg("-Wl,-Bsymbolic")
-        .arg(format!("-Wl,--version-script={}", map.display()))
-        .arg("-lpthread")
-        .arg("-ldl")
+        .args(hostlink::dead_strip())
+        .args(hostlink::strip_symbols())
+        .args(hostlink::local_binding())
+        .args(&export_flags)
+        .args(hostlink::system_libs())
         .arg("-lm")
         // vendored libfst (trs-interp build.rs) gzip-frames FST output
         // through zlib in every flavor, slim included
@@ -1177,26 +1185,66 @@ fn capi_cc_link(
         // -shared tolerates undefined symbols; RTLD_NOW (and a static
         // exe link against this .so) does not — fail at LINK time
         // instead of at sim load
-        .arg("-Wl,--no-undefined");
+        .args(hostlink::no_undefined());
     if llvm && cfg!(feature = "jit") {
         // a jit-featured capi staticlib references LLVM (rustc links
         // it into BINARIES only); use the shared libLLVM
-        let libdir = std::process::Command::new("llvm-config-18")
-            .arg("--libdir")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
+        // llvm-config by whichever name reaches it: the distro's
+        // versioned one, then the prefix llvm-sys was pointed at, then
+        // the Debian default -- a build configured through
+        // LLVM_SYS_181_PREFIX has no versioned binary on PATH.
+        let ask = |prog: &std::path::Path, args: &[&str]| {
+            std::process::Command::new(prog)
+                .args(args)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        // Which LLVM this staticlib was built against is a fact about
+        // the build, so the prefix llvm-sys was given is baked in at
+        // compile time; the environment at run time belongs to whoever
+        // is running trs and need not have it set at all.  A runtime
+        // value still wins, for moving an install.
+        let prefix = |p: &str| {
+            std::path::Path::new(p).join("bin").join("llvm-config")
+        };
+        let cfg = [
+            std::env::var("LLVM_SYS_181_PREFIX").ok().map(|p| prefix(&p)),
+            option_env!("LLVM_SYS_181_PREFIX").map(prefix),
+            Some(std::path::PathBuf::from("llvm-config-18")),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|p| ask(p, &["--libdir"]).is_some());
+        let libdir = cfg
+            .as_deref()
+            .and_then(|p| ask(p, &["--libdir"]))
             .unwrap_or_else(|| "/usr/lib/llvm-18/lib".into());
+        // the staticlib's llvm-sys bindings reference LLVM's own system
+        // libraries directly, and which ones those are is a property of
+        // this LLVM build, not of the platform -- ask it rather than
+        // keeping a list that is right on one distribution
+        let sys_libs: Vec<String> = cfg
+            .as_deref()
+            .and_then(|p| ask(p, &["--system-libs", "--link-static"]))
+            .map(|s| s.split_whitespace().map(str::to_string).collect())
+            .unwrap_or_else(|| {
+                hostlink::llvm_support_libs()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            });
         cc.arg(format!("-L{libdir}"))
             .arg("-lLLVM-18")
-            .arg("-lstdc++")
-            // the execution engine bindings reference libffi (shared
-            // libLLVM does not re-export it)
+            .arg(hostlink::cxx_runtime())
+            .args(&sys_libs)
+            // the execution engine bindings reference libffi, which
+            // llvm-config does not report
             .arg("-lffi")
-            // terminfo + zstd: llvm-sys support-library residue
-            .arg("-ltinfo")
-            .arg("-lzstd");
+            .args(hostlink::lib_search_paths());
     }
     match cc.status() {
         Ok(s) if s.success() => Ok(()),
@@ -1218,18 +1266,7 @@ fn write_shim_sources(
     let shim_c = tmp.join("shim.c");
     std::fs::write(
         &shim_s,
-        format!(
-            r##"	.section .note.GNU-stack,"",@progbits
-	.section .rodata
-	.align 8
-	.globl trs_bir_start
-trs_bir_start:
-	.incbin "{}"
-	.globl trs_bir_end
-trs_bir_end:
-"##,
-            bir_abs.display()
-        ),
+        hostlink::incbin_stub(bir_abs, "trs_bir_start", "trs_bir_end"),
     )
     .map_err(|e| format!("write {}: {e}", shim_s.display()))?;
     std::fs::write(
@@ -1295,12 +1332,10 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
         Err(e) => return note(e),
     };
     let map = tmp.join("export.map");
-    if let Err(e) = std::fs::write(
-        &map,
-        "{ global: new_MODEL_*; trs_*; local: *; };\n",
-    ) {
-        return note(format!("write {}: {e}", map.display()));
-    }
+    let shim_exports = match hostlink::export_list(&map, &["new_MODEL_*", "trs_*"]) {
+        Ok(f) => f,
+        Err(e) => return note(format!("write {}: {e}", map.display())),
+    };
     let so = format!("{base}.capi.so");
     let mut cc = std::process::Command::new("cc");
     cc.arg("-shared")
@@ -1316,11 +1351,11 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
         // itself references NO capi symbol — bluetcl dlsym's bk_*
         // through the dependency scope — so --as-needed (many distros'
         // default) would silently drop the DT_NEEDED: disable it.
-        .arg("-Wl,--no-as-needed")
-        .arg("-l:libtrs_capi.so")
+        .args(hostlink::no_as_needed())
+        .arg(hostlink::link_shared(&shared, "libtrs_capi.so"))
         .arg(format!("-Wl,-rpath,{}", shared_dir.display()))
-        .arg(format!("-Wl,--version-script={}", map.display()))
-        .arg("-Wl,--no-undefined");
+        .args(&shim_exports)
+        .args(hostlink::no_undefined());
     let r = cc.status();
     let _ = std::fs::remove_dir_all(&tmp);
     match r {
@@ -1383,14 +1418,9 @@ fn link_interactive(bir_path: &str, base: &str, top: &str) -> ExitCode {
         Err(e) => return fail(e),
     };
     let map = tmp.join("export.map");
-    if let Err(e) = std::fs::write(
-        &map,
-        "{ global: bk_*; trs_*; new_MODEL_*; local: *; };\n",
-    ) {
-        return fail(format!("write {}: {e}", map.display()));
-    }
     let so = format!("{base}.so");
-    if let Err(e) = capi_cc_link(&so, &[&shim_c, &shim_s], &lib, &map, true) {
+    if let Err(e) = capi_cc_link(&so, &[&shim_c, &shim_s], &lib, &map,
+                                 &["bk_*", "trs_*", "new_MODEL_*"], true) {
         return fail(e);
     }
     let _ = std::fs::remove_dir_all(&tmp);
