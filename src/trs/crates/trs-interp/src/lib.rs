@@ -156,12 +156,10 @@ pub struct Interp {
     /// name -> interned id.  Design::strings is the id->name direction;
     /// several lookups need the other one, and scanning the table for a
     /// match is O(strings) per call on paths that run per method call.
-    str_by_name: HashMap<String, StrId>,
     /// method -> EN_<method> / RDY_<method>.  Asked once per method
     /// call, and the answer is a property of the design, so the derived
     /// name is built once rather than on every call.
     en_id_of_meth: HashMap<StrId, Option<StrId>>,
-    rdy_id_of_meth: HashMap<StrId, Option<StrId>>,
     insts: Vec<Inst>,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
@@ -812,9 +810,7 @@ impl Interp {
             mods,
             mod_by_name,
             inst_by_path: HashMap::new(),
-            str_by_name: HashMap::new(),
             en_id_of_meth: HashMap::new(),
-            rdy_id_of_meth: HashMap::new(),
             insts: Vec::new(),
             fe: ForeignEnv::new(),
             dyn_strs: Vec::new(),
@@ -887,13 +883,6 @@ impl Interp {
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
-        it.str_by_name = it
-            .d
-            .strings
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (s.clone(), i as StrId))
-            .collect();
         it.vcd_trace = it.d.uses_wave_tasks;
         let top_mod = it.mod_by_name[&it.d.top];
         // the top module's reset inputs are all the kernel-driven reset
@@ -1612,15 +1601,15 @@ impl Interp {
                     None => Value::from_u64(1, 1),
                 }
             }
-            Expr::MethCall { width, instance, method, args, .. } => {
+            Expr::MethCall { width, instance, method, port, args } => {
                 let argv: Vec<Value> =
                     args.iter().map(|a| self.eval(inst, ctx, a)).collect();
                 let child = self.child_of(inst, *instance);
-                self.call_value(child, *method, &argv, *width)
+                self.call_value(child, *method, *port, &argv, *width)
             }
             Expr::MethValue { width, instance, method } => {
                 let child = self.child_of(inst, *instance);
-                self.call_value(child, *method, &[], *width)
+                self.call_value(child, *method, 0, &[], *width)
             }
             Expr::TaskValue { width, cookie } => {
                 // value produced by the paired Task action earlier in this
@@ -1632,7 +1621,8 @@ impl Interp {
                     .unwrap_or_else(|| Value::undet(*width))
             }
             Expr::ForeignCall { width, func, args } => {
-                let fname = self.s(*func).to_string();
+                // Arc clone, not a String: this runs per evaluated call
+                let fname = self.arg_str(*func);
                 let argv: Vec<Arg> = args
                     .iter()
                     .map(|a| self.eval_arg(inst, ctx, a, false))
@@ -1904,7 +1894,14 @@ impl Interp {
         a
     }
 
-    fn call_value(&mut self, callee: usize, method: StrId, argv: &[Value], w: u32) -> Value {
+    fn call_value(
+        &mut self,
+        callee: usize,
+        method: StrId,
+        port: u32,
+        argv: &[Value],
+        w: u32,
+    ) -> Value {
         if self.census.is_some() {
             if let InstKind::Prim(_) = &self.insts[callee].kind {
                 if let Some(c) = self.census.as_mut() {
@@ -1921,7 +1918,7 @@ impl Interp {
                 // the FloatTest malloc profile (disjoint fields, so
                 // the &mut prim borrow tolerates it)
                 let mname: &str = &self.d.strings[method as usize];
-                let r = p.value_method(mname, argv, self.now);
+                let r = p.value_method(mname, port, argv, self.now);
                 if self.trace_events {
                     let path = self.insts[callee].path.clone();
                     eprintln!("[{}] {}.{} -> {}", self.cycle, path, mname,
@@ -1952,7 +1949,7 @@ impl Interp {
         }
     }
 
-    fn call_action(&mut self, callee: usize, method: StrId, argv: &[Value]) {
+    fn call_action(&mut self, callee: usize, method: StrId, port: u32, argv: &[Value]) {
         if self.trace_events {
             if let InstKind::Prim(_) = &self.insts[callee].kind {
                 let mname = self.d.strings[method as usize].clone();
@@ -1973,7 +1970,7 @@ impl Interp {
                 // borrow, don't clone (same disjoint-fields fix as
                 // call_value; per-event-tax audit finding 3)
                 let mname: &str = &self.d.strings[method as usize];
-                p.action_method(mname, argv, self.now);
+                p.action_method(mname, port, argv, self.now);
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -2004,48 +2001,32 @@ impl Interp {
         }
     }
 
-    /// check_rdy for an always_enabled method: the C++ wraps the body in
-    /// `if (RDY_<m> port)` (cvtIFace), so evaluate the sibling RDY_<m>
-    /// method — the always_enabled method's own `ready` expr can
-    /// reference defs bsc dropped along with the caller-side condition.
-    /// No RDY method exported = constant ready.
-    /// The interned id of a method's companion EN_/RDY_ signal, or None
-    /// where the design exports no such signal.
-    fn derived_id(&mut self, method: StrId, prefix: &str) -> Option<StrId> {
-        let cached = if prefix == "EN_" {
-            self.en_id_of_meth.get(&method).copied()
-        } else {
-            self.rdy_id_of_meth.get(&method).copied()
-        };
-        if let Some(v) = cached {
+    /// The interned id of a method's companion EN_ signal, or None where
+    /// the design exports no such signal.
+    fn en_id_of(&mut self, method: StrId) -> Option<StrId> {
+        if let Some(v) = self.en_id_of_meth.get(&method).copied() {
             return v;
         }
-        let name = format!("{prefix}{}", self.s(method));
-        let v = self.str_by_name.get(&name).copied();
-        if prefix == "EN_" {
-            self.en_id_of_meth.insert(method, v);
-        } else {
-            self.rdy_id_of_meth.insert(method, v);
-        }
+        let name = format!("EN_{}", self.s(method));
+        let v = self.d.str_id(&name);
+        self.en_id_of_meth.insert(method, v);
         v
     }
 
-    fn en_id_of(&mut self, method: StrId) -> Option<StrId> {
-        self.derived_id(method, "EN_")
-    }
-
-    fn rdy_id_of(&mut self, method: StrId) -> Option<StrId> {
-        self.derived_id(method, "RDY_")
-    }
-
+    /// check_rdy for an always_enabled method: the C++ wraps the body in
+    /// `if (RDY_<m> port)` (cvtIFace), so evaluate the sibling RDY method
+    /// — the always_enabled method's own `ready` expr can reference defs
+    /// bsc dropped along with the caller-side condition.  No RDY method
+    /// exported = constant ready.
     fn always_en_rdy(&mut self, callee: usize, module: usize, method: StrId) -> bool {
-        let Some(id) = self.rdy_id_of(method) else {
+        let mir = self.mods[module].ir;
+        let Some(&mi) = self.mods[module].methods.get(&method) else {
             return true;
         };
-        if !self.mods[module].methods.contains_key(&id) {
+        let Some(id) = self.d.modules[mir].methods[mi].rdy else {
             return true;
-        }
-        self.call_value(callee, id, &[], 1).as_u64() & 1 == 1
+        };
+        self.call_value(callee, id, 0, &[], 1).as_u64() & 1 == 1
     }
 
     /// Record that an action/actionvalue method fired this pass: the C++
@@ -2203,20 +2184,21 @@ impl Interp {
     fn exec_action(&mut self, inst: usize, ctx: &mut Ctx, a: &Action) {
         // no finished check — see exec_stmt
         match a {
-            Action::MethCall { instance, method, cond, args, .. } => {
+            Action::MethCall { instance, method, port, cond, args } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
                 let argv: Vec<Value> =
                     args.iter().map(|x| self.eval(inst, ctx, x)).collect();
                 let child = self.child_of(inst, *instance);
-                self.call_action(child, *method, &argv);
+                self.call_action(child, *method, *port, &argv);
             }
             Action::Foreign { func, cond, args, signed } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
-                let fname = self.s(*func).to_string();
+                // Arc clone, not a String: this runs per evaluated call
+                let fname = self.arg_str(*func);
                 let argv: Vec<Arg> = args
                     .iter()
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
@@ -2229,7 +2211,8 @@ impl Interp {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
-                let fname = self.s(*func).to_string();
+                // Arc clone, not a String: this runs per evaluated call
+                let fname = self.arg_str(*func);
                 let argv: Vec<Arg> = args
                     .iter()
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
@@ -2567,7 +2550,7 @@ impl Interp {
             }
             // the method function writes its own EN/arg/result ports
             let en = format!("EN_{}", self.s(me.name));
-            if let Some(&en_id) = self.str_by_name.get(&en) {
+            if let Some(en_id) = self.d.str_id(&en) {
                 usage.entry(en_id).or_default().insert(fk);
             }
             for a in &me.args {
@@ -2579,17 +2562,20 @@ impl Interp {
             // an action method's function writes its WILL_FIRE def
             // (cvtIFace wf_stmts); whether the schedule also reads it
             // (rule inhibitors) falls out of the rule-cone marking above
-            if me.kind != ir::MethodKind::Value {
-                let wf = format!("WILL_FIRE_{}", self.s(me.name));
-                if let Some(&id) = self.str_by_name.get(&wf) {
-                    if defs_by_name.contains_key(&id) {
-                        usage.entry(id).or_default().insert(fk);
-                    }
+            if let Some(id) = me.will_fire {
+                if defs_by_name.contains_key(&id) {
+                    usage.entry(id).or_default().insert(fk);
                 }
             }
         }
 
         // member selection
+        // the action method each WILL_FIRE def belongs to
+        let wf_owner: HashMap<StrId, StrId> = m
+            .methods
+            .iter()
+            .filter_map(|me| me.will_fire.map(|wf| (wf, me.name)))
+            .collect();
         let mut members: Vec<ModVar> = Vec::new();
         for rst in &m.resets {
             if let Expr::Port(n) = &rst.wire {
@@ -2620,16 +2606,9 @@ impl Interp {
                 let dname = self.s(d.name).to_string();
                 // an action method's WILL_FIRE follows the call, like EN
                 // (the schedule zeroes it each edge, the call sets it)
-                let src = dname
-                    .strip_prefix("WILL_FIRE_")
-                    .and_then(|rest| {
-                        m.methods
-                            .iter()
-                            .find(|me| {
-                                me.kind != ir::MethodKind::Value && self.s(me.name) == rest
-                            })
-                            .map(|me| VcdSrc::PortEn(me.name))
-                    })
+                let src = wf_owner
+                    .get(&d.name)
+                    .map(|&owner| VcdSrc::PortEn(owner))
                     .unwrap_or(VcdSrc::Def(d.name));
                 let domain = usage
                     .get(&d.name)
@@ -2652,7 +2631,7 @@ impl Interp {
             let is_action = me.kind != ir::MethodKind::Value;
             if is_action {
                 let en = format!("EN_{}", self.s(me.name));
-                if let Some(&en_id) = self.str_by_name.get(&en) {
+                if let Some(en_id) = self.d.str_id(&en) {
                     let n_fns = usage.get(&en_id).map(|s| s.len()).unwrap_or(0);
                     if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
@@ -2859,7 +2838,7 @@ impl Interp {
         }
         // input clock port: chase the parent's binding expression
         if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
-            let pid = self.str_by_name.get(wire).map(|&i| i as usize);
+            let pid = self.d.str_id(wire).map(|i| i as usize);
             if let Some(pid) = pid {
                 if let Some((owner, e)) = clk_binds.get(&(pid as StrId)) {
                     let (owner, e) = (*owner, e.clone());
@@ -3162,17 +3141,26 @@ impl Interp {
         entries
     }
 
+    /// The instance an interned path names.
+    fn inst_of_path(&self, path: StrId) -> usize {
+        let p: &str = &self.d.strings[path as usize];
+        *self
+            .inst_by_path
+            .get(p)
+            .unwrap_or_else(|| panic!("unknown instance {p:?}"))
+    }
+
     /// Resolve qualified cross-inhibit pairs into the (later inst,
     /// later rule) -> earlier-CFs lookup for one interleaving.
     fn resolve_cross(
         &mut self,
-        pairs: &[(StrId, StrId)],
+        pairs: &[(ir::QualRule, ir::QualRule)],
     ) -> BTreeMap<(usize, StrId), Vec<(usize, StrId)>> {
         let mut cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>> =
             BTreeMap::new();
         for (earlier, later) in pairs {
-            let (e_inst, e_rule) = self.split_qual(*earlier);
-            let (l_inst, l_rule) = self.split_qual(*later);
+            let (e_inst, e_rule) = (self.inst_of_path(earlier.instance), earlier.rule);
+            let (l_inst, l_rule) = (self.inst_of_path(later.instance), later.rule);
             let e_mod = self.module_of(e_inst);
             let e_mir = self.mods[e_mod].ir;
             let e_ri = self.mods[e_mod].rules[&e_rule];
@@ -3765,7 +3753,7 @@ impl Interp {
                 let early: HashSet<(usize, StrId)> = comp
                     .early
                     .iter()
-                    .map(|q| self.split_qual(*q))
+                    .map(|q| (self.inst_of_path(q.instance), q.rule))
                     .collect();
                 let entries = self.resolve_entries(&comp.entries, comp.posedge, &early);
                 // cross-inhibit lookup: (later inst, later rule) -> earlier CFs
@@ -3777,10 +3765,7 @@ impl Interp {
                     .alts
                     .iter()
                     .map(|a| {
-                        let gpath = self.s(a.guard_inst).to_string();
-                        let gi = *self.inst_by_path.get(&gpath).unwrap_or_else(|| {
-                            panic!("unknown guard instance path {gpath:?}")
-                        });
+                        let gi = self.inst_of_path(a.guard_inst);
                         RAlt {
                             guard_inst: gi,
                             guard: a.guard.clone(),
@@ -4732,7 +4717,7 @@ impl Interp {
                         {
                             for mi in idxs {
                                 let (m, argv) = self.autofire[mi].clone();
-                                self.call_action(0, m, &argv);
+                                self.call_action(0, m, 0, &argv);
                             }
                         }
                     }
@@ -4813,7 +4798,7 @@ impl Interp {
                             {
                                 for mi in idxs {
                                     let (m, argv) = self.autofire[mi].clone();
-                                    self.call_action(0, m, &argv);
+                                    self.call_action(0, m, 0, &argv);
                                 }
                             }
                         }
@@ -5090,27 +5075,6 @@ impl Interp {
         if self.fe.fataled { 1 } else { 0 }
     }
 
-    /// "a.b.RL_r" -> (instance index of "a.b", rule StrId of "RL_r")
-    fn split_qual(&mut self, q: StrId) -> (usize, StrId) {
-        let s = self.s(q).to_string();
-        let (ipath, rname) = match s.rfind('.') {
-            Some(k) => (&s[..k], &s[k + 1..]),
-            None => ("", s.as_str()),
-        };
-        let inst = *self
-            .inst_by_path
-            .get(ipath)
-            .unwrap_or_else(|| panic!("unknown instance {ipath:?}"));
-        // find the StrId for the local rule name
-        let rid = self
-            .d
-            .strings
-            .iter()
-            .position(|x| x == rname)
-            .unwrap_or_else(|| panic!("unknown rule name {rname:?}"))
-            as StrId;
-        (inst, rid)
-    }
 }
 
 /// dollar_display's Target collects errors with push_front and prints
@@ -5465,7 +5429,7 @@ impl Interp {
         match kind {
             MethPortKind::En => {
                 let en = format!("EN_{}", self.s(method));
-                let id = self.str_by_name.get(&en).map(|&i| i as usize);
+                let id = self.d.str_id(&en).map(|i| i as usize);
                 let mut set = match (&self.insts[i].kind, id) {
                     (InstKind::User { latched, .. }, Some(id)) => {
                         latched.contains_key(&(id as StrId))
@@ -5535,7 +5499,7 @@ impl Interp {
                     if !self.mods[module].defs.contains_key(dn) {
                         let cf = format!("CAN_FIRE_{}", self.s(method));
                         if let Some(id) =
-                            self.str_by_name.get(&cf).map(|&i| i as usize)
+                            self.d.str_id(&cf).map(|i| i as usize)
                         {
                             if self.mods[module].defs.contains_key(&(id as StrId))
                             {

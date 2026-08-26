@@ -91,6 +91,8 @@ pub struct PrimCallSpec {
     /// global instance index of the prim
     pub inst: usize,
     pub method: StrId,
+    /// port the call addresses, for a multi-ported prim method
+    pub port: u32,
     /// argument widths, in order (marshaled as consecutive word runs)
     pub arg_widths: Vec<u32>,
     /// result width (0 = action, no result)
@@ -392,6 +394,7 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
         for pc in v {
             w(o, pc.inst as u32);
             w(o, pc.method);
+            w(o, pc.port);
             w(o, pc.ret_width);
             w(o, pc.is_action as u32);
             w(o, pc.arg_widths.len() as u32);
@@ -465,6 +468,7 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
         for _ in 0..n {
             let inst = r(b, i)? as usize;
             let method = r(b, i)?;
+            let port = r(b, i)?;
             let ret_width = r(b, i)?;
             let is_action = r(b, i)? != 0;
             let argc = r(b, i)?;
@@ -475,7 +479,7 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
             for _ in 0..argc {
                 arg_widths.push(r(b, i)?);
             }
-            v.push(PrimCallSpec { inst, method, arg_widths, ret_width, is_action });
+            v.push(PrimCallSpec { inst, method, port, arg_widths, ret_width, is_action });
         }
         Some(v)
     }

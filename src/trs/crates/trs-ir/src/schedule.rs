@@ -84,9 +84,18 @@ pub struct TickCall {
     pub port: StrId,
 }
 
+/// A rule named from the design root.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct QualRule {
+    /// Interned instance path ("" = the top module).
+    pub instance: StrId,
+    /// The rule's module-local name.
+    pub rule: StrId,
+}
+
 /// The per-link, per-(clock, edge) interleaving of instance segments —
 /// what the top-level edge function executes.  Instance paths are interned
-/// dotted strings ("a.b.c"); rule paths are "a.b.RL_r".
+/// dotted strings ("a.b.c").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Composition {
     /// Interned name of this composition's canonical clock oscillator.
@@ -98,12 +107,12 @@ pub struct Composition {
     pub entries: Vec<CompositionEntry>,
     /// Cross-instance tick order, producers before consumers.
     pub ticks: Vec<QualifiedTick>,
-    /// Clock-crossing rules run in the after-edge function (qualified).
-    pub early: Vec<StrId>,
-    /// Cross-module disjoint pairs (qualified rule paths) whose ME
-    /// inhibitors depend on this composed order: the first rule's CAN_FIRE
-    /// inhibits the second (which executes later in this composition).
-    pub cross_inhibits: Vec<(StrId, StrId)>,
+    /// Clock-crossing rules run in the after-edge function.
+    pub early: Vec<QualRule>,
+    /// Cross-module disjoint pairs whose ME inhibitors depend on this
+    /// composed order: the first rule's CAN_FIRE inhibits the second
+    /// (which executes later in this composition).
+    pub cross_inhibits: Vec<(QualRule, QualRule)>,
     /// Dynamic scheduling (bsc G0100-class designs): guarded alternative
     /// interleavings for this (clock, edge).  The per-cycle execution
     /// order of rules whose cross-boundary ordering constraint is
@@ -136,7 +145,7 @@ pub struct SchedAlt {
     pub entries: Vec<CompositionEntry>,
     /// Order-derived ME inhibitors for THIS interleaving (the base
     /// `cross_inhibits` encode the base order and do not apply).
-    pub cross_inhibits: Vec<(StrId, StrId)>,
+    pub cross_inhibits: Vec<(QualRule, QualRule)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

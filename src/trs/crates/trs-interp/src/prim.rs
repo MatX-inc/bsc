@@ -148,9 +148,9 @@ pub trait Prim {
         None
     }
     /// Value-method call (pure read).
-    fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value;
+    fn value_method(&mut self, method: &str, port: u32, args: &[Value], now: u64) -> Value;
     /// Action-method call (mutates).
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64);
+    fn action_method(&mut self, method: &str, port: u32, args: &[Value], now: u64);
     /// ActionValue-method call.
     fn actionvalue_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         let _ = (method, args, now);
@@ -787,10 +787,10 @@ impl Prim for Probe {
         let v = self.value.clone();
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("Probe: unknown value method {method:?}")
     }
-    fn action_method(&mut self, _method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, _method: &str, _port: u32, args: &[Value], _now: u64) {
         if let Some(v) = args.first() {
             self.value = v.clone();
         }
@@ -802,10 +802,10 @@ impl Prim for Probe {
 struct ProbeWire;
 
 impl Prim for ProbeWire {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("ProbeWire: unknown value method {method:?}")
     }
-    fn action_method(&mut self, _method: &str, _args: &[Value], _now: u64) {}
+    fn action_method(&mut self, _method: &str, _port: u32, _args: &[Value], _now: u64) {}
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
 }
 
@@ -815,13 +815,13 @@ struct ResetToBool {
 }
 
 impl Prim for ResetToBool {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "isAsserted" | "_read" | "read" => Value::from_u64(1, self.in_reset as u64),
             m => panic!("ResetToBool: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("ResetToBool: unknown action method {method:?}")
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
@@ -1189,7 +1189,7 @@ impl Prim for Counter {
         self.vcd_back = Some(back);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         match method {
             "value" | "_read" => {
                 if self.get_saved_at() == now {
@@ -1201,7 +1201,7 @@ impl Prim for Counter {
             m => panic!("Counter: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         if self.suppressed() {
             return;
         }
@@ -1880,7 +1880,7 @@ impl Prim for RegFile {
         ks.sort_unstable();
         Some(ks)
     }
-    fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) -> Value {
         match method {
             "sub" => {
                 let a = args[0].as_u64();
@@ -1934,7 +1934,7 @@ impl Prim for RegFile {
             m => panic!("RegFile: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "upd" => {
                 let a = args[0].as_u64();
@@ -2137,7 +2137,7 @@ impl Prim for LatchCrossingReg {
         self.vcd_back = Some((self.d_latch.clone(), self.s_flop.clone()));
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         match method {
             "read" | "_read" => self.s_flop.clone(),
             "crossed" => {
@@ -2154,7 +2154,7 @@ impl Prim for LatchCrossingReg {
             m => panic!("LatchCrossingReg: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "write" | "_write" => {
                 if !self.in_reset {
@@ -2230,7 +2230,7 @@ impl Prim for DualPortRam {
     fn class_name(&self) -> &'static str {
         "DualPortRam"
     }
-    fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) -> Value {
         match method {
             "read" | "sub" => {
                 let addr = args[0].as_u64();
@@ -2243,7 +2243,7 @@ impl Prim for DualPortRam {
             m => panic!("DualPortRam: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "write" | "upd" => {
                 let addr = args[0].as_u64();
@@ -2376,7 +2376,7 @@ impl Prim for Reg {
         vec![PrimSym { key: "", width: self.width, range: None }]
     }
     fn sym_read(&mut self, key: &str, now: u64) -> Option<Value> {
-        (key.is_empty()).then(|| self.value_method("read", &[], now))
+        (key.is_empty()).then(|| self.value_method("read", 0, &[], now))
     }
     fn vcd_defs(
         &mut self,
@@ -2398,7 +2398,7 @@ impl Prim for Reg {
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         match method {
             "read" | "get" | "_read" => self.load(),
             // crossing read: a same-instant write is not yet visible
@@ -2419,7 +2419,7 @@ impl Prim for Reg {
             m => panic!("Reg: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "write" | "set" | "put" | "_write" => {
                 // sync-reset registers never suppress writes — the reset
@@ -2546,13 +2546,13 @@ impl RegAligned {
 }
 
 impl Prim for RegAligned {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "read" | "_read" => self.value.clone(),
             m => panic!("RegAligned: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "write" | "_write" => {
                 // METH__write (bs_prim_mod_reg.h:284): stage the value;
@@ -2705,7 +2705,7 @@ impl Prim for ConfigReg {
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         self.refresh();
         match method {
             "read" | "get" => {
@@ -2718,7 +2718,7 @@ impl Prim for ConfigReg {
             m => panic!("ConfigReg: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "write" | "set" | "put" => {
                 if self.async_rst && self.suppress {
@@ -2941,14 +2941,14 @@ impl Prim for RWire {
         self.vcd_back = Some((written, self.value.clone()));
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "whas" => Value::from_u64(1, self.get_valid() as u64),
             "wget" => self.get_value(),
             m => panic!("RWire: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], _now: u64) {
         match method {
             "wset" | "send" => {
                 if self.width > 0 {
@@ -3049,14 +3049,14 @@ impl Prim for BypassWire {
     fn class_name(&self) -> &'static str {
         "BypassWire"
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "wget" | "read" => self.get_value(),
             "whas" => Value::from_u64(1, 1),
             m => panic!("BypassWire: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], _now: u64) {
         match method {
             // zero-width wires (BypassWire0) are set with no argument
             "wset" | "write" => {
@@ -3099,6 +3099,11 @@ impl Prim for BypassWire {
 
 // ===============
 
+/// Ports a CReg has.  Five is the language's limit, not a modelling
+/// choice: `mkCReg` rejects more at elaboration (PreludeBSV.bsv).  The
+/// reference models the same five (`bs_prim_mod_reg.h`, `ArenaKind::CReg5`).
+const CREG_PORTS: usize = 5;
+
 /// CReg with up to 5 ports (bs_prim_mod_reg.h:817): sequential port
 /// writes are immediate; tick commits the registered view.
 struct CReg {
@@ -3139,9 +3144,9 @@ impl CReg {
             async_rst,
             suppress: false,
             slot: None,
-            write_val: (0..5).map(|_| Value::undet(width)).collect(),
-            did_write: vec![false; 5],
-            did_write_rec: vec![false; 5],
+            write_val: (0..CREG_PORTS).map(|_| Value::undet(width)).collect(),
+            did_write: vec![false; CREG_PORTS],
+            did_write_rec: vec![false; CREG_PORTS],
             read_val0: Value::undet(width),
             vcd_base: 0,
             vcd_back: None,
@@ -3215,11 +3220,11 @@ impl Prim for CReg {
         // bs_prim_mod_reg.h:989-1022: parent-scope alias shares Q_OUT_0's
         // id; per-port Q_OUT_i/EN_i/D_IN_i, all clock-backdated
         let bits = self.value.width;
-        let mut n = w.reserve_ids(3 * 5);
+        let mut n = w.reserve_ids(3 * CREG_PORTS as u32);
         self.vcd_base = n;
         w.write_def(n, name, bits);
         w.scope_start(name, None);
-        for i in 0..5 {
+        for i in 0..CREG_PORTS {
             w.set_clock(n, clk);
             w.write_def(n, &format!("Q_OUT_{i}"), bits);
             n += 1;
@@ -3244,9 +3249,9 @@ impl Prim for CReg {
         let bit = |b: bool| Value::from_u64(1, b as u64);
         let mut num = self.vcd_base;
         // chained Q_OUT values: port i sees earlier ports' writes
-        let mut qouts: Vec<Value> = Vec::with_capacity(5);
+        let mut qouts: Vec<Value> = Vec::with_capacity(CREG_PORTS);
         let mut tmp = self.read_val0.clone();
-        for i in 0..5 {
+        for i in 0..CREG_PORTS {
             qouts.push(tmp.clone());
             if self.did_write_rec[i] {
                 tmp = self.write_val[i].clone();
@@ -3254,7 +3259,7 @@ impl Prim for CReg {
         }
         match dt {
             D::Xs => {
-                for _ in 0..5 {
+                for _ in 0..CREG_PORTS {
                     w.write_x(num, bits, now);
                     num += 1;
                     w.write_x(num, 1, now);
@@ -3266,12 +3271,12 @@ impl Prim for CReg {
             D::Changes => {
                 let (bq, be, bd) = self.vcd_back.clone().unwrap_or_else(|| {
                     (
-                        (0..5).map(|_| Value::undet(bits)).collect(),
-                        vec![false; 5],
-                        (0..5).map(|_| Value::undet(bits)).collect(),
+                        (0..CREG_PORTS).map(|_| Value::undet(bits)).collect(),
+                        vec![false; CREG_PORTS],
+                        (0..CREG_PORTS).map(|_| Value::undet(bits)).collect(),
                     )
                 });
-                for i in 0..5 {
+                for i in 0..CREG_PORTS {
                     if qouts[i] != bq[i] {
                         w.write_val(num, &qouts[i], now);
                     }
@@ -3287,7 +3292,7 @@ impl Prim for CReg {
                 }
             }
             _ => {
-                for i in 0..5 {
+                for i in 0..CREG_PORTS {
                     w.write_val(num, &qouts[i], now);
                     num += 1;
                     w.write_val(num, &bit(self.did_write_rec[i]), now);
@@ -3301,28 +3306,21 @@ impl Prim for CReg {
             Some((qouts, self.did_write_rec.clone(), self.write_val.clone()));
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
-        // portK__read returns the live value (port 0 sees the registered
-        // value at cycle start because nothing has written yet)
-        if method.starts_with("port") && method.ends_with("__read") {
-            self.load_val()
-        } else {
-            panic!("CReg: unknown value method {method:?}")
-        }
+    fn value_method(&mut self, _method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
+        // a CReg's only value method is a port read, and it returns the
+        // live value (port 0 sees the registered value at cycle start
+        // because nothing has written yet)
+        self.load_val()
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
-        if method.starts_with("port") && method.ends_with("__write") {
-            if !(self.async_rst && self.suppress) {
-                self.store_val(args[0].clone());
-                let i = method.as_bytes()[4].saturating_sub(b'0') as usize;
-                if i < 5 {
-                    self.did_write[i] = true;
-                    self.write_val[i] = args[0].clone();
-                }
-            }
-        } else {
-            panic!("CReg: unknown action method {method:?}")
+    fn action_method(&mut self, _method: &str, port: u32, args: &[Value], _now: u64) {
+        // ...and its only action method is a port write
+        if self.async_rst && self.suppress {
+            return;
         }
+        self.store_val(args[0].clone());
+        let i = port as usize;
+        self.did_write[i] = true;
+        self.write_val[i] = args[0].clone();
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
         if !gate { return; }
@@ -3330,7 +3328,7 @@ impl Prim for CReg {
         self.read_val0 = self.load_val_reg();
         let v = self.load_val();
         self.store_val_reg(v);
-        for i in 0..5 {
+        for i in 0..CREG_PORTS {
             self.did_write_rec[i] = self.did_write[i];
             self.did_write[i] = false;
         }
@@ -3829,7 +3827,7 @@ impl Prim for Fifo {
         self.vcd_back = Some(back);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         self.refresh();
         match method {
             "first" => self.data[self.fst].clone(),
@@ -3858,7 +3856,7 @@ impl Prim for Fifo {
             m => panic!("FIFO: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         self.refresh();
         if method == "enq" && !self.zero_width {
             // saved for VCD display before suppress/guard checks
@@ -4021,10 +4019,10 @@ impl Prim for ClockGen {
         w.write_def(clk_vcd_id, "CLK_OUT", 1);
         w.scope_end();
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("ClockGen: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("ClockGen: unknown action method {method:?}")
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
@@ -4165,7 +4163,7 @@ impl Prim for SyncBit {
         self.vcd_back = Some((self.d1.clone(), self.d2.clone(), ss));
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "read" | "_read" => {
                 if self.two_stage {
@@ -4177,7 +4175,7 @@ impl Prim for SyncBit {
             m => panic!("SyncBit: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "send" | "write" | "_write" => {
                 if !self.in_reset {
@@ -4294,13 +4292,13 @@ impl Prim for SyncPulse {
             Some((cur[0].clone(), cur[1].clone(), cur[2].clone(), cur[3].clone()));
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "pulse" | "read" | "_read" => self.d2.xor(&self.d_pulse, 1),
             m => panic!("SyncPulse: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) {
         match method {
             "send" => {
                 if !self.in_reset {
@@ -4570,14 +4568,14 @@ impl Prim for SyncHandshake {
         self.hs.vcd_dump(w, dt, now);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         match method {
             "pulse" | "read" | "_read" => Value::from_u64(1, self.hs.pulse(now) as u64),
             "RDY_send" => Value::from_u64(1, self.hs.rdy_send() as u64),
             m => panic!("SyncHandshake: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         match method {
             "send" => self.hs.send(),
             m => panic!("SyncHandshake: unknown action method {m:?}"),
@@ -4686,14 +4684,14 @@ impl Prim for SyncReg {
         self.hs.vcd_dump(w, dt, now);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "read" | "_read" => self.d_out.clone(),
             "RDY_write" => Value::from_u64(1, self.hs.rdy_send() as u64),
             m => panic!("SyncReg: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "write" | "_write" => {
                 self.data.write(args[0].clone(), now);
@@ -4839,10 +4837,10 @@ impl Prim for SyncReset {
         }
         self.vcd_back = Some((self.in_reset, self.count));
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("SyncReset: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("SyncReset: unknown action method {method:?}")
     }
     fn tick(&mut self, port: &str, _now: u64, _clk_val: bool, gate: bool) {
@@ -4872,10 +4870,10 @@ impl SyncReset0 {
 }
 
 impl Prim for SyncReset0 {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("SyncReset0: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("SyncReset0: unknown action method {method:?}")
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
@@ -4914,10 +4912,10 @@ impl Prim for InitialReset {
         w.scope_start(name, None);
         w.scope_end();
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("InitialReset: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("InitialReset: unknown action method {method:?}")
     }
     fn tick(&mut self, port: &str, _now: u64, _clk_val: bool, gate: bool) {
@@ -5016,13 +5014,13 @@ impl Prim for MakeReset {
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "isAsserted" => Value::from_u64(1, (self.rst == 0) as u64),
             m => panic!("MakeReset: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) {
         match method {
             "assertReset" => {
                 if !self.in_reset {
@@ -5172,14 +5170,14 @@ impl Prim for MakeClock {
     fn gate_out(&self) -> bool {
         self.gate_out
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "getClockValue" => Value::from_u64(1, self.current_high as u64),
             "getGateCond" => Value::from_u64(1, self.new_gate as u64),
             m => panic!("MakeClock: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], _now: u64) {
         match method {
             "setClockValue" => {
                 if !self.in_reset {
@@ -5323,13 +5321,13 @@ impl Prim for ClockDivider {
     fn gate_out(&self) -> bool {
         self.gate_out
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "clockReady" => Value::from_u64(1, (self.cntr == self.transition - 1) as u64),
             m => panic!("ClockDiv: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("ClockDiv: unknown action method {method:?}")
     }
     fn tick(&mut self, port: &str, _now: u64, _clk_val: bool, gate: bool) {
@@ -5472,13 +5470,13 @@ impl Prim for ClockInverter {
     fn gate_out(&self) -> bool {
         self.gate_out
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "clockReady" => Value::from_u64(1, 1),
             m => panic!("ClockInverter: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("ClockInverter: unknown action method {method:?}")
     }
     fn tick(&mut self, port: &str, _now: u64, clk_val: bool, gate: bool) {
@@ -5723,7 +5721,7 @@ impl SyncFifo {
 }
 
 impl Prim for SyncFifo {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "notEmpty" | "dNotEmpty" | "RDY_first" | "RDY_deq" => {
                 Value::from_u64(1, self.meth_not_empty() as u64)
@@ -5739,7 +5737,7 @@ impl Prim for SyncFifo {
             m => panic!("SyncFIFO: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "enq" => {
                 if self.width > 0 {
@@ -6305,7 +6303,7 @@ impl Prim for Bram {
         self.vcd_back = Some((back_a, back_b));
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         let read = |port_b: bool| -> Value {
             if self.slot.is_some() {
                 let w = self.vwords();
@@ -6324,7 +6322,7 @@ impl Prim for Bram {
             m => panic!("BRAM: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "put" | "a_put" => {
                 let wens = args[0].clone();
@@ -6519,10 +6517,10 @@ impl ResetMux {
 }
 
 impl Prim for ResetMux {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("ResetMux: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], _now: u64) {
         match method {
             "select" => self.new_sel_a = args[0].as_bool(),
             m => panic!("ResetMux: unknown action method {m:?}"),
@@ -6582,10 +6580,10 @@ impl ResetEither {
 }
 
 impl Prim for ResetEither {
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("ResetEither: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, _args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) {
         panic!("ResetEither: unknown action method {method:?}")
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
@@ -6677,13 +6675,13 @@ impl Prim for GatedClock {
     fn gate_out(&self) -> bool {
         self.gate_out
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         match method {
             "getGateCond" => Value::from_u64(1, self.reg as u64),
             m => panic!("GatedClock: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], _now: u64) {
         match method {
             "setGateCond" => {
                 if !self.suppress {
@@ -6793,7 +6791,7 @@ impl Prim for RegTwo {
         vcd_flat_dump(w, dt, now, self.vcd_id, &v, &mut self.vcd_back);
     }
 
-    fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], now: u64) -> Value {
         match method {
             "get" | "read" => {
                 if self.written == now {
@@ -6805,7 +6803,7 @@ impl Prim for RegTwo {
             m => panic!("RegTwo: unknown value method {m:?}"),
         }
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         if self.async_rst && self.suppress {
             return;
         }
@@ -6888,10 +6886,10 @@ impl Prim for ClockMux {
     fn gate_out(&self) -> bool {
         self.gate_out
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("ClockMux: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], _now: u64) {
         match method {
             "select" => {
                 self.sel_a = args[0].as_bool();
@@ -7002,10 +7000,10 @@ impl Prim for ClockSelect {
     fn gate_out(&self) -> bool {
         self.gate_out
     }
-    fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+    fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
         panic!("ClockSelect: unknown value method {method:?}")
     }
-    fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
+    fn action_method(&mut self, method: &str, _port: u32, args: &[Value], now: u64) {
         match method {
             "select" => {
                 self.last_now = now;

@@ -15,14 +15,18 @@ pub mod expr;
 pub mod schedule;
 pub mod verify;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 pub use expr::{Action, Expr, PrimOp, Stmt};
-pub use schedule::{Composition, ModuleSchedule, SchedAlt, SchedNode, Schedule, Segment};
+pub use schedule::{
+    Composition, ModuleSchedule, QualRule, SchedAlt, SchedNode, Schedule, Segment,
+};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 3;
+pub const BIR_VERSION: u32 = 4;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -48,7 +52,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 3;
+const SNAP_LAYOUT_REV: u32 = 4;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -191,6 +195,11 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
 pub struct Design {
     /// String table; all `StrId`s index into this.
     pub strings: Vec<String>,
+    /// Reverse of `strings`, so a name resolves to its id without a
+    /// scan.  Read it through `str_id`.  Derived, not serialized: the
+    /// decode paths build it.
+    #[serde(skip)]
+    str_ids: HashMap<String, StrId>,
     /// Whether the design calls a wave-recording task ($dumpvars and
     /// family).  A fact recorded by the exporter, where rule bodies are
     /// plain data: the runtime sees them deferred behind `Lazy`, and the
@@ -390,6 +399,12 @@ pub struct Method {
     /// backend's cvtIFace check_rdy wrapper).
     #[serde(default)]
     pub always_enabled: bool,
+    /// The sibling method carrying this one's ready signal, when the
+    /// module exports one; None = constant ready.
+    pub rdy: Option<StrId>,
+    /// The def this method's function writes to record that it fired
+    /// (cvtIFace wf_stmts).  Action and ActionValue methods only.
+    pub will_fire: Option<StrId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -544,8 +559,9 @@ impl Design {
         SNAP_BLOB
             .with(|b| *b.borrow_mut() = Some(std::sync::Arc::new(blob.to_vec())));
         // caller's thread on purpose — see snap_encode's NOTE
-        let d: Design = bincode::deserialize(design).ok()?;
+        let mut d: Design = bincode::deserialize(design).ok()?;
         drop(_g);
+        d.index_strings();
         verify::verify(&d).ok()?;
         Some(d)
     }
@@ -565,11 +581,30 @@ impl Design {
         }
         // deep expression trees (long fold chains) exceed ciborium's
         // default recursion limit of 128
-        let design: Design =
+        let mut design: Design =
             ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
                 .map_err(|e| DecodeError::Cbor(e.to_string()))?;
+        design.index_strings();
         verify::verify(&design).map_err(DecodeError::Invalid)?;
         Ok(design)
+    }
+
+    /// Build `str_ids` from `strings`.  Every path that produces a
+    /// Design must call this — the field is derived, so neither the
+    /// CBOR body nor the snapshot image carries it.
+    fn index_strings(&mut self) {
+        self.str_ids = self
+            .strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as StrId))
+            .collect();
+    }
+
+    /// The id of an interned string, or None if the design has no such
+    /// string.
+    pub fn str_id(&self, name: &str) -> Option<StrId> {
+        self.str_ids.get(name).copied()
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -592,6 +627,7 @@ mod tests {
     fn tiny_design() -> Design {
         Design {
             strings: vec!["mkTop".into()],
+            str_ids: HashMap::new(),
             uses_wave_tasks: false,
             top: 0,
             modules: vec![Module {

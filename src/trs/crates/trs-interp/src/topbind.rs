@@ -242,11 +242,11 @@ pub(crate) fn resolve(
             }
         }
         // always_enabled implies RDY constant true: assert it at arm
-        // time via the sibling RDY_<m> method (what check_rdy
-        // evaluates; absent = constant ready).  The result is
-        // typically a def reference to a constant def — chase the
-        // chain rather than pattern-matching one shape.
-        if let Some(&rdy_id) = sidx.get(format!("RDY_{}", s(m.name)).as_str()) {
+        // time via the sibling RDY method (what check_rdy evaluates;
+        // absent = constant ready).  The result is typically a def
+        // reference to a constant def — chase the chain rather than
+        // pattern-matching one shape.
+        if let Some(rdy_id) = m.rdy {
             if let Some(rm) = top.methods.iter().find(|x| x.name == rdy_id) {
                 let const_true = match &rm.result {
                     None => true,
