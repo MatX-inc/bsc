@@ -377,7 +377,9 @@ fn main() -> ExitCode {
                         )
                     }
                 }
-                return link_interactive(path, &base, interp.top_name());
+                return link_interactive(
+                    path, &base, interp.top_name(), &fmt_arg,
+                );
             }
             if exe {
                 // artifact-as-executable: <base> becomes a real PIE
@@ -1403,7 +1405,12 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
 /// with the BIR embedded via incbin) and <base>, the same bluesim.tcl
 /// wrapper the reference emits — `sim load`-able by stock bluetcl and
 /// runnable by the interactive testsuite unchanged.
-fn link_interactive(bir_path: &str, base: &str, top: &str) -> ExitCode {
+fn link_interactive(
+    bir_path: &str,
+    base: &str,
+    top: &str,
+    formats: &str,
+) -> ExitCode {
     let fail = |m: String| {
         eprintln!("trs link --interactive: {m}");
         ExitCode::FAILURE
@@ -1448,9 +1455,16 @@ fn link_interactive(bir_path: &str, base: &str, top: &str) -> ExitCode {
         }
     }
     // the reference's wrapper, verbatim shape (bsc.hs writeBluesimWrapper)
+    // Which writers the model carries is a link-time decision the
+    // model itself cannot see: bk_init reads it from the environment,
+    // and absent it takes the historical default of vcd alone.  The
+    // fast wrapper exports this in its -c/-f dispatch for the same
+    // reason; without it here, `sim fst` on a model linked
+    // -dump-formats fst answers that it has no FST support.
     let wrapper = format!(
         r##"#!/bin/sh
 
+TRS_CAPI_FORMATS="{formats}"; export TRS_CAPI_FORMATS
 BLUESPECDIR=`echo 'puts $env(BLUESPECDIR)' | bluetcl`
 
 for arg in $@

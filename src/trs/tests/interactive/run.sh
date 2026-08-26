@@ -73,7 +73,15 @@ build() { # src top [flags and/or C link files]...
     for c in $cfiles; do bdpi="$bdpi --bdpi $c"; done
     $TRSBIR $birflags $bdpi "$top" >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (trs-bir)"; fail=1; return 1; }
-    "$TRS" link "$top.bir" --interactive -o "trs_$top" \
+    # which waveform writers a model carries is a link-time contract on
+    # both sides, so the trs link is told what the reference was told
+    trsfmt=""
+    prev=""
+    for a in $flags; do
+        [ "$prev" = "-dump-formats" ] && trsfmt="--dump-formats $a"
+        prev=$a
+    done
+    "$TRS" link "$top.bir" --interactive $trsfmt -o "trs_$top" \
         > "$top.trs.log" 2>&1 \
         || { echo "FAIL $top (trs link --interactive)"; fail=1; return 1; }
 }
