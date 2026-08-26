@@ -157,8 +157,9 @@ data Flags = Flags {
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
         warnUndetPred :: Bool,
-        -- allow dynamic scheduling (per-cycle order alternatives) for
-        -- the trs backend; classic Bluesim codegen refuses such designs
+        -- record per-cycle order alternatives for rule pairs whose
+        -- order cannot be pinned statically, rather than refusing them;
+        -- a backend that bakes one static order cannot execute the result
         schedDynamic :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time

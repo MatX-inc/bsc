@@ -1470,7 +1470,7 @@ externalFlags = [
 
         ("sched-dynamic",
          (Toggle (\f x -> f {schedDynamic=x}) (showIfTrue schedDynamic),
-          "allow dynamic scheduling (trs backend only)", Hidden)),
+          "record per-cycle order alternatives instead of refusing\n\t\trule pairs that cannot be statically ordered", Hidden)),
 
         ("sched-dot",
          (Toggle (\f x -> f {schedDOT=x}) (showIfTrue schedDOT),
