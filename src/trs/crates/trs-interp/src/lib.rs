@@ -679,6 +679,8 @@ struct Stepper {
     jit: Option<JitPlans>,
 }
 
+
+
 impl Interp {
     /// Identity salt of the top-level bindings, already folded into
     /// `bir_hash` by the loaders: a compiled artifact's stamp must
@@ -892,7 +894,7 @@ impl Interp {
             .enumerate()
             .map(|(i, s)| (s.clone(), i as StrId))
             .collect();
-        it.vcd_trace = it.d.strings.iter().any(|s| s.starts_with("$dump"));
+        it.vcd_trace = it.d.uses_wave_tasks;
         let top_mod = it.mod_by_name[&it.d.top];
         // the top module's reset inputs are all the kernel-driven reset
         let top_binds: HashMap<StrId, usize> = it.d.modules[it.mods[top_mod].ir]

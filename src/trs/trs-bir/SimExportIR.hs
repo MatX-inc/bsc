@@ -64,7 +64,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 2
+birVersion = 3
 
 -- ===============
 -- String interning
@@ -141,10 +141,24 @@ encStr = C.encodeString . T.pack
 -- SimSystem -> BIR
 
 -- | Encode a 'SimSystem' as a BIR design document.
+-- | magic(8) + BIR_VERSION little-endian(4), ahead of the CBOR body.
+--
+-- A reader has to settle the version before it decodes anything: a
+-- schema change makes the body fail to deserialize, and a version
+-- carried inside the body can only be reported after that failure has
+-- already happened.  The last magic byte is the header's own format.
+-- Mirrors BIR_MAGIC / BIR_HEADER in trs-ir.
+birHeader :: L.ByteString
+birHeader = L.pack (magic ++ leWord32 birVersion)
+  where
+    magic = [0x54, 0x52, 0x53, 0x42, 0x49, 0x52, 0x00, 0x01]  -- "TRSBIR\0\1"
+    leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
+                 | k <- [0, 8, 16, 24] ]
+
 simSystemToBir :: Bool -> M.Map String (S.Set AId) -> SimSystem
                -> L.ByteString
 simSystemToBir keepF symMap ssys =
-    CW.toLazyByteString (encDesign keepF symMap ssys)
+    birHeader <> CW.toLazyByteString (encDesign keepF symMap ssys)
 
 -- | Write the design's .bir file.
 writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
@@ -185,8 +199,7 @@ encDesign keepF symMap ssys =
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
           return
-            [ ("version", encW32 birVersion)
-            , ("strings", mempty)   -- placeholder, replaced below
+            [ ("strings", mempty)   -- placeholder, replaced below
             , ("top", encW32 topId)
             , ("modules", encList modsEnc)
             , ("instance_map", encList instEnc)
@@ -195,6 +208,7 @@ encDesign keepF symMap ssys =
             , ("default_clock", encMaybe encW32 clkId)
             , ("default_reset", encMaybe encW32 rstId)
             , ("keep_fires", encBool keepF)
+            , ("uses_wave_tasks", encBool (designUsesWaveTasks pkgs))
             ]
 
         (fields, finalTbl) = runState action emptyStrTable
@@ -229,6 +243,32 @@ data ModSchedInfo = ModSchedInfo
 nodeKey :: SchedNode -> String
 nodeKey (Sched i) = "S:" ++ getIdBaseString i
 nodeKey (Exec i) = "E:" ++ getIdBaseString i
+
+-- | The wave-recording system tasks, as the trs runtime dispatches them.
+waveTaskNames :: S.Set String
+waveTaskNames = S.fromList
+    [ "$dumpfile", "$dumpvars", "$dumpon", "$dumpoff"
+    , "$dumpall", "$dumplimit", "$dumpflush" ]
+
+-- | The name a task-bearing action calls, if it is one.
+taskNameOf :: AAction -> Maybe String
+taskNameOf (AFCall { afcall_fun = f }) = Just f
+taskNameOf (ATaskAction { ataskact_fun = f }) = Just f
+taskNameOf _ = Nothing
+
+-- | Does this design record waveforms?
+--
+-- The runtime cannot answer this for itself: rule bodies reach it
+-- deferred, and the string table it could search holds every interned
+-- string, so a $display of the text "$dumpvars" reads the same as a
+-- call to it.  Here the actions are plain data and the question is
+-- exact.
+designUsesWaveTasks :: [SimPackage] -> Bool
+designUsesWaveTasks pkgs = or
+    [ maybe False (`S.member` waveTaskNames) (taskNameOf a)
+    | p <- pkgs
+    , r <- sp_rules p ++ concatMap aIfaceRules (sp_interface p)
+    , a <- arule_actions r ]
 
 analyzeModule :: S.Set String -> SimPackage -> ModSchedInfo
 analyzeModule pkgNames pkg =

@@ -22,7 +22,17 @@ pub use schedule::{Composition, ModuleSchedule, SchedAlt, SchedNode, Schedule, S
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 2;
+pub const BIR_VERSION: u32 = 3;
+
+/// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
+///
+/// The version has to be readable without decoding the body, or it
+/// cannot do its job: a schema change makes the body fail to
+/// deserialize, and a reader that learns the version from inside the
+/// body reports that failure instead of the mismatch that explains it.
+/// The last magic byte is the header's own format.
+const BIR_MAGIC: &[u8; 8] = b"TRSBIR\0\x01";
+const BIR_HEADER: usize = 12;
 
 /// Snapshot sidecar magic (`<base>.birsnap`, see `Design::snap_encode`).
 /// The trailing byte is the HEADER format; \x02 added the layout rev
@@ -179,9 +189,14 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
 /// A whole linked design: the top module and every module in its hierarchy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Design {
-    pub version: u32,
     /// String table; all `StrId`s index into this.
     pub strings: Vec<String>,
+    /// Whether the design calls a wave-recording task ($dumpvars and
+    /// family).  A fact recorded by the exporter, where rule bodies are
+    /// plain data: the runtime sees them deferred behind `Lazy`, and the
+    /// string table cannot distinguish a call to `$dumpvars` from a
+    /// string literal equal to it.
+    pub uses_wave_tasks: bool,
     pub top: StrId,
     pub modules: Vec<Module>,
     /// Hierarchical instance path -> module name (`ssys_instmap` analogue).
@@ -536,23 +551,31 @@ impl Design {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Design, DecodeError> {
-        // deep expression trees (long fold chains) exceed ciborium's
-        // default recursion limit of 128
-        let design: Design =
-            ciborium::de::from_reader_with_recursion_limit(bytes, 65536)
-                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
-        if design.version != BIR_VERSION {
+        // header first, and completely: everything below assumes a body
+        // this reader understands
+        if bytes.len() < BIR_HEADER || &bytes[..8] != BIR_MAGIC {
+            return Err(DecodeError::Cbor("not a .bir file".to_string()));
+        }
+        let found = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        if found != BIR_VERSION {
             return Err(DecodeError::VersionMismatch {
-                found: design.version,
+                found,
                 expected: BIR_VERSION,
             });
         }
+        // deep expression trees (long fold chains) exceed ciborium's
+        // default recursion limit of 128
+        let design: Design =
+            ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
+                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
         verify::verify(&design).map_err(DecodeError::Invalid)?;
         Ok(design)
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(BIR_HEADER);
+        out.extend_from_slice(BIR_MAGIC);
+        out.extend_from_slice(&BIR_VERSION.to_le_bytes());
         ciborium::into_writer(self, &mut out).expect("CBOR encoding cannot fail");
         out
     }
@@ -568,8 +591,8 @@ mod tests {
 
     fn tiny_design() -> Design {
         Design {
-            version: BIR_VERSION,
             strings: vec!["mkTop".into()],
+            uses_wave_tasks: false,
             top: 0,
             modules: vec![Module {
                 name: 0,
@@ -606,9 +629,9 @@ mod tests {
 
     #[test]
     fn version_check() {
-        let mut d = tiny_design();
-        d.version = BIR_VERSION + 1;
-        let bytes = d.encode();
+        let d = tiny_design();
+        let mut bytes = d.encode();
+        bytes[8..12].copy_from_slice(&(BIR_VERSION + 1).to_le_bytes());
         assert!(matches!(
             Design::decode(&bytes),
             Err(DecodeError::VersionMismatch { .. })
