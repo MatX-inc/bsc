@@ -1308,9 +1308,17 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
         false
     };
     let Some(shared) = find_capi_shared() else {
-        // silent: an install without the shared capi simply has no
-        // script tier — the artifact contract doesn't change
-        return false;
+        // Every other way this can fail says so, and so does this one:
+        // the artifact contract is unchanged either way, but an
+        // artifact quietly missing a documented tier is indisting-
+        // uishable from one that has it.  A lean install reaches here
+        // on purpose; so does a host where `trs capi-so` could not
+        // link, and only the message tells them apart.
+        return note(
+            "no libtrs_capi.so (looked at $TRS_CAPI_SO, then beside \
+             the trs binary and in ../lib)"
+                .to_string(),
+        );
     };
     let Some(shared_dir) = shared.parent().map(std::path::Path::to_path_buf) else {
         return note(format!("{} has no parent directory", shared.display()));
