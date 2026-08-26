@@ -1158,7 +1158,7 @@ fn capi_cc_link(
     // same thing in different shapes
     let export_flags = hostlink::export_list(map, keep)
         .map_err(|e| format!("write {}: {e}", map.display()))?;
-    let mut cc = std::process::Command::new("cc");
+    let mut cc = std::process::Command::new(trs_interp::cc_tool());
     cc.arg("-shared").arg("-fPIC").arg("-o").arg(out);
     for i in inputs {
         cc.arg(i);
@@ -1248,8 +1248,8 @@ fn capi_cc_link(
     }
     match cc.status() {
         Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!("cc exited {s}")),
-        Err(e) => Err(format!("cc: {e}")),
+        Ok(s) => Err(format!("{} exited {s}", trs_interp::cc_tool())),
+        Err(e) => Err(format!("{}: {e}", trs_interp::cc_tool())),
     }
 }
 
@@ -1345,7 +1345,7 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
         Err(e) => return note(format!("write {}: {e}", map.display())),
     };
     let so = format!("{base}.capi.so");
-    let mut cc = std::process::Command::new("cc");
+    let mut cc = std::process::Command::new(trs_interp::cc_tool());
     cc.arg("-shared")
         .arg("-fPIC")
         .arg("-o")
@@ -1368,8 +1368,8 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
     let _ = std::fs::remove_dir_all(&tmp);
     match r {
         Ok(s) if s.success() => {}
-        Ok(s) => return note(format!("cc exited {s}")),
-        Err(e) => return note(format!("cc: {e}")),
+        Ok(s) => return note(format!("{} exited {s}", trs_interp::cc_tool())),
+        Err(e) => return note(format!("{}: {e}", trs_interp::cc_tool())),
     }
     // companions: same-directory RELATIVE symlinks (they survive the
     // whole artifact directory moving together); a filesystem without

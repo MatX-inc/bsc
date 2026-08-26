@@ -982,7 +982,7 @@ fn aot_or_jit_scheds(
 /// artifact .so.
 /// The shared-link driver: TRS_CC overrides (set by `trs link --cc`,
 /// so hermetic builds pin the exact tool instead of PATH's `cc`).
-fn cc_tool() -> String {
+pub fn cc_tool() -> String {
     std::env::var("TRS_CC").unwrap_or_else(|_| "cc".into())
 }
 
@@ -1348,11 +1348,11 @@ fn aot_emit(
             .args(&files)
             .arg(&mf)
             .status()
-            .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
+            .map_err(|e| EmitFail::Infra(format!("{}: {e}", cc_tool())))?;
         if !st.success() {
             std::fs::remove_dir_all(&tmp).ok();
             std::fs::remove_file(&so_tmp).ok();
-            return Err(EmitFail::Infra("cc -shared failed".into()));
+            return Err(EmitFail::Infra(format!("{} -shared failed", cc_tool())));
         }
         std::fs::rename(&so_tmp, so)
             .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
@@ -1388,7 +1388,7 @@ fn aot_emit(
                 .args(["-o"])
                 .arg(&exe_tmp)
                 .status()
-                .map_err(|e| EmitFail::Infra(format!("cc exe: {e}")))?;
+                .map_err(|e| EmitFail::Infra(format!("{} exe: {e}", cc_tool())))?;
             if !st.success() {
                 std::fs::remove_dir_all(&tmp).ok();
                 std::fs::remove_file(&exe_tmp).ok();
@@ -1531,18 +1531,18 @@ fn aot_emit(
     // temp+rename, same discipline as the single-object emit; local
     // function binding for the same reason (see hostlink::local_binding)
     let so_tmp = so.with_extension("so.tmp");
-    let st = std::process::Command::new("cc")
+    let st = std::process::Command::new(cc_tool())
         .arg("-shared")
         .args(crate::hostlink::local_binding())
         .arg("-o")
         .arg(&so_tmp)
         .args(&files)
         .status()
-        .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
+        .map_err(|e| EmitFail::Infra(format!("{}: {e}", cc_tool())))?;
     std::fs::remove_dir_all(&tmp).ok();
     if !st.success() {
         std::fs::remove_file(&so_tmp).ok();
-        return Err(EmitFail::Infra("cc -shared failed".into()));
+        return Err(EmitFail::Infra(format!("{} -shared failed", cc_tool())));
     }
     std::fs::rename(&so_tmp, so)
         .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;

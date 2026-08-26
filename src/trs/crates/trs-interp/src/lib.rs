@@ -31,6 +31,7 @@ pub use topbind::{parse_bind, TopBind};
 #[cfg(feature = "aot")]
 pub mod hostlink;
 mod jit;
+pub use jit::cc_tool;
 #[cfg(feature = "aot")]
 pub use jit::{runcore_bake_commit, RunCoreBake};
 #[cfg(feature = "aot")]
