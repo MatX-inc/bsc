@@ -982,7 +982,7 @@ fn aot_or_jit_scheds(
 /// artifact .so.
 /// The shared-link driver: TRS_CC overrides (set by `trs link --cc`,
 /// so hermetic builds pin the exact tool instead of PATH's `cc`).
-fn cc_tool() -> String {
+pub fn cc_tool() -> String {
     std::env::var("TRS_CC").unwrap_or_else(|_| "cc".into())
 }
 
@@ -1010,6 +1010,7 @@ enum EmitFail {
     /// sched-outline dispatcher
     EdgeOverBudget(std::collections::HashSet<usize>, u64),
 }
+
 
 #[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
@@ -1339,24 +1340,19 @@ fn aot_emit(
         // .so at the final path (it would dlopen-fail or worse on the
         // next run before the gates can judge it)
         let so_tmp = so.with_extension("so.tmp");
-        // -Bsymbolic-functions: the artifact calls its OWN exec/sched
-        // fns, but their symbols must stay dynamically exported (the
-        // table-less loader path dlsyms them) — without local binding
-        // every intra-.so call pays a PLT stub + GOT load (FloatTest:
-        // 415 call sites, 5.5M indirect branches/run).  Function-only
-        // binding keeps the callback DATA globals (trs_cb_*) on their
-        // normal GOT path, which the loader writes through dlsym.
         let st = std::process::Command::new(cc_tool())
-            .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
+            .arg("-shared")
+            .args(crate::hostlink::local_binding())
+            .arg("-o")
             .arg(&so_tmp)
             .args(&files)
             .arg(&mf)
             .status()
-            .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
+            .map_err(|e| EmitFail::Infra(format!("{}: {e}", cc_tool())))?;
         if !st.success() {
             std::fs::remove_dir_all(&tmp).ok();
             std::fs::remove_file(&so_tmp).ok();
-            return Err(EmitFail::Infra("cc -shared failed".into()));
+            return Err(EmitFail::Infra(format!("{} -shared failed", cc_tool())));
         }
         std::fs::rename(&so_tmp, so)
             .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
@@ -1369,9 +1365,9 @@ fn aot_emit(
             // statically-linked LLVM whose constructors cost ~5ms at
             // every exec of the produced binary.
             let rt = if libdir.join("libtrs_rt.so").exists() {
-                "-l:libtrs_rt.so"
+                "libtrs_rt.so"
             } else {
-                "-l:libtrs_capi.so"
+                "libtrs_capi.so"
             };
             let mc = tmp.join("trs_main.c");
             std::fs::write(
@@ -1384,15 +1380,15 @@ fn aot_emit(
                 .arg(&mc)
                 .args(&files)
                 .arg(&mf)
-                .arg("-Wl,--export-dynamic")
-                .arg("-Wl,--no-as-needed")
+                .args(crate::hostlink::export_dynamic())
+                .args(crate::hostlink::no_as_needed())
                 .arg(format!("-L{}", libdir.display()))
-                .arg(rt)
+                .arg(crate::hostlink::link_shared(&libdir.join(rt), rt))
                 .arg(format!("-Wl,-rpath,{}", libdir.display()))
                 .args(["-o"])
                 .arg(&exe_tmp)
                 .status()
-                .map_err(|e| EmitFail::Infra(format!("cc exe: {e}")))?;
+                .map_err(|e| EmitFail::Infra(format!("{} exe: {e}", cc_tool())))?;
             if !st.success() {
                 std::fs::remove_dir_all(&tmp).ok();
                 std::fs::remove_file(&exe_tmp).ok();
@@ -1533,18 +1529,20 @@ fn aot_emit(
     std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
     // temp+rename, same discipline as the single-object emit; local
-    // function binding for the same reason (see the one-module link)
+    // function binding for the same reason (see hostlink::local_binding)
     let so_tmp = so.with_extension("so.tmp");
-    let st = std::process::Command::new("cc")
-        .args(["-shared", "-Wl,-Bsymbolic-functions", "-o"])
+    let st = std::process::Command::new(cc_tool())
+        .arg("-shared")
+        .args(crate::hostlink::local_binding())
+        .arg("-o")
         .arg(&so_tmp)
         .args(&files)
         .status()
-        .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
+        .map_err(|e| EmitFail::Infra(format!("{}: {e}", cc_tool())))?;
     std::fs::remove_dir_all(&tmp).ok();
     if !st.success() {
         std::fs::remove_file(&so_tmp).ok();
-        return Err(EmitFail::Infra("cc -shared failed".into()));
+        return Err(EmitFail::Infra(format!("{} -shared failed", cc_tool())));
     }
     std::fs::rename(&so_tmp, so)
         .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
