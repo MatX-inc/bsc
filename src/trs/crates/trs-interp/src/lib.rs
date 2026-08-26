@@ -153,6 +153,15 @@ pub struct Interp {
     mod_by_name: HashMap<StrId, usize>,
     /// instance path -> instance state index
     inst_by_path: HashMap<String, usize>,
+    /// name -> interned id.  Design::strings is the id->name direction;
+    /// several lookups need the other one, and scanning the table for a
+    /// match is O(strings) per call on paths that run per method call.
+    str_by_name: HashMap<String, StrId>,
+    /// method -> EN_<method> / RDY_<method>.  Asked once per method
+    /// call, and the answer is a property of the design, so the derived
+    /// name is built once rather than on every call.
+    en_id_of_meth: HashMap<StrId, Option<StrId>>,
+    rdy_id_of_meth: HashMap<StrId, Option<StrId>>,
     insts: Vec<Inst>,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
@@ -801,6 +810,9 @@ impl Interp {
             mods,
             mod_by_name,
             inst_by_path: HashMap::new(),
+            str_by_name: HashMap::new(),
+            en_id_of_meth: HashMap::new(),
+            rdy_id_of_meth: HashMap::new(),
             insts: Vec::new(),
             fe: ForeignEnv::new(),
             dyn_strs: Vec::new(),
@@ -873,6 +885,13 @@ impl Interp {
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
+        it.str_by_name = it
+            .d
+            .strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as StrId))
+            .collect();
         it.vcd_trace = it.d.strings.iter().any(|s| s.starts_with("$dump"));
         let top_mod = it.mod_by_name[&it.d.top];
         // the top module's reset inputs are all the kernel-driven reset
@@ -1988,15 +2007,43 @@ impl Interp {
     /// method — the always_enabled method's own `ready` expr can
     /// reference defs bsc dropped along with the caller-side condition.
     /// No RDY method exported = constant ready.
+    /// The interned id of a method's companion EN_/RDY_ signal, or None
+    /// where the design exports no such signal.
+    fn derived_id(&mut self, method: StrId, prefix: &str) -> Option<StrId> {
+        let cached = if prefix == "EN_" {
+            self.en_id_of_meth.get(&method).copied()
+        } else {
+            self.rdy_id_of_meth.get(&method).copied()
+        };
+        if let Some(v) = cached {
+            return v;
+        }
+        let name = format!("{prefix}{}", self.s(method));
+        let v = self.str_by_name.get(&name).copied();
+        if prefix == "EN_" {
+            self.en_id_of_meth.insert(method, v);
+        } else {
+            self.rdy_id_of_meth.insert(method, v);
+        }
+        v
+    }
+
+    fn en_id_of(&mut self, method: StrId) -> Option<StrId> {
+        self.derived_id(method, "EN_")
+    }
+
+    fn rdy_id_of(&mut self, method: StrId) -> Option<StrId> {
+        self.derived_id(method, "RDY_")
+    }
+
     fn always_en_rdy(&mut self, callee: usize, module: usize, method: StrId) -> bool {
-        let rdy_name = format!("RDY_{}", self.s(method));
-        let Some(id) = self.d.strings.iter().position(|x| x == &rdy_name) else {
+        let Some(id) = self.rdy_id_of(method) else {
             return true;
         };
-        if !self.mods[module].methods.contains_key(&(id as StrId)) {
+        if !self.mods[module].methods.contains_key(&id) {
             return true;
         }
-        self.call_value(callee, id as StrId, &[], 1).as_u64() & 1 == 1
+        self.call_value(callee, id, &[], 1).as_u64() & 1 == 1
     }
 
     /// Record that an action/actionvalue method fired this pass: the C++
@@ -2007,17 +2054,16 @@ impl Interp {
         if self.vcd_trace {
             self.vcd_rec_meth_time(callee, method);
         }
-        let en = format!("EN_{}", self.s(method));
-        if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
+        if let Some(en_id) = self.en_id_of(method) {
             if let Some(c) = self.census.as_mut() {
-                c.exec_latch(callee, en_id as StrId, &Value::from_u64(1, 1));
+                c.exec_latch(callee, en_id, &Value::from_u64(1, 1));
             }
             if let InstKind::User { latched, .. } = &mut self.insts[callee].kind {
-                latched.insert(en_id as StrId, Value::from_u64(1, 1));
+                latched.insert(en_id, Value::from_u64(1, 1));
             }
             // JIT body fallback: native scheds read EN from the arena
             if !self.jit_arena_ptr.is_null() {
-                if let Some(&slot) = self.jit_en_slots.get(&(callee, en_id as StrId)) {
+                if let Some(&slot) = self.jit_en_slots.get(&(callee, en_id)) {
                     unsafe { *self.jit_arena_ptr.add(slot as usize) = 1 };
                 }
             }
@@ -2519,8 +2565,8 @@ impl Interp {
             }
             // the method function writes its own EN/arg/result ports
             let en = format!("EN_{}", self.s(me.name));
-            if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
-                usage.entry(en_id as StrId).or_default().insert(fk);
+            if let Some(&en_id) = self.str_by_name.get(&en) {
+                usage.entry(en_id).or_default().insert(fk);
             }
             for a in &me.args {
                 usage.entry(a.name).or_default().insert(fk);
@@ -2533,8 +2579,7 @@ impl Interp {
             // (rule inhibitors) falls out of the rule-cone marking above
             if me.kind != ir::MethodKind::Value {
                 let wf = format!("WILL_FIRE_{}", self.s(me.name));
-                if let Some(id) = self.d.strings.iter().position(|x| x == &wf) {
-                    let id = id as StrId;
+                if let Some(&id) = self.str_by_name.get(&wf) {
                     if defs_by_name.contains_key(&id) {
                         usage.entry(id).or_default().insert(fk);
                     }
@@ -2605,8 +2650,8 @@ impl Interp {
             let is_action = me.kind != ir::MethodKind::Value;
             if is_action {
                 let en = format!("EN_{}", self.s(me.name));
-                if let Some(en_id) = self.d.strings.iter().position(|x| x == &en) {
-                    let n_fns = usage.get(&(en_id as StrId)).map(|s| s.len()).unwrap_or(0);
+                if let Some(&en_id) = self.str_by_name.get(&en) {
+                    let n_fns = usage.get(&en_id).map(|s| s.len()).unwrap_or(0);
                     if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
                             name: en,
@@ -2812,7 +2857,7 @@ impl Interp {
         }
         // input clock port: chase the parent's binding expression
         if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
-            let pid = self.d.strings.iter().position(|x| x == wire);
+            let pid = self.str_by_name.get(wire).map(|&i| i as usize);
             if let Some(pid) = pid {
                 if let Some((owner, e)) = clk_binds.get(&(pid as StrId)) {
                     let (owner, e) = (*owner, e.clone());
@@ -5418,7 +5463,7 @@ impl Interp {
         match kind {
             MethPortKind::En => {
                 let en = format!("EN_{}", self.s(method));
-                let id = self.d.strings.iter().position(|x| x == &en);
+                let id = self.str_by_name.get(&en).map(|&i| i as usize);
                 let mut set = match (&self.insts[i].kind, id) {
                     (InstKind::User { latched, .. }, Some(id)) => {
                         latched.contains_key(&(id as StrId))
@@ -5488,7 +5533,7 @@ impl Interp {
                     if !self.mods[module].defs.contains_key(dn) {
                         let cf = format!("CAN_FIRE_{}", self.s(method));
                         if let Some(id) =
-                            self.d.strings.iter().position(|x| x == &cf)
+                            self.str_by_name.get(&cf).map(|&i| i as usize)
                         {
                             if self.mods[module].defs.contains_key(&(id as StrId))
                             {
