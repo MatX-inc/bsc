@@ -20,19 +20,43 @@ all: install
 # link against (docs/TCL-CAPI.md).
 #
 # The hybrid JIT needs llvm-sys (LLVM 18 dev headers).  The prefix is
-# AUTO-DETECTED via llvm-config-18 so a plain build produces the full
-# product (a lean install silently downgraded every artifact to the
-# interpreter until the perf fence caught it); LLVM_SYS_181_PREFIX in
-# the environment overrides the probe.  Without either, the lean
-# interpreter-only fallback builds (no LLVM required).
-LLVM_SYS_181_PREFIX ?= $(shell llvm-config-18 --prefix 2>/dev/null)
+# AUTO-DETECTED so a plain build produces the full product (a lean
+# install silently downgrades every artifact to the interpreter);
+# LLVM_SYS_181_PREFIX in the environment overrides the probe.  Without
+# either, the lean interpreter-only fallback builds (no LLVM required).
+#
+# The probe takes the first llvm-config that answers "18", because no
+# single name finds it everywhere: distros install llvm-config-18,
+# while Homebrew's llvm@18 is keg-only, so its llvm-config is spelled
+# without a version AND never reaches PATH — the keg has to be asked
+# for by name.  A plain llvm-config counts only when it is an 18.
+# (`case ... in 18.*)` would end the $(shell) early: make balances the
+# parens of an expansion before the shell ever sees the text.)
+LLVM_CONFIG ?= $(shell \
+	for c in llvm-config-18 \
+	         "$$(brew --prefix llvm@18 2>/dev/null)/bin/llvm-config" \
+	         llvm-config; do \
+	  if "$$c" --version 2>/dev/null | grep -q '^18\.'; then \
+	    echo "$$c"; break; \
+	  fi; \
+	done)
+ifneq ($(LLVM_CONFIG),)
+LLVM_SYS_181_PREFIX ?= $(shell $(LLVM_CONFIG) --prefix 2>/dev/null)
+endif
 ifneq ($(LLVM_SYS_181_PREFIX),)
 export LLVM_SYS_181_PREFIX
 TRS_FLAGS = --features jit
 CAPI_FLAGS  =
 else
 # lean fallback: no compile tier, but artifact LOADING stays (aot
-# needs no LLVM) — artifacts built elsewhere run at full speed
+# needs no LLVM) — artifacts built elsewhere run at full speed.
+# Loud, because the product it yields looks identical and runs an
+# order slower: every artifact this build links falls to the
+# interpreter, and the only other thing that notices is the perf fence.
+$(warning trs: no LLVM 18 found — building the interpreter-only tier.)
+$(warning trs: artifacts from this build will run INTERPRETED.  Install)
+$(warning trs: LLVM 18 (apt: llvm-18-dev, brew: llvm@18) or point)
+$(warning trs: LLVM_SYS_181_PREFIX at one to get the compile tier.)
 TRS_FLAGS = --features aot
 CAPI_FLAGS  = --no-default-features --features aot
 endif
