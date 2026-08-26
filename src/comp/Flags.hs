@@ -172,7 +172,8 @@ data Flags = Flags {
         -- derive the Verilog "Ports:" comment from the APackage analysis
         -- (getIOPropsA) instead of the netlist measurement; off by default
         -- so the emitted Verilog is unchanged
-        semanticPortsComment :: Bool
+        semanticPortsComment :: Bool,
+        stableVerilog :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

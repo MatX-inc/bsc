@@ -137,5 +137,6 @@ Flags {
 	warnActionShadowing = True,
 	warnMethodUrgency = True,
 	warnUndetPred = False,
-	semanticPortsComment = False
+	semanticPortsComment = False,
+	stableVerilog = False
 }
