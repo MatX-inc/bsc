@@ -46,7 +46,15 @@ GHCINCLUDES = \
 	-i../../Parsec \
 	$(SAT_INCLUDES)
 
+# This program is built from bsc's own modules, and src/comp builds them
+# at -O2; without an -O flag GHC's default is -O0, which more than doubles
+# the export (measured 108s -> 46s on a large design, byte-identical .bir)
+# and triples its allocation.  ?= so a GHC whose optimiser has a bug can be
+# worked around from the command line, the way src/comp does for 9.2.1.
+GHCOPTLEVEL ?= -O2
+
 GHCFLAGS = \
+	$(GHCOPTLEVEL) \
 	-hide-all-packages \
 	-fasm \
 	-Wall \
