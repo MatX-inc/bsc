@@ -43,6 +43,7 @@ import Data.List (foldl', nub, sortBy)
 import Data.Maybe (mapMaybe, isJust)
 
 import ErrorUtil (internalError)
+import Util (stableOrdNub)
 import Id (Id, getIdBaseString, getIdQualString, isSignedId,
            mkIdCanFire, mkIdWillFire, mkRdyId, cmpIdByName)
 import IntLit (IntLit(..))
@@ -429,7 +430,7 @@ encComposition instToMod msis topGates ss = do
             -- topologically sort those; the BIR.md section 4 argument
             -- (cross-instance constraints only attach at method cut
             -- points) makes this projection acyclic.
-            units = nub (mapMaybe resolve order)
+            units = stableOrdNub (mapMaybe resolve order)
             firstPos = M.fromList
                 (reverse [ (u, p)
                          | (p, Just u) <- zip [(0 :: Int) ..] (map resolve order) ])
@@ -522,25 +523,35 @@ encComposition instToMod msis topGates ss = do
             indeg0 = M.fromListWith (+)
                        ([ (u, 0 :: Int) | u <- units ]
                         ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
-            pickNext ready = case ready of
-                [] -> Nothing
-                _  -> Just (snd (minimum
-                        [ (M.findWithDefault maxBound u firstPos, u)
-                        | u <- ready ]))
-            kahn indeg done
-                | Just u <- pickNext
-                    [ v | (v, d) <- M.toList indeg, d == 0 ] =
-                    let indeg' = M.delete u indeg
-                        indeg'' = foldl' (\m v -> M.adjust (subtract 1) v m)
-                                         indeg' (succsOf u)
-                    in  kahn indeg'' (u : done)
-                | M.null indeg = reverse done
-                | otherwise = internalError
-                    ("SimExportIR: cyclic segment graph; a module boundary is "
-                     ++ "interleaved below method granularity (or ME ordering "
-                     ++ "constraints interlock two multi-node segments): "
-                     ++ show (M.keys indeg))
-            entries = kahn indeg0 []
+            -- The ready set is carried, not rediscovered.  Scanning the
+            -- indegree map for its zeroes at every step costs a pass over
+            -- everything still unplaced, which is quadratic in the unit
+            -- count; a large design reaches tens of thousands of units
+            -- and that scan becomes the whole export.  Keying the set by
+            -- (first appearance, unit) puts the tie-break in the ordering,
+            -- so the minimum is the head rather than a search, and a unit
+            -- moves out of `indeg` exactly when its last predecessor is
+            -- placed.
+            readyKey u = (M.findWithDefault maxBound u firstPos, u)
+            (zeroes, blocked) = M.partition (== 0) indeg0
+            ready0 = S.fromList (map readyKey (M.keys zeroes))
+            release (m, rs) v = case M.lookup v m of
+                Just 1 -> (M.delete v m, S.insert (readyKey v) rs)
+                Just d -> (M.insert v (d - 1) m, rs)
+                Nothing -> (m, rs)
+            kahn indeg ready done = case S.minView ready of
+                Just ((_, u), ready') ->
+                    let (indeg', ready'') =
+                          foldl' release (indeg, ready') (succsOf u)
+                    in  kahn indeg' ready'' (u : done)
+                Nothing
+                    | M.null indeg -> reverse done
+                    | otherwise -> internalError
+                        ("SimExportIR: cyclic segment graph; a module boundary is "
+                         ++ "interleaved below method granularity (or ME ordering "
+                         ++ "constraints interlock two multi-node segments): "
+                         ++ show (M.keys indeg))
+            entries = kahn blocked ready0 []
 
             dups = length entries /= S.size (S.fromList entries)
 
