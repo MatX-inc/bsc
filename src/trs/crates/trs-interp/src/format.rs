@@ -148,12 +148,11 @@ fn fmt_val_into(
 pub fn format_args(
     args: &[Arg],
     default_base: u32,
-    now: u64,
     loc: &str,
     errs: &mut Vec<String>,
 ) -> String {
     let mut out = String::new();
-    format_args_into(&mut out, args, default_base, now, loc, errs);
+    format_args_into(&mut out, args, default_base, loc, errs);
     out
 }
 
@@ -163,7 +162,6 @@ pub fn format_args_into(
     out: &mut String,
     args: &[Arg],
     default_base: u32,
-    now: u64,
     loc: &str,
     errs: &mut Vec<String>,
 ) {
@@ -172,7 +170,7 @@ pub fn format_args_into(
         match &args[i] {
             Arg::Str(fmt) => {
                 i += 1;
-                format_str(fmt, args, &mut i, out, now, loc, errs);
+                format_str(fmt, args, &mut i, out, loc, errs);
             }
             Arg::Val(v, sg) => {
                 fmt_val_into(
@@ -227,7 +225,6 @@ fn unpack_str(v: &Value) -> String {
 pub fn format_sformat(
     args: &[Arg],
     default_base: u32,
-    now: u64,
     loc: &str,
     fmt_first: bool,
     errs: &mut Vec<String>,
@@ -235,7 +232,7 @@ pub fn format_sformat(
     if !fmt_first {
         // $swrite*: format("d", ..., restricted=false) — the $display
         // engine exactly
-        return format_args(args, default_base, now, loc, errs);
+        return format_args(args, default_base, loc, errs);
     }
     // $sformat: format("d", ..., restricted=true) — ONLY the first
     // argument is a format (a string, or a bit-packed string value);
@@ -246,12 +243,12 @@ pub fn format_sformat(
     match args.first() {
         Some(Arg::Str(f)) => {
             i = 1;
-            format_str(f, args, &mut i, &mut out, now, loc, errs);
+            format_str(f, args, &mut i, &mut out, loc, errs);
         }
         Some(Arg::Val(v, _)) => {
             i = 1;
             let fmt = unpack_str(v);
-            format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
+            format_str(&fmt, args, &mut i, &mut out, loc, errs);
         }
         _ => {}
     }
@@ -416,8 +413,6 @@ fn format_str(
     args: &[Arg],
     i: &mut usize,
     out: &mut String,
-    // carried by the whole formatting API; nothing in here reports time
-    _now: u64,
     loc: &str,
     errs: &mut Vec<String>,
 ) {
@@ -640,11 +635,11 @@ mod tests {
     fn verilog_column_widths() {
         // 8-bit %d pads to 3 columns
         let mut e = Vec::new();
-        let s = format_args(&[Arg::Str("v=%d".into()), v(8, 7)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("v=%d".into()), v(8, 7)], 10, "", &mut e);
         assert_eq!(s, "v=  7");
-        let s = format_args(&[Arg::Str("v=%0d".into()), v(8, 7)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("v=%0d".into()), v(8, 7)], 10, "", &mut e);
         assert_eq!(s, "v=7");
-        let s = format_args(&[Arg::Str("v=%h".into()), v(8, 7)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("v=%h".into()), v(8, 7)], 10, "", &mut e);
         assert_eq!(s, "v=07");
     }
 
@@ -655,11 +650,11 @@ mod tests {
         let mut e = Vec::new();
         let s = format_args(
             &[Arg::Str("A %v B".into()), v(16, 0)],
-            10, 0, "", &mut e,
+            10, "", &mut e,
         );
         assert_eq!(s, "A %v B    0");
         // flags, width and precision are echoed as written, case included
-        let s = format_args(&[Arg::Str("%-7z|%0.3Q".into())], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("%-7z|%0.3Q".into())], 10, "", &mut e);
         assert_eq!(s, "%-7z|%0.3Q");
     }
 
@@ -671,23 +666,23 @@ mod tests {
         for spec in ["%f", "%e", "%g"] {
             let s = format_args(
                 &[Arg::Str(spec.into()), Arg::Real(f64::NAN)],
-                10, 0, "", &mut e,
+                10, "", &mut e,
             );
             assert_eq!(s, "nan", "{spec} of NaN");
             let s = format_args(
                 &[Arg::Str(spec.into()), Arg::Real(f64::INFINITY)],
-                10, 0, "", &mut e,
+                10, "", &mut e,
             );
             assert_eq!(s, "inf", "{spec} of +inf");
             let s = format_args(
                 &[Arg::Str(spec.into()), Arg::Real(f64::NEG_INFINITY)],
-                10, 0, "", &mut e,
+                10, "", &mut e,
             );
             assert_eq!(s, "-inf", "{spec} of -inf");
         }
         let s = format_args(
             &[Arg::Str("%10e".into()), Arg::Real(f64::INFINITY)],
-            10, 0, "", &mut e,
+            10, "", &mut e,
         );
         assert_eq!(s, "       inf");
     }
@@ -698,31 +693,31 @@ mod tests {
         // the report shape that found this: %5d/%-5d
         let s = format_args(
             &[Arg::Str("%5d/%-5d".into()), v(32, 12), v(32, 12)],
-            10, 0, "", &mut e,
+            10, "", &mut e,
         );
         assert_eq!(s, "   12/12   ");
         // no padding to move when the value fills the field
-        let s = format_args(&[Arg::Str("%-3d".into()), v(32, 123)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("%-3d".into()), v(32, 123)], 10, "", &mut e);
         assert_eq!(s, "123");
         // wider than the field: nothing is truncated
-        let s = format_args(&[Arg::Str("%-2d".into()), v(32, 12345)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("%-2d".into()), v(32, 12345)], 10, "", &mut e);
         assert_eq!(s, "12345");
         // '-' beats '0', as in C
-        let s = format_args(&[Arg::Str("%-05d".into()), v(32, 42)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("%-05d".into()), v(32, 42)], 10, "", &mut e);
         assert_eq!(s, "42   ");
         // an explicit width replaces the natural column width, so the whole
         // field pads right (C printf: "%-6x" of 0x2f is "2f    ")
-        let s = format_args(&[Arg::Str("%-6h".into()), v(16, 0x2f)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("%-6h".into()), v(16, 0x2f)], 10, "", &mut e);
         assert_eq!(s, "2f    ");
         // with no width, %h still zero-fills to the value's column width
-        let s = format_args(&[Arg::Str("%h".into()), v(16, 0x2f)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("%h".into()), v(16, 0x2f)], 10, "", &mut e);
         assert_eq!(s, "002f");
         // %s ignores the width field altogether (so does "%6s"), which
         // leaves '-' nothing to re-align; pinned so a future width fix for
         // strings has to revisit this deliberately
         let s = format_args(
             &[Arg::Str("[%-6s]".into()), Arg::Str("ab".into())],
-            10, 0, "", &mut e,
+            10, "", &mut e,
         );
         assert_eq!(s, "[ab]");
         assert!(e.is_empty(), "unexpected errors: {e:?}");
@@ -731,14 +726,14 @@ mod tests {
     #[test]
     fn bare_args_default_base() {
         let mut e = Vec::new();
-        let s = format_args(&[v(4, 5)], 10, 0, "", &mut e);
+        let s = format_args(&[v(4, 5)], 10, "", &mut e);
         assert_eq!(s, " 5"); // 4-bit max is 15 -> 2 columns
     }
 
     #[test]
     fn escapes() {
         let mut e = Vec::new();
-        let s = format_args(&[Arg::Str("a\\nb".into())], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("a\\nb".into())], 10, "", &mut e);
         assert_eq!(s, "a\nb");
     }
 }

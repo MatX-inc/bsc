@@ -465,7 +465,7 @@ unsafe extern "C" fn runcore_foreign_cb(
         loc.push_str(p);
     }
     if ret_width == 0 {
-        if !rc.fe.action(&name, &argv, rc.now, &loc) {
+        if !rc.fe.action(&name, &argv, &loc) {
             if name != "srand" {
                 panic!(
                     "trs runcore: action task {name:?} reached the boot \

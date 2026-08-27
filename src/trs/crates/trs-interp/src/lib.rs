@@ -2324,7 +2324,7 @@ impl Interp {
         // console/file/finish core first (quiet and post-$finish
         // suppression live there too); what it declines is design-
         // coupled — the $dump* family (VCD writer) and BDPI imports
-        if self.fe.action(name, args, self.now, loc) {
+        if self.fe.action(name, args, loc) {
             return;
         }
         match name {
