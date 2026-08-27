@@ -97,8 +97,17 @@ pub(crate) struct ResolvedBinds {
     pub consumed_plus: Vec<String>,
 }
 
-fn str_id(d: &ir::Design, s: &str) -> Option<ir::StrId> {
-    d.strings.iter().position(|x| x == s).map(|i| i as ir::StrId)
+/// name -> interned id, the other direction from `Design::strings`.
+/// Built once per resolve: the callers ask for derived names
+/// (`RDY_<m>`, `EN_<m>`) once per top-level method, and scanning the
+/// table for each is O(methods * strings) for an answer a map gives
+/// directly.
+fn str_index(d: &ir::Design) -> std::collections::HashMap<&str, ir::StrId> {
+    d.strings
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.as_str(), i as ir::StrId))
+        .collect()
 }
 
 /// Resolve an expression to a constant u64 by chasing def references
@@ -204,6 +213,7 @@ pub(crate) fn resolve(
         .find(|m| m.name == d.top)
         .ok_or_else(|| "top module not found".to_string())?;
     let s = |id: ir::StrId| d.strings[id as usize].as_str();
+    let sidx = str_index(d);
 
     // ---- bindable surface ----
     // top-level arguments/parameters: the module's MethodArg inputs
@@ -232,11 +242,11 @@ pub(crate) fn resolve(
             }
         }
         // always_enabled implies RDY constant true: assert it at arm
-        // time via the sibling RDY_<m> method (what check_rdy
-        // evaluates; absent = constant ready).  The result is
-        // typically a def reference to a constant def — chase the
-        // chain rather than pattern-matching one shape.
-        if let Some(rdy_id) = str_id(d, &format!("RDY_{}", s(m.name))) {
+        // time via the sibling RDY method (what check_rdy evaluates;
+        // absent = constant ready).  The result is typically a def
+        // reference to a constant def — chase the chain rather than
+        // pattern-matching one shape.
+        if let Some(rdy_id) = m.rdy {
             if let Some(rm) = top.methods.iter().find(|x| x.name == rdy_id) {
                 let const_true = match &rm.result {
                     None => true,
@@ -400,7 +410,7 @@ pub(crate) fn resolve(
     // EN_<m> reads constant 1 for auto-fired methods (tied high)
     let mut af: Vec<(ir::StrId, Vec<Value>)> = Vec::new();
     for (mname, args) in &autofire {
-        if let Some(en) = str_id(d, &format!("EN_{}", s(*mname))) {
+        if let Some(&en) = sidx.get(format!("EN_{}", s(*mname)).as_str()) {
             params.push((en, Value::from_u64(1, 1)));
         }
         let argv: Vec<Value> = args

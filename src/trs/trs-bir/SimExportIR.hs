@@ -38,12 +38,13 @@ import Data.Word (Word32)
 import qualified Codec.CBOR.Encoding as C
 import qualified Codec.CBOR.Write as CW
 
+import Data.Char (isDigit)
 import Data.List (foldl', nub, sortBy)
 import Data.Maybe (mapMaybe, isJust)
 
 import ErrorUtil (internalError)
 import Id (Id, getIdBaseString, getIdQualString, isSignedId,
-           mkIdCanFire, mkIdWillFire, cmpIdByName)
+           mkIdCanFire, mkIdWillFire, mkRdyId, cmpIdByName)
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
@@ -64,7 +65,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 2
+birVersion = 5
 
 -- ===============
 -- String interning
@@ -141,10 +142,24 @@ encStr = C.encodeString . T.pack
 -- SimSystem -> BIR
 
 -- | Encode a 'SimSystem' as a BIR design document.
+-- | magic(8) + BIR_VERSION little-endian(4), ahead of the CBOR body.
+--
+-- A reader has to settle the version before it decodes anything: a
+-- schema change makes the body fail to deserialize, and a version
+-- carried inside the body can only be reported after that failure has
+-- already happened.  The last magic byte is the header's own format.
+-- Mirrors BIR_MAGIC / BIR_HEADER in trs-ir.
+birHeader :: L.ByteString
+birHeader = L.pack (magic ++ leWord32 birVersion)
+  where
+    magic = [0x54, 0x52, 0x53, 0x42, 0x49, 0x52, 0x00, 0x01]  -- "TRSBIR\0\1"
+    leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
+                 | k <- [0, 8, 16, 24] ]
+
 simSystemToBir :: Bool -> M.Map String (S.Set AId) -> SimSystem
                -> L.ByteString
 simSystemToBir keepF symMap ssys =
-    CW.toLazyByteString (encDesign keepF symMap ssys)
+    birHeader <> CW.toLazyByteString (encDesign keepF symMap ssys)
 
 -- | Write the design's .bir file.
 writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
@@ -185,8 +200,7 @@ encDesign keepF symMap ssys =
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
           return
-            [ ("version", encW32 birVersion)
-            , ("strings", mempty)   -- placeholder, replaced below
+            [ ("strings", mempty)   -- placeholder, replaced below
             , ("top", encW32 topId)
             , ("modules", encList modsEnc)
             , ("instance_map", encList instEnc)
@@ -195,6 +209,7 @@ encDesign keepF symMap ssys =
             , ("default_clock", encMaybe encW32 clkId)
             , ("default_reset", encMaybe encW32 rstId)
             , ("keep_fires", encBool keepF)
+            , ("uses_wave_tasks", encBool (designUsesWaveTasks pkgs))
             ]
 
         (fields, finalTbl) = runState action emptyStrTable
@@ -229,6 +244,32 @@ data ModSchedInfo = ModSchedInfo
 nodeKey :: SchedNode -> String
 nodeKey (Sched i) = "S:" ++ getIdBaseString i
 nodeKey (Exec i) = "E:" ++ getIdBaseString i
+
+-- | The wave-recording system tasks, as the trs runtime dispatches them.
+waveTaskNames :: S.Set String
+waveTaskNames = S.fromList
+    [ "$dumpfile", "$dumpvars", "$dumpon", "$dumpoff"
+    , "$dumpall", "$dumplimit", "$dumpflush" ]
+
+-- | The name a task-bearing action calls, if it is one.
+taskNameOf :: AAction -> Maybe String
+taskNameOf (AFCall { afcall_fun = f }) = Just f
+taskNameOf (ATaskAction { ataskact_fun = f }) = Just f
+taskNameOf _ = Nothing
+
+-- | Does this design record waveforms?
+--
+-- The runtime cannot answer this for itself: rule bodies reach it
+-- deferred, and the string table it could search holds every interned
+-- string, so a $display of the text "$dumpvars" reads the same as a
+-- call to it.  Here the actions are plain data and the question is
+-- exact.
+designUsesWaveTasks :: [SimPackage] -> Bool
+designUsesWaveTasks pkgs = or
+    [ maybe False (`S.member` waveTaskNames) (taskNameOf a)
+    | p <- pkgs
+    , r <- sp_rules p ++ concatMap aIfaceRules (sp_interface p)
+    , a <- arule_actions r ]
 
 analyzeModule :: S.Set String -> SimPackage -> ModSchedInfo
 analyzeModule pkgNames pkg =
@@ -515,15 +556,21 @@ encComposition instToMod msis topGates ss = do
             -- composed order is instance-specific.
             composedNodes =
                 [ (i, node) | (i, ds) <- entries, node <- segNodes i ds ]
+            -- `seen` keys on the joined path because that is how the
+            -- disjointness map is keyed, and carries the (instance,
+            -- rule) split the pairs are emitted as
             stepME (seen, acc) (i, Exec n) =
-                (S.insert (qp i (getIdBaseString n)) seen, acc)
+                (M.insert (qp i (getIdBaseString n)) (i, getIdBaseString n) seen,
+                 acc)
             stepME (seen, acc) (i, Sched n) =
-                let q = qp i (getIdBaseString n)
-                    inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
+                let base = getIdBaseString n
+                    q = qp i base
+                    inh = M.restrictKeys seen
+                            (M.findWithDefault S.empty q disjQ)
                 -- Chunk-accumulate and concat once, so the fold stays
                 -- linear in the number of emitted pairs.
-                in  (seen, [ (d, q) | d <- S.toList inh ] : acc)
-            crossPairs = concat (reverse (snd (foldl' stepME (S.empty, []) composedNodes)))
+                in  (seen, [ (d, (i, base)) | d <- M.elems inh ] : acc)
+            crossPairs = concat (reverse (snd (foldl' stepME (M.empty, []) composedNodes)))
           in
             if dups
             then internalError
@@ -628,7 +675,11 @@ encComposition instToMod msis topGates ss = do
                 , ("domain", encW32 (fromIntegral dom))
                 , ("segment", encW32 (fromIntegral seg))
                 ]
-            encCrossPair (a, b) = encPair <$> strE a <*> strE b
+            encQualRule (ipath, rname) = do
+              iE <- strE ipath
+              rE <- strE rname
+              return $ encStruct [ ("instance", iE), ("rule", rE) ]
+            encCrossPair (a, b) = encPair <$> encQualRule a <*> encQualRule b
         entriesEnc <- mapM encEntry entries
         let encTick (inst, prim, port, rst, gate) = do
               iE <- strE inst
@@ -650,7 +701,8 @@ encComposition instToMod msis topGates ss = do
                 , ("reset", encBool rst), ("gate", gateE) ]
         ticksEnc <- mapM encTick ticks
         negTicksEnc <- mapM encTick neg_ticks
-        earlyEnc <- mapM (strE . qualPath) (ss_early_rules ss)
+        earlyEnc <- mapM (\i -> encQualRule (getIdQualString i, getIdBaseString i))
+                         (ss_early_rules ss)
         crossEnc <- mapM encCrossPair crossPairs
         altsEnc <- mapM (\(gpath, g, (aentries, across)) -> do
                            giE <- strE gpath
@@ -729,7 +781,16 @@ encModule pkgNames msi symSet pkg = do
                   , not (M.member (adef_objid d) (sp_local_defs pkg)) ]
     defsEnc <- mapM (encDef symSet) (M.elems (sp_local_defs pkg) ++ av_defs)
     rulesEnc <- mapM (encRule msi pkg) (sp_rules pkg)
-    methodsEnc <- concat <$> mapM (encMethod pkg) (sp_interface pkg)
+    -- a method's sibling RDY method and WILL_FIRE def are relations the
+    -- module's own tables settle; naming them here spares the runtime
+    -- rebuilding them from name text
+    let sibs = Siblings
+          { sibIfc = S.fromList (map (getIdBaseString . aif_name)
+                                     (sp_interface pkg))
+          , sibDefs = S.fromList (map (getIdBaseString . adef_objid)
+                                      (M.elems (sp_local_defs pkg) ++ av_defs))
+          }
+    methodsEnc <- concat <$> mapM (encMethod sibs pkg) (sp_interface pkg)
     schedEnc <- encSchedule msi pkg
     -- interface output clocks: external port name -> the internal osc
     -- wire being re-exported (constant = noClock, never ticks)
@@ -1084,33 +1145,66 @@ encRule msi pkg r = do
       , ("me_inhibits", encList inhibitsEnc)
       ]
 
+-- The module-local name tables a method's sibling references resolve
+-- against: its interface entries and its defs.
+data Siblings = Siblings { sibIfc :: S.Set String, sibDefs :: S.Set String }
+
+-- The sibling RDY method and WILL_FIRE def of a method, each named only
+-- when the module actually has one.  Only a method with actions has a
+-- WILL_FIRE def (cvtIFace wf_stmts).
+encSiblings :: Siblings -> Id -> Bool -> EncM (C.Encoding, C.Encoding)
+encSiblings sibs name hasActions = do
+    let present set i =
+            if getIdBaseString i `S.member` set then Just i else Nothing
+    rdyEnc <- traverse idE (present (sibIfc sibs) (mkRdyId name))
+    wfEnc <- traverse idE
+               (if hasActions
+                then present (sibDefs sibs) (mkIdWillFire name)
+                else Nothing)
+    return (encMaybe id rdyEnc, encMaybe id wfEnc)
+
+-- bsc's interface ready predicate can name the pre-block-conversion
+-- RDY_<m> signal, which is not a def and so resolves to nothing on its
+-- own; the backend reads the method's CAN_FIRE def in that position
+-- (mkGCD.cxx: PORT_RDY_result = DEF_CAN_FIRE_result).  Emit the
+-- reference that resolves, rather than one the reader has to repair.
+resolveReady :: Siblings -> Id -> AExpr -> AExpr
+resolveReady sibs name e@(ASDef t i)
+  | not (getIdBaseString i `S.member` sibDefs sibs)
+  , cf <- mkIdCanFire name
+  , getIdBaseString cf `S.member` sibDefs sibs
+  = ASDef t cf
+  | otherwise = e
+resolveReady _ _ e = e
+
 -- Interface methods.  Clock/reset/inout interface entries carry no
 -- executable content (they are in the clock/reset lists); skip them.
-encMethod :: SimPackage -> AIFace -> EncM [C.Encoding]
-encMethod pkg (AIDef name inputs props pred_ (ADef _ t e _) _ _) = do
-    m <- encMethodStruct pkg name "Value" (concat inputs) (Just pred_) [] (Just (t, e))
+encMethod :: Siblings -> SimPackage -> AIFace -> EncM [C.Encoding]
+encMethod sibs pkg (AIDef name inputs props pred_ (ADef _ t e _) _ _) = do
+    m <- encMethodStruct sibs pkg name "Value" (concat inputs) (Just pred_) [] (Just (t, e))
                          props
     return [m]
-encMethod pkg (AIAction inputs props pred_ name body _) = do
-    m <- encMethodStruct pkg name "Action" (concat inputs) (Just pred_)
+encMethod sibs pkg (AIAction inputs props pred_ name body _) = do
+    m <- encMethodStruct sibs pkg name "Action" (concat inputs) (Just pred_)
                          (concatMap arule_actions body) Nothing props
     return [m]
-encMethod pkg (AIActionValue inputs props pred_ name body retdef _) = do
-    m <- encMethodStructAV pkg name (concat inputs) (Just pred_)
+encMethod sibs pkg (AIActionValue inputs props pred_ name body retdef _) = do
+    m <- encMethodStructAV sibs pkg name (concat inputs) (Just pred_)
                            (concatMap arule_actions body) retdef props
     return [m]
-encMethod _ (AIClock {}) = return []
-encMethod _ (AIReset {}) = return []
-encMethod _ (AIInout {}) = return []
+encMethod _ _ (AIClock {}) = return []
+encMethod _ _ (AIReset {}) = return []
+encMethod _ _ (AIInout {}) = return []
 
 -- ActionValue methods: the return def is linearized with the body and
 -- the result is a reference to it.
-encMethodStructAV :: SimPackage -> Id -> [AInput] -> Maybe APred
+encMethodStructAV :: Siblings -> SimPackage -> Id -> [AInput] -> Maybe APred
                   -> [AAction] -> ADef -> WireProps -> EncM C.Encoding
-encMethodStructAV pkg name inputs mpred body retdef props = do
+encMethodStructAV sibs pkg name inputs mpred body retdef props = do
     nameId <- idE name
+    (rdyEnc, wfEnc) <- encSiblings sibs name True
     argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
-    readyEnc <- traverse encExpr mpred
+    readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg name props (Just retdef) body)
     let ADef ret_id rt _ _ = retdef
@@ -1127,15 +1221,18 @@ encMethodStructAV pkg name inputs mpred body retdef props = do
       , ("result", resultEnc)
       , ("clock_domain", encW32 dom)
       , ("always_enabled", encBool (isAlwaysEn (sp_pps pkg) name))
+      , ("rdy", rdyEnc)
+      , ("will_fire", wfEnc)
       ]
 
-encMethodStruct :: SimPackage -> Id -> String -> [AInput] -> Maybe APred
-                -> [AAction] -> Maybe (AType, AExpr) -> WireProps
-                -> EncM C.Encoding
-encMethodStruct pkg name kind inputs mpred body mresult props = do
+encMethodStruct :: Siblings -> SimPackage -> Id -> String -> [AInput]
+                -> Maybe APred -> [AAction] -> Maybe (AType, AExpr)
+                -> WireProps -> EncM C.Encoding
+encMethodStruct sibs pkg name kind inputs mpred body mresult props = do
     nameId <- idE name
+    (rdyEnc, wfEnc) <- encSiblings sibs name (kind /= "Value")
     argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
-    readyEnc <- traverse encExpr mpred
+    readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg name props Nothing body)
     resultEnc <- traverse (encExpr . snd) mresult
@@ -1153,6 +1250,8 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
       , ("result", encMaybe id resultEnc)
       , ("clock_domain", encW32 dom)
       , ("always_enabled", encBool ae)
+      , ("rdy", rdyEnc)
+      , ("will_fire", wfEnc)
       ]
 
 -- ===============
@@ -1172,6 +1271,19 @@ toLimbs w v =
     let nlimbs = max 1 ((fromIntegral w + 31) `div` 32)
         limb k = fromIntegral ((v `shiftR` (32 * k)) .&. 0xFFFFFFFF)
     in  map limb [0 .. nlimbs - 1]
+
+-- The port a method call addresses.  bsc encodes it in the method name
+-- of a multi-ported primitive ("port0__read", "port1__write" -- the
+-- CReg family); the number is data the runtime schedules on, so it is
+-- resolved here, at the one place that knows bsc's naming, instead of
+-- being re-parsed out of the name on every call.  Single-ported
+-- methods are port 0.
+methPortNum :: Id -> Word32
+methPortNum i =
+    case getIdBaseString i of
+      'p':'o':'r':'t':rest
+        | (ds@(_:_), '_':'_':_) <- span isDigit rest -> read ds
+      _ -> 0
 
 encExpr :: AExpr -> EncM C.Encoding
 encExpr (ASInt _ t lit) =
@@ -1196,7 +1308,7 @@ encExpr (AMethCall t obj meth args) = do
       [ ("width", encW32 (aTypeWidth t))
       , ("instance", o)
       , ("method", m)
-      , ("port", encW32 0)   -- P0 TODO: multi-port assignment
+      , ("port", encW32 (methPortNum meth))
       , ("args", encList argsEnc)
       ]
 encExpr (AMethValue t obj meth) = do
@@ -1355,7 +1467,7 @@ encAction _ (ACall obj meth (cond : args)) = do
     return $ encVariant "MethCall" $ encStruct
       [ ("instance", o)
       , ("method", m)
-      , ("port", encW32 0)   -- P0 TODO: multi-port assignment
+      , ("port", encW32 (methPortNum meth))
       , ("cond", condEnc)
       , ("args", encList argsEnc)
       ]

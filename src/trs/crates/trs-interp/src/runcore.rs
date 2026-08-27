@@ -557,7 +557,7 @@ unsafe extern "C" fn runcore_prim_cb(
                 .get(pc.method as usize)
                 .expect("prim method id outside the design string table"),
         );
-        p.action_method(name, &argv, rc.now);
+        p.action_method(name, pc.port, &argv, rc.now);
     } else {
         let name: &str = table_str(
             &rc.buf,
@@ -565,7 +565,7 @@ unsafe extern "C" fn runcore_prim_cb(
                 .get(pc.method as usize)
                 .expect("prim method id outside the design string table"),
         );
-        let v = p.value_method(name, &argv, rc.now);
+        let v = p.value_method(name, pc.port, &argv, rc.now);
         let words = ((pc.ret_width.max(1) as usize) + 63) / 64;
         let dst = std::slice::from_raw_parts_mut(out, words);
         for (i, d) in dst.iter_mut().enumerate() {

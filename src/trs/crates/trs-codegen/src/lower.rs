@@ -2853,7 +2853,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return Ok(1);
         }
         let m = &self.env.d.modules[ie.mir];
-        match m.defs.iter().find(|d| d.name == name) {
+        match m.def(name) {
             Some(d) if d.width >= 1 => Ok(d.width),
             Some(_) => Ok(0), // zero-width def: the empty bit-vector
             None => Err(Ineligible(format!(
@@ -3273,6 +3273,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     f,
                     child,
                     GATE_OUT_METHOD,
+                    0,
                     &[],
                     1,
                     false,
@@ -3909,7 +3910,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
             self.builder.position_at_end(slow_bb);
             let sv = self
-                .emit_prim_call(f, child, method, args, width, false)?
+                .emit_prim_call(f, child, method, port, args, width, false)?
                 .expect("value prim call returns");
             f.ssa = saved;
             let s_end = self.builder.get_insert_block().unwrap();
@@ -3945,11 +3946,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return Ok(self.load_val(f, off, bw));
         }
         if let Some(&(base, cw)) = ie.creg5_slot.get(&instance) {
-            // CReg port reads return the LIVE value (schedule order
-            // makes port k's read see earlier ports' writes)
-            if !(mname.starts_with("port") && mname.ends_with("__read")) {
-                return nope("creg value method mismatch");
-            }
+            // a CReg's only value method is a port read, and it returns
+            // the LIVE value (schedule order makes port k's read see
+            // earlier ports' writes)
             if cw != width {
                 return nope("creg read width mismatch");
             }
@@ -3987,7 +3986,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         };
         if !self.env.insts.contains_key(&child) {
             let v = self
-                .emit_prim_call(f, child, method, args, width, false)?
+                .emit_prim_call(f, child, method, port, args, width, false)?
                 .expect("value prim call returns");
             return Ok(v);
         }
@@ -4233,6 +4232,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         f: &mut Frame<'ctx>,
         prim_inst: usize,
         method: StrId,
+        port: u32,
         args: &[Expr],
         ret_width: u32,
         is_action: bool,
@@ -4292,6 +4292,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.prim_calls.push(PrimCallSpec {
             inst: prim_inst,
             method,
+            port,
             arg_widths,
             ret_width: if is_action { 0 } else { ret_width },
             is_action,
@@ -4416,9 +4417,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return true;
                 };
                 let m = &self.env.d.modules[ie.mir];
-                m.defs
-                    .iter()
-                    .find(|d| d.name == *n)
+                m.def(*n)
                     .is_some_and(|d| self.effectful_expr(inst, &d.expr, seen))
             }
             E::MethCall { instance, method, args, .. } => {
@@ -4436,10 +4435,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // result closure only
                     let cm = &self.env.d.modules[ce.mir];
                     return cm
-                        .methods
-                        .iter()
-                        .find(|mm| mm.name == *method)
-                        .and_then(|mm| mm.result.as_ref())
+                        .method_idx(*method)
+                        .and_then(|mi| cm.methods[mi].result.as_ref())
                         .is_some_and(|r| self.effectful_expr(child, r, seen));
                 }
                 // prim child: dynamic-arg value reads may warn —
@@ -4856,7 +4853,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return nope("cyclic def");
         }
         let m = &self.env.d.modules[ie.mir];
-        let Some(d) = m.defs.iter().find(|d| d.name == n) else {
+        let Some(d) = m.def(n) else {
             let chain: Vec<&str> = f
                 .expanding
                 .iter()
@@ -5260,7 +5257,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 return nope("eager def without slot");
             }
             let m = &self.env.d.modules[self.ie(f.inst)?.mir];
-            let Some(d) = m.defs.iter().find(|d| d.name == e) else {
+            let Some(d) = m.def(e) else {
                 continue;
             };
             let dex = d.expr.clone();
@@ -5428,34 +5425,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return nope("auto-fire spec out of step with the method");
         }
         let (margs, body, mname) = (m.args.clone(), m.body.clone(), m.name);
-        // sibling RDY_<m> lookup — same rule as the interp's
-        // always_en_rdy and the parent-call inline: no RDY method
-        // exported = constant ready
-        let rdy = {
-            let rdy_name =
-                format!("RDY_{}", self.env.d.strings[mname as usize]);
-            self.env
-                .d
-                .strings
+        // sibling RDY lookup — same rule as the interp's always_en_rdy
+        // and the parent-call inline: no RDY method exported = constant
+        // ready
+        let rdy = m.rdy.and_then(|id| {
+            self.env.d.modules[mir]
+                .methods
                 .iter()
-                .position(|x| x == &rdy_name)
-                .and_then(|id| {
-                    self.env.d.modules[mir]
-                        .methods
-                        .iter()
-                        .enumerate()
-                        .find(|(_, mm)| mm.name == id as StrId)
-                        .map(|(mi, mm)| (mi, mm.result.clone()))
-                })
-        };
+                .enumerate()
+                .find(|(_, mm)| mm.name == id)
+                .map(|(mi, mm)| (mi, mm.result.clone()))
+        });
         let en_slot = {
             let en_name =
                 format!("EN_{}", self.env.d.strings[mname as usize]);
-            self.env
-                .d
-                .strings
-                .iter()
-                .position(|x| x == &en_name)
+            self.env.d.str_id(&en_name)
                 .and_then(|id| ie.en_slot.get(&(id as StrId)).copied())
         };
         // callee frame on the top itself, args bound to the baked
@@ -5808,7 +5792,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return false;
                 };
                 seen.push(*n);
@@ -5854,7 +5838,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return false;
                 };
                 seen.push(*n);
@@ -5912,7 +5896,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return false;
                 };
                 seen.push(*n);
@@ -6015,7 +5999,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let ie = self.ie(f.inst)?;
                 let m = &self.env.d.modules[ie.mir];
-                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                let Some(d) = m.def(*n) else {
                     return nope("unknown string def");
                 };
                 if f.expanding.contains(n) {
@@ -6276,23 +6260,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // the RESULT still evaluates when the body
                             // is skipped (the C++ returns the stale
                             // port value).  No RDY exported = ready.
-                            let rdy_id = if m.always_enabled {
-                                let rdy_name = format!(
-                                    "RDY_{}",
-                                    self.env.d.strings[*method as usize]
-                                );
-                                self.env
-                                    .d
-                                    .strings
-                                    .iter()
-                                    .position(|x| x == &rdy_name)
-                                    .map(|id| id as StrId)
-                                    .filter(|id| {
-                                        cmod.methods.iter().any(|mm| mm.name == *id)
-                                    })
-                            } else {
-                                None
-                            };
+                            let rdy_id = m.always_enabled.then_some(m.rdy).flatten();
                             if args.len() != m.args.len() {
                                 return nope("method arg count mismatch");
                             }
@@ -6303,12 +6271,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             let body = m.body.clone();
                             let en_name =
                                 format!("EN_{}", self.env.d.strings[*method as usize]);
-                            let en_slot = self
-                                .env
-                                .d
-                                .strings
-                                .iter()
-                                .position(|x| x == &en_name)
+                            let en_slot = self.env.d.str_id(&en_name)
                                 .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
                             let mut cf = self.child_frame(f, child, Some(mi))?;
                             let wc = self.expr_width(f, cond)?;
@@ -6565,7 +6528,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         return nope("prim actionvalue method (no trampoline AV path)");
                         #[allow(unreachable_code)]
                         let v = self
-                            .emit_prim_call(f, child, *method, args, wd, true)?
+                            .emit_prim_call(f, child, *method, *port, args, wd, true)?
                             .expect("av prim call returns");
                         let g_end = self.builder.get_insert_block().unwrap();
                         self.builder.build_unconditional_branch(jn_bb).unwrap();
@@ -7048,7 +7011,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
                     self.builder.position_at_end(slow_bb);
                     let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
-                    self.emit_prim_call(f, child, *method, args, 0, true)?;
+                    self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
                     f.ssa = saved;
                     self.builder.build_unconditional_branch(done_bb).unwrap();
 
@@ -7115,7 +7078,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
                     self.builder.position_at_end(slow_bb);
                     let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
-                    self.emit_prim_call(f, child, *method, args, 0, true)?;
+                    self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
                     f.ssa = saved;
                     self.builder.build_unconditional_branch(done_bb).unwrap();
 
@@ -7123,11 +7086,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Ok(());
                 }
                 if let Some(&(base, cw)) = ie.creg5_slot.get(instance) {
-                    // branchless port write: value = select(cond, v, old)
-                    if !(mname.starts_with("port") && mname.ends_with("__write"))
-                        || args.is_empty()
-                    {
-                        return nope("non-write CReg action");
+                    // branchless port write: value = select(cond, v, old).
+                    // A CReg's only action method is a port write.
+                    if args.is_empty() {
+                        return nope("CReg write without a value");
                     }
                     let vw = self.expr_width(f, &args[0])?;
                     let v0 = self.expr(f, &args[0])?;
@@ -7230,6 +7192,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 Ineligible("fifo child missing".into())
                             })?,
                             *method,
+                            *port,
                             &targs,
                             0,
                             true,
@@ -7347,7 +7310,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
                         self.builder.position_at_end(slow_bb);
                         let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
-                        self.emit_prim_call(f, child, *method, args, 0, true)?;
+                        self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
                         f.ssa = saved;
                         self.builder.build_unconditional_branch(done_bb).unwrap();
 
@@ -7469,7 +7432,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let t = self.ctx.bool_type().const_int(1, false);
                         self.gate_mark(f, t);
                     }
-                    self.emit_prim_call(f, child, *method, args, 0, true)?;
+                    self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
                     self.builder.build_unconditional_branch(sk_bb).unwrap();
                     self.builder.position_at_end(sk_bb);
                     return Ok(());
@@ -7504,31 +7467,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // method at call time (the C++ check_rdy wrapper); EN
                 // still lands when the caller fires. No RDY method
                 // exported = constant ready.
-                let rdy_id = if m.always_enabled {
-                    let rdy_name =
-                        format!("RDY_{}", self.env.d.strings[*method as usize]);
-                    self.env
-                        .d
-                        .strings
-                        .iter()
-                        .position(|x| x == &rdy_name)
-                        .map(|id| id as StrId)
-                        .filter(|id| cmod.methods.iter().any(|mm| mm.name == *id))
-                } else {
-                    None
-                };
+                let rdy_id = m.always_enabled.then_some(m.rdy).flatten();
                 if args.len() != m.args.len() {
                     return nope("method arg count mismatch");
                 }
                 let margs = m.args.clone();
                 let body = m.body.clone();
                 let en_name = format!("EN_{}", self.env.d.strings[*method as usize]);
-                let en_slot = self
-                    .env
-                    .d
-                    .strings
-                    .iter()
-                    .position(|x| x == &en_name)
+                let en_slot = self.env.d.str_id(&en_name)
                     .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
 
                 let mut cf = self.child_frame(f, child, Some(mi))?;

@@ -125,8 +125,8 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     } else {
         &lz.scheds[ordinal].prim_calls[local]
     };
-    let (inst, method, ret_width, is_action) =
-        (pc.inst, pc.method, pc.ret_width, pc.is_action);
+    let (inst, method, port, ret_width, is_action) =
+        (pc.inst, pc.method, pc.port, pc.ret_width, pc.is_action);
     // pc borrows the OWNED Arc clone, so it outlives every interp use
     // below — no arg_widths copy needed (this trampoline runs per
     // boxed prim access; a Vec clone + a Vec per argument showed as
@@ -158,9 +158,9 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         };
         *out = g;
     } else if is_action {
-        interp.call_action(inst, method, &argv);
+        interp.call_action(inst, method, port, &argv);
     } else {
-        let v = interp.call_value(inst, method, &argv, ret_width);
+        let v = interp.call_value(inst, method, port, &argv, ret_width);
         let words = ((ret_width.max(1) as usize) + 63) / 64;
         let dst = std::slice::from_raw_parts_mut(out, words);
         for (i, d) in dst.iter_mut().enumerate() {
@@ -700,7 +700,7 @@ impl<'a> ConeAnalyzer<'a> {
         if self.seen.contains(&(mir, n)) {
             return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false, ports: Vec::new() };
         }
-        let Some(di) = self.d.modules[mir].defs.iter().position(|dd| dd.name == n) else {
+        let Some(di) = self.d.modules[mir].def_idx(n) else {
             return PieceInfo { eff: 0, outlinable: false, stable: false, outlined: false, ports: Vec::new() };
         };
         self.seen.push((mir, n));
@@ -5429,11 +5429,7 @@ impl Interp {
             for (afi, (mname, argv)) in
                 self.autofire.clone().iter().enumerate()
             {
-                let Some(mi) = self.d.modules[tmir]
-                    .methods
-                    .iter()
-                    .position(|m| m.name == *mname)
-                else {
+                let Some(mi) = self.d.modules[tmir].method_idx(*mname) else {
                     if trace {
                         eprintln!("trs jit: off (autofire method missing)");
                     }

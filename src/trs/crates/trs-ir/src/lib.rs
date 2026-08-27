@@ -15,14 +15,28 @@ pub mod expr;
 pub mod schedule;
 pub mod verify;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 pub use expr::{Action, Expr, PrimOp, Stmt};
-pub use schedule::{Composition, ModuleSchedule, SchedAlt, SchedNode, Schedule, Segment};
+pub use schedule::{
+    Composition, ModuleSchedule, QualRule, SchedAlt, SchedNode, Schedule, Segment,
+};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 2;
+pub const BIR_VERSION: u32 = 5;
+
+/// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
+///
+/// The version has to be readable without decoding the body, or it
+/// cannot do its job: a schema change makes the body fail to
+/// deserialize, and a reader that learns the version from inside the
+/// body reports that failure instead of the mismatch that explains it.
+/// The last magic byte is the header's own format.
+const BIR_MAGIC: &[u8; 8] = b"TRSBIR\0\x01";
+const BIR_HEADER: usize = 12;
 
 /// Snapshot sidecar magic (`<base>.birsnap`, see `Design::snap_encode`).
 /// The trailing byte is the HEADER format; \x02 added the layout rev
@@ -38,7 +52,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 3;
+const SNAP_LAYOUT_REV: u32 = 4;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -179,9 +193,19 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
 /// A whole linked design: the top module and every module in its hierarchy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Design {
-    pub version: u32,
     /// String table; all `StrId`s index into this.
     pub strings: Vec<String>,
+    /// Reverse of `strings`, so a name resolves to its id without a
+    /// scan.  Read it through `str_id`.  Derived, not serialized: the
+    /// decode paths build it.
+    #[serde(skip)]
+    str_ids: HashMap<String, StrId>,
+    /// Whether the design calls a wave-recording task ($dumpvars and
+    /// family).  A fact recorded by the exporter, where rule bodies are
+    /// plain data: the runtime sees them deferred behind `Lazy`, and the
+    /// string table cannot distinguish a call to `$dumpvars` from a
+    /// string literal equal to it.
+    pub uses_wave_tasks: bool,
     pub top: StrId,
     pub modules: Vec<Module>,
     /// Hierarchical instance path -> module name (`ssys_instmap` analogue).
@@ -204,6 +228,13 @@ pub struct Design {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
     pub name: StrId,
+    /// name -> index over `defs` and `methods`, so a reference resolves
+    /// without a scan.  Read them through `def`/`def_idx`/`method_idx`.
+    /// Derived, not serialized: the decode paths build them.
+    #[serde(skip)]
+    def_ix: HashMap<StrId, usize>,
+    #[serde(skip)]
+    method_ix: HashMap<StrId, usize>,
     /// Hash of the module's exported content, for the object cache.
     pub content_hash: [u8; 32],
     pub clock_domains: Vec<ClockDomain>,
@@ -375,6 +406,30 @@ pub struct Method {
     /// backend's cvtIFace check_rdy wrapper).
     #[serde(default)]
     pub always_enabled: bool,
+    /// The sibling method carrying this one's ready signal, when the
+    /// module exports one; None = constant ready.
+    pub rdy: Option<StrId>,
+    /// The def this method's function writes to record that it fired
+    /// (cvtIFace wf_stmts).  Action and ActionValue methods only.
+    pub will_fire: Option<StrId>,
+}
+
+impl Module {
+    /// Index of a def by name, or None if this module has no such def.
+    pub fn def_idx(&self, name: StrId) -> Option<usize> {
+        self.def_ix.get(&name).copied()
+    }
+
+    /// A def by name, or None if this module has no such def.
+    pub fn def(&self, name: StrId) -> Option<&Def> {
+        self.def_idx(name).map(|i| &self.defs[i])
+    }
+
+    /// Index of a method by name, or None if this module has no such
+    /// method.
+    pub fn method_idx(&self, name: StrId) -> Option<usize> {
+        self.method_ix.get(&name).copied()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,30 +584,64 @@ impl Design {
         SNAP_BLOB
             .with(|b| *b.borrow_mut() = Some(std::sync::Arc::new(blob.to_vec())));
         // caller's thread on purpose — see snap_encode's NOTE
-        let d: Design = bincode::deserialize(design).ok()?;
+        let mut d: Design = bincode::deserialize(design).ok()?;
         drop(_g);
+        d.index_strings();
         verify::verify(&d).ok()?;
         Some(d)
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Design, DecodeError> {
-        // deep expression trees (long fold chains) exceed ciborium's
-        // default recursion limit of 128
-        let design: Design =
-            ciborium::de::from_reader_with_recursion_limit(bytes, 65536)
-                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
-        if design.version != BIR_VERSION {
+        // header first, and completely: everything below assumes a body
+        // this reader understands
+        if bytes.len() < BIR_HEADER || &bytes[..8] != BIR_MAGIC {
+            return Err(DecodeError::Cbor("not a .bir file".to_string()));
+        }
+        let found = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        if found != BIR_VERSION {
             return Err(DecodeError::VersionMismatch {
-                found: design.version,
+                found,
                 expected: BIR_VERSION,
             });
         }
+        // deep expression trees (long fold chains) exceed ciborium's
+        // default recursion limit of 128
+        let mut design: Design =
+            ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
+                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
+        design.index_strings();
         verify::verify(&design).map_err(DecodeError::Invalid)?;
         Ok(design)
     }
 
+    /// Build `str_ids` from `strings`.  Every path that produces a
+    /// Design must call this — the field is derived, so neither the
+    /// CBOR body nor the snapshot image carries it.
+    fn index_strings(&mut self) {
+        self.str_ids = self
+            .strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as StrId))
+            .collect();
+        for m in &mut self.modules {
+            m.def_ix =
+                m.defs.iter().enumerate().map(|(k, d)| (d.name, k)).collect();
+            m.method_ix =
+                m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect();
+        }
+    }
+
+    /// The id of an interned string, or None if the design has no such
+    /// string.
+    pub fn str_id(&self, name: &str) -> Option<StrId> {
+        self.str_ids.get(name).copied()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(BIR_HEADER);
+        out.extend_from_slice(BIR_MAGIC);
+        out.extend_from_slice(&BIR_VERSION.to_le_bytes());
         ciborium::into_writer(self, &mut out).expect("CBOR encoding cannot fail");
         out
     }
@@ -568,11 +657,14 @@ mod tests {
 
     fn tiny_design() -> Design {
         Design {
-            version: BIR_VERSION,
             strings: vec!["mkTop".into()],
+            str_ids: HashMap::new(),
+            uses_wave_tasks: false,
             top: 0,
             modules: vec![Module {
                 name: 0,
+                def_ix: HashMap::new(),
+                method_ix: HashMap::new(),
                 content_hash: [0; 32],
                 clock_domains: vec![],
                 resets: vec![],
@@ -606,9 +698,9 @@ mod tests {
 
     #[test]
     fn version_check() {
-        let mut d = tiny_design();
-        d.version = BIR_VERSION + 1;
-        let bytes = d.encode();
+        let d = tiny_design();
+        let mut bytes = d.encode();
+        bytes[8..12].copy_from_slice(&(BIR_VERSION + 1).to_le_bytes());
         assert!(matches!(
             Design::decode(&bytes),
             Err(DecodeError::VersionMismatch { .. })
