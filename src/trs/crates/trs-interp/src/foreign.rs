@@ -154,14 +154,13 @@ impl ForeignEnv {
         &mut self,
         args: &[Arg],
         base: u32,
-        now: u64,
         loc: &str,
         newline: bool,
         errs: &mut Vec<String>,
     ) {
         let mut out = std::mem::take(&mut self.fmt_out);
         out.clear();
-        format::format_args_into(&mut out, args, base, now, loc, errs);
+        format::format_args_into(&mut out, args, base, loc, errs);
         if newline {
             out.push('\n');
         }
@@ -173,7 +172,7 @@ impl ForeignEnv {
     /// task was consumed here — including quiet/post-finish
     /// suppression — and false when the name belongs to the owner
     /// ($dump* family, BDPI imports).
-    pub(crate) fn action(&mut self, name: &str, args: &[Arg], now: u64, loc: &str) -> bool {
+    pub(crate) fn action(&mut self, name: &str, args: &[Arg], loc: &str) -> bool {
         // oracle secondary: console output and the VCD task family are
         // suppressed wholesale ($f* writes die in write_fd; Sink slots
         // cover the files).  $fatal is NOT in this list — its finished/
@@ -253,7 +252,7 @@ impl ForeignEnv {
                     _ => 0x8000_0000,
                 };
                 let mut errs = Vec::new();
-                let mut text = format::format_args(&args[1..], base, now, loc, &mut errs);
+                let mut text = format::format_args(&args[1..], base, loc, &mut errs);
                 if name.starts_with("$fdisplay") {
                     text.push('\n');
                 }
@@ -312,49 +311,49 @@ impl ForeignEnv {
             }
             "$display" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 10, now, loc, true, &mut errs);
+                self.write_display(args, 10, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$displayh" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 16, now, loc, true, &mut errs);
+                self.write_display(args, 16, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$displayb" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 2, now, loc, true, &mut errs);
+                self.write_display(args, 2, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$displayo" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 8, now, loc, true, &mut errs);
+                self.write_display(args, 8, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$write" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 10, now, loc, false, &mut errs);
+                self.write_display(args, 10, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             "$writeh" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 16, now, loc, false, &mut errs);
+                self.write_display(args, 16, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             "$writeb" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 2, now, loc, false, &mut errs);
+                self.write_display(args, 2, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             "$writeo" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 8, now, loc, false, &mut errs);
+                self.write_display(args, 8, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             // dollar_error/dollar_warning/dollar_info format exactly like
             // $display — bsc compiles the severity prefix into the message
             "$error" | "$warning" | "$info" => {
                 let mut errs = Vec::new();
-                self.write_display(args, 10, now, loc, true, &mut errs);
+                self.write_display(args, 10, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$fatal" => {
@@ -366,7 +365,7 @@ impl ForeignEnv {
                 };
                 if !self.quiet {
                     let mut errs = Vec::new();
-                    self.write_display(rest, 10, now, loc, true, &mut errs);
+                    self.write_display(rest, 10, loc, true, &mut errs);
                     emit_output_errors(&errs);
                 } else {
                     crate::prim::note_window_effect();
@@ -545,7 +544,7 @@ impl ForeignEnv {
                 };
                 let mut errs = Vec::new();
                 let text = format::format_sformat(
-                    args, base, now, loc, name == "$sformatAV", &mut errs,
+                    args, base, loc, name == "$sformatAV", &mut errs,
                 );
                 emit_output_errors(&errs);
                 let packed = format::str_value(&text);

@@ -78,9 +78,10 @@ fn push_pad(out: &mut String, c: char, n: usize) {
 
 /// Append one formatted value.  Semantics are fmt_val's original,
 /// bug-compat included: the final length (sign included) pads up to
-/// `width`; bases 2/8/16 zero-pad, base 10 pads with the caller's
-/// zero_pad flag (which every %d call site passes as false — base-10
-/// space-pads even for "%05d", matching dollar_display.cxx).
+/// `width`, with the fill the caller asks for.  The %d call sites all
+/// pass false — base 10 space-pads even for "%05d", matching
+/// dollar_display.cxx — and the 2/8/16 sites ask for zero fill unless
+/// left justification has moved the padding to the right.
 fn fmt_val_into(
     out: &mut String,
     v: &Value,
@@ -90,7 +91,9 @@ fn fmt_val_into(
     signed: bool,
 ) {
     let w = width.unwrap_or(0);
-    let pad = if zero_pad || base != 10 { '0' } else { ' ' };
+    // Zero fill is the caller's choice, not the base's: '-' declines it
+    // so the padding can move to the right as spaces.
+    let pad = if zero_pad { '0' } else { ' ' };
     if v.width <= 64 {
         // allocation-free path: digit count first, pad, then digits
         let x = v.as_u64();
@@ -145,12 +148,11 @@ fn fmt_val_into(
 pub fn format_args(
     args: &[Arg],
     default_base: u32,
-    now: u64,
     loc: &str,
     errs: &mut Vec<String>,
 ) -> String {
     let mut out = String::new();
-    format_args_into(&mut out, args, default_base, now, loc, errs);
+    format_args_into(&mut out, args, default_base, loc, errs);
     out
 }
 
@@ -160,7 +162,6 @@ pub fn format_args_into(
     out: &mut String,
     args: &[Arg],
     default_base: u32,
-    now: u64,
     loc: &str,
     errs: &mut Vec<String>,
 ) {
@@ -169,11 +170,11 @@ pub fn format_args_into(
         match &args[i] {
             Arg::Str(fmt) => {
                 i += 1;
-                format_str(fmt, args, &mut i, out, now, loc, errs);
+                format_str(fmt, args, &mut i, out, loc, errs);
             }
             Arg::Val(v, sg) => {
                 fmt_val_into(
-                    out, v, default_base, false,
+                    out, v, default_base, default_base != 10,
                     Some(max_width(v.width, default_base, *sg)), *sg,
                 );
                 i += 1;
@@ -184,7 +185,7 @@ pub fn format_args_into(
                 errs.push("unexpected real number argument\n".to_string());
                 let v = Value::from_u64(64, (*r as i64) as u64);
                 fmt_val_into(
-                    out, &v, default_base, false,
+                    out, &v, default_base, default_base != 10,
                     Some(max_width(64, default_base, true)), true,
                 );
                 i += 1;
@@ -224,7 +225,6 @@ fn unpack_str(v: &Value) -> String {
 pub fn format_sformat(
     args: &[Arg],
     default_base: u32,
-    now: u64,
     loc: &str,
     fmt_first: bool,
     errs: &mut Vec<String>,
@@ -232,7 +232,7 @@ pub fn format_sformat(
     if !fmt_first {
         // $swrite*: format("d", ..., restricted=false) — the $display
         // engine exactly
-        return format_args(args, default_base, now, loc, errs);
+        return format_args(args, default_base, loc, errs);
     }
     // $sformat: format("d", ..., restricted=true) — ONLY the first
     // argument is a format (a string, or a bit-packed string value);
@@ -243,12 +243,12 @@ pub fn format_sformat(
     match args.first() {
         Some(Arg::Str(f)) => {
             i = 1;
-            format_str(f, args, &mut i, &mut out, now, loc, errs);
+            format_str(f, args, &mut i, &mut out, loc, errs);
         }
         Some(Arg::Val(v, _)) => {
             i = 1;
             let fmt = unpack_str(v);
-            format_str(&fmt, args, &mut i, &mut out, now, loc, errs);
+            format_str(&fmt, args, &mut i, &mut out, loc, errs);
         }
         _ => {}
     }
@@ -257,7 +257,7 @@ pub fn format_sformat(
             Arg::Str(text) => out.push_str(text),
             Arg::Val(v, sg) => {
                 fmt_val_into(
-                    &mut out, v, default_base, false,
+                    &mut out, v, default_base, default_base != 10,
                     Some(max_width(v.width, default_base, *sg)), *sg,
                 );
             }
@@ -265,7 +265,7 @@ pub fn format_sformat(
                 errs.push("unexpected real number argument\n".to_string());
                 let v = Value::from_u64(64, (*r as i64) as u64);
                 fmt_val_into(
-                    &mut out, &v, default_base, false,
+                    &mut out, &v, default_base, default_base != 10,
                     Some(max_width(64, default_base, true)), true,
                 );
             }
@@ -346,7 +346,21 @@ fn c_format_real(spec: char, width: Option<usize>, prec: Option<usize>, v: f64) 
             s.to_string()
         }
     }
-    let s = match spec {
+    // A non-finite value has no mantissa to split from an exponent, and no
+    // exponent to compare against the precision, so neither %e nor %g can
+    // be computed from one.  C printf renders all three conversions the
+    // same way here, and still pads to the field width.
+    let s = if !v.is_finite() {
+        let t = if v.is_nan() {
+            "nan"
+        } else if v.is_sign_positive() {
+            "inf"
+        } else {
+            "-inf"
+        };
+        t.to_string()
+    } else {
+        match spec {
         'f' => format!("{:.*}", prec.unwrap_or(6), v),
         'e' => c_e(v, prec.unwrap_or(6)),
         _ => {
@@ -362,6 +376,7 @@ fn c_format_real(spec: char, width: Option<usize>, prec: Option<usize>, v: f64) 
                 let decs = (p as i32 - 1 - exp).max(0) as usize;
                 trim_g(&format!("{:.*}", decs, v))
             }
+        }
         }
     };
     let w = width.unwrap_or(0);
@@ -398,7 +413,6 @@ fn format_str(
     args: &[Arg],
     i: &mut usize,
     out: &mut String,
-    now: u64,
     loc: &str,
     errs: &mut Vec<String>,
 ) {
@@ -422,6 +436,14 @@ fn format_str(
         // parse %[0][width]spec
         let mut zero_pad = false;
         let mut width: Option<usize> = None;
+        // '-' left-justifies within the field (C/Verilog printf).  It may
+        // precede the zero flag; zero padding is meaningless when left
+        // justified, so '-' wins, as it does in C.
+        let mut left_justify = false;
+        while cs.peek() == Some(&'-') {
+            left_justify = true;
+            cs.next();
+        }
         if cs.peek() == Some(&'0') {
             zero_pad = true;
             cs.next();
@@ -452,6 +474,8 @@ fn format_str(
         // "%0d" means minimal width (the 0 is a width of zero), while a
         // bare "%d" means the maximal column width
         let explicit_min = zero_pad && width.is_none();
+        // where this conversion's output begins, so '-' can re-align it
+        let field_start = out.len();
         match spec.to_ascii_lowercase() {
             '%' => out.push('%'),
             'd' | 'u' => {
@@ -470,7 +494,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 16, false)))
                 };
-                fmt_val_into(out, &v, 16, true, w, false);
+                fmt_val_into(out, &v, 16, !left_justify, w, false);
             }
             'o' => {
                 let (v, _) = next_val(args, i, errs);
@@ -479,7 +503,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 8, false)))
                 };
-                fmt_val_into(out, &v, 8, true, w, false);
+                fmt_val_into(out, &v, 8, !left_justify, w, false);
             }
             'b' => {
                 let (v, _) = next_val(args, i, errs);
@@ -488,7 +512,7 @@ fn format_str(
                 } else {
                     width.or(Some(max_width(v.width, 2, false)))
                 };
-                fmt_val_into(out, &v, 2, true, w, false);
+                fmt_val_into(out, &v, 2, !left_justify, w, false);
             }
             'c' => {
                 let (v, _) = next_val(args, i, errs);
@@ -557,7 +581,44 @@ fn format_str(
             }
             '0' => { /* %0 alone: nothing */ }
             'm' => out.push_str(loc),
-            other => panic!("trs-interp: unimplemented format %{other} (now={now})"),
+            // An unrecognized conversion is not fatal: the reference
+            // engine copies the spec through as literal text and leaves
+            // the argument to whatever formats it next, so no format
+            // string a design can write ends the simulation.
+            _ => {
+                out.push('%');
+                if left_justify {
+                    out.push('-');
+                }
+                if zero_pad {
+                    out.push('0');
+                }
+                if let Some(w) = width {
+                    push_u64_digits(out, w as u64, 10);
+                }
+                if let Some(pr) = prec {
+                    out.push('.');
+                    push_u64_digits(out, pr as u64, 10);
+                }
+                out.push(spec);
+            }
+        }
+        // Left justify by rotating the field: the conversions pad on the
+        // left, so the spaces they added move to the end.  Only spaces are
+        // moved -- a value's own leading zeros are part of the digits, and
+        // zero_pad is already off in this branch.
+        if left_justify {
+            let field = &out[field_start..];
+            let body = field.trim_start_matches(' ');
+            let padding = field.len() - body.len();
+            if padding > 0 {
+                let body = body.to_string();
+                out.truncate(field_start);
+                out.push_str(&body);
+                for _ in 0..padding {
+                    out.push(' ');
+                }
+            }
         }
     }
 }
@@ -574,25 +635,105 @@ mod tests {
     fn verilog_column_widths() {
         // 8-bit %d pads to 3 columns
         let mut e = Vec::new();
-        let s = format_args(&[Arg::Str("v=%d".into()), v(8, 7)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("v=%d".into()), v(8, 7)], 10, "", &mut e);
         assert_eq!(s, "v=  7");
-        let s = format_args(&[Arg::Str("v=%0d".into()), v(8, 7)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("v=%0d".into()), v(8, 7)], 10, "", &mut e);
         assert_eq!(s, "v=7");
-        let s = format_args(&[Arg::Str("v=%h".into()), v(8, 7)], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("v=%h".into()), v(8, 7)], 10, "", &mut e);
         assert_eq!(s, "v=07");
+    }
+
+    #[test]
+    fn unknown_spec_is_not_fatal() {
+        // The reference copies an unrecognized conversion through as text
+        // and leaves the argument for the next one; nothing aborts.
+        let mut e = Vec::new();
+        let s = format_args(
+            &[Arg::Str("A %v B".into()), v(16, 0)],
+            10, "", &mut e,
+        );
+        assert_eq!(s, "A %v B    0");
+        // flags, width and precision are echoed as written, case included
+        let s = format_args(&[Arg::Str("%-7z|%0.3Q".into())], 10, "", &mut e);
+        assert_eq!(s, "%-7z|%0.3Q");
+    }
+
+    #[test]
+    fn non_finite_reals() {
+        // No mantissa to split from an exponent: C printf renders these
+        // the same for every conversion, and still pads to the width.
+        let mut e = Vec::new();
+        for spec in ["%f", "%e", "%g"] {
+            let s = format_args(
+                &[Arg::Str(spec.into()), Arg::Real(f64::NAN)],
+                10, "", &mut e,
+            );
+            assert_eq!(s, "nan", "{spec} of NaN");
+            let s = format_args(
+                &[Arg::Str(spec.into()), Arg::Real(f64::INFINITY)],
+                10, "", &mut e,
+            );
+            assert_eq!(s, "inf", "{spec} of +inf");
+            let s = format_args(
+                &[Arg::Str(spec.into()), Arg::Real(f64::NEG_INFINITY)],
+                10, "", &mut e,
+            );
+            assert_eq!(s, "-inf", "{spec} of -inf");
+        }
+        let s = format_args(
+            &[Arg::Str("%10e".into()), Arg::Real(f64::INFINITY)],
+            10, "", &mut e,
+        );
+        assert_eq!(s, "       inf");
+    }
+
+    #[test]
+    fn left_justify() {
+        let mut e = Vec::new();
+        // the report shape that found this: %5d/%-5d
+        let s = format_args(
+            &[Arg::Str("%5d/%-5d".into()), v(32, 12), v(32, 12)],
+            10, "", &mut e,
+        );
+        assert_eq!(s, "   12/12   ");
+        // no padding to move when the value fills the field
+        let s = format_args(&[Arg::Str("%-3d".into()), v(32, 123)], 10, "", &mut e);
+        assert_eq!(s, "123");
+        // wider than the field: nothing is truncated
+        let s = format_args(&[Arg::Str("%-2d".into()), v(32, 12345)], 10, "", &mut e);
+        assert_eq!(s, "12345");
+        // '-' beats '0', as in C
+        let s = format_args(&[Arg::Str("%-05d".into()), v(32, 42)], 10, "", &mut e);
+        assert_eq!(s, "42   ");
+        // an explicit width replaces the natural column width, so the whole
+        // field pads right (C printf: "%-6x" of 0x2f is "2f    ")
+        let s = format_args(&[Arg::Str("%-6h".into()), v(16, 0x2f)], 10, "", &mut e);
+        assert_eq!(s, "2f    ");
+        // with no width, %h still zero-fills to the value's column width
+        let s = format_args(&[Arg::Str("%h".into()), v(16, 0x2f)], 10, "", &mut e);
+        assert_eq!(s, "002f");
+        // %s ignores the width field altogether (so does "%6s"), which
+        // leaves '-' nothing to re-align; pinned so a future width fix for
+        // strings has to revisit this deliberately
+        let s = format_args(
+            &[Arg::Str("[%-6s]".into()), Arg::Str("ab".into())],
+            10, "", &mut e,
+        );
+        assert_eq!(s, "[ab]");
+        assert!(e.is_empty(), "unexpected errors: {e:?}");
     }
 
     #[test]
     fn bare_args_default_base() {
         let mut e = Vec::new();
-        let s = format_args(&[v(4, 5)], 10, 0, "", &mut e);
+        let s = format_args(&[v(4, 5)], 10, "", &mut e);
         assert_eq!(s, " 5"); // 4-bit max is 15 -> 2 columns
     }
 
     #[test]
     fn escapes() {
         let mut e = Vec::new();
-        let s = format_args(&[Arg::Str("a\\nb".into())], 10, 0, "", &mut e);
+        let s = format_args(&[Arg::Str("a\\nb".into())], 10, "", &mut e);
         assert_eq!(s, "a\nb");
     }
 }
