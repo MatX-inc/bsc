@@ -850,10 +850,12 @@ findAssump i as =
 mkSchemeNoBVs :: CQType -> TI Scheme
 mkSchemeNoBVs cqt = do
     sy <- getSymTab
-    bvs <- getBoundTVs
+    bvs <- getBoundTVSet
     case convCQType sy cqt of
      Left emsg -> err emsg
-     Right qt -> return (quantify (tv qt \\ bvs) qt)
+     -- filter, not (\\): quantify numbers TGens in list order, so the
+     -- order of `tv qt` has to survive into the .bo
+     Right qt -> return (quantify (filter (`S.notMember` bvs) (tv qt)) qt)
 
 mkQualType :: CQType -> TI (Qual Type)
 mkQualType cqt = do
