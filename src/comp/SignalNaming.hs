@@ -120,10 +120,10 @@ signalNameFromAExpr' (expr@AMGate { }) =
     ppString (ae_objid expr) ++ "_" ++
     ppString (unQualId (ae_clkid expr)) ++ "_" ++ "GATE"
 
--- XXX assumes that "__[a-z][0-9]*" suffices are compiler-generated
+-- XXX assumes that "__[a-z][0-9]+" suffices are compiler-generated
 dropGeneratedSuffixes :: String -> String
 dropGeneratedSuffixes =
-    let generated_suffix = mkRegex "__[a-z][0-9]"
+    let generated_suffix = mkRegex "__[a-z][0-9]+"
     in  \name -> concat (splitRegex generated_suffix name)
 
 opToString :: PrimOp -> String
