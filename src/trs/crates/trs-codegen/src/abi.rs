@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use trs_ir::{Design, Expr, StrId};
+use trs_ir::{GlobalStrId, MethRef, ModuleStrId, Design, Expr, StrId};
 
 /// Callback for foreign statements inside compiled bodies (the
 /// $display family and value/ActionValue tasks): compiled code
@@ -90,7 +90,7 @@ pub static BRAM_WARN: std::sync::OnceLock<fn(block: usize, addr: u64)> =
 pub struct PrimCallSpec {
     /// global instance index of the prim
     pub inst: usize,
-    pub method: StrId,
+    pub method: GlobalStrId,
     /// port the call addresses, for a multi-ported prim method
     pub port: u32,
     /// argument widths, in order (marshaled as consecutive word runs)
@@ -197,7 +197,7 @@ pub struct InstEnv {
     /// TRACED artifacts only: method name -> recording slots for its
     /// VCD ports (EN time / args / result), stored by inlined call
     /// sites.  Part of the exec dedup signature.
-    pub rec_meths: HashMap<StrId, RecMeth>,
+    pub rec_meths: HashMap<MethRef, RecMeth>,
 }
 
 /// Arena recording slots for one user-module method's VCD ports
@@ -236,8 +236,6 @@ pub struct PlanEnv<'a> {
 pub struct AfSpec {
     /// method index in the TOP module's method list
     pub method_idx: usize,
-    /// method name — EN_<m>/RDY_<m> sibling lookups
-    pub method: StrId,
     /// constant argument values in method-arg order:
     /// (width, limbs normalized to ceil(width/64) words)
     pub argv: Vec<(u32, Vec<u64>)>,
@@ -286,7 +284,7 @@ pub struct RuleSpec {
 pub struct ForeignSpec {
     /// instance for $display location reporting
     pub inst: usize,
-    pub func: StrId,
+    pub func: GlobalStrId,
     /// result width (0 = plain action, no result)
     pub ret_width: u32,
     pub args: Vec<FArgSpec>,
@@ -360,14 +358,14 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
         w(o, v.len() as u32);
         for f in v {
             w(o, f.inst as u32);
-            w(o, f.func);
+            w(o, f.func.0);
             w(o, f.ret_width);
             w(o, f.args.len() as u32);
             for a in &f.args {
                 match a {
                     FArgSpec::Str(sid) => {
                         w(o, 0);
-                        w(o, *sid);
+                        w(o, sid.0);
                         w(o, 0);
                     }
                     FArgSpec::Num { width, signed } => {
@@ -393,7 +391,7 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
         w(o, v.len() as u32);
         for pc in v {
             w(o, pc.inst as u32);
-            w(o, pc.method);
+            w(o, pc.method.0);
             w(o, pc.port);
             w(o, pc.ret_width);
             w(o, pc.is_action as u32);
@@ -448,14 +446,14 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
                 // buffer walk desynchronizes on a garbage width
                 // (review finding: unknown tags fell open as Num)
                 args.push(match tag {
-                    0 => FArgSpec::Str(a),
+                    0 => FArgSpec::Str(ModuleStrId(a)),
                     1 => FArgSpec::Num { width: a, signed: sg != 0 },
                     2 => FArgSpec::Real,
                     3 => FArgSpec::StrDyn,
                     _ => return None,
                 });
             }
-            v.push(ForeignSpec { inst, func, ret_width, args });
+            v.push(ForeignSpec { inst, func: GlobalStrId(func), ret_width, args });
         }
         Some(v)
     }
@@ -479,7 +477,7 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
             for _ in 0..argc {
                 arg_widths.push(r(b, i)?);
             }
-            v.push(PrimCallSpec { inst, method, port, arg_widths, ret_width, is_action });
+            v.push(PrimCallSpec { inst, method: GlobalStrId(method), port, arg_widths, ret_width, is_action });
         }
         Some(v)
     }
@@ -518,13 +516,13 @@ impl Drop for AotModeGuard {
 }
 /// Sentinel method id in a PrimCallSpec: not a method call — the
 /// trampoline answers the prim's gate_out() (compiled Expr::Gate).
-pub const GATE_OUT_METHOD: StrId = u32::MAX;
+pub const GATE_OUT_METHOD: GlobalStrId = GlobalStrId(u32::MAX);
 
 /// Sentinel func id in a ForeignSpec: not a foreign function — the
 /// callback concatenates its (StrDyn) arguments' texts and interns the
 /// result, returning the new string id (compiled PrimOp::StringConcat,
 /// mirroring the interp's per-evaluation intern_dyn).
-pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
+pub const STRING_CONCAT_FUNC: GlobalStrId = GlobalStrId(u32::MAX - 1);
 /// Boundary-tax experiment (sharding rung, step 1): request one
 /// module TYPE's methods be emitted as standalone functions on the
 /// proposed slot ABI (arena, env, inst_base, token_base, args...) and
@@ -543,8 +541,8 @@ pub struct BoundaryReq {
     pub exemplar: usize,
     /// method index in the module's methods table
     pub mi: usize,
-    /// method name id
-    pub method: StrId,
+    /// the reference call sites use to reach this method
+    pub method: MethRef,
     /// BK_* kind: 0 = value result fn, 1 = action body fn,
     /// 2 = actionvalue body+result fn, 3 = actionvalue result-only fn
     pub kind: u8,
@@ -558,7 +556,7 @@ pub struct BoundaryReq {
 /// (result widths are known only at lowering): call sites consult it
 /// to divert.  Keyed (mir, method, kind).
 pub type BoundaryMap =
-    HashMap<(usize, StrId, u8), (String, u32, Vec<(StrId, u32)>)>;
+    HashMap<(usize, MethRef, u8), (String, u32, Vec<(StrId, u32)>)>;
 
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is

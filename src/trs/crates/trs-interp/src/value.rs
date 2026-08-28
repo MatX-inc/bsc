@@ -80,6 +80,52 @@ impl std::ops::DerefMut for Limbs {
     }
 }
 
+/// A string built while the design runs: an index into the engine's own
+/// arena.  It belongs to no module, so it is numbered on its own and not
+/// as a position in anyone's table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DynStrId(pub u32);
+
+impl DynStrId {
+    #[inline]
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// What a string-valued marker denotes: a literal a module interned, or
+/// a string the run produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StrRef {
+    Static(trs_ir::ModuleStrId),
+    Dyn(DynStrId),
+}
+
+/// Distinguishes the two spaces in a single word.  Both ids are 32 bits,
+/// so the tag sits above them and neither space constrains the other's
+/// numbering.
+const DYN_TAG: u64 = 1 << 32;
+
+impl StrRef {
+    /// The form the arena and the marker value carry.
+    #[inline]
+    pub fn to_word(self) -> u64 {
+        match self {
+            StrRef::Static(i) => i.0 as u64,
+            StrRef::Dyn(i) => DYN_TAG | i.0 as u64,
+        }
+    }
+
+    #[inline]
+    pub fn from_word(w: u64) -> StrRef {
+        if w & DYN_TAG != 0 {
+            StrRef::Dyn(DynStrId(w as u32))
+        } else {
+            StrRef::Static(trs_ir::ModuleStrId(w as u32))
+        }
+    }
+}
+
 /// Marker width for string-valued `Value`s (see `Value::str_ref`).
 pub const STR_MARKER: u32 = u32::MAX;
 pub const REAL_MARKER: u32 = u32::MAX - 1;
@@ -488,13 +534,13 @@ impl Value {
     /// A dynamically selected string value: carries an interned string id
     /// instead of bits.  Only valid as a task argument; the marker width
     /// keeps it inert through muxes and def stores.
-    pub fn str_ref(id: u32) -> Value {
-        Value { width: STR_MARKER, limbs: Limbs::S([id as u64]) }
+    pub fn str_ref(r: StrRef) -> Value {
+        Value { width: STR_MARKER, limbs: Limbs::S([r.to_word()]) }
     }
 
-    pub fn as_str_id(&self) -> Option<u32> {
+    pub fn as_str_ref(&self) -> Option<StrRef> {
         if self.width == STR_MARKER {
-            Some(self.limbs[0] as u32)
+            Some(StrRef::from_word(self.limbs[0]))
         } else {
             None
         }
@@ -622,6 +668,23 @@ impl Value {
 
 #[cfg(test)]
 mod tests {
+    /// The two string spaces share one word across the compiled
+    /// boundary and one marker value, so the tag has to survive both
+    /// directions for every id either space can hold.
+    #[test]
+    fn str_ref_word_round_trip() {
+        for n in [0u32, 1, 0x7fff_ffff, 0x8000_0000, u32::MAX] {
+            let stat = StrRef::Static(trs_ir::ModuleStrId(n));
+            let dynr = StrRef::Dyn(DynStrId(n));
+            assert_eq!(StrRef::from_word(stat.to_word()), stat, "static {n}");
+            assert_eq!(StrRef::from_word(dynr.to_word()), dynr, "dyn {n}");
+            assert_ne!(stat.to_word(), dynr.to_word(), "spaces collide at {n}");
+            // and through a marker value, which is how a mux carries one
+            assert_eq!(Value::str_ref(stat).as_str_ref(), Some(stat));
+            assert_eq!(Value::str_ref(dynr).as_str_ref(), Some(dynr));
+        }
+    }
+
     use super::*;
 
     #[test]

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::StrId;
+use crate::{GlobalStrId, MethRef, StrId};
 
 /// A combinational expression.  Widths are explicit everywhere; values wider
 /// than 64 bits carry their constants as little-endian 32-bit limbs (matching
@@ -22,19 +22,19 @@ pub enum Expr {
     MethCall {
         width: u32,
         instance: StrId,
-        method: StrId,
+        method: MethRef,
         /// Port number for multi-ported methods.
         port: u32,
         args: Vec<Expr>,
     },
     /// The returned value of an ActionValue method; the action side carries
     /// the arguments (split as in `AMethValue`, `ASyntax.hs:1049`).
-    MethValue { width: u32, instance: StrId, method: StrId },
+    MethValue { width: u32, instance: StrId, method: MethRef },
     /// Value of an ActionValue foreign task, correlated by cookie
     /// (`ATaskValue`).
     TaskValue { width: u32, cookie: u32 },
     /// Foreign (BDPI) value function call.
-    ForeignCall { width: u32, func: StrId, args: Vec<Expr> },
+    ForeignCall { width: u32, func: GlobalStrId, args: Vec<Expr> },
     /// String literal (`ASStr`) — `$display` format strings and the like.
     Str(StrId),
     /// An abstract clock value (`ASClock`) — appears in instantiation
@@ -141,14 +141,14 @@ pub enum Action {
     /// Conditional action-method call: `if (cond) instance.method(args)`.
     MethCall {
         instance: StrId,
-        method: StrId,
+        method: MethRef,
         port: u32,
         cond: Expr,
         args: Vec<Expr>,
     },
     /// Foreign action call ($display-family or BDPI action).
     Foreign {
-        func: StrId,
+        func: GlobalStrId,
         cond: Expr,
         args: Vec<Expr>,
         /// Per-arg signed-display flags (`encodeArgs`'s "-" prefix,
@@ -158,7 +158,7 @@ pub enum Action {
     /// Foreign ActionValue task; `cookie` links to `Expr::TaskValue`,
     /// `temp` is the def receiving the value (`ATaskAction`).
     Task {
-        func: StrId,
+        func: GlobalStrId,
         cookie: u32,
         temp: Option<StrId>,
         width: u32,

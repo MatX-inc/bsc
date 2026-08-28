@@ -73,7 +73,7 @@ pub(crate) struct ResolvedBinds {
     pub params: Vec<(ir::StrId, Value)>,
     /// always_enabled Action methods to auto-fire, in interface
     /// order, each with its constant argument values.
-    pub autofire: Vec<(ir::StrId, Vec<Value>)>,
+    pub autofire: Vec<(ir::MethRef, Vec<Value>)>,
     /// (composition index, entry index) -> autofire indices to invoke
     /// after that entry's nodes: each method's EXEC schedule position.
     /// A method's Exec node cuts the top's own schedule at the LAST
@@ -199,7 +199,8 @@ pub(crate) fn resolve(
         .iter()
         .find(|m| m.name == d.top)
         .ok_or_else(|| "top module not found".to_string())?;
-    let s = |id: ir::StrId| d.strings[id as usize].as_str();
+    let s = |id: ir::StrId| d.name(id);
+    let gs = |id: ir::GlobalStrId| d.global_name(id);
 
     // ---- bindable surface ----
     // top-level arguments/parameters: the module's MethodArg inputs
@@ -210,9 +211,9 @@ pub(crate) fn resolve(
         .map(|p| (p.name, p.width))
         .collect();
     // always_enabled methods (arm even with no bindings on the CLI)
-    let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> =
+    let mut autofire: Vec<(ir::MethRef, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> =
         Vec::new();
-    for m in &top.methods {
+    for (mi, m) in top.methods.iter().enumerate() {
         if !m.always_enabled {
             continue;
         }
@@ -234,7 +235,7 @@ pub(crate) fn resolve(
         // reference to a constant def — chase the chain rather than
         // pattern-matching one shape.
         if let Some(rdy_id) = m.rdy {
-            if let Some(rm) = top.methods.iter().find(|x| x.name == rdy_id) {
+            if let Some((_, rm)) = top.meth(rdy_id) {
                 let const_true = match &rm.result {
                     None => true,
                     Some(e) => {
@@ -252,7 +253,7 @@ pub(crate) fn resolve(
             }
         }
         autofire.push((
-            m.name,
+            ir::MethRef::User(mi as u32),
             m.args.iter().map(|a| (a.name, a.base, a.width)).collect(),
         ));
     }
@@ -321,11 +322,15 @@ pub(crate) fn resolve(
         .iter()
         .map(|&(n, w)| (s(n).to_string(), n, w))
         .collect();
-    for (mname, args) in &autofire {
+    for (mref, args) in &autofire {
+        let mname = match top.meth(*mref) {
+            Some((_, m)) => m.name,
+            None => continue,
+        };
         for &(an, abase, aw) in args {
             // the binding key is the user-facing "<method>.<arg>"
             let disp = abase.map(|b| s(b)).unwrap_or(s(an));
-            surface.push((format!("{}.{}", s(*mname), disp), an, aw));
+            surface.push((format!("{}.{}", s(mname), disp), an, aw));
         }
     }
 
@@ -386,17 +391,15 @@ pub(crate) fn resolve(
         return Err(format!(
             "top-level module `{}' requires bindings for: {} \
              (supply +NAME=value, or --bind NAME=value)",
-            s(d.top),
+            gs(d.top),
             missing.join(", ")
         ));
     }
 
     // EN_<m> reads constant 1 for auto-fired methods (tied high)
-    let mut af: Vec<(ir::StrId, Vec<Value>)> = Vec::new();
-    for (mname, args) in &autofire {
-        if let Some(en) =
-            top.methods.iter().find(|m| m.name == *mname).and_then(|m| m.en)
-        {
+    let mut af: Vec<(ir::MethRef, Vec<Value>)> = Vec::new();
+    for (mref, args) in &autofire {
+        if let Some(en) = top.meth(*mref).and_then(|(_, m)| m.en) {
             params.push((en, Value::from_u64(1, 1)));
         }
         let argv: Vec<Value> = args
@@ -409,7 +412,7 @@ pub(crate) fn resolve(
                     .expect("auto-fire arg bound above")
             })
             .collect();
-        af.push((*mname, argv));
+        af.push((*mref, argv));
     }
 
     let salt = if bound.is_empty() && af.is_empty() {
@@ -442,9 +445,8 @@ pub(crate) fn resolve(
             .collect();
         for (mi, _) in af.iter().enumerate() {
             let m = top
-                .methods
-                .iter()
-                .find(|x| x.name == af[mi].0)
+                .meth(af[mi].0)
+                .map(|(_, mm)| mm)
                 .expect("autofire method exists");
             if body_calls_user_child(top, &m.body, &user_children) {
                 return Err(format!(
@@ -462,7 +464,7 @@ pub(crate) fn resolve(
                 .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| d.strings[e.instance as usize].is_empty())
+                .filter(|(_, e)| d.name(e.instance).is_empty())
                 .map(|(ei, e)| (ei, e.domain, e.segment))
                 .collect();
             if tops.is_empty() {
@@ -470,8 +472,9 @@ pub(crate) fn resolve(
             }
             // placement per method: (anchor, cut segment, pos in cut)
             let mut placed: Vec<(Option<usize>, u32, usize, usize)> = Vec::new();
-            for (mi, (mname, _)) in af.iter().enumerate() {
-                let meth = top.methods.iter().find(|x| x.name == *mname).unwrap();
+            for (mi, (mref, _)) in af.iter().enumerate() {
+                let meth = top.meth(*mref).map(|(_, m)| m).unwrap();
+                let mname_of = Some(meth.name);
                 let dm = meth.clock_domain;
                 let Some(ms) = top
                     .schedule
@@ -497,7 +500,7 @@ pub(crate) fn resolve(
                     .find_map(|(k, seg)| {
                         seg.cut
                             .iter()
-                            .position(|c| c == mname)
+                            .position(|c| Some(*c) == mname_of)
                             .map(|p| (k as u32, p))
                     })
                 else {
@@ -529,7 +532,9 @@ pub(crate) fn resolve(
                 "top-level always_enabled method `{}' has no schedule \
                  anchor: v1 auto-firing requires a top-level rule in \
                  the method's clock domain",
-                s(af[mi].0)
+                top.meth(af[mi].0)
+                    .map(|(_, m)| s(m.name))
+                    .unwrap_or("?")
             ));
         }
     }

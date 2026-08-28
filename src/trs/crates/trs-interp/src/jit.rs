@@ -158,9 +158,10 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         };
         *out = g;
     } else if is_action {
-        interp.call_action(inst, method, port, &argv);
+        interp.call_action(inst, MethRef::Prim(method), port, &argv);
     } else {
-        let v = interp.call_value(inst, method, port, &argv, ret_width);
+        let v =
+            interp.call_value(inst, MethRef::Prim(method), port, &argv, ret_width);
         let words = ((ret_width.max(1) as usize) + 63) / 64;
         let dst = std::slice::from_raw_parts_mut(out, words);
         for (i, d) in dst.iter_mut().enumerate() {
@@ -175,7 +176,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         let meth = if method == trs_codegen::abi::GATE_OUT_METHOD {
             "$gate_out".to_string()
         } else {
-            interp.s(method).to_string()
+            interp.gs(method).to_string()
         };
         // keyed Class.method: the class decides the fix shape (e.g.
         // BypassWire has no arena kind — every access bounces by
@@ -541,7 +542,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             FArgSpec::Str(sid) => {
                 // Arc-interned once per distinct string id: a clone is
                 // a refcount bump, not a heap copy
-                argv.push(Arg::Str(interp.arg_str(sid)));
+                argv.push(Arg::Str(interp.arg_str(StrRef::Static(sid))));
             }
             FArgSpec::Num { width, signed } => {
                 let w = width;
@@ -566,7 +567,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
                 // -> the interp's Arg::Str, through the same Arc cache
                 // (dyn ids are stable once interned)
                 let word = *args.add(off);
-                argv.push(Arg::Str(interp.arg_str(word as u32)));
+                argv.push(Arg::Str(interp.arg_str(StrRef::from_word(word))));
                 off += 1;
             }
         }
@@ -582,7 +583,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             }
         }
         let id = interp.intern_dyn(text);
-        *out = id as u64;
+        *out = StrRef::Dyn(id).to_word();
         argv.clear();
         interp.foreign_argv = argv;
         if let Some(t0) = _t0 {
@@ -597,7 +598,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
     // both copied into scratch because foreign_action takes &mut self)
     let mut fname = std::mem::take(&mut interp.fname_buf);
     fname.clear();
-    fname.push_str(interp.s(func));
+    fname.push_str(interp.gs(func));
     let mut loc = std::mem::take(&mut interp.loc_buf);
     loc.clear();
     loc.push_str("top");
@@ -812,7 +813,10 @@ impl<'a> ConeAnalyzer<'a> {
                 for a in args {
                     sub!(a);
                 }
-                let mname = self.d.strings[*method as usize].clone();
+                let mname = match method {
+                    MethRef::Prim(g) => self.d.global_name(*g).to_string(),
+                    MethRef::User(_) => String::new(),
+                };
                 match (self.kind)(mir, *instance) {
                     ChildRef::Prim(c) => {
                         let (ok, st) = match c {
@@ -838,9 +842,8 @@ impl<'a> ConeAnalyzer<'a> {
                     }
                     ChildRef::User(cmir) => {
                         let mm = self.d.modules[cmir]
-                            .methods
-                            .iter()
-                            .find(|m| m.name == *method);
+                            
+                            .meth(*method).map(|(_, mm)| mm);
                         match mm {
                             Some(m) if m.body.is_empty() && m.result.is_some() => {
                                 let aset: std::collections::HashSet<StrId> =
@@ -865,7 +868,7 @@ impl<'a> ConeAnalyzer<'a> {
                             }
                             None => {
                                 if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
-                                    eprintln!("why: method-not-found {}", self.d.strings[*method as usize]);
+                                    eprintln!("why: method-not-found {method:?}");
                                 }
                                 outl = false;
                                 stab = false;
@@ -874,7 +877,7 @@ impl<'a> ConeAnalyzer<'a> {
                     }
                     ChildRef::Opaque => {
                         if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
-                            eprintln!("why: opaque-child {}", self.d.strings[*instance as usize]);
+                            eprintln!("why: opaque-child {}", self.d.name(*instance));
                         }
                         outl = false;
                         stab = false;
@@ -1147,7 +1150,7 @@ fn aot_emit(
                     if !quiet {
                         eprintln!(
                             "trs boundary: {} stays inline: always_enabled",
-                            env.d.strings[m.name as usize]
+                            env.d.name(m.name)
                         );
                     }
                     continue;
@@ -1167,7 +1170,7 @@ fn aot_emit(
                         mir,
                         exemplar,
                         mi,
-                        method: m.name,
+                        method: MethRef::User(mi as u32),
                         kind,
                         sym: format!("trs_bnd{mir}_{mi}_{kind}"),
                         args: args.clone(),
@@ -1200,7 +1203,7 @@ fn aot_emit(
                         .filter(|&i| i < env.d.modules.len())
                         .or_else(|| {
                             env.d.modules.iter().position(|m| {
-                                env.d.strings[m.name as usize] == sel
+                                env.d.global_name(m.name) == sel
                             })
                         });
                     let Some(mir) = mir else {
@@ -1218,7 +1221,7 @@ fn aot_emit(
                         eprintln!(
                             "trs boundary: module {} (mir {mir}), {} method fns \
                              requested",
-                            env.d.strings[env.d.modules[mir].name as usize],
+                            env.d.global_name(env.d.modules[mir].name),
                             reqs.len()
                         );
                     }
@@ -2097,7 +2100,7 @@ impl Interp {
         &mut self,
         rcomps: &[RComp],
         sources: &[crate::ClockSource],
-        clocks: &[StrId],
+        clocks: &[GlobalStrId],
         driver_clock: &HashMap<usize, usize>,
     ) {
         let Some(mut img) = self.runcore_pending.take() else { return };
@@ -2131,7 +2134,7 @@ impl Interp {
         // the boot PANICS on an unexpected task rather than fall back,
         // so this gate must make that unreachable.
         let lib_only = self.d.foreign_funcs.iter().all(|f| {
-            let (n, c) = (self.s(f.name), self.s(f.c_name));
+            let (n, c) = (self.gs(f.name), self.gs(f.c_name));
             (n == "rand32" && c == "rand32") || (n == "srand" && c == "srand")
         });
         if !lib_only {
@@ -3178,7 +3181,7 @@ impl Interp {
         let specs_lite: Vec<(usize, usize)> =
             specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
         let specs_lite = &specs_lite[..];
-        use trs_ir::{Action as A, Expr as E, InstanceKind, Primitive as P, Stmt};
+        use trs_ir::{MethRef, Action as A, Expr as E, InstanceKind, Primitive as P, Stmt};
         use std::collections::HashSet;
 
         #[derive(Clone)]
@@ -3226,7 +3229,7 @@ impl Interp {
         // the exporter ships prims as Other{name} (prim.rs classifies
         // by the same strings); the enum variants are matched too in
         // case the exporter ever starts using them
-        fn cat(p: &P, s: &dyn Fn(StrId) -> String) -> &'static str {
+        fn cat(p: &P, s: &dyn Fn(GlobalStrId) -> String) -> &'static str {
             match p {
                 P::Reg { .. } => "reg",
                 P::ConfigReg { .. } => "configreg",
@@ -3305,7 +3308,7 @@ impl Interp {
             inst_envs: &'a HashMap<usize, InstEnv>,
             prim_cat: HashMap<usize, &'static str>,
             cone_memo: HashMap<(usize, StrId), Cone>,
-            write_memo: HashMap<(usize, StrId), HashSet<usize>>,
+            write_memo: HashMap<(usize, MethRef), HashSet<usize>>,
         }
 
         fn walk_expr(cx: &mut Ctx, inst: usize, e: &E, out: &mut Cone) {
@@ -3321,10 +3324,14 @@ impl Interp {
                     }
                     match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
                         Some((gi, InstanceKind::Prim(p))) => {
-                            let s = |n: StrId| cx.itp.s(n).to_string();
+                            let s = |n: GlobalStrId| cx.itp.gs(n).to_string();
                             let pc = cat(p, &s);
                             cx.prim_cat.insert(gi, pc);
-                            if !stable_read(pc, cx.itp.s(*method)) {
+                            let mname = match method {
+                                        MethRef::Prim(g) => cx.itp.gs(*g),
+                                        MethRef::User(_) => "",
+                                    };
+                                    if !stable_read(pc, mname) {
                                 out.reads.insert(gi);
                             }
                             out.reads_all.insert(gi);
@@ -3348,9 +3355,8 @@ impl Interp {
                             // evaluates (over-poisoning; Ravi's catch)
                             let cmir = cx.inst_envs[&gi].mir;
                             let mm = cx.itp.d.modules[cmir]
-                                .methods
-                                .iter()
-                                .find(|m| m.name == *method)
+                                
+                                .meth(*method).map(|(_, mm)| mm)
                                 .cloned();
                             if let Some(mm) = mm {
                                 if let Some(res) = &mm.result {
@@ -3443,9 +3449,8 @@ impl Interp {
                         {
                             let cmir = cx.inst_envs[&gi].mir;
                             let mm = cx.itp.d.modules[cmir]
-                                .methods
-                                .iter()
-                                .find(|m| m.name == *method)
+                                
+                                .meth(*method).map(|(_, mm)| mm)
                                 .cloned();
                             if let Some(mm) = mm {
                                 for st2 in &mm.body {
@@ -3513,7 +3518,7 @@ impl Interp {
                         if let A::MethCall { instance, method, .. } = a {
                             match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
                                 Some((gi, InstanceKind::Prim(p))) => {
-                                    let s = |n: StrId| cx.itp.s(n).to_string();
+                                    let s = |n: GlobalStrId| cx.itp.gs(n).to_string();
                                     cx.prim_cat.insert(gi, cat(p, &s));
                                     out.insert(gi);
                                 }
@@ -3525,9 +3530,8 @@ impl Interp {
                                         cx.write_memo.insert(key, HashSet::new());
                                         let cmir = cx.inst_envs[&gi].mir;
                                         let mm = cx.itp.d.modules[cmir]
-                                            .methods
-                                            .iter()
-                                            .find(|m| m.name == *method)
+                                            
+                                            .meth(*method).map(|(_, mm)| mm)
                                             .cloned();
                                         let mut w = HashSet::new();
                                         if let Some(mm) = mm {
@@ -4338,8 +4342,8 @@ impl Interp {
                         .d
                         .foreign_funcs
                         .iter()
-                        .find(|ff| self.s(ff.name) == n)
-                        .map(|ff| self.s(ff.c_name).to_string())
+                        .find(|ff| self.gs(ff.name) == n)
+                        .map(|ff| self.gs(ff.c_name).to_string())
                         .unwrap_or_else(|| n.clone());
                     (c, a)
                 })
@@ -4837,10 +4841,10 @@ impl Interp {
             // never-evaluated default), plus per-method port blocks —
             // EN time (u64::MAX = never), every argument, the result
             let mut rec_defs: HashMap<StrId, (u32, u32)> = HashMap::new();
-            let mut rec_meths: HashMap<StrId, RecMeth> = HashMap::new();
+            let mut rec_meths: HashMap<MethRef, RecMeth> = HashMap::new();
             if let Some(mv) = rec_mvs.get(&module) {
                 let irm = &self.d.modules[mir];
-                let mut meth_names: Vec<StrId> = Vec::new();
+                let mut meth_names: Vec<MethRef> = Vec::new();
                 for var in mv.members.iter().chain(mv.ports.iter()) {
                     match &var.src {
                         crate::VcdSrc::Def(n) => {
@@ -4863,7 +4867,7 @@ impl Interp {
                     }
                 }
                 for mn in meth_names {
-                    let Some(me) = irm.methods.iter().find(|me| me.name == mn)
+                    let Some((_, me)) = irm.meth(mn)
                     else {
                         continue;
                     };
@@ -5429,7 +5433,7 @@ impl Interp {
             for (afi, (mname, argv)) in
                 self.autofire.clone().iter().enumerate()
             {
-                let Some(mi) = self.d.modules[tmir].method_idx(*mname) else {
+                let Some((mi, _)) = self.d.modules[tmir].meth(*mname) else {
                     if trace {
                         eprintln!("trs jit: off (autofire method missing)");
                     }
@@ -5463,7 +5467,6 @@ impl Interp {
                     token_base: (o as u64) << 17,
                     autofire: Some(trs_codegen::abi::AfSpec {
                         method_idx: mi,
-                        method: *mname,
                         argv: av,
                     }),
                 });
@@ -5884,8 +5887,8 @@ impl Interp {
                                     .d
                                     .foreign_funcs
                                     .iter()
-                                    .find(|ff| self.s(ff.name) == n)
-                                    .map(|ff| self.s(ff.c_name).to_string())
+                                    .find(|ff| self.gs(ff.name) == n)
+                                    .map(|ff| self.gs(ff.c_name).to_string())
                                     .unwrap_or_else(|| n.clone());
                                 (format!("trs_bdpi_{c}"), a)
                             })
@@ -6160,7 +6163,7 @@ impl Interp {
                     .d
                     .foreign_funcs
                     .iter()
-                    .map(|f| self.s(f.c_name).to_string())
+                    .map(|f| self.gs(f.c_name).to_string())
                     .filter(|n| !crate::is_lib_bdpi(n))
                     .collect();
                 v.sort_unstable();
@@ -6774,7 +6777,7 @@ struct LcWalk<'a> {
     /// memo key carries is_action (lockstep with LcRank): a value
     /// visit walks ready+result only and must not suppress a later
     /// action visit's body walk
-    seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
+    seen_meths: std::collections::HashSet<(usize, MethRef, bool)>,
     /// (slot base, word footprint, class): 0 = prim data, 1 = indexed
     /// prim (bounded), 2 = def/fire-signal slot
     out: Vec<(u32, u32, u8)>,
@@ -6828,7 +6831,7 @@ impl<'a> LcWalk<'a> {
         &mut self,
         inst: usize,
         child: StrId,
-        method: StrId,
+        method: MethRef,
         args: &[trs_ir::Expr],
         is_action: bool,
     ) {
@@ -6850,7 +6853,7 @@ impl<'a> LcWalk<'a> {
                 let Some(cenv) = self.envs.get(&ci) else { return };
                 let it = self.it;
                 let m = &it.d.modules[cenv.mir];
-                if let Some(me) = m.methods.iter().find(|me| me.name == method)
+                if let Some((_, me)) = m.meth(method)
                 {
                     if let Some(r) = &me.ready {
                         self.expr(ci, r);
@@ -7321,13 +7324,13 @@ impl Interp {
                 .strings
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (s.as_str(), i as StrId))
+                .map(|(i, s)| (s.as_str(), ModuleStrId(i as u32)))
                 .collect();
             let mut stay1: std::collections::HashSet<(usize, StrId)> =
                 std::collections::HashSet::new();
             for sp in specs {
                 if let Some(af) = &sp.autofire {
-                    if let Some(id) = self.en_id_at(sp.inst, af.method) {
+                    if let Some(id) = self.en_id_at(sp.inst, MethRef::User(af.method_idx as u32)) {
                         stay1.insert((sp.inst, id));
                     }
                     continue;
@@ -7480,7 +7483,7 @@ struct LcRank<'a> {
     /// memo key carries is_action: a value visit walks ready+result
     /// only, so it must not suppress a later ACTION visit's body walk
     /// (the body's EN reads would be invisibly pruned)
-    seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
+    seen_meths: std::collections::HashSet<(usize, MethRef, bool)>,
     /// rung 40: EN ports the walked cones actually load — the fast
     /// tier allocates slots only for these (keyed by mir: twin
     /// instances must stay layout-identical for dedup)
@@ -7506,7 +7509,7 @@ impl<'a> LcRank<'a> {
         &mut self,
         inst: usize,
         child: StrId,
-        method: StrId,
+        method: MethRef,
         args: &[trs_ir::Expr],
         is_action: bool,
     ) {
@@ -7530,7 +7533,7 @@ impl<'a> LcRank<'a> {
                 }
                 let it = self.it;
                 let m = &it.d.modules[cmir];
-                if let Some(me) = m.methods.iter().find(|me| me.name == method)
+                if let Some((_, me)) = m.meth(method)
                 {
                     if let Some(r) = &me.ready {
                         self.expr(ci, r);
@@ -7753,7 +7756,17 @@ impl Interp {
                             w.expr(inst, ex);
                         }
                     }
-                } else if !w.seen_meths.insert((mir, r, true)) {
+                } else if {
+                    let mref = it.d.modules[mir]
+                        .methods
+                        .iter()
+                        .position(|m| m.name == r)
+                        .map(|i| MethRef::User(i as u32));
+                    match mref {
+                        Some(mr) => !w.seen_meths.insert((mir, mr, true)),
+                        None => false,
+                    }
+                } {
                     // twin instance: this type's exec body walked
                     continue;
                 } else {
@@ -7803,7 +7816,7 @@ impl Interp {
                 continue;
             }
             if let Some(me) =
-                self.d.modules[top_mir].methods.iter().find(|m| m.name == *mname)
+                self.d.modules[top_mir].meth(*mname).map(|(_, mm)| mm)
             {
                 if let Some(r) = &me.ready {
                     w.expr(0, r);
@@ -7881,11 +7894,7 @@ impl Interp {
                 if !aw.seen_meths.insert((top_mir, *mname, true)) {
                     continue;
                 }
-                if let Some(me) = self.d.modules[top_mir]
-                    .methods
-                    .iter()
-                    .find(|m| m.name == *mname)
-                {
+                if let Some((_, me)) = self.d.modules[top_mir].meth(*mname) {
                     if let Some(r) = &me.ready {
                         aw.expr(0, r);
                     }
@@ -7910,8 +7919,8 @@ impl Interp {
                 .map(|&(mir, p)| {
                     format!(
                         "{}.{}",
-                        self.d.strings[self.d.modules[mir].name as usize],
-                        self.d.strings[p as usize]
+                        self.d.global_name(self.d.modules[mir].name),
+                        self.d.name(p)
                     )
                 })
                 .collect();

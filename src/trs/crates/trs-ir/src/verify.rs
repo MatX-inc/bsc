@@ -2,11 +2,11 @@
 //! only known rules, widths are sane.  This is the guard that makes BIR a
 //! contract rather than a hope (DESIGN.md §3.1).
 
-use crate::{Design, StrId};
+use crate::{Design, GlobalStrId};
 
 #[derive(Debug)]
 pub enum VerifyError {
-    BadStringRef { id: StrId, len: usize },
+    BadStringRef { at: usize, len: usize },
     NoTopModule { top: String },
     DuplicateModule { name: String },
 }
@@ -14,8 +14,8 @@ pub enum VerifyError {
 impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VerifyError::BadStringRef { id, len } => {
-                write!(f, "string id {id} out of range (table has {len} entries)")
+            VerifyError::BadStringRef { at, len } => {
+                write!(f, "string id {at} out of range (table has {len} entries)")
             }
             VerifyError::NoTopModule { top } => {
                 write!(f, "top module {top:?} not present in module list")
@@ -31,11 +31,11 @@ impl std::error::Error for VerifyError {}
 
 pub fn verify(design: &Design) -> Result<(), VerifyError> {
     let nstrings = design.strings.len();
-    let check = |id: StrId| -> Result<(), VerifyError> {
-        if (id as usize) < nstrings {
+    let check = |id: GlobalStrId| -> Result<(), VerifyError> {
+        if id.idx() < nstrings {
             Ok(())
         } else {
-            Err(VerifyError::BadStringRef { id, len: nstrings })
+            Err(VerifyError::BadStringRef { at: id.idx(), len: nstrings })
         }
     };
 
@@ -45,13 +45,13 @@ pub fn verify(design: &Design) -> Result<(), VerifyError> {
         check(m.name)?;
         if !seen.insert(m.name) {
             return Err(VerifyError::DuplicateModule {
-                name: design.strings[m.name as usize].clone(),
+                name: design.global_name(m.name).to_string(),
             });
         }
     }
     if !seen.contains(&design.top) {
         return Err(VerifyError::NoTopModule {
-            top: design.strings[design.top as usize].clone(),
+            top: design.global_name(design.top).to_string(),
         });
     }
     // TODO(P0): resolve every Def/Port/Param/instance/method reference in

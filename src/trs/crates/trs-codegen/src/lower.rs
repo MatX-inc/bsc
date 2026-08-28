@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 
-use trs_ir::{Action, Design, Expr, PrimOp, Stmt, StrId};
+use trs_ir::{Action, Design, Expr, GlobalStrId, MethRef, ModuleStrId, PrimOp, Stmt, StrId};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -2858,7 +2858,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             Some(_) => Ok(0), // zero-width def: the empty bit-vector
             None => Err(Ineligible(format!(
                 "unknown def (width): {}",
-                self.env.d.strings[name as usize]
+                self.env.d.name(name)
             ))),
         }
     }
@@ -3168,7 +3168,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         "trs: BUG: enable port '{}' was pruned by the \
                          fast-plan liveness walk but is read by compiled \
                          lowering — report this (rung-40 EN pruning)",
-                        self.env.d.strings[*p as usize]
+                        self.env.d.name(*p)
                     );
                 }
                 if let Some(&(w, v)) = ie.port_consts.get(p) {
@@ -3272,7 +3272,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 match self.emit_prim_call(
                     f,
                     child,
-                    GATE_OUT_METHOD,
+                    MethRef::Prim(GATE_OUT_METHOD),
                     0,
                     &[],
                     1,
@@ -3389,7 +3389,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // load the join-safe slot when the task has one — valid
                 // from any block, unlike the tphi value, which only
                 // dominates its own arm
-                if let Some(&(p, vw)) = f.av_slots.get(&(0x8000_0000u32 | *cookie)) {
+                if let Some(&(p, vw)) = f.av_slots.get(&ModuleStrId(0x8000_0000u32 | *cookie)) {
                     let v = self
                         .builder
                         .build_load(self.ity(vw), p, "tval")
@@ -3423,7 +3423,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         &mut self,
         f: &mut Frame<'ctx>,
         width: u32,
-        func: StrId,
+        func: GlobalStrId,
         args: &[Expr],
     ) -> Result<IntValue<'ctx>, Ineligible> {
         let Some(ff) = self.bdpi_import(func) else {
@@ -3451,7 +3451,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
     /// The design's BDPI import for `func`, if any (system tasks and
     /// unknown names return None).
-    fn bdpi_import(&self, func: StrId) -> Option<trs_ir::ForeignFunc> {
+    fn bdpi_import(&self, func: GlobalStrId) -> Option<trs_ir::ForeignFunc> {
         self.env.d.foreign_funcs.iter().find(|ff| ff.name == func).cloned()
     }
 
@@ -3466,7 +3466,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     ) -> Result<IntValue<'ctx>, Ineligible> {
         use trs_ir::ForeignType as FT;
         let ff = ff.clone();
-        let c_name = self.env.d.strings[ff.c_name as usize].clone();
+        let c_name = self.env.d.global_name(ff.c_name).to_string();
         let i64t = self.ctx.i64_type();
         let i32t = self.ctx.i32_type();
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
@@ -3641,7 +3641,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let Expr::Str(sid) = &args[k] else {
                         return nope("BDPI string arg not a literal");
                     };
-                    let text = self.env.d.strings[*sid as usize].clone();
+                    let text = self.env.d.name(*sid).to_string();
                     let gname = format!("trs_bdpistr_{sid}");
                     let g = self.module.get_global(&gname).unwrap_or_else(|| {
                         let arr = self.ctx.const_string(text.as_bytes(), true);
@@ -3724,12 +3724,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         f: &mut Frame<'ctx>,
         width: u32,
         instance: StrId,
-        method: StrId,
+        method: MethRef,
         port: u32,
         args: &[Expr],
     ) -> Result<IntValue<'ctx>, Ineligible> {
         let ie = self.ie(f.inst)?;
-        let mname = self.env.d.strings[method as usize].clone();
+        // the slot maps below hold primitive children, whose methods are
+        // named in the vocabulary every design shares; a call on a user
+        // module carries an index instead and takes the inline path past
+        // them, where no name is wanted
+        let mname = match method {
+            MethRef::Prim(g) => self.env.d.global_name(g).to_string(),
+            MethRef::User(_) => String::new(),
+        };
         if let Some(&(base, rw)) = ie.reg_slot.get(&instance) {
             if !matches!(mname.as_str(), "read" | "get" | "_read") || !args.is_empty() {
                 return nope("non-read register method in expression");
@@ -3996,12 +4003,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let cie = self.ie(child)?;
         let cmod = &self.env.d.modules[cie.mir];
-        let Some((mi, m)) = cmod
-            .methods
-            .iter()
-            .enumerate()
-            .find(|(_, m)| m.name == method)
-        else {
+        let Some((mi, m)) = cmod.meth(method) else {
             return nope("unknown method on child");
         };
         // the interp's call_value evaluates the method's RESULT expr
@@ -4140,17 +4142,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return None;
                 }
                 let ie = self.ie(f.inst).ok()?;
-                let mname = &self.env.d.strings[*method as usize];
+                let mname = match method {
+                    MethRef::Prim(g) => self.env.d.global_name(*g),
+                    MethRef::User(_) => "",
+                };
                 let ok = (ie.reg_slot.contains_key(instance)
                     || ie.creg_slot.contains_key(instance))
-                    && matches!(mname.as_str(), "read" | "get" | "_read")
+                    && matches!(mname, "read" | "get" | "_read")
                     || ie.wire_slot.contains_key(instance)
-                        && matches!(mname.as_str(), "whas" | "wget")
+                        && matches!(mname, "whas" | "wget")
                     || ie.bypass_slot.contains_key(instance)
-                        && matches!(mname.as_str(), "whas" | "wget" | "read")
+                        && matches!(mname, "whas" | "wget" | "read")
                     || ie.fifo_slot.contains_key(instance)
                         && matches!(
-                            mname.as_str(),
+                            mname,
                             "first" | "notFull" | "notEmpty" | "i_notFull" | "i_notEmpty"
                         );
                 ok.then_some(2)
@@ -4231,12 +4236,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         &mut self,
         f: &mut Frame<'ctx>,
         prim_inst: usize,
-        method: StrId,
+        method: MethRef,
         port: u32,
         args: &[Expr],
         ret_width: u32,
         is_action: bool,
     ) -> Result<Option<IntValue<'ctx>>, Ineligible> {
+        let MethRef::Prim(method) = method else {
+            return nope("user-module method reached the primitive call path");
+        };
         let Some(envp) = f.envp else {
             return nope("prim call without env pointer");
         };
@@ -4435,8 +4443,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // result closure only
                     let cm = &self.env.d.modules[ce.mir];
                     return cm
-                        .method_idx(*method)
-                        .and_then(|mi| cm.methods[mi].result.as_ref())
+                        .meth(*method)
+                        .and_then(|(_, mm)| mm.result.as_ref())
                         .is_some_and(|r| self.effectful_expr(child, r, seen));
                 }
                 // prim child: dynamic-arg value reads may warn —
@@ -4619,7 +4627,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         &mut self,
         cf: &Frame<'ctx>,
         child: usize,
-        method: StrId,
+        method: MethRef,
         argv: &[(IntValue<'ctx>, u32)],
     ) -> Result<(), Ineligible> {
         let rm = match self.ie(child)?.rec_meths.get(&method) {
@@ -4642,7 +4650,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         &mut self,
         cf: &Frame<'ctx>,
         child: usize,
-        method: StrId,
+        method: MethRef,
         v: IntValue<'ctx>,
     ) -> Result<(), Ineligible> {
         let res = match self.ie(child)?.rec_meths.get(&method) {
@@ -4730,7 +4738,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             return Err(Ineligible(format!(
                 "def escaped conditional arm: {}",
-                self.env.d.strings[n as usize]
+                self.env.d.name(n)
             )));
         }
         // whole-edge SSA cache: a value latched (CF/WF/eager at its
@@ -4857,11 +4865,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             let chain: Vec<&str> = f
                 .expanding
                 .iter()
-                .map(|&x| self.env.d.strings[x as usize].as_str())
+                .map(|&x| self.env.d.name(x))
                 .collect();
             return Err(Ineligible(format!(
                 "unknown def (expand): {} in {} (exec={} args={} chain={})",
-                self.env.d.strings[n as usize],
+                self.env.d.name(n),
                 self.spec.label,
                 f.is_exec,
                 f.args.len(),
@@ -5431,10 +5439,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // ready
         let rdy = m.rdy.and_then(|id| {
             self.env.d.modules[mir]
-                .methods
-                .iter()
-                .enumerate()
-                .find(|(_, mm)| mm.name == id)
+                .meth(id)
                 .map(|(mi, mm)| (mi, mm.result.clone()))
         });
         let en_slot = men.and_then(|id| ie.en_slot.get(&id).copied());
@@ -5455,7 +5460,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .iter()
             .filter_map(|pa| cf.args.get(&pa.name).copied())
             .collect();
-        self.rec_meth_call(&cf, f.inst, mname, &rec_argv)?;
+        self.rec_meth_call(&cf, f.inst, MethRef::User(af.method_idx as u32), &rec_argv)?;
         let sk_bb = self.ctx.append_basic_block(func, "afsk");
         match rdy {
             Some((mi_r, Some(res))) => {
@@ -5572,7 +5577,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     fn boundary_hit(
         &self,
         mir: usize,
-        method: StrId,
+        method: MethRef,
         kind: u8,
     ) -> Option<(String, u32, Vec<(StrId, u32)>)> {
         BOUNDARY.with(|b| {
@@ -5914,10 +5919,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     ) -> Result<IntValue<'ctx>, Ineligible> {
         let i64t = self.ctx.i64_type();
         match e {
-            Expr::Str(sid) => Ok(i64t.const_int(*sid as u64, false)),
+            Expr::Str(sid) => Ok(i64t.const_int(sid.0 as u64, false)),
             Expr::Param(p) | Expr::Port(p) => {
                 match self.ie(f.inst)?.str_consts.get(p) {
-                    Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
+                    Some(&sid) => Ok(i64t.const_int(sid.0 as u64, false)),
                     None => nope("non-string port in string context"),
                 }
             }
@@ -6038,7 +6043,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     fn emit_foreign(
         &mut self,
         f: &mut Frame<'ctx>,
-        func_id: StrId,
+        func_id: GlobalStrId,
         args: &[Expr],
         signed: &[bool],
         ret_width: u32,
@@ -6240,12 +6245,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             }
                             let cie = self.ie(child)?;
                             let cmod = &self.env.d.modules[cie.mir];
-                            let Some((mi, m)) = cmod
-                                .methods
-                                .iter()
-                                .enumerate()
-                                .find(|(_, m)| m.name == *method)
-                            else {
+                            let Some((mi, m)) = cmod.meth(*method) else {
                                 return nope("unknown actionvalue method on child");
                             };
                             if m.kind != trs_ir::MethodKind::ActionValue {
@@ -6628,7 +6628,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         else {
                             continue;
                         };
-                        let name = self.env.d.strings[tf5 as usize].clone();
+                        let name = self.env.d.global_name(tf5).to_string();
                         let v = if matches!(name.as_str(), "$time" | "$stime") {
                             let now = self.load_word(f, self.env.now_slot);
                             self.to_w(now, 64, width.max(1), false)
@@ -6659,7 +6659,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         &mut self,
         f: &mut Frame<'ctx>,
         func: FunctionValue<'ctx>,
-        tf: StrId,
+        tf: GlobalStrId,
         cookie: u32,
         temp: Option<StrId>,
         width: u32,
@@ -6675,7 +6675,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // happen only on the TAKEN path (review finding: the old
         // unconditional store of the phi wrote 0 over undet on skip)
         let ck = 0x8000_0000u32 | cookie;
-        let cp = self.av_slot(f, ck, w);
+        let cp = self.av_slot(f, ModuleStrId(ck), w);
         let tp = temp.map(|t| self.av_slot(f, t, w));
         let wc = self.expr_width(f, cond)?;
         let c = self.expr(f, cond)?;
@@ -6766,7 +6766,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             )
         }
         fn bound(
-            strings: &[String],
+            d: &Design,
             list: &[Stmt],
             dead: &mut Vec<StrId>,
             stable: &mut Vec<(StrId, Action)>,
@@ -6776,7 +6776,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     Stmt::Def { name, .. } => dead.push(*name),
                     Stmt::AvAction { def, action } => match action {
                         Action::Task { func, .. }
-                            if idempotent(strings[*func as usize].as_str()) =>
+                            if idempotent(d.global_name(*func)) =>
                         {
                             stable.push((*def, action.clone()));
                         }
@@ -6787,8 +6787,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         _ => dead.push(*def),
                     },
                     Stmt::Cond { then_, else_, .. } => {
-                        bound(strings, then_, dead, stable);
-                        bound(strings, else_, dead, stable);
+                        bound(d, then_, dead, stable);
+                        bound(d, else_, dead, stable);
                     }
                     _ => {}
                 }
@@ -6801,7 +6801,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         f.ssa = saved;
         let mut dead = Vec::new();
         let mut stable = Vec::new();
-        bound(&self.env.d.strings, list, &mut dead, &mut stable);
+        bound(&self.env.d, list, &mut dead, &mut stable);
         for n in dead {
             f.dead_defs.insert(n);
         }
@@ -6837,7 +6837,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         match a {
             Action::MethCall { instance, method, port, cond, args } => {
                 let ie = self.ie(f.inst)?;
-                let mname = self.env.d.strings[*method as usize].clone();
+                let mname = match method {
+                    MethRef::Prim(g) => self.env.d.global_name(*g).to_string(),
+                    MethRef::User(_) => String::new(),
+                };
                 let wc = self.expr_width(f, cond)?;
                 let c = self.expr(f, cond)?;
                 let cz = self.nonzero(c, wc);
@@ -7439,12 +7442,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let cie = self.ie(child)?;
                 let cmod = &self.env.d.modules[cie.mir];
-                let Some((mi, m)) = cmod
-                    .methods
-                    .iter()
-                    .enumerate()
-                    .find(|(_, m)| m.name == *method)
-                else {
+                let Some((mi, m)) = cmod.meth(*method) else {
                     return nope("unknown action method on child");
                 };
                 // a plain Action call may target an ActionValue method
@@ -7639,6 +7637,8 @@ pub fn llvm_smoke_test() -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
+    use trs_ir::{GlobalStrId, ModuleStrId};
+
     #[test]
     fn jit_round_trip() {
         assert_eq!(super::llvm_smoke_test().unwrap(), 42);
@@ -7650,10 +7650,10 @@ mod tests {
         let protos = vec![FnProtos {
             sched_foreign: vec![ForeignSpec {
                 inst: 3,
-                func: 7,
+                func: GlobalStrId(7),
                 ret_width: 64,
                 args: vec![
-                    FArgSpec::Str(11),
+                    FArgSpec::Str(ModuleStrId(11)),
                     FArgSpec::Num { width: 0, signed: false },
                     FArgSpec::Num { width: 65, signed: true },
                     FArgSpec::Real,
@@ -7668,7 +7668,7 @@ mod tests {
         let back = decode_protos(&bytes).expect("round trip");
         assert_eq!(back.len(), 1);
         let args = &back[0].sched_foreign[0].args;
-        assert!(matches!(args[0], FArgSpec::Str(11)));
+        assert!(matches!(args[0], FArgSpec::Str(ModuleStrId(11))));
         assert!(matches!(args[1], FArgSpec::Num { width: 0, signed: false }));
         assert!(matches!(args[2], FArgSpec::Num { width: 65, signed: true }));
         assert!(matches!(args[3], FArgSpec::Real));

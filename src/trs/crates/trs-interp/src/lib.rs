@@ -19,7 +19,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 
 use trs_ir as ir;
-use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
+use trs_ir::{Action, Design, Expr, GlobalStrId, MethRef, ModuleStrId, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
 mod census;
@@ -40,7 +40,7 @@ mod runcore;
 use foreign::ForeignEnv;
 use format::Arg;
 use prim::Prim;
-use value::Value;
+use value::{DynStrId, StrRef, Value};
 
 #[cfg(feature = "aot")]
 use jit::JitPlans;
@@ -150,7 +150,7 @@ pub struct Interp {
     /// (jit.rs run-mode gate honors this flag too)
     pub(crate) jit_armed: bool,
     mods: Vec<ModIx>,
-    mod_by_name: HashMap<StrId, usize>,
+    mod_by_name: HashMap<GlobalStrId, usize>,
     /// instance path -> instance state index
     inst_by_path: HashMap<String, usize>,
     /// name -> interned id.  Design::strings is the id->name direction;
@@ -159,7 +159,7 @@ pub struct Interp {
     /// method -> EN_<method> / RDY_<method>.  Asked once per method
     /// call, and the answer is a property of the design, so the derived
     /// name is built once rather than on every call.
-    en_id_of_meth: HashMap<(usize, StrId), Option<StrId>>,
+    en_id_of_meth: HashMap<(usize, MethRef), Option<StrId>>,
     insts: Vec<Inst>,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
@@ -213,10 +213,12 @@ pub struct Interp {
     loc_buf: String,
     /// string id -> Arc'd text for Arg::Str: interned once, cloned as
     /// a refcount bump on every later call
-    arg_strs: HashMap<u32, std::sync::Arc<str>>,
+    arg_strs: HashMap<DynStrId, std::sync::Arc<str>>,
     /// dense Arc cache for design-table string ids (the hot format
     /// strings on the foreign bounce path); dyn ids stay on arg_strs
     arg_strs_vec: Vec<Option<std::sync::Arc<str>>>,
+    /// The same, for link-level names.
+    global_arg_strs: Vec<Option<std::sync::Arc<str>>>,
     /// Emit requests stash the serialized PlanA here for the meta
     /// object (prime derives it; the aot_emit call site reads it)
     #[cfg(feature = "aot")]
@@ -242,10 +244,10 @@ pub struct Interp {
     vcd_def_vals: HashMap<(usize, StrId), Value>,
     /// last (edge time, args) of each user-module method call, for the
     /// EN_<m>/<m>_<arg> port values
-    vcd_meth_calls: HashMap<(usize, StrId), (u64, Vec<Value>)>,
+    vcd_meth_calls: HashMap<(usize, MethRef), (u64, Vec<Value>)>,
     /// last returned value of each user-module value-method call, for
     /// result-port values (C++ assigns PORT_<m> at call time)
-    vcd_meth_results: HashMap<(usize, StrId), Value>,
+    vcd_meth_results: HashMap<(usize, MethRef), Value>,
     /// per-instance kernel clock index (from the composition that runs it)
     vcd_inst_clock: Vec<usize>,
     /// (instance, module clock domain) -> kernel clock index
@@ -324,7 +326,7 @@ pub struct Interp {
     jit_rec_defs: HashMap<(usize, StrId), (u32, u32)>,
     /// TRACED artifact only: (instance, method) -> recording slots for
     /// the method's VCD ports (EN time / args / result)
-    jit_rec_meths: HashMap<(usize, StrId), RecSlots>,
+    jit_rec_meths: HashMap<(usize, MethRef), RecSlots>,
     /// per-engine $random/$srandom stream (library rand32/srand BDPI)
     rng: GlibcRandom,
     /// identity salt of the top-level bindings (topbind); folded into
@@ -336,7 +338,7 @@ pub struct Interp {
     consumed_plus: Vec<String>,
     /// always_enabled Action methods of the top auto-fired in batch
     /// mode (interface order), each with its constant argument values
-    autofire: Vec<(StrId, Vec<Value>)>,
+    autofire: Vec<(MethRef, Vec<Value>)>,
     /// (composition index, entry index) -> autofire indices to invoke
     /// after that entry's nodes — the methods' Exec cut positions
     /// (resolved by topbind::resolve; keys line up with rcomps)
@@ -412,11 +414,11 @@ enum VcdSrc {
     /// member def: last computed value (write_undet pattern initially)
     Def(StrId),
     /// EN_<m>: 1 when the method executed at the clock's last posedge
-    PortEn(StrId),
+    PortEn(MethRef),
     /// method argument port: value from the last call
-    PortArg(StrId, usize),
+    PortArg(MethRef, usize),
     /// value/RDY method result port: evaluated on demand
-    PortRes(StrId),
+    PortRes(MethRef),
 }
 
 /// One module-scope $var: display name, value source, width, and whether
@@ -552,7 +554,7 @@ struct RAlt {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct PlanA {
     version: u32,
-    clocks: Vec<StrId>,
+    clocks: Vec<GlobalStrId>,
     sources: Vec<ClockSource>,
     driver_clock: Vec<(usize, usize)>,
     rcomps: Vec<RComp>,
@@ -654,7 +656,7 @@ impl StopCond {
 
 struct Stepper {
     /// distinct clocks in first-appearance order, default clock first
-    clocks: Vec<StrId>,
+    clocks: Vec<GlobalStrId>,
     sources: Vec<ClockSource>,
     /// clock-driver prim instance -> clock index, for routing triggered
     /// edges after ticks
@@ -770,7 +772,7 @@ impl Interp {
             .strings
             .iter()
             .enumerate()
-            .map(|(i, s)| (s.as_str(), i as StrId))
+            .map(|(i, s)| (s.as_str(), ModuleStrId(i as u32)))
             .collect();
         let mods: Vec<ModIx> = d
             .modules
@@ -801,7 +803,7 @@ impl Interp {
                 methods: m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
             })
             .collect();
-        let mod_by_name: HashMap<StrId, usize> =
+        let mod_by_name: HashMap<GlobalStrId, usize> =
             d.modules.iter().enumerate().map(|(i, m)| (m.name, i)).collect();
 
         let mut it = Interp {
@@ -835,6 +837,7 @@ impl Interp {
             loc_buf: String::new(),
             arg_strs: HashMap::new(),
             arg_strs_vec: Vec::new(),
+            global_arg_strs: Vec::new(),
             #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
@@ -911,16 +914,29 @@ impl Interp {
     }
 
     fn s(&self, id: StrId) -> &str {
-        let n = self.d.strings.len();
-        if (id as usize) < n {
-            &self.d.strings[id as usize]
-        } else {
-            &self.dyn_strs[id as usize - n]
+        self.d.name(id)
+    }
+
+    /// The display name of a link-level id.
+    fn gs(&self, id: GlobalStrId) -> &str {
+        self.d.global_name(id)
+    }
+
+    fn dyn_text(&self, id: DynStrId) -> &str {
+        &self.dyn_strs[id.idx()]
+    }
+
+    /// The text a string-valued marker stands for, from whichever space
+    /// holds it.
+    fn str_text(&self, r: StrRef) -> &str {
+        match r {
+            StrRef::Static(i) => self.s(i),
+            StrRef::Dyn(i) => self.dyn_text(i),
         }
     }
 
     /// Intern a runtime-created string (StringConcat) into the arena.
-    pub(crate) fn intern_dyn(&mut self, text: String) -> StrId {
+    pub(crate) fn intern_dyn(&mut self, text: String) -> DynStrId {
         // window-time interning shifts every later dyn string id and
         // leaves baked slots holding ids a RunCore boot cannot resolve
         // (adversarial-panel finding) — any bake-window intern makes
@@ -929,7 +945,7 @@ impl Interp {
             prim::note_window_effect();
         }
         self.dyn_strs.push(text);
-        (self.d.strings.len() + self.dyn_strs.len() - 1) as StrId
+        DynStrId((self.dyn_strs.len() - 1) as u32)
     }
 
     /// The string id bound to a string-valued parameter of an instance,
@@ -1003,7 +1019,7 @@ impl Interp {
                     let cmod = *self
                         .mod_by_name
                         .get(&mname)
-                        .unwrap_or_else(|| panic!("unknown module {:?}", self.s(mname)));
+                        .unwrap_or_else(|| panic!("unknown module {:?}", self.gs(mname)));
                     // bind the child's parameters: its inputs align
                     // positionally with the instantiation args
                     let cmir = self.mods[cmod].ir;
@@ -1091,7 +1107,7 @@ impl Interp {
                 }
                 ir::InstanceKind::Prim(p) => {
                     let pname = match &p {
-                        ir::Primitive::Other { name } => self.s(*name).to_string(),
+                        ir::Primitive::Other { name } => self.gs(*name).to_string(),
                         other => panic!("structured primitive kinds not exported yet: {other:?}"),
                     };
                     // evaluate instantiation args in the parent context
@@ -1114,8 +1130,8 @@ impl Interp {
                                 let v = self.eval(slot, &mut c, a);
                                 // computed strings (e.g. StringConcat of
                                 // parameters) are string args, not consts
-                                match v.as_str_id() {
-                                    Some(id) => strs.push(self.s(id).to_string()),
+                                match v.as_str_ref() {
+                                    Some(r) => strs.push(self.str_text(r).to_string()),
                                     None => consts.push(v),
                                 }
                             }
@@ -1356,7 +1372,7 @@ impl Interp {
     }
 
     /// Record a method-fired timestamp (EN port), preserving prior args.
-    fn vcd_rec_meth_time(&mut self, callee: usize, method: StrId) {
+    fn vcd_rec_meth_time(&mut self, callee: usize, method: MethRef) {
         let now = self.now;
         if !self.jit_arena_ptr.is_null() {
             if let Some(rs) = self.jit_rec_meths.get(&(callee, method)) {
@@ -1371,7 +1387,7 @@ impl Interp {
     }
 
     /// Record a method call: timestamp + argument port values.
-    fn vcd_rec_meth_call(&mut self, callee: usize, method: StrId, argv: &[Value]) {
+    fn vcd_rec_meth_call(&mut self, callee: usize, method: MethRef, argv: &[Value]) {
         let now = self.now;
         if !self.jit_arena_ptr.is_null() {
             if let Some(rs) = self.jit_rec_meths.get(&(callee, method)).cloned() {
@@ -1387,7 +1403,7 @@ impl Interp {
     }
 
     /// Record a value/AV method's returned value (result port).
-    fn vcd_rec_meth_result(&mut self, callee: usize, method: StrId, v: &Value) {
+    fn vcd_rec_meth_result(&mut self, callee: usize, method: MethRef, v: &Value) {
         if !self.jit_arena_ptr.is_null() {
             if let Some(rs) = self.jit_rec_meths.get(&(callee, method)) {
                 if let Some((base, w)) = rs.res {
@@ -1429,7 +1445,7 @@ impl Interp {
     fn eval(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr) -> Value {
         match e {
             Expr::Const { width, limbs } => Value::from_limbs32(*width, limbs),
-            Expr::Str(sid) => Value::str_ref(*sid),
+            Expr::Str(sid) => Value::str_ref(StrRef::Static(*sid)),
             Expr::Def(name) => {
                 if let Some(v) = ctx.locals.get(name) {
                     return v.clone();
@@ -1503,7 +1519,7 @@ impl Interp {
                     // string parameters flow as marker values so dynamic
                     // muxes over them still resolve at task boundaries
                     if let Some(&sid) = str_params.get(name) {
-                        return Value::str_ref(sid);
+                        return Value::str_ref(StrRef::Static(sid));
                     }
                 }
                 // module input ports outside a method frame: clock gates and
@@ -1589,7 +1605,7 @@ impl Interp {
                                      pruned by the fast-plan liveness \
                                      walk but read interp-side — report \
                                      this (rung-40 EN pruning)",
-                                    self.d.strings[*name as usize]
+                                    self.d.name(*name)
                                 );
                             }
                         }
@@ -1621,7 +1637,7 @@ impl Interp {
             }
             Expr::ForeignCall { width, func, args } => {
                 // Arc clone, not a String: this runs per evaluated call
-                let fname = self.arg_str(*func);
+                let fname = self.global_arg_str(*func);
                 let argv: Vec<Arg> = args
                     .iter()
                     .map(|a| self.eval_arg(inst, ctx, a, false))
@@ -1812,13 +1828,13 @@ impl Interp {
                 let mut text = String::new();
                 for a in args {
                     let v = self.eval(inst, ctx, a);
-                    match v.as_str_id() {
-                        Some(id) => text.push_str(self.s(id)),
+                    match v.as_str_ref() {
+                        Some(r) => text.push_str(self.str_text(r)),
                         None => panic!("StringConcat of a non-string value"),
                     }
                 }
                 let id = self.intern_dyn(text);
-                Value::str_ref(id)
+                Value::str_ref(StrRef::Dyn(id))
             }
         }
     }
@@ -1847,8 +1863,8 @@ impl Interp {
         if let Some(r) = v.as_real() {
             return Arg::Real(r);
         }
-        match v.as_str_id() {
-            Some(id) => Arg::Str(self.s(id).into()),
+        match v.as_str_ref() {
+            Some(r) => Arg::Str(self.str_text(r).into()),
             None => Arg::Val(v, signed),
         }
     }
@@ -1866,37 +1882,55 @@ impl Interp {
         }
     }
 
+    /// Arg::Str text for a link-level name -- a task or foreign symbol --
+    /// Arc-interned on first use, like `arg_str` for the module scope.
+    pub(crate) fn global_arg_str(&mut self, id: GlobalStrId) -> std::sync::Arc<str> {
+        if self.global_arg_strs.is_empty() {
+            self.global_arg_strs = vec![None; self.d.strings.len()];
+        }
+        if let Some(a) = &self.global_arg_strs[id.idx()] {
+            return a.clone();
+        }
+        let a: std::sync::Arc<str> = std::sync::Arc::from(self.gs(id));
+        self.global_arg_strs[id.idx()] = Some(a.clone());
+        a
+    }
+
     /// Arg::Str text for a string id, Arc-interned on first use (the
     /// per-event-tax audit: an Arc clone per call replaces a String
     /// alloc per call on the $display path).
-    pub(crate) fn arg_str(&mut self, id: u32) -> std::sync::Arc<str> {
-        // design-table ids take a dense index (no per-call hashing);
-        // dyn ids (appended past the table) stay on the map
-        let n = self.d.strings.len();
-        if (id as usize) < n {
-            if self.arg_strs_vec.is_empty() {
-                self.arg_strs_vec = vec![None; n];
+    pub(crate) fn arg_str(&mut self, r: StrRef) -> std::sync::Arc<str> {
+        // a table id takes a dense index, so the common case does no
+        // hashing; the run's own strings are sparse and take the map
+        match r {
+            StrRef::Static(id) => {
+                let n = self.d.strings.len();
+                if self.arg_strs_vec.is_empty() {
+                    self.arg_strs_vec = vec![None; n];
+                }
+                if let Some(a) = &self.arg_strs_vec[id.idx()] {
+                    return a.clone();
+                }
+                let a: std::sync::Arc<str> = std::sync::Arc::from(self.s(id));
+                self.arg_strs_vec[id.idx()] = Some(a.clone());
+                a
             }
-            if let Some(a) = &self.arg_strs_vec[id as usize] {
-                return a.clone();
+            StrRef::Dyn(id) => {
+                if let Some(a) = self.arg_strs.get(&id) {
+                    return a.clone();
+                }
+                let a: std::sync::Arc<str> =
+                    std::sync::Arc::from(self.dyn_text(id));
+                self.arg_strs.insert(id, a.clone());
+                a
             }
-            let a: std::sync::Arc<str> =
-                std::sync::Arc::from(self.d.strings[id as usize].as_str());
-            self.arg_strs_vec[id as usize] = Some(a.clone());
-            return a;
         }
-        if let Some(a) = self.arg_strs.get(&id) {
-            return a.clone();
-        }
-        let a: std::sync::Arc<str> = std::sync::Arc::from(self.s(id));
-        self.arg_strs.insert(id, a.clone());
-        a
     }
 
     fn call_value(
         &mut self,
         callee: usize,
-        method: StrId,
+        method: MethRef,
         port: u32,
         argv: &[Value],
         w: u32,
@@ -1916,7 +1950,10 @@ impl Interp {
                 // value path, and a String alloc per call showed in
                 // the FloatTest malloc profile (disjoint fields, so
                 // the &mut prim borrow tolerates it)
-                let mname: &str = &self.d.strings[method as usize];
+                let MethRef::Prim(mg) = method else {
+                    panic!("user-module method reference on a primitive");
+                };
+                let mname: &str = self.d.global_name(mg);
                 let r = p.value_method(mname, port, argv, self.now);
                 if self.trace_events {
                     let path = self.insts[callee].path.clone();
@@ -1927,10 +1964,10 @@ impl Interp {
             }
             InstKind::User { module, .. } => {
                 let module = *module;
-                let mi = *self.mods[module]
-                    .methods
-                    .get(&method)
-                    .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
+                let MethRef::User(mi) = method else {
+                    panic!("primitive method reference on a user module");
+                };
+                let mi = mi as usize;
                 let mir = self.mods[module].ir;
                 let result = self.d.modules[mir].methods[mi].result.clone();
                 let mut ctx = self.method_ctx(module, mi, argv, true);
@@ -1948,10 +1985,13 @@ impl Interp {
         }
     }
 
-    fn call_action(&mut self, callee: usize, method: StrId, port: u32, argv: &[Value]) {
+    fn call_action(&mut self, callee: usize, method: MethRef, port: u32, argv: &[Value]) {
         if self.trace_events {
             if let InstKind::Prim(_) = &self.insts[callee].kind {
-                let mname = self.d.strings[method as usize].clone();
+                let MethRef::Prim(mg) = method else {
+                    panic!("user-module method reference on a primitive");
+                };
+                let mname = self.d.global_name(mg).to_string();
                 let args: Vec<String> = argv.iter().map(|v| v.to_hex_string()).collect();
                 eprintln!("[{}] {}.{}({})", self.cycle, self.insts[callee].path,
                           mname, args.join(","));
@@ -1968,15 +2008,18 @@ impl Interp {
             InstKind::Prim(p) => {
                 // borrow, don't clone (same disjoint-fields fix as
                 // call_value; per-event-tax audit finding 3)
-                let mname: &str = &self.d.strings[method as usize];
+                let MethRef::Prim(mg) = method else {
+                    panic!("user-module method reference on a primitive");
+                };
+                let mname: &str = self.d.global_name(mg);
                 p.action_method(mname, port, argv, self.now);
             }
             InstKind::User { module, .. } => {
                 let module = *module;
-                let mi = *self.mods[module]
-                    .methods
-                    .get(&method)
-                    .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
+                let MethRef::User(mi) = method else {
+                    panic!("primitive method reference on a user module");
+                };
+                let mi = mi as usize;
                 self.latch_method_en(callee, method);
                 if self.vcd_trace {
                     self.vcd_rec_meth_call(callee, method, argv);
@@ -2002,19 +2045,15 @@ impl Interp {
 
     /// The interned id of a method's companion EN_ signal, or None where
     /// the design exports no such signal.
-    pub(crate) fn en_id_at(&self, inst: usize, method: StrId) -> Option<StrId> {
+    pub(crate) fn en_id_at(&self, inst: usize, method: MethRef) -> Option<StrId> {
         let InstKind::User { module, .. } = &self.insts[inst].kind else {
             return None;
         };
         let mir = self.mods[*module].ir;
-        self.d.modules[mir]
-            .methods
-            .iter()
-            .find(|m| m.name == method)
-            .and_then(|m| m.en)
+        self.d.modules[mir].meth(method).and_then(|(_, m)| m.en)
     }
 
-    fn en_id_of(&mut self, callee: usize, method: StrId) -> Option<StrId> {
+    fn en_id_of(&mut self, callee: usize, method: MethRef) -> Option<StrId> {
         let InstKind::User { module, .. } = &self.insts[callee].kind else {
             return None;
         };
@@ -2032,12 +2071,12 @@ impl Interp {
     /// — the always_enabled method's own `ready` expr can reference defs
     /// bsc dropped along with the caller-side condition.  No RDY method
     /// exported = constant ready.
-    fn always_en_rdy(&mut self, callee: usize, module: usize, method: StrId) -> bool {
+    fn always_en_rdy(&mut self, callee: usize, module: usize, method: MethRef) -> bool {
         let mir = self.mods[module].ir;
-        let Some(&mi) = self.mods[module].methods.get(&method) else {
+        let Some((_, me)) = self.d.modules[mir].meth(method) else {
             return true;
         };
-        let Some(id) = self.d.modules[mir].methods[mi].rdy else {
+        let Some(id) = me.rdy else {
             return true;
         };
         self.call_value(callee, id, 0, &[], 1).as_u64() & 1 == 1
@@ -2047,7 +2086,7 @@ impl Interp {
     /// schedule zeroes every EN_* at the top of the pass and sets it when
     /// the method executes, and WILL_FIRE urgency inhibitors of
     /// conflicting rules read it later in the same pass.
-    fn latch_method_en(&mut self, callee: usize, method: StrId) {
+    fn latch_method_en(&mut self, callee: usize, method: MethRef) {
         if self.vcd_trace {
             self.vcd_rec_meth_time(callee, method);
         }
@@ -2067,18 +2106,21 @@ impl Interp {
         }
     }
 
-    fn call_actionvalue(&mut self, callee: usize, method: StrId, argv: &[Value]) -> Value {
+    fn call_actionvalue(&mut self, callee: usize, method: MethRef, argv: &[Value]) -> Value {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
-                let mname: &str = &self.d.strings[method as usize];
+                let MethRef::Prim(mg) = method else {
+                    panic!("user-module method reference on a primitive");
+                };
+                let mname: &str = self.d.global_name(mg);
                 p.actionvalue_method(mname, argv, self.now)
             }
             InstKind::User { module, .. } => {
                 let module = *module;
-                let mi = *self.mods[module]
-                    .methods
-                    .get(&method)
-                    .unwrap_or_else(|| panic!("unknown method {:?}", self.s(method)));
+                let MethRef::User(mi) = method else {
+                    panic!("primitive method reference on a user module");
+                };
+                let mi = mi as usize;
                 self.latch_method_en(callee, method);
                 if self.vcd_trace {
                     self.vcd_rec_meth_call(callee, method, argv);
@@ -2212,7 +2254,7 @@ impl Interp {
                     return;
                 }
                 // Arc clone, not a String: this runs per evaluated call
-                let fname = self.arg_str(*func);
+                let fname = self.global_arg_str(*func);
                 let argv: Vec<Arg> = args
                     .iter()
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
@@ -2226,7 +2268,7 @@ impl Interp {
                     return;
                 }
                 // Arc clone, not a String: this runs per evaluated call
-                let fname = self.arg_str(*func);
+                let fname = self.global_arg_str(*func);
                 let argv: Vec<Arg> = args
                     .iter()
                     .zip(signed.iter().chain(std::iter::repeat(&false)))
@@ -2257,8 +2299,8 @@ impl Interp {
             .d
             .foreign_funcs
             .iter()
-            .filter(|f| !is_lib_bdpi(self.s(f.c_name)))
-            .map(|f| (self.s(f.name).to_string(), self.s(f.c_name).to_string()))
+            .filter(|f| !is_lib_bdpi(self.gs(f.c_name)))
+            .map(|f| (self.gs(f.name).to_string(), self.gs(f.c_name).to_string()))
             .collect();
         self.bdpi = Some(bdpi::Bdpi::load(std::path::Path::new(path), &funcs)?);
         Ok(())
@@ -2272,7 +2314,7 @@ impl Interp {
         self.d
             .foreign_funcs
             .iter()
-            .any(|f| !is_lib_bdpi(self.s(f.c_name)))
+            .any(|f| !is_lib_bdpi(self.gs(f.c_name)))
     }
 
     /// Dispatch a non-builtin task name as a BDPI import, if the design
@@ -2282,13 +2324,13 @@ impl Interp {
             .d
             .foreign_funcs
             .iter()
-            .find(|f| self.s(f.name) == name)?
+            .find(|f| self.gs(f.name) == name)?
             .clone();
         // library BDPI: reference Bluesim links libbsprim.a (with
         // rand32.cxx) into every executable, so these imports resolve
         // without any user C files; provide them natively with the same
         // glibc calls for bit-identical streams
-        match self.s(ff.c_name) {
+        match self.gs(ff.c_name) {
             "rand32" => {
                 // rand32.cxx: return (unsigned int)random(); ours is
                 // the same glibc stream, per-engine (see GlibcRandom)
@@ -2547,14 +2589,14 @@ impl Interp {
         }
         // rule body functions
         for r in &m.rules {
-            let fk = (1u8, r.name, 0u32);
+            let fk = (1u8, r.name.0, 0u32);
             let mut seen = std::collections::HashSet::new();
             mark_stmts(&r.body, fk, &m, &defs_by_name, &mut usage, &mut seen);
         }
         // method functions (RDY_<m> methods are separate entries, so the
         // C++ METH_RDY_<m> function falls out naturally)
         for me in &m.methods {
-            let fk = (2u8, me.name, 0u32);
+            let fk = (2u8, me.name.0, 0u32);
             let mut seen = std::collections::HashSet::new();
             // NOTE: me.ready is NOT marked — the readiness cone lives in
             // the separate RDY_<m> method entry (its own C++ function)
@@ -2584,10 +2626,13 @@ impl Interp {
 
         // member selection
         // the action method each WILL_FIRE def belongs to
-        let wf_owner: HashMap<StrId, StrId> = m
+        let wf_owner: HashMap<StrId, MethRef> = m
             .methods
             .iter()
-            .filter_map(|me| me.will_fire.map(|wf| (wf, me.name)))
+            .enumerate()
+            .filter_map(|(mi, me)| {
+                me.will_fire.map(|wf| (wf, MethRef::User(mi as u32)))
+            })
             .collect();
         let mut members: Vec<ModVar> = Vec::new();
         for rst in &m.resets {
@@ -2640,7 +2685,7 @@ impl Interp {
 
         // port selection
         let mut ports: Vec<ModVar> = Vec::new();
-        for me in &m.methods {
+        for (mei, me) in m.methods.iter().enumerate() {
             let is_action = me.kind != ir::MethodKind::Value;
             if is_action {
                 if let Some(en_id) = me.en {
@@ -2648,7 +2693,7 @@ impl Interp {
                     if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
                             name: self.s(en_id).to_string(),
-                            src: VcdSrc::PortEn(me.name),
+                            src: VcdSrc::PortEn(MethRef::User(mei as u32)),
                             width: 1,
                             clocked: true,
                             domain: Some(me.clock_domain),
@@ -2661,7 +2706,7 @@ impl Interp {
                 if n_fns >= 2 || a.width > 64 || (self.d.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(a.name).to_string(),
-                        src: VcdSrc::PortArg(me.name, ai),
+                        src: VcdSrc::PortArg(MethRef::User(mei as u32), ai),
                         width: a.width,
                         clocked: true,
                         domain: Some(me.clock_domain),
@@ -2690,7 +2735,7 @@ impl Interp {
                 if n_fns >= 2 || w > 64 || (self.d.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(me.name).to_string(),
-                        src: VcdSrc::PortRes(me.name),
+                        src: VcdSrc::PortRes(MethRef::User(mei as u32)),
                         width: w.max(1),
                         clocked: true,
                         domain: Some(me.clock_domain),
@@ -2736,7 +2781,7 @@ impl Interp {
 
         // FST records the scope's MODULE TYPE as its component field
         // (the fstscopes correlation surface); VCD ignores it
-        let mtype = self.s(self.d.modules[mir].name).to_string();
+        let mtype = self.gs(self.d.modules[mir].name).to_string();
         w.scope_start(name, Some(&mtype));
         let base = w.reserve_ids((mv.members.len() + mv.ports.len() + prims.len()) as u32);
 
@@ -2850,9 +2895,9 @@ impl Interp {
         }
         // input clock port: chase the parent's binding expression
         if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
-            let pid = self.d.str_id(wire).map(|i| i as usize);
+            let pid = self.d.str_id(wire);
             if let Some(pid) = pid {
-                if let Some((owner, e)) = clk_binds.get(&(pid as StrId)) {
+                if let Some((owner, e)) = clk_binds.get(&pid) {
                     let (owner, e) = (*owner, e.clone());
                     let osc = match &e {
                         Expr::Clock { osc, .. } => osc.as_ref().clone(),
@@ -3090,7 +3135,7 @@ impl Interp {
                         panic!(
                             "no schedule for domain {} in {:?}",
                             e.domain,
-                            self.s(self.d.modules[mir].name)
+                            self.gs(self.d.modules[mir].name)
                         )
                     });
                 REntry {
@@ -3155,7 +3200,7 @@ impl Interp {
 
     /// The instance an interned path names.
     fn inst_of_path(&self, path: StrId) -> usize {
-        let p: &str = &self.d.strings[path as usize];
+        let p: &str = self.d.name(path);
         *self
             .inst_by_path
             .get(p)
@@ -3397,11 +3442,11 @@ impl Interp {
     /// edges); interface output clocks and input clock ports chase
     /// through ifc_clocks / instantiation bindings to their oscillator;
     /// noClock and non-default top input clocks never fire.
-    fn resolve_source(&self, clock: StrId) -> ClockSource {
+    fn resolve_source(&self, clock: GlobalStrId) -> ClockSource {
         if Some(clock) == self.d.default_clock {
             return Self::default_wave();
         }
-        let name = self.s(clock).to_string();
+        let name = self.gs(clock).to_string();
         self.resolve_clock_at(0, &name)
     }
 
@@ -3447,7 +3492,7 @@ impl Interp {
         let mir = self.mods[module].ir;
         if self.insts[inst].path.is_empty() {
             if let Some(dc) = self.d.default_clock {
-                if self.s(dc) == wire {
+                if self.gs(dc) == wire {
                     return Self::default_wave();
                 }
             }
@@ -3697,7 +3742,7 @@ impl Interp {
         // distinct clocks in first-appearance order, with the default
         // clock first: the kernel defines it before derived clocks, and
         // VCD clock ids follow definition order (CLK = id 0 = '!')
-        let mut clocks: Vec<StrId> = Vec::new();
+        let mut clocks: Vec<GlobalStrId> = Vec::new();
         if let Some(dc) = self.d.default_clock {
             if comps.iter().any(|c| c.clock == dc) {
                 clocks.push(dc);
@@ -3743,7 +3788,7 @@ impl Interp {
                     }
                     ClockSource::Never => "never".to_string(),
                 };
-                eprintln!("clock[{ci}] {:?}: {k}", self.s(c));
+                eprintln!("clock[{ci}] {:?}: {k}", self.gs(c));
             }
         }
         // clock-driver prim instance -> clock index, for routing triggered
@@ -3806,7 +3851,7 @@ impl Interp {
                             .get(&ppath)
                             .unwrap_or_else(|| panic!("unknown tick instance {ppath:?}"));
                         let owner = *self.inst_by_path.get(&ipath).unwrap_or(&0);
-                        let pname = self.d.strings[tk.port as usize].clone();
+                        let pname = self.d.name(tk.port).to_string();
                         (ii, pname, tk.reset, owner, tk.gate.clone())
                     })
                     // no-op ticks (Reg/ConfigReg/FIFO clock ticks) cost a
@@ -3896,7 +3941,7 @@ impl Interp {
                 .iter()
                 .enumerate()
                 .map(|(ci, &c)| VcdClock {
-                    name: self.s(c).to_string(),
+                    name: self.gs(c).to_string(),
                     vcd_id: 0,
                     cur: match &sources[ci] {
                         ClockSource::Wave(w) => w.init_high,
@@ -3986,7 +4031,7 @@ impl Interp {
         }
         // clock-source prims alias the clock they DRIVE (CLK_OUT)
         for (ci, &c) in clocks.iter().enumerate() {
-            let cname = self.s(c).to_string();
+            let cname = self.gs(c).to_string();
             if let Some(cpath) = cname.strip_suffix("$CLK_OUT") {
                 if let Some(&pi) = self.inst_by_path.get(cpath) {
                     self.vcd_inst_clock[pi] = ci;
@@ -5107,7 +5152,7 @@ pub(crate) fn emit_output_errors(errs: &[String]) {
 
 fn cookie_key(cookie: u32) -> StrId {
     // cookies live in a synthetic key space far above real string ids
-    0x8000_0000 | cookie
+    ModuleStrId(0x8000_0000 | cookie)
 }
 
 /// Outcome of a trs link Emit request.
@@ -5377,22 +5422,23 @@ impl Interp {
     pub fn method_port_symbols(
         &self,
         i: usize,
-    ) -> Vec<(String, u32, StrId, MethPortKind)> {
+    ) -> Vec<(String, u32, MethRef, MethPortKind)> {
         let InstKind::User { module, .. } = &self.insts[i].kind else {
             return Vec::new();
         };
         let mir = self.mods[*module].ir;
         let mut out = Vec::new();
-        for m in &self.d.modules[mir].methods {
+        for (mi, m) in self.d.modules[mir].methods.iter().enumerate() {
+            let mref = MethRef::User(mi as u32);
             let mname = self.s(m.name).to_string();
             if let Some(en) = m.en {
-                out.push((self.s(en).to_string(), 1, m.name, MethPortKind::En));
+                out.push((self.s(en).to_string(), 1, mref, MethPortKind::En));
             }
             for (k, a) in m.args.iter().enumerate() {
                 out.push((
                     self.s(a.name).to_string(),
                     a.width.max(1),
-                    m.name,
+                    mref,
                     MethPortKind::Arg(k),
                 ));
             }
@@ -5400,7 +5446,7 @@ impl Interp {
             // RDY port to register (interim until the exporter carries
             // the surviving methodPorts set)
             if !matches!(m.ready, Some(Expr::Const { .. }) | None) {
-                out.push((format!("RDY_{mname}"), 1, m.name, MethPortKind::Rdy));
+                out.push((format!("RDY_{mname}"), 1, mref, MethPortKind::Rdy));
             }
             if m.result.is_some() {
                 let w = match m.result.as_ref().unwrap() {
@@ -5412,7 +5458,7 @@ impl Interp {
                         .unwrap_or(1),
                     e => e.width().max(1),
                 };
-                out.push((mname, w.max(1), m.name, MethPortKind::Result));
+                out.push((mname, w.max(1), mref, MethPortKind::Result));
             }
         }
         out
@@ -5424,7 +5470,7 @@ impl Interp {
     pub fn method_port_peek(
         &mut self,
         i: usize,
-        method: StrId,
+        method: MethRef,
         kind: MethPortKind,
         width: u32,
     ) -> Value {
@@ -5438,7 +5484,7 @@ impl Interp {
                 let id = self.en_id_at(i, method);
                 let mut set = match (&self.insts[i].kind, id) {
                     (InstKind::User { latched, .. }, Some(id)) => {
-                        latched.contains_key(&(id as StrId))
+                        latched.contains_key(&id)
                     }
                     _ => false,
                 };
@@ -5446,7 +5492,7 @@ impl Interp {
                 // boxed latch map
                 if !set && !self.jit_arena_ptr.is_null() {
                     if let Some(id) = id {
-                        if let Some(&slot) = self.jit_en_slots.get(&(i, id as StrId))
+                        if let Some(&slot) = self.jit_en_slots.get(&(i, id))
                         {
                             set = unsafe { *self.jit_arena_ptr.add(slot as usize) }
                                 != 0;
@@ -5490,9 +5536,9 @@ impl Interp {
                     .unwrap_or_else(|| Value::zero(width.max(1)))
             }
             MethPortKind::Rdy => {
-                let mi = match self.mods[module].methods.get(&method) {
-                    Some(&mi) => mi,
-                    None => return Value::zero(width.max(1)),
+                let Some(mi) = self.d.modules[mir].meth(method).map(|(i, _)| i)
+                else {
+                    return Value::zero(width.max(1));
                 };
                 let m = &self.d.modules[mir].methods[mi];
                 let e = m.ready.clone();
@@ -5733,7 +5779,7 @@ impl Interp {
 
     /// Top module name (the new_MODEL_<top> shim symbol).
     pub fn top_name(&self) -> &str {
-        self.s(self.d.top)
+        self.gs(self.d.top)
     }
 
     /// Stage a +arg (without the '+') for $test$plusargs/$value$plusargs.

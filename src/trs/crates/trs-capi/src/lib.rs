@@ -133,7 +133,7 @@ enum SymKind {
     /// a method port (EN_/arg/RDY_/result — SYM_PORT semantics)
     MethPort {
         inst: usize,
-        method: trs_ir::StrId,
+        method: trs_ir::MethRef,
         kind: trs_interp::MethPortKind,
     },
     Rule,

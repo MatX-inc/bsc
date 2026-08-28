@@ -31,6 +31,7 @@ import qualified Data.ByteString.Lazy as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Control.Monad.Reader (ReaderT, runReaderT, ask, local)
 import Control.Monad.State.Strict (State, runState, gets, modify)
 import Data.Bits (shiftR, (.&.))
 import Data.Word (Word32)
@@ -66,7 +67,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 6
+birVersion = 7
 
 -- ===============
 -- String interning
@@ -78,7 +79,36 @@ birVersion = 6
 
 data StrTable = StrTable !(M.Map String Word32) ![String] !Word32
 
-type EncM = State StrTable
+-- | What the encoding needs beyond the string table: which module each
+-- instance of the package being encoded is of, and where each module's
+-- methods sit in its own method list.  A call on a submodule names a
+-- position in the callee, so it takes both.
+data EncEnv = EncEnv
+    { envMethIx :: M.Map String (M.Map String Int)
+    , envInstMod :: M.Map String String
+    }
+
+type EncM = ReaderT EncEnv (State StrTable)
+
+-- | The reference a call carries: a position in the callee for a user
+-- module, and the shared name for a primitive, whose methods are a
+-- vocabulary rather than a list.
+encMethRef :: Id -> Id -> EncM C.Encoding
+encMethRef obj meth = do
+    env <- ask
+    case M.lookup (getIdBaseString obj) (envInstMod env) of
+      Just modName -> encMethRefIn modName meth
+      Nothing      -> encVariant "Prim" <$> idE meth
+
+-- | The same, where the callee's module is already known.
+encMethRefIn :: String -> Id -> EncM C.Encoding
+encMethRefIn modName meth = do
+    env <- ask
+    let ix = M.lookup modName (envMethIx env)
+               >>= M.lookup (getIdBaseString meth)
+    case ix of
+      Just i  -> return $ encVariant "User" (encW32 (fromIntegral i))
+      Nothing -> encVariant "Prim" <$> idE meth
 
 emptyStrTable :: StrTable
 emptyStrTable = StrTable M.empty [] 0
@@ -213,7 +243,17 @@ encDesign keepF symMap ssys =
             , ("uses_wave_tasks", encBool (designUsesWaveTasks pkgs))
             ]
 
-        (fields, finalTbl) = runState action emptyStrTable
+        -- a method's position in the list its module emits: encMethod
+        -- yields one entry per value/action/actionvalue face, in
+        -- interface order, and nothing for clocks, resets and inouts
+        methIx = M.fromList
+          [ ( getIdBaseString (sp_name p)
+            , M.fromList (zip [ getIdBaseString (aif_name f)
+                              | f <- sp_interface p, isMethodIfc f ]
+                              [0 ..]) )
+          | p <- pkgs ]
+        env0 = EncEnv { envMethIx = methIx, envInstMod = M.empty }
+        (fields, finalTbl) = runState (runReaderT action env0) emptyStrTable
         strsEnc = encList (map encStr (tableStrings finalTbl))
         fields' = [ (k, if k == "strings" then strsEnc else v)
                   | (k, v) <- fields ]
@@ -762,7 +802,10 @@ oscName clk = case aclock_osc clk of
 
 encModule :: S.Set String -> ModSchedInfo -> S.Set AId -> SimPackage
           -> EncM C.Encoding
-encModule pkgNames msi symSet pkg = do
+encModule pkgNames msi symSet pkg =
+  local (\e -> e { envInstMod = instMods }) $ do
+    -- which module each of this package's instances is of, so a call on
+    -- one resolves to a position in that module
     nameId <- idE (sp_name pkg)
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
@@ -879,6 +922,11 @@ encModule pkgNames msi symSet pkg = do
       , ("methods", encList methodsEnc)
       , ("schedule", schedEnc)
       ]
+  where
+    instMods = M.fromList
+      [ ( getIdBaseString (avi_vname avi)
+        , getVNameString (vName (avi_vmi avi)) )
+      | avi <- M.elems (sp_state_instances pkg) ]
 
 encSchedule :: ModSchedInfo -> SimPackage -> EncM C.Encoding
 encSchedule msi pkg = do
@@ -1030,8 +1078,9 @@ encInstance pkgNames mom avi = do
     let morder = sortBy (\(a, b) (c, d) ->
                            (a `cmpIdByName` c) <> (b `cmpIdByName` d))
                         (S.toList (M.findWithDefault S.empty (avi_vname avi) mom))
-    morderEnc <- mapM (\(a, b) -> encPair <$> idE a <*> idE b) morder
-    portsEnc <- mapM (\(m, n) -> encPair <$> idE m
+    morderEnc <- mapM (\(a, b) -> encPair <$> encMethRefIn modName a
+                                            <*> encMethRefIn modName b) morder
+    portsEnc <- mapM (\(m, n) -> encPair <$> encMethRefIn modName m
                                          <*> pure (encW32 (fromIntegral n)))
                      (avi_iarray avi)
     return $ encStruct
@@ -1192,11 +1241,14 @@ data Siblings = Siblings { sibIfc :: S.Set String, sibDefs :: S.Set String }
 -- The sibling RDY method and WILL_FIRE def of a method, each named only
 -- when the module actually has one.  Only a method with actions has a
 -- WILL_FIRE def (cvtIFace wf_stmts).
-encSiblings :: Siblings -> Id -> Bool -> EncM (C.Encoding, C.Encoding)
-encSiblings sibs name hasActions = do
+encSiblings :: Siblings -> String -> Id -> Bool
+            -> EncM (C.Encoding, C.Encoding)
+encSiblings sibs modName name hasActions = do
     let present set i =
             if getIdBaseString i `S.member` set then Just i else Nothing
-    rdyEnc <- traverse idE (present (sibIfc sibs) (mkRdyId name))
+    -- the ready signal is a sibling METHOD, so it is named the way any
+    -- call on this module names one
+    rdyEnc <- traverse (encMethRefIn modName) (present (sibIfc sibs) (mkRdyId name))
     wfEnc <- traverse idE
                (if hasActions
                 then present (sibDefs sibs) (mkIdWillFire name)
@@ -1242,7 +1294,7 @@ encMethodStructAV :: Siblings -> SimPackage -> Id -> [AInput] -> Maybe APred
                   -> [AAction] -> ADef -> WireProps -> EncM C.Encoding
 encMethodStructAV sibs pkg name inputs mpred body retdef props = do
     nameId <- idE name
-    (rdyEnc, wfEnc) <- encSiblings sibs name True
+    (rdyEnc, wfEnc) <- encSiblings sibs (getIdBaseString (sp_name pkg)) name True
     enEnc <- encEnableId pkg name True
     argsEnc <- mapM (\it -> encPortOf it "MethodArg" (Just name)) inputs
     readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
@@ -1277,6 +1329,15 @@ encEnableId pkg name hasActions = do
                        else Nothing)
     return (encMaybe id e)
 
+-- | The interface faces that become methods, in the order encMethod
+-- emits them.  Clocks, resets and inouts yield nothing.
+isMethodIfc :: AIFace -> Bool
+isMethodIfc f = case f of
+    AIDef {}         -> True
+    AIAction {}      -> True
+    AIActionValue {} -> True
+    _                -> False
+
 -- | Whether a method is driven by an enable port: it takes actions, and
 -- is not always enabled -- bsc ties those high and emits no port.
 hasEnablePort :: SimPackage -> AIFace -> Bool
@@ -1291,7 +1352,8 @@ encMethodStruct :: Siblings -> SimPackage -> Id -> String -> [AInput]
                 -> WireProps -> EncM C.Encoding
 encMethodStruct sibs pkg name kind inputs mpred body mresult props = do
     nameId <- idE name
-    (rdyEnc, wfEnc) <- encSiblings sibs name (kind /= "Value")
+    (rdyEnc, wfEnc) <-
+        encSiblings sibs (getIdBaseString (sp_name pkg)) name (kind /= "Value")
     enEnc <- encEnableId pkg name (kind /= "Value")
     argsEnc <- mapM (\it -> encPortOf it "MethodArg" (Just name)) inputs
     readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
@@ -1362,7 +1424,7 @@ encExpr (ASParam _ i) = encVariant "Param" <$> idE i
 encExpr (ASStr _ _ s) = encVariant "Str" <$> strE s
 encExpr (AMethCall t obj meth args) = do
     o <- idE obj
-    m <- idE meth
+    m <- encMethRef obj meth
     -- one value PER PORT, matching the callee's flattened (concat
     -- inputs) method-input defs: split-port args (ATuple / tuple-typed
     -- exprs) expand exactly as the C++ backend's call sites do
@@ -1376,7 +1438,7 @@ encExpr (AMethCall t obj meth args) = do
       ]
 encExpr (AMethValue t obj meth) = do
     o <- idE obj
-    m <- idE meth
+    m <- encMethRef obj meth
     return $ encVariant "MethValue" $ encStruct
       [ ("width", encW32 (aTypeWidth t))
       , ("instance", o)
@@ -1523,7 +1585,7 @@ primOpName op = internalError ("SimExportIR.primOpName: " ++ show op)
 encAction :: SignedOracle -> AAction -> EncM C.Encoding
 encAction _ (ACall obj meth (cond : args)) = do
     o <- idE obj
-    m <- idE meth
+    m <- encMethRef obj meth
     condEnc <- encExpr cond
     -- per-port arg expansion: see encExpr (AMethCall ...)
     argsEnc <- mapM encExpr (concatMap argInputPorts args)

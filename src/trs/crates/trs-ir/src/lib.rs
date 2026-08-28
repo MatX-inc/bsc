@@ -26,7 +26,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 6;
+pub const BIR_VERSION: u32 = 7;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -69,8 +69,72 @@ pub fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
-/// Identifier interned per design; display names live in `Design::strings`.
-pub type StrId = u32;
+/// An identifier scoped to one module type: an index into that module's
+/// own string table.  Renumberable within a fragment, and meaningless
+/// against any other module.
+///
+/// Serializes as the bare integer it wraps.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct ModuleStrId(pub u32);
+
+/// How a call names the method it invokes.  A primitive's methods are a
+/// vocabulary every design shares, so a call on one names it; a user
+/// module's methods are its own, so a call on one names a position in
+/// the callee's method list and carries no identifier out of it.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum MethRef {
+    Prim(GlobalStrId),
+    User(u32),
+}
+
+/// An identifier in the link-level table: the vocabulary fragments share.
+/// Module type names, instance paths, and any name one module writes for
+/// another module to resolve.
+///
+/// Serializes as the bare integer it wraps.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct GlobalStrId(pub u32);
+
+impl std::fmt::Display for ModuleStrId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::fmt::Display for GlobalStrId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl ModuleStrId {
+    /// The table position.  Every place an id leaves its type goes
+    /// through this, so those places can be found.
+    #[inline]
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl GlobalStrId {
+    #[inline]
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// One table backs both spaces, so the module scope is the default:
+/// `GlobalStrId` is written where a reference crosses a fragment
+/// boundary.
+pub type StrId = ModuleStrId;
 
 thread_local! {
     /// Snap ENCODE side-blob: while `Some`, `Lazy` fields serialize as
@@ -206,17 +270,17 @@ pub struct Design {
     /// string table cannot distinguish a call to `$dumpvars` from a
     /// string literal equal to it.
     pub uses_wave_tasks: bool,
-    pub top: StrId,
+    pub top: GlobalStrId,
     pub modules: Vec<Module>,
     /// Hierarchical instance path -> module name (`ssys_instmap` analogue).
-    pub instance_map: Vec<(StrId, StrId)>,
+    pub instance_map: Vec<(GlobalStrId, GlobalStrId)>,
     /// Per-(clock, edge) interleavings of instance segments — the design
     /// schedule, exported hierarchically (see `schedule` module docs).
     pub compositions: Vec<Composition>,
     /// Foreign (BDPI) function signatures used anywhere in the design.
     pub foreign_funcs: Vec<ForeignFunc>,
-    pub default_clock: Option<StrId>,
-    pub default_reset: Option<StrId>,
+    pub default_clock: Option<GlobalStrId>,
+    pub default_reset: Option<GlobalStrId>,
     /// bsc was invoked with -keep-fires: CAN_FIRE/WILL_FIRE defs and
     /// method ports are never demoted to stack locals, so they all get
     /// VCD variables (SimCOpt shouldMove's cfwfOkToMove/portOkToMove).
@@ -227,7 +291,7 @@ pub struct Design {
 /// One synthesized module (one `.ba` / one `SimPackage`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
-    pub name: StrId,
+    pub name: GlobalStrId,
     /// name -> index over `defs` and `methods`, so a reference resolves
     /// without a scan.  Read them through `def`/`def_idx`/`method_idx`.
     /// Derived, not serialized: the decode paths build them.
@@ -309,9 +373,9 @@ pub struct Instance {
     pub args: Vec<Expr>,
     /// Pairs (a, b) of methods where a must execute before b within one
     /// atomic action — the `sSB` relation (`MethodOrderMap`).
-    pub method_order: Vec<(StrId, StrId)>,
+    pub method_order: Vec<(MethRef, MethRef)>,
     /// Method name -> number of used ports (multi-ported methods).
-    pub port_counts: Vec<(StrId, u32)>,
+    pub port_counts: Vec<(MethRef, u32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,7 +383,7 @@ pub enum InstanceKind {
     /// A primitive with codegen support (possibly fully inlined).
     Prim(Primitive),
     /// Another user module in this design.
-    Module(StrId),
+    Module(GlobalStrId),
 }
 
 /// Primitives the backend knows how to lay out or call into trs-rt.
@@ -344,7 +408,7 @@ pub enum Primitive {
     SyncReg { width: u32, stages: u8 },
     SyncFifo { width: u32, depth: u32 },
     /// Escape hatch during bring-up: named primitive handled by trs-rt.
-    Other { name: StrId },
+    Other { name: GlobalStrId },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,7 +476,7 @@ pub struct Method {
     pub always_enabled: bool,
     /// The sibling method carrying this one's ready signal, when the
     /// module exports one; None = constant ready.
-    pub rdy: Option<StrId>,
+    pub rdy: Option<MethRef>,
     /// The def this method's function writes to record that it fired
     /// (cvtIFace wf_stmts).  Action and ActionValue methods only.
     pub will_fire: Option<StrId>,
@@ -435,6 +499,19 @@ impl Module {
 
     /// Index of a method by name, or None if this module has no such
     /// method.
+    /// The method a reference names in this module, with its position.
+    /// A primitive's methods are not listed here, so a reference to one
+    /// resolves to nothing.
+    pub fn meth(&self, r: MethRef) -> Option<(usize, &Method)> {
+        match r {
+            MethRef::User(i) => {
+                let i = i as usize;
+                self.methods.get(i).map(|m| (i, m))
+            }
+            MethRef::Prim(_) => None,
+        }
+    }
+
     pub fn method_idx(&self, name: StrId) -> Option<usize> {
         self.method_ix.get(&name).copied()
     }
@@ -451,8 +528,8 @@ pub enum MethodKind {
 /// exactly (DESIGN.md §5.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForeignFunc {
-    pub name: StrId,
-    pub c_name: StrId,
+    pub name: GlobalStrId,
+    pub c_name: GlobalStrId,
     pub ret: ForeignType,
     pub args: Vec<ForeignType>,
 }
@@ -630,7 +707,7 @@ impl Design {
             .strings
             .iter()
             .enumerate()
-            .map(|(i, s)| (s.clone(), i as StrId))
+            .map(|(i, s)| (s.clone(), ModuleStrId(i as u32)))
             .collect();
         for m in &mut self.modules {
             m.def_ix =
@@ -654,13 +731,62 @@ impl Design {
         out
     }
 
-    pub fn name(&self, id: StrId) -> &str {
-        &self.strings[id as usize]
+    /// The display name of a module-scoped id.  The parameter type is
+    /// the guard: a global id cannot be read against a module's table.
+    pub fn name(&self, id: ModuleStrId) -> &str {
+        &self.strings[id.idx()]
+    }
+
+    /// The display name a method reference stands for.  A primitive's
+    /// method is named in the shared vocabulary; a user module's is a
+    /// position in that module's own method list, so reading it takes
+    /// the module.
+    pub fn meth_name(&self, callee: usize, r: MethRef) -> &str {
+        match r {
+            MethRef::Prim(g) => self.global_name(g),
+            MethRef::User(i) => {
+                self.name(self.modules[callee].methods[i as usize].name)
+            }
+        }
+    }
+
+    /// The display name of a link-level id: a module type, a primitive,
+    /// a foreign symbol, or a name the design as a whole owns.
+    pub fn global_name(&self, id: GlobalStrId) -> &str {
+        &self.strings[id.idx()]
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// Both id spaces ride the wire as bare integers: the .bir is CBOR
+    /// and the snapshot is bincode, and an id occupies the same bytes in
+    /// each as the integer it wraps.
+    #[test]
+    fn ids_encode_as_bare_integers() {
+        for n in [0u32, 7, 0x8000_0000, u32::MAX] {
+            let mut plain = Vec::new();
+            ciborium::into_writer(&n, &mut plain).unwrap();
+            let mut m = Vec::new();
+            ciborium::into_writer(&ModuleStrId(n), &mut m).unwrap();
+            let mut g = Vec::new();
+            ciborium::into_writer(&GlobalStrId(n), &mut g).unwrap();
+            assert_eq!(plain, m, "cbor ModuleStrId({n})");
+            assert_eq!(plain, g, "cbor GlobalStrId({n})");
+
+            assert_eq!(
+                bincode::serialize(&n).unwrap(),
+                bincode::serialize(&ModuleStrId(n)).unwrap(),
+                "bincode ModuleStrId({n})"
+            );
+            assert_eq!(
+                bincode::serialize(&n).unwrap(),
+                bincode::serialize(&GlobalStrId(n)).unwrap(),
+                "bincode GlobalStrId({n})"
+            );
+        }
+    }
+
     use super::*;
 
     fn tiny_design() -> Design {
@@ -668,9 +794,9 @@ mod tests {
             strings: vec!["mkTop".into()],
             str_ids: HashMap::new(),
             uses_wave_tasks: false,
-            top: 0,
+            top: GlobalStrId(0),
             modules: vec![Module {
-                name: 0,
+                name: GlobalStrId(0),
                 def_ix: HashMap::new(),
                 method_ix: HashMap::new(),
                 content_hash: [0; 32],
@@ -700,7 +826,7 @@ mod tests {
         let d = tiny_design();
         let bytes = d.encode();
         let d2 = Design::decode(&bytes).unwrap();
-        assert_eq!(d2.name(d2.top), "mkTop");
+        assert_eq!(d2.global_name(d2.top), "mkTop");
         assert_eq!(d2.modules.len(), 1);
     }
 

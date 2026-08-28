@@ -31,7 +31,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::expr::Expr;
-use crate::StrId;
+use crate::{GlobalStrId, StrId};
 
 /// `Sched r` computes r's fire conditions; `Exec r` runs r's body.
 /// (`SchedNode`, `AScheduleInfo.hs:218`.)
@@ -99,7 +99,7 @@ pub struct QualRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Composition {
     /// Interned name of this composition's canonical clock oscillator.
-    pub clock: StrId,
+    pub clock: GlobalStrId,
     pub posedge: bool,
     /// Ordered (instance, segment) references.  Each instance's segments
     /// appear in order; runs are maximized so the common case is one entry

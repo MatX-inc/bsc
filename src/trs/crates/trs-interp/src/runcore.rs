@@ -23,6 +23,8 @@
 //! decode, no Interp, no reflection: precisely the prims the compiled
 //! code can bounce on, nothing else.
 
+use crate::value::{DynStrId, StrRef};
+use trs_ir::GlobalStrId;
 use std::collections::HashMap;
 
 use crate::foreign::ForeignEnv;
@@ -326,7 +328,7 @@ struct RunCore {
     buf: Vec<u8>,
     strings: Vec<(u32, u32)>,
     dyn_strs: Vec<String>,
-    arg_strs: HashMap<u32, std::sync::Arc<str>>,
+    arg_strs: HashMap<DynStrId, std::sync::Arc<str>>,
     paths: Vec<(u32, u32)>,
     protos: Vec<FnProtos>,
     /// $random/$srandom (library rand32/srand BDPI): same fresh glibc
@@ -351,38 +353,43 @@ struct RunCore {
 }
 
 impl RunCore {
-    fn s(&self, id: u32) -> &str {
-        let n = self.strings.len();
-        if (id as usize) < n {
-            table_str(&self.buf, self.strings[id as usize])
-        } else {
-            &self.dyn_strs[id as usize - n]
-        }
+    fn gs(&self, id: GlobalStrId) -> &str {
+        table_str(&self.buf, self.strings[id.idx()])
     }
-    fn arg_str(&mut self, id: u32) -> std::sync::Arc<str> {
-        // design-table ids take a dense index (no per-call hashing);
-        // dyn ids (appended past the table) stay on the map
-        let n = self.strings.len();
-        if (id as usize) < n {
-            if self.arg_strs_vec.is_empty() {
-                self.arg_strs_vec = vec![None; n];
+
+    fn dyn_text(&self, id: DynStrId) -> &str {
+        &self.dyn_strs[id.idx()]
+    }
+
+    fn arg_str(&mut self, r: StrRef) -> std::sync::Arc<str> {
+        // a table id takes a dense index, so the common case does no
+        // hashing; the run's own strings are sparse and take the map
+        match r {
+            StrRef::Static(id) => {
+                let n = self.strings.len();
+                if self.arg_strs_vec.is_empty() {
+                    self.arg_strs_vec = vec![None; n];
+                }
+                if let Some(a) = &self.arg_strs_vec[id.idx()] {
+                    return a.clone();
+                }
+                let a: std::sync::Arc<str> = std::sync::Arc::from(table_str(
+                    &self.buf,
+                    self.strings[id.idx()],
+                ));
+                self.arg_strs_vec[id.idx()] = Some(a.clone());
+                a
             }
-            if let Some(a) = &self.arg_strs_vec[id as usize] {
-                return a.clone();
+            StrRef::Dyn(id) => {
+                if let Some(a) = self.arg_strs.get(&id) {
+                    return a.clone();
+                }
+                let a: std::sync::Arc<str> =
+                    std::sync::Arc::from(self.dyn_text(id));
+                self.arg_strs.insert(id, a.clone());
+                a
             }
-            let a: std::sync::Arc<str> = std::sync::Arc::from(table_str(
-                &self.buf,
-                self.strings[id as usize],
-            ));
-            self.arg_strs_vec[id as usize] = Some(a.clone());
-            return a;
         }
-        if let Some(a) = self.arg_strs.get(&id) {
-            return a.clone();
-        }
-        let a: std::sync::Arc<str> = std::sync::Arc::from(self.s(id));
-        self.arg_strs.insert(id, a.clone());
-        a
     }
 }
 
@@ -417,7 +424,7 @@ unsafe extern "C" fn runcore_foreign_cb(
     let mut off = 0usize;
     for a in &fs.args {
         match *a {
-            FArgSpec::Str(sid) => argv.push(Arg::Str(rc.arg_str(sid))),
+            FArgSpec::Str(sid) => argv.push(Arg::Str(rc.arg_str(StrRef::Static(sid)))),
             FArgSpec::Num { width, signed } => {
                 let words = ((width.max(1) as usize) + 63) / 64;
                 let limbs = std::slice::from_raw_parts(args.add(off), words);
@@ -433,7 +440,7 @@ unsafe extern "C" fn runcore_foreign_cb(
             }
             FArgSpec::StrDyn => {
                 let word = *args.add(off);
-                argv.push(Arg::Str(rc.arg_str(word as u32)));
+                argv.push(Arg::Str(rc.arg_str(StrRef::from_word(word))));
                 off += 1;
             }
         }
@@ -446,16 +453,16 @@ unsafe extern "C" fn runcore_foreign_cb(
                 text.push_str(s);
             }
         }
-        let id = rc.strings.len() + rc.dyn_strs.len();
         rc.dyn_strs.push(text);
-        *out = id as u64;
+        let id = DynStrId((rc.dyn_strs.len() - 1) as u32);
+        *out = StrRef::Dyn(id).to_word();
         argv.clear();
         rc.foreign_argv = argv;
         return 0;
     }
     let mut name = std::mem::take(&mut rc.fname_buf);
     name.clear();
-    name.push_str(rc.s(func));
+    name.push_str(rc.gs(func));
     let mut loc = std::mem::take(&mut rc.loc_buf);
     loc.clear();
     loc.push_str("top");
@@ -554,7 +561,7 @@ unsafe extern "C" fn runcore_prim_cb(
         let name: &str = table_str(
             &rc.buf,
             *rc.strings
-                .get(pc.method as usize)
+                .get(pc.method.idx())
                 .expect("prim method id outside the design string table"),
         );
         p.action_method(name, pc.port, &argv, rc.now);
@@ -562,7 +569,7 @@ unsafe extern "C" fn runcore_prim_cb(
         let name: &str = table_str(
             &rc.buf,
             *rc.strings
-                .get(pc.method as usize)
+                .get(pc.method.idx())
                 .expect("prim method id outside the design string table"),
         );
         let v = p.value_method(name, pc.port, &argv, rc.now);
