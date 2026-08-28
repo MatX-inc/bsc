@@ -159,7 +159,7 @@ pub struct Interp {
     /// method -> EN_<method> / RDY_<method>.  Asked once per method
     /// call, and the answer is a property of the design, so the derived
     /// name is built once rather than on every call.
-    en_id_of_meth: HashMap<StrId, Option<StrId>>,
+    en_id_of_meth: HashMap<(usize, StrId), Option<StrId>>,
     insts: Vec<Inst>,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
@@ -602,7 +602,8 @@ fn collect_def_refs(e: &Expr, out: &mut Vec<StrId>) {
         | Expr::TaskValue { .. }
         | Expr::Str(_)
         | Expr::Real(_)
-        | Expr::Gate { .. } => {}
+        | Expr::Gate { .. }
+        | Expr::ClockOut { .. } => {}
     }
 }
 
@@ -790,9 +791,8 @@ impl Interp {
                             .iter()
                             .map(|a| (a.name, (a.width, a.kind)))
                             .chain(
-                                str_ids
-                                    .get(format!("EN_{}", d.strings[me.name as usize]).as_str())
-                                    .map(|&en| (en, (1, ir::PortKind::MethodEnable))),
+                                me.en
+                                    .map(|en| (en, (1, ir::PortKind::MethodEnable))),
                             )
                             .collect::<Vec<_>>()
                     }))
@@ -1529,27 +1529,6 @@ impl Interp {
                         return self.eval(owner, &mut c, &g);
                     }
                 }
-                // flattened gate wires of derived clocks: the exporter
-                // writes "<absolute.path>$CLK_GATE_OUT" for qualified
-                // gate ports (tick gates); module-local Gate reads come
-                // through Expr::Gate instead
-                if let Some(path) = self.s(*name).strip_suffix("$CLK_GATE_OUT") {
-                    let candidates = [path.to_string(), {
-                        let base = &self.insts[inst].path;
-                        if base.is_empty() {
-                            path.to_string()
-                        } else {
-                            format!("{base}.{path}")
-                        }
-                    }];
-                    for p in &candidates {
-                        if let Some(&ci) = self.inst_by_path.get(p) {
-                            if let InstKind::Prim(pr) = &self.insts[ci].kind {
-                                return Value::from_u64(1, pr.gate_out() as u64);
-                            }
-                        }
-                    }
-                }
                 let module = self.module_of(inst);
                 match self.mods[module].ports.get(name) {
                     // EN_* is latched 1 for the rest of the pass when the
@@ -1637,8 +1616,7 @@ impl Interp {
                     InstKind::User { module, .. } => {
                         // a user module's exported gate: evaluate the
                         // child's recorded gate expr in the child's
-                        // context (it may chase further Gates or a
-                        // prim's $CLK_GATE_OUT port)
+                        // context (it may chase further Gates)
                         let mir = self.mods[*module].ir;
                         let g = self.d.modules[mir]
                             .ifc_clock_gates
@@ -1656,7 +1634,9 @@ impl Interp {
                     }
                 }
             }
-            Expr::Clock { .. } => Value::from_u64(1, 1),
+            // a clock is not a value; both forms read as 1, the
+            // way the C++ backend treats a clock signal
+            Expr::Clock { .. } | Expr::ClockOut { .. } => Value::from_u64(1, 1),
             Expr::Reset { wire } => self.eval(inst, ctx, wire),
             Expr::Real(r) => Value::real(*r),
             Expr::Prim { op, width, args } => self.eval_prim(inst, ctx, *op, *width, args),
@@ -2003,13 +1983,28 @@ impl Interp {
 
     /// The interned id of a method's companion EN_ signal, or None where
     /// the design exports no such signal.
-    fn en_id_of(&mut self, method: StrId) -> Option<StrId> {
-        if let Some(v) = self.en_id_of_meth.get(&method).copied() {
+    pub(crate) fn en_id_at(&self, inst: usize, method: StrId) -> Option<StrId> {
+        let InstKind::User { module, .. } = &self.insts[inst].kind else {
+            return None;
+        };
+        let mir = self.mods[*module].ir;
+        self.d.modules[mir]
+            .methods
+            .iter()
+            .find(|m| m.name == method)
+            .and_then(|m| m.en)
+    }
+
+    fn en_id_of(&mut self, callee: usize, method: StrId) -> Option<StrId> {
+        let InstKind::User { module, .. } = &self.insts[callee].kind else {
+            return None;
+        };
+        let mir = self.mods[*module].ir;
+        if let Some(v) = self.en_id_of_meth.get(&(mir, method)).copied() {
             return v;
         }
-        let name = format!("EN_{}", self.s(method));
-        let v = self.d.str_id(&name);
-        self.en_id_of_meth.insert(method, v);
+        let v = self.en_id_at(callee, method);
+        self.en_id_of_meth.insert((mir, method), v);
         v
     }
 
@@ -2037,7 +2032,7 @@ impl Interp {
         if self.vcd_trace {
             self.vcd_rec_meth_time(callee, method);
         }
-        if let Some(en_id) = self.en_id_of(method) {
+        if let Some(en_id) = self.en_id_of(callee, method) {
             if let Some(c) = self.census.as_mut() {
                 c.exec_latch(callee, en_id, &Value::from_u64(1, 1));
             }
@@ -2460,7 +2455,8 @@ impl Interp {
                 | Expr::Real(_)
                 | Expr::TaskValue { .. }
                 | Expr::MethValue { .. }
-                | Expr::Gate { .. } => {}
+                | Expr::Gate { .. }
+                | Expr::ClockOut { .. } => {}
             }
         }
         fn mark_action(
@@ -2549,8 +2545,7 @@ impl Interp {
                 mark_expr(res, fk, &m, &defs_by_name, &mut usage, &mut seen);
             }
             // the method function writes its own EN/arg/result ports
-            let en = format!("EN_{}", self.s(me.name));
-            if let Some(en_id) = self.d.str_id(&en) {
+            if let Some(en_id) = me.en {
                 usage.entry(en_id).or_default().insert(fk);
             }
             for a in &me.args {
@@ -2630,12 +2625,11 @@ impl Interp {
         for me in &m.methods {
             let is_action = me.kind != ir::MethodKind::Value;
             if is_action {
-                let en = format!("EN_{}", self.s(me.name));
-                if let Some(en_id) = self.d.str_id(&en) {
+                if let Some(en_id) = me.en {
                     let n_fns = usage.get(&en_id).map(|s| s.len()).unwrap_or(0);
                     if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
-                            name: en,
+                            name: self.s(en_id).to_string(),
                             src: VcdSrc::PortEn(me.name),
                             width: 1,
                             clocked: true,
@@ -2802,9 +2796,17 @@ impl Interp {
     /// bindings (like resolve_clock_at) and match clock names.
     fn vcd_clock_index(&self, inst: usize, port: StrId) -> Option<usize> {
         let wire = self.s(port).to_string();
-        self.vcd_clock_index_wire(inst, &wire, 0)
+        self.vcd_clock_index_wire(inst, &wire, Some(port), 0)
     }
-    fn vcd_clock_index_wire(&self, inst: usize, wire: &str, depth: u32) -> Option<usize> {
+    /// `wid` is `wire`'s id where the caller already had one; the
+    /// child-qualified case below splits a name and has only text.
+    fn vcd_clock_index_wire(
+        &self,
+        inst: usize,
+        wire: &str,
+        wid: Option<StrId>,
+        depth: u32,
+    ) -> Option<usize> {
         if depth > 16 {
             return None;
         }
@@ -2829,7 +2831,7 @@ impl Interp {
                 format!("{}.{}", self.insts[inst].path, qual)
             };
             if let Some(&ci) = self.inst_by_path.get(&cpath) {
-                return self.vcd_clock_index_wire(ci, base, depth + 1);
+                return self.vcd_clock_index_wire(ci, base, None, depth + 1);
             }
         }
         // top-level ports match kernel clock names directly
@@ -2838,9 +2840,9 @@ impl Interp {
         }
         // input clock port: chase the parent's binding expression
         if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
-            let pid = self.d.str_id(wire).map(|i| i as usize);
+            let pid = wid.or_else(|| self.d.str_id(wire));
             if let Some(pid) = pid {
-                if let Some((owner, e)) = clk_binds.get(&(pid as StrId)) {
+                if let Some((owner, e)) = clk_binds.get(&pid) {
                     let (owner, e) = (*owner, e.clone());
                     let osc = match &e {
                         Expr::Clock { osc, .. } => osc.as_ref().clone(),
@@ -2848,7 +2850,8 @@ impl Interp {
                     };
                     if let Expr::Port(n) = osc {
                         let name = self.s(n).to_string();
-                        return self.vcd_clock_index_wire(owner, &name, depth + 1);
+                        return self
+                            .vcd_clock_index_wire(owner, &name, Some(n), depth + 1);
                     }
                 }
             }
@@ -3447,6 +3450,13 @@ impl Interp {
             .find(|(n, _)| self.s(*n) == wire)
         {
             return match osc {
+                // a re-exported submodule clock: descend into the child
+                // the osc names, rather than into a name spelling it
+                Expr::ClockOut { instance, clock } => {
+                    let ci = self.child_of(inst, *instance);
+                    let inner = self.s(*clock).to_string();
+                    self.resolve_clock_at(ci, &inner)
+                }
                 Expr::Port(p) => {
                     let inner = self.s(*p).to_string();
                     self.resolve_clock_at(inst, &inner)
@@ -5373,13 +5383,8 @@ impl Interp {
         let mut out = Vec::new();
         for m in &self.d.modules[mir].methods {
             let mname = self.s(m.name).to_string();
-            if m.kind != trs_ir::MethodKind::Value {
-                out.push((
-                    format!("EN_{mname}"),
-                    1,
-                    m.name,
-                    MethPortKind::En,
-                ));
+            if let Some(en) = m.en {
+                out.push((self.s(en).to_string(), 1, m.name, MethPortKind::En));
             }
             for (k, a) in m.args.iter().enumerate() {
                 out.push((
@@ -5428,8 +5433,7 @@ impl Interp {
         let mir = self.mods[module].ir;
         match kind {
             MethPortKind::En => {
-                let en = format!("EN_{}", self.s(method));
-                let id = self.d.str_id(&en).map(|i| i as usize);
+                let id = self.en_id_at(i, method);
                 let mut set = match (&self.insts[i].kind, id) {
                     (InstKind::User { latched, .. }, Some(id)) => {
                         latched.contains_key(&(id as StrId))

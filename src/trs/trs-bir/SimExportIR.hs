@@ -39,13 +39,13 @@ import qualified Codec.CBOR.Encoding as C
 import qualified Codec.CBOR.Write as CW
 
 import Data.Char (isDigit)
-import Data.List (foldl', nub, sortBy)
+import Data.List (foldl', nub, sortBy, stripPrefix)
 import Data.Maybe (mapMaybe, isJust)
 
 import ErrorUtil (internalError)
 import Util (stableOrdNub)
 import Id (Id, getIdBaseString, getIdQualString, isSignedId,
-           mkIdCanFire, mkIdWillFire, mkRdyId, cmpIdByName)
+           mkEnableId, mkIdCanFire, mkIdWillFire, mkRdyId, cmpIdByName)
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
@@ -66,7 +66,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 5
+birVersion = 6
 
 -- ===============
 -- String interning
@@ -696,17 +696,10 @@ encComposition instToMod msis topGates ss = do
               iE <- strE inst
               pE <- strE prim
               oE <- strE port
+              -- constant-true gates encode as None
               gateE <- case gate of
-                         -- constant-true gates encode as None
                          ASInt _ _ il | ilValue il == 1 -> return C.encodeNull
-                         -- design-level gate wires carry the instance
-                         -- path in the qualifier; flatten it into the
-                         -- port name so the backend can resolve it
-                         ASPort _ i | not (null (getIdQualString i)) ->
-                           encVariant "Port"
-                             <$> (encW32 <$> str (getIdQualString i ++ "$"
-                                                  ++ getIdBaseString i))
-                         g -> encExpr g
+                         g -> encGate g
               return $ encStruct
                 [ ("instance", iE), ("prim", pE), ("port", oE)
                 , ("reset", encBool rst), ("gate", gateE) ]
@@ -766,7 +759,18 @@ encModule pkgNames msi symSet pkg = do
     nameId <- idE (sp_name pkg)
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
-    insEnc <- concat <$> mapM encInput (sp_inputs pkg)
+    insEnc0 <- concat <$> mapM encInput (sp_inputs pkg)
+    -- A method with actions is driven by an enable port unless it is
+    -- always enabled, in which case bsc ties it high and drops it.  The
+    -- port is the module's, so the module lists it: the reader reaches a
+    -- method's enable through the id on the method, never by spelling
+    -- the name again.
+    enInsEnc <- sequence
+      [ do n <- idE (mkEnableId (aif_name f))
+           return (encPortRaw n 1 "MethodEnable")
+      | f <- sp_interface pkg
+      , hasEnablePort pkg f ]
+    let insEnc = insEnc0 ++ enInsEnc
     -- construction order matters for load-time output (RegFileLoad gap
     -- warnings): match the C++ backend's alphabetization (raw_avis)
     let avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
@@ -814,10 +818,11 @@ encModule pkgNames msi symSet pkg = do
     ifcClksEnc <- sequence
       [ do pn <- str (oclkPortName (aif_name f))
            oscEnc <- case aclock_osc (aif_clock f) of
+                       -- an osc qualified by an instance is that
+                       -- submodule's output clock; name the submodule
+                       -- rather than splice it into a port name
                        ASPort _ i | not (null (getIdQualString i)) ->
-                           encVariant "Port" <$>
-                             (encW32 <$> str (getIdQualString i ++ "$"
-                                              ++ getIdBaseString i))
+                           encClockOut i
                        p@(ASPort {}) -> encExpr p
                        _ -> return constZero
            return (encPair (encW32 pn) oscEnc)
@@ -828,12 +833,7 @@ encModule pkgNames msi symSet pkg = do
     -- Expr::Gate (Bug 1677 lifts the gate into the rule condition)
     ifcClkGatesEnc <- sequence
       [ do gn <- str (getIdBaseString (aif_name f))
-           gateEnc <- case aclock_gate (aif_clock f) of
-                        ASPort _ i | not (null (getIdQualString i)) ->
-                            encVariant "Port" <$>
-                              (encW32 <$> str (getIdQualString i ++ "$"
-                                               ++ getIdBaseString i))
-                        g -> encExpr g
+           gateEnc <- encGate (aclock_gate (aif_clock f))
            return (encPair (encW32 gn) gateEnc)
       | f@(AIClock {}) <- sp_interface pkg ]
     -- interface output resets: external port name -> the internal reset
@@ -968,16 +968,34 @@ encInput (AAI_Inout {}) =
     internalError "SimExportIR.encInput: Inout not supported by Bluesim"
 
 encPort :: (Id, AType) -> String -> EncM C.Encoding
-encPort (i, t) kind = do
+encPort it kind = encPortOf it kind Nothing
+
+-- | A port, with the bare name of the method argument it carries when it
+-- is one.  bsc composes an argument's port name as <method>_<arg>; this
+-- is the one place that knows it, so the reader never takes the name
+-- apart to find the argument.
+encPortOf :: (Id, AType) -> String -> Maybe Id -> EncM C.Encoding
+encPortOf (i, t) kind mmeth = do
     n <- idE i
-    return $ encPortRaw n (aTypeWidth t) kind
+    baseEnc <- traverse strE (mmeth >>= argBaseName i)
+    return $ encPortRawBase n (aTypeWidth t) kind (encMaybe id baseEnc)
+
+-- | The argument's own name: the port name with its method's prefix off.
+argBaseName :: Id -> Id -> Maybe String
+argBaseName arg meth =
+    stripPrefix (getIdBaseString meth ++ "_") (getIdBaseString arg)
 
 encPortRaw :: C.Encoding -> Word32 -> String -> C.Encoding
 encPortRaw nameEnc w kind =
+    encPortRawBase nameEnc w kind (encMaybe id Nothing)
+
+encPortRawBase :: C.Encoding -> Word32 -> String -> C.Encoding -> C.Encoding
+encPortRawBase nameEnc w kind baseEnc =
     encStruct
       [ ("name", nameEnc)
       , ("width", encW32 w)
       , ("kind", encUnitVariant kind)
+      , ("base", baseEnc)
       ]
 
 encInstance :: S.Set String -> MethodOrderMap -> AVInst -> EncM C.Encoding
@@ -1214,7 +1232,8 @@ encMethodStructAV :: Siblings -> SimPackage -> Id -> [AInput] -> Maybe APred
 encMethodStructAV sibs pkg name inputs mpred body retdef props = do
     nameId <- idE name
     (rdyEnc, wfEnc) <- encSiblings sibs name True
-    argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
+    enEnc <- encEnableId pkg name True
+    argsEnc <- mapM (\it -> encPortOf it "MethodArg" (Just name)) inputs
     readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg name props (Just retdef) body)
@@ -1234,7 +1253,27 @@ encMethodStructAV sibs pkg name inputs mpred body retdef props = do
       , ("always_enabled", encBool (isAlwaysEn (sp_pps pkg) name))
       , ("rdy", rdyEnc)
       , ("will_fire", wfEnc)
+      , ("en", enEnc)
       ]
+
+-- | The id of a method's enable port, or nothing where it has none.
+-- Must agree with `hasEnablePort`, which decides whether the module
+-- lists the port at all.
+encEnableId :: SimPackage -> Id -> Bool -> EncM C.Encoding
+encEnableId pkg name hasActions = do
+    e <- traverse idE (if hasActions && not (isAlwaysEn (sp_pps pkg) name)
+                       then Just (mkEnableId name)
+                       else Nothing)
+    return (encMaybe id e)
+
+-- | Whether a method is driven by an enable port: it takes actions, and
+-- is not always enabled -- bsc ties those high and emits no port.
+hasEnablePort :: SimPackage -> AIFace -> Bool
+hasEnablePort pkg f = case f of
+    AIAction {}      -> notAlways
+    AIActionValue {} -> notAlways
+    _                -> False
+  where notAlways = not (isAlwaysEn (sp_pps pkg) (aif_name f))
 
 encMethodStruct :: Siblings -> SimPackage -> Id -> String -> [AInput]
                 -> Maybe APred -> [AAction] -> Maybe (AType, AExpr)
@@ -1242,7 +1281,8 @@ encMethodStruct :: Siblings -> SimPackage -> Id -> String -> [AInput]
 encMethodStruct sibs pkg name kind inputs mpred body mresult props = do
     nameId <- idE name
     (rdyEnc, wfEnc) <- encSiblings sibs name (kind /= "Value")
-    argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
+    enEnc <- encEnableId pkg name (kind /= "Value")
+    argsEnc <- mapM (\it -> encPortOf it "MethodArg" (Just name)) inputs
     readyEnc <- traverse (encExpr . resolveReady sibs name) mpred
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg name props Nothing body)
@@ -1263,6 +1303,7 @@ encMethodStruct sibs pkg name kind inputs mpred body mresult props = do
       , ("always_enabled", encBool ae)
       , ("rdy", rdyEnc)
       , ("will_fire", wfEnc)
+      , ("en", enEnc)
       ]
 
 -- ===============
@@ -1295,6 +1336,40 @@ methPortNum i =
       'p':'o':'r':'t':rest
         | (ds@(_:_), '_':'_':_) <- span isDigit rest -> read ds
       _ -> 0
+
+-- | The gate of a clock, as an expression.  A gate qualified by an
+-- instance is that submodule's output clock gate, so it is emitted as
+-- the reference it is rather than as a port name with the instance
+-- spliced into it -- the reader reaches the submodule directly instead
+-- of taking a name apart to find it.
+-- | A submodule's output clock, from an osc qualified by the instance
+-- that exports it.
+encClockOut :: Id -> EncM C.Encoding
+encClockOut i =
+    let qual = getIdQualString i
+    in  if '.' `elem` qual
+          then internalError
+                 ("SimExportIR: output clock qualified by a path, not an "
+                  ++ "instance: " ++ show qual ++ "$" ++ getIdBaseString i)
+          else do instE <- strE qual
+                  clkE <- strE (getIdBaseString i)
+                  return $ encVariant "ClockOut" $ encStruct
+                    [ ("instance", instE), ("clock", clkE) ]
+
+encGate :: AExpr -> EncM C.Encoding
+encGate g = case g of
+    ASPort _ i | not (null (getIdQualString i)) ->
+        let qual = getIdQualString i
+        in  if '.' `elem` qual
+              then internalError
+                     ("SimExportIR: gate qualified by a path, not an "
+                      ++ "instance: " ++ show qual ++ "$"
+                      ++ getIdBaseString i)
+              else do instE <- strE qual
+                      clkE <- strE (getIdBaseString i)
+                      return $ encVariant "Gate" $ encStruct
+                        [ ("instance", instE), ("clock", clkE) ]
+    _ -> encExpr g
 
 encExpr :: AExpr -> EncM C.Encoding
 encExpr (ASInt _ t lit) =

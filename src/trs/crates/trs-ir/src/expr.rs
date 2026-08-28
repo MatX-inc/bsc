@@ -48,6 +48,10 @@ pub enum Expr {
     Reset { wire: Box<Expr> },
     /// A submodule's output clock gate (`AMGate`).
     Gate { instance: StrId, clock: StrId },
+    /// A submodule's output clock oscillator: what an interface output
+    /// clock re-exports.  The submodule is named directly rather than
+    /// spliced into a port name for the reader to take apart again.
+    ClockOut { instance: StrId, clock: StrId },
     Prim { op: PrimOp, width: u32, args: Vec<Expr> },
     /// if-then-else / mux.
     If { width: u32, cond: Box<Expr>, then_: Box<Expr>, else_: Box<Expr> },
@@ -71,7 +75,7 @@ impl Expr {
             | Expr::Prim { width, .. }
             | Expr::If { width, .. }
             | Expr::Case { width, .. } => *width,
-            Expr::Gate { .. } => 1,
+            Expr::Gate { .. } | Expr::ClockOut { .. } => 1,
             Expr::Clock { .. } | Expr::Reset { .. } => 1,
             Expr::Real(_) => 64,
             // Def/Port/Param/Str widths come from their declarations.

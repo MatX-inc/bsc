@@ -26,7 +26,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 5;
+pub const BIR_VERSION: u32 = 6;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -283,6 +283,10 @@ pub struct Port {
     pub name: StrId,
     pub width: u32,
     pub kind: PortKind,
+    /// A method argument's own name, without the method that qualifies
+    /// it in `name`.  The exporter records it so that reaching an
+    /// argument takes no knowledge of how the port name is composed.
+    pub base: Option<StrId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +416,10 @@ pub struct Method {
     /// The def this method's function writes to record that it fired
     /// (cvtIFace wf_stmts).  Action and ActionValue methods only.
     pub will_fire: Option<StrId>,
+    /// The def carrying this method's enable, when the module has one.
+    /// The exporter names it, so nothing downstream spells the
+    /// convention.
+    pub en: Option<StrId>,
 }
 
 impl Module {

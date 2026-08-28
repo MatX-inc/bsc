@@ -97,19 +97,6 @@ pub(crate) struct ResolvedBinds {
     pub consumed_plus: Vec<String>,
 }
 
-/// name -> interned id, the other direction from `Design::strings`.
-/// Built once per resolve: the callers ask for derived names
-/// (`RDY_<m>`, `EN_<m>`) once per top-level method, and scanning the
-/// table for each is O(methods * strings) for an answer a map gives
-/// directly.
-fn str_index(d: &ir::Design) -> std::collections::HashMap<&str, ir::StrId> {
-    d.strings
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.as_str(), i as ir::StrId))
-        .collect()
-}
-
 /// Resolve an expression to a constant u64 by chasing def references
 /// (bounded depth).  None = not (provably) constant.
 fn resolve_const(m: &ir::Module, e: &ir::Expr, depth: u32) -> Option<u64> {
@@ -213,7 +200,6 @@ pub(crate) fn resolve(
         .find(|m| m.name == d.top)
         .ok_or_else(|| "top module not found".to_string())?;
     let s = |id: ir::StrId| d.strings[id as usize].as_str();
-    let sidx = str_index(d);
 
     // ---- bindable surface ----
     // top-level arguments/parameters: the module's MethodArg inputs
@@ -224,7 +210,8 @@ pub(crate) fn resolve(
         .map(|p| (p.name, p.width))
         .collect();
     // always_enabled methods (arm even with no bindings on the CLI)
-    let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, u32)>)> = Vec::new();
+    let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> =
+        Vec::new();
     for m in &top.methods {
         if !m.always_enabled {
             continue;
@@ -266,7 +253,7 @@ pub(crate) fn resolve(
         }
         autofire.push((
             m.name,
-            m.args.iter().map(|a| (a.name, a.width)).collect(),
+            m.args.iter().map(|a| (a.name, a.base, a.width)).collect(),
         ));
     }
 
@@ -335,12 +322,9 @@ pub(crate) fn resolve(
         .map(|&(n, w)| (s(n).to_string(), n, w))
         .collect();
     for (mname, args) in &autofire {
-        for &(an, aw) in args {
-            // arg ports export as "<method>_<arg>"; the binding key
-            // is the user-facing "<method>.<arg>"
-            let disp = s(an)
-                .strip_prefix(&format!("{}_", s(*mname)))
-                .unwrap_or(s(an));
+        for &(an, abase, aw) in args {
+            // the binding key is the user-facing "<method>.<arg>"
+            let disp = abase.map(|b| s(b)).unwrap_or(s(an));
             surface.push((format!("{}.{}", s(*mname), disp), an, aw));
         }
     }
@@ -410,12 +394,14 @@ pub(crate) fn resolve(
     // EN_<m> reads constant 1 for auto-fired methods (tied high)
     let mut af: Vec<(ir::StrId, Vec<Value>)> = Vec::new();
     for (mname, args) in &autofire {
-        if let Some(&en) = sidx.get(format!("EN_{}", s(*mname)).as_str()) {
+        if let Some(en) =
+            top.methods.iter().find(|m| m.name == *mname).and_then(|m| m.en)
+        {
             params.push((en, Value::from_u64(1, 1)));
         }
         let argv: Vec<Value> = args
             .iter()
-            .map(|&(an, _)| {
+            .map(|&(an, _, _)| {
                 params
                     .iter()
                     .find(|(p, _)| *p == an)
@@ -616,7 +602,8 @@ fn body_calls_user_child(
                 | ir::Expr::TaskValue { .. }
                 | ir::Expr::Str(_)
                 | ir::Expr::Real(_)
-                | ir::Expr::Gate { .. } => false,
+                | ir::Expr::Gate { .. }
+            | ir::Expr::ClockOut { .. } => false,
             }
         }
         fn act(&mut self, a: &ir::Action) -> bool {

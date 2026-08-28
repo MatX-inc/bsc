@@ -6960,7 +6960,8 @@ impl<'a> LcWalk<'a> {
             | E::Param(_)
             | E::Str(_)
             | E::Real(_)
-            | E::Gate { .. } => {}
+            | E::Gate { .. }
+            | E::ClockOut { .. } => {}
         }
     }
 
@@ -7327,8 +7328,7 @@ impl Interp {
                 std::collections::HashSet::new();
             for sp in specs {
                 if let Some(af) = &sp.autofire {
-                    let en = format!("EN_{}", self.s(af.method));
-                    if let Some(&id) = sid.get(en.as_str()) {
+                    if let Some(id) = self.en_id_at(sp.inst, af.method) {
                         stay1.insert((sp.inst, id));
                     }
                     continue;
@@ -7361,8 +7361,7 @@ impl Interp {
                     let Some(&ci) = env.children.get(instance) else {
                         continue;
                     };
-                    let en = format!("EN_{}", self.s(*method));
-                    if let Some(&id) = sid.get(en.as_str()) {
+                    if let Some(id) = self.en_id_at(ci, *method) {
                         stay1.insert((ci, id));
                     }
                 }
@@ -7631,7 +7630,8 @@ impl<'a> LcRank<'a> {
             | E::Param(_)
             | E::Str(_)
             | E::Real(_)
-            | E::Gate { .. } => {}
+            | E::Gate { .. }
+            | E::ClockOut { .. } => {}
         }
     }
 
