@@ -52,6 +52,7 @@ data Flags = Flags {
         finalcleanup :: Int,
         genABin :: Bool,
         genABinVerilog :: Bool,
+        genBir :: Bool,
         genName :: [String],
         genSysC :: Bool,
         ifcPathRaw :: [String],

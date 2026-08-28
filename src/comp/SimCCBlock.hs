@@ -19,6 +19,7 @@ module SimCCBlock( SBId
                  , mkGateConst
                  , mkLiteralName
                  , mkStringLiteralName
+                 , isOkId
                  , simCCBlockToClassDeclaration
                  , simCCBlockToClassDefinition
                  , simCCScheduleToFunctionDefinition

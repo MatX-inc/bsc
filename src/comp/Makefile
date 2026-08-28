@@ -147,6 +147,7 @@ PACKAGES = \
 	text \
 	deepseq \
 	strict-concurrency \
+	cborg \
 
 # GHC can compile either a single file (use GHCCOMPILEFLAGS) or
 # in make mode where it follows dependencies (use GHCMAKEFLAGS).

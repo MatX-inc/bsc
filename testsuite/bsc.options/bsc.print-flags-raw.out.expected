@@ -29,6 +29,7 @@ Flags {
 	finalcleanup = 1,
 	genABin = False,
 	genABinVerilog = False,
+	genBir = False,
 	genName = [],
 	genSysC = False,
 	ifLift = True,
