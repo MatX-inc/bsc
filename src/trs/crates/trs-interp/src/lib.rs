@@ -159,7 +159,7 @@ pub struct Interp {
     /// method -> EN_<method> / RDY_<method>.  Asked once per method
     /// call, and the answer is a property of the design, so the derived
     /// name is built once rather than on every call.
-    en_id_of_meth: HashMap<StrId, Option<StrId>>,
+    en_id_of_meth: HashMap<(usize, StrId), Option<StrId>>,
     insts: Vec<Inst>,
     cycle: u64,
     /// current simulation time (the time of the executing clock edge)
@@ -790,9 +790,8 @@ impl Interp {
                             .iter()
                             .map(|a| (a.name, (a.width, a.kind)))
                             .chain(
-                                str_ids
-                                    .get(format!("EN_{}", d.strings[me.name as usize]).as_str())
-                                    .map(|&en| (en, (1, ir::PortKind::MethodEnable))),
+                                me.en
+                                    .map(|en| (en, (1, ir::PortKind::MethodEnable))),
                             )
                             .collect::<Vec<_>>()
                     }))
@@ -2003,13 +2002,28 @@ impl Interp {
 
     /// The interned id of a method's companion EN_ signal, or None where
     /// the design exports no such signal.
-    fn en_id_of(&mut self, method: StrId) -> Option<StrId> {
-        if let Some(v) = self.en_id_of_meth.get(&method).copied() {
+    pub(crate) fn en_id_at(&self, inst: usize, method: StrId) -> Option<StrId> {
+        let InstKind::User { module, .. } = &self.insts[inst].kind else {
+            return None;
+        };
+        let mir = self.mods[*module].ir;
+        self.d.modules[mir]
+            .methods
+            .iter()
+            .find(|m| m.name == method)
+            .and_then(|m| m.en)
+    }
+
+    fn en_id_of(&mut self, callee: usize, method: StrId) -> Option<StrId> {
+        let InstKind::User { module, .. } = &self.insts[callee].kind else {
+            return None;
+        };
+        let mir = self.mods[*module].ir;
+        if let Some(v) = self.en_id_of_meth.get(&(mir, method)).copied() {
             return v;
         }
-        let name = format!("EN_{}", self.s(method));
-        let v = self.d.str_id(&name);
-        self.en_id_of_meth.insert(method, v);
+        let v = self.en_id_at(callee, method);
+        self.en_id_of_meth.insert((mir, method), v);
         v
     }
 
@@ -2037,7 +2051,7 @@ impl Interp {
         if self.vcd_trace {
             self.vcd_rec_meth_time(callee, method);
         }
-        if let Some(en_id) = self.en_id_of(method) {
+        if let Some(en_id) = self.en_id_of(callee, method) {
             if let Some(c) = self.census.as_mut() {
                 c.exec_latch(callee, en_id, &Value::from_u64(1, 1));
             }
@@ -2549,8 +2563,7 @@ impl Interp {
                 mark_expr(res, fk, &m, &defs_by_name, &mut usage, &mut seen);
             }
             // the method function writes its own EN/arg/result ports
-            let en = format!("EN_{}", self.s(me.name));
-            if let Some(en_id) = self.d.str_id(&en) {
+            if let Some(en_id) = me.en {
                 usage.entry(en_id).or_default().insert(fk);
             }
             for a in &me.args {
@@ -2630,12 +2643,11 @@ impl Interp {
         for me in &m.methods {
             let is_action = me.kind != ir::MethodKind::Value;
             if is_action {
-                let en = format!("EN_{}", self.s(me.name));
-                if let Some(en_id) = self.d.str_id(&en) {
+                if let Some(en_id) = me.en {
                     let n_fns = usage.get(&en_id).map(|s| s.len()).unwrap_or(0);
                     if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
-                            name: en,
+                            name: self.s(en_id).to_string(),
                             src: VcdSrc::PortEn(me.name),
                             width: 1,
                             clocked: true,
@@ -5373,13 +5385,8 @@ impl Interp {
         let mut out = Vec::new();
         for m in &self.d.modules[mir].methods {
             let mname = self.s(m.name).to_string();
-            if m.kind != trs_ir::MethodKind::Value {
-                out.push((
-                    format!("EN_{mname}"),
-                    1,
-                    m.name,
-                    MethPortKind::En,
-                ));
+            if let Some(en) = m.en {
+                out.push((self.s(en).to_string(), 1, m.name, MethPortKind::En));
             }
             for (k, a) in m.args.iter().enumerate() {
                 out.push((
@@ -5428,8 +5435,7 @@ impl Interp {
         let mir = self.mods[module].ir;
         match kind {
             MethPortKind::En => {
-                let en = format!("EN_{}", self.s(method));
-                let id = self.d.str_id(&en).map(|i| i as usize);
+                let id = self.en_id_at(i, method);
                 let mut set = match (&self.insts[i].kind, id) {
                     (InstKind::User { latched, .. }, Some(id)) => {
                         latched.contains_key(&(id as StrId))

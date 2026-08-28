@@ -5424,7 +5424,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         if !m.always_enabled || m.args.len() != af.argv.len() {
             return nope("auto-fire spec out of step with the method");
         }
-        let (margs, body, mname) = (m.args.clone(), m.body.clone(), m.name);
+        let (margs, body, mname, men) =
+            (m.args.clone(), m.body.clone(), m.name, m.en);
         // sibling RDY lookup — same rule as the interp's always_en_rdy
         // and the parent-call inline: no RDY method exported = constant
         // ready
@@ -5436,12 +5437,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .find(|(_, mm)| mm.name == id)
                 .map(|(mi, mm)| (mi, mm.result.clone()))
         });
-        let en_slot = {
-            let en_name =
-                format!("EN_{}", self.env.d.strings[mname as usize]);
-            self.env.d.str_id(&en_name)
-                .and_then(|id| ie.en_slot.get(&(id as StrId)).copied())
-        };
+        let en_slot = men.and_then(|id| ie.en_slot.get(&id).copied());
         // callee frame on the top itself, args bound to the baked
         // constants (limbs pre-normalized to ceil(width/64) words)
         let mut cf = self.child_frame(f, f.inst, Some(af.method_idx))?;
@@ -6269,10 +6265,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             };
                             let margs = m.args.clone();
                             let body = m.body.clone();
-                            let en_name =
-                                format!("EN_{}", self.env.d.strings[*method as usize]);
-                            let en_slot = self.env.d.str_id(&en_name)
-                                .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
+                            let en_slot =
+                                m.en.and_then(|id| cie.en_slot.get(&id).copied());
                             let mut cf = self.child_frame(f, child, Some(mi))?;
                             let wc = self.expr_width(f, cond)?;
                             let c = self.expr(f, cond)?;
@@ -7473,9 +7467,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let margs = m.args.clone();
                 let body = m.body.clone();
-                let en_name = format!("EN_{}", self.env.d.strings[*method as usize]);
-                let en_slot = self.env.d.str_id(&en_name)
-                    .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
+                let en_slot = m.en.and_then(|id| cie.en_slot.get(&id).copied());
 
                 let mut cf = self.child_frame(f, child, Some(mi))?;
                 for (a, pa) in args.iter().zip(&margs) {
