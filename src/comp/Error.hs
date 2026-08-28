@@ -727,6 +727,7 @@ data ErrMsg =
             Position -- ^ previous decl position
 
         | EForeignNotBit String String
+        | EForeignCtxNotNumeric String String
         | EPartialTypeApp String Integer Integer -- synonym (# expected) (# given)
         | ENotStructId String
         | ENotStructUpd String
@@ -1942,6 +1943,14 @@ getErrorText (EMultipleDecl name prevPos) =
 getErrorText (EForeignNotBit i t) =
   (Type 12, empty, hdr $$ text "Type:" <+> nest 2 (text t))
   where hdr = s2par ("Foreign function " ++ ishow i ++ " has a non-Bit argument or result.")
+getErrorText (EForeignCtxNotNumeric i p) =
+  (Type 163, empty, hdr $$ text "Proviso:" <+> nest 2 (text p))
+  where hdr = s2par ("Foreign function " ++ ishow i ++ " has a proviso" ++
+                     " that is not a numeric relationship." ++
+                     " Only Add, Mul, Div, Log, Max, Min and NumEq" ++
+                     " provisos are permitted on foreign functions:" ++
+                     " they are checked at each application and then" ++
+                     " erased.")
 getErrorText (EPartialTypeApp i expected given) =
     (Type 13, empty,
      s2par ("Partially applied type synonym: " ++ ishow i) $$
