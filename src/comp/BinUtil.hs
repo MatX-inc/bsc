@@ -181,23 +181,19 @@ doImport errh flags hashmap i = do
     (file, name) <- fromMaybeM (bsError errh [missingErr]) $
                       readBinFilePath errh (getIdPosition i)
                           (verbose flags) binname (ifcPath flags)
-    (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash)
+    (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash, pill)
         <- readBinFile errh name file
     when (pi /= i) $
         bsError errh [(noPosition, EBinFilePkgNameMismatch name
                                        (pfpString i) (pfpString pi))]
-    when (any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]) $
+    -- The writer recorded this in the header (GenBin.pillByte); the severity
+    -- is still the importer's call.  The message never named the offending
+    -- def, so the flag reproduces the old diagnostic exactly.
+    when pill $
         pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
     hashmap' <- mergeHashes errh hashmap pi hash impHashes
     let impNames = map fst impHashes
     return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
-
-hasPoisonPill :: IExpr a -> Bool
-hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
-hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
-hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
-hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
-hasPoisonPill _ = False
 
 mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->
                IO HashMap
