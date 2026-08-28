@@ -31,15 +31,73 @@
 use serde::{Deserialize, Serialize};
 
 use crate::expr::Expr;
-use crate::{RuleRef, StrId};
+use crate::{MethodRef, RuleRef, SchedEntity, StrId};
 
 /// `Sched r` computes r's fire conditions; `Exec r` runs r's body.
 /// (`SchedNode`, `AScheduleInfo.hs:218`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchedNode {
-    Sched(RuleRef),
-    Exec(RuleRef),
+    Sched(SchedEntity),
+    Exec(SchedEntity),
 }
+
+/// A call on a submodule, as the pair of positions naming it.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub struct SubMethod {
+    /// the submodule instance, in this module's instance list
+    pub instance: u32,
+    /// the method, in that submodule's method list
+    pub method: MethodRef,
+}
+
+impl SubMethod {
+    #[inline]
+    pub fn inst_idx(self) -> usize {
+        self.instance as usize
+    }
+}
+
+/// An ordering the static schedule cannot pin across a submodule
+/// (`ADynSched`).  Method fusion demands one order while this module's
+/// own schedule implies another; the conditions involved are disjoint,
+/// so at most one constraint is live per cycle and a guard readable
+/// against pre-edge state selects which.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DynSched {
+    /// Two rules, each of whose flagged call must precede the other's.
+    Pair {
+        rule_e: RuleRef,
+        /// `rule_e`'s CAN_FIRE, inlined to register reads and constants.
+        guard_e: Expr,
+        rule_l: RuleRef,
+        /// Present when the pair is constrained in both directions;
+        /// then neither constraint is live when both guards are false.
+        guard_l: Option<Expr>,
+        /// The flagged (early, late) calls.
+        meths: Vec<(SubMethod, SubMethod)>,
+        /// Submodule rules between the flagged calls, by name.  bsc
+        /// leaves these unqualified -- which submodule each belongs to
+        /// is settled only when the merge places them against the
+        /// hierarchy -- so this is the one reference a fragment cannot
+        /// resolve to a position on its own.
+        between: Vec<StrId>,
+    },
+    /// One rule making both flagged calls (bsc G0096): it must run
+    /// before the submodule rules for its early call and after them for
+    /// its late one.  The rule executes either way, so only the
+    /// inactive call's fused edges may drop.
+    SelfCall {
+        rule: RuleRef,
+        /// The rule's predicate AND the early call's condition.
+        guard: Expr,
+        early: SubMethod,
+        late: SubMethod,
+        between: Vec<StrId>,
+    },
+}
+
 
 /// Per-module (type) schedule information.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -52,7 +110,7 @@ pub struct Schedule {
     /// alongside rules, so an entry here is not always a rule.
     /// Intra-module by construction; already reflected in the WILL_FIRE
     /// defs, carried for verification and diagnostics.
-    pub conflicts: Vec<(StrId, Vec<StrId>)>,
+    pub conflicts: Vec<(SchedEntity, Vec<SchedEntity>)>,
     /// Rules whose bodies call a system or foreign task.  A task's
     /// output is observable, so the relative order of two such rules is
     /// observable too, and merging this module's schedule into a design
@@ -65,6 +123,26 @@ pub struct Schedule {
     /// task-bearing rule rather than only against each other.  Sorted.
     #[serde(default)]
     pub finish_rules: Vec<RuleRef>,
+    /// The module's own schedule graph: each node paired with the nodes
+    /// that must follow it (`asi_sched_graph`).  The design-level merge
+    /// reads this; the segments above are what the merge produces.
+    #[serde(default)]
+    pub sched_graph: Vec<(SchedNode, Vec<SchedNode>)>,
+    /// Entities provably disjoint from each other, so their order is
+    /// free (`asi_exclusive_rules_db`, reduced to the disjoint half the
+    /// merge actually reads).  Methods appear here as well as rules,
+    /// since the scheduler ranks both.
+    #[serde(default)]
+    pub disjoint_rules: Vec<(SchedEntity, Vec<SchedEntity>)>,
+    /// Exec-pair edges that exist only because two rules call foreign
+    /// functions whose relative order was an arbitrary choice.  The
+    /// merge may drop these to break a cycle, and nothing else about
+    /// the rule-relation database is read.
+    #[serde(default)]
+    pub ffunc_edges: Vec<(SchedEntity, SchedEntity)>,
+    /// Pairs the static schedule cannot order across a submodule.
+    #[serde(default)]
+    pub dyn_scheds: Vec<DynSched>,
 }
 
 /// A module's execution order within one clock domain and edge, split into

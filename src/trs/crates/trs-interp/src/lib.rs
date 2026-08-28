@@ -998,7 +998,10 @@ impl Interp {
                 format!("{}.{}", path, self.s(name))
             };
             let cidx = match kind {
-                ir::InstanceKind::Module(mname) => {
+                ir::InstanceKind::Module(xr) => {
+                    // one resolution per instance: the fragment names a
+                    // position in its externs, the link supplies the module
+                    let mname = self.d.modules[mir].extern_module(xr);
                     let cmod = *self
                         .mod_by_name
                         .get(&mname)
@@ -2514,7 +2517,7 @@ impl Interp {
             for seg in &ms.segments {
                 for node in &seg.nodes {
                     let rn = match node {
-                        ir::SchedNode::Sched(r) | ir::SchedNode::Exec(r) => *r,
+                        ir::SchedNode::Sched(r) | ir::SchedNode::Exec(r) => r.rule(),
                     };
                     {
                         let cf = m.rules[rn.idx()].can_fire;
@@ -3102,6 +3105,7 @@ impl Interp {
             let mut stack: Vec<StrId> = Vec::new();
             for &node in &en.nodes {
                 let SchedNode::Sched(r) = node else { continue };
+                let r = r.rule();
                 if early.contains(&(ii, r)) {
                     continue;
                 }
@@ -4768,20 +4772,20 @@ impl Interp {
                         for &node in &en.nodes {
                             // clock-crossing rules run in the after-edge pass
                             let r0 = match node {
-                                SchedNode::Sched(r) | SchedNode::Exec(r) => r,
+                                SchedNode::Sched(r) | SchedNode::Exec(r) => r.rule(),
                             };
                             if rc.early.contains(&(inst, r0)) {
                                 continue;
                             }
                             match node {
-                                SchedNode::Sched(r) => {
+                                SchedNode::Sched(r) => { let r = r.rule();
                                     let ci2 = walk_cross
                                         .get(&(inst, r))
                                         .cloned()
                                         .unwrap_or_default();
                                     self.latch_rule(inst, r, &ci2);
                                 }
-                                SchedNode::Exec(r) => self.exec_rule(inst, r),
+                                SchedNode::Exec(r) => self.exec_rule(inst, r.rule()),
                             }
                         }
                         // batch auto-fire: always_enabled top methods
@@ -4959,13 +4963,13 @@ impl Interp {
                                 break;
                             }
                             let r0 = match node {
-                                SchedNode::Sched(r) | SchedNode::Exec(r) => r,
+                                SchedNode::Sched(r) | SchedNode::Exec(r) => r.rule(),
                             };
                             if !rc.early.contains(&(inst, r0)) {
                                 continue;
                             }
                             match node {
-                                SchedNode::Sched(r) => {
+                                SchedNode::Sched(r) => { let r = r.rule();
                                     let ci2 = rc
                                         .cross
                                         .get(&(inst, r))
@@ -4973,7 +4977,7 @@ impl Interp {
                                         .unwrap_or_default();
                                     self.latch_rule(inst, r, &ci2);
                                 }
-                                SchedNode::Exec(r) => self.exec_rule(inst, r),
+                                SchedNode::Exec(r) => self.exec_rule(inst, r.rule()),
                             }
                         }
                     }

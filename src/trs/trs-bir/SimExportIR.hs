@@ -53,7 +53,9 @@ import SCC (tsort)
 import Pragma (RulePragma(..), isAlwaysEn)
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
 import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..), VResetInfo(..))
-import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
+import AUses (MethodId(..))
+import AScheduleInfo (AScheduleInfo(..), ADynSched(..), Conflicts(..), RuleRelationDB(..),
+                      RuleRelationInfo(..))
 import ASyntaxUtil (aVars, tupleElemRange, argInputPorts)
 import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
@@ -66,7 +68,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 7
+birVersion = 8
 
 -- ===============
 -- String interning
@@ -188,7 +190,7 @@ encDesign keepF symMap ssys =
         action :: EncM [(String, C.Encoding)]
         action = do
           topId <- str (getIdBaseString (ssys_top ssys))
-          modsEnc <- mapM (\p -> encModule pkgNames
+          modsEnc <- mapM (\p -> encModule pkgNames msis
                                    (msis M.! getIdBaseString (sp_name p))
                                    (M.findWithDefault S.empty
                                       (getIdBaseString (sp_name p)) symMap)
@@ -242,6 +244,10 @@ data ModSchedInfo = ModSchedInfo
       -- rule reference never leaves its module, so it travels as a
       -- position rather than a name
     , msi_ruleIx  :: M.Map String Int
+      -- method name -> its position in the module's emitted method
+      -- list; bsc's scheduler ranks methods alongside rules, so a
+      -- schedule node or conflict entry may name either
+    , msi_methIx  :: M.Map String Int
     }
 
 -- Segment lookup key for a schedule node ("S:rule" / "E:rule"), local
@@ -362,13 +368,20 @@ analyzeModule pkg =
         -- position in the list encModule emits
         ruleIx = M.fromList
                    (zip (map (getIdBaseString . arule_id) (sp_rules pkg)) [0 ..])
+
+        -- encMethod emits one entry per value/action/actionvalue face,
+        -- in interface order, and nothing for clocks, resets or inouts
+        methIx = M.fromList
+                   (zip [ getIdBaseString (aif_name f)
+                        | f <- sp_interface pkg, isMethodIfc f ] [0 ..])
     in
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
                      , msi_execPos = execPos
                      , msi_taskRules = taskRules
                      , msi_finishRules = finishRules
-                     , msi_ruleIx = ruleIx }
+                     , msi_ruleIx = ruleIx
+                     , msi_methIx = methIx }
 
 -- ===============
 -- Compositions
@@ -769,10 +782,15 @@ oscName clk = case aclock_osc clk of
 -- ===============
 -- Modules
 
-encModule :: S.Set String -> ModSchedInfo -> S.Set AId -> SimPackage
+encModule :: S.Set String -> M.Map String ModSchedInfo -> ModSchedInfo
+          -> S.Set AId -> SimPackage
           -> EncM C.Encoding
-encModule pkgNames msi symSet pkg = do
+encModule pkgNames msis msi symSet pkg = do
     nameId <- idE (sp_name pkg)
+    -- the modules this fragment reaches across its boundary
+    let externNames = externsOf pkgNames pkg
+        externIx = M.fromList (zip externNames [0 ..])
+    externIds <- mapM str externNames
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
     insEnc0 <- concat <$> mapM encInput (sp_inputs pkg)
@@ -791,7 +809,7 @@ encModule pkgNames msi symSet pkg = do
     -- warnings): match the C++ backend's alphabetization (raw_avis)
     let avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                       (M.elems (sp_state_instances pkg))
-    instsEnc0 <- mapM (encInstance pkgNames (sp_method_order_map pkg)) avis
+    instsEnc0 <- mapM (encInstance pkgNames externIx (sp_method_order_map pkg)) avis
     -- noinline functions instantiate as argument-less modules whose one
     -- value method computes the function
     niEnc <- mapM (\(iname, mname) -> do
@@ -822,7 +840,7 @@ encModule pkgNames msi symSet pkg = do
                                       (M.elems (sp_local_defs pkg) ++ av_defs))
           }
     methodsEnc <- concat <$> mapM (encMethod sibs pkg) (sp_interface pkg)
-    schedEnc <- encSchedule msi pkg
+    schedEnc <- encSchedule msis msi pkg
     -- interface output clocks: external port name -> the internal osc
     -- wire being re-exported (constant = noClock, never ticks)
     let oclks = output_clocks (wClk (sp_external_wires pkg))
@@ -871,6 +889,8 @@ encModule pkgNames msi symSet pkg = do
       | f@(AIReset {}) <- sp_interface pkg ]
     return $ encStruct
       [ ("name", nameId)
+      , ("externs", encList [ encStruct [("module", encW32 i)]
+                            | i <- externIds ])
       , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
       , ("clock_domains", encList domsEnc)
       , ("resets", encList rstsEnc)
@@ -885,18 +905,18 @@ encModule pkgNames msi symSet pkg = do
       , ("schedule", schedEnc)
       ]
 
-encSchedule :: ModSchedInfo -> SimPackage -> EncM C.Encoding
-encSchedule msi pkg = do
+encSchedule :: M.Map String ModSchedInfo -> ModSchedInfo -> SimPackage
+            -> EncM C.Encoding
+encSchedule msis msi pkg = do
     domsEnc <- mapM (encModSched msi) (msi_domains msi)
     let esposito = case asch_scheduler (asi_schedule (sp_schedule pkg)) of
                      [ASchedEsposito pairs] -> pairs
                      scheds -> concat [ ps | ASchedEsposito ps <- scheds ]
     -- the scheduler ranks methods alongside rules, so these are names
-    conflictsEnc <- mapM (\(r, blockers) -> do
-                            rE <- idE r
-                            bsE <- mapM idE blockers
-                            return (encPair rE (encList bsE)))
-                         esposito
+    let conflictsEnc =
+          [ encPair (encSchedEntity msi r)
+                    (encList (map (encSchedEntity msi) blockers))
+          | (r, blockers) <- esposito ]
     -- ordering facts the design-level merge needs and cannot recover
     -- from the segments alone; sorted, so the fragment's bytes do not
     -- depend on set iteration order
@@ -904,11 +924,83 @@ encSchedule msi pkg = do
                  . map (ruleIxOf msi) . S.toList
         taskEnc = refsOf (msi_taskRules msi)
         finishEnc = refsOf (msi_finishRules msi)
+    -- the design-level merge's own inputs: this module's schedule graph
+    -- and the disjointness it may reorder across.  The segments above
+    -- are what the merge produces from them.
+    let asi = sp_schedule pkg
+        graphEnc =
+          [ encPair (encSchedNodeE msi n) (encList (map (encSchedNodeE msi) ns))
+          | (n, ns) <- asi_sched_graph asi ]
+        disjEnc =
+          [ encPair (encSchedEntity msi r)
+                    (encList (map (encSchedEntity msi) (S.toList ds)))
+          | (r, ds) <- M.toList
+                         (exclRulesDBToDisjRulesDB (asi_exclusive_rules_db asi)) ]
+    -- the only thing the merge reads out of the rule-relation database:
+    -- Exec pairs ordered solely because two foreign calls had to be put
+    -- in some order, which it may drop to break a cycle
+        RuleRelationDB _ rrmap = asi_rule_relation_db asi
+        isFFuncOnly i = case i of
+          RuleRelationInfo Nothing Nothing Nothing Nothing Nothing
+                           (Just CFFuncArbitraryChoice) -> True
+          _ -> False
+        ffuncEnc = [ encPair (encSchedEntity msi a) (encSchedEntity msi b)
+                   | ((a, b), i) <- M.toList rrmap, isFFuncOnly i ]
+    -- a flagged call names a local instance and a method of whatever
+    -- module that instance is of; `between` stays a name because bsc
+    -- leaves it unqualified (see DynSched::between)
+    let avis' = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
+                       (M.elems (sp_state_instances pkg))
+        instMod = M.fromList
+          [ (getIdBaseString (avi_vname avi),
+             getVNameString (vName (avi_vmi avi)))
+          | avi <- avis' ]
+        instIx = M.fromList
+          (zip (map (getIdBaseString . avi_vname) avis') [0 :: Int ..])
+        encSubMeth (MethodId obj meth) =
+          let o = getIdBaseString obj
+              mn = getIdBaseString meth
+          in  case (M.lookup o instIx, M.lookup o instMod >>= (`M.lookup` msis)) of
+                (Just i, Just cmsi)
+                  | Just k <- M.lookup mn (msi_methIx cmsi) ->
+                      encStruct [ ("instance", encW32 (fromIntegral i))
+                                , ("method", encW32 (fromIntegral k)) ]
+                _ -> internalError
+                       ("SimExportIR: flagged call " ++ o ++ "." ++ mn
+                        ++ " names no method of an instantiated module")
+    let encDyn d@(ADynSched {}) = do
+          gE <- encExpr (ads_guardE d)
+          gLE <- traverse encExpr (ads_guardL d)
+          btw <- mapM (strE . getIdBaseString) (ads_between d)
+          return $ encVariant "Pair" $ encStruct
+            [ ("rule_e", encRuleRefName msi (getIdBaseString (ads_ruleE d)))
+            , ("guard_e", gE)
+            , ("rule_l", encRuleRefName msi (getIdBaseString (ads_ruleL d)))
+            , ("guard_l", encMaybe id gLE)
+            , ("meths", encList [ encPair (encSubMeth a) (encSubMeth b)
+                                | (a, b) <- ads_meths d ])
+            , ("between", encList btw)
+            ]
+        encDyn d@(ADynSchedSelf {}) = do
+          gE <- encExpr (adss_guard d)
+          btw <- mapM (strE . getIdBaseString) (adss_between d)
+          return $ encVariant "SelfCall" $ encStruct
+            [ ("rule", encRuleRefName msi (getIdBaseString (adss_rule d)))
+            , ("guard", gE)
+            , ("early", encSubMeth (adss_early d))
+            , ("late", encSubMeth (adss_late d))
+            , ("between", encList btw)
+            ]
+    dynEnc <- mapM encDyn (asi_dyn_scheds asi)
     return $ encStruct
       [ ("domains", encList domsEnc)
       , ("conflicts", encList conflictsEnc)
       , ("task_rules", encList taskEnc)
       , ("finish_rules", encList finishEnc)
+      , ("sched_graph", encList graphEnc)
+      , ("disjoint_rules", encList disjEnc)
+      , ("ffunc_edges", encList ffuncEnc)
+      , ("dyn_scheds", encList dynEnc)
       ]
 
 encModSched :: ModSchedInfo -> (Int, [Seg]) -> EncM C.Encoding
@@ -931,22 +1023,45 @@ encSeg msi seg = do
       , ("cut", encList cutEnc)
       ]
 
+-- | A schedule node, pure: the graph has no strings left to intern.
+encSchedNodeE :: ModSchedInfo -> SchedNode -> C.Encoding
+encSchedNodeE msi (Sched i) = encVariant "Sched" (encSchedEntity msi i)
+encSchedNodeE msi (Exec i) = encVariant "Exec" (encSchedEntity msi i)
+
 encSchedNode :: ModSchedInfo -> SchedNode -> EncM C.Encoding
-encSchedNode msi (Sched i) = return (encVariant "Sched" (encRuleRef msi i))
-encSchedNode msi (Exec i) = return (encVariant "Exec" (encRuleRef msi i))
+encSchedNode msi (Sched i) = return (encVariant "Sched" (encSchedEntity msi i))
+encSchedNode msi (Exec i) = return (encVariant "Exec" (encSchedEntity msi i))
 
 -- | A rule as its position in the module's rule list.  The segment
 -- builder admits only this module's own rules, so a name that is not
 -- there is an exporter bug rather than something to skip.
-encRuleRef :: ModSchedInfo -> Id -> C.Encoding
-encRuleRef msi = encRuleRefName msi . getIdBaseString
-
 ruleIxOf :: ModSchedInfo -> String -> Int
 ruleIxOf msi n =
     M.findWithDefault
       (internalError ("SimExportIR: no rule " ++ show n
                       ++ " in its own module's rule list"))
       n (msi_ruleIx msi)
+
+-- | The interface faces that become methods, in the order encMethod
+-- emits them.
+isMethodIfc :: AIFace -> Bool
+isMethodIfc f = case f of
+    AIDef {}         -> True
+    AIAction {}      -> True
+    AIActionValue {} -> True
+    _                -> False
+
+-- | What a schedule node or conflict entry names: a rule of this module
+-- or one of its interface methods.  Anything else is an exporter bug.
+encSchedEntity :: ModSchedInfo -> Id -> C.Encoding
+encSchedEntity msi i =
+    let n = getIdBaseString i
+    in  case (M.lookup n (msi_ruleIx msi), M.lookup n (msi_methIx msi)) of
+          (Just k, _) -> encVariant "Rule" (encW32 (fromIntegral k))
+          (_, Just k) -> encVariant "Method" (encW32 (fromIntegral k))
+          _ -> internalError
+                 ("SimExportIR: " ++ show n
+                  ++ " is neither a rule nor a method of its module")
 
 encRuleRefName :: ModSchedInfo -> String -> C.Encoding
 encRuleRefName msi n =
@@ -1045,13 +1160,27 @@ encPortRawBase nameEnc w kind baseEnc =
       , ("base", baseEnc)
       ]
 
-encInstance :: S.Set String -> MethodOrderMap -> AVInst -> EncM C.Encoding
-encInstance pkgNames mom avi = do
+-- | The synthesized modules a fragment instantiates, in first-use
+-- order.  A cross-boundary reference names a position in this list, so
+-- the module name is written once however many times it is used.
+externsOf :: S.Set String -> SimPackage -> [String]
+externsOf pkgNames pkg =
+    stableOrdNub [ m | avi <- M.elems (sp_state_instances pkg)
+                 , let m = getVNameString (vName (avi_vmi avi))
+                 , m `S.member` pkgNames ]
+
+encInstance :: S.Set String -> M.Map String Int -> MethodOrderMap -> AVInst
+            -> EncM C.Encoding
+encInstance pkgNames externIx mom avi = do
     nameId <- idE (avi_vname avi)
     let modName = getVNameString (vName (avi_vmi avi))
     kindEnc <-
       if modName `S.member` pkgNames
-        then encVariant "Module" <$> strE modName
+        then case M.lookup modName externIx of
+               Just k -> return (encVariant "Module" (encW32 (fromIntegral k)))
+               Nothing -> internalError
+                            ("SimExportIR: " ++ show modName
+                             ++ " instantiated but not in the externs list")
         -- P0 TODO: map primitives to their structured kinds (Reg, Fifo,
         -- ...) instead of Other; the structured mapping lands with codegen.
         else do mEnc <- strE modName

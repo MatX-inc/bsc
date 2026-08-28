@@ -4457,6 +4457,7 @@ impl Interp {
             for en in &rc.entries {
                 for &node in &en.nodes {
                     let SchedNode::Sched(r) = node else { continue };
+                    let r = r.rule();
                     if rc.early.contains(&(en.inst, r)) {
                         continue; // after-edge pass runs it interpreted
                     }
@@ -4500,6 +4501,7 @@ impl Interp {
                 for en in &alt.entries {
                     for &node in &en.nodes {
                         let SchedNode::Sched(r) = node else { continue };
+                        let r = r.rule();
                         if rc.early.contains(&(en.inst, r))
                             || rule_ord.contains_key(&(en.inst, r))
                         {
@@ -5297,6 +5299,7 @@ impl Interp {
                 let module = self.module_of(en.inst);
                 for &node in &en.nodes {
                     let SchedNode::Exec(r) = node else { continue };
+                    let r = r.rule();
                     let mir = self.mods[module].ir;
                     if r.idx() >= self.d.modules[mir].rules.len() {
                         continue;
@@ -5487,8 +5490,8 @@ impl Interp {
                     for en in &rc.entries {
                         for &node in &en.nodes {
                             let (is_exec, r) = match node {
-                                SchedNode::Sched(r) => (false, r),
-                                SchedNode::Exec(r) => (true, r),
+                                SchedNode::Sched(r) => (false, r.rule()),
+                                SchedNode::Exec(r) => (true, r.rule()),
                             };
                             if rc.early.contains(&(en.inst, r)) {
                                 continue;
@@ -5703,8 +5706,8 @@ impl Interp {
                 for (ei, en) in rc.entries.iter().enumerate() {
                     for &node in &en.nodes {
                         let (r, is_sched) = match node {
-                            SchedNode::Sched(r) => (r, true),
-                            SchedNode::Exec(r) => (r, false),
+                            SchedNode::Sched(r) => (r.rule(), true),
+                            SchedNode::Exec(r) => (r.rule(), false),
                         };
                         // early rules run in THIS comp's PG_FINAL pass
                         // interpreted — emitting them here would double-
@@ -5981,8 +5984,8 @@ impl Interp {
                         for en in &alt.entries {
                             for &node in &en.nodes {
                                 let (r, is_sched) = match node {
-                                    SchedNode::Sched(r) => (r, true),
-                                    SchedNode::Exec(r) => (r, false),
+                                    SchedNode::Sched(r) => (r.rule(), true),
+                                    SchedNode::Exec(r) => (r.rule(), false),
                                 };
                                 if rc.early.contains(&(en.inst, r)) {
                                     continue;
@@ -7161,8 +7164,8 @@ impl Interp {
                     }
                     for node in &en.nodes {
                         let (r, is_sched) = match node {
-                            SchedNode::Sched(r) => (*r, true),
-                            SchedNode::Exec(r) => (*r, false),
+                            SchedNode::Sched(r) => (r.rule(), true),
+                            SchedNode::Exec(r) => (r.rule(), false),
                         };
                         let ri = r.idx();
                         let rr = &self.d.modules[mir].rules[ri];
@@ -7695,7 +7698,7 @@ impl Interp {
                 }
                 for node in &en.nodes {
                     let r = match node {
-                        SchedNode::Sched(r) | SchedNode::Exec(r) => *r,
+                        SchedNode::Sched(r) | SchedNode::Exec(r) => r.rule(),
                     };
                     let rr = &self.d.modules[mir].rules[r.idx()];
                     s.insert(rr.can_fire);
@@ -7732,8 +7735,8 @@ impl Interp {
             }
             for node in &en.nodes {
                 let (r, is_sched) = match node {
-                    SchedNode::Sched(r) => (*r, true),
-                    SchedNode::Exec(r) => (*r, false),
+                    SchedNode::Sched(r) => (r.rule(), true),
+                    SchedNode::Exec(r) => (r.rule(), false),
                 };
                 let ri = r.idx();
                 let rr = &it.d.modules[mir].rules[ri];

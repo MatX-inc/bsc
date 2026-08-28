@@ -26,7 +26,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 7;
+pub const BIR_VERSION: u32 = 8;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -249,10 +249,98 @@ impl std::fmt::Display for RuleRef {
     }
 }
 
+/// A synthesized module this fragment references across its boundary.
+/// Not a package import -- those are a source-level notion -- but the
+/// linker's view of what this fragment needs supplied.
+///
+/// It records only the name for now: any change to the referenced
+/// fragment invalidates this one.  Narrowing that to an interface hash,
+/// so a body-only change need not rebuild the referrer, slots in here
+/// without disturbing how references are written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Extern {
+    pub module: StrId,
+}
+
+/// A position in a module's `externs` list.
+///
+/// Serializes as the bare integer it wraps.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct ExternRef(pub u32);
+
+impl ExternRef {
+    #[inline]
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl std::fmt::Display for ExternRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// A method, as its position in its module's `methods` list.
+///
+/// Serializes as the bare integer it wraps.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct MethodRef(pub u32);
+
+impl MethodRef {
+    #[inline]
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl std::fmt::Display for MethodRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// What a schedule orders.  bsc ranks a module's rules and its interface
+/// methods in one order, so a node in the schedule graph -- and an entry
+/// in the Esposito conflict list -- is either.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum SchedEntity {
+    Rule(RuleRef),
+    Method(MethodRef),
+}
+
+impl SchedEntity {
+    /// The rule this names.  A node in a *segment* is always a rule --
+    /// the exporter routes interface-method nodes to the segment's cut
+    /// -- so a method reaching a segment walker is a bug rather than a
+    /// case to skip past.
+    pub fn rule(self) -> RuleRef {
+        match self {
+            SchedEntity::Rule(r) => r,
+            SchedEntity::Method(m) => {
+                panic!("schedule segment names method {m}, not a rule")
+            }
+        }
+    }
+}
+
 /// One synthesized module (one `.ba` / one `SimPackage`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
     pub name: StrId,
+    /// The synthesized modules this fragment references.  `ExternRef`
+    /// indexes it, so a cross-boundary reference names a position here
+    /// rather than repeating a module name at every use.
+    #[serde(default)]
+    pub externs: Vec<Extern>,
     /// name -> index over `defs` and `methods`, so a reference resolves
     /// without a scan.  Read them through `def`/`def_idx`/`method_idx`.
     /// Derived, not serialized: the decode paths build them.
@@ -343,8 +431,9 @@ pub struct Instance {
 pub enum InstanceKind {
     /// A primitive with codegen support (possibly fully inlined).
     Prim(Primitive),
-    /// Another user module in this design.
-    Module(StrId),
+    /// Another synthesized module, named through this fragment's
+    /// `externs`.
+    Module(ExternRef),
 }
 
 /// Primitives the backend knows how to lay out or call into trs-rt.
@@ -448,6 +537,11 @@ pub struct Method {
 }
 
 impl Module {
+    /// The module a cross-boundary reference names.
+    pub fn extern_module(&self, r: ExternRef) -> StrId {
+        self.externs[r.idx()].module
+    }
+
     /// Index of a def by name, or None if this module has no such def.
     pub fn def_idx(&self, name: StrId) -> Option<usize> {
         self.def_ix.get(&name).copied()
@@ -696,6 +790,7 @@ mod tests {
             top: 0,
             modules: vec![Module {
                 name: 0,
+                externs: vec![],
                 def_ix: HashMap::new(),
                 method_ix: HashMap::new(),
                 content_hash: [0; 32],
