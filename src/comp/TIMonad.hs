@@ -349,8 +349,12 @@ popExplPreds = modify dropPreds
   where dropPreds s = s { tsExplPreds = tail (tsExplPreds s) }
 
 mkEPred :: Pred -> TI EPred
+-- expandSynPred: givens must satisfy the same construction-time
+-- normalization invariant as goals (lookfor matches structurally, so
+-- an unexpanded synonym in a given would never match an expanded
+-- solver predicate).
 mkEPred p = do i <- newDict
-               return $ EPred (CVar i) p
+               return $ EPred (CVar i) (expandSynPred p)
 
 clearSubst :: TI ()
 clearSubst = modify (transSubst (const nullSubst))
