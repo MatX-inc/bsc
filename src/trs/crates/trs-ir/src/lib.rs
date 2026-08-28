@@ -13,6 +13,7 @@
 
 pub mod expr;
 pub mod schedule;
+pub mod fold;
 pub mod verify;
 
 use std::collections::HashMap;
