@@ -395,7 +395,7 @@ pub(crate) struct JitPlans {
     workers: Vec<std::thread::JoinHandle<()>>,
     /// rule ordinal -> (instance, rule name, WF slot) for the
     /// interpreted-body fallback while its cell is cold
-    pub(crate) exec_fallback: Vec<(usize, StrId, u32)>,
+    pub(crate) exec_fallback: Vec<(usize, RuleRef, u32)>,
     /// per composition: rc.ticks indices whose work is compiled INTO
     /// the loaded edge fns (wire valid-bit clears) — the interp tick
     /// loop skips them when the fused fn ran, and the central-loop
@@ -4442,7 +4442,7 @@ impl Interp {
             shared: Vec<StrId>,
         }
         let mut rules: Vec<RuleInfo> = Vec::new();
-        let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
+        let mut rule_ord: HashMap<(usize, RuleRef), usize> = HashMap::new();
         for rc in rcomps {
             // clock-crossing "early" rules never enter the compiled
             // edge walk: the general loop's after-edge pass (PG_FINAL)
@@ -4470,9 +4470,7 @@ impl Interp {
                     // external caller latches EN/args at call time;
                     // uncalled methods read EN as 0 through their
                     // arena slots), so the compiled walk omits them
-                    let Some(&ri) = self.mods[module].rules.get(&r) else {
-                        continue;
-                    };
+                    let ri = r.idx();
                     let shared =
                         owned_so_far.get(&en.inst).cloned().unwrap_or_default();
                     owned_so_far
@@ -4508,10 +4506,7 @@ impl Interp {
                             continue;
                         }
                         let module = self.module_of(en.inst);
-                        let Some(&ri) = self.mods[module].rules.get(&r)
-                        else {
-                            continue;
-                        };
+                        let ri = r.idx();
                         rule_ord.insert((en.inst, r), rules.len());
                         rules.push(RuleInfo {
                             inst: en.inst,
@@ -5302,8 +5297,9 @@ impl Interp {
                 let module = self.module_of(en.inst);
                 for &node in &en.nodes {
                     let SchedNode::Exec(r) = node else { continue };
-                    if !self.mods[module].rules.contains_key(&r) {
-                        continue; // method exec node
+                    let mir = self.mods[module].ir;
+                    if r.idx() >= self.d.modules[mir].rules.len() {
+                        continue;
                     }
                     if rc.early.contains(&(en.inst, r)) {
                         continue; // after-edge pass runs it interpreted
@@ -5333,7 +5329,7 @@ impl Interp {
             let module = self.module_of(ri.inst);
             let mut inhibit_slots = Vec::new();
             for other in &rr.me_inhibits {
-                let other_ri = self.mods[module].rules[other];
+                let other_ri = other.idx();
                 let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
                 match inst_envs[&ri.inst].cfwf_slot.get(&other_cf) {
                     Some(&s) => inhibit_slots.push(s),
@@ -5350,7 +5346,7 @@ impl Interp {
                 Vec::with_capacity(rcomps.len());
             for rc in rcomps {
                 let mut cv = Vec::new();
-                if let Some(cs) = rc.cross.get(&(ri.inst, rr.name)) {
+                if let Some(cs) = rc.cross.get(&(ri.inst, RuleRef(ri.rule_idx as u32))) {
                     for (oi, ocf) in cs {
                         match inst_envs.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
                             Some(&s) => cv.push(s),
@@ -6616,11 +6612,11 @@ impl Interp {
                 comp_nodes.len()
             );
         }
-        let exec_fallback: Vec<(usize, StrId, u32)> = {
+        let exec_fallback: Vec<(usize, RuleRef, u32)> = {
             let mut v = Vec::with_capacity(rules.len());
             for ri in &rules {
                 let mir = lazy.insts[&ri.inst].mir;
-                v.push((ri.inst, self.d.modules[mir].rules[ri.rule_idx].name, ri.wf_slot));
+                v.push((ri.inst, RuleRef(ri.rule_idx as u32), ri.wf_slot));
             }
             v
         };
@@ -7168,10 +7164,7 @@ impl Interp {
                             SchedNode::Sched(r) => (*r, true),
                             SchedNode::Exec(r) => (*r, false),
                         };
-                        let Some(&ri) = self.mods[module].rules.get(&r)
-                        else {
-                            continue;
-                        };
+                        let ri = r.idx();
                         let rr = &self.d.modules[mir].rules[ri];
                         if is_sched {
                             for name in [rr.can_fire, rr.will_fire] {
@@ -7482,6 +7475,10 @@ struct LcRank<'a> {
     /// only, so it must not suppress a later ACTION visit's body walk
     /// (the body's EN reads would be invisibly pruned)
     seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
+    /// Rule bodies already walked.  Separate from `seen_meths`: a rule
+    /// is a position and a method a name, and one set cannot key both
+    /// without an index aliasing an unrelated name id.
+    seen_rules: std::collections::HashSet<(usize, RuleRef)>,
     /// rung 40: EN ports the walked cones actually load — the fast
     /// tier allocates slots only for these (keyed by mir: twin
     /// instances must stay layout-identical for dedup)
@@ -7700,11 +7697,9 @@ impl Interp {
                     let r = match node {
                         SchedNode::Sched(r) | SchedNode::Exec(r) => *r,
                     };
-                    if let Some(&ri) = self.mods[module].rules.get(&r) {
-                        let rr = &self.d.modules[mir].rules[ri];
-                        s.insert(rr.can_fire);
-                        s.insert(rr.will_fire);
-                    }
+                    let rr = &self.d.modules[mir].rules[r.idx()];
+                    s.insert(rr.can_fire);
+                    s.insert(rr.will_fire);
                 }
             };
             for rc in rcomps {
@@ -7740,9 +7735,7 @@ impl Interp {
                     SchedNode::Sched(r) => (*r, true),
                     SchedNode::Exec(r) => (*r, false),
                 };
-                let Some(&ri) = it.mods[module].rules.get(&r) else {
-                    continue;
-                };
+                let ri = r.idx();
                 let rr = &it.d.modules[mir].rules[ri];
                 if is_sched {
                     w.mark(mir, rr.can_fire);
@@ -7755,7 +7748,7 @@ impl Interp {
                             w.expr(inst, ex);
                         }
                     }
-                } else if !w.seen_meths.insert((mir, r, true)) {
+                } else if !w.seen_rules.insert((mir, r)) {
                     // twin instance: this type's exec body walked
                     continue;
                 } else {
@@ -7767,6 +7760,7 @@ impl Interp {
             }
         }
         let mut w = LcRank {
+            seen_rules: std::collections::HashSet::new(),
             it: self,
             stop,
             rank: HashMap::new(),
@@ -7826,6 +7820,7 @@ impl Interp {
         // the schedule-affinity ranks; live_en is a set, where order
         // cannot matter.
         let mut gw = LcRank {
+            seen_rules: std::collections::HashSet::new(),
             it: self,
             stop: HashMap::new(),
             rank: HashMap::new(),
@@ -7866,6 +7861,7 @@ impl Interp {
                 n: 0,
                 seen_defs: std::collections::HashSet::new(),
                 seen_meths: std::collections::HashSet::new(),
+                seen_rules: std::collections::HashSet::new(),
                 live_en: std::collections::HashSet::new(),
             };
             for rc in rcomps {

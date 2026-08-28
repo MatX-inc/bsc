@@ -39,7 +39,7 @@ import qualified Codec.CBOR.Encoding as C
 import qualified Codec.CBOR.Write as CW
 
 import Data.Char (isDigit)
-import Data.List (foldl', nub, sortBy, stripPrefix)
+import Data.List (foldl', nub, sort, sortBy, stripPrefix)
 import Data.Maybe (mapMaybe, isJust)
 
 import ErrorUtil (internalError)
@@ -66,7 +66,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 6
+birVersion = 7
 
 -- ===============
 -- String interning
@@ -176,7 +176,7 @@ encDesign keepF symMap ssys =
 
         -- per-module schedule analysis (segments, exec order, disjointness)
         msis = M.fromList [ (getIdBaseString (sp_name p),
-                             analyzeModule pkgNames p)
+                             analyzeModule p)
                           | p <- pkgs ]
         instToMod = ssys_instmap ssys
 
@@ -238,6 +238,10 @@ data ModSchedInfo = ModSchedInfo
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
     , msi_taskRules   :: S.Set String  -- rules with system/foreign tasks
     , msi_finishRules :: S.Set String  -- rules calling $finish/$fatal/$stop
+      -- rule name -> its position in the module's emitted rule list; a
+      -- rule reference never leaves its module, so it travels as a
+      -- position rather than a name
+    , msi_ruleIx  :: M.Map String Int
     }
 
 -- Segment lookup key for a schedule node ("S:rule" / "E:rule"), local
@@ -272,8 +276,8 @@ designUsesWaveTasks pkgs = or
     , r <- sp_rules p ++ concatMap aIfaceRules (sp_interface p)
     , a <- arule_actions r ]
 
-analyzeModule :: S.Set String -> SimPackage -> ModSchedInfo
-analyzeModule pkgNames pkg =
+analyzeModule :: SimPackage -> ModSchedInfo
+analyzeModule pkg =
     let asi = sp_schedule pkg
         order = asi_sched_order asi
 
@@ -353,12 +357,18 @@ analyzeModule pkgNames pkg =
             | (d, segs) <- domSegs
             , (i, seg) <- zip [(0 :: Int) ..] segs
             , (j, n) <- zip [(0 :: Int) ..] (seg_nodes seg) ]
+
+        -- a rule reference never leaves its module, so it travels as a
+        -- position in the list encModule emits
+        ruleIx = M.fromList
+                   (zip (map (getIdBaseString . arule_id) (sp_rules pkg)) [0 ..])
     in
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
                      , msi_execPos = execPos
                      , msi_taskRules = taskRules
-                     , msi_finishRules = finishRules }
+                     , msi_finishRules = finishRules
+                     , msi_ruleIx = ruleIx }
 
 -- ===============
 -- Compositions
@@ -686,9 +696,15 @@ encComposition instToMod msis topGates ss = do
                 , ("domain", encW32 (fromIntegral dom))
                 , ("segment", encW32 (fromIntegral seg))
                 ]
+            -- the rule belongs to the module at ipath, so it travels as
+            -- a position in that module's rule list
             encQualRule (ipath, rname) = do
               iE <- strE ipath
-              rE <- strE rname
+              let rE = case instMsi ipath of
+                         Just m -> encRuleRefName m rname
+                         Nothing -> internalError
+                           ("SimExportIR: no module at instance path "
+                            ++ show ipath ++ " for rule " ++ show rname)
               return $ encStruct [ ("instance", iE), ("rule", rE) ]
             encCrossPair (a, b) = encPair <$> encQualRule a <*> encQualRule b
         entriesEnc <- mapM encEntry entries
@@ -871,23 +887,33 @@ encModule pkgNames msi symSet pkg = do
 
 encSchedule :: ModSchedInfo -> SimPackage -> EncM C.Encoding
 encSchedule msi pkg = do
-    domsEnc <- mapM encModSched (msi_domains msi)
+    domsEnc <- mapM (encModSched msi) (msi_domains msi)
     let esposito = case asch_scheduler (asi_schedule (sp_schedule pkg)) of
                      [ASchedEsposito pairs] -> pairs
                      scheds -> concat [ ps | ASchedEsposito ps <- scheds ]
+    -- the scheduler ranks methods alongside rules, so these are names
     conflictsEnc <- mapM (\(r, blockers) -> do
                             rE <- idE r
                             bsE <- mapM idE blockers
                             return (encPair rE (encList bsE)))
                          esposito
+    -- ordering facts the design-level merge needs and cannot recover
+    -- from the segments alone; sorted, so the fragment's bytes do not
+    -- depend on set iteration order
+    let refsOf = map (encW32 . fromIntegral) . sort
+                 . map (ruleIxOf msi) . S.toList
+        taskEnc = refsOf (msi_taskRules msi)
+        finishEnc = refsOf (msi_finishRules msi)
     return $ encStruct
       [ ("domains", encList domsEnc)
       , ("conflicts", encList conflictsEnc)
+      , ("task_rules", encList taskEnc)
+      , ("finish_rules", encList finishEnc)
       ]
 
-encModSched :: (Int, [Seg]) -> EncM C.Encoding
-encModSched (d, segs) = do
-    segsEnc <- mapM encSeg segs
+encModSched :: ModSchedInfo -> (Int, [Seg]) -> EncM C.Encoding
+encModSched msi (d, segs) = do
+    segsEnc <- mapM (encSeg msi) segs
     return $ encStruct
       [ ("domain", encW32 (fromIntegral d))
       , ("posedge", encBool True)   -- P0 TODO: negedge-triggered domains
@@ -896,18 +922,39 @@ encModSched (d, segs) = do
       , ("ticks", encList [])
       ]
 
-encSeg :: Seg -> EncM C.Encoding
-encSeg seg = do
-    nodesEnc <- mapM encSchedNode (seg_nodes seg)
+encSeg :: ModSchedInfo -> Seg -> EncM C.Encoding
+encSeg msi seg = do
+    nodesEnc <- mapM (encSchedNode msi) (seg_nodes seg)
     cutEnc <- mapM strE (seg_cut seg)
     return $ encStruct
       [ ("nodes", encList nodesEnc)
       , ("cut", encList cutEnc)
       ]
 
-encSchedNode :: SchedNode -> EncM C.Encoding
-encSchedNode (Sched i) = encVariant "Sched" <$> idE i
-encSchedNode (Exec i) = encVariant "Exec" <$> idE i
+encSchedNode :: ModSchedInfo -> SchedNode -> EncM C.Encoding
+encSchedNode msi (Sched i) = return (encVariant "Sched" (encRuleRef msi i))
+encSchedNode msi (Exec i) = return (encVariant "Exec" (encRuleRef msi i))
+
+-- | A rule as its position in the module's rule list.  The segment
+-- builder admits only this module's own rules, so a name that is not
+-- there is an exporter bug rather than something to skip.
+encRuleRef :: ModSchedInfo -> Id -> C.Encoding
+encRuleRef msi = encRuleRefName msi . getIdBaseString
+
+ruleIxOf :: ModSchedInfo -> String -> Int
+ruleIxOf msi n =
+    M.findWithDefault
+      (internalError ("SimExportIR: no rule " ++ show n
+                      ++ " in its own module's rule list"))
+      n (msi_ruleIx msi)
+
+encRuleRefName :: ModSchedInfo -> String -> C.Encoding
+encRuleRefName msi n =
+    case M.lookup n (msi_ruleIx msi) of
+      Just k  -> encW32 (fromIntegral k)
+      Nothing -> internalError
+                   ("SimExportIR: no rule " ++ show n
+                    ++ " in its own module's rule list")
 
 encClockDomain :: AClockDomain -> EncM C.Encoding
 encClockDomain (ClockDomain n, clocks) = do

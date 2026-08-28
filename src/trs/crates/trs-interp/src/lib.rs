@@ -19,7 +19,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 
 use trs_ir as ir;
-use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
+use trs_ir::{Action, Design, Expr, PrimOp, RuleRef, SchedNode, Stmt, StrId};
 
 mod bdpi;
 mod census;
@@ -128,7 +128,6 @@ struct ModIx {
     ir: usize, // index into design.modules
     ports: HashMap<StrId, (u32, ir::PortKind)>,
     defs: HashMap<StrId, usize>,
-    rules: HashMap<StrId, usize>,
     methods: HashMap<StrId, usize>,
 }
 
@@ -510,14 +509,14 @@ struct RComp {
     // and artifact bytes must not depend on hash iteration order
     // (bincode wire format is identical — len + entries — so blobs
     // decode across the change; only the entry ORDER becomes fixed)
-    cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>>,
+    cross: BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>>,
     // (prim instance, resolved port name, is_reset_tick, owner instance
     // for gate evaluation, gate expr)
     ticks: Vec<(usize, String, bool, usize, Option<Expr>)>,
     // clock-crossing "early" rules: excluded from the edge pass,
     // run in the after-edge pass at end of timeslice (the C++
     // schedule_after_posedge_* at PG_FINAL)
-    early: HashSet<(usize, StrId)>,
+    early: HashSet<(usize, RuleRef)>,
     // dynamic-scheduling alternatives (ir::SchedAlt): guarded
     // interleavings selected per edge before the walk; empty for
     // statically-scheduled designs (every design until bsc exports
@@ -539,7 +538,7 @@ struct RAlt {
     guard: Expr,
     entries: Vec<REntry>,
     // BTreeMap for byte-deterministic trs_plan_a, like RComp::cross
-    cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>>,
+    cross: BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>>,
 }
 
 /// prime()'s derivation half, baked into AOT artifacts as trs_plan_a:
@@ -798,7 +797,6 @@ impl Interp {
                     }))
                     .collect(),
                 defs: m.defs.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
-                rules: m.rules.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
                 methods: m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
             })
             .collect();
@@ -2518,9 +2516,9 @@ impl Interp {
                     let rn = match node {
                         ir::SchedNode::Sched(r) | ir::SchedNode::Exec(r) => *r,
                     };
-                    if let Some(&ri) = rules_by_name.get(&rn) {
-                        let cf = m.rules[ri].can_fire;
-                        let wf = m.rules[ri].will_fire;
+                    {
+                        let cf = m.rules[rn.idx()].can_fire;
+                        let wf = m.rules[rn.idx()].will_fire;
                         mark_expr(&Expr::Def(cf), fk, &m, &defs_by_name, &mut usage, &mut seen);
                         mark_expr(&Expr::Def(wf), fk, &m, &defs_by_name, &mut usage, &mut seen);
                     }
@@ -3058,7 +3056,7 @@ impl Interp {
         &self,
         src: &[ir::schedule::CompositionEntry],
         posedge: bool,
-        early: &HashSet<(usize, StrId)>,
+        early: &HashSet<(usize, RuleRef)>,
     ) -> Vec<REntry> {
         let mut entries: Vec<REntry> = src
             .iter()
@@ -3107,9 +3105,7 @@ impl Interp {
                 if early.contains(&(ii, r)) {
                     continue;
                 }
-                let Some(&ri) = self.mods[module].rules.get(&r) else {
-                    continue;
-                };
+                let ri = r.idx();
                 let rr = &self.d.modules[mir].rules[ri];
                 stack.push(rr.can_fire);
                 stack.push(rr.will_fire);
@@ -3158,31 +3154,28 @@ impl Interp {
     fn resolve_cross(
         &mut self,
         pairs: &[(ir::QualRule, ir::QualRule)],
-    ) -> BTreeMap<(usize, StrId), Vec<(usize, StrId)>> {
-        let mut cross: BTreeMap<(usize, StrId), Vec<(usize, StrId)>> =
+    ) -> BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>> {
+        let mut cross: BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>> =
             BTreeMap::new();
         for (earlier, later) in pairs {
             let (e_inst, e_rule) = (self.inst_of_path(earlier.instance), earlier.rule);
             let (l_inst, l_rule) = (self.inst_of_path(later.instance), later.rule);
             let e_mod = self.module_of(e_inst);
             let e_mir = self.mods[e_mod].ir;
-            let e_ri = self.mods[e_mod].rules[&e_rule];
+            let e_ri = e_rule.idx();
             let e_cf = self.d.modules[e_mir].rules[e_ri].can_fire;
             cross.entry((l_inst, l_rule)).or_default().push((e_inst, e_cf));
         }
         cross
     }
 
-    fn latch_rule(&mut self, inst: usize, rule_name: StrId, cross_inh: &[(usize, StrId)]) {
+    fn latch_rule(&mut self, inst: usize, rule: RuleRef, cross_inh: &[(usize, StrId)]) {
         let module = self.module_of(inst);
         let mir = self.mods[module].ir;
-        let ri = match self.mods[module].rules.get(&rule_name) {
-            Some(ri) => *ri,
-            None => return, // method node in a segment: nothing to latch
-        };
+        let ri = rule.idx();
         let r = self.d.modules[mir].rules[ri].clone();
         if let Some(c) = self.census.as_mut() {
-            c.begin_latch(inst, rule_name, r.can_fire, r.will_fire);
+            c.begin_latch(inst, r.name, r.can_fire, r.will_fire);
         }
         let mut ctx = Ctx { memo: true, ..Default::default() };
 
@@ -3194,7 +3187,7 @@ impl Interp {
         // latch exists (review finding: latched-only lookup missed
         // every compiled inhibitor)
         for other in &r.me_inhibits {
-            let other_ri = self.mods[module].rules[other];
+            let other_ri = other.idx();
             let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
             if let Some(c) = self.census.as_mut() {
                 c.lread(inst, other_cf);
@@ -3224,7 +3217,7 @@ impl Interp {
         let wf = self.eval(inst, &mut wf_ctx, &Expr::Def(r.will_fire));
         if self.trace_wf && wf.as_bool() {
             eprintln!("[{}] FIRE {}.{}", self.cycle, self.insts[inst].path,
-                      self.s(rule_name));
+                      self.s(r.name));
         }
         let wf_b = wf.as_bool();
         self.set_latched(inst, r.will_fire, wf);
@@ -3233,33 +3226,27 @@ impl Interp {
         }
     }
 
-    fn exec_rule(&mut self, inst: usize, rule_name: StrId) {
+    fn exec_rule(&mut self, inst: usize, rule: RuleRef) {
         let module = self.module_of(inst);
         let mir = self.mods[module].ir;
-        let ri = match self.mods[module].rules.get(&rule_name) {
-            Some(ri) => *ri,
-            None => return,
-        };
+        let ri = rule.idx();
         let wf = self.d.modules[mir].rules[ri].will_fire;
         let fire = self.latched(inst, wf).map(|v| v.as_bool()).unwrap_or(false);
         if !fire {
             return;
         }
-        self.exec_rule_forced(inst, rule_name);
+        self.exec_rule_forced(inst, rule);
     }
 
     /// Execute a rule body unconditionally (the caller has already
     /// established WILL_FIRE — the JIT dispatch reads it from the slot).
-    fn exec_rule_forced(&mut self, inst: usize, rule_name: StrId) {
+    fn exec_rule_forced(&mut self, inst: usize, rule: RuleRef) {
         let module = self.module_of(inst);
         let mir = self.mods[module].ir;
-        let ri = match self.mods[module].rules.get(&rule_name) {
-            Some(ri) => *ri,
-            None => return,
-        };
+        let ri = rule.idx();
         let r = self.d.modules[mir].rules[ri].clone();
         if let Some(c) = self.census.as_mut() {
-            c.begin_exec(inst, rule_name);
+            c.begin_exec(inst, r.name);
         }
         let mut ctx = Ctx::default();
         for st in r.body.iter() {
@@ -3760,7 +3747,7 @@ impl Interp {
         let rcomps: Vec<RComp> = comps
             .iter()
             .map(|comp| {
-                let early: HashSet<(usize, StrId)> = comp
+                let early: HashSet<(usize, RuleRef)> = comp
                     .early
                     .iter()
                     .map(|q| (self.inst_of_path(q.instance), q.rule))

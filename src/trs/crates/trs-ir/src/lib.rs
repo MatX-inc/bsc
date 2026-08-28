@@ -26,7 +26,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 6;
+pub const BIR_VERSION: u32 = 7;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -224,6 +224,31 @@ pub struct Design {
     pub keep_fires: bool,
 }
 
+/// A rule, as its position in its module's `rules` list.  A rule
+/// reference never leaves the module that defines it, so a position
+/// says everything a name would and cannot be resolved against the
+/// wrong module by accident.
+///
+/// Serializes as the bare integer it wraps.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct RuleRef(pub u32);
+
+impl RuleRef {
+    #[inline]
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl std::fmt::Display for RuleRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// One synthesized module (one `.ba` / one `SimPackage`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
@@ -393,7 +418,7 @@ pub struct Rule {
     /// patch (`mkMERuleInhibits`, `SimMakeCBlocks.hs:1636-1658`).  Fixed
     /// per module type; cross-module pairs are in
     /// `Composition::cross_inhibits`.
-    pub me_inhibits: Vec<StrId>,
+    pub me_inhibits: Vec<RuleRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

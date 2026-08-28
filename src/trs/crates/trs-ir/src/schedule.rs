@@ -31,14 +31,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::expr::Expr;
-use crate::StrId;
+use crate::{RuleRef, StrId};
 
 /// `Sched r` computes r's fire conditions; `Exec r` runs r's body.
 /// (`SchedNode`, `AScheduleInfo.hs:218`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchedNode {
-    Sched(StrId),
-    Exec(StrId),
+    Sched(RuleRef),
+    Exec(RuleRef),
 }
 
 /// Per-module (type) schedule information.
@@ -46,11 +46,25 @@ pub enum SchedNode {
 pub struct Schedule {
     /// One entry per (clock domain, edge) this module participates in.
     pub domains: Vec<ModuleSchedule>,
-    /// Esposito conflict lists: rule -> more-urgent conflicting rules whose
-    /// WILL_FIRE blocks it (`ASchedEsposito`).  Intra-module by
-    /// construction; already reflected in the WILL_FIRE defs, carried for
-    /// verification and diagnostics.
+    /// Esposito conflict lists: a schedulable entity -> the more-urgent
+    /// ones whose WILL_FIRE blocks it (`ASchedEsposito`).  Named rather
+    /// than positioned because the scheduler ranks interface methods
+    /// alongside rules, so an entry here is not always a rule.
+    /// Intra-module by construction; already reflected in the WILL_FIRE
+    /// defs, carried for verification and diagnostics.
     pub conflicts: Vec<(StrId, Vec<StrId>)>,
+    /// Rules whose bodies call a system or foreign task.  A task's
+    /// output is observable, so the relative order of two such rules is
+    /// observable too, and merging this module's schedule into a design
+    /// must preserve it.  Sorted.
+    #[serde(default)]
+    pub task_rules: Vec<RuleRef>,
+    /// Rules calling $finish, $fatal or $stop.  Stronger than
+    /// `task_rules`: the stop suppresses output from anything ordered
+    /// after it in the same instant, so these pin order against every
+    /// task-bearing rule rather than only against each other.  Sorted.
+    #[serde(default)]
+    pub finish_rules: Vec<RuleRef>,
 }
 
 /// A module's execution order within one clock domain and edge, split into
@@ -89,8 +103,9 @@ pub struct TickCall {
 pub struct QualRule {
     /// Interned instance path ("" = the top module).
     pub instance: StrId,
-    /// The rule's module-local name.
-    pub rule: StrId,
+    /// The rule's position in the rule list of the module at
+    /// `instance`.
+    pub rule: RuleRef,
 }
 
 /// The per-link, per-(clock, edge) interleaving of instance segments —
