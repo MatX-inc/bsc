@@ -460,15 +460,35 @@ instance Show (IExpr a) where
   show (ICon i ic)    = "(ICon " ++ show i ++ " " ++ show ic ++ ")"
   show (IRefT t p _ _)  = "(IRefT " ++ show t ++ " " ++ "_" ++ show p ++ ")"
 
+-- Rank-first comparison: different constructors are ordered by an
+-- explicit rank (the same structure cmpC already uses via ordC);
+-- same-constructor pairs compare structurally.  The previous pairwise
+-- clause matrix encoded a non-transitive order -- ILAM < ICon,
+-- ICon < IRefT, but IRefT < ILAM (the clauses marked ??? below) --
+-- which was harmless only because ILAM and IRefT never coexist in
+-- live comparisons.  Rank-first reproduces the old order for every
+-- other constructor pair.
 cmpE :: IExpr a -> IExpr a -> Ordering
-cmpE (ILam i1 _ e1)  (ILam i2 _ e2)  =
+cmpE x y =
+    case compare (rankE x) (rankE y) of
+    EQ -> cmpSameRank x y
+    o  -> o
+
+rankE :: IExpr a -> Int
+rankE (ILam _ _ _) = 0
+rankE (IAps _ _ _) = 1
+rankE (IVar _) = 2
+rankE (ILAM _ _ _) = 3
+rankE (ICon _ _) = 4
+rankE (IRefT _ _ _ _) = 5
+
+cmpSameRank :: IExpr a -> IExpr a -> Ordering
+cmpSameRank (ILam i1 _ e1)  (ILam i2 _ e2)  =
         case compare i1 i2 of
         EQ -> cmpE e1 e2
         o  -> o
-cmpE (ILam _ _ _)    _               = LT
 
-cmpE (IAps _  _ _)   (ILam _ _ _)    = GT
-cmpE (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
+cmpSameRank (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
         case compare e1 e2 of
         EQ ->
                 case compare es1 es2 of
@@ -480,28 +500,16 @@ cmpE (IAps e1 ts1 es1) (IAps e2 ts2 es2) =
                 o  -> o
 -}
         o  -> o
-cmpE (IAps _  _ _)   _               = LT
 
-cmpE (IVar _)        (ILam _ _ _)    = GT
-cmpE (IVar _)        (IAps _ _ _)    = GT
-cmpE (IVar i1)       (IVar i2)       = compare i1 i2
-cmpE (IVar _)        _               = LT
+cmpSameRank (IVar i1)       (IVar i2)       = compare i1 i2
 
-cmpE (ILAM _ _ _)    (ILam _ _ _)    = GT
-cmpE (ILAM _ _ _)    (IAps _ _ _)    = GT
-cmpE (ILAM _ _ _)    (IVar _)        = GT
-cmpE (ILAM i1 _ e1)  (ILAM i2 _ e2)  =
+cmpSameRank (ILAM i1 _ e1)  (ILAM i2 _ e2)  =
         case compare i1 i2 of
         EQ -> cmpE e1 e2
         o  -> o
-cmpE (ILAM _ _ _)    (IRefT _ _ _ _)   = GT -- ???????
 
-cmpE (ILAM _  _ _)   _               = LT
 
-cmpE (ICon _ _)      (ILam _ _ _)    = GT
-cmpE (ICon _ _)      (IAps _ _ _)    = GT
-cmpE (ICon _ _)      (IVar _)        = GT
-cmpE (ICon i1 ic1) (ICon i2 ic2)     =
+cmpSameRank (ICon i1 ic1) (ICon i2 ic2)     =
         case compare i1 i2 of
         EQ -> case (cmpC ic1 ic2) of
                 -- inlined positions need to be considered in equality tests
@@ -510,19 +518,11 @@ cmpE (ICon i1 ic1) (ICon i2 ic2)     =
                       in  compare mposs1 mposs2
                 o  -> o
         o  -> o
-cmpE (ICon _ _)      _               = LT
 
-cmpE (IRefT _ _ _ _)   (ILam _ _ _)    = GT
-cmpE (IRefT _ _ _ _)   (IAps _ _ _)    = GT
-cmpE (IRefT _ _ _ _)   (IVar _)        = GT
-cmpE (IRefT _ _ _ _)   (ICon _ _)      = GT
-cmpE (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
+cmpSameRank (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
 
-cmpE (IRefT _ _ _ _)     (ILAM _ _ _)  = LT -- ??????????
 
-{- all cases are covered above, so the compiler complains about this line:
-cmpE e1              e2              = internalError ("not match in cmpE " ++ ppReadable (e1,e2))
--}
+cmpSameRank e1 e2 = internalError ("cmpSameRank: rank mismatch " ++ ppReadable (e1, e2))
 
 instance Eq (IExpr a) where
     x == y  =  cmpE x y == EQ
