@@ -45,7 +45,7 @@ import IOUtil(getEnvDef)
 import SimCCBlock
 import SimCOpt(simCOpt)
 import SimExpand(simExpandWith)
-import SimExportIR(writeBirFile)
+import SimExportIR(writeBirFile, writeSchedFile)
 import SimMakeCBlocks(simMakeCBlocks)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
@@ -64,6 +64,7 @@ data Options = Options
     , optBdpi      :: [FilePath]
     , optLibPath   :: [String]
     , optLibs      :: [String]
+    , optDumpSched :: Maybe FilePath
     , optVerbose   :: Bool
     , optVersion   :: Bool
     , optHelp      :: Bool
@@ -77,6 +78,7 @@ defaultOptions = Options
     , optBdpi      = []
     , optLibPath   = []
     , optLibs      = []
+    , optDumpSched = Nothing
     , optVerbose   = False
     , optVersion   = False
     , optHelp      = False
@@ -102,6 +104,9 @@ options =
     , Option ['l'] []
         (ReqArg (\d o -> o { optLibs = optLibs o ++ [d] }) "LIB")
         "link LIB into the BDPI companion (repeatable)"
+    , Option []    ["dump-schedule"]
+        (ReqArg (\d o -> o { optDumpSched = Just d }) "FILE")
+        "also write the merged design schedule here, for inspection"
     , Option ['v'] ["verbose"]
         (NoArg (\o -> o { optVerbose = True }))
         "report progress while reading the hierarchy"
@@ -229,6 +234,9 @@ exportBir errh flags opts toplevel afilenames = do
                      | sb <- sbs_opt ]
 
     writeBirFile birfile (keepFires flags) symMap sim_system_opt
+    case optDumpSched opts of
+      Nothing -> return ()
+      Just p  -> writeSchedFile p (keepFires flags) symMap sim_system_opt
     writeBdpiSo opts toplevel prefix sim_system_opt
 
 -- | The companion the trs runtime dlopens for BDPI imports.

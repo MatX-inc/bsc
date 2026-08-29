@@ -24,6 +24,7 @@
 module SimExportIR
     ( birVersion
     , simSystemToBir
+    , writeSchedFile
     , writeBirFile
     ) where
 
@@ -159,6 +160,15 @@ birHeader = L.pack (magic ++ leWord32 birVersion)
     leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
                  | k <- [0, 8, 16, 24] ]
 
+-- | The schedule sidecar's own magic, so it cannot be mistaken for a
+-- .bir; it tracks the same version, since it is the same encoding.
+schedHeader :: L.ByteString
+schedHeader = L.pack (magic ++ leWord32 birVersion)
+  where
+    magic = [0x54, 0x52, 0x53, 0x53, 0x43, 0x48, 0x00, 0x01]  -- "TRSSCH\0\1"
+    leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
+                 | k <- [0, 8, 16, 24] ]
+
 simSystemToBir :: Bool -> M.Map String (S.Set AId) -> SimSystem
                -> L.ByteString
 simSystemToBir keepF symMap ssys =
@@ -170,8 +180,17 @@ writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
 writeBirFile path keepF symMap ssys =
     L.writeFile path (simSystemToBir keepF symMap ssys)
 
-encDesign :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
-encDesign keepF symMap ssys =
+-- | Write the merged design schedule beside it, for inspection and for
+-- comparison against a schedule computed some other way.
+writeSchedFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
+               -> IO ()
+writeSchedFile path keepF symMap ssys =
+    L.writeFile path (schedHeader
+                      <> CW.toLazyByteString (encSched keepF symMap ssys))
+
+encDesignFields :: Bool -> M.Map String (S.Set AId) -> SimSystem
+                -> [(String, C.Encoding)]
+encDesignFields keepF symMap ssys =
     let pkgs = M.elems (ssys_packages ssys)
         pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
         instmap = M.toList (ssys_instmap ssys)
@@ -219,7 +238,20 @@ encDesign keepF symMap ssys =
         strsEnc = encList (map encStr (tableStrings finalTbl))
         fields' = [ (k, if k == "strings" then strsEnc else v)
                   | (k, v) <- fields ]
-    in  encStruct fields'
+    in  fields'
+
+-- | The whole design.
+encDesign :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
+encDesign keepF symMap ssys = encStruct (encDesignFields keepF symMap ssys)
+
+-- | The design schedule alone, with the table its ids index.  Same
+-- derivation and same encoding as the .bir carries -- a separate one
+-- could drift from what bsc actually computes, and this exists to be
+-- compared against.
+encSched :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
+encSched keepF symMap ssys =
+    encStruct [ f | f@(k, _) <- encDesignFields keepF symMap ssys
+              , k `elem` ["strings", "compositions"] ]
 
 -- ===============
 -- Module-local schedule analysis (BIR.md section 4)

@@ -754,7 +754,15 @@ impl Design {
                     let _ = writeln!(f, "{line}");
                 }
                 if lines.is_empty() {
-                    let _ = writeln!(f, "ok");
+                    // a design with no compositions matches whatever the
+                    // merge does, including nothing: say so, or a run of
+                    // such designs reads as evidence it is not
+                    let n = design.compositions.len();
+                    let _ = writeln!(
+                        f,
+                        "{}",
+                        if n == 0 { "ok vacuous".to_string() } else { format!("ok {n}") }
+                    );
                 }
             }
         }
