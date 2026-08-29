@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::schedule::{Composition, SchedNode};
-use crate::{Design, SchedEntity};
+use crate::{ClockArg, Design, Expr, RuleRef, SchedEntity, StrId};
 
 /// The instance hierarchy, as the merge walks it: for each instance, its
 /// path, the module it is of, and its children.
@@ -97,6 +97,110 @@ impl ModCsi {
     }
 }
 
+/// What a module's schedule needs to know about one clock domain
+/// (`DomainInfo`).  Built per module here; the merge combines these
+/// across the hierarchy.
+#[derive(Debug, Default, Clone)]
+pub struct DomainInfo {
+    /// the domain's clocks, as (oscillator, gate)
+    pub clocks: Vec<(Expr, Expr)>,
+    pub rules: Vec<RuleRef>,
+    /// the subset of `rules` marked clock-crossing, which run in the
+    /// after-edge pass rather than the edge itself
+    pub crossing_rules: Vec<RuleRef>,
+    /// primitives clocked by this domain: (instance position, the clock
+    /// argument that puts it here)
+    pub prims: Vec<(u32, ClockArg)>,
+    /// the subset of `prims` whose clock carries a reset, so their ticks
+    /// are reset ticks
+    pub prim_resets: Vec<(u32, StrId)>,
+    /// interface output clocks this domain drives: (port name, osc)
+    pub output_clocks: Vec<(StrId, Expr)>,
+}
+
+/// One module's domains (`makeDomainMaps`).
+#[derive(Debug, Default)]
+pub struct ModDomains {
+    /// oscillator -> domain id.  A `Vec` rather than a map because
+    /// `Expr` is only `PartialEq` and a module has a handful of
+    /// domains; bsc keys the same lookup on the oscillator too.
+    by_osc: Vec<(Expr, u32)>,
+    /// domain id -> what is in it
+    pub info: BTreeMap<u32, DomainInfo>,
+}
+
+impl ModDomains {
+    /// The domain an oscillator belongs to, or None for `noClock`,
+    /// whose oscillator is the constant false and which has no domain.
+    pub fn domain_of(&self, osc: &Expr) -> Option<u32> {
+        if is_no_clock(osc) {
+            return None;
+        }
+        self.by_osc.iter().find(|(o, _)| o == osc).map(|(_, d)| *d)
+    }
+
+    /// Read one module's domains out of its fragment.
+    pub fn of(m: &crate::Module) -> ModDomains {
+        let mut d = ModDomains::default();
+
+        // the domains themselves, and the oscillator index over them
+        for cd in &m.clock_domains {
+            for (osc, _) in &cd.clocks {
+                d.by_osc.push((osc.clone(), cd.id));
+            }
+            d.info.entry(cd.id).or_default().clocks.extend(cd.clocks.iter().cloned());
+        }
+
+        // rules, by the domain their wire properties put them in
+        for (i, r) in m.rules.iter().enumerate() {
+            let e = d.info.entry(r.clock_domain).or_default();
+            e.rules.push(RuleRef(i as u32));
+            if r.crossing {
+                e.crossing_rules.push(RuleRef(i as u32));
+            }
+        }
+
+        // primitives, by the domain of each clock they are wired with
+        for (i, inst) in m.instances.iter().enumerate() {
+            if !matches!(inst.kind, crate::InstanceKind::Prim(_)) {
+                continue;
+            }
+            for ca in &inst.clock_args {
+                let Some(osc) = inst.args.get(ca.arg as usize).and_then(clock_osc) else {
+                    continue;
+                };
+                let Some(dom) = d.domain_of(osc) else { continue };
+                let e = d.info.entry(dom).or_default();
+                e.prims.push((i as u32, *ca));
+                if ca.has_reset {
+                    e.prim_resets.push((i as u32, ca.name));
+                }
+            }
+        }
+
+        // interface output clocks
+        for (name, osc) in &m.ifc_clocks {
+            if let Some(dom) = d.domain_of(osc) {
+                d.info.entry(dom).or_default().output_clocks.push((*name, osc.clone()));
+            }
+        }
+        d
+    }
+}
+
+/// `noClock`'s oscillator is the constant false, and it has no domain.
+fn is_no_clock(osc: &Expr) -> bool {
+    matches!(osc, Expr::Const { limbs, .. } if limbs.iter().all(|&w| w == 0))
+}
+
+/// The oscillator of a clock-valued instantiation argument.
+fn clock_osc(arg: &Expr) -> Option<&Expr> {
+    match arg {
+        Expr::Clock { osc, .. } => Some(osc),
+        _ => None,
+    }
+}
+
 /// The design's compositions, computed from the fragments.
 ///
 /// Empty while the port is in progress; `diff` measures the distance.
@@ -159,6 +263,49 @@ mod tests {
         assert_eq!(format!("{base:#?}"), format!("{:#?}", comp(vec![(0, 0, 0), (1, 0, 0), (1, 0, 1)])));
     }
 
+    /// The domain check reports nothing across the whole corpus, which
+    /// is only worth believing if it can report something.  Each of
+    /// these is a way the domain read could be wrong.
+    #[test]
+    fn domain_check_catches_a_misread() {
+        use crate::{ClockArg, ClockDomain, Instance, InstanceKind, Primitive, Ticks};
+
+        let mut d = crate::tests::tiny_design();
+        let osc = Expr::Const { width: 1, limbs: vec![1] };
+        d.modules[0].clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![(osc.clone(), Expr::Const { width: 1, limbs: vec![1] })],
+        }];
+        assert!(domain_anomalies(&d).is_empty(), "a consistent module must be quiet");
+
+        // a primitive wired with a clock that belongs to no domain
+        let stray = Expr::Const { width: 1, limbs: vec![9] };
+        let mut bad = d.clone();
+        bad.modules[0].instances = vec![Instance {
+            name: 0,
+            kind: InstanceKind::Prim(Primitive::Other { name: 0 }),
+            clock_args: vec![ClockArg { name: 0, arg: 0, has_reset: false, ticks: Ticks::Pos }],
+            args: vec![Expr::Clock {
+                osc: Box::new(stray),
+                gate: Box::new(Expr::Const { width: 1, limbs: vec![1] }),
+            }],
+            method_order: vec![],
+            port_counts: vec![],
+        }];
+        assert!(
+            domain_anomalies(&bad).iter().any(|l| l.contains("in no domain")),
+            "an unresolvable prim clock must be reported"
+        );
+
+        // a clock argument pointing at something that is not a clock
+        let mut bad2 = bad.clone();
+        bad2.modules[0].instances[0].args = vec![Expr::Const { width: 1, limbs: vec![0] }];
+        assert!(
+            domain_anomalies(&bad2).iter().any(|l| l.contains("is not a clock")),
+            "a non-clock clock argument must be reported"
+        );
+    }
+
     /// The per-module read is the merge's ground floor: whatever the
     /// fragment says about itself has to survive being read.
     #[test]
@@ -174,6 +321,52 @@ mod tests {
     }
 }
 
+/// Whether the per-module domain read holds together, independent of
+/// the merge: every rule lands in exactly one domain, and every clock a
+/// primitive is wired with resolves to one.  A violation means the
+/// domains were misread, and nothing downstream of them can be right.
+pub fn domain_anomalies(design: &Design) -> Vec<String> {
+    let mut out = Vec::new();
+    for m in &design.modules {
+        let d = ModDomains::of(m);
+        let placed: usize = d.info.values().map(|i| i.rules.len()).sum();
+        if placed != m.rules.len() {
+            out.push(format!(
+                "module {}: {} rules, {} placed in domains",
+                design.name(m.name),
+                m.rules.len(),
+                placed
+            ));
+        }
+        for inst in &m.instances {
+            if !matches!(inst.kind, crate::InstanceKind::Prim(_)) {
+                continue;
+            }
+            for ca in &inst.clock_args {
+                let Some(osc) = inst.args.get(ca.arg as usize).and_then(clock_osc)
+                else {
+                    out.push(format!(
+                        "module {}: instance {} clock arg {} is not a clock",
+                        design.name(m.name),
+                        design.name(inst.name),
+                        design.name(ca.name)
+                    ));
+                    continue;
+                };
+                if !is_no_clock(osc) && d.domain_of(osc).is_none() {
+                    out.push(format!(
+                        "module {}: instance {} clock {} is in no domain",
+                        design.name(m.name),
+                        design.name(inst.name),
+                        design.name(ca.name)
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Where the computed compositions differ from the exported ones.
 ///
 /// The comparison is over the whole structure's `Debug` rendering
@@ -183,6 +376,10 @@ mod tests {
 /// standing behind the port.  Exhaustive by construction beats
 /// exhaustive by inspection.
 pub fn diff(design: &Design) -> Vec<String> {
+    let mut out = domain_anomalies(design);
+    if !out.is_empty() {
+        return out;
+    }
     let got = compositions(design);
     let want = &design.compositions;
     if got.len() != want.len() {
