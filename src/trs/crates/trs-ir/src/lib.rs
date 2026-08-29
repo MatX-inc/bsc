@@ -12,6 +12,7 @@
 //! - This models what the *backend* needs, not everything bsc knows.
 
 pub mod expr;
+pub mod merge;
 pub mod schedule;
 pub mod verify;
 
@@ -738,6 +739,25 @@ impl Design {
                 .map_err(|e| DecodeError::Cbor(e.to_string()))?;
         design.index_strings();
         verify::verify(&design).map_err(DecodeError::Invalid)?;
+        // TRS_MERGE_CHECK=<file>: while the exporter still writes the
+        // design schedule, it is the oracle for the merge being ported
+        // here.  Appends to the named file rather than a stream the
+        // tests compare, so measuring does not perturb what it
+        // measures.  Scaffolding -- it goes when the export does.
+        if let Some(p) = std::env::var_os("TRS_MERGE_CHECK") {
+            use std::io::Write;
+            let lines = merge::diff(&design);
+            if let Ok(mut f) =
+                std::fs::OpenOptions::new().create(true).append(true).open(&p)
+            {
+                for line in &lines {
+                    let _ = writeln!(f, "{line}");
+                }
+                if lines.is_empty() {
+                    let _ = writeln!(f, "ok");
+                }
+            }
+        }
         Ok(design)
     }
 
@@ -782,7 +802,7 @@ impl Design {
 mod tests {
     use super::*;
 
-    fn tiny_design() -> Design {
+    pub(crate) fn tiny_design() -> Design {
         Design {
             strings: vec!["mkTop".into()],
             str_ids: HashMap::new(),

@@ -34,8 +34,12 @@ use crate::expr::Expr;
 use crate::{MethodRef, RuleRef, SchedEntity, StrId};
 
 /// `Sched r` computes r's fire conditions; `Exec r` runs r's body.
-/// (`SchedNode`, `AScheduleInfo.hs:218`.)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// (`SchedNode`, `AScheduleInfo.hs:218`.)  Ordered so the merge can key
+/// maps on it: bsc's own Ord puts every Sched before every Exec, and
+/// the derived order does the same because Sched is declared first.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub enum SchedNode {
     Sched(SchedEntity),
     Exec(SchedEntity),
