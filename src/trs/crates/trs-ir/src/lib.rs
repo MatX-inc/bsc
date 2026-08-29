@@ -27,7 +27,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 8;
+pub const BIR_VERSION: u32 = 9;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -413,11 +413,60 @@ pub enum PortKind {
     Parameter,
 }
 
+/// A clock argument of an instantiated module, as bsc's `VArgInfo`
+/// describes it.  A fragment carries this rather than a reader looking
+/// it up in a table of known primitives: an imported Verilog module's
+/// clock and reset wiring comes from its declaration, so it is design
+/// data, and the fixed-primitive assumption expires with the Verilog
+/// path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockArg {
+    /// the clock port's name on the instantiated module
+    pub name: StrId,
+    /// which of `Instance::args` carries it
+    pub arg: u32,
+    /// whether an input reset of that module is associated with this
+    /// clock (`input_resets`), which is what makes its ticks reset ticks
+    pub has_reset: bool,
+    /// which edges of this clock tick the instance (`TickDirection`).
+    /// Read from bsc's primitive table today; carried here so the merge
+    /// consults no table of known primitives, and so a declared Verilog
+    /// import can say it for itself.
+    pub ticks: Ticks,
+}
+
+/// The edges on which a clock ticks its instance.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum Ticks {
+    /// the port does not tick this instance
+    Never,
+    Pos,
+    Neg,
+    Both,
+}
+
+impl Ticks {
+    pub fn on_posedge(self) -> bool {
+        matches!(self, Ticks::Pos | Ticks::Both)
+    }
+
+    pub fn on_negedge(self) -> bool {
+        matches!(self, Ticks::Neg | Ticks::Both)
+    }
+}
+
 /// A state-element or submodule instantiation (`AVInst` analogue).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub name: StrId,
     pub kind: InstanceKind,
+    /// The clock arguments this instance is wired with.  Empty for an
+    /// instance with no clock, and for user modules, whose clocking the
+    /// link reads from their own fragment.
+    #[serde(default)]
+    pub clock_args: Vec<ClockArg>,
     /// Instantiation arguments; constant by construction (Bluesim rejects
     /// dynamic instantiation args, `SimExpand.hs:2158`).
     pub args: Vec<Expr>,

@@ -53,10 +53,12 @@ import Prim (PrimOp(..))
 import SCC (tsort)
 import Pragma (RulePragma(..), isAlwaysEn)
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
-import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..), VResetInfo(..))
+import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..),
+                 VResetInfo(..), VArgInfo(..), vRst)
 import AUses (MethodId(..))
 import AScheduleInfo (AScheduleInfo(..), ADynSched(..), Conflicts(..), RuleRelationDB(..),
                       RuleRelationInfo(..))
+import ASyntax (getInstArgs)
 import ASyntaxUtil (aVars, tupleElemRange, argInputPorts)
 import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
@@ -69,7 +71,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 8
+birVersion = 9
 
 -- ===============
 -- String interning
@@ -1205,6 +1207,37 @@ encInstance :: S.Set String -> M.Map String Int -> MethodOrderMap -> AVInst
             -> EncM C.Encoding
 encInstance pkgNames externIx mom avi = do
     nameId <- idE (avi_vname avi)
+    -- the instance's clock wiring, as VArgInfo describes it: which
+    -- argument carries which named clock, and whether that clock has an
+    -- input reset (what makes its ticks reset ticks).  Carried per
+    -- instance because an imported Verilog module's wiring is declared,
+    -- not looked up in a table of known primitives.
+    let rstClks = nub [ c | (_, (Just _, Just c))
+                              <- input_resets (vRst (avi_vmi avi)) ]
+        clkArgs = [ (k, argId) | (k, (ClockArg argId, _)) <- zip [0 :: Int ..]
+                                                                 (getInstArgs avi) ]
+    -- which edges this port ticks on, from the primitive table: the one
+    -- place that knows it, so nothing downstream has to look a module up
+    -- by name to find out
+    let modName' = getVNameString (vName (avi_vmi avi))
+        tickSpecs = case [ l | (nm, _, _, l) <- primMap, nm == modName' ] of
+                      (l : _) -> l
+                      []      -> []
+        ticksFor p = case [ td | td <- tickSpecs, tickElem td == p ] of
+                       (td : _) | tickIsPos td && tickIsNeg td -> "Both"
+                                | tickIsPos td -> "Pos"
+                                | otherwise    -> "Neg"
+                       [] -> "Never"
+    clkArgsEnc <- mapM (\(k, argId) -> do
+                          n <- idE argId
+                          return $ encStruct
+                            [ ("name", n)
+                            , ("arg", encW32 (fromIntegral k))
+                            , ("has_reset", encBool (argId `elem` rstClks))
+                            , ("ticks",
+                               encUnitVariant (ticksFor (getIdBaseString argId)))
+                            ])
+                       clkArgs
     let modName = getVNameString (vName (avi_vmi avi))
     kindEnc <-
       if modName `S.member` pkgNames
@@ -1234,6 +1267,7 @@ encInstance pkgNames externIx mom avi = do
     return $ encStruct
       [ ("name", nameId)
       , ("kind", kindEnc)
+      , ("clock_args", encList clkArgsEnc)
       , ("args", encList argsEnc)
       , ("method_order", encList morderEnc)
       , ("port_counts", encList portsEnc)
