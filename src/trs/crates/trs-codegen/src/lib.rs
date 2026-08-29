@@ -11,6 +11,8 @@
 
 pub mod abi;
 #[cfg(feature = "llvm")]
+pub mod chunk;
+#[cfg(feature = "llvm")]
 pub mod lower;
 
 /// Optimization effort, surfaced to users as `-sim-opt 0..3` (DESIGN.md §6).

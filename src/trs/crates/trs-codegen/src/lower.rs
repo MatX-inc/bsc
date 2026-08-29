@@ -1977,6 +1977,7 @@ fn lower_edge_ssa<'ctx>(
                     method_idx: None,
                     args: HashMap::new(),
                     ssa: HashMap::new(),
+                    chunks: HashMap::new(),
                     expanding: Vec::new(),
                     thunks: HashMap::new(),
                     av_widths: HashMap::new(),
@@ -1987,7 +1988,7 @@ fn lower_edge_ssa<'ctx>(
                     is_exec: false,
                     depth: 0,
                 };
-                let gv = lcg.expr(&mut gf, &ar.guard)?;
+                let gv = lcg.expr_scalar(&mut gf, &ar.guard)?;
                 // SchedAlt contract: the guard cone is pure (register
                 // and const reads only).  A callback emitted here
                 // would carry gspec's tokens — wrong rule, wrong
@@ -2138,6 +2139,7 @@ fn lower_edge_ssa<'ctx>(
                         method_idx: None,
                         args: HashMap::new(),
                         ssa: HashMap::new(),
+                        chunks: HashMap::new(),
                         expanding: Vec::new(),
                         thunks: HashMap::new(),
                         av_widths: HashMap::new(),
@@ -2158,6 +2160,7 @@ fn lower_edge_ssa<'ctx>(
                     method_idx: None,
                     args: HashMap::new(),
                     ssa: HashMap::new(),
+                    chunks: HashMap::new(),
                     expanding: Vec::new(),
                     thunks: HashMap::new(),
                     av_widths: HashMap::new(),
@@ -2371,6 +2374,7 @@ fn lower_edge_ssa<'ctx>(
                                 method_idx: None,
                                 args: HashMap::new(),
                                 ssa: HashMap::new(),
+                                chunks: HashMap::new(),
                                 expanding: Vec::new(),
                                 thunks: HashMap::new(),
                                 av_widths: HashMap::new(),
@@ -2762,6 +2766,65 @@ struct Lower<'a, 'ctx> {
 /// names resolve here, and the SSA maps.  Method inlining opens a
 /// fresh child Frame (its defs may depend on the call's arguments, so
 /// the memo cannot be shared).
+/// A lowered value.
+///
+/// Wide values are carried word-decomposed rather than as a single `iN`:
+/// bsc lowers struct build/select to Concat/Extract, so these are only
+/// ever assembled, moved and taken apart, and materialising them makes
+/// LLVM legalise every operation over them (measured ~7x on a 5600-bit
+/// pack/select/unpack function).  Element `i` of `Wide` is bits
+/// `[i*W, (i+1)*W)` of the value, `W` being the target's word size, so
+/// the representation needs no separate layout.
+///
+/// This is the return type of `expr`, deliberately, rather than an
+/// opt-in alternative to it: an operator that has not been taught about
+/// chunks must say so by calling `as_scalar`, which makes every
+/// materialisation a visible decision instead of a silent default.
+#[derive(Debug, Clone)]
+enum Val<'ctx> {
+    Scalar(IntValue<'ctx>),
+    Wide(Vec<IntValue<'ctx>>),
+}
+
+/// Is word-decomposed lowering on?  `TRS_CHUNK_WIDE=0` turns it off so
+/// the two lowerings can be compared on the same binary.
+fn chunking_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !matches!(std::env::var("TRS_CHUNK_WIDE").as_deref(), Ok("0")))
+}
+
+/// Width of word `i` of a `total`-bit decomposition; the last word is
+/// short when the width is not a whole number of words.
+fn word_width_at(i: u32, total: u32, w: u32) -> u32 {
+    let lo = i * w;
+    if lo >= total {
+        0
+    } else {
+        w.min(total - lo)
+    }
+}
+
+impl<'ctx> Val<'ctx> {
+    /// The value as a single integer, packing if it is decomposed.  This
+    /// is the escape hatch that keeps operators which need the whole
+    /// value -- wide arithmetic included, rare but legal Bluespec --
+    /// working unchanged.
+    fn as_scalar(self, lc: &mut Lower<'_, 'ctx>, width: u32) -> IntValue<'ctx> {
+        match self {
+            Val::Scalar(v) => v,
+            Val::Wide(ws) => lc.pack(&ws, width),
+        }
+    }
+
+    /// The decomposition, or None when this is a plain scalar.
+    fn words(&self) -> Option<&[IntValue<'ctx>]> {
+        match self {
+            Val::Wide(ws) => Some(ws),
+            Val::Scalar(_) => None,
+        }
+    }
+}
+
 struct Frame<'ctx> {
     arena: PointerValue<'ctx>,
     /// env pointer (exec functions only)
@@ -2775,6 +2838,12 @@ struct Frame<'ctx> {
     args: HashMap<StrId, (IntValue<'ctx>, u32)>,
     /// def name -> computed value (cone memo or body locals)
     ssa: HashMap<StrId, IntValue<'ctx>>,
+    /// def name -> word-decomposed binding.  A name here has NOT been
+    /// packed; `def()` packs on demand and caches into `ssa`, while
+    /// `expr()` hands the words straight to consumers that understand
+    /// them.  Without this the decomposition dies at the first binding,
+    /// since every later reference goes through a name.
+    chunks: HashMap<StrId, Vec<IntValue<'ctx>>>,
     /// defs currently being expanded (cycle guard)
     expanding: Vec<StrId>,
     /// defs whose positioned binding lived inside a conditional arm
@@ -2985,6 +3054,22 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.builder.build_store(p, v).unwrap();
     }
 
+    /// A width-`w` state read as words, one load per word.  The arena is
+    /// word-sloted, so the decomposition is what the loads already
+    /// produce -- packing them only to have a consumer take them apart
+    /// again is the round trip this avoids.
+    fn load_words(&self, f: &Frame<'ctx>, base: u32, w: u32) -> Vec<IntValue<'ctx>> {
+        let ws = self.word_bits();
+        let n = ((w + ws - 1) / ws) as u32;
+        let mut out = Vec::with_capacity(n as usize);
+        for k in 0..n {
+            let word = self.load_word(f, base + k);
+            let cw = ws.min(w - k * ws);
+            out.push(self.to_w(word, 64, cw, false));
+        }
+        out
+    }
+
     /// Load a width-w value from ceil(w/64) consecutive slots.
     fn load_val(&self, f: &Frame<'ctx>, base: u32, w: u32) -> IntValue<'ctx> {
         if w <= 64 {
@@ -3090,6 +3175,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
+    /// Store a word-decomposed value: one store per word, no slicing.
+    /// The packed form is never built, which is the other half of the
+    /// round trip `load_words` removes at the read end.
+    fn store_words(&self, f: &Frame<'ctx>, base: u32, w: u32, ws: &[IntValue<'ctx>]) {
+        let wb = self.word_bits();
+        for (k, v) in ws.iter().enumerate() {
+            let cw = word_width_at(k as u32, w, wb);
+            if cw == 0 {
+                break;
+            }
+            let word = self.to_w(*v, cw, 64, false);
+            self.store_word(f, base + k as u32, word);
+        }
+    }
+
     /// Store a width-w value into ceil(w/64) consecutive slots.
     fn store_val(&self, f: &Frame<'ctx>, base: u32, w: u32, v: IntValue<'ctx>) {
         if w <= 64 {
@@ -3118,8 +3218,189 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.ity(w).const_int_arbitrary_precision(&words)
     }
 
+    /// Read bits `[lo, hi]` out of a word-decomposed value.  Returns
+    /// None for a scalar source, or when the field reaches past the last
+    /// word (the caller's zero-extension rules then apply).
+    fn extract_words(
+        &mut self,
+        src: &Val<'ctx>,
+        lo: u32,
+        hi: u32,
+        srcw: u32,
+        width: u32,
+    ) -> Option<IntValue<'ctx>> {
+        let words = src.words()?.to_vec();
+        let w = self.word_bits();
+        let (wi, wj) = (lo / w, hi / w);
+        if wj as usize >= words.len() {
+            return None;
+        }
+        let off = lo % w;
+        let low = words[wi as usize];
+        let loww = word_width_at(wi, srcw, w);
+        // the part of the field held by the low word
+        let sh = self.ity(loww).const_int(u64::from(off), false);
+        let got = self.builder.build_right_shift(low, sh, false, "wx").unwrap();
+        let mut acc = self.to_w(got, loww, width, false);
+        if wj > wi {
+            // the field straddles: bring in the head of the next word
+            let high = words[wj as usize];
+            let highw = word_width_at(wj, srcw, w);
+            let hz = self.to_w(high, highw, width, false);
+            let up = width.min(w - off);
+            let k = self.ity(width).const_int(u64::from(up), false);
+            let moved = self.builder.build_left_shift(hz, k, "wxh").unwrap();
+            acc = self.builder.build_or(acc, moved, "wxo").unwrap();
+        }
+        Some(self.to_w(acc, width, width, false))
+    }
+
+    /// Pack a word-decomposed value into a single integer.
+    fn pack(&mut self, words: &[IntValue<'ctx>], width: u32) -> IntValue<'ctx> {
+        let w = self.word_bits();
+        let ty = self.ity(width);
+        let mut acc = ty.const_zero();
+        for (i, v) in words.iter().enumerate() {
+            let lo = (i as u32) * w;
+            if lo >= width {
+                break;
+            }
+            let cw = w.min(width - lo);
+            let wide = self.to_w(*v, cw, width, false);
+            let placed = if lo == 0 {
+                wide
+            } else {
+                let k = ty.const_int(u64::from(lo), false);
+                self.builder.build_left_shift(wide, k, "pk").unwrap()
+            };
+            acc = self.builder.build_or(acc, placed, "po").unwrap();
+        }
+        acc
+    }
+
+    /// The target's native integer width (see crate::chunk).
+    fn word_bits(&self) -> u32 {
+        let dl = self.module.get_data_layout();
+        crate::chunk::word_bits(dl.as_str().to_string_lossy().as_ref(), 64)
+    }
+
+    /// How many words a value of `width` bits decomposes into.
+    fn word_count(&self, width: u32) -> usize {
+        let w = self.word_bits();
+        ((width + w - 1) / w) as usize
+    }
+
+    /// Lower an expression, keeping it word-decomposed where that is
+    /// natural.  Callers needing a single integer say so via
+    /// `Val::as_scalar`.
+    fn expr(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<Val<'ctx>, Ineligible> {
+        // TRS_CHUNK_WIDE=0 forces every value packed, for A/B against
+        // the pre-decomposition lowering.  Checked once per process.
+        if !chunking_enabled() {
+            return Ok(Val::Scalar(self.expr_scalar(f, e)?));
+        }
+        let word = self.word_bits();
+        if let Expr::Def(n) = e {
+            if let Some(ws) = f.chunks.get(n) {
+                return Ok(Val::Wide(ws.clone()));
+            }
+        }
+        if let Expr::Prim { op: PrimOp::Concat, args, width } = e {
+            if *width > word {
+                if let Some(ws) = self.concat_words(f, args, *width)? {
+                    return Ok(Val::Wide(ws));
+                }
+            }
+        }
+        if let Expr::If { width, cond, then_, else_ } = e {
+            if *width > word {
+                let cw = self.expr_width(f, cond)?;
+                let c0 = self.expr_scalar(f, cond)?;
+                let cz = self.nonzero(c0, cw);
+                if let Some(v) = self.wide_mux(f, *width, cz, then_, else_)? {
+                    return Ok(v);
+                }
+            }
+        }
+        // A wide register read is already word-shaped in the arena: take
+        // the loads as the decomposition rather than packing them only
+        // for a consumer to slice them apart again.
+        if let Expr::MethCall { width, instance, method, args, .. } = e {
+            if *width > word && args.is_empty() {
+                let mname = self.env.d.strings[*method as usize].clone();
+                if matches!(mname.as_str(), "read" | "get" | "_read") {
+                    let slot = self.ie(f.inst)?.reg_slot.get(instance).copied();
+                    if let Some((base, rw)) = slot {
+                        if rw == *width {
+                            return Ok(Val::Wide(self.load_words(f, base, rw)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Val::Scalar(self.expr_scalar(f, e)?))
+    }
+
+    /// Build a concat's operands straight into word slots, so the packed
+    /// form is never constructed.
+    fn concat_words(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        args: &[Expr],
+        width: u32,
+    ) -> Result<Option<Vec<IntValue<'ctx>>>, Ineligible> {
+        let w = self.word_bits();
+        // operand bit positions, first arg most significant
+        let mut spans = Vec::with_capacity(args.len());
+        let mut hi = width;
+        for a in args {
+            let aw = self.expr_width(f, a)?;
+            if aw > hi {
+                return Ok(None);
+            }
+            hi -= aw;
+            spans.push((hi, aw));
+        }
+        if hi != 0 {
+            return Ok(None);
+        }
+        let nw = self.word_count(width);
+        let mut out = Vec::with_capacity(nw);
+        for i in 0..nw {
+            let clo = (i as u32) * w;
+            let cw = w.min(width - clo);
+            let cty = self.ity(cw);
+            let mut acc: Option<IntValue<'ctx>> = None;
+            for (&(olo, ow), a) in spans.iter().zip(args.iter()) {
+                if ow == 0 || olo >= clo + cw || olo + ow <= clo {
+                    continue;
+                }
+                let v = self.expr_scalar(f, a)?;
+                // widen to a type that can hold the shift, then trim
+                let tw = cw.max(ow) + w;
+                let vz = self.to_w(v, ow, tw, false);
+                let sh = i64::from(olo) - i64::from(clo);
+                let tty = self.ity(tw);
+                let moved = if sh >= 0 {
+                    let k = tty.const_int(sh as u64, false);
+                    self.builder.build_left_shift(vz, k, "kl").unwrap()
+                } else {
+                    let k = tty.const_int((-sh) as u64, false);
+                    self.builder.build_right_shift(vz, k, false, "kr").unwrap()
+                };
+                let piece = self.to_w(moved, tw, cw, false);
+                acc = Some(match acc {
+                    None => piece,
+                    Some(p) => self.builder.build_or(p, piece, "ko").unwrap(),
+                });
+            }
+            out.push(acc.unwrap_or_else(|| cty.const_zero()));
+        }
+        Ok(Some(out))
+    }
+
     /// Lower an expression to an iN value of its BSV width.
-    fn expr(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<IntValue<'ctx>, Ineligible> {
+    fn expr_scalar(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<IntValue<'ctx>, Ineligible> {
         // string-typed expressions lower uniformly as i64 ids wherever
         // they appear (def bindings, cones, muxes) — the consumers
         // (StrDyn foreign args, string Eq, concat) understand the
@@ -3204,7 +3485,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     }
                     let (owner, g) = (*owner, g.clone());
                     let mut of = self.child_frame(f, owner, None)?;
-                    return self.expr(&mut of, &g);
+                    return self.expr_scalar(&mut of, &g);
                 }
                 nope("port read outside args/reset/EN/consts")
             }
@@ -3264,7 +3545,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 );
                             }
                             let mut cf = self.child_frame(f, child, None)?;
-                            self.expr(&mut cf, &e)
+                            self.expr_scalar(&mut cf, &e)
                         }
                         None => Ok(self.ity(1).const_int(1, false)),
                     };
@@ -3293,7 +3574,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             Expr::If { width, cond, then_, else_ } => {
                 let wc = self.expr_width(f, cond)?;
-                let c = self.expr(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
                 let cz = self.nonzero(c, wc);
                 // bsc LIFTS shared updates into mux dataflow; lowering
                 // every If as a branch diamond re-manufactures control
@@ -3308,16 +3589,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .zip(self.pure_size(f, else_, SPEC_CAP));
                 if spec.is_some() {
                     let wt = self.expr_width(f, then_)?;
-                    let tv0 = self.expr(f, then_)?;
+                    let tv0 = self.expr_scalar(f, then_)?;
                     let tv = self.to_w(tv0, wt, (*width).max(1), false);
                     let we = self.expr_width(f, else_)?;
-                    let ev0 = self.expr(f, else_)?;
+                    let ev0 = self.expr_scalar(f, else_)?;
                     let ev = self.to_w(ev0, we, (*width).max(1), false);
                     return Ok(self
                         .builder
                         .build_select(cz, tv, ev, "sel")
                         .unwrap()
                         .into_int_value());
+                }
+                if let Some(v) = self.wide_mux(f, *width, cz, then_, else_)? {
+                    return Ok(v.as_scalar(self, *width));
                 }
                 self.lazy_mux(f, *width, cz, then_, else_)
             }
@@ -3337,10 +3621,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // switch could alias or duplicate cases.
                 if ws > 64 {
                     let wd = self.expr_width(f, default)?;
-                    let dv = self.expr(f, default)?;
+                    let dv = self.expr_scalar(f, default)?;
                     return Ok(self.to_w(dv, wd, w, false));
                 }
-                let sv = self.expr(f, scrutinee)?;
+                let sv = self.expr_scalar(f, scrutinee)?;
                 let func =
                     self.builder.get_insert_block().unwrap().get_parent().unwrap();
                 let def_bb = self.ctx.append_basic_block(func, "cd");
@@ -3365,7 +3649,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 for ((_, arm), &bb) in arms.iter().zip(&arm_bbs) {
                     self.builder.position_at_end(bb);
                     let wa = self.expr_width(f, arm)?;
-                    let av0 = self.expr(f, arm)?;
+                    let av0 = self.expr_scalar(f, arm)?;
                     let av = self.to_w(av0, wa, w, false);
                     f.ssa = saved.clone();
                     incoming.push((av, self.builder.get_insert_block().unwrap()));
@@ -3373,7 +3657,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 self.builder.position_at_end(def_bb);
                 let wd = self.expr_width(f, default)?;
-                let dv0 = self.expr(f, default)?;
+                let dv0 = self.expr_scalar(f, default)?;
                 let dv = self.to_w(dv0, wd, w, false);
                 f.ssa = saved;
                 incoming.push((dv, self.builder.get_insert_block().unwrap()));
@@ -3620,20 +3904,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             match ft {
                 FT::Bits(_) => {
                     let wa = self.expr_width(f, &args[k])?;
-                    let v = self.expr(f, &args[k])?;
+                    let v = self.expr_scalar(f, &args[k])?;
                     ptys.push(i64t.into());
                     slots.push(self.to_w(v, wa, 64, false).into());
                 }
                 FT::Wide(m) => {
                     let wa = self.expr_width(f, &args[k])?;
-                    let v0 = self.expr(f, &args[k])?;
+                    let v0 = self.expr_scalar(f, &args[k])?;
                     let v = self.to_w(v0, wa, (*m).max(1), false);
                     ptys.push(ptrt.into());
                     slots.push(store_limbs(self, v, (*m).max(1)).into());
                 }
                 FT::Poly => {
                     let wa = self.expr_width(f, &args[k])?;
-                    let v = self.expr(f, &args[k])?;
+                    let v = self.expr_scalar(f, &args[k])?;
                     ptys.push(ptrt.into());
                     slots.push(store_limbs(self, v, wa.max(1)).into());
                 }
@@ -3860,7 +4144,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             };
             let i64t = self.ctx.i64_type();
             let aw = self.expr_width(f, &args[0])?;
-            let a0 = self.expr(f, &args[0])?;
+            let a0 = self.expr_scalar(f, &args[0])?;
             let a = self.to_w(a0, aw, 64, false);
             let inlo = self
                 .builder
@@ -4039,7 +4323,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         for (a, p) in args.iter().zip(&margs) {
             let wa = self.expr_width(f, a)?;
-            let v0 = self.expr(f, a)?;
+            let v0 = self.expr_scalar(f, a)?;
             let v = self.to_w(v0, wa, p.width, false);
             cf.args.insert(p.name, (v, p.width));
         }
@@ -4083,7 +4367,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
         }
         let rw = self.expr_width(&cf, &res)?;
-        let v = self.expr(&mut cf, &res)?;
+        let v = self.expr_scalar(&mut cf, &res)?;
         // call_value zero-extends the result to the caller's width
         let out = self.to_w(v, rw, width, false);
         self.rec_meth_result(&cf, child, method, out)?;
@@ -4104,7 +4388,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     ) -> Result<IntValue<'ctx>, Ineligible> {
         self.lazy_mux_fn(f, width, cz, then_, &|lc, f| {
             let wx = lc.expr_width(f, else_)?;
-            let v = lc.expr(f, else_)?;
+            // TODO: a wide mux arm could stay decomposed and select
+            // per word; today it materialises.  That is where the
+            // i5600-shaped select/phi cost still lives.
+            let v = lc.expr_scalar(f, else_)?;
             Ok(lc.to_w(v, wx, width, false))
         })
     }
@@ -4186,6 +4473,92 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
+    /// A mux whose arms are wider than a word: one phi per word instead
+    /// of a single wide phi.  A wide phi/select is the shape that costs
+    /// most under legalisation (measured: a 5600-bit select/unpack
+    /// function went 2.41s -> 0.35s once word-decomposed), and both arms
+    /// are already decomposed by the time they reach the join.
+    fn wide_mux(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        cz: IntValue<'ctx>,
+        then_: &Expr,
+        else_: &Expr,
+    ) -> Result<Option<Val<'ctx>>, Ineligible> {
+        if !chunking_enabled() || width <= self.word_bits() {
+            return Ok(None);
+        }
+        let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let then_bb = self.ctx.append_basic_block(func, "wmt");
+        let else_bb = self.ctx.append_basic_block(func, "wme");
+        let join_bb = self.ctx.append_basic_block(func, "wmj");
+        self.builder.build_conditional_branch(cz, then_bb, else_bb).unwrap();
+
+        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+        let saved_c = f.chunks.clone();
+
+        self.builder.position_at_end(then_bb);
+        let tw = self.words_of(f, then_, width)?;
+        f.ssa = saved.clone();
+        f.chunks = saved_c.clone();
+        let t_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        self.builder.position_at_end(else_bb);
+        let ew = self.words_of(f, else_, width)?;
+        f.ssa = saved;
+        f.chunks = saved_c;
+        let e_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        self.builder.position_at_end(join_bb);
+        let w = self.word_bits();
+        let n = self.word_count(width);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let cw = word_width_at(i as u32, width, w);
+            let phi = self.builder.build_phi(self.ity(cw), "wmp").unwrap();
+            phi.add_incoming(&[(&tw[i], t_end), (&ew[i], e_end)]);
+            out.push(phi.as_basic_value().into_int_value());
+        }
+        Ok(Some(Val::Wide(out)))
+    }
+
+    /// An expression as exactly `word_count(width)` words, decomposing a
+    /// scalar result if the producer did not already.
+    fn words_of(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        e: &Expr,
+        width: u32,
+    ) -> Result<Vec<IntValue<'ctx>>, Ineligible> {
+        let ew = self.expr_width(f, e)?;
+        match self.expr(f, e)? {
+            Val::Wide(ws) if ws.len() == self.word_count(width) => Ok(ws),
+            other => {
+                let v = other.as_scalar(self, ew);
+                let v = self.to_w(v, ew, width, false);
+                Ok(self.split_words(v, width))
+            }
+        }
+    }
+
+    /// Cut a packed value into words.
+    fn split_words(&mut self, v: IntValue<'ctx>, width: u32) -> Vec<IntValue<'ctx>> {
+        let w = self.word_bits();
+        let ty = self.ity(width);
+        let mut out = Vec::with_capacity(self.word_count(width));
+        for i in 0..self.word_count(width) {
+            let lo = (i as u32) * w;
+            let cw = word_width_at(i as u32, width, w);
+            let sh = ty.const_int(u64::from(lo), false);
+            let r = self.builder.build_right_shift(v, sh, false, "sw").unwrap();
+            out.push(self.to_w(r, width, cw, false));
+        }
+        out
+    }
+
     fn lazy_mux_fn(
         &mut self,
         f: &mut Frame<'ctx>,
@@ -4206,7 +4579,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.builder.position_at_end(then_bb);
         let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
         let wt = self.expr_width(f, then_)?;
-        let tv0 = self.expr(f, then_)?;
+        let tv0 = self.expr_scalar(f, then_)?;
         let tv = self.to_w(tv0, wt, width, false);
         f.ssa = saved.clone();
         let t_end = self.builder.get_insert_block().unwrap();
@@ -4244,7 +4617,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let mut vals = Vec::new();
         for a in args {
             let wa = self.expr_width(f, a)?;
-            let v = self.expr(f, a)?;
+            let v = self.expr_scalar(f, a)?;
             arg_widths.push(wa);
             vals.push((v, wa));
         }
@@ -4356,6 +4729,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             method_idx,
             args: HashMap::new(),
             ssa: HashMap::new(),
+            chunks: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
             av_widths: HashMap::new(),
@@ -4566,7 +4940,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // hazard — same save/restore discipline as lazy_mux arms)
         let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
         f.expanding.push(n);
-        let v = self.expr(f, dex)?;
+        let v = self.expr_scalar(f, dex)?;
         f.expanding.pop();
         f.ssa = saved;
         // schedule-position slot store (mirrors the plain expansion
@@ -4715,6 +5089,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
         if let Some(v) = f.ssa.get(&n) {
             return Ok(*v);
+        }
+        if let Some(ws) = f.chunks.get(&n).cloned() {
+            let w = self.def_width(f.inst, n).unwrap_or(0);
+            if w > 0 {
+                let v = self.pack(&ws, w);
+                f.ssa.insert(n, v);
+                return Ok(v);
+            }
         }
         if f.dead_defs.contains(&n) {
             // an ActionValue task binding survives the join through its
@@ -4876,7 +5258,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
         }
         f.expanding.push(n);
-        let v = self.expr(f, &dex)?;
+        let v = self.expr_scalar(f, &dex)?;
         f.expanding.pop();
         f.ssa.insert(n, v);
         self.rec_def(f, n, v);
@@ -4933,11 +5315,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let mut it = args.iter();
                 let first = it.next().ok_or_else(|| Ineligible("no args".into()))?;
                 let w0 = self.expr_width(f, first)?;
-                let a0 = self.expr(f, first)?;
+                let a0 = self.expr_scalar(f, first)?;
                 let mut acc = self.to_w(a0, w0, width, false);
                 for a in it {
                     let wa = self.expr_width(f, a)?;
-                    let v0 = self.expr(f, a)?;
+                    let v0 = self.expr_scalar(f, a)?;
                     let v = self.to_w(v0, wa, width, false);
                     acc = match op {
                         PrimOp::And => self.builder.build_and(acc, v, "and").unwrap(),
@@ -4953,13 +5335,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             PrimOp::Not => {
                 let w0 = self.expr_width(f, &args[0])?;
-                let v0 = self.expr(f, &args[0])?;
+                let v0 = self.expr_scalar(f, &args[0])?;
                 let v = self.to_w(v0, w0, width, false);
                 Ok(self.builder.build_not(v, "not").unwrap())
             }
             PrimOp::Neg => {
                 let w0 = self.expr_width(f, &args[0])?;
-                let v0 = self.expr(f, &args[0])?;
+                let v0 = self.expr_scalar(f, &args[0])?;
                 let v = self.to_w(v0, w0, width, false);
                 Ok(self.builder.build_int_neg(v, "neg").unwrap())
             }
@@ -4967,8 +5349,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let wx = self.expr_width(f, &args[0])?;
                 let wy = self.expr_width(f, &args[1])?;
                 let wm = wx.max(wy);
-                let x0 = self.expr(f, &args[0])?;
-                let y0 = self.expr(f, &args[1])?;
+                let x0 = self.expr_scalar(f, &args[0])?;
+                let y0 = self.expr_scalar(f, &args[1])?;
                 let x = self.to_w(x0, wx, wm, false);
                 let y = self.to_w(y0, wy, wm, false);
                 let p = match op {
@@ -4982,8 +5364,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let wx = self.expr_width(f, &args[0])?;
                 let wy = self.expr_width(f, &args[1])?;
                 let wm = wx.max(wy);
-                let x0 = self.expr(f, &args[0])?;
-                let y0 = self.expr(f, &args[1])?;
+                let x0 = self.expr_scalar(f, &args[0])?;
+                let y0 = self.expr_scalar(f, &args[1])?;
                 let x = self.to_w(x0, wx, wm, true);
                 let y = self.to_w(y0, wy, wm, true);
                 let p = if op == PrimOp::Slt { IntPredicate::SLT } else { IntPredicate::SLE };
@@ -4994,9 +5376,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if ws != width {
                     return nope("shift result width differs from source");
                 }
-                let x = self.expr(f, &args[0])?;
+                let x = self.expr_scalar(f, &args[0])?;
                 let wa = self.expr_width(f, &args[1])?;
-                let s0 = self.expr(f, &args[1])?;
+                let s0 = self.expr_scalar(f, &args[1])?;
                 // compare/clamp the amount in 64 bits, then bring to iW
                 let s64 = self.to_w(s0, wa, 64, false);
                 let wc = self.ctx.i64_type().const_int(width as u64, false);
@@ -5055,7 +5437,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     if lo >= ws as u64 {
                         return Ok(self.ity(width).const_zero());
                     }
-                    let x = self.expr(f, &args[0])?;
+                    // A word-decomposed source is read straight out of
+                    // the word(s) the field lands in, so the packed value
+                    // is never built.  Most fields sit inside one word;
+                    // one straddling a boundary takes the tail of the
+                    // low word and the head of the high one.
+                    let src = self.expr(f, &args[0])?;
+                    if let Some(v) = self.extract_words(&src, lo as u32, hi as u32, ws, width) {
+                        return Ok(v);
+                    }
+                    let x = src.as_scalar(self, ws);
                     let sh = self.ity(ws).const_int(lo, false);
                     let r = self.builder.build_right_shift(x, sh, false, "ex").unwrap();
                     return Ok(self.to_w(r, ws, width, false));
@@ -5063,12 +5454,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // dynamic bounds: Value::extract takes bits lo..=hi
                 // (source-clamped), i.e. min(hi-lo+1, width) result bits
                 let i64t = self.ctx.i64_type();
-                let x = self.expr(f, &args[0])?;
+                let x = self.expr_scalar(f, &args[0])?;
                 let wh = self.expr_width(f, &args[1])?;
-                let hi0 = self.expr(f, &args[1])?;
+                let hi0 = self.expr_scalar(f, &args[1])?;
                 let hi64 = self.to_w(hi0, wh, 64, false);
                 let wl = self.expr_width(f, &args[2])?;
-                let lo0 = self.expr(f, &args[2])?;
+                let lo0 = self.expr_scalar(f, &args[2])?;
                 let lo64 = self.to_w(lo0, wl, 64, false);
                 // shifted = lo >= ws ? 0 : x >> lo, widened to the result
                 let wsc = i64t.const_int(ws as u64, false);
@@ -5132,7 +5523,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let mut total = 0u32;
                 for a in args {
                     let wa = self.expr_width(f, a)?;
-                    let v0 = self.expr(f, a)?;
+                    let v0 = self.expr_scalar(f, a)?;
                     if wa == 0 {
                         continue;
                     }
@@ -5161,12 +5552,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             PrimOp::ZeroExt => {
                 let ws = self.expr_width(f, &args[0])?;
-                let v = self.expr(f, &args[0])?;
+                let v = self.expr_scalar(f, &args[0])?;
                 Ok(self.to_w(v, ws, width, false))
             }
             PrimOp::SignExt => {
                 let ws = self.expr_width(f, &args[0])?;
-                let v = self.expr(f, &args[0])?;
+                let v = self.expr_scalar(f, &args[0])?;
                 Ok(self.to_w(v, ws, width, true))
             }
             PrimOp::Quot | PrimOp::Rem => {
@@ -5174,8 +5565,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // interpreter (Value::quot) and native division
                 let wx = self.expr_width(f, &args[0])?;
                 let wy = self.expr_width(f, &args[1])?;
-                let x0 = self.expr(f, &args[0])?;
-                let y0 = self.expr(f, &args[1])?;
+                let x0 = self.expr_scalar(f, &args[0])?;
+                let y0 = self.expr_scalar(f, &args[1])?;
                 let wm = wx.max(wy).max(width);
                 let x = self.to_w(x0, wx, wm, false);
                 let y = self.to_w(y0, wy, wm, false);
@@ -5219,6 +5610,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             method_idx: None,
             args: HashMap::new(),
             ssa: HashMap::new(),
+            chunks: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
             av_widths: HashMap::new(),
@@ -5341,6 +5733,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             method_idx: None,
             args: HashMap::new(),
             ssa: HashMap::new(),
+            chunks: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
             av_widths: HashMap::new(),
@@ -5464,7 +5857,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         match rdy {
             Some((mi_r, Some(res))) => {
                 let mut rf = self.child_frame(f, f.inst, Some(mi_r))?;
-                let r = self.expr(&mut rf, &res)?;
+                let r = self.expr_scalar(&mut rf, &res)?;
                 let rz = self.nonzero(r, 1);
                 let bd_bb = self.ctx.append_basic_block(func, "afrdy");
                 self.builder
@@ -5530,6 +5923,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             method_idx: None,
             args,
             ssa: HashMap::new(),
+            chunks: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
             av_widths: HashMap::new(),
@@ -5627,6 +6021,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 method_idx: Some(rq.mi),
                 args: dargs,
                 ssa: HashMap::new(),
+                chunks: HashMap::new(),
                 expanding: Vec::new(),
                 thunks: HashMap::new(),
                 av_widths: HashMap::new(),
@@ -5690,6 +6085,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             method_idx: Some(rq.mi),
             args,
             ssa: HashMap::new(),
+            chunks: HashMap::new(),
             expanding: Vec::new(),
             thunks: HashMap::new(),
             av_widths: HashMap::new(),
@@ -5704,7 +6100,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             0 | 3 => {
                 let res = result.as_ref().unwrap();
                 let rw = self.expr_width(&f, res)?;
-                let v = self.expr(&mut f, res)?;
+                let v = self.expr_scalar(&mut f, res)?;
                 let out = self.to_w(v, rw, ret_w, false);
                 self.builder.build_return(Some(&out)).unwrap();
             }
@@ -5724,7 +6120,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.stmts(&mut f, func, &body, stop_bb)?;
                 let res = result.as_ref().unwrap();
                 let rw = self.expr_width(&f, res)?;
-                let v = self.expr(&mut f, res)?;
+                let v = self.expr_scalar(&mut f, res)?;
                 let vv = self.to_w(v, rw, ret_w, false);
                 let outp =
                     func.get_nth_param(3).unwrap().into_pointer_value();
@@ -5936,7 +6332,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return nope("string concat under a mux arm");
                 }
                 let wc = self.expr_width(f, cond)?;
-                let c = self.expr(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
                 let cz = self.nonzero(c, wc);
                 let tv = self.str_expr(f, then_, stop_bb)?;
                 let ev = self.str_expr(f, else_, stop_bb)?;
@@ -5957,7 +6353,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if ws > 64 {
                     return self.str_expr(f, default, stop_bb);
                 }
-                let sv = self.expr(f, scrutinee)?;
+                let sv = self.expr_scalar(f, scrutinee)?;
                 let mut acc = self.str_expr(f, default, stop_bb)?;
                 for (k, a) in arms {
                     if ws < 64 && *k >= (1u64 << ws) {
@@ -6062,7 +6458,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             if self.expr_is_real(f, a) {
                 // i64 f64-bits value, one marshaled word; the spec's
                 // Real tag makes the decode rebuild Arg::Real
-                let v = self.expr(f, a)?;
+                let v = self.expr_scalar(f, a)?;
                 spec_args.push(FArgSpec::Real);
                 vals.push((v, 64));
                 continue;
@@ -6076,7 +6472,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 continue;
             }
             let wa = self.expr_width(f, a)?;
-            let v = self.expr(f, a)?;
+            let v = self.expr_scalar(f, a)?;
             spec_args.push(FArgSpec::Num {
                 width: wa,
                 signed: signed.get(i).copied().unwrap_or(false),
@@ -6200,10 +6596,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         while let Some(st) = it.next() {
             match st {
                 Stmt::Def { name, expr } => {
-                    let v = self.expr(f, expr)?;
                     f.dead_defs.remove(name);
-                    f.ssa.insert(*name, v);
-                    self.rec_def(f, *name, v);
+                    match self.expr(f, expr)? {
+                        Val::Wide(ws) => {
+                            // stays decomposed for the whole body; a
+                            // consumer wanting it whole gets it via def()
+                            f.chunks.insert(*name, ws);
+                        }
+                        Val::Scalar(v) => {
+                            f.ssa.insert(*name, v);
+                            self.rec_def(f, *name, v);
+                        }
+                    }
                 }
                 Stmt::Action(a) => self.action(f, func, a, stop_bb)?,
                 Stmt::AvAction { def, action } => match action {
@@ -6275,11 +6679,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
                             let mut cf = self.child_frame(f, child, Some(mi))?;
                             let wc = self.expr_width(f, cond)?;
-                            let c = self.expr(f, cond)?;
+                            let c = self.expr_scalar(f, cond)?;
                             let cz = self.nonzero(c, wc);
                             for (a, pa) in args.iter().zip(&margs) {
                                 let wa = self.expr_width(f, a)?;
-                                let v0 = self.expr(f, a)?;
+                                let v0 = self.expr_scalar(f, a)?;
                                 let v = self.to_w(v0, wa, pa.width, false);
                                 cf.args.insert(pa.name, (v, pa.width));
                                 // per-edge arg latch for later
@@ -6479,7 +6883,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // already has the declared width")
                             let rv = match brv {
                                 Some(v) => v,
-                                None => self.expr(&mut cf, &result)?,
+                                None => self.expr_scalar(&mut cf, &result)?,
                             };
                             self.rec_meth_result(&cf, child, *method, rv)?;
                             // the interp records the def only on the
@@ -6514,7 +6918,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         }
                         let wd = self.def_width(f.inst, *def).unwrap_or(1);
                         let wc = self.expr_width(f, cond)?;
-                        let c = self.expr(f, cond)?;
+                        let c = self.expr_scalar(f, cond)?;
                         let cz = self.nonzero(c, wc);
                         let go_bb = self.ctx.append_basic_block(func, "avgo");
                         let sk_bb = self.ctx.append_basic_block(func, "avsk");
@@ -6551,7 +6955,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         };
                         let wd = self.def_width(f.inst, *def).unwrap_or(1);
                         let wc = self.expr_width(f, cond)?;
-                        let c = self.expr(f, cond)?;
+                        let c = self.expr_scalar(f, cond)?;
                         let cz = self.nonzero(c, wc);
                         let go_bb = self.ctx.append_basic_block(func, "bvgo");
                         let sk_bb = self.ctx.append_basic_block(func, "bvsk");
@@ -6605,7 +7009,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         }
                     }
                     let wc = self.expr_width(f, cond)?;
-                    let c = self.expr(f, cond)?;
+                    let c = self.expr_scalar(f, cond)?;
                     let cz = self.nonzero(c, wc);
                     let then_bb = self.ctx.append_basic_block(func, "then");
                     let else_bb = self.ctx.append_basic_block(func, "else");
@@ -6684,7 +7088,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let cp = self.av_slot(f, ck, w);
         let tp = temp.map(|t| self.av_slot(f, t, w));
         let wc = self.expr_width(f, cond)?;
-        let c = self.expr(f, cond)?;
+        let c = self.expr_scalar(f, cond)?;
         let cz = self.nonzero(c, wc);
         let go_bb = self.ctx.append_basic_block(func, "tgo");
         let sk_bb = self.ctx.append_basic_block(func, "tsk");
@@ -6845,7 +7249,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let ie = self.ie(f.inst)?;
                 let mname = self.env.d.strings[*method as usize].clone();
                 let wc = self.expr_width(f, cond)?;
-                let c = self.expr(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
                 let cz = self.nonzero(c, wc);
 
                 if let Some(&(base, rw)) = ie.reg_slot.get(instance) {
@@ -6855,28 +7259,60 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         return nope("non-write register action");
                     }
                     let wv = self.expr_width(f, &args[0])?;
-                    let v0 = self.expr(f, &args[0])?;
+                    let v0 = self.expr_scalar(f, &args[0])?;
                     let v = self.to_w(v0, wv, rw, false);
                     // the value is evaluated eagerly either way — the
                     // old wr/sk branch protected only the store.
                     // Branchless: store(select(cond, new, old)); the
                     // monsters' 14k branches are mostly these.
-                    let old = self.load_val(f, base, rw);
-                    let sel = self
-                        .builder
-                        .build_select(cz, v, old, "wsel")
-                        .unwrap()
-                        .into_int_value();
-                    self.store_val(f, base, rw, sel);
+                    // The whole read-select-write is word-shaped: the
+                    // arena holds words, so packing the old value only
+                    // to select against it and slice it back apart is
+                    // the round trip word decomposition removes.  This
+                    // is the shape that dominated the widest functions
+                    // measured (load 88 words, select, store 88 words).
+                    let gating = self.env.gate_scratch.is_some();
+                    // the packed pair, needed only by the gate mark
+                    let mut cmp: Option<(IntValue<'ctx>, IntValue<'ctx>)> = None;
+                    if chunking_enabled() && rw > self.word_bits() {
+                        let oldw = self.load_words(f, base, rw);
+                        let neww = self.split_words(v, rw);
+                        let mut selw = Vec::with_capacity(oldw.len());
+                        for (nv, ov) in neww.iter().zip(oldw.iter()) {
+                            selw.push(
+                                self.builder
+                                    .build_select(cz, *nv, *ov, "wselw")
+                                    .unwrap()
+                                    .into_int_value(),
+                            );
+                        }
+                        self.store_words(f, base, rw, &selw);
+                        if gating {
+                            let s = self.pack(&selw, rw);
+                            let o = self.pack(&oldw, rw);
+                            cmp = Some((s, o));
+                        }
+                    } else {
+                        let old = self.load_val(f, base, rw);
+                        let sel = self
+                            .builder
+                            .build_select(cz, v, old, "wsel")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base, rw, sel);
+                        cmp = Some((sel, old));
+                    }
                     // gating: value-accurate mark (sel==old covers
                     // both "not fired" and "rewrote the same value" —
                     // the fires != dirty distinction the census proved)
-                    if self.env.gate_scratch.is_some() {
-                        let ne = self
-                            .builder
-                            .build_int_compare(IntPredicate::NE, sel, old, "gne")
-                            .unwrap();
-                        self.gate_mark(f, ne);
+                    if gating {
+                        if let Some((sel, old)) = cmp {
+                            let ne = self
+                                .builder
+                                .build_int_compare(IntPredicate::NE, sel, old, "gne")
+                                .unwrap();
+                            self.gate_mark(f, ne);
+                        }
                     }
                     return Ok(());
                 }
@@ -6895,7 +7331,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // [old (w), cur (w), written_at].
                     let words = rw.max(1).div_ceil(64);
                     let wv = self.expr_width(f, &args[0])?;
-                    let v0 = self.expr(f, &args[0])?;
+                    let v0 = self.expr_scalar(f, &args[0])?;
                     let v = self.to_w(v0, wv, rw, false);
                     let wr_bb = self.ctx.append_basic_block(func, "cwr");
                     let sk_bb = self.ctx.append_basic_block(func, "csk");
@@ -6942,10 +7378,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let i64t = self.ctx.i64_type();
                     let words = rw.max(1).div_ceil(64);
                     let aw = self.expr_width(f, &args[0])?;
-                    let a0 = self.expr(f, &args[0])?;
+                    let a0 = self.expr_scalar(f, &args[0])?;
                     let a = self.to_w(a0, aw, 64, false);
                     let wv = self.expr_width(f, &args[1])?;
-                    let v0 = self.expr(f, &args[1])?;
+                    let v0 = self.expr_scalar(f, &args[1])?;
                     let vv = self.to_w(v0, wv, rw, false);
                     let wr_bb = self.ctx.append_basic_block(func, "rfw");
                     let fast_bb = self.ctx.append_basic_block(func, "rfwf");
@@ -7042,13 +7478,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let pw = 3 + wenw + 4 * w;
                     let pb = base + if port_b { pw } else { 0 };
                     let ww = self.expr_width(f, &args[0])?;
-                    let w0 = self.expr(f, &args[0])?;
+                    let w0 = self.expr_scalar(f, &args[0])?;
                     let wens = self.to_w(w0, ww, nw.max(1), false);
                     let aw = self.expr_width(f, &args[1])?;
-                    let a0 = self.expr(f, &args[1])?;
+                    let a0 = self.expr_scalar(f, &args[1])?;
                     let a = self.to_w(a0, aw, 64, false);
                     let vw = self.expr_width(f, &args[2])?;
-                    let v0 = self.expr(f, &args[2])?;
+                    let v0 = self.expr_scalar(f, &args[2])?;
                     let vv = self.to_w(v0, vw, bw.max(1), false);
                     let go_bb = self.ctx.append_basic_block(func, "bpg");
                     let fast_bb = self.ctx.append_basic_block(func, "bpf");
@@ -7092,7 +7528,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         return nope("CReg write without a value");
                     }
                     let vw = self.expr_width(f, &args[0])?;
-                    let v0 = self.expr(f, &args[0])?;
+                    let v0 = self.expr_scalar(f, &args[0])?;
                     let vv = self.to_w(v0, vw, cw.max(1), false);
                     let oldv = self.load_val(f, base, cw.max(1));
                     let selv = self
@@ -7117,7 +7553,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let words = fw.max(1).div_ceil(64);
                         let v = if is_enq && fw > 0 {
                             let wv = self.expr_width(f, &args[0])?;
-                            let v0 = self.expr(f, &args[0])?;
+                            let v0 = self.expr_scalar(f, &args[0])?;
                             Some(self.to_w(v0, wv, fw, false))
                         } else {
                             None
@@ -7286,7 +7722,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let w = cw.max(1).div_ceil(64);
                         let i64t = self.ctx.i64_type();
                         let vw = self.expr_width(f, &args[0])?;
-                        let v0 = self.expr(f, &args[0])?;
+                        let v0 = self.expr_scalar(f, &args[0])?;
                         let vv = self.to_w(v0, vw, cw.max(1), false);
                         let go_bb = self.ctx.append_basic_block(func, "cng");
                         let fast_bb = self.ctx.append_basic_block(func, "cnf");
@@ -7355,7 +7791,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     }
                     let v = if ww >= 1 && !args.is_empty() {
                         let wv = self.expr_width(f, &args[0])?;
-                        let v0 = self.expr(f, &args[0])?;
+                        let v0 = self.expr_scalar(f, &args[0])?;
                         Some(self.to_w(v0, wv, ww, false))
                     } else {
                         None
@@ -7396,7 +7832,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // zero-width wset (no argument) moves no state
                     if ww >= 1 && !args.is_empty() {
                         let wv = self.expr_width(f, &args[0])?;
-                        let v0 = self.expr(f, &args[0])?;
+                        let v0 = self.expr_scalar(f, &args[0])?;
                         let v = self.to_w(v0, wv, ww, false);
                         let oldv = self.load_val(f, base, ww);
                         let selv = self
@@ -7480,7 +7916,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let mut cf = self.child_frame(f, child, Some(mi))?;
                 for (a, pa) in args.iter().zip(&margs) {
                     let wa = self.expr_width(f, a)?;
-                    let v0 = self.expr(f, a)?;
+                    let v0 = self.expr_scalar(f, a)?;
                     let v = self.to_w(v0, wa, pa.width, false);
                     cf.args.insert(pa.name, (v, pa.width));
                 }
@@ -7590,7 +8026,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             Action::Foreign { func: ff, cond, args, signed } => {
                 let wc = self.expr_width(f, cond)?;
-                let c = self.expr(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
                 let cz = self.nonzero(c, wc);
                 let go_bb = self.ctx.append_basic_block(func, "fgo");
                 let sk_bb = self.ctx.append_basic_block(func, "fsk");
