@@ -158,10 +158,36 @@ rebuilds every multi-module test's submodules with `-c` and byte-compares.
 
 The Verilog backend has the same mode: `-verilog -c M` regenerates `M.v` from
 `M.ba` (via `vGenMods` in `bsc.hs`), byte-identical to the `.v` that `-g`
-writes for the same elaboration under the same generation flags.  Codegen
-flags are read from the `-c` invocation's command line (elaboration-affecting
-flags are baked into the `.ba`), and foreign-function `.ba` files are found
-via the same `-p`/`-bdir` search path as at link time.
+writes for the same elaboration.  The `.ba` records the module's flags with
+any `(* options *)` pragma applied (`genModule` runs `updateFlags` before the
+`.ba` write), and `-c` regenerates under those stored flags -- `-keep-fires`,
+`-unspecified-to`, `-stable-verilog`, all of it -- so the regenerated `.v`
+matches the original compile by construction.  Only environment/output flags
+(`-bdir`/`-vdir`/`-info-dir`, the search path, verbosity, show/print toggles,
+`-u`) follow the `-c` invocation.  Foreign-function `.ba` files are found via
+the same `-p`/`-bdir` search path as at link time.
+
+With `-stable-verilog` (default on), the emitted Verilog is a pure function
+of the `.ba`: every backend choice that used to lean on `Id`'s `Ord` (the
+SpeedyString intern order, which varies with compile history) instead uses
+the identifier's text -- topological-sort tie-breaks, CSE survivor names,
+port/mux/gate orderings -- and a final `VStableRenumber` pass renumbers the
+compiler-minted name families (`__d`/`__h`/`__q`/`__f`/`_dm`/`_ds`) into
+first-use order (foreign linkage names are excluded: a "BDPI"-imported
+`f__h1` must keep its C symbol).  The testsuite enforces the contract at
+the point of generation: since a `-verilog` compile writes the `.ba` by
+default, `check_verilog_regen` (called from `bsc_compile_verilog` in
+`testsuite/config/unix.exp`, so every Verilog-compile proc gets it)
+regenerates each `.v` the compile just produced from its `.ba` with `-c`
+and requires a byte-identical result, skipping invocations whose flags
+make the comparison meaningless (`-no-stable-verilog`, `-elab-only`/
+`-no-elab`, relocated outputs, `-verilog-filter`).  The regeneration runs
+in a fresh bsc process, which is the point: in the process that wrote the
+`.v` every string is already interned, so a same-process regen would see
+the same interning history and could not fail for interning-order
+reasons.  `testsuite/bsc.verilog/stable_verilog/` holds the targeted
+trigger designs, including two that pin the flag is not vacuous (under
+`-no-stable-verilog` the direct and regenerated `.v` must diverge).
 
 The mirror image is `-elab-only`, which makes a `-verilog` compile stop at
 the `.ba`, exactly as a Bluesim compile does: `genModuleVerilog` is not run
