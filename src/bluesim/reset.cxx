@@ -18,13 +18,10 @@
 #include "kernel.h"
 #include "event_queue.h"
 
-/* Keep a list of pending reset calls */
-typedef struct
-{
-  tResetFn fn;
-  tUInt8   rst;
-  void*    parent;
-} tResetRequest;
+/* A pending reset call is embedded directly in its event (the
+ * tResetRequest member of tEventData, see event_queue.h), so
+ * scheduling and executing resets allocates nothing.
+ */
 
 /* Initialize the reset request counting system */
 void init_reset_request_counters(tSimStateHdl simHdl)
@@ -79,21 +76,16 @@ bool any_reset_asserted(tSimStateHdl simHdl)
 /* Routine called from kernel to execute delayed reset functions */
 static tTime reset_event(tSimStateHdl simHdl, tEvent& ev)
 {
-  if (ev.data.ptr == NULL)
+  const tResetRequest& req = ev.data.reset;
+
+  if (req.fn == NULL)
     return 0llu;
 
-  tResetRequest* req = (tResetRequest*) ev.data.ptr;
-
-  if (req->fn == NULL)
-    return 0llu;
-  
-  req->fn(req->parent, req->rst);
-  if (req->rst == 0)
+  req.fn(req.parent, req.rst);
+  if (req.rst == 0)
     start_reset_ticks(simHdl);
   else
     stop_reset_ticks(simHdl);
-
-  delete req;
 
   return 0llu;
 }
@@ -101,18 +93,14 @@ static tTime reset_event(tSimStateHdl simHdl, tEvent& ev)
 /* Queue a reset function to be called at the beginning of the time-slice */
 void reset_init(tSimStateHdl simHdl, tResetFn fn, void* parent, tUInt8 rst)
 {
-  tResetRequest* req = new tResetRequest;
-
-  req->fn     = fn;
-  req->parent = parent;
-  req->rst    = rst;
-
   tEvent ev;
 
   ev.at       = simHdl->sim_time;
   ev.priority = make_priority(PG_INITIAL, PS_RESET);
   ev.fn       = reset_event;
-  ev.data.ptr = req;
+  ev.data.reset.fn     = fn;
+  ev.data.reset.parent = parent;
+  ev.data.reset.rst    = rst;
 
   simHdl->queue->schedule(ev);
 }
@@ -121,18 +109,14 @@ void reset_init(tSimStateHdl simHdl, tResetFn fn, void* parent, tUInt8 rst)
 void reset_at_end_of_timeslice(tSimStateHdl simHdl,
 			       tResetFn fn, void* parent, tUInt8 rst)
 {
-  tResetRequest* req = new tResetRequest;
-
-  req->fn     = fn;
-  req->parent = parent;
-  req->rst    = rst;
-
   tEvent ev;
 
   ev.at       = simHdl->sim_time;
   ev.priority = make_priority(PG_AFTER_LOGIC, PS_RESET);
   ev.fn       = reset_event;
-  ev.data.ptr = req;
+  ev.data.reset.fn     = fn;
+  ev.data.reset.parent = parent;
+  ev.data.reset.rst    = rst;
 
   simHdl->queue->schedule(ev);
 }

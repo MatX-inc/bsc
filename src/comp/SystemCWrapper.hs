@@ -185,6 +185,18 @@ wrapSystemC flags sim_system = do
         -- bluesim kernel state handle
         sim_hdl = decl $ (userType "tSimStateHdl") (mkVar "_sim_hdl")
 
+        -- storage for the kernel's simulation context, allocated by
+        -- the wrapper and handed to bk_sync_init (the kernel does
+        -- not allocate its context)
+        sim_ctx = decl $ (ptr . CCSyntax.char) (mkVar "_sim_ctx")
+
+        -- storage for the model itself and its port areas, allocated
+        -- by the wrapper and recorded with new_MODEL_* (the model
+        -- does not allocate its state)
+        state_buf = decl $ (ptr . CCSyntax.char) (mkVar "_state_buf")
+        in_buf    = decl $ (ptr . CCSyntax.char) (mkVar "_in_buf")
+        out_buf   = decl $ (ptr . CCSyntax.char) (mkVar "_out_buf")
+
         -- constructor & destructor
         -- XXX: this is an ugly hack to deal with the macro
         ctor_hack   = ctor (mkVar "SC_CTOR") [mkVar name]
@@ -195,6 +207,10 @@ wrapSystemC flags sim_system = do
                       [ (var "_model_inst") `cCall` [mkNULL]
                       , (var "_model_hdl") `cCall` [mkNULL]
                       , (var "_sim_hdl") `cCall` [mkNULL]
+                      , (var "_sim_ctx") `cCall` [mkNULL]
+                      , (var "_state_buf") `cCall` [mkNULL]
+                      , (var "_in_buf") `cCall` [mkNULL]
+                      , (var "_out_buf") `cCall` [mkNULL]
                       ]
         setup_handler do_init i =
             let nm = getIdBaseString i
@@ -214,21 +230,50 @@ wrapSystemC flags sim_system = do
         destructor  = define (dtor (mkVar name)) (block dtor_stmts)
 
         -- simulation callbacks
+        mk_buf_alloc buf size_fn =
+            (mkVar buf) `assign`
+                (cTernary (((var size_fn) `cCall` [ var "_model_hdl" ])
+                               `cGt` (mkUInt64 0))
+                          (newArray (classType "char")
+                               ((var size_fn) `cCall` [ var "_model_hdl" ]))
+                          mkNULL)
         start_of_sim_stmts =
+            -- A sizing call first: with no storage recorded, the
+            -- returned handle supports the size queries.  The wrapper
+            -- then allocates the model's state and port buffers and
+            -- records them with a second call (see the new_MODEL
+            -- contract in bluesim_kernel_api.h).
             [ (mkVar "_model_hdl") `assign`
-                  ((var ("new_MODEL_" ++ name)) `cCall` [])
+                  ((var ("new_MODEL_" ++ name)) `cCall`
+                       [ mkNULL, mkNULL, mkNULL, mkNULL, mkNULL ])
+            , mk_buf_alloc "_state_buf" "bk_state_bytes"
+            , mk_buf_alloc "_in_buf" "bk_input_bytes"
+            , mk_buf_alloc "_out_buf" "bk_output_bytes"
+            , (mkVar "_model_hdl") `assign`
+                  ((var ("new_MODEL_" ++ name)) `cCall`
+                       [ (var "bs_default_host_ops") `cCall` []
+                       , (var "bs_default_host_ctx") `cCall` []
+                       , var "_state_buf", var "_in_buf", var "_out_buf" ])
             -- The event-queue capacity is the model's static bound
             -- plus headroom for the wrapper's own host calls (the
             -- bk_trigger_clock_edge pair per clock handler and the
             -- UI yield event of a reached bk_quit_after_edge limit);
             -- 16 matches the headroom documented at bk_sync_init().
+            , decl $ (userType "tUInt32") $ (mkVar "_capacity") `assign`
+                  (((var "bk_max_event_queue_depth") `cCall`
+                        [ var "_model_hdl" ]) `cAdd` (mkUInt32 16))
+            -- The kernel constructs its simulation context (state
+            -- and event queue) in a buffer the wrapper provides.
+            , (mkVar "_sim_ctx") `assign`
+                  (newArray (classType "char")
+                       ((var "bk_context_bytes") `cCall` [var "_capacity"]))
             , (mkVar "_sim_hdl") `assign`
                   ((var "bk_sync_init") `cCall`
                        [ var "_model_hdl", mkBool False
                        , (var "bs_default_host_ops") `cCall` []
                        , (var "bs_default_host_ctx") `cCall` []
-                       , ((var "bk_max_event_queue_depth") `cCall`
-                              [ var "_model_hdl" ]) `cAdd` (mkUInt32 16)
+                       , var "_capacity"
+                       , var "_sim_ctx"
                        ])
             , stmt $ (var "bk_set_interactive") `cCall` [var "_sim_hdl"]
             , (mkVar "_model_inst") `assign`
@@ -237,7 +282,19 @@ wrapSystemC flags sim_system = do
             ]
         sos_type = function void (mkVar "start_of_simulation") []
         start_of_sim_fn = virtual $ define sos_type (block start_of_sim_stmts)
-        end_of_sim_stmts = [ stmt $ (var "bk_shutdown") `cCall` [var "_sim_hdl"] ]
+        end_of_sim_stmts = [ stmt $ (var "bk_shutdown") `cCall` [var "_sim_hdl"]
+                           -- bk_shutdown tears the context and the
+                           -- model down in place; the buffers are the
+                           -- wrapper's to free
+                           , stmt $ deleteArray (var "_sim_ctx")
+                           , (mkVar "_sim_ctx") `assign` mkNULL
+                           , stmt $ deleteArray (var "_state_buf")
+                           , (mkVar "_state_buf") `assign` mkNULL
+                           , stmt $ deleteArray (var "_in_buf")
+                           , (mkVar "_in_buf") `assign` mkNULL
+                           , stmt $ deleteArray (var "_out_buf")
+                           , (mkVar "_out_buf") `assign` mkNULL
+                           ]
         eos_type = function void (mkVar "end_of_simulation") []
         end_of_sim_fn = virtual $ define eos_type (block end_of_sim_stmts)
 
@@ -303,7 +360,7 @@ wrapSystemC flags sim_system = do
         class_sects   = [ comment "clock and reset inputs" (public clk_rst_decls)
                         , comment "method ports" (public port_decls)
                         , comment "implementation class" (public [sub_mod])
-                        , comment "Bluesim kernel state" (private [model_hdl, sim_hdl])
+                        , comment "Bluesim kernel state" (private [model_hdl, sim_hdl, sim_ctx, state_buf, in_buf, out_buf])
                         , comment "constructor" (public [constructor])
                         , comment "destructor"  (public [destructor])
                         , comment "simulation callbacks" (public [start_of_sim_fn, end_of_sim_fn])

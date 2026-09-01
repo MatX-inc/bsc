@@ -3,12 +3,16 @@
 /* Constructor */
 MOD_MakeReset::MOD_MakeReset(tSimStateHdl simHdl,
 			     const char* name, Module* parent_mod,
+			     tStateLayout* sto,
 			     unsigned int cycles, tUInt8 init, tUInt8 async)
     : Module(simHdl, name, parent_mod),
-      sync(simHdl, "rstSync", this, cycles, async),
+      sync(simHdl, "rstSync", this, NULL, cycles, async),
       rst_reset_value(init),
       written(~bk_now(sim_hdl))
 {
+  // clock/reset primitives keep no data in the element area: claim
+  // (and ignore) the published entry so later elements stay aligned
+  sto->claim();
   reset_fn = NULL;
   rst = 1;
   old_rst = rst;

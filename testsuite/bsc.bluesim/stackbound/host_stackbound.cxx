@@ -153,12 +153,15 @@ static const struct bs_host_ops raw_ops = {
 
 /* ---- kernel entry points ---- */
 
-typedef void*        (*tNewModelFn)(void);
+typedef void* (*tNewModelFn)(const struct bs_host_ops*, void*,
+                              void*, void*, void*);
+typedef tUInt64 (*tModelBytesFn)(tModel);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
 typedef tUInt64      (*tStackBoundFn)(tModel);
+typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
                                     const struct bs_host_ops*, void*,
-                                    tUInt32);
+                                    tUInt32, void*);
 typedef tStatus      (*tSyncRunFn)(tSimStateHdl);
 typedef tStatus      (*tSyncStepFn)(tSimStateHdl, tClock);
 typedef tClock       (*tGetClockFn)(tSimStateHdl, const char*);
@@ -191,6 +194,7 @@ static struct
   /* in */
   tNewModelFn   new_model;
   tMaxDepthFn   max_depth;
+  tCtxBytesFn   ctx_bytes;
   tSyncInitFn   sync_init;
   tSyncRunFn    sync_run;
   tSyncStepFn   sync_step;
@@ -198,6 +202,9 @@ static struct
   tFinishedFn   finished;
   tExitStatusFn exit_status;
   tShutdownFn   shutdown_fn;
+  tModelBytesFn state_bytes;
+  tModelBytesFn in_bytes;
+  tModelBytesFn out_bytes;
   char*         stack_low;     /* base of the thread's stack region */
   /* out */
   int           ok;
@@ -209,15 +216,23 @@ static void* sim_thread(void* /*arg*/)
 {
   g.ok = 0;
 
-  tModel model = g.new_model();
+  tModel model = g.new_model(NULL, NULL, NULL, NULL, NULL);
   if (model == NULL)
   {
     fprintf(stderr, "harness: new_MODEL returned NULL\n");
     return NULL;
   }
 
+  /* the model's caller-provided storage (constructor ABI) */
+  void* state_buf = malloc(g.state_bytes(model));
+  void* in_buf  = (g.in_bytes(model) > 0)  ? malloc(g.in_bytes(model))  : NULL;
+  void* out_buf = (g.out_bytes(model) > 0) ? malloc(g.out_bytes(model)) : NULL;
+  model = g.new_model(&raw_ops, NULL, state_buf, in_buf, out_buf);
+
+  tUInt32 capacity = g.max_depth(model) + 16;
+  void* ctx_buf = malloc(g.ctx_bytes(capacity));
   tSimStateHdl sim = g.sync_init(model, 1, &raw_ops, NULL,
-                                 g.max_depth(model) + 16);
+                                 capacity, ctx_buf);
   if (sim == NULL)
   {
     fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -276,6 +291,7 @@ static void* sim_thread(void* /*arg*/)
   }
   g.final_status = g.exit_status(sim);
   g.shutdown_fn(sim);
+  free(ctx_buf);
 
   g.ok = 1;
   return NULL;
@@ -317,7 +333,11 @@ int main(int argc, char** argv)
   snprintf(new_model_name, sizeof(new_model_name), "new_MODEL_%s", top_name);
 
   g.new_model   = (tNewModelFn)   find_sym(dl, new_model_name);
+  g.state_bytes = (tModelBytesFn) find_sym(dl, "bk_state_bytes");
+  g.in_bytes    = (tModelBytesFn) find_sym(dl, "bk_input_bytes");
+  g.out_bytes   = (tModelBytesFn) find_sym(dl, "bk_output_bytes");
   g.max_depth   = (tMaxDepthFn)   find_sym(dl, "bk_max_event_queue_depth");
+  g.ctx_bytes   = (tCtxBytesFn)   find_sym(dl, "bk_context_bytes");
   g.sync_init   = (tSyncInitFn)   find_sym(dl, "bk_sync_init");
   g.sync_run    = (tSyncRunFn)    find_sym(dl, "bk_sync_run");
   g.sync_step   = (tSyncStepFn)   find_sym(dl, "bk_sync_step");
@@ -331,7 +351,7 @@ int main(int argc, char** argv)
   /* the bound is a property of the loaded model: readable before any
    * simulation state exists (a NULL model handle reads as 0)
    */
-  tModel probe_model = g.new_model();
+  tModel probe_model = g.new_model(NULL, NULL, NULL, NULL, NULL);
   tUInt64 bound = stack_bound(probe_model);
   fprintf(stderr, "harness: exposed stack bound: %llu bytes\n",
           (unsigned long long)bound);
@@ -346,8 +366,16 @@ int main(int argc, char** argv)
       return 1;
 
     /* the design still simulates normally */
+    void* state_buf = malloc(g.state_bytes(probe_model));
+    void* in_buf = (g.in_bytes(probe_model) > 0)
+                       ? malloc(g.in_bytes(probe_model)) : NULL;
+    void* out_buf = (g.out_bytes(probe_model) > 0)
+                        ? malloc(g.out_bytes(probe_model)) : NULL;
+    probe_model = g.new_model(&raw_ops, NULL, state_buf, in_buf, out_buf);
+    tUInt32 capacity = g.max_depth(probe_model) + 16;
+    void* ctx_buf = malloc(g.ctx_bytes(capacity));
     tSimStateHdl sim = g.sync_init(probe_model, 1, &raw_ops, NULL,
-                                   g.max_depth(probe_model) + 16);
+                                   capacity, ctx_buf);
     if (sim == NULL)
     {
       fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -362,6 +390,7 @@ int main(int argc, char** argv)
     printf("harness: simulation finished with status %d\n",
            (int)g.exit_status(sim));
     g.shutdown_fn(sim);
+    free(ctx_buf);
     return 0;
   }
 

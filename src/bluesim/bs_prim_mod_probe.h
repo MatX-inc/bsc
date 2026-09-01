@@ -2,24 +2,30 @@
 #define __BS_PRIM_MOD_PROBE_H__
 
 #include "bluesim_kernel_api.h"
-#include "bluesim_probes.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
+#include "bs_prim_storage.h"
 
 // This is the definition of the Probe primitive.
 template<typename T>
 class MOD_Probe : public Module
 {
+  // embedded symbol-table storage (bound to Module::symbols;
+  // symbol tables never allocate)
+ private:
+  tSym __symbols[1];
  public:
   MOD_Probe(tSimStateHdl simHdl, const char* name, Module* parent,
+	    tStateLayout* sto,
 	    unsigned int width)
     : Module(simHdl, name, parent), __clk_handle_0(BAD_CLOCK_HANDLE),
-      bits(width), proxy(NULL)
+      value(bs_bind_elem(value_stg_, sto->claim(), width)),
+      bits(width)
   {
-    init_val(value, bits);
     write_undet(&value, bits);
 
     symbol_count = 1;
-    symbols = new tSym[symbol_count];
+    symbols = __symbols;
 
     symbols[0].key = "";
     symbols[0].info = SYM_DEF | bits << 4;
@@ -35,37 +41,10 @@ class MOD_Probe : public Module
  // Probe data members
  private:
   tClock __clk_handle_0;
-  T value;
+  T value_stg_;          // wide: the view object behind 'value'
+  T& value;              // the live element value, in caller storage
   unsigned int bits;
 
- // proxy access facility 
- private:
-  BluespecProbe<T>* proxy;
- public:
-  BluespecProbe<T>& getProbe()
-  {
-    if (proxy == NULL)
-      proxy = new BluespecProbe<T>(this, one, eq_one, read_probe, write_probe);
-    return (*proxy);
-  }
- private:
-  static unsigned int one(void* /*obj */, bool /* hi */)
-  {
-    return 1;
-  }
-  static bool eq_one(void* /* obj */, unsigned int addr)
-  {
-    return (addr == 1);
-  }
-  static const T& read_probe(void* obj, unsigned int /* addr */)
-  {
-    MOD_Probe<T>* probe = (MOD_Probe<T>*) obj;
-    return probe->value;
-  }
-  static bool write_probe(void* /* obj */, unsigned int /* addr */, const T& /* data */)
-  {
-    return false; // MOD_Probe<T> instances are read-only
-  }
 };
 
 // This is the definition of the ProbeWire primitive.
@@ -74,9 +53,13 @@ class MOD_ProbeWire : public Module
 {
  public:
   MOD_ProbeWire(tSimStateHdl simHdl, const char* name, Module* parent,
+		tStateLayout* sto,
 		unsigned int width)
     : Module(simHdl, name, parent)
   {
+    // a ProbeWire holds no state; claim (and ignore) its published
+    // element entry so later elements bind at their published offsets
+    sto->claim();
     symbol_count = 0;
     symbols = NULL;
   }

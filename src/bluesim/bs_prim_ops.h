@@ -1,10 +1,9 @@
 #ifndef __BS_PRIM_OPS_H__
 #define __BS_PRIM_OPS_H__
 
-#include <string>
-
 #include "bluesim_types.h"
 #include "bluesim_kernel_api.h"
+#include "bs_str.h"
 #include "bs_wide_data.h"
 
 /* These are utility functions used when implementing
@@ -1696,7 +1695,8 @@ unsigned int* copy_arg(const tUInt8* data, unsigned int n = 1);
 unsigned int* copy_arg(const tUInt32* data);
 unsigned int* copy_arg(const tUInt64* data, unsigned int n = 2);
 unsigned int* copy_arg(const unsigned int* data, unsigned int n);
-char* copy_arg(const std::string& str);
+char* copy_arg(const tStr* str);
+char* copy_arg(const char* str);
 
 // Allocate an uninitialized temporary array
 unsigned int* ignore_arg(unsigned int n);

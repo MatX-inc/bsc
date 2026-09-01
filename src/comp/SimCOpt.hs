@@ -167,14 +167,17 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
               -- only move ports if -keep-fires is not set
               isPort = (sbid,aid) `S.member` port_set
               portOkToMove = not (isPort && (keepFires flags))
-              -- do not move ports if this is the top module of a SystemC model
-              isTopSysC = (genSysC flags) && (top_sbid == (Just sbid))
-              syscOkToMove = not (isPort && isTopSysC)
+              -- never move the top module's ports: they are bound to
+              -- the caller's input and output port buffers at their
+              -- published introspection offsets, so they must stay
+              -- live class members
+              isTopMod = top_sbid == (Just sbid)
+              topPortOkToMove = not (isPort && isTopMod)
           in and [ sizeOkToMove
                  , exprOkToMove
                  , cfwfOkToMove
                  , portOkToMove
-                 , syscOkToMove
+                 , topPortOkToMove
                  ]
 
       -- determine which defs we want to move into each function

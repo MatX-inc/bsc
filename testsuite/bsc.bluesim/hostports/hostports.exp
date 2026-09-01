@@ -1,0 +1,81 @@
+# Tests for the caller-provided port buffers of the model
+# construction contract (bluesim_kernel_api.h):
+#
+#  * new_MODEL_*() takes borrowed input and output port buffers, and
+#    construction binds the top module's ports into them at the byte
+#    offsets published by the introspection descriptor tables;
+#  * the host drives method arguments and enables by writing the
+#    input buffer before a clock edge, and observes readies and
+#    method results by reading the output buffer after it;
+#  * value-method results and readies are refreshed at the end of
+#    every edge from the post-edge state (results gated on their
+#    RDY), and ActionValue results update when the method executes.
+#
+# sysHostPorts is a design with a representative interface: narrow
+# and wide method arguments, enables, narrow and wide results,
+# readies, an always-ready combinational method, and an ActionValue
+# method.  The host_ports harness dlopen()s the model and performs a
+# full input-to-state-to-output round trip purely through the port
+# buffers, checking the values cycle by cycle.  Bluesim only: the
+# port buffers are a Bluesim model construction feature.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set status [catch "exec ./$cmd >& $logfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # compile and link the design (the .cexe.so is what the harness loads)
+    compile_object_pass sysHostPorts.bsv sysHostPorts
+    link_objects_pass {sysHostPorts} sysHostPorts
+
+    if [build_host_harness host_ports host_ports.cxx] {
+
+        # drive the inputs and observe the outputs purely through the
+        # port buffers at the published offsets
+        run_host_harness \
+            "host_ports sysHostPorts.cexe.so sysHostPorts" \
+            [list 0] host_ports.out
+        compare_file host_ports.out
+    }
+}

@@ -17,10 +17,14 @@ compile_object_pass TbGCD.bsv mkTbGCD
 link_objects_pass {} mkTbGCD {-v -parallel-sim-link 2}
 # Store the output to a new name, since we are going to re-link later
 move mkTbGCD.bsc-ccomp-out mkTbGCD-1.bsc-ccomp-out
-# Check that the object file for mkGCD was reused
+# Check that the object file for mkGCD was NOT reused: it was
+# generated as the top module (whose constructor binds the interface
+# ports into the caller's port buffers), and a top-module object
+# cannot be reused as a submodule
 find_regexp mkTbGCD-1.bsc-ccomp-out {exec\: make}
-find_n_strings mkTbGCD-1.bsc-ccomp-out {reuse} 1
-find_n_strings mkTbGCD-1.bsc-ccomp-out {Bluesim object created:} 2
+find_n_strings mkTbGCD-1.bsc-ccomp-out {reuse} 0
+find_n_strings mkTbGCD-1.bsc-ccomp-out {Bluesim object created:} 3
+find_regexp mkTbGCD-1.bsc-ccomp-out {Bluesim object created\: mkGCD\.}
 find_regexp mkTbGCD-1.bsc-ccomp-out {Bluesim object created\: mkTbGCD\.}
 find_regexp mkTbGCD-1.bsc-ccomp-out {Bluesim object created\: model\_mkTbGCD\.}
 

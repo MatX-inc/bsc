@@ -17,15 +17,32 @@ class FormatHandler
  public:
   FormatHandler() {}
   virtual ~FormatHandler() {}
+
+  // Format handlers are never heap-allocated (the memory primitives
+  // build them on the stack while preloading), but the virtual
+  // destructor makes the compiler emit deleting destructors that
+  // would otherwise reference the global operator delete.  This
+  // class-scope operator delete keeps that reference (and the
+  // allocator import it would create) out of the generated code; it
+  // can never actually run.
+  static void operator delete(void*) {}
   virtual tMemFileStatus updateAddress(const char* addr_str) = 0;
   virtual tMemFileStatus setEntry(const char* data_str) = 0;
   virtual void checkRange(tSimStateHdl simHdl,
                           const char* filename, const char* memname) = 0;
 };
 
+// One address or value token of a memory file (underscores
+// included) is accumulated in a fixed buffer of this many bytes;
+// the parser reports an error for a longer token.  The cap
+// comfortably covers entries of tens of thousands of bits, and
+// keeps the parser allocation-free.
+#define BS_MEMFILE_TOKEN_MAX 65536u
+
 // This is the top-level file parser/loader.  The file is read (and
 // any errors are reported) through the host operations registered
-// with bk_sync_init() for the given simulation handle.
+// with bk_sync_init() for the given simulation handle.  Parsing
+// allocates nothing (see BS_MEMFILE_TOKEN_MAX above).
 extern void read_mem_file(tSimStateHdl simHdl,
                           const char* filename,
                           const char* memname,

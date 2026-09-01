@@ -3,6 +3,7 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_prim_storage.h"
 #include "bs_reset.h"
 #include "bs_wide_data.h"
 
@@ -37,11 +38,16 @@
 class MOD_SyncReset: public Module
 {
  public:
+  // 'sto' is the element-storage cursor when this instance is a
+  // published state element; an embedded instance (inside MakeReset)
+  // passes NULL and claims nothing
   MOD_SyncReset(tSimStateHdl simHdl, const char* name, Module* parent_mod,
-		unsigned int cycles, tUInt8 async)
+		tStateLayout* sto, unsigned int cycles, tUInt8 async)
     : Module(simHdl, name, parent_mod), reset_hold(cycles),
       is_async(async != 0), __clk_handle_0(BAD_CLOCK_HANDLE)
   {
+    if (sto != NULL)
+      sto->claim();
     reset_fn = NULL;
     count = 0;
     in_reset = false;
@@ -124,10 +130,14 @@ class MOD_SyncReset: public Module
 class MOD_SyncReset0: public Module
 {
  public:
-  MOD_SyncReset0(tSimStateHdl simHdl, const char* name, Module* parent_mod)
+  MOD_SyncReset0(tSimStateHdl simHdl, const char* name, Module* parent_mod,
+		 tStateLayout* sto)
     : Module(simHdl, name, parent_mod), reset_fn(NULL), in_reset(false),
       out_asserted(false)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
   }
  public:
   void set_reset_fn_gen_rst(tResetFn fn) { reset_fn = fn; }
@@ -160,9 +170,12 @@ class MOD_InitialReset: public Module
 {
  public:
   MOD_InitialReset(tSimStateHdl simHdl, const char* name, Module* parent_mod,
-		   unsigned int cycles)
+		   tStateLayout* sto, unsigned int cycles)
     : Module(simHdl, name, parent_mod), reset_hold(cycles)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     reset_fn = NULL;
     count = 0;
     out_asserted = false;
@@ -203,6 +216,7 @@ class MOD_MakeReset: public Module
 {
  public:
   MOD_MakeReset(tSimStateHdl simHdl, const char* name, Module* parent,
+		tStateLayout* sto,
 		unsigned int cycles, tUInt8 init, tUInt8 async);
 
  public:
@@ -291,10 +305,13 @@ class MOD_MakeReset0: public Module
 {
  public:
   MOD_MakeReset0(tSimStateHdl simHdl, const char* name, Module* parent_mod,
-		 tUInt8 init)
+		 tStateLayout* sto, tUInt8 init)
     : Module(simHdl, name, parent_mod), rst_reset_value(init),
       written(~bk_now(sim_hdl))
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     reset_fn = NULL;
     rst = 1;
     old_rst = rst;
@@ -381,9 +398,13 @@ class MOD_MakeReset0: public Module
 class MOD_ResetMux : public Module
 {
  public:
-  MOD_ResetMux(tSimStateHdl simHdl, const char* name, Module* parent_mod)
+  MOD_ResetMux(tSimStateHdl simHdl, const char* name, Module* parent_mod,
+	       tStateLayout* sto)
     : Module(simHdl, name, parent_mod)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     reset_fn = NULL;
     select_out = false;
     new_select_out = false;
@@ -466,9 +487,13 @@ class MOD_ResetMux : public Module
 class MOD_ResetEither : public Module
 {
  public:
-  MOD_ResetEither(tSimStateHdl simHdl, const char* name, Module* parent_mod)
+  MOD_ResetEither(tSimStateHdl simHdl, const char* name, Module* parent_mod,
+		  tStateLayout* sto)
     : Module(simHdl, name, parent_mod)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     reset_fn = NULL;
     a_rst_in = 1;
     b_rst_in = 1;
@@ -518,9 +543,13 @@ class MOD_ResetEither : public Module
 class MOD_ResetToBool : public Module
 {
  public:
-  MOD_ResetToBool(tSimStateHdl simHdl, const char* name, Module* parent_mod)
+  MOD_ResetToBool(tSimStateHdl simHdl, const char* name, Module* parent_mod,
+		  tStateLayout* sto)
     : Module(simHdl, name, parent_mod)
   {
+    // clock/reset primitives keep no data in the element area: claim
+    // (and ignore) the published entry so later elements stay aligned
+    sto->claim();
     in_reset = 0;
   }
 

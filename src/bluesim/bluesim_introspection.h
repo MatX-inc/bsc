@@ -17,13 +17,56 @@
  * bluesim_kernel_api.h).
  *
  * Alongside the descriptors, the code generator defines a flat
- * layout: every state element is assigned a byte offset within a
- * planned contiguous state area, and every top-module input (output)
- * port a byte offset within a planned contiguous input (output)
- * area.  The three areas are independent; each starts at offset 0.
- * In this version of the runtime the layout is DESCRIPTIVE only --
- * construction does not yet place storage at these offsets -- but
- * the layout is fixed per design and hosts may size buffers from it.
+ * layout: every state element is assigned a byte offset within the
+ * element sub-area of the caller-provided state buffer, and every
+ * top-module input (output) port a byte offset within the
+ * caller-provided input (output) buffer.  Construction places the
+ * live storage at exactly these offsets: bk_sync_init() builds the
+ * model in the state buffer recorded by new_MODEL_*(), and each
+ * element's value is read and written there for the whole life of
+ * the simulation, so a host that writes an element's bytes changes
+ * the simulated state and a host that reads them sees the current
+ * simulated value.
+ *
+ * The STATE buffer (bk_state_bytes(model) bytes) has two parts:
+ *
+ *   [ module objects | element sub-area ]
+ *
+ * The module objects -- the C++ shells of the generated module tree,
+ * placement-constructed at the front of the buffer -- are opaque to
+ * hosts.  The element sub-area begins at byte
+ * bk_state_elements_offset(model) (a multiple of 16); the element
+ * descriptors' offsets are relative to ITS start, and
+ * bk_state_bytes() is the elements offset plus the element
+ * sub-area's size.  The input and output areas are independent
+ * whole buffers of their own; port descriptor offsets are relative
+ * to their starts.
+ *
+ * The INPUT buffer (bk_input_bytes(model) bytes) is where the model
+ * reads the top module's input ports: the caller writes method
+ * argument values and method enables at their published offsets
+ * before triggering a clock edge, and the schedule reads them there
+ * (an enabled action method executes on the edge, exactly as if the
+ * corresponding Verilog input were driven).  The model writes each
+ * input port once during construction (enables to 0, other ports to
+ * 0); after that the buffer belongs to the caller.
+ *
+ * The OUTPUT buffer (bk_output_bytes(model) bytes) is where the
+ * model writes the top module's output ports.  Value-method results
+ * and RDY_* readies are refreshed at the END of every clock edge,
+ * computed from the post-edge state -- the same values the
+ * corresponding Verilog output ports would settle to -- so after an
+ * edge has executed the caller reads current values at the
+ * published offsets.  A value method's result is recomputed only
+ * when its RDY is true (a not-ready result holds its previous
+ * bytes), and an ActionValue result updates when the method
+ * executes (its enable was set).  Hosts should treat the output
+ * buffer as read-only.
+ *
+ * Elements of the CLOCK and RESET kinds (and PROBE elements of the
+ * stateless ProbeWire primitive) occupy their published slots but
+ * store no defined value: their bytes are unspecified and writing
+ * them has no effect.
  *
  * Layout rules (identical for all three areas):
  *

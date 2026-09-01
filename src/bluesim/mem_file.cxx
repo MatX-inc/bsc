@@ -1,5 +1,5 @@
-#include <string>
 #include <cstring>
+#include <cstdio>
 #include <ctype.h>
 #include <errno.h>
 
@@ -82,16 +82,23 @@ void read_mem_file(tSimStateHdl simHdl,
     return;
   }
 
-  // parse the file contents, passing addresses and data
-  // to the handler as strings
+  // Parse the file contents, passing addresses and data to the
+  // handler as strings.  The current address or value token is
+  // accumulated character by character into a fixed buffer (nothing
+  // is allocated); BS_MEMFILE_TOKEN_MAX bounds one token -- an
+  // address or one entry's value, underscores included -- and a
+  // longer token is reported as an error.  The token buffer is
+  // static because memory files can be preloaded during model
+  // construction, whose stack use is kept small; the kernel is
+  // single-threaded, so one buffer suffices.
   char buf[128];
-  std::string err_buf;
+  static char token[BS_MEMFILE_TOKEN_MAX];
+  unsigned int token_len = 0;
+  char err_buf[96];
   char* cptr;
   unsigned int comment_start_line = 0;
   unsigned int line = 1;
   unsigned int start_line = 1;
-  std::string addr_str;
-  std::string value_str;
   tMemParserState state = START;
   tSInt64 nread;
   while ((nread = ops->read(ctx, in, buf, sizeof(buf) - 1)) > 0)
@@ -99,17 +106,30 @@ void read_mem_file(tSimStateHdl simHdl,
     buf[nread] = '\0';
     cptr = buf;
 
-    // when a line extends beyond a buffer, we may need to accumulate
-    // in the current address or value string
-    if (state == IN_VALUE)
-      value_str += cptr;
-    if (state == IN_ADDR)
-      addr_str += cptr;
-
     // parse the current buffer contents character-by-character
     while (*cptr != '\0')
     {
       char c = *cptr;
+
+      // accumulate the current token (the state machine below only
+      // stays in a token state on token characters)
+      if ((state == IN_ADDR) || (state == IN_VALUE))
+      {
+        bool token_char = isxdigit(c) || (c == '_') ||
+                          (c == 'x')  || (c == 'X') ||
+                          (c == 'z')  || (c == 'Z');
+        if (token_char)
+        {
+          if (token_len >= (sizeof(token) - 1))
+          {
+            report_error(dest, "token overflow", start_line, filename,
+                         "Address or value token is too long.");
+            ops->close(ctx, in);
+            return;
+          }
+          token[token_len++] = c;
+        }
+      }
       switch (state)
       {
         case START:
@@ -121,13 +141,14 @@ void read_mem_file(tSimStateHdl simHdl,
           else if (c == '@')
           {
             state = IN_ADDR;
-            addr_str = cptr+1;
+            token_len = 0;
             start_line = line;
           }
           else if (isxdigit(c))
           {
             state = IN_VALUE;
-            value_str = cptr;
+            token[0] = c;
+            token_len = 1;
             start_line = line;
           }
           else if (c == '\n')
@@ -141,10 +162,10 @@ void read_mem_file(tSimStateHdl simHdl,
           }
           else
           {
-            std::string detail("Encountered '");
-            detail += c;
-            detail += "' when expecting '/', '@', hex digit, end-of-line or whitespace.";
-            report_error(dest, "syntax error", line, filename, detail.c_str());
+            snprintf(err_buf, sizeof(err_buf),
+                     "Encountered '%c' when expecting "
+                     "'/', '@', hex digit, end-of-line or whitespace.", c);
+            report_error(dest, "syntax error", line, filename, err_buf);
             ops->close(ctx, in);
             return;
           }
@@ -222,13 +243,15 @@ void read_mem_file(tSimStateHdl simHdl,
           const char* err = NULL;
           if ((c == '\n') || (c == '\r') || isblank(c))
           {
-            err = processAddress(addr_str.c_str(), handler);
+            token[token_len] = '\0';
+            err = processAddress(token, handler);
             if (c == '\n') ++line;
             state = START;
           }
           else if (c == '/')
           {
-            err = processAddress(addr_str.c_str(), handler);
+            token[token_len] = '\0';
+            err = processAddress(token, handler);
             state = BEGIN_COMMENT;
 
           }
@@ -240,18 +263,16 @@ void read_mem_file(tSimStateHdl simHdl,
           }
           else
           {
-            err_buf = "Encountered '";
-            err_buf += c;
-            err_buf += "' when expecting '/', hex digit, end-of-line or whitespace";
-            err = err_buf.c_str();
+            snprintf(err_buf, sizeof(err_buf),
+                     "Encountered '%c' when expecting "
+                     "'/', hex digit, end-of-line or whitespace.", c);
+            err = err_buf;
           }
 
           if (err)
           {
-            std::string detail(err);
-            detail += '.';
             report_error(dest, "address processing error", start_line,
-                         filename, detail.c_str());
+                         filename, err);
             ops->close(ctx, in);
             return;
           }
@@ -264,13 +285,15 @@ void read_mem_file(tSimStateHdl simHdl,
           const char* err = NULL;
           if ((c == '\n') || (c == '\r') || isblank(c))
           {
-            err = processData(value_str.c_str(), handler);
+            token[token_len] = '\0';
+            err = processData(token, handler);
             if (c == '\n') ++line;
             state = START;
           }
           else if (c == '/')
           {
-            err = processData(value_str.c_str(), handler);
+            token[token_len] = '\0';
+            err = processData(token, handler);
             state = BEGIN_COMMENT;
           }
           else if (isxdigit(c) || (c == '_') ||
@@ -281,18 +304,16 @@ void read_mem_file(tSimStateHdl simHdl,
           }
           else
           {
-            err_buf = "Encountered '";
-            err_buf += c;
-            err_buf += "' when expecting '/', digit, end-of-line or whitespace";
-            err = err_buf.c_str();
+            snprintf(err_buf, sizeof(err_buf),
+                     "Encountered '%c' when expecting "
+                     "'/', digit, end-of-line or whitespace.", c);
+            err = err_buf;
           }
 
           if (err)
           {
-            std::string detail(err);
-            detail += '.';
             report_error(dest, "value processing error", start_line,
-                         filename, detail.c_str());
+                         filename, err);
             ops->close(ctx, in);
             return;
           }
@@ -311,13 +332,11 @@ void read_mem_file(tSimStateHdl simHdl,
   }
   else if (state == IN_VALUE)
   {
-    const char* err = processData(value_str.c_str(), handler);
+    token[token_len] = '\0';
+    const char* err = processData(token, handler);
     if (err)
     {
-      std::string detail(err);
-      detail += '.';
-      report_error(dest, "value processing error", line, filename,
-                   detail.c_str());
+      report_error(dest, "value processing error", line, filename, err);
     }
   }
 

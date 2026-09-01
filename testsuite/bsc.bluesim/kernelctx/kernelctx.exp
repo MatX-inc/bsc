@@ -1,0 +1,87 @@
+# Tests the kernel's caller-provided simulation context:
+#
+#  * bk_context_bytes() reports the context size for a chosen
+#    event-queue capacity (0 for the invalid capacity 0, growing with
+#    the capacity since the event storage lives in the context);
+#  * bk_sync_init() takes the context buffer from the caller,
+#    constructs the simulation state and event queue inside it
+#    (rejecting a NULL or misaligned buffer), and returns a handle
+#    pointing into it;
+#  * bk_shutdown() tears the context down in place and frees nothing,
+#    leaving the buffer to the caller -- who can immediately host a
+#    second, fresh initialization in it.
+#
+# sysKernelCtx first runs to completion through the normal flow (the
+# generated exe and bluetcl allocate the context themselves).  Then
+# the host_kernelctx harness dlopen()s the model, sizes and allocates
+# the context buffer itself, checks the rejection cases, runs the
+# design to $finish inside the buffer, tears it down in place,
+# scribbles over the buffer, and runs a fresh instance in the same
+# buffer, requiring identical results.  Bluesim only; the API under
+# test is the Bluesim kernel's.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    # only stdout is compared: the harness prints the build-varying
+    # context size to stderr, which is kept in a .err file
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set errfile "[file rootname $logfile].err"
+    set status [catch "exec ./$cmd > $logfile 2> $errfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the design runs to completion through the normal flow
+    compile_object_pass sysKernelCtx.bsv sysKernelCtx
+    link_objects_pass {sysKernelCtx} sysKernelCtx
+    sim_output sysKernelCtx
+    compare_file sysKernelCtx.out
+
+    if [build_host_harness host_kernelctx host_kernelctx.cxx] {
+
+        # the caller provides the context buffer; init/shutdown/
+        # re-init in the same buffer behave identically
+        run_host_harness \
+            "host_kernelctx sysKernelCtx.cexe.so sysKernelCtx" \
+            [list 0] host_kernelctx.out
+        compare_file host_kernelctx.out
+    }
+}

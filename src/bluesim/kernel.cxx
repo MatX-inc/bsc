@@ -1,6 +1,7 @@
-#include <list>
-#include <algorithm>
 #include <cstring>
+#include <cstddef>
+#include <cstdint>
+#include <new>
 
 #include "mem_alloc.h"
 #include "kernel.h"
@@ -300,7 +301,7 @@ static void add_dummy_schedule_events(tSimStateHdl simHdl)
   ++(simHdl->need_dummy_edges);
   if (simHdl->queue && (simHdl->need_dummy_edges == 1))
   {
-    for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
+    for (tClock clk = 0; clk < simHdl->num_clocks; ++clk)
       setup_clock_edges(simHdl, clk);
   }
 }
@@ -331,10 +332,15 @@ static void setup_cycle_dump_events(tSimStateHdl simHdl)
   if ((simHdl == NULL) || (simHdl->queue == NULL))
     return;
 
-  // make an event for each real schedule event in the queue
-  std::list<tEvent> new_events;
+  // make an event for each real schedule event in the queue (the
+  // events cannot be scheduled while the queue search is walking, so
+  // they are staged in a fixed local array first: each clock keeps
+  // at most one initial edge and one pos/neg edge pair in the queue,
+  // so 4 slots per possible clock is a safe bound)
+  tEvent new_events[4u * BK_MAX_CLOCKS];
+  unsigned int num_new = 0;
   for (const tEvent* pos = simHdl->queue->find(simHdl, isRealScheduleEvent);
-       pos != NULL;
+       (pos != NULL) && (num_new < (4u * BK_MAX_CLOCKS));
        pos = simHdl->queue->find(simHdl, NULL))
   {
     unsigned int n = pos->data.value;
@@ -349,15 +355,12 @@ static void setup_cycle_dump_events(tSimStateHdl simHdl)
     ev.fn         = dump_cycle_event;
     ev.data.value = n;
 
-    new_events.push_front(ev);
+    new_events[num_new++] = ev;
   }
 
   // add new events to the queue
-  for (std::list<tEvent>::const_iterator p = new_events.begin();
-       p != new_events.end();
-       ++p)
-    simHdl->queue->schedule(*p);
-  new_events.clear();
+  for (unsigned int i = 0; i < num_new; ++i)
+    simHdl->queue->schedule(new_events[i]);
 }
 
 /*
@@ -449,6 +452,13 @@ tUInt64 bk_state_bytes(tModel model)
   return ((Model*) model)->get_state_bytes();
 }
 
+tUInt64 bk_state_elements_offset(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_state_elements_offset();
+}
+
 tUInt32 bk_num_input_ports(tModel model)
 {
   if (model == NULL)
@@ -491,6 +501,41 @@ tUInt64 bk_output_bytes(tModel model)
   return ((Model*) model)->get_output_bytes();
 }
 
+/* The kernel's simulation context lives in a single caller-provided
+ * buffer laid out as
+ *
+ *   [ tSimState | EventQueue | tEvent[event_queue_capacity] ]
+ *
+ * with each part aligned to its type.  bk_context_bytes() reports the
+ * total size for a given capacity, and bk_sync_init() constructs the
+ * parts in place at the offsets computed here; the buffer itself must
+ * be aligned like max_align_t (any malloc result qualifies), which
+ * covers every part's alignment.
+ */
+static size_t context_align_up(size_t n, size_t alignment)
+{
+  return (n + alignment - 1) & ~(alignment - 1);
+}
+
+static size_t context_queue_offset()
+{
+  return context_align_up(sizeof(tSimState), alignof(EventQueue));
+}
+
+static size_t context_events_offset()
+{
+  return context_align_up(context_queue_offset() + sizeof(EventQueue),
+                          alignof(tEvent));
+}
+
+tUInt64 bk_context_bytes(tUInt32 event_queue_capacity)
+{
+  if (event_queue_capacity == 0)
+    return 0llu;
+  return (tUInt64) (context_events_offset() +
+                    ((size_t) event_queue_capacity) * sizeof(tEvent));
+}
+
 /* helper routine for checking that a host ops table is usable */
 static bool check_host_ops(const struct bs_host_ops* ops)
 {
@@ -519,7 +564,8 @@ static bool check_host_ops(const struct bs_host_ops* ops)
 /* Initialize the Bluesim kernel */
 tSimStateHdl bk_sync_init(tModel model, tBool master,
                           const struct bs_host_ops* ops, void* ctx,
-                          tUInt32 event_queue_capacity)
+                          tUInt32 event_queue_capacity,
+                          void* context_buffer)
 {
   /* the runtime cannot do any I/O without host operations */
   if (!check_host_ops(ops))
@@ -529,7 +575,46 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   if (event_queue_capacity == 0)
     return NULL;
 
-  tSimStateHdl simHdl = new tSimState;
+  /* the model must have been given its caller-provided storage: the
+   * state buffer new_MODEL_*() recorded is where create_model() below
+   * placement-constructs the module tree (input/output port buffers
+   * are likewise required whenever their published areas are
+   * non-empty).  A sizing-only new_MODEL_*() call leaves these NULL.
+   */
+  {
+    Model* m = (Model*) model;
+    if (m == NULL)
+      return NULL;
+    if ((m->state_storage == NULL) && (m->get_state_bytes() > 0llu))
+      return NULL;
+    if ((((uintptr_t) m->state_storage) % alignof(max_align_t)) != 0)
+      return NULL;
+    if ((m->input_storage == NULL) && (m->get_input_bytes() > 0llu))
+      return NULL;
+    if ((m->output_storage == NULL) && (m->get_output_bytes() > 0llu))
+      return NULL;
+    /* port entries are at most 8-byte aligned (tUInt64) */
+    if ((((uintptr_t) m->input_storage) % 8u) != 0)
+      return NULL;
+    if ((((uintptr_t) m->output_storage) % 8u) != 0)
+      return NULL;
+  }
+
+  /* the caller provides the storage for the simulation context: at
+   * least bk_context_bytes(event_queue_capacity) bytes, aligned like
+   * max_align_t
+   */
+  if (context_buffer == NULL)
+    return NULL;
+  if ((((uintptr_t) context_buffer) % alignof(max_align_t)) != 0)
+    return NULL;
+
+  /* construct the context in the caller's buffer: the simulation
+   * state, then the event queue and its storage (see the layout
+   * comment at bk_context_bytes())
+   */
+  char* context_base = (char*) context_buffer;
+  tSimStateHdl simHdl = new (context_base) tSimState;
 
   simHdl->model = (Model*)model;
 
@@ -562,6 +647,14 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
 
   simHdl->need_dummy_edges = 0;
 
+  /* the fixed-capacity tables embedded in the context buffer start
+   * empty (their storage is uninitialized until entries are added)
+   */
+  simHdl->num_clocks = 0;
+  simHdl->labels.head = 0;
+  simHdl->labels.count = 0;
+  simHdl->num_plus_args = 0;
+
   simHdl->rule_name_indent = 0;
 
   simHdl->reset_tick_requests = 0;
@@ -581,14 +674,18 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   }
   init_mem_allocator();
   simHdl->sim_time = 0llu;
-  /* The queue's storage is preallocated here and never grows: the
-   * host chose the capacity (normally bk_max_event_queue_depth() of
-   * the model plus headroom for its own event-enqueuing calls), and
-   * scheduling past it fails through the event_queue_overflow host
-   * operation.  create_model() below already schedules events (reset
-   * waveform, clock edges), so the queue must exist first.
+  /* The queue and its storage live in the context buffer and never
+   * grow: the host chose the capacity (normally
+   * bk_max_event_queue_depth() of the model plus headroom for its own
+   * event-enqueuing calls), and scheduling past it fails through the
+   * event_queue_overflow host operation.  create_model() below
+   * already schedules events (reset waveform, clock edges), so the
+   * queue must exist first.
    */
-  simHdl->queue = new EventQueue(simHdl, event_queue_capacity);
+  simHdl->queue =
+    new (context_base + context_queue_offset())
+      EventQueue(simHdl, event_queue_capacity,
+                 (tEvent*) (context_base + context_events_offset()));
   simHdl->need_dummy_edges = 0;
   simHdl->model->create_model(simHdl, master != 0);
   simHdl->top_symbol.key = "";
@@ -598,7 +695,11 @@ tSimStateHdl bk_sync_init(tModel model, tBool master,
   return simHdl;
 }
 
-/* Shutdown the Bluesim kernel */
+/* Shutdown the Bluesim kernel.  The simulation context is torn down
+ * in place: nothing here frees the caller's context buffer, which
+ * afterwards is the caller's to reuse (including for another
+ * bk_sync_init()) or release.
+ */
 void bk_shutdown(tSimStateHdl simHdl)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL))
@@ -608,13 +709,14 @@ void bk_shutdown(tSimStateHdl simHdl)
 
   simHdl->model->destroy_model();
   shutdown_mem_allocator();
-  for (unsigned int i = 0; i < simHdl->clocks.size(); ++i)
-    free(simHdl->clocks[i].name);
-  simHdl->clocks.clear();
-  delete simHdl->queue;
+  /* the clock and plus-arg tables are fixed storage embedded in the
+   * context buffer; nothing to free
+   */
+  simHdl->num_clocks = 0;
+  simHdl->queue->~EventQueue();
   simHdl->queue = NULL;
   clear_plusargs(simHdl);
-  delete simHdl;
+  simHdl->~tSimState();
 }
 
 /* Get the host operations / host context registered with
@@ -840,10 +942,20 @@ tClock bk_define_clock(tSimStateHdl simHdl,
   if ((simHdl == NULL) || (simHdl->queue == NULL) || (name == NULL))
     return BAD_CLOCK_HANDLE;
 
-  tClock clk = simHdl->clocks.size();
+  /* the clock table is fixed-capacity storage in the caller's
+   * context buffer (see BK_MAX_CLOCKS in kernel.h)
+   */
+  if (simHdl->num_clocks >= BK_MAX_CLOCKS)
+    return BAD_CLOCK_HANDLE;
 
-  tClockInfo ci;
-  ci.name = strdup(name);
+  tClock clk = simHdl->num_clocks;
+
+  tClockInfo& ci = simHdl->clocks[clk];
+  /* the name is copied into the entry's embedded buffer (truncated
+   * to fit); nothing is allocated
+   */
+  strncpy(ci.name, name, BK_CLOCK_NAME_MAX - 1);
+  ci.name[BK_CLOCK_NAME_MAX - 1] = '\0';
   ci.current_value = initial_value;
   ci.initial_value = initial_value;
   ci.has_initial_value = (has_initial_value != 0);
@@ -863,7 +975,7 @@ tClock bk_define_clock(tSimStateHdl simHdl,
   ci.posedge_limit = 0llu;
   ci.negedge_limit = 0llu;
 
-  simHdl->clocks.push_back(ci);
+  ++(simHdl->num_clocks);
 
   return clk;
 }
@@ -878,7 +990,7 @@ tStatus bk_alter_clock(tSimStateHdl simHdl,
                        tTime       low_duration)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL) ||
-      (clk >= simHdl->clocks.size()))
+      (clk >= simHdl->num_clocks))
     return BK_ERROR;
 
   simHdl->clocks[clk].current_value     = initial_value;
@@ -902,7 +1014,7 @@ tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
                               tEdgeDirection dir)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL) ||
-      (clk >= simHdl->clocks.size()))
+      (clk >= simHdl->num_clocks))
     return BK_ERROR;
 
   if (dir == POSEDGE)
@@ -926,7 +1038,7 @@ tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
 			      tClock clk, tEdgeDirection dir, tTime at)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL) ||
-      (clk >= simHdl->clocks.size()) || (at < simHdl->sim_time))
+      (clk >= simHdl->num_clocks) || (at < simHdl->sim_time))
     return BK_ERROR;
 
   if ( (simHdl->need_dummy_edges > 0) ||
@@ -955,7 +1067,7 @@ tStatus bk_enqueue_initial_clock_edge(tSimStateHdl simHdl,
 				      tClock clk, tEdgeDirection dir)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL) ||
-      (clk >= simHdl->clocks.size()))
+      (clk >= simHdl->num_clocks))
     return BK_ERROR;
 
   // XXX when a warning/error mechanism becomes available,
@@ -984,7 +1096,7 @@ tClock bk_get_clock_by_name(tSimStateHdl simHdl, const char* name)
 {
   if (name)
   {
-    tClock clk = simHdl->clocks.size();
+    tClock clk = simHdl->num_clocks;
     while (clk > 0)
     {
       if (!strcmp(name, simHdl->clocks[--clk].name))
@@ -1015,7 +1127,7 @@ tClock bk_get_or_define_clock(tSimStateHdl simHdl, const char* name)
 /* Get the number of clocks defined in the kernel */
 tUInt32 bk_num_clocks(tSimStateHdl simHdl)
 {
-  return simHdl->clocks.size();
+  return simHdl->num_clocks;
 }
 
 /* Get the clock handle for the nth clock.
@@ -1024,7 +1136,7 @@ tUInt32 bk_num_clocks(tSimStateHdl simHdl)
  */
 tClock bk_get_nth_clock(tSimStateHdl simHdl, tUInt32 n)
 {
-  if (n >= simHdl->clocks.size())
+  if (n >= simHdl->num_clocks)
     return BAD_CLOCK_HANDLE;
   else
     return ((tClock) n);
@@ -1034,28 +1146,28 @@ tClock bk_get_nth_clock(tSimStateHdl simHdl, tUInt32 n)
 
 const char* bk_clock_name(tSimStateHdl simHdl, tClock clk)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return NULL;
   return simHdl->clocks[clk].name;
 }
 
 tClockValue bk_clock_initial_value(tSimStateHdl simHdl, tClock clk)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return CLK_LOW;
   return simHdl->clocks[clk].initial_value;
 }
 
 tTime bk_clock_first_edge(tSimStateHdl simHdl, tClock clk)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return 0;
   return simHdl->clocks[clk].initial_delay;
 }
 
 tTime bk_clock_duration(tSimStateHdl simHdl, tClock clk, tClockValue value)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return 0;
   if (value == CLK_LOW)
     return simHdl->clocks[clk].low_phase_length;
@@ -1065,7 +1177,7 @@ tTime bk_clock_duration(tSimStateHdl simHdl, tClock clk, tClockValue value)
 
 tClockValue bk_clock_val(tSimStateHdl simHdl, tClock clk)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return CLK_LOW;
 
   return simHdl->clocks[clk].current_value;
@@ -1073,17 +1185,19 @@ tClockValue bk_clock_val(tSimStateHdl simHdl, tClock clk)
 
 tUInt64 bk_clock_cycle_count(tSimStateHdl simHdl, tClock clk)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return 0llu;
 
-  return std::max(simHdl->clocks[clk].posedge_count,
-                  simHdl->clocks[clk].negedge_count);
+  return (simHdl->clocks[clk].posedge_count >
+          simHdl->clocks[clk].negedge_count)
+             ? simHdl->clocks[clk].posedge_count
+             : simHdl->clocks[clk].negedge_count;
 }
 
 tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 			    tClock clk, tEdgeDirection dir)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return 0llu;
 
   if (dir == POSEDGE)
@@ -1114,26 +1228,26 @@ tTime bk_now(tSimStateHdl simHdl)
 // A valid time unit is of the form: (1 | 10 | 100)<space>(s | ms | us | ns | ps | fs)
 // The Verilog standard allows more whitespace, but that doesn't seem useful here.
 // This test is ugly, but hopefully simple and correct.
+// It examines the C string in place and allocates nothing.
 bool valid_unit(const char* scale_unit) {
-  std::string scale_unit_str(scale_unit);
-  size_t unit_pos = 0;
-
-  if(scale_unit_str.find("1 ") == 0) {
-    unit_pos = 2;
-  } else if(scale_unit_str.find("10 ") == 0) {
-    unit_pos = 3;
-  } else if(scale_unit_str.find("100 ") == 0) {
-    unit_pos = 4;
-  }
-
-  // We didn't match a valid scale, so fail.
-  if(unit_pos == 0)
+  if (scale_unit == NULL)
     return false;
 
-  std::string unit_str = scale_unit_str.substr(unit_pos);
+  const char* unit = NULL;
+  if (strncmp(scale_unit, "100 ", 4) == 0)
+    unit = scale_unit + 4;
+  else if (strncmp(scale_unit, "10 ", 3) == 0)
+    unit = scale_unit + 3;
+  else if (strncmp(scale_unit, "1 ", 2) == 0)
+    unit = scale_unit + 2;
 
-  return (unit_str == "s"  || unit_str == "ms" || unit_str == "us" ||
-          unit_str == "ns" || unit_str == "ps" || unit_str == "fs");
+  // We didn't match a valid scale, so fail.
+  if (unit == NULL)
+    return false;
+
+  return ((strcmp(unit, "s")  == 0) || (strcmp(unit, "ms") == 0) ||
+          (strcmp(unit, "us") == 0) || (strcmp(unit, "ns") == 0) ||
+          (strcmp(unit, "ps") == 0) || (strcmp(unit, "fs") == 0));
 }
 
 /* Set the simulation timescale */
@@ -1191,7 +1305,7 @@ tBool bk_is_combo_sched(tSimStateHdl simHdl)
 
 tTime bk_clock_last_edge(tSimStateHdl simHdl, tClock clk)
 {
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return ((tTime) 0llu);
 
   // Case 1: we are before the initial edge time
@@ -1236,7 +1350,7 @@ tTime bk_clock_last_edge(tSimStateHdl simHdl, tClock clk)
 
 tTime bk_clock_combinational_time(tSimStateHdl simHdl, tClock clk)
 {
-  if (simHdl->queue && (clk < simHdl->clocks.size()))
+  if (simHdl->queue && (clk < simHdl->num_clocks))
     return simHdl->clocks[clk].combinational_at;
 
   return ((tTime) 0llu);
@@ -1260,7 +1374,7 @@ tStatus bk_quit_after_edge(tSimStateHdl simHdl,
 			   tClock clk, tEdgeDirection dir, tUInt64 cycle)
 {
   if ((simHdl == NULL) || (simHdl->queue == NULL) ||
-      (clk >= simHdl->clocks.size()))
+      (clk >= simHdl->num_clocks))
     return BK_ERROR;
 
   if (dir == POSEDGE)
@@ -1341,7 +1455,7 @@ tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk)
   if (bk_is_running(simHdl))
     return BK_ERROR;
 
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
     return BK_ERROR;
 
   /* once $finish has been called there is nothing to step */
@@ -1482,9 +1596,9 @@ void bk_dump_cycle_counts(tSimStateHdl simHdl, const char* label, tClock clk)
     host_write_str(simHdl, BS_HOST_STDOUT, ": ");
     indent = strlen(label) + 2;
   }
-  if (clk >= simHdl->clocks.size())
+  if (clk >= simHdl->num_clocks)
   {
-    for (tClock n = 0; n < simHdl->clocks.size(); ++n)
+    for (tClock n = 0; n < simHdl->num_clocks; ++n)
     {
       if (n > 0 && indent != 0)
         host_write_char(simHdl, BS_HOST_STDOUT, ' ', indent);

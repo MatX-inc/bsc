@@ -3,7 +3,12 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
+#include "bs_wide_data.h"
+#include "bs_prim_storage.h"
 #include "bs_reset.h"
+
+/* aux storage words a wide Counter needs for its secondary values */
+#define BS_COUNTER_AUX_WORDS(b) (6u * BS_AUX_WORDS(b))
 
 // This is the definition of the Probe primitive.
 template<typename T>
@@ -11,21 +16,23 @@ class MOD_Counter : public Module
 {
  public:
   MOD_Counter(tSimStateHdl simHdl, const char* name, Module* parent,
+	      tStateLayout* sto, unsigned int* aux,
 	      unsigned int width, const T& init)
     : Module(simHdl, name, parent),
+      val(bs_bind_elem(val_stg_, sto->claim(), width)),
       saved_at(~bk_now(sim_hdl)),
       a_at(~bk_now(sim_hdl)), b_at(~bk_now(sim_hdl)),
       c_at(~bk_now(sim_hdl)), f_at(~bk_now(sim_hdl)),
-
-      bits(width), reset_val(init)
+      bits(width)
   {
-    init_val(val, bits);
+    bs_bind_aux(saved_val, &aux, bits);
+    bs_bind_aux(a, &aux, bits);
+    bs_bind_aux(b, &aux, bits);
+    bs_bind_aux(c, &aux, bits);
+    bs_bind_aux(f, &aux, bits);
+    bs_bind_aux(reset_val, &aux, bits);
+    reset_val = init;
     write_undet(&val, bits);
-    init_val(a, bits);
-    init_val(b, bits);
-    init_val(c, bits);
-    init_val(f, bits);
-    init_val(saved_val, bits);
     in_reset = false;
     suppress_write = false;
   }
@@ -159,8 +166,9 @@ class MOD_Counter : public Module
 
  public:
  private:
-  T val;
-  T saved_val;
+  T val_stg_;            // wide: the view object behind 'val'
+  T& val;                // the live element value, in caller storage
+  T saved_val;           // aux-bound when wide
   T a;
   T b;
   T c;

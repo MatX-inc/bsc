@@ -539,6 +539,19 @@ void WideData::setSize(unsigned int width)
     data = (unsigned int*) alloc_mem(nWords);
 }
 
+// Rebind as a non-owning view over caller-provided storage.  Any
+// owned storage is released first; the caller's buffer is borrowed
+// and left uninitialized.
+void WideData::bind(unsigned int* buf, unsigned int bits)
+{
+  if (ownsData && (data != NULL))
+    free_mem(data, nWords);
+  nBits  = bits;
+  nWords = NUM_WORDS(bits);
+  ownsData = false;
+  data = buf;
+}
+
 unsigned char WideData::getByte(unsigned int byte_num) const
 {
   return ((data[byte_num/BYTES_PER_WORD] >> (8 * (byte_num % BYTES_PER_WORD))) & 0xFF);

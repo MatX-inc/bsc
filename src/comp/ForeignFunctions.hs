@@ -227,10 +227,6 @@ is_str e = (is_str_lit e) || (is_str_def e) || (is_str_param e)
 is_real :: AExpr -> Bool
 is_real e = aType e == ATReal
 
-str_size :: AExpr -> [Char]
-str_size (ASDef (ATString Nothing) _) = ""
-str_size e                            = show (aSize e)
-
 argExpr :: Argument -> Maybe AExpr
 argExpr (Arg e)     = Just e
 argExpr (Field e _) = Just e
@@ -257,13 +253,15 @@ encodeArgs :: [Argument] -> String
 encodeArgs args =
   let prefix (ASDef _ aid) | isSignedId aid = "-"
       prefix _                              = ""
-      encode (Arg e)     | is_str e  = Just ((str_size e) ++ "s")
+      -- a string literal is a character array whose byte count rides
+      -- in the descriptor (the sized "Ns" form); a string def or
+      -- parameter is a tStr node pointer (the unsized "s" form)
+      encode (Arg e)     | is_str_lit e = Just ((show (aSize e)) ++ "s")
+                         | is_str e  = Just "s"
                          | is_real e = Just "r"
                          | otherwise = Just ((prefix e) ++ (show (aSize e)))
       encode (Field e _) = Just ((prefix e) ++ (show (aSize e)) ++ "p")
-      encode (Ptr e)     = if (is_str e)
-                           then Just "s"
-                           else Just ((prefix e) ++ (show (aSize e)) ++ "p")
+      encode (Ptr e)     = Just ((prefix e) ++ (show (aSize e)) ++ "p")
       encode (Copy a)    = encode a
       encode (NoConst a) = encode a
       encode _           = Nothing
@@ -415,7 +413,11 @@ mkSystemTaskArgs add_sim add_this ret_arg args =
   in sim ++ this ++ argstr ++ (maybeToList ret_arg) ++ rest
 
 convAExprToArgument :: AExpr -> Argument
-convAExprToArgument e | (is_str e)     = Ptr e
+-- strings pass by value: a literal is its file-scope character
+-- array, with the length carried in the argument descriptor (the
+-- sized "Ns" form); a def or parameter is already a tStr node
+-- pointer (the unsized "s" form)
+convAExprToArgument e | (is_str e)     = Arg e
                       | (is_real e)    = Arg e
                       | (aSize e) > 64 = Ptr e
                       | otherwise      = Arg e

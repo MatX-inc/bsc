@@ -1,0 +1,96 @@
+# Tests that a Bluesim model makes ZERO allocator calls end to end:
+#
+#  * the new_MODEL sizing call, construction in caller-provided
+#    buffers, and bk_sync_init() touch no allocator (the model is
+#    placement-built in the host's storage; the kernel's bookkeeping
+#    is fixed storage inside the caller-provided context);
+#  * busy cycles -- $display with strings, wide values and reals,
+#    RegFile (preloaded) and BRAM traffic, FIFO and submodule
+#    activity, and $swrite through a stack buffer -- make no
+#    Bluesim-allocator or C-allocator/operator-new calls at all: the
+#    formatting engine stages everything in stack storage;
+#  * the run to $finish and bk_shutdown() allocate (and free)
+#    nothing.
+#
+# The host_hostalloc harness interposes the C allocators and operator
+# new/new[], records callers while the whole lifecycle runs, and
+# requires that no recorded caller lies outside ld.so/libc (the host's
+# own stdio is the only excused allocator user) and that the model's
+# bs_mem_alloc_counters() still read 0/0 after shutdown.
+#
+# The same harness validates the state write-through both ways: it
+# writes the design's 'poke' register through the state buffer at its
+# published offset and sees the simulation react (a rule mirrors the
+# value, and the design's own $display reports it), and it reads
+# 'cnt', 'mirror' and a wide register back at their published offsets
+# and checks them against the simulated values.
+#
+# Bluesim only; the property under test is how the Bluesim model
+# behaves.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    # only stdout is compared: the harness prints raw counts (the
+    # host's own stdio allocations vary) to stderr, which is kept in
+    # a .err file for inspection
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set errfile "[file rootname $logfile].err"
+    set status [catch "exec ./$cmd > $logfile 2> $errfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the design runs to completion through the normal flow
+    compile_object_pass sysHostAlloc.bsv sysHostAlloc
+    link_objects_pass {sysHostAlloc} sysHostAlloc
+    sim_output sysHostAlloc
+    compare_file sysHostAlloc.out
+
+    if [build_host_harness host_hostalloc host_hostalloc.cxx] {
+
+        # the whole lifecycle makes no allocator calls, and state
+        # write-through works in both directions
+        run_host_harness \
+            "host_hostalloc sysHostAlloc.cexe.so sysHostAlloc" \
+            [list 0] host_hostalloc.out
+        compare_file host_hostalloc.out
+    }
+}

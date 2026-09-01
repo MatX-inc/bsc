@@ -19,6 +19,7 @@ module SimCCBlock( SBId
                  , mkGateConst
                  , mkLiteralName
                  , mkStringLiteralName
+                 , mkStringObjName
                  , simCCBlockToClassDeclaration
                  , simCCBlockToClassDefinition
                  , simCCScheduleToFunctionDefinition
@@ -38,6 +39,10 @@ module SimCCBlock( SBId
                  , pfxPort
                  , pfxMeth
                  , renameIds
+                 , entryUnitBytes
+                 , entryAlignBytes
+                 , layoutArea
+                 , ifcPortOffsets
                  ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -50,7 +55,7 @@ import ASyntax
 import ASyntaxUtil
 import SimDomainInfo(DomainId)
 import Wires(ClockDomain, noClockDomain, writeClockDomain)
-import VModInfo(VName(..), vName_to_id)
+import VModInfo(VName(..), vName_to_id, getVNameString)
 import CCSyntax
 import ForeignFunctions
 import SimPrimitiveModules
@@ -65,7 +70,7 @@ import Eval
 import ErrorUtil(internalError)
 
 import Data.Maybe
-import Data.List(partition, intersperse, intercalate, nub, sortBy)
+import Data.List(partition, intersperse, intercalate, nub, sortBy, mapAccumL)
 import Data.List.Split(wordsBy)
 import Numeric(showHex)
 import Control.Monad(when)
@@ -359,10 +364,19 @@ mkLiteralName nBits val | nBits > 64 =
 mkStringLiteralName :: Integer -> String
 mkStringLiteralName n = "__str_literal_" ++ (show n)
 
+-- the name of the constant-initialized tStr leaf object emitted next
+-- to a string literal's character array (see bs_str.h)
+mkStringObjName :: Integer -> String
+mkStringObjName n = "__str_obj_" ++ (show n)
+
 -- convert an AType into a combinator for the appropriate C type
 aTypeToCType :: AType -> (CCFragment -> CCFragment)
 aTypeToCType (ATBit size) = (`ofType` (bitsType size CTunsigned))
-aTypeToCType (ATString _) = (`ofType` (classType "std::string"))
+-- a string value is a pointer to an immutable tStr node: a literal
+-- leaf object, a parameter leaf passed in through the constructor,
+-- or a concatenation node member built once in the constructor
+-- (see bs_str.h)
+aTypeToCType (ATString _) = ptr . constant . (userType "tStr")
 aTypeToCType (ATReal) = (`ofType` doubleType)
 aTypeToCType (ATTuple _) = userType "WideData"
 aTypeToCType (ATArray _ _) = internalError "Unexpected array"
@@ -370,10 +384,12 @@ aTypeToCType (ATAbstract _ _) = internalError "Unexpected abstract type"
 
 -- ===============
 
-pfxPort, pfxParam, pfxDef, pfxMeth, pfxInst, pfxMod, pfxArg, pfxModel :: String
+pfxPort, pfxParam, pfxDef, pfxMeth, pfxInst, pfxMod, pfxArg, pfxModel,
+    pfxConcat :: String
 
 pfxPort = "PORT_"
 pfxParam = "PARAM_"
+pfxConcat = "CONCAT_"
 pfxDef = "DEF_"
 pfxMeth = "METH_"
 pfxInst = "INST_"
@@ -552,9 +568,11 @@ isPrimBlock id = any (\sb -> (sb_id sb) == id) primBlocks
 --      as polymorphic arguments to foreign functions, since
 --      these will be passed as unsigned int*s.
 --   2. values of string literals appearing in converted
---      expressions, since these need to be std::string
---      values defined outside of the expressions in which they
---      occur, so that embedded null characters are handled.
+--      expressions, since these need to be file-scope character
+--      arrays (and, when used as string values, tStr leaf objects
+--      carrying their byte counts) defined outside of the
+--      expressions in which they occur, so that embedded null
+--      characters are handled.
 --   3. whether any expression contained a foreign function
 --      whose arguments were copied, so that the memory can
 --      be released after the function returns.
@@ -563,6 +581,19 @@ isPrimBlock id = any (\sb -> (sb_id sb) == id) primBlocks
 data ConvState = CS { literals :: [(ASize,Integer)]
                     , str_literal_count :: Integer
                     , str_map :: M.Map String Integer
+                    -- string literals used as string values, which
+                    -- get a tStr leaf object next to their character
+                    -- array (see bs_str.h)
+                    , str_objs :: S.Set String
+                    -- string concatenations of the current block,
+                    -- mapped to the node members that hold them
+                    -- (built once, in the constructor)
+                    , str_concat_map :: M.Map AExpr String
+                    -- member string defs whose value is a
+                    -- concatenation: the def pointer is initialized
+                    -- in the constructor, so rule bodies do not
+                    -- recompute it
+                    , str_concat_defs :: M.Map AId String
                     , copied_args :: Bool
                     , function_map :: ForeignFuncMap
                     -- wide data declared in block scopes (looked up by scope)
@@ -582,6 +613,11 @@ data ConvState = CS { literals :: [(ASize,Integer)]
                     , stk_decls :: [CCFragment]
                     , stk_count :: Integer
                     , stk_names :: [String]
+                    -- whether we are converting inside a function body,
+                    -- where declarations can be hoisted to the top of the
+                    -- function (as opposed to a constructor initializer
+                    -- list, where wide literal views must be built inline)
+                    , in_function :: Bool
                     }
   deriving (Eq,Show);
 
@@ -589,7 +625,8 @@ type WideDefMap = M.Map String [AId]
 
 initialState :: ForeignFuncMap -> WideDefMap -> String -> ConvState
 initialState ff_map wdef_map undet_type =
-    CS [] 1 M.empty False ff_map wdef_map [] [] M.empty undet_type [] 0 []
+    CS [] 1 M.empty S.empty M.empty M.empty False ff_map wdef_map [] [] M.empty
+       undet_type [] 0 [] False
 
 type ExprConv  = State ConvState CCExpr
 type ExprsConv = State ConvState [CCExpr]
@@ -621,6 +658,44 @@ getStringLiteralName s =
        case M.lookup s sm of
          (Just n) -> return $ mkStringLiteralName n
          Nothing  -> internalError $ "unknown string literal: " ++ s
+
+-- register a string literal used as a string value, so that a tStr
+-- leaf object is emitted next to its character array
+addStringObj :: String -> State ConvState ()
+addStringObj s = do addStringLit s
+                    modify (\st -> st { str_objs = S.insert s (str_objs st) })
+
+getStringObjName :: String -> State ConvState String
+getStringObjName s =
+    do sm <- gets str_map
+       case M.lookup s sm of
+         (Just n) -> return $ mkStringObjName n
+         Nothing  -> internalError $ "unknown string literal: " ++ s
+
+-- the bare character array of a string literal (NUL-terminated; a
+-- sized consumer carries the byte count in its argument descriptor)
+strLitArrayRef :: String -> ExprConv
+strLitArrayRef s = do addStringLit s
+                      nm <- getStringLiteralName s
+                      return $ var nm
+
+-- record the current block's string concatenations: the map from
+-- each concatenation expression to its node member, and the map from
+-- concat-valued member defs to the nodes holding their values
+setStrConcats :: M.Map AExpr String -> M.Map AId String ->
+                 State ConvState ()
+setStrConcats emap dmap =
+    modify (\st -> st { str_concat_map = emap, str_concat_defs = dmap })
+
+-- the node member holding a string concatenation's value
+getStrConcatNode :: AExpr -> State ConvState String
+getStrConcatNode e =
+    do cm <- gets str_concat_map
+       case M.lookup e cm of
+         (Just nm) -> return nm
+         Nothing   -> internalError $
+                        "SimCCBlock.getStrConcatNode: no node for: " ++
+                        (show e)
 
 -- ----------------------
 -- Stack storage for wide temporaries
@@ -667,6 +742,38 @@ takeStkDecls =
     do ds <- gets stk_decls
        modify (\s -> s { stk_decls = [], stk_count = 0, stk_names = [] })
        return (reverse ds)
+
+-- File-scope literals are emitted as plain word arrays (see
+-- mkLiteralDecls in SimBlocksToC), so a function that uses a wide
+-- literal as a WideData value declares one non-owning view of the
+-- array at the top of the function.  Constructing the view stores a
+-- few fields and makes no allocator calls.
+mkLitViewDecl :: String -> Integer -> CCFragment
+mkLitViewDecl name w =
+    construct (constant $ (mkVar name) `ofType` (bitsType 65 CTunsigned))
+              [var (name ++ "_arr"), mkUInt32 w]
+
+-- hoist the view declaration for a wide literal, at most once per function
+addLitView :: Integer -> Integer -> State ConvState ()
+addLitView w x =
+    do let name = mkLiteralName w x
+       names <- gets stk_names
+       when (name `notElem` names) $
+           do modify (\s -> s { stk_names = name:(stk_names s) })
+              addStkDecl (mkLitViewDecl name w)
+
+-- reference a wide literal as a WideData value: inside a function,
+-- through the hoisted view; elsewhere (constructor initializer
+-- lists), through a view constructed inline
+mkLitRef :: Integer -> Integer -> State ConvState CCExpr
+mkLitRef w x =
+    do addLit (w,x) -- record the literal for out-of-line generation
+       in_fn <- gets in_function
+       if in_fn
+         then do addLitView w x
+                 return $ var (mkLiteralName w x)
+         else return $ (var "tUWide") `cCall`
+                           [ var ((mkLiteralName w x) ++ "_arr"), mkUInt32 w ]
 
 setFuncWData :: [AId] -> State ConvState ()
 setFuncWData wids = modify (\s -> s {func_wdata = wids})
@@ -997,6 +1104,12 @@ convertArgList args = convert args (encodeArgs args)
                                             return ((var "this"):rest')
         convert ((ArgStr):rest)    str = do rest' <- convert rest str
                                             return ((mkStr str):rest')
+        -- a string literal argument passes its bare character array;
+        -- the sized "Ns" descriptor carries the byte count
+        convert ((Arg (ASStr _ _ s)):rest) str =
+          do e' <- strLitArrayRef s
+             rest' <- convert rest str
+             return (e':rest')
         convert ((Arg e):rest)     str = do e' <- aExprToCExpr noRet e
                                             rest' <- convert rest str
                                             return (e':rest')
@@ -1006,7 +1119,8 @@ convertArgList args = convert args (encodeArgs args)
         convert ((Ptr (ASInt _ ty val)):rest) str | aSize ty <= 64 =
           do let w  = aSize ty
                  x  = ilValue val
-                 e' = (var (mkLiteralName w x)) `cDot` "data"
+                 -- pass the literal's file-scope word array directly
+                 e' = var ((mkLiteralName w x) ++ "_arr")
              addLit (w,x) -- record the literal for out-of-line generation
              rest' <- convert rest str
              return (e':rest')
@@ -1165,8 +1279,12 @@ aExprToCExpr _ (APrim _ _ PrimBOr args) = argCount (>1) args $
   simplePrimN noRet (cOr) (toWString PrimBOr) args
 aExprToCExpr _ (APrim _ _ PrimBNot args) = argCount (==1) args $
   simplePrim1 noRet (cNot) (toWString PrimBNot) (args!!0)
+-- a string concatenation's value lives in a node member of the
+-- enclosing module, built once in its constructor; a use is just the
+-- node's address
 aExprToCExpr _ p@(APrim _ _ PrimStringConcat args) = argCount (==2) args $
-  simplePrim2 noRet (cAdd) (ppString PrimAdd) (args!!0) (args!! 1)
+  do nm <- getStrConcatNode p
+     return $ cAddr (var nm)
 aExprToCExpr _ p@(APrim _ _ _ _) =
   internalError ("unhandled primitive: " ++ (show p))
 aExprToCExpr _ (AMethCall _ id mid args) =
@@ -1207,15 +1325,16 @@ aExprToCExpr _ (ASInt _ (ATBit w) val) | w == 1    =
                                        | w <= 64   =
   do return $ mkUInt64 (ilValue val)
                                        | otherwise =
-  do let x = ilValue val
-     addLit (w,x) -- record the wide literal for out-of-line generation
-     return $ var (mkLiteralName w x)
+  do mkLitRef w (ilValue val)
 aExprToCExpr _ (ASReal _ _ val) = return $ mkDouble val
+-- a string literal used as a string value: the address of its
+-- constant-initialized tStr leaf object (see bs_str.h).  Call sites
+-- that want the bare character array instead (sized-descriptor
+-- system task arguments, primitive file names) use strLitArrayRef.
 aExprToCExpr _ (ASStr _ _ str) =
---  do return $ mkStr str
-  do addStringLit str
-     nm <- getStringLiteralName str
-     return $ var nm
+  do addStringObj str
+     nm <- getStringObjName str
+     return $ cAddr (var nm)
 aExprToCExpr ret f@(AFunCall {}) =
   do ff_map <- gets function_map
      let (ret_style,name,arg_list) = mkCallExpr ff_map ret f
@@ -1280,11 +1399,12 @@ simFnStmtToCStmt (SFSDef isPort (ty,aid) Nothing) =
              addStkArray arr_name w
              return $ construct typed_id [var arr_name, mkUInt32 w]
      else return $ decl typed_id
-simFnStmtToCStmt (SFSDef isPort (ty@(ATString (Just sz)),aid) (Just expr)) =
+-- a local string def is a plain node pointer (see bs_str.h)
+simFnStmtToCStmt (SFSDef isPort (ty@(ATString _),aid) (Just expr)) =
   do let dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
          typed_id = (aTypeToCType ty) dst
      v <- aExprToCExpr noRet expr
-     return $ construct typed_id [v, mkUInt32 sz]
+     return $ decl $ typed_id `assign` v
 simFnStmtToCStmt (SFSDef isPort (ty,aid) (Just expr)) =
   do ff_map <- gets function_map
      let isCase (APrim _ _ PrimCase _) = True
@@ -1328,6 +1448,17 @@ simFnStmtToCStmt (SFSAssign isPort aid
      c_arms <- concatMapM armToCCFragment arms_combined
      c_def <- simFnStmtToCStmt (SFSAssign isPort aid def)
      return $ switch c_idx c_arms (Just [c_def])
+simFnStmtToCStmt (SFSAssign isPort aid e@(APrim _ _ PrimStringConcat _)) =
+  do cdefs <- gets str_concat_defs
+     if (not isPort) && (M.member aid cdefs)
+       then -- the def's node and pointer are built once, in the
+            -- constructor; there is nothing to recompute per firing
+            return $ blankLines 0
+       else do v <- aExprToCExpr noRet e
+               let dst = if isPort
+                         then aPortIdToCLval aid
+                         else aDefIdToCLval aid
+               return $ dst `assign` v
 simFnStmtToCStmt (SFSAssign isPort aid expr) =
   do ff_map <- gets function_map
      wdata_test <- getWDataTest
@@ -1486,10 +1617,12 @@ simFnToCDefinition is_static scope c_args prologue
          wdata_fn = concatMap (wideLocalDef) stmts
      setFuncWData wdata_fn
      setFuncArgs (map snd args)
+     modify (\s -> s { in_function = True })
      body_stmts <- mapM simFnStmtToCStmt non_return_stmts
      final_stmts <- mapM simFnStmtToCStmt return_stmts
-     -- stack storage for the function's wide temporaries, declared
-     -- ahead of the statements that construct views over it
+     modify (\s -> s { in_function = False })
+     -- stack storage for the function's wide temporaries and literal
+     -- views, declared ahead of the statements that use them
      stk_decl_stmts <- takeStkDecls
      has_copies <- gets copied_args
      let free_copies = if has_copies
@@ -1509,21 +1642,164 @@ memberDecl :: SBMap -> SBId -> AId -> [AExpr] -> CCFragment
 memberDecl sb_map sbid aid args =
   decl $ (moduleType (lookupSB sb_map sbid) args) (aInstIdToCLval aid)
 
+-- ----------------
+-- Auxiliary storage for the wide secondary values of primitives.
+--
+-- A primitive's published element storage holds only its live value
+-- (or entries); its wide SECONDARY values (previous/reset values,
+-- output registers, ...) are non-owning views over an 'unsigned int'
+-- array member of the enclosing generated module -- part of the
+-- module-object region of the caller-provided state buffer -- so
+-- constructing the primitive makes no allocator calls.  The word
+-- counts are owned by the primitive headers as BS_*_AUX_WORDS macros;
+-- the code generator only decides whether any wide value is present
+-- (and therefore whether to emit the array and pass it, or a NULL).
+
+-- The families whose C++ constructors take an aux pointer, keyed by
+-- BSV primitive name: the aux macro and the widths whose wideness
+-- determines whether any aux storage is needed.  The argument
+-- positions mirror classifyPrim in SimBlocksToC.
+primAuxSpec :: SimCCBlock -> [AExpr] -> Maybe (String, [Integer])
+primAuxSpec pb args =
+  let prim = sb_name pb
+      norm_args = snd (sb_naming_fn pb args)
+      geomNat what e =
+        case e of
+          (ASInt _ _ il) -> ilValue il
+          _ -> internalError ("SimCCBlock.primAuxSpec: non-constant " ++
+                              what ++ " argument of " ++ prim ++ ": " ++
+                              ppReadable e)
+      argNat what as n =
+        case (drop n as) of
+          (e:_) -> geomNat what e
+          []    -> internalError ("SimCCBlock.primAuxSpec: missing " ++
+                                  what ++ " argument of " ++ prim)
+      width   = argNat "width" norm_args 0
+      dataW n = argNat "data width" args n
+      enW   n = argNat "enable width" args n
+      reg_prims = [ "RegN", "RegUN", "RegA"
+                  , "CrossingRegN", "CrossingRegUN", "CrossingRegA"
+                  , "RevertReg" ]
+      creg_prims = [ "CRegN5", "CRegUN5", "CRegA5" ]
+      configreg_prims = [ "ConfigRegN", "ConfigRegUN", "ConfigRegA" ]
+      regtwo_prims = [ "RegTwoN", "RegTwoUN", "RegTwoA" ]
+      fifo_prims = [ "FIFO1", "FIFO10", "FIFO2", "FIFO20"
+                   , "SizedFIFO", "SizedFIFO0"
+                   , "FIFOL1", "FIFOL10", "FIFOL2", "FIFOL20"
+                   , "SizedFIFOL", "SizedFIFOL0" ]
+      syncfifo_prims = [ "SyncFIFO", "SyncFIFO0", "SyncFIFO1", "SyncFIFO10"
+                       , "SyncFIFOLevel", "SyncFIFOLevel0" ]
+  in  if prim `elem` reg_prims
+      then Just ("BS_REG_AUX_WORDS", [width])
+      else if prim `elem` creg_prims
+      then Just ("BS_CREG_AUX_WORDS", [width])
+      else if prim `elem` configreg_prims
+      then Just ("BS_CONFIGREG_AUX_WORDS", [width])
+      else if prim `elem` regtwo_prims
+      then Just ("BS_REGTWO_AUX_WORDS", [width])
+      else if prim == "RegAligned"
+      then Just ("BS_REGALIGNED_AUX_WORDS", [width])
+      else if prim `elem` fifo_prims
+      then Just ("BS_FIFO_AUX_WORDS", [width])
+      else if prim `elem` syncfifo_prims
+      then Just ("BS_SYNCFIFO_AUX_WORDS", [width])
+      else if prim == "Counter"
+      then Just ("BS_COUNTER_AUX_WORDS", [width])
+      else if prim == "SyncRegister"
+      then Just ("BS_SYNCREG_AUX_WORDS", [width])
+      else if prim == "LatchCrossingReg"
+      then Just ("BS_LATCHXREG_AUX_WORDS", [width])
+      -- RegFile: ADDR_WIDTH, DATA_WIDTH, LO, HI
+      else if prim == "RegFile"
+      then Just ("BS_REGFILE_AUX_WORDS", [dataW 1])
+      -- RegFileLoad: FILE, ADDR_WIDTH, DATA_WIDTH, LO, HI, BINARY
+      else if prim == "RegFileLoad"
+      then Just ("BS_REGFILE_AUX_WORDS", [dataW 2])
+      -- DualPortRam: ADDR_WIDTH, DATA_WIDTH
+      else if prim == "DualPortRam"
+      then Just ("BS_DPRAM_AUX_WORDS", [dataW 1])
+      -- BRAM1/BRAM2: PIPELINED, ADDR_WIDTH, DATA_WIDTH, MEMSIZE
+      else if prim `elem` ["BRAM1","BRAM2"]
+      then Just ("BS_BRAM_AUX_WORDS", [dataW 2, 1])
+      -- BRAM1Load/BRAM2Load: FILE, PIPELINED, ADDR_WIDTH, DATA_WIDTH,
+      --                      MEMSIZE, BINARY
+      else if prim `elem` ["BRAM1Load","BRAM2Load"]
+      then Just ("BS_BRAM_AUX_WORDS", [dataW 3, 1])
+      -- BRAM1BE/BRAM2BE: PIPELINED, ADDR_WIDTH, DATA_WIDTH, CHUNKSIZE,
+      --                  WE_WIDTH, MEMSIZE
+      else if prim `elem` ["BRAM1BE","BRAM2BE"]
+      then Just ("BS_BRAM_AUX_WORDS", [dataW 2, enW 4])
+      -- BRAM1BELoad/BRAM2BELoad: FILE, PIPELINED, ADDR_WIDTH,
+      --                          DATA_WIDTH, CHUNKSIZE, WE_WIDTH,
+      --                          MEMSIZE, BINARY
+      else if prim `elem` ["BRAM1BELoad","BRAM2BELoad"]
+      then Just ("BS_BRAM_AUX_WORDS", [dataW 3, enW 5])
+      else Nothing
+
+-- the name of the aux array member for a primitive instance
+mkAuxArrName :: AId -> String
+mkAuxArrName aid = pfxInst ++ getIdBaseString aid ++ "__aux"
+
+-- the aux argument to pass to a primitive instance's constructor:
+-- Nothing when the family takes no aux pointer, Just NULL when it
+-- does but no value is wide, Just the array when aux storage exists
+primAuxArg :: SBMap -> (SBId, AId, [AExpr]) -> Maybe CCExpr
+primAuxArg sb_map (sbid, aid, args)
+  | not (isPrimBlock sbid) = Nothing
+  | otherwise =
+      case primAuxSpec (lookupSB sb_map sbid) args of
+        Nothing -> Nothing
+        Just (_, ws) | any (> 64) ws -> Just (var (mkAuxArrName aid))
+                     | otherwise ->
+                         Just (cCast (ptrType (bitsType 32 CTunsigned))
+                                     mkNULL)
+
+-- the aux array member declaration for a primitive instance, when
+-- one is needed.  The array size is the primitive header's aux-words
+-- macro applied to the instance's widths, so the byte counts stay
+-- owned by the C++ headers.
+primAuxDecl :: SBMap -> (SBId, AId, [AExpr]) -> [CCFragment]
+primAuxDecl sb_map (sbid, aid, args)
+  | not (isPrimBlock sbid) = []
+  | otherwise =
+      case primAuxSpec (lookupSB sb_map sbid) args of
+        Just (macro, ws) | any (> 64) ws ->
+          let size_txt = macro ++ "(" ++
+                         intercalate ", " (map itos ws) ++ ")"
+              -- the array suffix rides along in the declarator so the
+              -- size can be a macro call rather than a literal
+              declarator = mkAuxArrName aid ++ "[" ++ size_txt ++ "]"
+          in  [ decl $ unsigned . int $ mkVar declarator ]
+        _ -> []
+
 -- Helper routine for building constructor functions.
 -- Constructors are not represented as SimCCFn, because
 -- they have additional initializer lists and implicit
 -- return types.
-mkCtor :: Maybe String -> SimCCBlock  -> CCFragment
-mkCtor scope sb =
+mkCtor :: Bool -> Maybe String -> SimCCBlock  -> CCFragment
+mkCtor is_top scope sb =
   let prefix = maybe "" (++ "::") scope
       args = [ (aTypeToCType ty) (aArgIdToCLval arg_id)
              | (ty, arg_id, isPort) <- sb_parameters sb
              ]
+      -- the top module binds its interface ports into the caller's
+      -- input and output port buffers (borrowed; see the model
+      -- construction contract in bluesim_kernel_api.h)
+      port_bufs = if is_top
+                  then [ ptr . (userType "unsigned char") $
+                             (mkVar "__ports_in")
+                       , ptr . (userType "unsigned char") $
+                             (mkVar "__ports_out")
+                       ]
+                  else []
   in ctor (mkVar (prefix ++ pfxMod ++ (sb_name sb)))
           ([ (userType "tSimStateHdl") $ (mkVar "simHdl")
            , ptr . constant . CCSyntax.char $ (mkVar "name")
            , ptr . (userType "Module") $ (mkVar "parent")
-           ] ++ args)
+           -- the element-storage cursor the module tree is being
+           -- constructed against (see bs_prim_storage.h)
+           , ptr . (userType "tStateLayout") $ (mkVar "__sto")
+           ] ++ port_bufs ++ args)
 
 -- Add arguments for a constructor determined by the SimCCBlock.
 -- This is used for FIFOs, where we want to use the same C++ module
@@ -1533,49 +1809,234 @@ addSBArgs sb_map (sbid,aid,args) =
   let sb = lookupSB sb_map sbid
   in (aid, snd (sb_naming_fn sb args))
 
--- Create an initlist for use with `withInits`
-mkStateInitList :: [(AId,[AExpr])] -> ExprsConv
-mkStateInitList state_defs =
-  -- we replace any references to ports or parameters with the argument,
-  -- since the memory location for ports may not be initialized yet
-  let replaceInputs (ASPort t i)  = ASPort t i
-      replaceInputs (ASParam t i) = ASPort t i
-      replaceInputs x             = x
-      mkOne (aid,args) =
-          do let args' = mapAExprs replaceInputs  args
-             arg_list <- mapM (aExprToCExpr noRet) args'
+-- Create an initlist for use with `withInits`.
+-- Every sub-instance receives the element-storage cursor ('__sto',
+-- the constructor's tStateLayout argument): a primitive claims its
+-- own published entry from it (plus an aux pointer for the families
+-- that keep wide secondary values, see primAuxArg), and a generated
+-- submodule walks it recursively for its own subtree.
+-- We replace any references to ports or parameters with the ctor
+-- argument, since the memory location for ports may not be
+-- initialized yet.  (Shallow: instantiation arguments are simple
+-- references or string concatenations, whose own operands are
+-- handled through their nodes.)
+replaceCtorInputs :: AExpr -> AExpr
+replaceCtorInputs (ASPort t i)  = ASPort t i
+replaceCtorInputs (ASParam t i) = ASPort t i
+replaceCtorInputs x             = x
+
+mkStateInitList :: SBMap -> [(SBId,AId,[AExpr])] -> ExprsConv
+mkStateInitList sb_map state_defs =
+      -- A string-typed argument: a generated submodule takes string
+      -- values (tStr node pointers, see bs_str.h), so any string
+      -- expression converts as a value -- a concatenation's node
+      -- member is finished by the time the submodule is
+      -- constructed, because the nodes are declared (and therefore
+      -- initialized) before the submodule members.  A primitive
+      -- (RegFile/BRAM load file names) takes the bare character
+      -- array for a literal and a node pointer otherwise (it
+      -- flattens the tree when it loads the file).
+  let cvtArg is_prim e | isStringType (aType e) =
+          case e of
+            (ASStr _ _ s) | is_prim -> strLitArrayRef s
+            _ -> aExprToCExpr noRet e
+      cvtArg _ e = aExprToCExpr noRet e
+      mkOne (sbid,aid,raw_args) =
+          do let sb = lookupSB sb_map sbid
+                 args = snd (sb_naming_fn sb raw_args)
+                 args' = mapAExprs replaceCtorInputs args
+             arg_list <- mapM (cvtArg (isPrimBlock sbid)) args'
              let name = mkStr (getIdBaseString aid)
+                 aux = case primAuxArg sb_map (sbid, aid, raw_args) of
+                         Nothing -> []
+                         Just e  -> [e]
              return $ cCall (aInstIdToC aid)
-                        ([var "simHdl", name, var "this"] ++ arg_list)
+                        ([var "simHdl", name, var "this", var "__sto"] ++
+                         aux ++ arg_list)
   in mapM mkOne state_defs
 
-mkWideInitList :: [(AId,[AExpr])] -> ExprsConv
-mkWideInitList wide_defs =
-  let mkOne (aid,args) =
-          do arg_list <- mapM (aExprToCExpr noRet) args
-             return $ cCall (aDefIdToC aid) arg_list
-  in  mapM mkOne wide_defs
+-- ----------------------
+-- String concatenation nodes
+--
+-- Every string concatenation in a block gets one tStr node member
+-- (see bs_str.h), built once in the constructor's initializer list.
+-- The nodes are declared -- and therefore initialized -- before the
+-- submodule members, in an order where a node's operands (literal
+-- leaf objects, parameter leaves, other nodes) are built before it,
+-- so a concatenation passed to a submodule constructor is always
+-- finished before that constructor reads it.  Two concatenations in
+-- one argument list are likewise sequenced by the initializer list
+-- rather than by the argument evaluation order.
+
+-- all statements of a block's functions, with conditional and reset
+-- bodies flattened in
+blockFnStmts :: SimCCBlock -> [SimCCFnStmt]
+blockFnStmts sb =
+    let fns = (get_rule_fns sb) ++ (get_method_fns sb) ++ (sb_resets sb)
+        flatten s@(SFSCond _ ts fs) =
+            [s] ++ (concatMap flatten ts) ++ (concatMap flatten fs)
+        flatten s@(SFSResets ss) = [s] ++ (concatMap flatten ss)
+        flatten s = [s]
+    in  concatMap flatten (concatMap sf_body fns)
+
+-- the expressions appearing directly in a statement (conditional and
+-- reset bodies are visited through blockFnStmts' flattening)
+stmtExprs :: SimCCFnStmt -> [AExpr]
+stmtExprs (SFSDef _ _ me)             = maybeToList me
+stmtExprs (SFSAssign _ _ e)           = [e]
+stmtExprs (SFSAction act)             = aact_args act
+stmtExprs (SFSAssignAction _ _ act _) = aact_args act
+stmtExprs (SFSRuleExec _)             = []
+stmtExprs (SFSCond e _ _)             = [e]
+stmtExprs (SFSMethodCall _ _ es)      = es
+stmtExprs (SFSFunctionCall _ _ es)    = es
+stmtExprs (SFSResets _)               = []
+stmtExprs (SFSReturn me)              = maybeToList me
+stmtExprs (SFSOutputReset _ e)        = [e]
+
+-- an expression and all of its subexpressions, children first
+subExprsPostOrder :: AExpr -> [AExpr]
+subExprsPostOrder e = (concatMap subExprsPostOrder (children e)) ++ [e]
+  where children (APrim _ _ _ es)            = es
+        children (AMethCall _ _ _ es)        = es
+        children (ANoInlineFunCall _ _ _ es) = es
+        children (AFunCall _ _ _ _ es)       = es
+        children (ATuple _ es)               = es
+        children (ATupleSel _ e' _)          = [e']
+        children _                           = []
+
+isStrConcat :: AExpr -> Bool
+isStrConcat (APrim _ _ PrimStringConcat _) = True
+isStrConcat _                              = False
+
+-- Collect one node per distinct string concatenation in the block,
+-- in initialization order (operands before the nodes reading them).
+-- The node for a concatenation that defines a string def is named
+-- after the def (CONCAT_<def>); nodes for concatenations appearing
+-- inline (in instantiation arguments) are numbered.  Also returns
+-- the map from concat-valued member defs to their nodes: those def
+-- pointers are initialized in the constructor, and their rule-body
+-- assignments are dropped.
+collectStrConcats :: SBMap -> SimCCBlock ->
+                     ([(AExpr, String)], M.Map AId String, M.Map AId AExpr)
+collectStrConcats sb_map sb =
+    let stmts = blockFnStmts sb
+        -- string defs whose value is a concatenation
+        def_rhs = M.fromList ([ (i,e) | (SFSAssign _ i e) <- stmts
+                                      , isStrConcat e ] ++
+                              [ (i,e) | (SFSDef _ (_,i) (Just e)) <- stmts
+                                      , isStrConcat e ])
+        -- instantiation arguments, transformed exactly the way
+        -- mkStateInitList converts them, so that map keys match
+        inst_args = concat [ mapAExprs replaceCtorInputs
+                                 (snd (sb_naming_fn (lookupSB sb_map sbid)
+                                                    raw_args))
+                           | (sbid,_,raw_args) <- sb_state sb ]
+        found = [ c | e <- (concatMap stmtExprs stmts) ++ inst_args
+                    , c <- subExprsPostOrder e
+                    , isStrConcat c ]
+        -- the concatenations a node's initialization reads: nested
+        -- operand concatenations and the values of referenced defs
+        deps (APrim _ _ PrimStringConcat es) = concatMap dep es
+          where dep d@(APrim _ _ PrimStringConcat _) = [d]
+                dep (ASDef (ATString _) i) = maybeToList (M.lookup i def_rhs)
+                dep _ = []
+        deps _ = []
+        -- order the distinct concatenations operands-first
+        order seen [] = (seen, [])
+        order seen (c:cs)
+          | c `S.member` seen = order seen cs
+          | otherwise =
+              let (seen', before) = order (S.insert c seen) (deps c)
+                  (seen'', after) = order seen' cs
+              in  (seen'', before ++ [c] ++ after)
+        (_, ordered) = order S.empty found
+        rev_def = M.fromList [ (e, i) | (i, e) <- M.toList def_rhs ]
+        nameNodes _ [] = []
+        nameNodes n (c:cs) =
+            case M.lookup c rev_def of
+              Just i  -> (c, pfxConcat ++ (snd (adjustInstQuals i))) :
+                         (nameNodes n cs)
+              Nothing -> (c, pfxConcat ++ (show n)) :
+                         (nameNodes (n+1) cs)
+        nodes = nameNodes (1::Integer) ordered
+        node_map = M.fromList nodes
+        member_ids = S.fromList (map snd ((sb_publicDefs sb) ++
+                                          (sb_privateDefs sb)))
+        def_nodes = M.fromList [ (i, nm)
+                               | (i, e) <- M.toList def_rhs
+                               , i `S.member` member_ids
+                               , (Just nm) <- [M.lookup e node_map] ]
+    in  (nodes, def_nodes, def_rhs)
+
+-- Initializer-list entries building the block's concatenation nodes,
+-- in collectStrConcats order.  An operand is the address of a
+-- literal's leaf object, a parameter's node pointer (or its ctor
+-- argument, in an instantiation-argument concatenation), or the
+-- address of another node; a referenced def's value is read through
+-- its node directly, since the def pointer members are initialized
+-- later.  Anything else cannot appear as a concatenation operand
+-- (dynamic selection distributes over concatenation during
+-- elaboration).
+mkStrConcatInitList :: M.Map AId AExpr -> [(AExpr, String)] -> ExprsConv
+mkStrConcatInitList def_rhs nodes =
+  let opRef e@(ASStr {})   = aExprToCExpr noRet e
+      opRef e@(ASParam {}) = aExprToCExpr noRet e
+      opRef e@(ASPort {})  = aExprToCExpr noRet e
+      opRef e@(APrim _ _ PrimStringConcat _) = aExprToCExpr noRet e
+      opRef e@(ASDef (ATString _) i) =
+          case M.lookup i def_rhs of
+            (Just rhs) -> do nm <- getStrConcatNode rhs
+                             return $ cAddr (var nm)
+            Nothing    -> internalError $
+                            "SimCCBlock.mkStrConcatInitList: operand def " ++
+                            "is not a concatenation: " ++ (show e)
+      opRef e = internalError $
+                  "SimCCBlock.mkStrConcatInitList: unexpected string " ++
+                  "concatenation operand: " ++ (show e)
+      mkOne ((APrim _ _ PrimStringConcat [a, b]), nm) =
+          do a' <- opRef a
+             b' <- opRef b
+             return $ (var nm) `cCall` [a', b']
+      mkOne (e, _) = internalError $
+                       "SimCCBlock.mkStrConcatInitList: not a " ++
+                       "concatenation: " ++ (show e)
+  in  mapM mkOne nodes
+
+-- Wide defs and ports are non-owning views over 'unsigned int' array
+-- members of the class (declared alongside them, see mkWideArrName),
+-- so constructing a module allocates nothing for them.
+mkWideViewInit :: String -> (AId -> CCExpr) -> (AId,ASize) -> CCExpr
+mkWideViewInit pfx toC (aid,sz) =
+  cCall (toC aid) [ var (mkWideArrName pfx aid), mkUInt32 sz ]
+
+-- the name of the word-array member backing a wide def or port
+mkWideArrName :: String -> AId -> String
+mkWideArrName pfx aid = pfx ++ getIdBaseString aid ++ "__arr"
+
+-- the word-array member declaration backing a wide def or port
+mkWideArrDecl :: String -> AId -> ASize -> CCFragment
+mkWideArrDecl pfx aid sz =
+  decl $ arraySz ((sz + 31) `div` 32) $ unsigned . int $
+      mkVar (mkWideArrName pfx aid)
 
 -- For ports, we initialize one-bit ports to False, so that
--- all enables and readys are covered.  For wide ports, we set the size
--- and clear the data.
+-- all enables and readys are covered.  A wide port is already a view
+-- over its embedded array (or over the caller's port buffer), so it
+-- is only cleared -- never resized, which would allocate.
 mkPortInit :: (AType,AId,VName) -> [CCFragment]
 mkPortInit ((ATBit 1),_,vn) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkBool False) ]
 mkPortInit ((ATBit n),_,vn) | n > 64 =
   let p = aPortIdToC (vName_to_id vn)
-  in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 n ]
-     , stmt $ p `cDot` "clear" `cCall` []
-     ]
+  in [ stmt $ p `cDot` "clear" `cCall` [] ]
 mkPortInit ((ATBit n),_,vn) | n > 32 =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt64 0) ]
 mkPortInit ((ATBit n),_,vn) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt32 0) ]
 mkPortInit (t@(ATTuple _),_,vn) =
   let p = aPortIdToC (vName_to_id vn)
-  in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 $ aSize t ]
-     , stmt $ p `cDot` "clear" `cCall` []
-     ]
+  in [ stmt $ p `cDot` "clear" `cCall` [] ]
 mkPortInit p = internalError ("SimCCBlock.mkPortInit: " ++ ppReadable p)
 
 -- Create a call to the "set_reset_fn" for submodules with output resets
@@ -1611,12 +2072,13 @@ instance PPrint Symbol where
   pPrint _ _ SymRule        = (text "Rule")
   pPrint _ _ SymUnknown     = (text "Unknown")
 
--- Setup for symbol data
+-- Setup for symbol data.  The symbol array is a member of the module
+-- class (declared in simCCBlockToClassDeclaration), so binding it
+-- makes no allocator calls.
 mkSymbolHdr :: Int -> [CCFragment]
 mkSymbolHdr n = [ (mkVar "symbol_count") `assign` (mkUInt32 (toInteger n)) ] ++
                 if (n > 0)
-                then [ (mkVar "symbols") `assign` (newArray (classType "tSym") (var "symbol_count"))
-                     ]
+                then [ (mkVar "symbols") `assign` (var "__symbols") ]
                 else []
 
 -- Call symbol init method
@@ -1684,17 +2146,20 @@ isOkId i = not ((isInternal i) || (isBadId i) || (isFromRHSId i))
 -- Generate a class declaration for the SimCCBlock.
 -- The declaration will include all of the state elements and local
 -- defs, along with rule and method declarations.
-simCCBlockToClassDeclaration :: SBMap -> SimCCBlock -> CCFragment
-simCCBlockToClassDeclaration sb_map sb =
+simCCBlockToClassDeclaration :: Bool -> SBMap -> SimCCBlock -> CCFragment
+simCCBlockToClassDeclaration is_top sb_map sb =
   let clks        = [ decl $ clockType (mkVar (mkClkDefName dom))
                     | dom <- sb_domains sb]
       clk_defs    = [comment "Clock handles" (private clks)]
       gates       = mkGateDecls (toInteger (length (sb_gateMap sb)))
       gate_defs   = [comment "Clock gate handles" (public gates)]
-      st          = [ memberDecl sb_map sbid aid args
-                    | (sbid,aid,args) <- sb_state sb]
+      -- each primitive that keeps wide secondary values gets an aux
+      -- word-array member right before it (see primAuxDecl)
+      st          = concat [ primAuxDecl sb_map s ++
+                             [ memberDecl sb_map sbid aid args ]
+                    | s@(sbid,aid,args) <- sb_state sb]
       state       = [comment "Module state" (public st)]
-      ctr         = decl $ mkCtor Nothing sb
+      ctr         = decl $ mkCtor is_top Nothing sb
       constructor = [comment "Constructor" (public [ctr])]
       num_symbols = sum [ length (sb_parameters sb)
                         , length (sb_methodPorts sb)
@@ -1705,25 +2170,66 @@ simCCBlockToClassDeclaration sb_map sb =
       num_symbol_groups = max 1 ((num_symbols + 200) `div` 500)
       sym_init_protos = map (decl . (symInitFnProto Nothing)) [0..(num_symbol_groups-1)]
       symbol_init_fns = [comment "Symbol init methods" (private sym_init_protos)]
+      -- embedded storage for the module's symbol table, bound to
+      -- Module::symbols in the constructor (no allocation).  The count
+      -- computed here can slightly overestimate the number of symbols
+      -- the constructor actually records (non-bit parameters are
+      -- dropped there), which only leaves unused trailing slots.
+      symbol_storage =
+          if (num_symbols > 0)
+          then [comment "Symbol table storage"
+                        (private [ decl $ arraySz (toInteger num_symbols) $
+                                     (userType "tSym") (mkVar "__symbols") ])]
+          else []
       adefs       = [ decl $ constant $
                                  (aTypeToCType ty) (aParamIdToCLval arg_id)
                     | (ty, arg_id, False) <- sb_parameters sb ]
       -- XXX params only need to be public if they are used in rule
       -- XXX predicates
       param_defs  = [comment "Instantiation parameters" (public adefs)]
+      -- string concatenation nodes are declared before the submodule
+      -- members, so the initializer list finishes building them
+      -- before any submodule constructor can read them
+      (concat_nodes, _, _) = collectStrConcats sb_map sb
+      cndefs      = [ decl $ constant $ (userType "tStr") (mkVar nm)
+                    | (_, nm) <- concat_nodes ]
+      concat_defs = if (null concat_nodes)
+                    then []
+                    else [comment ("String concatenation nodes, " ++
+                                   "built once in the constructor")
+                                  (private cndefs)]
       rdefs       = [ decl $ (aTypeToCType ty) (aPortIdToCLval id)
                     | (ty,id) <- sb_resetDefs sb ]
       reset_defs  = [comment "Reset signal definitions" (private rdefs)]
-      mpdefs      = [ decl $ (aTypeToCType ty) (aPortIdToCLval arg_id)
-                    | (ty, arg_id, True) <- sb_parameters sb ] ++
-                    [ decl $ (aTypeToCType ty) (aPortIdToCLval (vName_to_id vn))
-                    | (ty,_,vn) <- sb_methodPorts sb ]
+      -- a wide port or def is a non-owning view; it is declared right
+      -- after the embedded word array that backs it.  The top module's
+      -- ports live in the caller's input and output port buffers at
+      -- their published introspection offsets instead: a narrow port
+      -- is a reference into the buffer and a wide port is a view over
+      -- it, so no embedded array is declared.
+      portDecl (ty, i)
+        | is_top =
+          if wideDataType ty
+          then [ decl $ (aTypeToCType ty) (aPortIdToCLval i) ]
+          else [ decl $ reference $ (aTypeToCType ty) (aPortIdToCLval i) ]
+        | otherwise =
+          (if wideDataType ty
+           then [ mkWideArrDecl pfxPort i (aSize ty) ]
+           else []) ++
+          [ decl $ (aTypeToCType ty) (aPortIdToCLval i) ]
+      defDecl (ty, i) =
+          (if wideDataType ty
+           then [ mkWideArrDecl pfxDef i (aSize ty) ]
+           else []) ++
+          [ decl $ (aTypeToCType ty) (aDefIdToCLval i) ]
+      mpdefs      = concat ([ portDecl (ty, arg_id)
+                            | (ty, arg_id, True) <- sb_parameters sb ] ++
+                            [ portDecl (ty, vName_to_id vn)
+                            | (ty,_,vn) <- sb_methodPorts sb ])
       port_defs   = [ comment "Port definitions" (public mpdefs)]
-      pdefs       = [ decl $ (aTypeToCType ty) (aDefIdToCLval id)
-                    | (ty,id) <- sb_publicDefs sb ]
+      pdefs       = concat [ defDecl (ty,id) | (ty,id) <- sb_publicDefs sb ]
       public_defs = [comment "Publicly accessible definitions" (public pdefs)]
-      ldefs       = [ decl $ (aTypeToCType ty) (aDefIdToCLval id)
-                    | (ty,id) <- sb_privateDefs sb ]
+      ldefs       = concat [ defDecl (ty,id) | (ty,id) <- sb_privateDefs sb ]
       local_defs  = [comment "Local definitions" (private ldefs)]
       rls         = map simFnToCDeclaration (get_rule_fns sb)
       rules       = [comment "Rules" (public rls)]
@@ -1753,9 +2259,11 @@ simCCBlockToClassDeclaration sb_map sb =
                     concat [ clk_defs
                            , gate_defs
                            , param_defs
+                           , concat_defs
                            , state
                            , constructor
                            , symbol_init_fns
+                           , symbol_storage
                            , reset_defs
                            , port_defs
                            , public_defs
@@ -1771,22 +2279,18 @@ simCCBlockToClassDeclaration sb_map sb =
       comment_str = "Class declaration for the " ++ (sb_name sb) ++ " module"
   in comment comment_str (decl class_decl)
 
--- Generate the initializations for defs, to be called from the ctor.
--- For wide data, we call a constructor with the size.
--- For defs which will hold system tasks, we initialize the value to "aaaa"
--- (unless it is wide, in which case the constructor for wide data already
--- does that).
+-- Generate the initializations for narrow defs which will hold
+-- system task results: initialize the value to "aaaa".  (Wide defs
+-- are handled separately: they are views over embedded arrays, see
+-- mkWideInitList, and the constructor body writes their
+-- undetermined-value pattern.)
 mkCtorInit :: S.Set AId -> (AType,AId) -> Maybe (AId,[AExpr])
 mkCtorInit task_id_set (aty@(ATBit sz),aid)
-  | sz > 64     = Just (aid,[aNat sz])
+  | sz > 64     = Nothing
   | (S.member aid task_id_set)
                 = let val = ASInt defaultAId aty (ilHex (aaaa sz))
                   in  Just (aid,[val])
   | otherwise   = Nothing
-mkCtorInit _ (aty@(ATTuple _),aid) =
-  Just (aid, [ aNat (aSize aty) ])
--- system tasks shouldn't be returning other types (like String),
--- so no need to consult the task_id_set
 mkCtorInit _ _  = Nothing
 
 -- Defines the ordering we want for symbol names.
@@ -1810,13 +2314,25 @@ symOrd (str1,sym1) (str2,sym2) =
                       GT -> GT
               GT -> GT
 
-simCCBlockToClassDefinition :: SBMap -> SimCCBlock -> StmtsConv
-simCCBlockToClassDefinition sb_map sb =
+simCCBlockToClassDefinition :: Bool -> SBMap -> SimCCBlock -> StmtsConv
+simCCBlockToClassDefinition is_top sb_map sb =
   do let scope = Just (pfxMod ++ (sb_name sb))
-         state_defs = map (addSBArgs sb_map) (sb_state sb)
+         state_defs = sb_state sb
          task_id_set = S.fromList (sb_taskDefs sb)
          pub_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_publicDefs sb)
          pri_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_privateDefs sb)
+         -- wide ports and defs: views over embedded arrays,
+         -- initialized in the initializer list and (for defs) set to
+         -- the undetermined-value pattern in the constructor body
+         wide_arg_ports = [ (i, aSize t)
+                          | (t,i,True) <- sb_parameters sb
+                          , wideDataType t ]
+         wide_meth_ports = [ (vName_to_id vn, aSize t)
+                           | (t,_,vn) <- sb_methodPorts sb
+                           , wideDataType t ]
+         wide_defs = [ (i, aSize t)
+                     | (t,i) <- (sb_publicDefs sb) ++ (sb_privateDefs sb)
+                     , wideDataType t ]
          symbols = sortBy symOrd $ [ (getIdString i, SymParam i sz)
                                    -- deliberately drop non-bit parameters
                                    -- i.e. real & string
@@ -1845,12 +2361,45 @@ simCCBlockToClassDefinition sb_map sb =
          symbol_groups = splitUp num_symbol_groups symbol_group_size (zip [0..] symbols)
      -- put the gate map into the state
      setGateMap (sb_gateMap sb)
+     -- record the block's string concatenation nodes, so expression
+     -- conversion refers each concatenation to its node member
+     let (concat_nodes, concat_def_nodes, concat_def_rhs) =
+             collectStrConcats sb_map sb
+     setStrConcats (M.fromList concat_nodes) concat_def_nodes
      -- since state inits can refer to ctor arguments, declare them
      setFuncArgs (map snd3 (sb_parameters sb))
-     stateinitlist <- mkStateInitList state_defs
+     concatinitlist <- mkStrConcatInitList concat_def_rhs concat_nodes
+     stateinitlist <- mkStateInitList sb_map state_defs
      setFuncArgs []
-     wideinitlist <- mkWideInitList (pub_def_inits ++ pri_def_inits)
-     let initlist' =
+     taskinitlist <-
+         let mkOne (aid,args) =
+                 do arg_list <- mapM (aExprToCExpr noRet) args
+                    return $ cCall (aDefIdToC aid) arg_list
+         in  mapM mkOne (pub_def_inits ++ pri_def_inits)
+     let wide_arg_port_set = S.fromList (map fst wide_arg_ports)
+         -- the top module's ports are bound into the caller's input
+         -- and output port buffers at their published introspection
+         -- offsets (shared with the descriptor tables through
+         -- ifcPortOffsets): a narrow port is a reference to the
+         -- buffer entry, a wide port is a non-owning view over it
+         (in_offs, out_offs) = ifcPortOffsets sb
+         topPortBind (t, aid, nm) =
+           let (bufv, off) =
+                   case (M.lookup nm in_offs, M.lookup nm out_offs) of
+                     (Just o, _) -> ("__ports_in", o)
+                     (_, Just o) -> ("__ports_out", o)
+                     _ -> internalError ("SimCCBlock.topPortBind: no " ++
+                                         "published offset for port " ++ nm)
+               base = (var bufv) `cAdd` (mkUInt64 off)
+           in if wideDataType t
+              then (aPortIdToC aid) `cCall`
+                       [ cCast (ptrType (bitsType 32 CTunsigned)) base
+                       , mkUInt32 (aSize t) ]
+              else (aPortIdToC aid) `cCall`
+                       [ cDeref (cCast (ptrType (bitsType (aSize t)
+                                                          CTunsigned))
+                                       base) ]
+         initlist' =
              -- call the superclass constructor
              [ (var "Module") `cCall` [var "simHdl", var "name", var "parent"] ] ++
              -- initialize clock handles
@@ -1861,18 +2410,65 @@ simCCBlockToClassDefinition sb_map sb =
              [ (aParamIdToC aid) `cCall` [aArgIdToC aid]
              | (_,aid,False) <- sb_parameters sb
              ] ++
+             -- build the string concatenation nodes, operands first
+             -- (declared before the submodules, so any node passed
+             -- to a submodule constructor is already finished)
+             concatinitlist ++
              -- instantiate submodules
              stateinitlist ++
              -- initialize reset defs (to be off)
              [ (aPortIdToC aid) `cCall` [mkUInt8 1]
              | (_,aid) <- sb_resetDefs sb
              ] ++
-             -- initialize module argument ports
-             [ (aPortIdToC aid) `cCall` [aArgIdToC aid]
-             | (_,aid,True) <- sb_parameters sb
+             -- initialize module argument ports (a wide one becomes a
+             -- view over its embedded array; the value is copied in
+             -- the constructor body).  In the top module every port
+             -- is instead bound into the caller's port buffers, and
+             -- argument values are copied in the constructor body.
+             [ if is_top
+               then topPortBind (t, aid, getIdBaseString aid)
+               else if (aid `S.member` wide_arg_port_set)
+                    then mkWideViewInit pfxPort aPortIdToC (aid, aSize t)
+                    else (aPortIdToC aid) `cCall` [aArgIdToC aid]
+             | (t,aid,True) <- sb_parameters sb
              ] ++
-             -- initialize wide defs
-             wideinitlist
+             -- bind method ports: in the top module all of them are
+             -- bound into the caller's port buffers; elsewhere only
+             -- the wide ones need initializers (views over their
+             -- embedded arrays)
+             (if is_top
+              then [ topPortBind (t, vName_to_id vn, getVNameString vn)
+                   | (t,_,vn) <- sb_methodPorts sb ]
+              else map (mkWideViewInit pfxPort aPortIdToC) wide_meth_ports) ++
+             -- initialize narrow task defs
+             taskinitlist ++
+             -- point concat-valued string defs at their nodes (their
+             -- rule-body assignments are dropped: the value never
+             -- changes after construction)
+             [ (aDefIdToC i) `cCall` [cAddr (var nm)]
+             | (_, i) <- (sb_publicDefs sb) ++ (sb_privateDefs sb)
+             , (Just nm) <- [M.lookup i concat_def_nodes]
+             ] ++
+             -- bind wide defs to their embedded arrays
+             (map (mkWideViewInit pfxDef aDefIdToC) wide_defs)
+         -- copy wide module argument values through their views; in
+         -- the top module the narrow argument ports are references
+         -- into the caller's input buffer, so their values are also
+         -- copied here rather than in the initializer list
+         wide_arg_copies =
+             [ (aPortIdToCLval aid) `assign` (aArgIdToC aid)
+             | (aid,_) <- wide_arg_ports ] ++
+             (if is_top
+              then [ (aPortIdToCLval aid) `assign` (aArgIdToC aid)
+                   | (t,aid,True) <- sb_parameters sb
+                   , not (wideDataType t) ]
+              else [])
+         -- wide defs start at the undetermined-value pattern, like
+         -- the owning WideData objects they used to be
+         wide_def_undets =
+             [ stmt $ (var "write_undet") `cCall`
+                          [ cAddr (aDefIdToC aid), mkUInt32 sz ]
+             | (aid,sz) <- wide_defs ]
          port_inits =
              -- module argument ports were already taken care of,
              -- leaving just method ports to be initialized
@@ -1881,9 +2477,10 @@ simCCBlockToClassDefinition sb_map sb =
          output_reset_inits = map mkOutputResetInit (sb_outputResets sb)
          symbol_inits = (mkSymbolHdr num_symbols) ++
                         (map mkSymbolCall [0..(num_symbol_groups-1)])
-         ctor_body = port_inits ++ reset_inits ++
+         ctor_body = wide_arg_copies ++ port_inits ++ wide_def_undets ++
+                     reset_inits ++
                      output_reset_inits ++ symbol_inits
-         constructor = define (mkCtor scope sb) (block ctor_body)
+         constructor = define (mkCtor is_top scope sb) (block ctor_body)
                            `withInits` initlist'
      rules   <- mapM (simFnToCDefinition False scope [] []) (get_rule_fns sb)
      methods <- mapM (simFnToCDefinition False scope [] []
@@ -1963,6 +2560,58 @@ wideDataType :: AType -> Bool
 wideDataType (ATBit sz) = sz > 64
 wideDataType (ATTuple _) = True
 wideDataType _ = False
+
+-- ========================
+-- Flat-area layout (the documented rules of bluesim_introspection.h)
+
+-- The storage unit (in bytes) of one entry of a given bit width, and
+-- its required alignment.  These are the documented rules of
+-- bluesim_introspection.h: 1/4/8 bytes for up to 8/32/64 bits (as
+-- tUInt8/tUInt32/tUInt64), and a 4-byte-aligned array of 32-bit
+-- words for wide data.
+entryUnitBytes :: Integer -> Integer
+entryUnitBytes b | b <= 8    = 1
+                 | b <= 32   = 4
+                 | b <= 64   = 8
+                 | otherwise = 4 * ((b + 31) `div` 32)
+
+entryAlignBytes :: Integer -> Integer
+entryAlignBytes b | b <= 8    = 1
+                  | b <= 32   = 4
+                  | b <= 64   = 8
+                  | otherwise = 4
+
+-- Lay out one area: walk the elements (entry bit width, entry count)
+-- in table order with a running offset starting at 0, rounding up to
+-- each element's alignment and advancing by its size.  Returns the
+-- (offset, size) of each element and the total area size, which is
+-- the final offset rounded up to a multiple of 8 so the area itself
+-- can be placed at any 8-byte-aligned address.
+layoutArea :: [(Integer, Integer)] -> ([(Integer, Integer)], Integer)
+layoutArea elems =
+  let alignUp x a = ((x + a - 1) `div` a) * a
+      step off (b, e) =
+        let off' = alignUp off (entryAlignBytes b)
+            sz   = e * (entryUnitBytes b)
+        in  (off' + sz, (off', sz))
+      (end, places) = mapAccumL step 0 elems
+  in  (places, alignUp end 8)
+
+-- Byte offsets of a module's interface ports in the caller's input
+-- and output port buffers, keyed by port name.  This is shared
+-- between the introspection descriptor tables (SimBlocksToC) and the
+-- port bindings in the generated top-module class, so the published
+-- offsets and the constructed reality cannot drift apart.
+ifcPortOffsets :: SimCCBlock -> (M.Map String Integer, M.Map String Integer)
+ifcPortOffsets sb =
+  let ins  = [ (nm, aSize t) | (True,  t, nm) <- sb_ifcPorts sb ]
+      outs = [ (nm, aSize t) | (False, t, nm) <- sb_ifcPorts sb ]
+      place ps = M.fromList
+                     [ (nm, off)
+                     | ((nm, _), (off, _)) <-
+                           zip ps (fst (layoutArea [ (b, 1) | (_, b) <- ps ]))
+                     ]
+  in  (place ins, place outs)
 
 
 -- ========================

@@ -5,18 +5,35 @@
 
 // Base class helpers
 
-// Report accumulated errors on the host's stdout stream
+// Record an error message in the fixed error storage (truncating an
+// over-long message; dropping the message when the storage is full)
+void Target::add_error(const char* error)
+{
+  if (num_errors == MAX_ERRORS)
+    return;
+  char* slot = errors[num_errors];
+  unsigned int i = 0;
+  while ((error[i] != '\0') && (i < MAX_ERROR_LEN - 1))
+  {
+    slot[i] = error[i];
+    ++i;
+  }
+  slot[i] = '\0';
+  ++num_errors;
+}
+
+// Report accumulated errors on the host's stdout stream, most
+// recently added first (the order the old error list produced)
 void Target::handle_errors()
 {
-  while(!errors.empty()) {
-    const std::string& msg = errors.front();
+  while (num_errors > 0) {
+    const char* msg = errors[--num_errors];
     if (host_ops != NULL)
     {
       struct bs_host_file* out = host_ops->std_stream(host_ctx, BS_HOST_STDOUT);
       host_ops->write(host_ctx, out, "Output error: ", 14);
-      host_ops->write(host_ctx, out, msg.data(), msg.length());
+      host_ops->write(host_ctx, out, msg, strlen(msg));
     }
-    errors.pop_front();
   }
 }
 
@@ -69,10 +86,20 @@ void Target::write_real(const char* format, double value)
 
   if (len < 0)
   {
-    std::string msg("printing real number with format ");
-    msg += format;
-    msg += " failed\n";
-    add_error(msg.c_str());
+    // compose the message in fixed storage (add_error() truncates
+    // an over-long format harmlessly)
+    char msg[MAX_ERROR_LEN];
+    unsigned int pos = 0;
+    static const char head[] = "printing real number with format ";
+    static const char tail[] = " failed\n";
+    for (unsigned int i = 0; head[i] != '\0'; ++i)
+      if (pos < MAX_ERROR_LEN - 1) msg[pos++] = head[i];
+    for (unsigned int i = 0; format[i] != '\0'; ++i)
+      if (pos < MAX_ERROR_LEN - 1) msg[pos++] = format[i];
+    for (unsigned int i = 0; tail[i] != '\0'; ++i)
+      if (pos < MAX_ERROR_LEN - 1) msg[pos++] = tail[i];
+    msg[pos] = '\0';
+    add_error(msg);
   }
   else if (((size_t) len) < sizeof(buf))
   {
@@ -80,11 +107,12 @@ void Target::write_real(const char* format, double value)
   }
   else
   {
-    // the formatted value did not fit in the local buffer
-    char* big_buf = new char[len + 1];
+    // the formatted value did not fit in the local buffer; retry
+    // with a stack array sized by the reported length (which the
+    // requested field width in the format string bounds)
+    char big_buf[len + 1];  // VLA (see DYNAMIC_VLA_FUNCTIONS)
     if (host_ops->format_real(host_ctx, big_buf, len + 1, format, value) == len)
       write_data(big_buf, sizeof(char), len);
-    delete[] big_buf;
   }
 }
 
@@ -149,12 +177,14 @@ void FileTarget::write_data(const void* data,
 // the string by removing leading characters.  We achieve this
 // efficiently by treating the target as a circular buffer.
 
-BufferTarget::BufferTarget(tSimStateHdl simHdl, unsigned int size)
+BufferTarget::BufferTarget(tSimStateHdl simHdl, char* storage,
+                           unsigned int size)
   : Target(bk_host_ops(simHdl), bk_host_ctx(simHdl))
 {
-  // the buffer contains one extra space for the null terminator.
+  // the caller's storage contains one extra space for the null
+  // terminator; it is borrowed, never freed
   buf_size = size + 1;
-  buffer = new char[buf_size];
+  buffer = storage;
   start = 0;
   end = 0;
   buffer[end] = '\0';
@@ -162,7 +192,6 @@ BufferTarget::BufferTarget(tSimStateHdl simHdl, unsigned int size)
 
 BufferTarget::~BufferTarget()
 {
-  delete[] buffer;
 }
 
 void BufferTarget::write_char(char c)

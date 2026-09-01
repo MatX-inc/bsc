@@ -106,6 +106,11 @@ class WideData
   // this detaches from the caller's buffer (which is left untouched)
   // and switches the object to freshly allocated owned storage.
   void setSize(unsigned int width);
+  // Rebind this object as a non-owning view over caller-provided
+  // storage of at least NUM_WORDS(bits) words (releasing any owned
+  // storage first).  The buffer is borrowed, never freed, and is not
+  // initialized here.
+  void bind(unsigned int* buf, unsigned int bits);
   unsigned int size() const { return nBits; }
   unsigned int numWords() const { return nWords; }
   unsigned int& operator[](unsigned int idx) const { return data[idx]; }

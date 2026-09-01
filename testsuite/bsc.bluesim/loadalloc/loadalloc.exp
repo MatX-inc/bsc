@@ -1,0 +1,91 @@
+# Tests that LOADING a Bluesim model performs no allocator calls:
+#
+#  * wide literals in generated code are file-scope word arrays with
+#    non-owning WideData views built where they are used, instead of
+#    static WideData objects whose global constructors allocated at
+#    dlopen time;
+#  * string literals are file-scope char arrays instead of static
+#    std::string objects;
+#  * the runtime library's static tables (the foreign-call argument
+#    record book, the $fopen file table) are constant-initialized POD.
+#
+# sysLoadAlloc uses all of the converted forms -- wide register resets
+# and rule-body constants, string formats and %s arguments including a
+# dynamically selected string, $fopen/$fwrite/$fgetc/$fclose,
+# $test$plusargs, and a BDPI function taking a string -- and is first
+# run to completion through the normal flow to show the consumers of
+# the converted literals still behave.  Then the host_loadalloc
+# harness dlopen()s the model and requires that the load made no
+# Bluesim-allocator calls, registered no static destructors at all
+# (interposed __cxa_atexit), and made no C-allocator/operator-new
+# calls beyond the dynamic linker's own bookkeeping (interposed
+# allocators, callers attributed with dladdr).
+# Bluesim only; the property under test is how the Bluesim model is
+# loaded.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    # only stdout is compared: the harness prints the load-varying raw
+    # counts (the dynamic linker's own allocations) to stderr, which
+    # is kept in a .err file for inspection
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set errfile "[file rootname $logfile].err"
+    set status [catch "exec ./$cmd > $logfile 2> $errfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the design runs to completion through the normal flow
+    compile_object_pass sysLoadAlloc.bsv sysLoadAlloc
+    link_objects_pass {sysLoadAlloc} sysLoadAlloc {loadalloc_c.c}
+    sim_output sysLoadAlloc
+    compare_file sysLoadAlloc.out
+
+    if [build_host_harness host_loadalloc host_loadalloc.cxx] {
+
+        # loading the model makes no allocator calls, and the model
+        # still initializes and runs to $finish afterwards
+        run_host_harness \
+            "host_loadalloc sysLoadAlloc.cexe.so sysLoadAlloc" \
+            [list 0] host_loadalloc.out
+        compare_file host_loadalloc.out
+    }
+}

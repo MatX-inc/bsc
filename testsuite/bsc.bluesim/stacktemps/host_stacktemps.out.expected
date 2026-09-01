@@ -1,4 +1,4 @@
-harness: construction and init use the allocators: yes
+harness: construction and init are allocation-free: yes
 harness: warmed up (200 cycles, now at time 1990)
 harness: segment 0 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0
 harness: segment 1 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0

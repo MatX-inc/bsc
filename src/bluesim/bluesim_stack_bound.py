@@ -309,6 +309,11 @@ INDIRECT_SITE_TABLE = [
     # host and calls back into the primitive being preloaded; the
     # callbacks are non-virtual members, but the reads are host ops.
     (r"\b(read_mem_file|MemFileParser|parse_mem)", ["HOST_OPS"]),
+    # The Bluesim allocator's arena-exhaustion report writes through
+    # the host ops (arena_exhausted() is file-static and may be
+    # inlined into alloc_mem).
+    (r"^void\* alloc_mem\(", ["HOST_OPS"]),
+    (r"^void (free_mem|arena_exhausted)\(", ["HOST_OPS"]),
 ]
 
 # Conservative per-call stack allowances, in bytes, for external
@@ -336,6 +341,10 @@ EXTERNAL_ALLOWANCES = [
     (r"^(strtol|strtoul|strtoll|strtoull|strtod|atoi|atol)$", 2048),
     # allocator family (glibc malloc worst path: arena setup + mmap)
     (r"^(malloc|free|cfree|calloc|realloc|posix_memalign|strdup)$", 8192),
+    # the Bluesim allocator's unbounded fallback hooks: thin wrappers
+    # over operator new[]/delete[], defined only in models with BDPI
+    # imports (weak-undefined -- never called -- elsewhere)
+    (r"^bs_mem_heap_(alloc|free)$", 8192 + 1024),
     (r"\boperator (new|delete)\s*(\[\])?\s*\(", 8192),
     (r"^_Z(nw|na|dl|da)m?", 8192),
     # out-of-line libstdc++ helpers (extern-template std::string,
@@ -347,11 +356,31 @@ EXTERNAL_ALLOWANCES = [
 ]
 
 # The runtime's known VLA users (all sized by the width of the value
-# being formatted or divided): a plain-'dynamic' frame matching one of
-# these is charged its static part plus --format-vla-bytes; any other
-# plain-'dynamic' frame defeats the bound.
+# being formatted or divided, or by a format field's own length): a
+# plain-'dynamic' frame matching one of these is charged its static
+# part plus --format-vla-bytes; any other plain-'dynamic' frame
+# defeats the bound.
 DYNAMIC_VLA_FUNCTIONS = [
-    r"^const char\* print_binary\(tFieldDesc&",     # dollar_display.cxx
+    # dollar_display.cxx: string arguments staged on the stack
+    # (FILL_TVALUE_KEEPING_STRINGS), numeric values reinterpreted as
+    # format strings, the real-format field copy, and the $swrite
+    # family's caller-side BufferTarget storage
+    r"^const char\* print_(binary|decimal|hex|octal|real)\(tFieldDesc&",
+    r"^void format\(const char\*",
+    # the variadic system tasks are matched by mangled name: GCC's
+    # callgraph labels demangle their '...' prototypes to just ")"
+    r"^_Z12dollar_fatalP9tSimState",
+    r"^_Z1\ddollar_s(write[boh]?|format)AVP9tSimState",
+    # tree-valued string names flattened into stack buffers sized by
+    # the tree's own byte count: $fopen's file name and mode, the
+    # plusargs name, and the RegFile/BRAM load-file constructors
+    # (see bs_str.h)
+    r"^_Z12dollar_fopenPKc",
+    r"^_Z26dollar_test_dollar_plusargsP9tSimState",
+    r"\bMOD_RegFile<.*>::MOD_RegFile\(.*tStr",
+    r"\bMOD_BRAM<.*>::MOD_BRAM\(.*tStr",
+    # target.cxx: over-long formatted reals retried on the stack
+    r"\bTarget::write_real\(",
     r"\bWideData::print_(binary|hex|octal|decimal)\(",
     r"\bWideData::max_decimal_digits\(",
     r"^WideData operator[/%]\(",                     # wide_data.cxx

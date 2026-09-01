@@ -27,8 +27,70 @@ extern "C" {
 #endif
 
 /*
+ * Model construction.
+ *
+ * A generated design exports one constructor entry point,
+ *
+ *   void* new_MODEL_<top>(const struct bs_host_ops* ops, void* ctx,
+ *                         void* state, void* inputs, void* outputs);
+ *
+ * which returns the design's model handle (the 'tModel' the functions
+ * below take).  The model object itself lives in static storage
+ * inside the loaded design; every call returns the same handle, and
+ * each call re-records the five pointers:
+ *
+ *  - 'ops'/'ctx': the host operations the model performs its I/O
+ *    through during construction (memory-file preloads) and the host
+ *    context passed to each of them.  They must be the same table and
+ *    context later passed to bk_sync_init().  Borrowed.
+ *
+ *  - 'state': storage for the model itself, at least
+ *    bk_state_bytes(model) bytes, aligned like max_align_t (any
+ *    malloc result qualifies).  bk_sync_init() placement-constructs
+ *    the whole module tree in this buffer: the module objects at the
+ *    front, and every published state element at its descriptor
+ *    offset within the element sub-area that starts
+ *    bk_state_elements_offset(model) bytes in (see
+ *    bluesim_introspection.h).  Borrowed until bk_shutdown(), which
+ *    tears the model down in place and frees nothing.
+ *
+ *  - 'inputs'/'outputs': storage for the top module's input and
+ *    output port areas, at least bk_input_bytes(model) /
+ *    bk_output_bytes(model) bytes, 8-byte aligned; either may be
+ *    NULL when its area is empty.  Borrowed until bk_shutdown().
+ *    The top module's ports are bound to these buffers at their
+ *    published descriptor offsets: the host drives input ports
+ *    (method arguments and enables) by writing 'inputs' before a
+ *    clock edge, and reads output ports (method results and
+ *    readies, refreshed by the schedule) from 'outputs' after it
+ *    (see bluesim_introspection.h for the exact semantics).
+ *
+ * All five pointers may be NULL for a SIZING call: the returned
+ * handle then supports the pre-initialization queries (the bk_*
+ * introspection walkers, bk_max_event_queue_depth(),
+ * bk_stack_depth_bound()) so the host can size the buffers, after
+ * which it calls new_MODEL_<top>() again with real storage.
+ * bk_sync_init() refuses (returns NULL) a model whose required
+ * storage is still unbound.  Nothing in new_MODEL_<top>() or in model
+ * construction calls the allocator.
+ */
+
+/*
  * Kernel resource management routines.
  */
+
+/* Get the number of bytes of storage the kernel needs for its
+ * simulation context: the simulation state and an event queue of the
+ * given capacity.  The embedder allocates (or otherwise provides) a
+ * buffer of at least this size, aligned like max_align_t (any malloc
+ * result qualifies), and hands it to bk_sync_init(); the kernel
+ * itself never allocates its context.  The size depends only on the
+ * chosen event-queue capacity, so like bk_max_event_queue_depth()
+ * and bk_stack_depth_bound() it can be queried before
+ * bk_sync_init().  Returns 0 if 'event_queue_capacity' is 0 (an
+ * invalid capacity).
+ */
+tUInt64 bk_context_bytes(tUInt32 event_queue_capacity);
 
 /* This must be called before calling any other Bluesim
  * kernel API functions.
@@ -52,8 +114,8 @@ extern "C" {
  * they must all be initialized with the same 'ops' and 'ctx'.
  *
  * 'event_queue_capacity' fixes the capacity of the kernel's event
- * queue: the storage is preallocated here and NEVER grows, and
- * scheduling an event into a full queue fails through the host's
+ * queue: the storage lives in the context buffer and NEVER grows,
+ * and scheduling an event into a full queue fails through the host's
  * noreturn event_queue_overflow operation.  The host chooses the
  * capacity; the intended budget is
  *
@@ -66,13 +128,25 @@ extern "C" {
  * bk_quit_at event and one host-triggered edge pair at a time).  A
  * capacity of 0 is rejected (NULL is returned).
  *
- * Returns an owned handle to the simulation state, which is needed
- * as an argument to the other Bluesim kernel API functions and is
- * released by bk_shutdown().  Returns NULL on error.
+ * 'context_buffer' provides the storage for the kernel's simulation
+ * context: at least bk_context_bytes(event_queue_capacity) bytes,
+ * aligned like max_align_t.  The kernel constructs its state in this
+ * buffer instead of allocating it.  The buffer is borrowed, not
+ * owned: it must remain valid until bk_shutdown(), which tears the
+ * context down in place and frees nothing, after which the buffer is
+ * the caller's to reuse (including for another bk_sync_init()) or
+ * release.  A NULL or misaligned buffer is rejected (NULL is
+ * returned).
+ *
+ * Returns a handle to the simulation state, which is needed as an
+ * argument to the other Bluesim kernel API functions.  The handle
+ * points into 'context_buffer' and is invalidated by bk_shutdown().
+ * Returns NULL on error.
  */
-own tSimStateHdl bk_sync_init(tModel model, tBool master,
-                              const struct bs_host_ops* ops, void* ctx,
-                              tUInt32 event_queue_capacity);
+tSimStateHdl bk_sync_init(tModel model, tBool master,
+                          const struct bs_host_ops* ops, void* ctx,
+                          tUInt32 event_queue_capacity,
+                          void* context_buffer);
 
 /* Get the host operations / host context registered with
  * bk_sync_init().  A NULL simHdl returns the process-wide copy
@@ -114,11 +188,13 @@ BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
  */
 tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
 
-/* This should be called at the end of simulation
- * to free resources controlled by the simulation kernel.
- * After bk_shutdown() is called, no other Bluesim kernel
- * API functions may be called unless bk_sync_init() has been
- * called first.
+/* This should be called at the end of simulation to release the
+ * resources controlled by the simulation kernel.  The simulation
+ * context is torn down in place inside the caller-provided buffer;
+ * the buffer itself is never freed here, and afterwards it is the
+ * caller's to reuse or release.  After bk_shutdown() is called, the
+ * handle is invalid and no other Bluesim kernel API functions may be
+ * called unless bk_sync_init() has been called first.
  */
 void bk_shutdown(tSimStateHdl simHdl);
 
@@ -214,8 +290,17 @@ tUInt32 bk_num_state_elements(tModel model);
  */
 const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n);
 
-/* Total byte size of the planned contiguous state area. */
+/* Total byte size of the state area the host must provide to
+ * new_MODEL_*(): the module-object region followed by the element
+ * sub-area (see bluesim_introspection.h).
+ */
 tUInt64 bk_state_bytes(tModel model);
+
+/* Byte offset of the element sub-area within the state area: element
+ * descriptor offsets are relative to (state + this offset).  Always a
+ * multiple of 16.
+ */
+tUInt64 bk_state_elements_offset(tModel model);
 
 /* Number of top-module input ports (module argument ports, method
  * enables and method arguments; clock and reset ports are driven
@@ -271,6 +356,12 @@ tUInt64 bk_output_bytes(tModel model);
  * callbacks are registered (see bk_set_clock_event_fn()).  Clocks the
  * model registers are counted in bk_max_event_queue_depth(); a clock
  * the HOST defines is not, and costs up to 5 further events.
+ *
+ * The clock table is fixed-capacity storage in the caller-provided
+ * context buffer (nothing is allocated): at most 64 clocks can be
+ * defined, and 'name' is copied into the entry's embedded buffer,
+ * truncated to 127 characters if longer.  Defining a 65th clock
+ * fails with BAD_CLOCK_HANDLE.
  */
 tClock bk_define_clock(tSimStateHdl simHdl,
 		       const char* name,
@@ -618,7 +709,11 @@ tBool bk_aborted(tSimStateHdl simHdl);
  * Routines for setting and testing arguments (eg., plusargs).
  */
 
-/* Add an argument string */
+/* Add an argument string.  The string is copied into fixed-capacity
+ * storage in the simulation context (nothing is allocated): at most
+ * 64 arguments of at most 127 characters each are recorded, and an
+ * argument beyond either limit is silently ignored.
+ */
 void bk_append_argument(tSimStateHdl simHdl, const char* arg);
 
 /* Retrieve the trailing portion of the first matching argument */

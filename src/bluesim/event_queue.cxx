@@ -1,4 +1,4 @@
-#include <vector>
+#include <utility>
 #include <cstdint>
 
 #include "bs_target.h"
@@ -106,16 +106,21 @@ bool EventQueue::isValid()
  * The event queue operations
  */
 
-/* Construct an EventQueue with a fixed capacity.  The storage is
- * preallocated here and never grows (see schedule()).
+/* Construct an EventQueue with a fixed capacity over caller-provided
+ * storage of 'queue_capacity' tEvent slots.  The queue allocates
+ * nothing, the storage never grows (see schedule()), and the caller
+ * keeps ownership of it.
  */
-EventQueue::EventQueue(tSimStateHdl simHdl, unsigned int queue_capacity)
-  : sim_hdl(simHdl), events(queue_capacity), capacity(queue_capacity),
+EventQueue::EventQueue(tSimStateHdl simHdl, unsigned int queue_capacity,
+                       tEvent* storage)
+  : sim_hdl(simHdl), events(storage), capacity(queue_capacity),
     count(0), max_count(0), in_event(false), halted(false),
     last_find_pred(NULL), curr_find_idx(0)
 {}
 
-/* Destroy an EventQueue and free its memory. */
+/* Destroy an EventQueue.  Its storage belongs to the caller and is
+ * not freed here.
+ */
 EventQueue::~EventQueue()
 {}
 

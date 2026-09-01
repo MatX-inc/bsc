@@ -32,15 +32,17 @@
 #include "bluesim_host_ops_default.h"
 #include "bluesim_introspection.h"
 
-typedef void*               (*tNewModelFn)(void);
+typedef void*               (*tNewModelFn)(const struct bs_host_ops*, void*,
+                                            void*, void*, void*);
 typedef tUInt32             (*tMaxDepthFn)(tModel);
 typedef tUInt32             (*tCountFn)(tModel);
 typedef const tBkStateInfo* (*tGetStateFn)(tModel, tUInt32);
 typedef const tBkPortInfo*  (*tGetPortFn)(tModel, tUInt32);
 typedef tUInt64             (*tBytesFn)(tModel);
+typedef tUInt64             (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl        (*tSyncInitFn)(tModel, tBool,
                                            const struct bs_host_ops*, void*,
-                                           tUInt32);
+                                           tUInt32, void*);
 typedef void                (*tShutdownFn)(tSimStateHdl);
 
 static void* find_sym(void* dl, const char* name)
@@ -158,12 +160,14 @@ int main(int argc, char** argv)
   tCountFn    num_state  = (tCountFn)    find_sym(dl, "bk_num_state_elements");
   tGetStateFn get_state  = (tGetStateFn) find_sym(dl, "bk_get_state_element");
   tBytesFn    state_bytes = (tBytesFn)   find_sym(dl, "bk_state_bytes");
+  tBytesFn    elems_off  = (tBytesFn)    find_sym(dl, "bk_state_elements_offset");
   tCountFn    num_in     = (tCountFn)    find_sym(dl, "bk_num_input_ports");
   tGetPortFn  get_in     = (tGetPortFn)  find_sym(dl, "bk_get_input_port");
   tBytesFn    in_bytes   = (tBytesFn)    find_sym(dl, "bk_input_bytes");
   tCountFn    num_out    = (tCountFn)    find_sym(dl, "bk_num_output_ports");
   tGetPortFn  get_out    = (tGetPortFn)  find_sym(dl, "bk_get_output_port");
   tBytesFn    out_bytes  = (tBytesFn)    find_sym(dl, "bk_output_bytes");
+  tCtxBytesFn ctx_bytes  = (tCtxBytesFn) find_sym(dl, "bk_context_bytes");
   tSyncInitFn sync_init  = (tSyncInitFn) find_sym(dl, "bk_sync_init");
   tShutdownFn shutdown_fn = (tShutdownFn) find_sym(dl, "bk_shutdown");
 
@@ -171,6 +175,7 @@ int main(int argc, char** argv)
   check(num_state(NULL) == 0, "NULL model has no state elements");
   check(get_state(NULL, 0) == NULL, "NULL model has no state descriptor");
   check(state_bytes(NULL) == 0, "NULL model has no state bytes");
+  check(elems_off(NULL) == 0, "NULL model has no elements offset");
   check(num_in(NULL) == 0 && num_out(NULL) == 0,
         "NULL model has no ports");
   check(get_in(NULL, 0) == NULL && get_out(NULL, 0) == NULL,
@@ -178,7 +183,8 @@ int main(int argc, char** argv)
   check(in_bytes(NULL) == 0 && out_bytes(NULL) == 0,
         "NULL model has no port bytes");
 
-  tModel model = new_model();
+  /* a sizing call: no storage yet, only the pre-init queries */
+  tModel model = new_model(NULL, NULL, NULL, NULL, NULL);
   if (model == NULL)
   {
     fprintf(stderr, "harness: %s returned NULL\n", new_model_name);
@@ -191,11 +197,16 @@ int main(int argc, char** argv)
 
   tUInt32 n_state = num_state(model);
   tUInt64 t_state = state_bytes(model);
+  tUInt64 e_off   = elems_off(model);
+  tUInt64 t_elems = t_state - e_off;
   printf("state elements: %u (%llu bytes)\n",
-         (unsigned) n_state, (unsigned long long) t_state);
+         (unsigned) n_state, (unsigned long long) t_elems);
   check(n_state > 0, "design has state elements");
   check(t_state > 0, "state area is nonzero");
-  check((t_state % 8) == 0, "state area is a multiple of 8 bytes");
+  check(e_off > 0, "the module objects precede the element sub-area");
+  check((e_off % 16) == 0, "element sub-area offset is 16-byte aligned");
+  check(t_state == e_off + t_elems, "state bytes = objects + elements");
+  check((t_elems % 8) == 0, "element sub-area is a multiple of 8 bytes");
   tUInt64 prev_end = 0;
   tUInt64 sum = 0;
   for (tUInt32 i = 0; i < n_state; ++i)
@@ -211,10 +222,10 @@ int main(int argc, char** argv)
            (unsigned long long) s->entries,
            (unsigned long long) s->offset, (unsigned long long) s->size);
     prev_end = check_element(s->name, s->bits, s->entries,
-                             s->offset, s->size, prev_end, t_state);
+                             s->offset, s->size, prev_end, t_elems);
     sum += s->size;
   }
-  check(sum <= t_state, "state sizes sum within the area");
+  check(sum <= t_elems, "state sizes sum within the area");
   check(get_state(model, n_state) == NULL,
         "out-of-range state index yields NULL");
 
@@ -282,7 +293,21 @@ int main(int argc, char** argv)
   const tBkStateInfo* s0 = get_state(model, 0);
   const struct bs_host_ops* ops = bs_default_host_ops();
   void* ctx = bs_default_host_ctx();
-  tSimStateHdl sim = sync_init(model, 1, ops, ctx, max_depth(model) + 16);
+  tUInt32 capacity = max_depth(model) + 16;
+  void* ctx_buf = malloc(ctx_bytes(capacity));
+
+  /* the kernel refuses to construct a model with no storage bound */
+  check(sync_init(model, 1, ops, ctx, capacity, ctx_buf) == NULL,
+        "bk_sync_init refuses a model without storage");
+
+  /* record the caller-provided storage with a second constructor call */
+  void* state_buf = malloc(t_state);
+  void* in_buf = (t_in > 0) ? malloc(t_in) : NULL;
+  void* out_buf = (t_out > 0) ? malloc(t_out) : NULL;
+  check(new_model(ops, ctx, state_buf, in_buf, out_buf) == model,
+        "new_MODEL returns the same handle when storage is recorded");
+
+  tSimStateHdl sim = sync_init(model, 1, ops, ctx, capacity, ctx_buf);
   if (sim == NULL)
   {
     fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -292,6 +317,10 @@ int main(int argc, char** argv)
   check(get_state(model, 0) == s0, "descriptors are static across init");
   check(state_bytes(model) == t_state, "state bytes unchanged by init");
   shutdown_fn(sim);
+  free(ctx_buf);
+  free(state_buf);
+  free(in_buf);
+  free(out_buf);
 
   if (failures != 0)
   {

@@ -323,10 +323,20 @@ foreign import ccall "dynamic"
                           (Ptr CUInt -> CUChar -> IO (Ptr CUInt))
 
 -- bk_sync_init: model handle, master flag, host ops, host context,
--- event-queue capacity
+-- event-queue capacity, context buffer
 foreign import ccall "dynamic"
-  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> IO (Ptr CUInt)) ->
-                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> IO (Ptr CUInt))
+  dl_sync_init_fn :: FunPtr (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> Ptr () -> IO (Ptr CUInt)) ->
+                     (Ptr CUInt -> CUChar -> Ptr () -> Ptr () -> CUInt -> Ptr () -> IO (Ptr CUInt))
+
+-- new_MODEL_*: host ops, host context, state storage, input port
+-- storage, output port storage (see bluesim_kernel_api.h)
+foreign import ccall "dynamic"
+  dl_new_model_fn :: FunPtr (Ptr () -> Ptr () -> Ptr () -> Ptr () -> Ptr () -> IO (Ptr CUInt)) ->
+                     (Ptr () -> Ptr () -> Ptr () -> Ptr () -> Ptr () -> IO (Ptr CUInt))
+
+-- bk_context_bytes: event-queue capacity
+foreign import ccall "dynamic"
+  dl_uint_ret_ullong :: FunPtr (CUInt -> IO CULLong) -> (CUInt -> IO CULLong)
 
 foreign import ccall "dynamic"
   dl_ptr_uint_int_ullong_ret_int :: FunPtr (Ptr CUInt -> CUInt -> CInt -> CULLong -> IO CInt) ->
@@ -428,6 +438,15 @@ data BluesimModel =
     BS { model_so               :: DL
        , model_hdl              :: WordPtr
        , sim_hdl                :: WordPtr
+         -- the kernel context buffer: allocated here, handed to
+         -- bk_sync_init, and freed after bk_shutdown
+       , sim_ctx                :: Ptr ()
+         -- the model's state / input-port / output-port buffers:
+         -- allocated here, recorded with new_MODEL_*, and freed
+         -- after bk_shutdown (see bluesim_kernel_api.h)
+       , model_state_buf        :: Ptr ()
+       , model_in_buf           :: Ptr ()
+       , model_out_buf          :: Ptr ()
        , current_clock          :: BSClock
        , current_directory      :: [BSSymbol]
        , cleanup_handlers       :: [IO ()]
@@ -489,6 +508,10 @@ loadBluesimModel fname top_name = do
   -- lookup symbols in the shared object
   c_new_model              <- dlsym dl ("new_" ++ pfxModel ++ top_name)
   c_bk_max_event_queue_depth <- dlsym dl "bk_max_event_queue_depth"
+  c_bk_state_bytes         <- dlsym dl "bk_state_bytes"
+  c_bk_input_bytes         <- dlsym dl "bk_input_bytes"
+  c_bk_output_bytes        <- dlsym dl "bk_output_bytes"
+  c_bk_context_bytes       <- dlsym dl "bk_context_bytes"
   c_bk_sync_init           <- dlsym dl "bk_sync_init"
   c_bk_sync_run            <- dlsym dl "bk_sync_run"
   c_bk_now                 <- dlsym dl "bk_now"
@@ -531,15 +554,27 @@ loadBluesimModel fname top_name = do
   c_bk_get_nth_symbol      <- dlsym dl "bk_get_nth_symbol"
   c_bk_shutdown            <- dlsym dl "bk_shutdown"
   -- convert functions to Haskell types and build BluesimModel
-  let new_model :: IO WordPtr
-      new_model = fromC $ dl_ret_ptr c_new_model
+  let new_model :: Ptr () -> Ptr () -> Ptr () -> Ptr () -> Ptr () -> IO WordPtr
+      new_model ops ctx st ins outs =
+          fromC `fmap` dl_new_model_fn c_new_model ops ctx st ins outs
       bk_max_event_queue_depth :: WordPtr -> IO Word32
       bk_max_event_queue_depth m =
           fromC $ dl_ptr_ret_uint c_bk_max_event_queue_depth (toC m)
-      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> Word32 -> IO WordPtr
-      bk_sync_init m mstr ops ctx cap =
+      bk_state_bytes_m, bk_input_bytes_m, bk_output_bytes_m
+          :: WordPtr -> IO Word64
+      bk_state_bytes_m m =
+          fromC `fmap` dl_ptr_ret_ullong c_bk_state_bytes (toC m)
+      bk_input_bytes_m m =
+          fromC `fmap` dl_ptr_ret_ullong c_bk_input_bytes (toC m)
+      bk_output_bytes_m m =
+          fromC `fmap` dl_ptr_ret_ullong c_bk_output_bytes (toC m)
+      bk_context_bytes :: Word32 -> IO Word64
+      bk_context_bytes cap =
+          fromC `fmap` dl_uint_ret_ullong c_bk_context_bytes (toC cap)
+      bk_sync_init :: WordPtr -> Bool -> Ptr () -> Ptr () -> Word32 -> Ptr () -> IO WordPtr
+      bk_sync_init m mstr ops ctx cap ctx_buf =
           do p <- dl_sync_init_fn c_bk_sync_init (toC m) (toC mstr) ops ctx
-                                  (toC cap)
+                                  (toC cap) ctx_buf
              return (fromC p)
       -- string return must be handled specially for bk_clock_name, etc.
       clk_name_fn :: WordPtr -> BSClock -> IO String
@@ -604,11 +639,25 @@ loadBluesimModel fname top_name = do
               then do v <- read_value sz vptr
                       return $ Value { num_bits = (fromC sz), value = v }
               else return NoValue
-  model_hdl <- new_model
-  -- install the default host operations, through which the loaded
-  -- model performs all of its I/O
+  -- the default host operations, through which the loaded model
+  -- performs all of its I/O
   host_ops <- bs_default_host_ops
   host_ctx <- bs_default_host_ctx
+  -- A sizing call first: with no storage recorded the returned
+  -- handle supports the size queries.  Allocate the model's state
+  -- and port buffers, then record them with a second call (see the
+  -- new_MODEL contract in bluesim_kernel_api.h).
+  sizing_hdl <- new_model nullPtr nullPtr nullPtr nullPtr nullPtr
+  state_bytes <- bk_state_bytes_m sizing_hdl
+  input_bytes <- bk_input_bytes_m sizing_hdl
+  output_bytes <- bk_output_bytes_m sizing_hdl
+  let mallocOrNull n = if (n == 0)
+                       then return nullPtr
+                       else mallocBytes (fromIntegral n)
+  state_buf <- mallocOrNull state_bytes
+  in_buf <- mallocOrNull input_bytes
+  out_buf <- mallocOrNull output_bytes
+  model_hdl <- new_model host_ops host_ctx state_buf in_buf out_buf
   -- The event queue's fixed capacity is the model's static bound
   -- (assuming no host calls that enqueue events) plus headroom for
   -- bluetcl's own host calls: the UI yield events of 'sim runto',
@@ -617,7 +666,13 @@ loadBluesimModel fname top_name = do
   -- documented at bk_sync_init().
   model_max <- bk_max_event_queue_depth model_hdl
   let queue_capacity = model_max + 16
+  -- the kernel constructs its simulation context (state and event
+  -- queue) in a buffer the host provides; allocate it here and keep
+  -- it until after bk_shutdown
+  ctx_bytes <- bk_context_bytes queue_capacity
+  ctx_buf <- mallocBytes (fromIntegral ctx_bytes)
   sim_hdl <- bk_sync_init model_hdl True host_ops host_ctx queue_capacity
+                          ctx_buf
   -- start the simulation worker thread, which executes the model's
   -- event queue through the kernel's synchronous API
   worker_hdl <- if (sim_hdl == ptrToWordPtr nullPtr)
@@ -628,12 +683,20 @@ loadBluesimModel fname top_name = do
                                      c_bk_shutdown
                                      c_bk_now
   if (worker_hdl == nullPtr)
-   then return Nothing
+   then do free ctx_buf
+           free state_buf
+           free in_buf
+           free out_buf
+           return Nothing
    else do
         top_symbol <- (fromC $ dl_ptr_ret_ptr c_bk_top_symbol) sim_hdl
         return $ Just (BS { model_so               = dl
                           , model_hdl              = model_hdl
                           , sim_hdl                = sim_hdl
+                          , sim_ctx                = ctx_buf
+                          , model_state_buf        = state_buf
+                          , model_in_buf           = in_buf
+                          , model_out_buf          = out_buf
                           , current_clock          = 0  -- default clock handle
                           , current_directory      = [top_symbol]
                           , cleanup_handlers       = []
@@ -683,6 +746,13 @@ loadBluesimModel fname top_name = do
 
 unloadBluesimModel :: BluesimModel -> IO ()
 unloadBluesimModel bs = do bk_shutdown bs
+                           -- bk_shutdown tears the kernel context and
+                           -- the model down in place; the buffers are
+                           -- ours to free once the worker has shut down
+                           free (sim_ctx bs)
+                           free (model_state_buf bs)
+                           free (model_in_buf bs)
+                           free (model_out_buf bs)
                            dlclose (model_so bs)
 
 -- fields are: clock handle, currently active, name, initial value,

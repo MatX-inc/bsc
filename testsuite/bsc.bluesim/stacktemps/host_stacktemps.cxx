@@ -72,11 +72,14 @@ extern "C" void* realloc(void* ptr, size_t size)
 
 /* ---- kernel entry points ---- */
 
-typedef void*        (*tNewModelFn)(void);
+typedef void* (*tNewModelFn)(const struct bs_host_ops*, void*,
+                              void*, void*, void*);
+typedef tUInt64 (*tBytesFn)(tModel);
 typedef tUInt32      (*tMaxDepthFn)(tModel);
+typedef tUInt64      (*tCtxBytesFn)(tUInt32);
 typedef tSimStateHdl (*tSyncInitFn)(tModel, tBool,
                                     const struct bs_host_ops*, void*,
-                                    tUInt32);
+                                    tUInt32, void*);
 typedef tStatus      (*tSyncRunFn)(tSimStateHdl);
 typedef tStatus      (*tSyncStepFn)(tSimStateHdl, tClock);
 typedef tClock       (*tGetClockFn)(tSimStateHdl, const char*);
@@ -149,6 +152,7 @@ int main(int argc, char** argv)
 
   tNewModelFn   new_model   = (tNewModelFn)   find_sym(dl, new_model_name);
   tMaxDepthFn   max_depth   = (tMaxDepthFn)   find_sym(dl, "bk_max_event_queue_depth");
+  tCtxBytesFn   ctx_bytes   = (tCtxBytesFn)   find_sym(dl, "bk_context_bytes");
   tSyncInitFn   sync_init   = (tSyncInitFn)   find_sym(dl, "bk_sync_init");
   tSyncRunFn    sync_run    = (tSyncRunFn)    find_sym(dl, "bk_sync_run");
   tSyncStepFn   sync_step   = (tSyncStepFn)   find_sym(dl, "bk_sync_step");
@@ -162,16 +166,33 @@ int main(int argc, char** argv)
   tCounts before_init;
   sample(&before_init);
 
-  tModel model = new_model();
+  tModel model = new_model(NULL, NULL, NULL, NULL, NULL);
   if (model == NULL)
   {
     fprintf(stderr, "harness: new_%s returned NULL\n", top_name);
     return 1;
   }
 
+  /* the model's caller-provided storage (constructor ABI); taken
+   * straight from __libc_malloc so the harness's own allocations
+   * stay out of the counters
+   */
+  tBytesFn state_bytes = (tBytesFn) find_sym(dl, "bk_state_bytes");
+  tBytesFn in_bytes    = (tBytesFn) find_sym(dl, "bk_input_bytes");
+  tBytesFn out_bytes   = (tBytesFn) find_sym(dl, "bk_output_bytes");
+  void* state_buf = __libc_malloc(state_bytes(model));
+  void* in_buf  = (in_bytes(model) > 0)
+                      ? __libc_malloc(in_bytes(model))  : NULL;
+  void* out_buf = (out_bytes(model) > 0)
+                      ? __libc_malloc(out_bytes(model)) : NULL;
+  model = new_model(bs_default_host_ops(), bs_default_host_ctx(),
+                    state_buf, in_buf, out_buf);
+
+  tUInt32 capacity = max_depth(model) + 16;
+  void* ctx_buf = __libc_malloc(ctx_bytes(capacity));
   tSimStateHdl sim = sync_init(model, 1,
                                bs_default_host_ops(), bs_default_host_ctx(),
-                               max_depth(model) + 16);
+                               capacity, ctx_buf);
   if (sim == NULL)
   {
     fprintf(stderr, "harness: bk_sync_init failed\n");
@@ -180,9 +201,16 @@ int main(int argc, char** argv)
 
   tCounts after_init;
   sample(&after_init);
-  printf("harness: construction and init use the allocators: %s\n",
-         ((after_init.mem_allocs > before_init.mem_allocs) &&
-          (after_init.c_allocs > before_init.c_allocs)) ? "yes" : "NO");
+  /* the model constructs into caller-provided storage and the
+   * kernel's bookkeeping is fixed storage in the caller-provided
+   * context, so the whole of construction and initialization must
+   * touch no allocator at all
+   */
+  printf("harness: construction and init are allocation-free: %s\n",
+         ((after_init.c_allocs == before_init.c_allocs) &&
+          (after_init.c_frees == before_init.c_frees) &&
+          (after_init.mem_allocs == before_init.mem_allocs) &&
+          (after_init.mem_frees == before_init.mem_frees)) ? "yes" : "NO");
 
   tClock clk = get_clock(sim, "CLK");
 
@@ -238,6 +266,7 @@ int main(int argc, char** argv)
   printf("harness: simulation finished with status %d\n",
          (int) exit_status(sim));
   shutdown_fn(sim);
+  __libc_free(ctx_buf);
 
   return (bad_segments == 0) ? 0 : 1;
 }

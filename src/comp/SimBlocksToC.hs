@@ -3,8 +3,9 @@ module SimBlocksToC ( simBlocksToC
                     , mkSchedName
                     ) where
 
-import Data.List(nub, genericLength, mapAccumL)
+import Data.List(nub, genericLength)
 import Data.Maybe(catMaybes)
+import qualified Data.Set as S
 import Control.Monad.State(runState)
 import System.Time -- XXX: in old-time package
 import qualified Data.Map as M
@@ -132,14 +133,14 @@ convertModuleBlock flags sb_map ff_map wdef_mod_map reused top_blk writeFileC sb
         include_ids = nub (map (\(id,_,_)->id) (sb_state sb))
 
         -- class declaration (for the H file)
-        class_decl = simCCBlockToClassDeclaration sb_map sb
+        class_decl = simCCBlockToClassDeclaration is_top sb_map sb
 
         -- method definitions (for the CXX file)
         (method_defs, state) =
-            runState (simCCBlockToClassDefinition sb_map sb)
+            runState (simCCBlockToClassDefinition is_top sb_map sb)
                      (initialState ff_map wdef_inst_map (unSpecTo flags))
         lit_defs = mkLiteralDecls (nub (literals state))
-        str_defs = mkStringDecls (M.toList (str_map state))
+        str_defs = mkStringDecls (M.toList (str_map state)) (str_objs state)
         class_defs = lit_defs ++ str_defs ++ method_defs
     if (name `elem` reused)
     then return [] -- don't generate any files for reused blocks
@@ -199,6 +200,8 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                            (mkVar "get_state_element")
                            [ (userType "tUInt32") (mkVar "n") ]
               , decl $ function (userType "tUInt64") (mkVar "get_state_bytes") []
+              , decl $ function (userType "tUInt64")
+                           (mkVar "get_state_elements_offset") []
               , decl $ function (userType "tUInt32")
                            (mkVar "get_num_input_ports") []
               , decl $ function (ptr . constant . (userType "tBkPortInfo"))
@@ -224,23 +227,58 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                              ]
             ]
 
-        -- abstract the model constructor
+        -- The model constructor entry point (the ABI is documented at
+        -- the top of bluesim_kernel_api.h).  The model object lives in
+        -- static storage -- placement-constructed on the first call,
+        -- so loading the design registers no static destructor and
+        -- calling this makes no allocator calls -- and every call
+        -- re-records the host ops/context and the caller-provided
+        -- state/input/output storage in the Model base.
         new_fn_proto =
-            function (ptr . void) (mkVar ("new_" ++ model_name)) []
+            function (ptr . void) (mkVar ("new_" ++ model_name))
+                [ (ptr . constant . userType "struct bs_host_ops")
+                      (mkVar "ops")
+                , (ptr . void) (mkVar "ctx")
+                , (ptr . void) (mkVar "state")
+                , (ptr . void) (mkVar "inputs")
+                , (ptr . void) (mkVar "outputs")
+                ]
         new_fn_decl =
             [ comment "Function for creating a new model" $
               externC [decl $ new_fn_proto]
             ]
 
         new_fn_def =
-            [ comment "Function for creating a new model" $
+            [ comment ("Function for creating a new model (see the " ++
+                       "new_MODEL contract in bluesim_kernel_api.h)") $
               define new_fn_proto
                 (block
-                 [ decl $ (ptr . userType model_name) $
-                            (mkVar "model") `assign`
-                                (new (classType model_name) (Just []))
-                 , ret $ Just (cCast (ptrType voidType) (var "model")) ]
+                 [ if_cond ((var "__model_instance") `cEq` mkNULL)
+                       ((mkVar "__model_instance") `assign`
+                            ((var ("new (__model_storage.bytes) " ++
+                                   model_name)) `cCall` []))
+                       Nothing
+                 , stmt $ ((var "__model_instance") `cArrow` "set_storage")
+                              `cCall` [ var "ops", var "ctx", var "state"
+                                      , var "inputs", var "outputs" ]
+                 , ret $ Just (cCast (ptrType voidType)
+                                     (var "__model_instance")) ]
                  )
+            ]
+
+        -- static storage for the model object: aligned raw bytes plus
+        -- the instance pointer set on the first new_MODEL_* call
+        model_storage_decls =
+            [ comment ("Static storage for the model object " ++
+                       "(placement-constructed on first use; " ++
+                       "no global constructor or destructor)")
+                      (blankLines 0)
+            , static $ decl $
+                (userType ("union { double __align; char bytes[sizeof(" ++
+                           model_name ++ ")]; }"))
+                (mkVar "__model_storage")
+            , static $ decl $ (ptr . userType model_name) $
+                (mkVar "__model_instance") `assign` mkNULL
             ]
 
         -- model constructor
@@ -260,7 +298,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
         -- wide literals used in the methods
         meth_lits = mkLiteralDecls (nub (literals state))
 
-        str_lits = mkStringDecls (M.toList (str_map state))
+        str_lits = mkStringDecls (M.toList (str_map state)) (str_objs state)
 
         -- include files needed for kernel callbacks, etc.
         uses_foreign = any schedCallsForeignFn scheds
@@ -500,12 +538,29 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                             "(static; see bluesim_introspection.h)")
                            (blankLines 0) ] ++ desc_tables
 
+        -- the element sub-area of the caller-provided state buffer
+        -- begins after the module objects, at the next 16-byte
+        -- boundary; the expression is compile-time constant
+        elems_off_txt =
+            "((sizeof(" ++ pfxMod ++ (modName top_blk) ++
+            ") + 15llu) & ~((tUInt64)15))"
+
         mk_num_def fn_name n =
             define (function (userType "tUInt32") (mkScopedVar fn_name) [])
                    (block [ ret (Just (mkUInt32 n)) ])
         mk_bytes_def fn_name n =
             define (function (userType "tUInt64") (mkScopedVar fn_name) [])
                    (block [ ret (Just (mkUInt64 n)) ])
+        -- get_state_bytes: module objects plus the element sub-area
+        mk_state_bytes_def n =
+            define (function (userType "tUInt64")
+                             (mkScopedVar "get_state_bytes") [])
+                   (block [ ret (Just ((var elems_off_txt) `cAdd`
+                                       (mkUInt64 n))) ])
+        mk_elems_off_def =
+            define (function (userType "tUInt64")
+                             (mkScopedVar "get_state_elements_offset") [])
+                   (block [ ret (Just (var elems_off_txt)) ])
         mk_elem_def fn_name ty arr n =
             define (function (ptr . constant . (userType ty))
                              (mkScopedVar fn_name)
@@ -528,7 +583,8 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
             , mk_num_def "get_num_state_elements" num_state_elems
             , mk_elem_def "get_state_element" "tBkStateInfo"
                           "bk_state_elements" num_state_elems
-            , mk_bytes_def "get_state_bytes" state_bytes
+            , mk_state_bytes_def state_bytes
+            , mk_elems_off_def
             , mk_num_def "get_num_input_ports" num_input_ports
             , mk_elem_def "get_input_port" "tBkPortInfo"
                           "bk_input_ports" num_input_ports
@@ -548,12 +604,41 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                                  [ bool $ mkVar "asserted" ]
         get_instance_decl  = function (ptr . void) (mkScopedVar "get_instance") []
 
-        newInst sb   = let inst = mkVar ((modName sb) ++ "_instance")
-                           new_expr = new (classType (pfxMod ++ (modName sb)))
-                                          (Just [var "sim_hdl", mkStr "top", mkNULL])
-                       in inst `assign` new_expr
+        -- placement-construct the module tree in the caller-provided
+        -- state buffer recorded by new_MODEL_*(): module objects at
+        -- the front, published elements at their descriptor offsets
+        -- in the element sub-area (walked through the tStateLayout
+        -- cursor)
+        newInst sb   =
+            let inst = mkVar ((modName sb) ++ "_instance")
+                table_expr = if (num_state_elems == (0 :: Integer))
+                             then mkNULL
+                             else var "bk_state_elements"
+                new_expr = (var ("new (state_storage) " ++
+                                 pfxMod ++ (modName sb))) `cCall`
+                               [ var "sim_hdl", mkStr "top", mkNULL
+                               , var "&__layout"
+                               -- borrowed: the caller's input and
+                               -- output port buffers, recorded by
+                               -- new_MODEL_*()
+                               , var "(unsigned char*) input_storage"
+                               , var "(unsigned char*) output_storage" ]
+            in  [ decl $ (userType "tStateLayout") (mkVar "__layout")
+                , (mkVar "__layout.elems") `assign`
+                      (var ("((unsigned char*) state_storage) + " ++
+                            elems_off_txt))
+                , (mkVar "__layout.table") `assign` table_expr
+                , (mkVar "__layout.next") `assign` (mkUInt32 0)
+                , inst `assign` new_expr
+                ]
+        -- the model is torn down in place; the buffer is the
+        -- caller's and nothing is freed here
         deleteInst sb = let nm = (modName sb) ++ "_instance"
-                        in [ stmt $ delete (var nm)
+                            cls = pfxMod ++ (modName sb)
+                        in [ if_cond (var nm)
+                                 (stmt $ ((var nm) `cArrow` ("~" ++ cls))
+                                             `cCall` [])
+                                 Nothing
                            , (mkVar nm) `assign` mkNULL
                            ]
         resetInst sb = let nm = (modName sb) ++ "_instance"
@@ -582,8 +667,9 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                           -- clear reset counters
                           [ stmt $ (var "init_reset_request_counters") `cCall`
                                      [ var "sim_hdl" ] ] ++
-                          -- allocate top module instance
-                          [ newInst top_blk ] ++
+                          -- construct the top module instance in the
+                          -- caller-provided state buffer
+                          (newInst top_blk) ++
                           -- declare clock names (which creates handles)
                           (map declare_clk_name clk_groups) ++
                           -- if master, setup default clock and reset
@@ -666,6 +752,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                  gate_lits ++
                  desc_defs ++
                  ctor_def ++
+                 model_storage_decls ++
                  new_fn_def ++
                  sched_fns ++
                  model_methods ++
@@ -838,45 +925,26 @@ classifyPrim inst pb args =
                            inst ++ "); assign it a tBkStateKind here")
   in  (inst, kind, bits, entries)
 
--- The storage unit (in bytes) of one entry of a given bit width, and
--- its required alignment.  These are the documented rules of
--- bluesim_introspection.h: 1/4/8 bytes for up to 8/32/64 bits (as
--- tUInt8/tUInt32/tUInt64), and a 4-byte-aligned array of 32-bit
--- words for wide data.
-entryUnitBytes :: Integer -> Integer
-entryUnitBytes b | b <= 8    = 1
-                 | b <= 32   = 4
-                 | b <= 64   = 8
-                 | otherwise = 4 * ((b + 31) `div` 32)
+-- The flat-area layout helpers (entryUnitBytes, entryAlignBytes,
+-- layoutArea) live in SimCCBlock, shared with the top-module port
+-- bindings so the published offsets and the constructed reality
+-- cannot drift apart.
 
-entryAlignBytes :: Integer -> Integer
-entryAlignBytes b | b <= 8    = 1
-                  | b <= 32   = 4
-                  | b <= 64   = 8
-                  | otherwise = 4
-
--- Lay out one area: walk the elements (entry bit width, entry count)
--- in table order with a running offset starting at 0, rounding up to
--- each element's alignment and advancing by its size.  Returns the
--- (offset, size) of each element and the total area size, which is
--- the final offset rounded up to a multiple of 8 so the area itself
--- can be placed at any 8-byte-aligned address.
-layoutArea :: [(Integer, Integer)] -> ([(Integer, Integer)], Integer)
-layoutArea elems =
-  let alignUp x a = ((x + a - 1) `div` a) * a
-      step off (b, e) =
-        let off' = alignUp off (entryAlignBytes b)
-            sz   = e * (entryUnitBytes b)
-        in  (off' + sz, (off', sz))
-      (end, places) = mapAccumL step 0 elems
-  in  (places, alignUp end 8)
-
--- Some literals cannot be written inline in the generated C, so they are
--- declared as separate variables at the beginning of the file.
+-- Some literals cannot be written inline in the generated C, so their
+-- words are declared as plain file-scope arrays at the beginning of
+-- the file.  The arrays are constant-initialized data: loading a
+-- model runs no global constructors and makes no allocator calls for
+-- them.  Functions that use a wide literal as a WideData value
+-- construct a non-owning view of the array, hoisted to the top of the
+-- function (see addLitView in SimCCBlock); constructor initializer
+-- lists construct the view inline; pointer arguments to foreign
+-- functions pass the array itself.  The arrays are deliberately not
+-- const: foreign functions receive them through non-const pointers,
+-- just as they previously received the literals' heap storage.
 mkLiteralDecls :: [(ASize,Integer)] -> [CCFragment]
 mkLiteralDecls [] = [blankLines 0]
 mkLiteralDecls lits = [comment "Literal declarations" (blankLines 0)]
-                      ++ (concatMap mkLitDecl lits)
+                      ++ (map mkLitDecl lits)
                       ++ [blankLines 1]
   where mkLitDecl (sz,val) =
            let name = mkLiteralName sz val
@@ -885,26 +953,35 @@ mkLiteralDecls lits = [comment "Literal declarations" (blankLines 0)]
                                             `mod` (2^(32::Integer)))
                            | n <- [0,32..(sz-1)] ]
                initializer = mkInitBraces arr_words
-               arr_decl = constant . array . unsigned . int $
+               arr_decl = array . unsigned . int $
                             (mkVar arr_name) `assign` initializer
-               lit_var = constant $
-                            (mkVar name) `ofType` (bitsType 65 CTunsigned)
-               lit = construct lit_var [mkUInt32 sz, var arr_name]
-           in [static $ arr_decl, static $ lit]
+           in static $ arr_decl
 
 
--- String literals may have embedded null characters, so we must
--- construct std::strings for them based on their known size.
-mkStringDecls :: [(String,Integer)] -> [CCFragment]
-mkStringDecls [] = [blankLines 0]
-mkStringDecls lits = [comment "String declarations" (blankLines 0)]
-                      ++ (map mkStrDecl lits)
-                      ++ [blankLines 1]
+-- String literals are declared as plain file-scope char arrays:
+-- constant-initialized data, so loading a model runs no global
+-- constructors and makes no allocator calls for them.  They may have
+-- embedded null characters, so consumers do not measure them with
+-- strlen(): the generated calls carry the length in their argument
+-- descriptor string or pass it explicitly.  A literal used as a
+-- string value additionally gets a tStr leaf object (see bs_str.h)
+-- carrying the array and its byte count; its constexpr constructor
+-- makes it constant-initialized as well.
+mkStringDecls :: [(String,Integer)] -> S.Set String -> [CCFragment]
+mkStringDecls [] _ = [blankLines 0]
+mkStringDecls lits objs = [comment "String declarations" (blankLines 0)]
+                           ++ (concatMap mkStrDecl lits)
+                           ++ [blankLines 1]
   where mkStrDecl (s,n) =
            let name = mkStringLiteralName n
-               str_var = constant $
-                           (mkVar name) `ofType` (classType "std::string")
-           in static $ construct str_var [ mkStr s, mkUInt32 (genericLength s) ]
+               str_var = constant . array . CCSyntax.char $
+                           (mkVar name) `assign` (mkStr s)
+               obj = construct (constant $ (userType "tStr")
+                                    (mkVar (mkStringObjName n)))
+                               [ var name
+                               , mkUInt32 (genericLength s) ]
+           in (static $ str_var) :
+              (if (s `S.member` objs) then [static $ obj] else [])
 
 -- Create one .cxx and one .h file, given a list of
 -- referenced blocks, class declarations and method definitions.
