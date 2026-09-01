@@ -370,10 +370,6 @@ fnNeedsSimHdl name = any (`isPrefixOf` name ) tasks
 
                   , "$test$plusargs"
 
-                  , "$dumpfile" , "$dumpvars"
-                  , "$dumpon"   , "$dumpoff"  , "$dumpall"
-                  , "$dumplimit", "$dumpflush"
-
                   -- idPrefixOf handles the "b", "o", "h", "AV" variants
                   , "$write"  , "$fwrite"  , "$swrite"
                   , "$display", "$fdisplay", "$sformat"

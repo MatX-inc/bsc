@@ -4,7 +4,6 @@
 #include "bluesim_kernel_api.h"
 #include "bluesim_probes.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 
 // This is the definition of the Probe primitive.
 template<typename T>
@@ -33,35 +32,6 @@ class MOD_Probe : public Module
   {
     __clk_handle_0 = bk_get_or_define_clock(sim_hdl, s);
   }
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    dump_val(value, bits);
-    putchar('\n');
-  }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    char* buf = NULL;
-    int sz = asprintf(&buf, "%s$PROBE", inst_name);
-    if (sz < 0)
-      perror("dump_VCD_defs: asprintf");
-    vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_set_clock(sim_hdl, vcd_num, __clk_handle_0);
-    vcd_write_def(sim_hdl, vcd_num, buf, bits);
-    free(buf);
-    return (vcd_num + 1);
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_Probe<T>& backing)
-  {
-    if (dt == VCD_DUMP_XS)
-      vcd_write_x(sim_hdl, vcd_num, bits);
-    else if ((dt != VCD_DUMP_CHANGES) || (backing.value != value))
-    {
-      vcd_write_val(sim_hdl, vcd_num, value, bits);
-      backing.value = value;
-    }
-  }
-
  // Probe data members
  private:
   tClock __clk_handle_0;
@@ -117,17 +87,6 @@ class MOD_ProbeWire : public Module
   {
     //__clk_handle_0 = bk_get_or_define_clock(sim_hdl, s);
   }
-  void dump_state(unsigned int indent)
-  {
-  }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
-  {
-    return vcd_num;
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_ProbeWire<T>& backing)
-  {
-  }
-
  // ProbeWire data members
  private:
 };

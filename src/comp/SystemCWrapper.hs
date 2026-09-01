@@ -252,18 +252,14 @@ wrapSystemC flags sim_system = do
                 sample_inputs =
                     [ comment "sample method input ports" (blankLines 0) ] ++
                     (map sample_port ins)
-                do_vcd =
-                    [ comment "update VCD waveforms for ports" (blankLines 0)
-                    , decl . (userType "tTime") $ (mkVar "now") `assign`
-                      ((((var "sc_time_stamp") `cCall` []) `cDot` "value") `cCall` [])
-                    , stmt $ (var "bk_VCD_combo_update") `cCall` [var "_sim_hdl", var "now"]
-                    ]
                 stop_cond =
                     cOr ((var "bk_stopped") `cCall` [ var "_sim_hdl" ]) $
                     cOr ((var "bk_finished") `cCall` [ var "_sim_hdl" ]) $
                         ((var "bk_aborted") `cCall` [ var "_sim_hdl" ])
                 exec =
                     [ comment "execute schedule" (blankLines 0)
+                    , decl . (userType "tTime") $ (mkVar "now") `assign`
+                      ((((var "sc_time_stamp") `cCall` []) `cDot` "value") `cCall` [])
                     , decl . (userType "tEdgeDirection") $ (mkVar "dir") `assign`
                       (cTernary (read_port i) (var "POSEDGE") (var "NEGEDGE"))
                     , stmt $ (var "bk_quit_after_edge") `cCall`
@@ -278,7 +274,7 @@ wrapSystemC flags sim_system = do
                 update_outputs =
                     [ comment "update method output ports" (blankLines 0) ] ++
                     [ stmt $ write_port out | out <- outs ]
-            in get_clk ++ sample_inputs ++ do_vcd ++ exec ++ update_outputs
+            in get_clk ++ sample_inputs ++ exec ++ update_outputs
         reset_call i =
             let nm = getIdBaseString i
             in stmt $ obj_call "_model_inst" ("reset_" ++ nm) [read_port i]

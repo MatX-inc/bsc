@@ -10,7 +10,7 @@ import qualified Data.Set as S
 
 import IOUtil(progArgs)
 import Error (internalError, EMsg, ErrMsg(..), ErrorHandle, bsError,
-              convExceptTToIO)
+              bsWarning, convExceptTToIO)
 import Position (noPosition, getPosition)
 import PPrint
 import Flags
@@ -2080,7 +2080,57 @@ simCheckPackage errh True apkg = do
     -- check for dynamic ports (and also inline submodule port/param exprs)
     apkg' <- simExpandParams errh apkg
 
-    return apkg'
+    -- warn about and remove VCD $dump* tasks, which Bluesim does not support
+    apkg'' <- removeDumpTasks errh apkg'
+
+    return apkg''
+
+-- ----------
+
+-- The VCD $dump* system tasks are not supported by Bluesim.
+-- Warn about each use and drop the action, so that no code is
+-- generated for it.  (The Verilog backend is unaffected.)
+
+vcdDumpTaskNames :: [String]
+vcdDumpTaskNames = [ "$dumpfile", "$dumpvars", "$dumpon", "$dumpoff"
+                   , "$dumpall", "$dumplimit", "$dumpflush" ]
+
+removeDumpTasks :: ErrorHandle -> APackage -> IO APackage
+removeDumpTasks errh apkg = do
+    let isDumpTask :: AAction -> Maybe EMsg
+        isDumpTask (AFCall { aact_objid = i, afcall_fun = f })
+            | f `elem` vcdDumpTaskNames
+            = Just (getPosition i, WBluesimVCDUnsupported f)
+        isDumpTask (ATaskAction { aact_objid = i, ataskact_fun = f })
+            | f `elem` vcdDumpTaskNames
+            = Just (getPosition i, WBluesimVCDUnsupported f)
+        isDumpTask _ = Nothing
+
+        dropRuleDumpTasks :: ARule -> ([EMsg], ARule)
+        dropRuleDumpTasks r =
+            let warns = mapMaybe isDumpTask (arule_actions r)
+                acts  = [ a | a <- arule_actions r,
+                              isNothing (isDumpTask a) ]
+            in  (warns, r { arule_actions = acts })
+
+        dropIfcDumpTasks :: AIFace -> ([EMsg], AIFace)
+        dropIfcDumpTasks ifc@(AIAction {}) =
+            let (wss, rs) = unzip (map dropRuleDumpTasks (aif_body ifc))
+            in  (concat wss, ifc { aif_body = rs })
+        dropIfcDumpTasks ifc@(AIActionValue {}) =
+            let (wss, rs) = unzip (map dropRuleDumpTasks (aif_body ifc))
+            in  (concat wss, ifc { aif_body = rs })
+        dropIfcDumpTasks ifc = ([], ifc)
+
+        (rule_warnss, rules') =
+            unzip (map dropRuleDumpTasks (apkg_rules apkg))
+        (ifc_warnss, ifcs') =
+            unzip (map dropIfcDumpTasks (apkg_interface apkg))
+
+        warns = concat rule_warnss ++ concat ifc_warnss
+
+    when (not (null warns)) $ bsWarning errh warns
+    return (apkg { apkg_rules = rules', apkg_interface = ifcs' })
 
 -- ----------
 

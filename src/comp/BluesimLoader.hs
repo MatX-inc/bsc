@@ -319,10 +319,6 @@ foreign import ccall "dynamic"
                            (Ptr CUInt -> CULLong -> IO CInt)
 
 foreign import ccall "dynamic"
-  dl_ptr_str_ret_int :: FunPtr (Ptr CUInt -> CString -> IO CInt) ->
-                        (Ptr CUInt -> CString -> IO CInt)
-
-foreign import ccall "dynamic"
   dl_ptr_uchar_ret_ptr :: FunPtr (Ptr CUInt -> CUChar -> IO (Ptr CUInt)) ->
                           (Ptr CUInt -> CUChar -> IO (Ptr CUInt))
 
@@ -384,7 +380,6 @@ data BluesimModel =
        , model_hdl              :: WordPtr
        , sim_hdl                :: WordPtr
        , current_clock          :: BSClock
-       , active_vcd_file        :: Maybe String
        , current_directory      :: [BSSymbol]
        , cleanup_handlers       :: [IO ()]
          -- configuration state
@@ -430,9 +425,6 @@ data BluesimModel =
        , bk_peek_range_value    :: BSSymbol -> BSIndex -> IO BSValue
        , bk_num_symbols         :: BSSymbol -> IO Word32
        , bk_get_nth_symbol      :: BSSymbol -> Word32 -> IO BSSymbol
-       , bk_set_VCD_file        :: String -> IO BSStatus
-       , bk_enable_VCD_dumping  :: IO Bool
-       , bk_disable_VCD_dumping :: IO ()
        , bk_shutdown            :: IO ()
        }
 
@@ -489,9 +481,6 @@ loadBluesimModel fname top_name = do
   c_bk_peek_range_value    <- dlsym dl "bk_peek_range_value"
   c_bk_num_symbols         <- dlsym dl "bk_num_symbols"
   c_bk_get_nth_symbol      <- dlsym dl "bk_get_nth_symbol"
-  c_bk_set_VCD_file        <- dlsym dl "bk_set_VCD_file"
-  c_bk_enable_VCD_dumping  <- dlsym dl "bk_enable_VCD_dumping"
-  c_bk_disable_VCD_dumping <- dlsym dl "bk_disable_VCD_dumping"
   c_bk_shutdown            <- dlsym dl "bk_shutdown"
   -- convert functions to Haskell types and build BluesimModel
   let new_model :: IO WordPtr
@@ -516,10 +505,6 @@ loadBluesimModel fname top_name = do
       get_clk_fn :: WordPtr -> String -> IO BSClock
       get_clk_fn simHdl s =
           let fn = dl_ptr_str_ret_uint c_bk_get_clock_by_name
-          in withCString s (fromC . fn (toC simHdl))
-      set_vcd_fn :: WordPtr -> String -> IO BSStatus
-      set_vcd_fn simHdl s =
-          let fn = dl_ptr_str_ret_int c_bk_set_VCD_file
           in withCString s (fromC . fn (toC simHdl))
       plusarg_fn :: WordPtr -> String -> IO ()
       plusarg_fn simHdl s =
@@ -575,7 +560,6 @@ loadBluesimModel fname top_name = do
                           , model_hdl              = model_hdl
                           , sim_hdl                = sim_hdl
                           , current_clock          = 0  -- default clock handle
-                          , active_vcd_file        = Nothing
                           , current_directory      = [top_symbol]
                           , cleanup_handlers       = []
                           , is_interactive         = False
@@ -619,9 +603,6 @@ loadBluesimModel fname top_name = do
                           , bk_peek_range_value    = peek_range_fn
                           , bk_num_symbols         = (fromC . dl_ptr_ret_uint c_bk_num_symbols . toC)
                           , bk_get_nth_symbol      = (fromC . dl_ptr_uint_ret_ptr c_bk_get_nth_symbol . toC)
-                          , bk_set_VCD_file        = set_vcd_fn sim_hdl
-                          , bk_enable_VCD_dumping  = (fromC $ dl_ptr_ret_uchar c_bk_enable_VCD_dumping) sim_hdl
-                          , bk_disable_VCD_dumping = (fromC $ dl_ptr_ret_void c_bk_disable_VCD_dumping) sim_hdl
                           , bk_shutdown            = (fromC $ dl_ptr_ret_void c_bk_shutdown) sim_hdl
                           })
 

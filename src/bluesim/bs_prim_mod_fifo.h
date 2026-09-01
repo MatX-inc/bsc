@@ -6,7 +6,6 @@
 #include "bluesim_kernel_api.h"
 #include "bluesim_probes.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 
 typedef enum { FIFO_SIMPLE, FIFO_LOOPY, FIFO_BYPASS} tFifoType;
 
@@ -51,7 +50,7 @@ class MOD_Fifo : public Module
     elems = 0;
     in_reset = false;
     suppress_writes = false;
-    // for zero-width fifos and VCDs
+    // for zero-width fifos
     init_val(dummyval, width);
     write_undet(&dummyval, width);
 
@@ -121,7 +120,7 @@ class MOD_Fifo : public Module
   // if this happens when the FIFO is full, it is an error.
   void METH_enq(const T& x)
   {
-    dummyval = x;  // save for VCD display
+    dummyval = x;  // save for zero-width fifo reads
 
     if (suppress_writes)
       return;
@@ -242,181 +241,6 @@ class MOD_Fifo : public Module
       return NULL;
   }
 
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (elems == 0)
-      printf("EMPTY");
-    else
-    {
-      printf("{ ");
-      for (unsigned int n = 0; n < elems; ++n)
-      {
-	if (n > 0)
-	  printf(", ");
-	dump_val(data[(fst + n) % size], bits);
-      }
-      printf(" }");
-    }
-    putchar('\n');
-  }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    vcd_num = vcd_reserve_ids(sim_hdl, size + 6 + (bits > 0 ? 1 : 0));
-    unsigned int n = vcd_num;
-    char buf[16];
-    vcd_write_scope_start(sim_hdl, inst_name);
-    vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1);
-    vcd_write_def(sim_hdl, n++, "RST", 1);
-    vcd_write_def(sim_hdl, n++, "FULL_N", 1);
-    vcd_write_def(sim_hdl, n++, "EMPTY_N", 1);
-    vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "ENQ", 1);
-    if (bits > 0)
-    {
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "D_IN", bits);
-    }
-    vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "DEQ", 1);
-    vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "CLR", 1);
-    if (bits > 0)
-      vcd_write_def(sim_hdl, n,"D_OUT", bits);  // alias of arr_0
-    for (unsigned int i = 0; i < size; ++i)
-    {
-      snprintf(buf, 16, "arr_%d", i);
-      vcd_write_def(sim_hdl, n++, buf, bits);
-    }
-    vcd_write_scope_end(sim_hdl);
-    return n;
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_Fifo<T>& backing)
-  {
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      if (bits > 0)
-	vcd_write_x(sim_hdl, num++, bits);
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, 1);
-      for (unsigned int i = 0; i < size; ++i)
-	vcd_write_x(sim_hdl, num++, bits);
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      if (in_reset != backing.in_reset)
-	vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      else
-	++num;
-      if (METH_notFull() != backing.METH_notFull())
-	vcd_write_val(sim_hdl, num++, METH_notFull(), 1);
-      else
-	++num;
-      if (METH_notEmpty() != backing.METH_notEmpty())
-	vcd_write_val(sim_hdl, num++, METH_notEmpty(), 1);
-      else
-	++num;
-      bool at_posedge =
-	       bk_clock_val(sim_hdl, __clk_handle_0) == CLK_HIGH &&
-	       bk_clock_last_edge(sim_hdl, __clk_handle_0) == bk_now(sim_hdl);
-      if (at_posedge)
-      {
-	did_enq = bk_is_same_time(sim_hdl, enq_at);
-	if (did_enq != backing.did_enq)
-	{
-	  vcd_write_val(sim_hdl, num++, did_enq, 1);
-	  backing.did_enq = did_enq;
-	}
-	else
-	  ++num;
-      }
-      else
-	++num;
-      if (bits > 0)
-      {
-	if (dummyval != backing.dummyval)
-	  vcd_write_val(sim_hdl, num++, dummyval, bits);
-	else
-	  ++num;
-      }
-      if (at_posedge)
-      {
-	did_deq = bk_is_same_time(sim_hdl, deq_at);
-	if (did_deq != backing.did_deq)
-	{
-	  vcd_write_val(sim_hdl, num++, did_deq, 1);
-	  backing.did_deq = did_deq;
-	}
-	else
-	  ++num;
-      }
-      else
-	++num;
-      if (at_posedge)
-      {
-	did_clear = bk_is_same_time(sim_hdl, clear_at);
-	if (did_clear != backing.did_clear)
-	{
-	  vcd_write_val(sim_hdl, num++, did_clear, 1);
-	  backing.did_clear = did_clear;
-	}
-	else
-	  ++num;
-      }
-      else
-	++num;
-      for (unsigned int i = 0; i < size; ++i)
-      {
-	unsigned int idx = (fst + i) % size;
-	unsigned int b_idx = (backing.fst + i) % size;
-	if ((i < elems) &&
-	    ((i >= backing.elems) || (data[idx] != backing.data[b_idx])))
-	  vcd_write_val(sim_hdl, num++, data[idx], bits);
-	else if ((i >= elems) && (i < backing.elems))
-	  vcd_write_x(sim_hdl, num++, bits);
-	else
-	  ++num;
-      }
-    }
-    else
-    {
-      vcd_write_val(sim_hdl, num++, !in_reset, 1);
-      vcd_write_val(sim_hdl, num++, METH_notFull(), 1);
-      vcd_write_val(sim_hdl, num++, METH_notEmpty(), 1);
-      did_enq = bk_is_same_time(sim_hdl, enq_at);
-      did_deq = bk_is_same_time(sim_hdl, deq_at);
-      did_clear = bk_is_same_time(sim_hdl, clear_at);
-      vcd_write_val(sim_hdl, num++, did_enq, 1);
-      if (bits > 0)
-	vcd_write_val(sim_hdl, num++, dummyval, bits);
-      vcd_write_val(sim_hdl, num++, did_deq, 1);
-      vcd_write_val(sim_hdl, num++, did_clear, 1);
-      for (unsigned int i = 0; i < size; ++i)
-      {
-	unsigned int idx = (fst + i) % size;
-	if (i < elems)
-	  vcd_write_val(sim_hdl, num++, data[idx], bits);
-	else
-	  vcd_write_x(sim_hdl, num++, bits);
-      }
-      backing.did_enq = did_enq;
-      backing.did_deq = did_deq;
-      backing.did_clear = did_clear;
-    }
-
-    backing.fst = fst;
-    backing.elems = elems;
-    for (unsigned int i = 0; i < size; ++i)
-      backing.data[i] = data[i];
-    backing.in_reset = in_reset;
-    backing.dummyval = dummyval;
-  }
-
   // FIFO data members
  private:
   T*                 data;
@@ -434,13 +258,12 @@ class MOD_Fifo : public Module
   bool               in_reset;
   bool               suppress_writes;
 
-  // for zero-width fifos (also used for VCD data)
+  // for zero-width fifos
   T dummyval;
 
   // range structure for symbolic access to FIFO data
   Range range;
 
-  // used for VCD dumping
   bool did_enq;
   bool did_deq;
   bool did_clear;

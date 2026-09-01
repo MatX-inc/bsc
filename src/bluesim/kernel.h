@@ -5,78 +5,10 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_model.h"
-#include "bs_vcd.h"
+#include "bs_symbol.h"
 #include "event_queue.h"
 #include "portability.h"
 
-
-/*
- * VCD state
- */
-
-/* state */
-
-typedef enum { VCD_OFF, VCD_HEADER, VCD_ENABLED, VCD_DISABLED } tVCDStatus;
-
-// Represents a change of a value
-class Change
-{
-public:
-  // Change to X
-  Change(unsigned int n, unsigned int b)
-    : num(n), bits(b), isX(true)
-  {}
-  // Change to a new value (<= 64 bits)
-  Change(unsigned int n, unsigned int b, tUInt64 v)
-    : num(n), bits(b), isX(false), narrow(v)
-  {}
-  // Change to a new value (> 64 bits)
-  Change(unsigned int n, const tUWide& v)
-    : num(n), bits(v.size()), isX(false), wide(v)
-  {}
-public:
-  tUInt32 num;   // VCD ID number
-  unsigned int bits;  // bit width
-  bool isX;           // is an X value
-  tUInt64 narrow;     // narrow data
-  tUWide  wide;       // wide data
-};
-
-// Represents the list of changes at a single time
-typedef std::list<Change> tChangeList;
-
-typedef std::multimap<unsigned int, tClock> tClockMap;
-
-struct tVCDState {
-  tVCDStatus state;
-  tUInt64 vcd_filesize_limit;
-  bool go_xs;
-  tUInt32 next_seq_num;
-  tUInt32 kept_seq_num;
-  bool is_backing_instance;
-
-  std::string vcd_file_name;
-  std::set<std::string> previous_files;
-
-  tClockMap clk_map;                    // clks for each VCD num
-
-  std::map<tTime,tChangeList> changes;  // all pending changes
-  std::map<tTime,const char*> tasks;    // all pending VCD tasks
-  tTime min_pending;                    // lowest time of pending events
-  tTime last_time_written;              // last time values were written
-  bool need_end_task;                   // if we are within a $* task
-  bool changes_now;                     // treat changes as immediate
-
-  // external interface
-  FILE* vcd_file;
-  bool vcd_enabled;
-  bool vcd_checkpoint;
-  tUInt32 vcd_depth;
-
-  char* vcd_timescale;
-};
-
-typedef struct tVCDState tVCDState;
 
 /* A tLabel provides the information for creating a label when
  * dumping rule firing information.
@@ -110,7 +42,6 @@ typedef struct
   tUInt64 negedge_count;            /* count of number of negedges */
   tUInt64 posedge_limit;            /* call UI on posedge count */
   tUInt64 negedge_limit;            /* call UI on negedge count */
-  unsigned int vcd_num;             /* Seq. # for VCD dumping */
 } tClockInfo;
 
 /*
@@ -122,7 +53,7 @@ struct tSimState {
 
   // current simulation time
   tTime sim_time;
-  // scaling factor used for $time/$stime and vcds
+  // scaling factor used for $time/$stime
   tTime sim_timescale;
 
   // a priority queue of locally-defined clock edges
@@ -155,10 +86,6 @@ struct tSimState {
   tSInt32 exit_status;
   volatile bool force_halt;
 
-  // flag that records current state dump setting
-  bool  call_dump_state;
-  tTime last_state_dump_time;
-
   // flag that records current cycle dump setting
   bool call_dump_cycle_counts;
 
@@ -184,9 +111,6 @@ struct tSimState {
 
   // Count the number of primitives that have requested reset ticks
   unsigned int reset_tick_requests;
-
-  // VCD state
-  tVCDState vcd;
 
 };
 

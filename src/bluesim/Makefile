@@ -33,7 +33,7 @@ HEADERS = bluesim_kernel_api.h \
           bs_symbol.h \
           bs_system_tasks.h \
           bs_mem_defines.h bs_mem_file.h bs_range_tracker.h \
-          bs_vcd.h bs_module.h bs_target.h \
+          bs_module.h bs_target.h \
           bs_model.h
 
 # These ld export maps get copies to the inst/lib/Bluesim area
@@ -101,7 +101,7 @@ PRIM_OBJS = prim_ops.o wide_data.o mem_alloc.o target.o \
             prim_mod_synchronizers.o \
             prim_mod_gatedclock.o \
             prim_mod_resets.o \
-            dollar_display.o dollar_dumpvars.o dollar_plusargs.o \
+            dollar_display.o dollar_plusargs.o \
             dollar_stop_finish.o dollar_time.o \
             mem_file.o module.o portability.o \
             rand32.o
@@ -109,7 +109,7 @@ PRIM_OBJS = prim_ops.o wide_data.o mem_alloc.o target.o \
 # Description of Bluesim kernel library
 LIB_KERNEL = libbskernel.a
 KERNEL_OBJS = kernel.o event_queue.o priority.o symbol.o \
-              reset.o plusargs.o vcd.o portability.o
+              reset.o plusargs.o portability.o
 
 LIBS = $(LIB_PRIM) $(LIB_KERNEL)
 

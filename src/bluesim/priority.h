@@ -27,10 +27,8 @@ typedef enum {
   PS_RESET,
   PS_UI,
   PS_CYCLE_DUMP,
-  PS_VCD,
   PS_EXECUTE,
   PS_RULE_DUMP,
-  PS_STATE_DUMP,
   PS_COMBINATIONAL
 } tPrioritySlot;
 

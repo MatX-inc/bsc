@@ -17,7 +17,6 @@
 #include "bs_reset.h"
 #include "kernel.h"
 #include "event_queue.h"
-#include "bs_vcd.h"
 
 /* Keep a list of pending reset calls */
 typedef struct
@@ -78,9 +77,6 @@ static tTime reset_event(tSimStateHdl simHdl, tEvent& ev)
 /* Queue a reset function to be called at the beginning of the time-slice */
 void reset_init(tSimStateHdl simHdl, tResetFn fn, void* parent, tUInt8 rst)
 {
-  if (vcd_is_backing_instance(simHdl))
-    return;
-
   tResetRequest* req = new tResetRequest;
 
   req->fn     = fn;
@@ -101,9 +97,6 @@ void reset_init(tSimStateHdl simHdl, tResetFn fn, void* parent, tUInt8 rst)
 void reset_at_end_of_timeslice(tSimStateHdl simHdl,
 			       tResetFn fn, void* parent, tUInt8 rst)
 {
-  if (vcd_is_backing_instance(simHdl))
-    return;
-
   tResetRequest* req = new tResetRequest;
 
   req->fn     = fn;

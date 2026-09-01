@@ -2631,7 +2631,7 @@ simGrammar = (tclcmd "sim" namespace helpStr "") .+.
                     , stepGrammar, stopGrammar, syncGrammar, timeGrammar
                     , isFatalGrammar
                     , timescaleGrammar
-                    , unloadGrammar, upGrammar, vcdGrammar, verGrammar
+                    , unloadGrammar, upGrammar, verGrammar
                     ])
     where helpStr = "Control Bluesim simulation"
           argGrammar = (kw "arg" "Set a simulation plus-arg" "") .+.
@@ -2678,11 +2678,6 @@ simGrammar = (tclcmd "sim" namespace helpStr "") .+.
           unloadGrammar = kw "unload" "Unload the current bluesim model" ""
           upGrammar = (kw "up" "Move up the module hierarchy" "") .+.
                       (optional $ arg "N" IntArg "number of levels")
-          vcdGrammar = (kw "vcd" "Control dumping waveforms to a VCD file" "") .+.
-                       (optional $ oneOf [ (kw "on" "Turn on VCD dumping" "")
-                                         , (kw "off" "Turn off VCD dumping" "")
-                                         , (arg "file" StringArg "Dump to named VCD file")
-                                         ])
           verGrammar = kw "version" "Show Bluesim model version information" ""
 
 tclSim :: [String] -> IO HTclObj
@@ -3039,32 +3034,6 @@ tclSim ("up":args) = do
                       mbs = Just (bs { current_directory = dirs' })
                   modifyIORef globalVar (\gv -> gv { tp_bluesim = mbs })
                   return $ TLst []
-    Nothing -> ioError $ userError ("There is no bluesim model loaded")
-----------
-tclSim ("vcd":args) = do
-  g <- readIORef globalVar
-  case (tp_bluesim g) of
-    Just bs -> case args of
-                 []      -> -- return name of active VCD file, if any
-                            do l <- toTclObj $ maybeToList (active_vcd_file bs)
-                               return $ TCL l
-                 ["on"]  -> -- turn on VCD dumping
-                            do _ <- bk_enable_VCD_dumping bs
-                               when (isNothing $ active_vcd_file bs) $
-                                    let bs' = bs { active_vcd_file = Just "dump.vcd" }
-                                    in modifyIORef globalVar (\gv -> gv { tp_bluesim = Just bs' })
-                               return $ TLst []
-                 ["off"] -> -- turn off VCD dumping
-                            do bk_disable_VCD_dumping bs
-                               return $ TLst []
-                 [file]  -> -- dump to named file
-                            do _ <- bk_set_VCD_file bs file
-                               _ <- bk_enable_VCD_dumping bs
-                               let bs' = bs { active_vcd_file = Just file }
-                               modifyIORef globalVar (\gv -> gv { tp_bluesim = Just bs' })
-                               return $ TLst []
-                 _ -> internalError $ "tclSim: grammar mismatch: " ++ (show args)
-
     Nothing -> ioError $ userError ("There is no bluesim model loaded")
 ----------
 tclSim ["version"] = do

@@ -8,9 +8,7 @@ link_objects_pass {mkTestbench mkDesign} mkTestbench
 #sim_output mkTestbench "-ss"
 #copy "mkTestbench.out" "command_ss.out"
 #compare_file command_ss.out
-sim_output mkTestbench "-V"
-copy "dump.vcd" "dump.out"
-#compare_vcd_file dump.out
+sim_output mkTestbench ""
 #sim_output mkTestbench "-s -R!"
 #copy "mkTestbench.out" "command_s_R.out"
 #compare_file command_s_R.out
@@ -29,12 +27,6 @@ copy "dump.vcd" "dump.out"
 #sim_output mkTestbench "-d bsv_c_drvfile"
 #copy "mkTestbench.out" "command_d.out"
 #compare_file command_d.out
-#sim_output mkTestbench "-w 100 -V dump.vcd"
-#copy "dump.vcd" "dump_w_1.out"
-#compare_vcd_file dump_w_1.out
-#sim_output mkTestbench "-w 40 -V dump.vcd"
-#copy "dump.vcd" "dump_w_2.out"
-#compare_vcd_file dump_w_2.out
 #sim_output mkTestbench "-r"
 #cpy "mkTestbench.out" "command_r.out"
 #compare_file command_r.out

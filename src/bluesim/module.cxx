@@ -111,8 +111,8 @@ static int bin_search(tSym table[], unsigned int size,
 
 Module::Module(tSimStateHdl hdl, const char* name, Module* parent_module)
   : parent(parent_module), inst_name(name), sim_hdl(hdl),
-    vcd_num(0), symbol_count(0), symbols(NULL)
-{  
+    symbol_count(0), symbols(NULL)
+{
 }
 
 Module::~Module()

@@ -15,8 +15,6 @@
 
 
 /* forward declarations of some static helper functions */
-static void setup_state_dump_events(tSimStateHdl simHdl, bool initial);
-static void setup_vcd_events(tSimStateHdl simHdl);
 static void setup_clock_edges(tSimStateHdl simHdl, tClock clk);
 
 /* mutex operations */
@@ -180,18 +178,6 @@ static tTime reset_model_event(tSimStateHdl simHdl, tEvent& ev)
   return 0llu; // not a recurring event
 }
 
-static tTime dump_state_event(tSimStateHdl simHdl, tEvent& ev)
-{
-  bool initial = ev.data.flag;
-
-  if (initial)
-    bk_dump_state(simHdl, "Initial State");
-  else
-    bk_dump_state(simHdl, "State");
-
-  return 0llu;
-}
-
 static void print_cycle_description(tSimStateHdl simHdl,
 				    tClock clk,
                                     tEdgeDirection dir,
@@ -286,17 +272,7 @@ static tTime run_edge_schedule_event(tSimStateHdl simHdl, tEvent& ev)
 
   // run the schedule function
   if (schedule)
-  {
     schedule(simHdl, simHdl->model->get_instance());
-
-    // if necessary, schedule the state dumping event
-    if (simHdl->call_dump_state)
-      setup_state_dump_events(simHdl, false);
-  }
-
-  // if necessary, schedule the VCD dumping event
-  if (vcd_is_active(simHdl))
-    setup_vcd_events(simHdl);
 
   // if necessary, setup to yield to the UI at the end of this timeslice
   if (need_to_yield || simHdl->force_halt)
@@ -331,82 +307,6 @@ static tTime run_combo_schedule_event(tSimStateHdl simHdl, tEvent& ev)
   }
 
   return simHdl->clocks[clk].period;
-}
-
-static tTime vcd_event(tSimStateHdl simHdl, tEvent& ev)
-{
-  // if writing a new header, dump the hierarchy and id map
-  if (vcd_write_header(simHdl))
-  {
-    vcd_write_scope_start(simHdl, "main");
-    simHdl->model->dump_VCD_defs();
-    vcd_write_scope_end(simHdl);
-    fputs("$enddefinitions $end\n", (simHdl->vcd).vcd_file);
-  }
-
-  vcd_advance(simHdl, ev.data.flag);
-
-  tVCDDumpType dt = get_VCD_dump_type(simHdl);
-  switch (dt)
-  {
-    case VCD_DUMP_XS:
-    {
-      vcd_task(simHdl, "$dumpoff");
-      for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
-        vcd_write_x(simHdl, simHdl->clocks[clk].vcd_num, 1);
-      simHdl->model->dump_VCD(dt);
-      break;
-    }
-    case VCD_DUMP_INITIAL:
-    {
-      vcd_task(simHdl, "$dumpvars");
-      for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
-      {
-        if ( simHdl->clocks[clk].has_initial_value ||
-             (bk_clock_cycle_count(simHdl, clk) != 0llu) )
-          vcd_write_val(simHdl, simHdl->clocks[clk].vcd_num,
-			bk_clock_val(simHdl, clk), 1);
-      }
-      simHdl->model->dump_VCD(dt);
-      break;
-    }
-    case VCD_DUMP_CHECKPOINT:
-    {
-      vcd_task(simHdl, "$dumpall");
-      for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
-        vcd_write_val(simHdl, simHdl->clocks[clk].vcd_num,
-		      bk_clock_val(simHdl, clk), 1);
-      simHdl->model->dump_VCD(dt);
-      break;
-    }
-    case VCD_DUMP_CHANGES:
-    {
-      tTime now = bk_now(simHdl);
-      for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
-      {
-        if ((simHdl->clocks[clk].posedge_at == now) ||
-	    (simHdl->clocks[clk].negedge_at == now))
-          vcd_write_val(simHdl, simHdl->clocks[clk].vcd_num,
-			bk_clock_val(simHdl, clk), 1);
-      }
-      simHdl->model->dump_VCD(dt);
-      break;
-    }
-    case VCD_DUMP_RESTART:
-    {
-      vcd_task(simHdl, "$dumpon");
-      for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
-        vcd_write_val(simHdl, simHdl->clocks[clk].vcd_num,
-		      bk_clock_val(simHdl, clk), 1);
-      simHdl->model->dump_VCD(dt);
-      break;
-    }
-    default: break;
-  }
-
-  vcd_check_file_size(simHdl);
-
-  return 0llu;
 }
 
 static tTime quit_event(tSimStateHdl simHdl, tEvent& /* unused */)
@@ -468,34 +368,9 @@ static bool isRealScheduleEvent(tSimStateHdl simHdl, const tEvent& ev)
     return (ev.fn == run_combo_schedule_event);
 }
 
-static bool isDummyScheduleEvent(tSimStateHdl simHdl, const tEvent& ev)
-{
-  if (ev.fn == run_edge_schedule_event)
-  {
-    unsigned int n = ev.data.value;
-    tClock         clk = get_clock_event_clk(n);
-    tEdgeDirection dir = get_clock_event_dir(n);
-
-    return (((dir == POSEDGE) && (simHdl->clocks[clk].on_posedge == NULL)) ||
-            ((dir == NEGEDGE) && (simHdl->clocks[clk].on_negedge == NULL)));
-  }
-  else
-    return false;
-}
-
-static bool isStateDumpEvent(tSimStateHdl /* unused */, const tEvent& ev)
-{
-  return (ev.fn == dump_state_event);
-}
-
 static bool isCycleDumpEvent(tSimStateHdl /* unused */, const tEvent& ev)
 {
   return (ev.fn == dump_cycle_event);
-}
-
-static bool isVCDEvent(tSimStateHdl /* unused */, const tEvent& ev)
-{
-  return (ev.fn == vcd_event);
 }
 
 static void add_dummy_schedule_events(tSimStateHdl simHdl)
@@ -506,17 +381,6 @@ static void add_dummy_schedule_events(tSimStateHdl simHdl)
     for (tClock clk = 0; clk < simHdl->clocks.size(); ++clk)
       setup_clock_edges(simHdl, clk);
   }
-}
-
-static void remove_dummy_schedule_events(tSimStateHdl simHdl)
-{
-  if (simHdl->need_dummy_edges == 0)
-    return;
-
-  --(simHdl->need_dummy_edges);
-
-  if (simHdl->queue && (simHdl->need_dummy_edges == 0))
-    simHdl->queue->remove(simHdl, isDummyScheduleEvent);
 }
 
 static void setup_reset_events(tSimStateHdl simHdl)
@@ -538,30 +402,6 @@ static void setup_reset_events(tSimStateHdl simHdl)
 
   simHdl->queue->schedule(assert_event);
   simHdl->queue->schedule(deassert_event);
-}
-
-static void setup_state_dump_events(tSimStateHdl simHdl, bool initial)
-{
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return;
-
-  if (simHdl->last_state_dump_time == simHdl->sim_time)
-    return;
-
-  tEvent ev;
-
-  ev.fn = dump_state_event;
-  ev.at = simHdl->sim_time;
-  ev.data.flag = initial;
-  if (initial)
-    ev.priority = make_priority(PG_INITIAL, PS_STATE_DUMP);
-  else
-    ev.priority = make_priority(PG_AFTER_LOGIC, PS_STATE_DUMP);
-
-  if (!initial)
-    simHdl->last_state_dump_time = simHdl->sim_time;
-
-  simHdl->queue->schedule(ev);
 }
 
 static void setup_cycle_dump_events(tSimStateHdl simHdl)
@@ -596,24 +436,6 @@ static void setup_cycle_dump_events(tSimStateHdl simHdl)
        ++p)
     simHdl->queue->schedule(*p);
   new_events.clear();
-}
-
-void setup_vcd_events(tSimStateHdl simHdl)
-{
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return;
-
-  if (simHdl->queue->find(simHdl, isVCDEvent) == NULL)
-  {
-    // schedule the vcd event
-    tEvent ev;
-    ev.at        = simHdl->sim_time;
-    ev.priority  = make_priority(PG_AFTER_LOGIC, PS_VCD);
-    ev.fn        = vcd_event;
-    ev.data.flag = false;
-
-    simHdl->queue->schedule(ev);
-  }
 }
 
 /*
@@ -671,9 +493,6 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   simHdl->exit_status = 0;
   simHdl->force_halt = false;
 
-  simHdl->call_dump_state = false;
-  simHdl->last_state_dump_time = 0llu;
-
   simHdl->call_dump_cycle_counts = false;
 
   simHdl->need_dummy_edges = 0;
@@ -682,26 +501,7 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
 
   simHdl->reset_tick_requests = 0;
 
-  (simHdl->vcd).state = VCD_OFF;
-  (simHdl->vcd).vcd_filesize_limit = 0llu;
-  (simHdl->vcd).go_xs = false;
-  (simHdl->vcd).next_seq_num = 0;
-  (simHdl->vcd).kept_seq_num = 0;
-  (simHdl->vcd).is_backing_instance = false;
-
-  (simHdl->vcd).min_pending = (simHdl->sim_time);
-  (simHdl->vcd).last_time_written = (simHdl->sim_time);
-  (simHdl->vcd).need_end_task = false;
-  (simHdl->vcd).changes_now = false;
-
-  (simHdl->vcd).vcd_file = NULL;
-  (simHdl->vcd).vcd_enabled = false;
-  (simHdl->vcd).vcd_checkpoint = false;
-  (simHdl->vcd).vcd_depth = 0;
-
-  // initialize directly so bk_set_timescale doesn't try to free garbage
   simHdl->sim_timescale = 1;
-  (simHdl->vcd).vcd_timescale = strdup("1 us");
 
   tBluesimVersionInfo version;
   simHdl->model->get_version(&(version.name), &(version.build));
@@ -720,8 +520,6 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
   simHdl->top_symbol.key = "";
   simHdl->top_symbol.info = SYM_MODULE;
   simHdl->top_symbol.value = bk_get_model_instance(simHdl);
-  simHdl->last_state_dump_time = ~(simHdl->sim_time);
-  vcd_keep_ids(simHdl);
 
   return simHdl;
 }
@@ -802,7 +600,6 @@ void bk_shutdown(tSimStateHdl simHdl)
   delete simHdl->queue;
   simHdl->queue = NULL;
   clear_plusargs(simHdl);
-  vcd_reset(simHdl);
   delete simHdl;
 }
 
@@ -958,7 +755,6 @@ tClock bk_define_clock(tSimStateHdl simHdl,
   ci.negedge_count = 0llu;
   ci.posedge_limit = 0llu;
   ci.negedge_limit = 0llu;
-  ci.vcd_num = vcd_reserve_ids(simHdl, 1);
 
   simHdl->clocks.push_back(ci);
 
@@ -1189,13 +985,6 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
     return simHdl->clocks[clk].negedge_count;
 }
 
-tUInt32 bk_clock_vcd_num(tSimStateHdl simHdl, tClock clk)
-{
-  if (clk >= simHdl->clocks.size())
-    return 0;
-  return simHdl->clocks[clk].vcd_num;
-}
-
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
  * This should be called before the first bk_advance() call.
@@ -1215,7 +1004,7 @@ tTime bk_now(tSimStateHdl simHdl)
   return (simHdl->sim_timescale) * (simHdl->sim_time);
 }
 
-// A valid VCD unit is of the form: (1 | 10 | 100)<space>(s | ms | us | ns | ps | fs)
+// A valid time unit is of the form: (1 | 10 | 100)<space>(s | ms | us | ns | ps | fs)
 // The Verilog standard allows more whitespace, but that doesn't seem useful here.
 // This test is ugly, but hopefully simple and correct.
 bool valid_unit(const char* scale_unit) {
@@ -1250,11 +1039,6 @@ tStatus bk_set_timescale(tSimStateHdl simHdl, const char* scale_unit, tTime scal
     return BK_ERROR;
 
   simHdl->sim_timescale = scale_factor;
-  char* current_timescale = simHdl->vcd.vcd_timescale;
-  simHdl->vcd.vcd_timescale = strdup(scale_unit);
-  if(current_timescale != NULL) {
-    free(current_timescale);
-  }
 
   return BK_SUCCESS;
 }
@@ -1617,32 +1401,6 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at)
   return BK_SUCCESS;
 }
 
-/* Control dumping of state */
-
-void bk_enable_state_dumping(tSimStateHdl simHdl)
-{
-  simHdl->call_dump_state = true;
-  setup_state_dump_events(simHdl, true);
-}
-
-void bk_disable_state_dumping(tSimStateHdl simHdl)
-{
-  simHdl->call_dump_state = false;
-  if (simHdl->queue)
-    simHdl->queue->remove(simHdl, isStateDumpEvent);
-}
-
-tBool bk_is_state_dumping_enabled(tSimStateHdl simHdl)
-{
-  return simHdl->call_dump_state ? 1 : 0;
-}
-
-void bk_dump_state(tSimStateHdl simHdl, const char* label)
-{
-  printf("%s:\n", label);
-  simHdl->model->dump_state();
-}
-
 /* Control dumping of cycle counts */
 
 void bk_enable_cycle_dumping(tSimStateHdl simHdl)
@@ -1687,57 +1445,6 @@ void bk_dump_cycle_counts(tSimStateHdl simHdl, const char* label, tClock clk)
   else
     printf("%llu %s cycles\n",
            bk_clock_cycle_count(simHdl, clk), simHdl->clocks[clk].name);
-}
-
-/* Control dumping of VCD */
-
-tBool bk_enable_VCD_dumping(tSimStateHdl simHdl)
-{
-  if ((simHdl->vcd).vcd_enabled)
-    return 1;
-  else if (vcd_set_state(simHdl, true))
-  {
-    add_dummy_schedule_events(simHdl);
-    return 1;
-  }
-  else
-    return 0;
-}
-
-void bk_disable_VCD_dumping(tSimStateHdl simHdl)
-{
-  if (!(simHdl->vcd).vcd_enabled)
-    return;
-
-  if (simHdl->queue)
-    simHdl->queue->remove(simHdl, isVCDEvent);
-
-  remove_dummy_schedule_events(simHdl);
-  vcd_set_state(simHdl, false);
-  vcd_dump_xs(simHdl);
-}
-
-tBool bk_is_VCD_dumping_enabled(tSimStateHdl simHdl)
-{
-  return (simHdl->vcd).vcd_enabled ? 1 : 0;
-}
-
-/* Used by SystemC wrappers to update VCD values at non-standard times.
- * Look no further for evidence that Bluesim's VCD handling is a mess.
- */
-void bk_VCD_combo_update(tSimStateHdl simHdl, tTime t)
-{
-  if (!(simHdl->vcd).vcd_enabled)
-    return;
-
-  // schedule a special "immediate" vcd event
-  tEvent ev;
-  ev.at        = t;
-  ev.priority  = make_priority(PG_BEFORE_LOGIC, PS_VCD);
-  ev.fn        = vcd_event;
-  ev.data.flag = true;
-
-  simHdl->queue->schedule(ev);
 }
 
 /* Call to enable clock edges without logic (for interactive stepping) */

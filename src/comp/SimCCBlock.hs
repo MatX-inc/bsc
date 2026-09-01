@@ -26,7 +26,6 @@ module SimCCBlock( SBId
                  , clockType
                  , get_rule_fns
                  , get_method_fns
-                 , defs_written
                  , defs_read
                  , lookupSB
                  , isPrimBlock
@@ -215,19 +214,6 @@ data SimCCFnStmt = -- Bool is whether the var is a port (else a def)
 isReturn :: SimCCFnStmt -> Bool
 isReturn (SFSReturn _) = True
 isReturn _             = False
-
--- List of Ids (in raw form) which are written in a function.
--- Since both defs and ports can be written, and they are in separate
--- namespaces, the Ids are returned as a pair, with a boolean indicating
--- which namespace (True for ports)
-defs_written :: SimCCFnStmt -> [(Bool, AId)]
-defs_written (SFSDef isPort (_,aid) (Just _)) = [(isPort, aid)]
-defs_written (SFSAssign isPort aid _)         = [(isPort, aid)]
-defs_written (SFSAssignAction isPort aid _ _) = [(isPort, aid)]
-defs_written (SFSCond _ ts fs)                = (concatMap defs_written ts) ++
-                                                (concatMap defs_written fs)
-defs_written (SFSResets rs)                   = concatMap defs_written rs
-defs_written _                                = []
 
 -- List of Ids (in raw form) which are read in a function.
 -- This does not distinguish reads of ports from reads of defs!
@@ -1533,56 +1519,6 @@ setClkFnDef scope dom =
       def_assign = (mkVar def_name) `assign` handle
   in  define (setClkFnProto scope dom) (block [def_assign])
 
--- Functions used for generating the dump() methods for a SimCCBlock
-dumpFnProto :: Maybe String -> Bool -> String -> CCFragment
-dumpFnProto scope with_handle fn_name =
-  let prefix = maybe "" (++ "::") scope
-      harg = if with_handle then [clockType (mkVar "handle")] else []
-      iarg = [unsigned . int $ (mkVar "indent")]
-  in function void (mkVar (prefix ++ fn_name)) (harg ++ iarg)
-
-vcdHdrFnProto :: Maybe String -> CCFragment
-vcdHdrFnProto scope =
-  let prefix = maybe "" (++ "::") scope
-  in function (unsigned . int) (mkVar (prefix ++ "dump_VCD_defs"))
-                               [ unsigned . int $ (mkVar "levels") ]
-
-vcdDumpFnProto :: SimCCBlock -> Maybe String -> String -> Bool -> CCFragment
-vcdDumpFnProto sb scope name with_levels =
-  let prefix = maybe "" (++ "::") scope
-      args = [ (userType "tVCDDumpType") $ (mkVar "dt") ] ++
-             (if (with_levels) then [ unsigned . int $ (mkVar "levels") ] else []) ++
-             [ reference . (moduleType sb []) $ (mkVar "backing") ]
-  in function void (mkVar (prefix ++ name)) args
-
-vcdFnProto :: SimCCBlock -> Maybe String -> CCFragment
-vcdFnProto sb scope = vcdDumpFnProto sb scope "dump_VCD" True
-
-mkSubCall :: AId -> String -> [CCExpr] -> Maybe CCFragment -> CCFragment
-mkSubCall inst fn args lval =
-  let rhs = ((aInstIdToC inst) `cDot` fn) `cCall` args
-  in case lval of
-       (Just lhs) -> lhs `assign` rhs
-       Nothing    -> stmt $ rhs
-
-mkVCDDef :: Map.Map (Bool, AId) ClockDomain -> (AType, AId, Bool) -> [CCFragment]
-mkVCDDef clk_map (ty,aid,isPort) =
-  let name      = getIdBaseString aid
-      def       = if isPort then (aPortIdToC aid) else (aDefIdToC aid)
-      -- we lookup based on the AId in a map made by calling "defs_written"
-      -- this requires that the Ids be paired with whether it is a port
-      -- (since ports and defs are in separate namespaces)
-      aid'      = (isPort, aid)
-      dom       = M.lookup aid' clk_map
-      set_lag   = case dom of
-                    (Just d) -> [ stmt $ (var "vcd_set_clock") `cCall`
-                                  [ var "sim_hdl", var "num",  var (mkClkDefName d) ] ]
-                    Nothing  -> []
-      args = [var "sim_hdl"] ++ (mkVCDCallArgs VCDDef ty name def)
-      write_def = [ stmt $ (var "vcd_write_def") `cCall` args ]
-
-  in set_lag ++ write_def
-
 -- Symbol initialization function prototype
 symInitFnProto :: (Maybe String) -> Int -> CCFragment
 symInitFnProto scope n =
@@ -1660,33 +1596,6 @@ simCCBlockToClassDeclaration sb_map sb =
       set_clk_fns = [comment ("Functions to set the elaborated clock id")
                              (public (map (decl . (setClkFnProto Nothing))
                                           (sb_domains sb)))]
-      state_dump  = [comment "State dumping routine"
-                             (public [decl $ dumpFnProto Nothing False "dump_state"])]
-      vcd_hdr     = decl $ vcdHdrFnProto Nothing
-      is_string_type (ATString _) = True
-      is_string_type _            = False
-      has_members = any (not . null) [ sb_resetDefs sb
-                                     , [ (t,i)
-                                       | (t,i) <- ((sb_privateDefs sb) ++ (sb_publicDefs sb))
-                                       , not (is_string_type t)
-                                       ]
-                                     ]
-      has_prims = or [ isPrimBlock sub | (sub,_,_) <- sb_state sb ]
-      has_submodules = or [ not (isPrimBlock sub) | (sub,_,_) <- sb_state sb ]
-      vcd_changes = [ decl $ vcdFnProto sb Nothing ]
-                    ++
-                    (if has_members
-                     then [decl $ vcdDumpFnProto sb Nothing "vcd_defs" False]
-                     else [])
-                    ++
-                    (if has_prims
-                     then [decl $ vcdDumpFnProto sb Nothing "vcd_prims" False]
-                     else [])
-                    ++
-                    (if has_submodules
-                     then [decl $ vcdDumpFnProto sb Nothing "vcd_submodules" True]
-                     else [])
-      vcd         = [comment "VCD dumping routines" (public (vcd_hdr:vcd_changes))]
       class_decl  = c_class (pfxMod ++ (sb_name sb)) (Just "Module") $
                     concat [ clk_defs
                            , gate_defs
@@ -1705,8 +1614,6 @@ simCCBlockToClassDeclaration sb_map sb =
                            , rst_fn_fields
                            , set_rst_fns
                            , set_clk_fns
-                           , state_dump
-                           , vcd
                            ]
       comment_str = "Class declaration for the " ++ (sb_name sb) ++ " module"
   in comment comment_str (decl class_decl)
@@ -1729,19 +1636,6 @@ mkCtorInit _ (aty@(ATTuple _),aid) =
 -- so no need to consult the task_id_set
 mkCtorInit _ _  = Nothing
 
-data VCDCallType = VCDDef | VCDX | VCDVal | VCDChange
-
-mkVCDCallArgs :: VCDCallType -> AType -> String -> CCExpr -> [CCExpr]
-mkVCDCallArgs ct ty name def =
-  let size_arg = case ty of
-                   (ATString Nothing) -> [ mkUInt32 0 ]
-                   otherwise          -> [ mkUInt32 (aSize ty) ]
-  in case ct of
-       VCDDef    -> [ cPostInc (var "num"), mkStr name ] ++ size_arg
-       VCDX      -> [ cPostInc (var "num") ] ++ size_arg
-       VCDVal    -> [ cPostInc (var "num"), def ] ++ size_arg
-       VCDChange -> [ var "num", def ] ++ size_arg
-
 -- Defines the ordering we want for symbol names.
 -- This needs to match the ordering used in the match_key function
 -- in src/sim/module.cxx.
@@ -1763,9 +1657,8 @@ symOrd (str1,sym1) (str2,sym2) =
                       GT -> GT
               GT -> GT
 
-simCCBlockToClassDefinition :: SBMap -> M.Map (Bool,AId) ClockDomain ->
-                               SimCCBlock -> StmtsConv
-simCCBlockToClassDefinition sb_map sch_map sb =
+simCCBlockToClassDefinition :: SBMap -> SimCCBlock -> StmtsConv
+simCCBlockToClassDefinition sb_map sb =
   do let scope = Just (pfxMod ++ (sb_name sb))
          state_defs = map (addSBArgs sb_map) (sb_state sb)
          task_id_set = S.fromList (sb_taskDefs sb)
@@ -1859,251 +1752,6 @@ simCCBlockToClassDefinition sb_map sch_map sb =
              , let body = concatMap mkSymbolInit syms
              ]
 
-     -- ----------------------
-     -- State dumping routines
-
-     let label = stmt $ (var "printf") `cCall` [ mkStr "%*s%s:\n"
-                                               , var "indent"
-                                               , mkStr ""
-                                               , var "inst_name"
-                                               ]
-     let hasState sb =
-           let (prims,subs) = partition isPrimBlock
-                                        [ sbid | (sbid,_,_) <- sb_state sb ]
-           in (not (null prims)) || (any hasState (map (lookupSB sb_map) subs))
-     let state_dump_body =
-           if (not (hasState sb))
-           then block []
-           else block ([label] ++
-                       [ mkSubCall inst
-                                   "dump_state"
-                                   [(var "indent") `cAdd` (mkUInt32 2)]
-                                   Nothing
-                         | (_,inst,_) <- (sb_state sb) ])
-     let state_dump = define (dumpFnProto scope False "dump_state") state_dump_body
-
-     -- --------------------
-     -- VCD dumping routines
-
-     let ids_by_clock = [ (fromJust clk, nub rl_ids)
-                        | (clk, rls) <- sb_rules sb
-                        , isJust clk
-                        , let rules = map snd rls
-                        , let rl_ids = concatMap defs_written
-                                                 (concatMap sf_body rules)
-                        ]
-         rl_map = M.fromList [ (i,d) | (d,is) <- ids_by_clock, i <- is ]
-         mc_map = M.fromList [ (i,c)
-                             | (c, mths) <- sb_methods sb
-                             , i <- map fst mths
-                             ]
-         -- RDY methods now get marked with the clock of the method,
-         -- so this indirection should no longer be needed.
-         lookupMClk i | isRdyId i = M.findWithDefault Nothing (dropReadyPrefixId i) mc_map
-                      | otherwise = M.findWithDefault Nothing i mc_map
-         (ms1,ms2) = partition (\(c,_) -> c == (Just noClockDomain))
-                               (sb_methods sb)
-         ms1' = M.toList $ M.unionsWith (++) $
-                [ M.singleton (lookupMClk i) [(i,f)]
-                | (i,f) <- concatMap snd ms1
-                ]
-         methods' = ms1' ++ ms2
-         ids_by_clock' = [ (fromJust clk, nub mth_ids)
-                         | (clk, mths) <- methods'
-                         , (isJust clk) && (fromJust clk /= noClockDomain)
-                         , let ms = map snd mths
-                         , let mth_ids = concatMap defs_written
-                                                   (concatMap sf_body ms)
-                         ]
-         meth_map = M.fromList [ (i,d) | (d,is) <- ids_by_clock', i <- is ]
-         clk_map = M.unions [ rl_map, meth_map, sch_map ]
-         prims = sortBy cmpIdByName
-                        (catMaybes [ if isPrimBlock sub
-                                     then Just inst
-                                     else Nothing
-                                   | (sub,inst,_) <- sb_state sb ])
-         sub_modules = sortBy cmpIdByName
-                              (catMaybes [ if isPrimBlock sub
-                                           then Nothing
-                                           else Just inst
-                                         | (sub,inst,_) <- sb_state sb ])
-         cmp_def (_,i1,_) (_,i2,_) = i1 `cmpIdByName` i2
-         is_string_type (ATString _) = True
-         is_string_type _            = False
-         members = sortBy cmp_def $
-                          [ (t,i,True)
-                          | (t,i) <- (sb_resetDefs sb)
-                          ] ++
-                          [ (t,i,False)
-                          | (t,i) <- ((sb_privateDefs sb) ++
-                                      (sb_publicDefs sb))
-                          , not (is_string_type t)
-                          ]
-         ports = sortBy cmp_def
-                        [ (t,vName_to_id vn,True)
-                        | (t,_,vn) <- sb_methodPorts sb ]
-         num_ids = (length members) + (length ports) + (length prims)
-
-         -- vcd definitions function
-
-         num_init = [ (mkVar "vcd_num") `assign`
-                         ((var "vcd_reserve_ids") `cCall`
-                                 [var "sim_hdl", mkUInt32 (toInteger num_ids)])
-                    , decl $ (unsigned . int) $
-                        (mkVar "num") `assign` (var "vcd_num")
-                    ]
-         clk_def_loop = [ for (decl $ (unsigned . int) $ (mkVar "clk") `assign` (mkUInt32 0))
-                              ((var "clk") `cLt` ((var "bk_num_clocks") `cCall` [var "sim_hdl"]))
-                              (stmt $ cPreInc (var "clk"))
-                              (stmt $ (var "vcd_add_clock_def") `cCall` [ var "sim_hdl"
-                                                                        , var "this"
-                                                                        , (var "bk_clock_name") `cCall` [var "sim_hdl", var "clk"]
-                                                                        , (var "bk_clock_vcd_num") `cCall` [var "sim_hdl", var "clk"]
-                                                                        ])
-                        ]
-         clk_aliases = [ stmt $ (var "vcd_write_def") `cCall` [var "sim_hdl",num,name,sz]
-                       | (port, dom) <- sb_inputClocks sb
-                       , let clk = var (mkClkDefName dom)
-                       , let num = (var "bk_clock_vcd_num") `cCall` [var "sim_hdl", clk]
-                       , let name = mkStr (getIdString port)
-                       , let sz = mkUInt32 1
-                       ]
-         prim_calls = [ mkSubCall inst "dump_VCD_defs"
-                                       [var "num"]
-                                       (Just (mkVar "num"))
-                        | inst <- prims ]
-         sub_calls = [ mkSubCall inst "dump_VCD_defs"
-                                      [var "l"]
-                                      (Just (mkVar "num"))
-                        | inst <- sub_modules ]
-         member_calls = concatMap (mkVCDDef clk_map) members
-         port_calls   = concatMap (mkVCDDef clk_map) ports
-         new_l = cTernary ((var "levels") `cEq` (mkUInt32 0))
-                          (mkUInt32 0)
-                          ((var "levels") `cSub` (mkUInt32 1))
-         vcd_recurse =
-           [ decl $ (unsigned . int) $ (mkVar "l") `assign` new_l ] ++
-           sub_calls
-         scope_start = [ stmt $ (var "vcd_write_scope_start") `cCall` [var "sim_hdl", var "inst_name"] ]
-         scope_end = [ stmt $ (var "vcd_write_scope_end") `cCall` [var "sim_hdl"] ]
-         vcd_dump_defs_body =
-           block (scope_start ++
-                  num_init ++
-                  clk_def_loop ++
-                  clk_aliases ++
-                  member_calls ++
-                  port_calls ++
-                  prim_calls ++
-                  (if (null sub_calls)
-                   then []
-                   else [ if_cond ((var "levels") `cNe` (mkUInt32 1))
-                                  (block vcd_recurse)
-                                  Nothing
-                        ]) ++
-                  scope_end ++
-                  [ ret (Just (var "num")) ]
-                  )
-         vcd_dump_defs = define (vcdHdrFnProto scope) vcd_dump_defs_body
-
-         -- value dumping functions
-
-         def_name  Nothing  i = aDefIdToC i
-         def_name  (Just x) i = x `cDot` (aUnqualDefIdToString i)
-         port_name Nothing  i = aPortIdToC i
-         port_name (Just x) i = x `cDot` (aUnqualPortIdToString i)
-         vcd_write ct (ty,aid,isPort) =
-           let name        = getIdBaseString aid
-               name_fn     = if isPort then port_name else def_name
-               def         = name_fn Nothing aid
-               backing_def = name_fn (Just (var "backing")) aid
-           in [ stmt $ (var "vcd_write_val") `cCall`
-                         ([var "sim_hdl"] ++ (mkVCDCallArgs ct ty name def))
-              , (stmt backing_def) `assign` def
-              ]
-         vcd_write_x (ty,aid,isPort) =
-           let name_fn = if isPort then port_name else def_name
-               def     = name_fn Nothing aid
-           in  stmt $ (var "vcd_write_x") `cCall`
-                        ([var "sim_hdl"] ++ (mkVCDCallArgs VCDX ty "" def))
-         vcd_write_changed target@(ty,aid,isPort) =
-           let name_fn     = if isPort then port_name else def_name
-               def         = name_fn Nothing aid
-               backing_def = name_fn (Just (var "backing")) aid
-           in [ if_cond (backing_def `cNe` def)
-                        (block (vcd_write VCDChange  target))
-                        Nothing
-              , stmt $ cPreInc (var "num")
-              ]
-         member_calls_xs = map vcd_write_x members
-         member_calls_changed = concatMap vcd_write_changed members
-         member_calls_all = concatMap (vcd_write VCDVal) members
-         port_calls_xs = map vcd_write_x ports
-         port_calls_changed = concatMap vcd_write_changed ports
-         port_calls_all = concatMap (vcd_write VCDVal) ports
-         vcd_defs_proto = vcdDumpFnProto sb scope "vcd_defs" False
-         vcd_defs_body =
-           block [ decl $ (unsigned . int) $
-                                (mkVar "num") `assign` (var "vcd_num")
-                 , if_cond ((var "dt") `cEq` (var "VCD_DUMP_XS"))
-                           (block (member_calls_xs ++ port_calls_xs))
-                           (Just (if_cond ((var "dt") `cEq` (var "VCD_DUMP_CHANGES"))
-                                          (block (member_calls_changed ++ port_calls_changed))
-                                          (Just (block (member_calls_all ++ port_calls_all)))))
-                  ]
-         vcd_prims_proto = vcdDumpFnProto sb scope "vcd_prims" False
-         vcd_prims_body =
-           block [ mkSubCall inst
-                             "dump_VCD"
-                             [ var "dt"
-                             , (var "backing") `cDot` (aUnqualInstIdToString inst)
-                             ]
-                             Nothing
-                 | inst <- prims
-                 ]
-         vcd_submodules_proto = vcdDumpFnProto sb scope "vcd_submodules" True
-         vcd_submodules_body =
-           block [ mkSubCall inst
-                             "dump_VCD"
-                             [ var "dt"
-                             , var "levels"
-                             , (var "backing") `cDot` (aUnqualInstIdToString inst)
-                             ]
-                             Nothing
-                 | inst <- sub_modules
-                 ]
-         vcd_dump_body =
-           block ((if (null members)
-                   then []
-                   else [ stmt $ (var "vcd_defs") `cCall` [var "dt", var "backing"] ])
-                  ++
-                   (if (null prims)
-                    then []
-                    else [ stmt $ (var "vcd_prims") `cCall` [var "dt", var "backing"] ])
-                  ++
-                   (if (null sub_modules)
-                    then []
-                    else [ if_cond ((var "levels") `cNe` (mkUInt32 1))
-                                   (stmt $ (var "vcd_submodules") `cCall` [ var "dt"
-                                                                          , (var "levels") `cSub` (mkUInt32 1)
-                                                                          , var "backing"
-                                                                          ])
-                                   Nothing
-                         ])
-                 )
-         vcd_dump = define (vcdFnProto sb scope) vcd_dump_body
-         vcd_dump_fns = (if (null members)
-                         then []
-                         else [ define vcd_defs_proto vcd_defs_body ])
-                        ++
-                        (if (null prims)
-                         then []
-                         else [ define vcd_prims_proto vcd_prims_body ])
-                        ++
-                        (if (null sub_modules)
-                         then []
-                         else [ define vcd_submodules_proto vcd_submodules_body ])
-         vcds = [vcd_dump_defs, vcd_dump] ++ vcd_dump_fns
-
      -- -------------------
      -- Put it all together
      let fns =  [comment "Constructor" constructor]
@@ -2123,9 +1771,6 @@ simCCBlockToClassDefinition sb_map sch_map sb =
              ++ [comment "Functions to set the elaborated clock id"
                          (blankLines 0)]
              ++ set_clk_fns
-             ++ [comment "State dumping routine" state_dump]
-             ++ [comment "VCD dumping routines" (blankLines 0)]
-             ++ vcds
      return $ intersperse (blankLines 1) fns
 
 -- Generate the schedule function definitions for a SimCCSched.

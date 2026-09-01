@@ -8,7 +8,6 @@
 #include "bluesim_probes.h"
 #include "bs_mem_file.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 #include "bs_range_tracker.h"
 
 // forward declaration
@@ -280,8 +279,7 @@ class MOD_BRAM : public Module
     }
 
     // allocate top-level storage block
-    if (!vcd_is_backing_instance(sim_hdl))
-      top_level = new_block(0);
+    top_level = new_block(0);
 
     // initialize address and data storage
 
@@ -312,9 +310,6 @@ class MOD_BRAM : public Module
 
   void init_symbols()
   {
-    if (vcd_is_backing_instance(sim_hdl))
-      return; // do not allocate symbols for backing instance
-
     // initialize symbols
     symbol_count = 3;
     symbols = new tSym[symbol_count];
@@ -339,9 +334,6 @@ class MOD_BRAM : public Module
 
   void init_from_file(const std::string& memfile, bool bin_format)
   {
-    if (vcd_is_backing_instance(sim_hdl))
-      return; // do not try to initialize the backing instance
-
     FormatHandler* reader;
     if (bin_format)
       reader = new BinFormatHandlerBRAM<AT,DT,ET>(this, true,
@@ -731,222 +723,6 @@ class MOD_BRAM : public Module
       return NULL;
   }
 
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (last_word < 16)
-    {
-      DT* data = (DT*) top_level;
-      printf("{ ");
-      for (unsigned long long n = 0llu; n <= last_word; ++n)
-      {
-        if (n > 0)
-          printf(", ");
-        dump_val(lo_addr + n, addr_bits);
-        printf(": ");
-        dump_val(data[n], data_bits);
-      }
-      printf(" }\n");
-    }
-    else
-    {
-      printf("<BRAM with %llu entries>\n", (unsigned long long) last_word + 1);
-    }
-  }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    // Memory contents are not dumped, only ports
-    vcd_num = vcd_reserve_ids(sim_hdl, dual_port ? 10 : 5);
-    unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
-    if (dual_port) {
-      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLKA", 1);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "ENA", 1);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "WEA", num_wens);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "ADDRA", addr_bits);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "DIA", data_bits);
-      vcd_write_def(sim_hdl, n++, "DOA", data_bits);
-      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_1), "CLKB", 1);
-      vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "ENB", 1);
-      vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "WEB", num_wens);
-      vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "ADDRB", addr_bits);
-      vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "DIB", data_bits);
-      vcd_write_def(sim_hdl, n++, "DOB", data_bits);
-    } else {
-      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "EN", 1);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "WE", num_wens);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "ADDR", addr_bits);
-      vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "DI", data_bits);
-      vcd_write_def(sim_hdl, n++, "DO", data_bits);
-    }
-    vcd_write_scope_end(sim_hdl);
-    return n;
-  }
-  void dump_VCD(tVCDDumpType dt, MOD_BRAM<AT,DT,ET>& backing)
-  {
-    // Memory contents are not dumped, only ports
-    unsigned int num = vcd_num;
-    if (dt == VCD_DUMP_XS)
-    {
-      vcd_write_x(sim_hdl, num++, 1);
-      vcd_write_x(sim_hdl, num++, num_wens);
-      vcd_write_x(sim_hdl, num++, addr_bits);
-      vcd_write_x(sim_hdl, num++, data_bits);
-      vcd_write_x(sim_hdl, num++, data_bits);
-      if (dual_port)
-      {
-        vcd_write_x(sim_hdl, num++, 1);
-        vcd_write_x(sim_hdl, num++, num_wens);
-        vcd_write_x(sim_hdl, num++, addr_bits);
-        vcd_write_x(sim_hdl, num++, data_bits);
-        vcd_write_x(sim_hdl, num++, data_bits);
-      }
-    }
-    else if (dt == VCD_DUMP_CHANGES)
-    {
-      bool at_posedge_a =
-               bk_clock_val(sim_hdl, __clk_handle_0) == CLK_HIGH &&
-               bk_clock_last_edge(sim_hdl, __clk_handle_0) == bk_now(sim_hdl);
-      if (at_posedge_a)
-      {
-        did_ena = bk_is_same_time(sim_hdl, upd_a_at);
-        bool did_write = did_ena && !is_zero(upd_a_wens);
-        bool backing_did_write = backing.did_ena && !is_zero(backing.upd_a_wens);
-        if (did_ena != backing.did_ena)
-        {
-          vcd_write_val(sim_hdl, num++, did_ena, 1);
-          backing.did_ena = did_ena;
-        }
-        else
-          ++num;
-        if ((did_write != backing_did_write) || (upd_a_wens != backing.upd_a_wens))
-        {
-          if (!did_ena)
-            vcd_write_val(sim_hdl, num++, 0llu, num_wens); // it's OK that 0 may not be of type ET
-          else
-            vcd_write_val(sim_hdl, num++, upd_a_wens, num_wens);
-        }
-        else
-          ++num;
-        if (upd_a_addr != backing.upd_a_addr)
-          vcd_write_val(sim_hdl, num++, upd_a_addr, addr_bits);
-        else
-          ++num;
-        if (upd_a_val != backing.upd_a_val)
-          vcd_write_val(sim_hdl, num++, upd_a_val, data_bits);
-        else
-          ++num;
-        if (pipelined && (out_reg2_a != backing.out_reg2_a))
-          vcd_write_val(sim_hdl, num++, out_reg2_a, data_bits);
-        else if (!pipelined && (out_reg_a != backing.out_reg_a))
-          vcd_write_val(sim_hdl, num++, out_reg_a, data_bits);
-        else
-          ++num;
-      }
-      else
-        num += 5;
-      if (dual_port)
-      {
-        bool at_posedge_b =
-                 bk_clock_val(sim_hdl, __clk_handle_1) == CLK_HIGH &&
-                 bk_clock_last_edge(sim_hdl, __clk_handle_1) == bk_now(sim_hdl);
-        if (at_posedge_b)
-        {
-          did_enb = bk_is_same_time(sim_hdl, upd_b_at);
-          bool did_write = did_enb && !is_zero(upd_b_wens);
-          bool backing_did_write = backing.did_enb && !is_zero(backing.upd_b_wens);
-          if (did_enb != backing.did_enb)
-          {
-            vcd_write_val(sim_hdl, num++, did_enb, 1);
-            backing.did_enb = did_enb;
-          }
-          else
-            ++num;
-          if ((did_write != backing_did_write) || (upd_b_wens != backing.upd_b_wens))
-          {
-            if (!did_enb)
-              vcd_write_val(sim_hdl, num++, 0llu, num_wens); // it's OK that 0 may not be of type ET
-            else
-              vcd_write_val(sim_hdl, num++, upd_b_wens, num_wens);
-          }
-          else
-            ++num;
-          if (upd_b_addr != backing.upd_b_addr)
-            vcd_write_val(sim_hdl, num++, upd_b_addr, addr_bits);
-          else
-            ++num;
-          if (upd_b_val != backing.upd_b_val)
-            vcd_write_val(sim_hdl, num++, upd_b_val, data_bits);
-          else
-            ++num;
-          if (pipelined && (out_reg2_b != backing.out_reg2_b))
-            vcd_write_val(sim_hdl, num++, out_reg2_b, data_bits);
-          else if (!pipelined && (out_reg_b != backing.out_reg_b))
-            vcd_write_val(sim_hdl, num++, out_reg_b, data_bits);
-          else
-            ++num;
-        }
-        else
-          num += 5;
-      }
-    }
-    else
-    {
-      did_ena = bk_is_same_time(sim_hdl, upd_a_at);
-      vcd_write_val(sim_hdl, num++, did_ena, 1);
-      vcd_write_val(sim_hdl, num++, upd_a_wens, num_wens);
-      vcd_write_val(sim_hdl, num++, upd_a_addr, addr_bits);
-      vcd_write_val(sim_hdl, num++, upd_a_val, data_bits);
-      if (pipelined)
-        vcd_write_val(sim_hdl, num++, out_reg2_a, data_bits);
-      else
-        vcd_write_val(sim_hdl, num++, out_reg_a, data_bits);
-      if (dual_port)
-      {
-        did_enb = bk_is_same_time(sim_hdl, upd_b_at);
-        vcd_write_val(sim_hdl, num++, did_enb, 1);
-        vcd_write_val(sim_hdl, num++, upd_b_wens, num_wens);
-        vcd_write_val(sim_hdl, num++, upd_b_addr, addr_bits);
-        vcd_write_val(sim_hdl, num++, upd_b_val, data_bits);
-        if (pipelined)
-          vcd_write_val(sim_hdl, num++, out_reg2_b, data_bits);
-        else
-          vcd_write_val(sim_hdl, num++, out_reg_b, data_bits);
-      }
-      backing.did_ena = did_ena;
-      backing.did_enb = did_enb;
-    }
-
-    backing.upd_a_at   = upd_a_at;
-    backing.upd_a_wens = upd_a_wens;
-    backing.upd_a_addr = upd_a_addr;
-    backing.upd_a_val  = upd_a_val;
-    backing.out_reg_a  = out_reg_a;
-    backing.out_reg2_a = out_reg2_a;
-    if (dual_port)
-    {
-      backing.upd_b_at   = upd_b_at;
-      backing.upd_b_wens = upd_b_wens;
-      backing.upd_b_addr = upd_b_addr;
-      backing.upd_b_val  = upd_b_val;
-      backing.out_reg_b  = out_reg_b;
-      backing.out_reg2_b = out_reg2_b;
-    }
-  }
-
  // BRAM data members
  private:
   bool           pipelined;
@@ -983,7 +759,6 @@ class MOD_BRAM : public Module
   // range structure for symbolic access to RegFile data
   Range range;
 
-  // used for VCD dumping
   bool did_ena;
   bool did_enb;
 

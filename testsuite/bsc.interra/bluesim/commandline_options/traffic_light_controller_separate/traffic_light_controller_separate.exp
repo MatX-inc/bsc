@@ -38,20 +38,5 @@ compare_file command_m_2.out
 #sim_output mkTestbench "-s -m 4"
 #copy "mkTestbench.out" "command_s_m.out"
 #compare_file command_s_m.out
-#sim_output mkTestbench "-p 100 -V dump.vcd"
-#copy "dump.vcd" "dump.out"
-#compare_vcd_file dump.out
-#sim_output mkTestbench "-p 100 -V dump.vcd"
-#copy "dump.vcd" "dump_p_100.out"
-#compare_vcd_file dump_p_100.out
-#sim_output mkTestbench "-p 50 -V dump.vcd"
-#copy "dump.vcd" "dump_p_50.out"
-#compare_vcd_file dump_p_50.out
-#sim_output mkTestbench "-F reFile1 -V dump.vcd"
-#copy "dump.vcd" "dump_F_re1.out"
-#compare_vcd_file dump_F_re1.out
-#sim_output mkTestbench "-F reFile2 -V dump.vcd"
-#copy "dump.vcd" "dump_F_re2.out"
-#compare_vcd_file dump_F_re2.out
 }
 

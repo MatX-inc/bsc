@@ -109,20 +109,4 @@ extern bool dollar_test_dollar_plusargs(tSimStateHdl simHdl,
 					const char* size_str,
 					const std::string* name);
 
-// VCD-related tasks
-extern void dollar_dumpfile(tSimStateHdl simHdl);
-extern void dollar_dumpfile(tSimStateHdl simHdl,
-			    const char* size_str,
-			    const std::string* name);
-extern void dollar_dumpvars(tSimStateHdl simHdl,
-			    const char* size_str = NULL,
-			    unsigned int depth = 0);
-extern void dollar_dumpon(tSimStateHdl simHdl);
-extern void dollar_dumpoff(tSimStateHdl simHdl);
-extern void dollar_dumpall(tSimStateHdl simHdl);
-extern void dollar_dumplimit(tSimStateHdl simHdl,
-			     const char* size_str,
-			     unsigned long long bytes);
-extern void dollar_dumpflush(tSimStateHdl simHdl);
-
 #endif /* __BS_SYSTEM_TASKS_H__ */

@@ -5,7 +5,6 @@
 
 #include "bluesim_kernel_api.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 #include "bs_reset.h"
 
 // This is the definition of the ClockMux primitive,
@@ -69,19 +68,6 @@ class MOD_ClockMux : public Module
   void xclk(tUInt8 /* clock_value */, tUInt8 gate_value = 1)
   {
     do_clock();
-  }
-
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
-
-  unsigned int dump_VCD_defs(unsigned int num) const
-  {
-    return (num);
-  }
-
-  void dump_VCD(tVCDDumpType /* unused */, MOD_ClockMux& /* unused */) const
-  {
   }
 
  public:
@@ -225,19 +211,6 @@ class MOD_ClockSelect : public Module
 	do_clock_and_reset();
       }
     }
-  }
-
-  void dump_state(unsigned int /* unused */, bool with_label=true) const
-  {
-  }
-
-  unsigned int dump_VCD_defs(unsigned int num) const
-  {
-    return (num);
-  }
-  void dump_VCD(tVCDDumpType /* unused */,
-		MOD_ClockSelect& /* unused */) const
-  {
   }
 
  public:

@@ -20,15 +20,3 @@ if {$vtest == 1} {
 
 }
 
-# Include a bluesim test here,  but bluesim does not look at the reset macro!
-if {$ctest == 1} {
-    # resimulate with vcd enabled
-    sim_output sysNoReset "-V sysNoReset_sim.vcd"
-    move dump.vcd sysNoReset.vcd
-
-    # Look for reset value....  main.top.RESET_P  
-    vcdcheck_pass sysNoReset_sim.vcd {-c "main.top.RESET_P becomes 1 @5" \
-                            }
-
-}
-

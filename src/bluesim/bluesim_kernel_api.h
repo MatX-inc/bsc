@@ -159,7 +159,6 @@ tClockValue bk_clock_val(tSimStateHdl simHdl, tClock handle);
 tUInt64 bk_clock_cycle_count(tSimStateHdl simHdl, tClock handle);
 tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 			    tClock handle, tEdgeDirection dir);
-tUInt32 bk_clock_vcd_num(tSimStateHdl simHdl, tClock handle);
 
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
@@ -174,7 +173,7 @@ void bk_use_default_reset(tSimStateHdl simHdl);
 /* Get the current simulation time */
 tTime bk_now(tSimStateHdl simHdl);
 
-/* Set simulation timescale - reporting scale factor and time unit for VCDs.
+/* Set simulation timescale - reporting scale factor and time unit for $time.
  *
  * Returns BK_ERROR on error, BK_SUCCESS on success.
  *
@@ -296,7 +295,7 @@ tBool bk_sync_pending(tSimStateHdl simHdl);
  *
  * The default is enabled.  Embedders whose I/O does not go through
  * the C library's buffered streams can disable it to reduce per-step
- * overhead; with flushing disabled, pending $display and VCD output
+ * overhead; with flushing disabled, pending $display output
  * stays in the C library's buffers until the embedder flushes them
  * itself or bk_shutdown() is called.
  *
@@ -322,29 +321,11 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
  * Routines to control debugging functionality.
  */
 
-void bk_enable_state_dumping(tSimStateHdl simHdl);
-void bk_disable_state_dumping(tSimStateHdl simHdl);
-tBool bk_is_state_dumping_enabled(tSimStateHdl simHdl);
-void bk_dump_state(tSimStateHdl simHdl, const char* label);
-
 void bk_enable_cycle_dumping(tSimStateHdl simHdl);
 void bk_disable_cycle_dumping(tSimStateHdl simHdl);
 tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl);
 void bk_dump_cycle_counts(tSimStateHdl simHdl,
 			  const char* label, tClock handle);
-
-tBool bk_enable_VCD_dumping(tSimStateHdl simHdl);
-void bk_disable_VCD_dumping(tSimStateHdl simHdl);
-tBool bk_is_VCD_dumping_enabled(tSimStateHdl simHdl);
-void bk_VCD_combo_update(tSimStateHdl simHdl, tTime t);
-
-/* VCD control routines */
-tStatus bk_set_VCD_file(tSimStateHdl simHdl, const char* name);
-const char* bk_get_VCD_file_name(tSimStateHdl simHdl);
-void bk_set_VCD_depth(tSimStateHdl simHdl, tUInt32 depth);
-tStatus bk_VCD_checkpoint(tSimStateHdl simHdl);
-void bk_set_VCD_filesize_limit(tSimStateHdl simHdl, tUInt64 bytes);
-void bk_flush_VCD_output(tSimStateHdl simHdl);
 
 /* Call to enable clock edges without logic (for interactive stepping) */
 void bk_set_interactive(tSimStateHdl simHdl);

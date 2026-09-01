@@ -2934,23 +2934,6 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
         } else {
            compare_file_bug $outfile $expected $cbug
         }
-
-        if { $check_vcd == 1 } {
-            # check that Bluesim vcd is not totally broken
-            sim_output $sysmod "-V $sysmod.c.vcd $sim_options"
-            move $sysmod.out $sysmod.c-vcd.out
-
-            # clean up to be safe
-            erase $sysmod.out
-
-            # check that vcd dumping does not change behavior
-            # (assuming this is not a known simulator bug)
-            if {[string compare $cbug ""] == 0} {
-                compare_file $sysmod.c-vcd.out $sysmod.c.out
-            }
-
-            erase $sysmod.c.vcd
-        }
     }
 
 }

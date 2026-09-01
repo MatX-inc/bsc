@@ -8,7 +8,6 @@
 #include "bluesim_probes.h"
 #include "bs_mem_file.h"
 #include "bs_module.h"
-#include "bs_vcd.h"
 #include "bs_range_tracker.h"
 
 // forward declaration
@@ -179,9 +178,6 @@ class MOD_RegFile : public Module
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
       upd_at(~bk_now(sim_hdl)), proxy(NULL)
   {
-    if (vcd_is_backing_instance(sim_hdl))
-      return;  // do not allocate storage for backing instance
-
     init_storage();
 
     init_symbols();
@@ -194,9 +190,6 @@ class MOD_RegFile : public Module
       data_bits(data_width), lo_addr(lo), hi_addr(hi),
       upd_at(~bk_now(sim_hdl)), proxy(NULL)
   {
-    if (vcd_is_backing_instance(sim_hdl))
-      return; // do not allocate storage for backing instance
-
     init_storage();
 
     init_from_file(memfile, bin_format);
@@ -428,54 +421,6 @@ class MOD_RegFile : public Module
       return symbol_value(value_ptr, data_bits);
     else
       return NULL;
-  }
-
-  void dump_state(unsigned int indent)
-  {
-    printf("%*s%s = ", indent, "", inst_name);
-    if (last_word < 16)
-    {
-      DT* data = (DT*) top_level;
-      printf("{ ");
-      for (unsigned long long n = 0llu; n <= last_word; ++n)
-      {
-	if (n > 0)
-	  printf(", ");
-	dump_val(lo_addr + n, addr_bits);
-	printf(": ");
-	dump_val(data[n], data_bits);
-      }
-      printf(" }");
-    }
-    else
-    {
-      printf("<RegFile with %llu entries>", (unsigned long long) last_word + 1);
-    }
-
-    // dump write address and data
-    if (upd_at == bk_now(sim_hdl))
-    {
-      printf(" (Wrote ");
-      dump_val(upd_addr, addr_bits);
-      printf(": ");
-      DT* value_ptr = lookup_value(upd_addr,true);
-      dump_val(*value_ptr, data_bits);
-      printf(")");
-    }
-    putchar('\n');
-  }
-  unsigned int dump_VCD_defs(unsigned int num)
-  {
-    // Memory contents are not dumped
-    // Please update ../lib/tcllib/bluespec/Waves.tcl proc correct_regfile_names
-    // when vcd dumping is enabled.
-    return (num);
-  }
-  void dump_VCD(tVCDDumpType /* unused */,
-		MOD_RegFile<AT,DT>& /* unused */)
-
-  {
-    // Memory contents are not dumped
   }
 
  // RegFile data members
