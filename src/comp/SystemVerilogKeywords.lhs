@@ -14,6 +14,7 @@ CAVEAT: you should run checkSystemVerilogKeywords after changing this file.
 >                              svSymbolChars,
 >                              checkSystemVerilogKeywords) where
 
+> import Warmup ()
 > import Data.List(sort,group,(\\),nub)
 > import Control.Monad(when)
 > import System.IO(hPutStrLn, stderr)
