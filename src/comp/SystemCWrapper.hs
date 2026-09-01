@@ -77,6 +77,7 @@ wrapSystemC flags sim_system = do
         h_name   = mkHName Nothing "" (name ++ "_systemc")
         cxx_name = mkCxxName Nothing "" (name ++ "_systemc")
         h_includes   = [ cpp_include "bluesim_kernel_api.h"
+                       , cpp_include "bluesim_host_ops_default.h"
                        , cpp_include (mkHName Nothing "" name)
                        , cpp_include ("model_" ++ name ++ ".h")
                        ]
@@ -216,8 +217,19 @@ wrapSystemC flags sim_system = do
         start_of_sim_stmts =
             [ (mkVar "_model_hdl") `assign`
                   ((var ("new_MODEL_" ++ name)) `cCall` [])
+            -- The event-queue capacity is the model's static bound
+            -- plus headroom for the wrapper's own host calls (the
+            -- bk_trigger_clock_edge pair per clock handler and the
+            -- UI yield event of a reached bk_quit_after_edge limit);
+            -- 16 matches the headroom documented at bk_sync_init().
             , (mkVar "_sim_hdl") `assign`
-                  ((var "bk_init") `cCall` [ var "_model_hdl", mkBool False])
+                  ((var "bk_sync_init") `cCall`
+                       [ var "_model_hdl", mkBool False
+                       , (var "bs_default_host_ops") `cCall` []
+                       , (var "bs_default_host_ctx") `cCall` []
+                       , ((var "bk_max_event_queue_depth") `cCall`
+                              [ var "_model_hdl" ]) `cAdd` (mkUInt32 16)
+                       ])
             , stmt $ (var "bk_set_interactive") `cCall` [var "_sim_hdl"]
             , (mkVar "_model_inst") `assign`
                   (cCast (ptrType sub_mod_type)
@@ -266,7 +278,7 @@ wrapSystemC flags sim_system = do
                                [ var "_sim_hdl", var "_clk_hdl", var "dir", next_edge ]
                     , stmt $ (var "bk_trigger_clock_edge") `cCall`
                                [ var "_sim_hdl", var "_clk_hdl", var "dir", var "now" ]
-                    , stmt $ (var "bk_advance") `cCall` [ var "_sim_hdl", mkBool False ]
+                    , stmt $ (var "bk_sync_run") `cCall` [ var "_sim_hdl" ]
                     , if_cond stop_cond
                           (stmt $ (var "sc_stop") `cCall` [])
                           Nothing

@@ -1,0 +1,1 @@
+Error: BRAM 'top.bram' -- Write address on port A is out of bounds: 0xc (valid range: 0x0 to 0x9)

@@ -1,7 +1,7 @@
 #include <cstdlib>
 #include <cstring>
-#include <csignal>
 
+#include "bluesim_kernel_api.h"
 #include "bs_wide_data.h"
 #include "bs_mem_defines.h"
 #include "mem_alloc.h"
@@ -1216,9 +1216,11 @@ void wide_quot_rem(const WideData& v1, const WideData& v2,
     --first_divisor_bit;
   }
 
-  // handle division by zero
+  // handle division by zero: report through the host operations and
+  // do not return (bk_divide_by_zero is noreturn, so execution can
+  // never fall through to compute a garbage result)
   if (first_divisor_bit < 0)
-    raise(SIGFPE);
+    bk_divide_by_zero("wide integer division");
 
   // find the most significant bit set in the dividend
   int first_dividend_bit = dividend.size() - 1;
@@ -1356,22 +1358,23 @@ void init_val(unsigned long long /* unused */, unsigned int /* unused */)
   return;
 }
 
-void dump_val(unsigned long long v, unsigned int width)
+void dump_val(Target* dest, unsigned long long v, unsigned int width)
 {
-  FileTarget dest(stdout);
   if (width == 0)
-    dest.write_string("()");
+    dest->write_string("()");
   else if (width == 1)
-    dest.write_string("%s", (v ? "True" : "False"));
+    dest->write_string(v ? "True" : "False");
   else
-    dest.write_string("0x%0*llx", ((width+3)/4), v);
+  {
+    dest->write_string("0x");
+    dest->write_hex(v, (width+3)/4);
+  }
 }
 
-void dump_val(const WideData& v, unsigned int /* unused */)
+void dump_val(Target* dest, const WideData& v, unsigned int /* unused */)
 {
-  FileTarget dest(stdout);
-  dest.write_string("0x");
-  v.print_hex(&dest);
+  dest->write_string("0x");
+  v.print_hex(dest);
 }
 
 void write_undet(bool* pValue, unsigned int width)

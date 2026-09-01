@@ -1,0 +1,85 @@
+# Tests for the non-allocating introspection of a Bluesim model:
+#
+#  * the code generator emits static per-design descriptor tables for
+#    the state elements (dotted instance names, kinds, widths and
+#    geometry across the whole module tree) and for the top module's
+#    input and output ports, SEPARATELY;
+#  * every element is assigned a byte offset in a planned contiguous
+#    area (state, input, output), following the ordering and
+#    alignment rules documented in bluesim_introspection.h, and each
+#    area exposes its total byte size;
+#  * the bk_num_* / bk_get_* / bk_*_bytes kernel walk functions serve
+#    the tables from the model handle alone, before bk_sync_init(),
+#    without allocating.
+#
+# sysIntrospect is a design with a known mix of state (narrow and
+# wide registers, a RegFile, a BRAM, FIFOs, wires and a nested
+# submodule).  It is run through the normal bluetcl flow, and then
+# the host_introspect harness dlopen()s the model, prints the
+# complete descriptor tables (pinning names, kinds, widths and the
+# layout in the expected output) and independently re-checks the
+# documented layout invariants.  Bluesim only; there is no Verilog
+# analogue of the descriptor tables.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set status [catch "exec ./$cmd >& $logfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the design runs to completion through the normal bluetcl flow
+    compile_object_pass sysIntrospect.bsv sysIntrospect
+    link_objects_pass {sysIntrospect} sysIntrospect
+    sim_output sysIntrospect
+    compare_file sysIntrospect.out
+
+    if [build_host_harness host_introspect host_introspect.cxx] {
+
+        # walk the descriptor tables before bk_sync_init, print them,
+        # and re-check the documented layout invariants
+        run_host_harness \
+            "host_introspect sysIntrospect.cexe.so sysIntrospect" \
+            [list 0] host_introspect.out
+        compare_file host_introspect.out
+    }
+}

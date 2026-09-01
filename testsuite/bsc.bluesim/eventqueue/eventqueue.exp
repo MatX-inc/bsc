@@ -1,0 +1,94 @@
+# Tests for the fixed-capacity Bluesim event queue and the exposed
+# maximum event-queue depth:
+#
+#  * bk_max_event_queue_depth() reports a static per-design upper
+#    bound on the events the model can have live in the queue at any
+#    one time, assuming no host calls that enqueue events.
+#  * bk_sync_init() takes the host's chosen capacity; the queue is
+#    preallocated at that size and never grows.  Scheduling past it
+#    fails through the noreturn event_queue_overflow host operation
+#    (default implementation: stderr message + abort()).
+#
+# sysEventBound is a busy multi-clock, multi-reset design.  It is run
+# three ways: through the normal bluetcl flow (capacity = bound +
+# headroom), and through the host_eventqueue harness with the
+# capacity set EXACTLY to the exposed bound -- validating that the
+# codegen formula is an upper bound -- and then with a host that
+# schedules past the capacity, which must abort with the overflow
+# message (Bluesim only; there is no Verilog analogue of the kernel's
+# event queue).
+
+set abrt [list SIGABRT 6 134]
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set status [catch "exec ./$cmd >& $logfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the busy design runs to completion through the normal bluetcl
+    # flow (event-queue capacity = exposed bound + headroom)
+    compile_object_pass sysEventBound.bsv sysEventBound
+    link_objects_pass {sysEventBound} sysEventBound
+    sim_output sysEventBound
+    compare_file sysEventBound.out
+
+    if [build_host_harness host_eventqueue host_eventqueue.cxx] {
+
+        # exact-capacity run: the whole simulation must fit in a
+        # queue of exactly bk_max_event_queue_depth() events, with
+        # the high-water mark within the bound
+        run_host_harness \
+            "host_eventqueue sysEventBound.cexe.so sysEventBound exact" \
+            [list 0] host_exact.out
+        compare_file host_exact.out
+
+        # a host that schedules past the capacity must fail through
+        # the event_queue_overflow operation: stderr message + SIGABRT
+        run_host_harness \
+            "host_eventqueue sysEventBound.cexe.so sysEventBound overflow" \
+            $abrt host_overflow.out
+        find_regexp host_overflow.out \
+            {Error: Bluesim event queue overflow \(capacity [0-9]+ events\)\.}
+    }
+}

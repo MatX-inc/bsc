@@ -1,7 +1,6 @@
 #ifndef __BS_PRIM_MOD_BRAM_H__
 #define __BS_PRIM_MOD_BRAM_H__
 
-#include <cstdio>
 #include <string>
 
 #include "bluesim_kernel_api.h"
@@ -9,6 +8,7 @@
 #include "bs_mem_file.h"
 #include "bs_module.h"
 #include "bs_range_tracker.h"
+#include "bs_reset.h"
 
 // forward declaration
 template<typename AT, typename DT, typename ET> class MOD_BRAM;
@@ -72,9 +72,10 @@ class BinFormatHandlerBRAM : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_BRAM<AT,DT,ET>* bram;
@@ -147,9 +148,10 @@ class HexFormatHandlerBRAM : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_BRAM<AT,DT,ET>* bram;
@@ -343,7 +345,7 @@ class MOD_BRAM : public Module
       reader = new HexFormatHandlerBRAM<AT,DT,ET>(this, true,
                                                   addr_bits, data_bits,
                                                   lo_addr, hi_addr);
-    read_mem_file(memfile.c_str(), inst_name, reader);
+    read_mem_file(sim_hdl, memfile.c_str(), inst_name, reader);
   }
 
   void* new_block(unsigned int level)
@@ -419,6 +421,17 @@ class MOD_BRAM : public Module
     }
   }
 
+  /* Report an out-of-bounds access through the out_of_bounds host
+   * operation.  Does not return.
+   */
+  BS_HOST_NORETURN void oob_panic(const char* access, const AT& addr) const
+  {
+    BufferTarget name_buf(sim_hdl, 1024);
+    write_name(&name_buf);
+    bk_out_of_bounds(sim_hdl, "BRAM", name_buf.str(), access,
+                     (tUInt64) addr, (tUInt64) lo_addr, (tUInt64) hi_addr);
+  }
+
  public:
   // Note: BRAM has put CF read, plus has cross-port
   // issues, so we must take care to faithfully reproduce
@@ -459,12 +472,12 @@ class MOD_BRAM : public Module
             }
             if (collision)
             {
-              FileTarget dest(stdout);
-              printf("Warning: BRAM '");
+              FileTarget dest(sim_hdl);
+              dest.write_string("Warning: BRAM '");
               write_name(&dest);
-              printf("' -- Write collision at address ");
-              dump_val(upd_a_addr, addr_bits);
-              putchar('\n');
+              dest.write_string("' -- Write collision at address ");
+              dump_val(&dest, upd_a_addr, addr_bits);
+              dest.write_char('\n');
             }
           }
 
@@ -546,12 +559,12 @@ class MOD_BRAM : public Module
             }
             if (collision)
             {
-              FileTarget dest(stdout);
-              printf("Warning: BRAM '");
+              FileTarget dest(sim_hdl);
+              dest.write_string("Warning: BRAM '");
               write_name(&dest);
-              printf("' -- Write collision at address ");
-              dump_val(upd_b_addr, addr_bits);
-              putchar('\n');
+              dest.write_string("' -- Write collision at address ");
+              dump_val(&dest, upd_b_addr, addr_bits);
+              dest.write_char('\n');
             }
           }
 
@@ -602,18 +615,22 @@ class MOD_BRAM : public Module
   void METH_a_put(const ET& write_ens, const AT& addr, const DT& val,
                   bool immediate = false)
   {
+    bool is_write = !is_zero(write_ens);
+
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(stdout);
-      printf("Warning: BRAM '");
-      write_name(&dest);
-      printf("' -- %s address on port A is out of bounds: ", (write_ens != 0) ? "Write" : "Read");
-      dump_val(addr, addr_bits);
-      putchar('\n');
+      if (!any_reset_asserted(sim_hdl))
+        oob_panic((write_ens != 0) ? "Write address on port A"
+                                   : "Read address on port A", addr);
+      // in-reset carve-out (see bs_reset.h): drop an immediate
+      // out-of-bounds write silently (lookup_value() would alias the
+      // address onto a valid entry); a deferred request is recorded as
+      // usual and clkA() clamps it to an undetermined read value
+      // without touching memory
+      if (is_write && immediate)
+        return;
     }
-
-    bool is_write = !is_zero(write_ens);
 
     // handle an immediate write
     if (is_write && immediate)
@@ -643,18 +660,18 @@ class MOD_BRAM : public Module
  void METH_b_put(const ET& write_ens, const AT& addr, const DT& val,
                   bool immediate = false)
   {
+    bool is_write = !is_zero(write_ens);
+
     // bounds check
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(stdout);
-      printf("Warning: BRAM '");
-      write_name(&dest);
-      printf("' -- %s address on port B is out of bounds: ", (write_ens != 0) ? "Write" : "Read");
-      dump_val(addr, addr_bits);
-      putchar('\n');
+      if (!any_reset_asserted(sim_hdl))
+        oob_panic((write_ens != 0) ? "Write address on port B"
+                                   : "Read address on port B", addr);
+      // in-reset carve-out: see METH_a_put()
+      if (is_write && immediate)
+        return;
     }
-
-    bool is_write = !is_zero(write_ens);
 
     // handle an immediate write
     if (is_write && immediate)

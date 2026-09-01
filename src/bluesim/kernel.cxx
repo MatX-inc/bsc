@@ -1,14 +1,11 @@
 #include <list>
 #include <algorithm>
 #include <cstring>
-#include <cstdio>
-
-#include <pthread.h>
-#include <signal.h>
 
 #include "mem_alloc.h"
 #include "kernel.h"
 #include "bs_module.h"
+#include "bs_reset.h"
 #include "plusargs.h"
 #include "version.h"
 #include "portability.h"
@@ -17,131 +14,55 @@
 /* forward declarations of some static helper functions */
 static void setup_clock_edges(tSimStateHdl simHdl, tClock clk);
 
-/* mutex operations */
-
-static void lock_sim_state(tSimStateHdl simHdl)
-{
-  if (pthread_mutex_lock(&(simHdl->sim_mutex)) != 0)
-    perror("lock_sim_state()");
-}
-
-static void unlock_sim_state(tSimStateHdl simHdl)
-{
-  if (pthread_mutex_unlock(&(simHdl->sim_mutex)) != 0)
-    perror("unlock_sim_state()");
-}
-
-/* Stop the simulation thread until told to restart */
-static void pause_sim(tSimStateHdl simHdl)
-{
-  fflush(NULL); /* flush open file buffers */
-
-  /* The stop_semaphore is used to indicate when simulation
-   * stops.  It is posted here and can be waited on in
-   * wait_for_sim_stop().
-   */
-  post_semaphore(simHdl->stop_semaphore);
-
-  /* The start_semaphore is used to control simulation wake-up.
-   * It is waited on here and posted in bk_advance, so that
-   * we know the simulation will wake-up exactly once for
-   * each call to bk_advance().
-   */
-  wait_on_semaphore(simHdl->start_semaphore);
-}
-
-/* Wait for the simulation thread to stop in pause_sim().
- * This is a hard-wait and should only be called when we know
- * the simulation thread is actually running (or going to run).
- */
-static void wait_for_sim_stop(tSimStateHdl simHdl)
-{
-  /* Wait for the simulation thread to stop */
-  wait_on_semaphore(simHdl->stop_semaphore);
-
-  fflush(NULL); /* flush open file buffers */
-}
-
 /*
- * SIGINT handler which triggers a simulation stop via bk_abort_now()
+ * All I/O performed by the kernel goes through the host operations
+ * registered with bk_sync_init().  These are small helpers for
+ * writing the kernel's own messages (cycle dumps, warnings) to the
+ * host's standard streams.
  */
 
-// list of sims that have registered their interest in the signal
-// (use a list, so that iterators are still valid after an erase)
-static std::list<tSimStateHdl> abort_watchers;
-
-static void abort_handler(int /* unused */)
-{
-  std::list<tSimStateHdl>::iterator it;
-  for (it = abort_watchers.begin(); it != abort_watchers.end(); it++)
-    bk_abort_now(*it);
-}
-
-static void add_abort_watcher(tSimStateHdl simHdl)
-{
-  abort_watchers.push_back(simHdl);
-}
-
-static void remove_abort_watcher(tSimStateHdl simHdl)
-{
-  std::list<tSimStateHdl>::iterator it;
-  // list iterators are valid after an erase, except for the erased iterator;
-  // therefore, a for-loop is OK, but do the increment before erasing
-  for (it = abort_watchers.begin(); it != abort_watchers.end(); ) {
-    if ((*it) == simHdl) {
-      std::list<tSimStateHdl>::iterator next_it = it;
-      next_it++;
-      abort_watchers.erase(it);
-      it = next_it;
-    } else {
-      it++;
-    }
-  }
-}
-
-/*
- * Simulation thread which handles the actual simulation event queue
- * operations.  It communicates with the rest of the API through
- * semaphore operations in pause_sim, bk_advance and wait_for_sim_stop.
+/* the ops/ctx of the most recent bk_sync_init(), for use by system
+ * tasks which are not passed a simulation handle (see bk_host_ops)
  */
-static void* sim_thread(void* ptr)
+static const struct bs_host_ops* process_host_ops = NULL;
+static void* process_host_ctx = NULL;
+
+/* write a string to one of the host's standard streams */
+static void host_write_str(tSimStateHdl simHdl, tHostStdStream which,
+                           const char* str)
 {
-  tSimState* simHdl = (tSimState*)ptr;
+  const struct bs_host_ops* ops = simHdl->host_ops;
+  struct bs_host_file* file = ops->std_stream(simHdl->host_ctx, which);
+  ops->write(simHdl->host_ctx, file, str, strlen(str));
+}
 
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return NULL;
+/* write a character to one of the host's standard streams */
+static void host_write_char(tSimStateHdl simHdl, tHostStdStream which,
+                            char c, unsigned int count = 1)
+{
+  const struct bs_host_ops* ops = simHdl->host_ops;
+  struct bs_host_file* file = ops->std_stream(simHdl->host_ctx, which);
+  while (count-- > 0)
+    ops->write(simHdl->host_ctx, file, &c, 1);
+}
 
-  /* install signal handlers to shut down simulation */
-  struct sigaction sa;
-  sa.sa_flags = 0;
-  sa.sa_handler = abort_handler;
-  sigemptyset(&sa.sa_mask);
-  /* SIGINT (user types Ctrl-C) */
-  sigaction(SIGINT, &sa, NULL);
-  /* SIGPIPE (usually stdout piped to a program that exits, eg /usr/bin/head) */
-  sigaction(SIGPIPE, &sa, NULL);
-
-  /* add this sim to the signal watch list */
-  add_abort_watcher(simHdl);
-
-  while (!simHdl->sim_shutting_down)
+/* write an unsigned decimal number to one of the host's standard streams */
+static void host_write_dec(tSimStateHdl simHdl, tHostStdStream which,
+                           tUInt64 value)
+{
+  char buf[20]; /* a 64-bit value has at most 20 decimal digits */
+  unsigned int digits = 0;
+  do {
+    buf[digits++] = '0' + (char)(value % 10llu);
+    value /= 10llu;
+  } while (value != 0llu);
+  const struct bs_host_ops* ops = simHdl->host_ops;
+  struct bs_host_file* file = ops->std_stream(simHdl->host_ctx, which);
+  while (digits > 0)
   {
-    /* yield to the UI and wait for a trigger to execute */
-    lock_sim_state(simHdl);
-    simHdl->sim_running = false;
-    unlock_sim_state(simHdl);
-    pause_sim(simHdl);
-
-    /* execute the events in the simulation queue */
-    simHdl->force_halt = false;
-    while (bk_is_running(simHdl) && !simHdl->sim_shutting_down)
-      simHdl->queue->execute(simHdl);
+    --digits;
+    ops->write(simHdl->host_ctx, file, &(buf[digits]), 1);
   }
-
-  /* remove this sim from the signal watch list */
-  remove_abort_watcher(simHdl);
-
-  pthread_exit(NULL);
 }
 
 /*
@@ -174,6 +95,8 @@ unsigned int set_clock_event_data(tClock clk, tEdgeDirection dir)
 
 static tTime reset_model_event(tSimStateHdl simHdl, tEvent& ev)
 {
+  /* the default reset waveform is a reset source (see bs_reset.h) */
+  set_reset_output(simHdl, &simHdl->default_reset_asserted, ev.data.flag);
   simHdl->model->reset_model(ev.data.flag);
   return 0llu; // not a recurring event
 }
@@ -193,8 +116,15 @@ static void print_cycle_description(tSimStateHdl simHdl,
     cycle_count = simHdl->clocks[clk].negedge_count + 1;
   const char* combo_str = combo ? "after-" : "";
   char dir_char = (dir == POSEDGE) ? '/' : '\\';
-  printf("%s%c%s @ %llu (cycle %llu)\n",
-         combo_str, dir_char, clock_name, time, cycle_count);
+  /* "%s%c%s @ %llu (cycle %llu)\n" */
+  host_write_str(simHdl, BS_HOST_STDOUT, combo_str);
+  host_write_char(simHdl, BS_HOST_STDOUT, dir_char);
+  host_write_str(simHdl, BS_HOST_STDOUT, clock_name);
+  host_write_str(simHdl, BS_HOST_STDOUT, " @ ");
+  host_write_dec(simHdl, BS_HOST_STDOUT, time);
+  host_write_str(simHdl, BS_HOST_STDOUT, " (cycle ");
+  host_write_dec(simHdl, BS_HOST_STDOUT, cycle_count);
+  host_write_str(simHdl, BS_HOST_STDOUT, ")\n");
 }
 
 static tTime dump_cycle_event(tSimStateHdl simHdl, tEvent& ev)
@@ -317,21 +247,13 @@ static tTime quit_event(tSimStateHdl simHdl, tEvent& /* unused */)
 
 static tTime yield_event(tSimStateHdl simHdl, tEvent& ev)
 {
-  lock_sim_state(simHdl);
   simHdl->sim_running = false;
   simHdl->sim_time = ev.at;
-  unlock_sim_state(simHdl);
-  if (simHdl->sync_mode)
-  {
-    /* return control to the caller of bk_sync_run();
-     * sync_run_events() flushes file buffers before returning
-     */
-    simHdl->queue->halt();
-    return (0llu);
-  }
-  pause_sim(simHdl);
-  if (simHdl->sim_shutting_down)
-    simHdl->queue->clear();
+
+  /* return control to the caller of bk_sync_run();
+   * sync_run_events() flushes file buffers before returning
+   */
+  simHdl->queue->halt();
   return (0llu);
 }
 
@@ -467,22 +389,148 @@ bool check_version(tBluesimVersionInfo* version)
           !strcmp(version_name,version->name));
 }
 
-/* Build the simulation state shared by bk_init() and bk_sync_init() */
-static tSimStateHdl init_sim_state(tModel model, tBool master)
+/* Get the design's maximum event-queue depth, assuming no host calls
+ * that enqueue events.  This is a static per-design constant computed
+ * at code generation; it takes the model handle (not a simulation
+ * handle) so that an embedder can query it before bk_sync_init(),
+ * e.g. to size the event queue it asks for there.
+ */
+tUInt32 bk_max_event_queue_depth(tModel model)
 {
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_max_event_queue_depth();
+}
+
+/* Non-allocating introspection walkers over the static descriptor
+ * tables the code generator emits into the model: state elements and
+ * top-module input/output ports, with the flat layout documented in
+ * bluesim_introspection.h.  Like bk_max_event_queue_depth(), they
+ * take the model handle (not a simulation handle) so an embedder can
+ * size and inspect a design before bk_sync_init().  The returned
+ * descriptor pointers are borrowed (never freed by the caller) and
+ * stay valid for the lifetime of the loaded model.
+ */
+tUInt32 bk_num_state_elements(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_num_state_elements();
+}
+
+const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n)
+{
+  if (model == NULL)
+    return NULL;
+  return ((Model*) model)->get_state_element(n);
+}
+
+tUInt64 bk_state_bytes(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_state_bytes();
+}
+
+tUInt32 bk_num_input_ports(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_num_input_ports();
+}
+
+const tBkPortInfo* bk_get_input_port(tModel model, tUInt32 n)
+{
+  if (model == NULL)
+    return NULL;
+  return ((Model*) model)->get_input_port(n);
+}
+
+tUInt64 bk_input_bytes(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_input_bytes();
+}
+
+tUInt32 bk_num_output_ports(tModel model)
+{
+  if (model == NULL)
+    return 0;
+  return ((Model*) model)->get_num_output_ports();
+}
+
+const tBkPortInfo* bk_get_output_port(tModel model, tUInt32 n)
+{
+  if (model == NULL)
+    return NULL;
+  return ((Model*) model)->get_output_port(n);
+}
+
+tUInt64 bk_output_bytes(tModel model)
+{
+  if (model == NULL)
+    return 0llu;
+  return ((Model*) model)->get_output_bytes();
+}
+
+/* helper routine for checking that a host ops table is usable */
+static bool check_host_ops(const struct bs_host_ops* ops)
+{
+  if (ops == NULL)
+    return false;
+
+  /* the table must be at least as new as this kernel requires */
+  if ((ops->size < sizeof(struct bs_host_ops)) ||
+      (ops->version < BS_HOST_OPS_VERSION))
+    return false;
+
+  /* every operation this kernel knows about must be provided */
+  return ((ops->std_stream  != NULL) &&
+          (ops->open        != NULL) &&
+          (ops->close       != NULL) &&
+          (ops->write       != NULL) &&
+          (ops->read        != NULL) &&
+          (ops->unget_char  != NULL) &&
+          (ops->flush       != NULL) &&
+          (ops->format_real != NULL) &&
+          (ops->divide_by_zero != NULL) &&
+          (ops->out_of_bounds  != NULL) &&
+          (ops->event_queue_overflow != NULL));
+}
+
+/* Initialize the Bluesim kernel */
+tSimStateHdl bk_sync_init(tModel model, tBool master,
+                          const struct bs_host_ops* ops, void* ctx,
+                          tUInt32 event_queue_capacity)
+{
+  /* the runtime cannot do any I/O without host operations */
+  if (!check_host_ops(ops))
+    return NULL;
+
+  /* the event queue must be able to hold at least one event */
+  if (event_queue_capacity == 0)
+    return NULL;
+
   tSimStateHdl simHdl = new tSimState;
 
   simHdl->model = (Model*)model;
 
+  /* Record the host operations before anything else: creating the
+   * model below may already perform I/O through them (memory-file
+   * preloads, for instance).  The process-wide copy serves the
+   * system tasks which are not passed a simulation handle.
+   */
+  simHdl->host_ops = ops;
+  simHdl->host_ctx = ctx;
+  process_host_ops = ops;
+  process_host_ctx = ctx;
+
   simHdl->sim_time = 0llu;
   simHdl->queue = NULL;
 
-  simHdl->sync_mode = false;
   simHdl->flush_on_pause = true;
   simHdl->sim_running = false;
-  simHdl->sim_shutting_down = false;
-  simHdl->start_semaphore = NULL;
-  simHdl->stop_semaphore = NULL;
 
   simHdl->in_combo_schedule = false;
 
@@ -501,65 +549,34 @@ static tSimStateHdl init_sim_state(tModel model, tBool master)
 
   simHdl->reset_tick_requests = 0;
 
+  simHdl->resets_asserted = 0;
+  simHdl->default_reset_asserted = false;
+
   simHdl->sim_timescale = 1;
 
   tBluesimVersionInfo version;
   simHdl->model->get_version(&(version.name), &(version.build));
   version.creation_time = simHdl->model->get_creation_time();
   if (! check_version(&version)) {
-    fprintf(stderr,
-	    "%s\n%s\n",
-	    "Warning: the Bluesim kernel version does not match the BSC version used to",
-	    "generate the Bluesim model");
+    host_write_str(simHdl, BS_HOST_STDERR,
+		   "Warning: the Bluesim kernel version does not match the BSC version used to\n"
+		   "generate the Bluesim model\n");
   }
   init_mem_allocator();
   simHdl->sim_time = 0llu;
-  simHdl->queue = new EventQueue();
+  /* The queue's storage is preallocated here and never grows: the
+   * host chose the capacity (normally bk_max_event_queue_depth() of
+   * the model plus headroom for its own event-enqueuing calls), and
+   * scheduling past it fails through the event_queue_overflow host
+   * operation.  create_model() below already schedules events (reset
+   * waveform, clock edges), so the queue must exist first.
+   */
+  simHdl->queue = new EventQueue(simHdl, event_queue_capacity);
   simHdl->need_dummy_edges = 0;
   simHdl->model->create_model(simHdl, master != 0);
   simHdl->top_symbol.key = "";
   simHdl->top_symbol.info = SYM_MODULE;
   simHdl->top_symbol.value = bk_get_model_instance(simHdl);
-
-  return simHdl;
-}
-
-/* Initialize the Bluesim kernel */
-tSimStateHdl bk_init(tModel model, tBool master)
-{
-  tSimStateHdl simHdl = init_sim_state(model, master);
-
-  /* setup simulation thread infrastructure */
-  simHdl->force_halt = false;
-  simHdl->sim_shutting_down = false;
-  pthread_mutex_init(&(simHdl->sim_mutex), NULL);
-  simHdl->start_semaphore = create_semaphore();
-  simHdl->stop_semaphore = create_semaphore();
-  if (simHdl->start_semaphore == NULL || simHdl->stop_semaphore == NULL)
-  {
-    release_semaphore(simHdl->start_semaphore);
-    release_semaphore(simHdl->stop_semaphore);
-    return NULL; // ERROR
-  }
-
-  /* start the simulation thread and wait for it to block in pause_sim */
-  simHdl->sim_running = true;
-  pthread_create(&(simHdl->sim_thread_id), NULL, sim_thread, (void*)simHdl);
-  wait_for_sim_stop(simHdl);
-
-  return simHdl;
-}
-
-/* Initialize the Bluesim kernel in synchronous mode */
-tSimStateHdl bk_sync_init(tModel model, tBool master)
-{
-  tSimStateHdl simHdl = init_sim_state(model, master);
-
-  /* no simulation thread, semaphores, or signal handlers in sync mode;
-   * the mutex is still created so bk_is_running() et al. work unchanged
-   */
-  simHdl->sync_mode = true;
-  pthread_mutex_init(&(simHdl->sim_mutex), NULL);
 
   return simHdl;
 }
@@ -570,27 +587,7 @@ void bk_shutdown(tSimStateHdl simHdl)
   if ((simHdl == NULL) || (simHdl->queue == NULL))
     return;
 
-  /* trigger the simulation queue thread to end */
-  lock_sim_state(simHdl);
-  simHdl->force_halt = true;
-  simHdl->sim_shutting_down = true;
-  unlock_sim_state(simHdl);
-  if (!simHdl->sync_mode)
-  {
-    post_semaphore(simHdl->start_semaphore);
-    pthread_join(simHdl->sim_thread_id, NULL);
-  }
   simHdl->sim_running = false;
-
-  /* clean up semaphores and mutexes */
-  if (!simHdl->sync_mode)
-  {
-    release_semaphore(simHdl->start_semaphore);
-    simHdl->start_semaphore = NULL;
-    release_semaphore(simHdl->stop_semaphore);
-    simHdl->stop_semaphore = NULL;
-  }
-  pthread_mutex_destroy(&(simHdl->sim_mutex));
 
   simHdl->model->destroy_model();
   shutdown_mem_allocator();
@@ -601,6 +598,99 @@ void bk_shutdown(tSimStateHdl simHdl)
   simHdl->queue = NULL;
   clear_plusargs(simHdl);
   delete simHdl;
+}
+
+/* Get the host operations / host context registered with
+ * bk_sync_init().  A NULL simHdl returns the process-wide copy
+ * (that of the most recent bk_sync_init()), which is what system
+ * tasks without a simulation handle use.
+ */
+const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl)
+{
+  if (simHdl == NULL)
+    return process_host_ops;
+  return simHdl->host_ops;
+}
+
+void* bk_host_ctx(tSimStateHdl simHdl)
+{
+  if (simHdl == NULL)
+    return process_host_ctx;
+  return simHdl->host_ctx;
+}
+
+/* Stop the process without returning, used as a backstop when a host
+ * operation that must not return does return anyway.  This traps
+ * rather than calling abort() so that the runtime stays free of libc
+ * signal machinery.
+ */
+static void halt_process(void) __attribute__((noreturn));
+static void halt_process(void)
+{
+  __builtin_trap();
+}
+
+/* Report a fatal division by zero through the process-wide host
+ * operations (division sites have no simulation handle at hand).
+ * Does not return.
+ */
+void bk_divide_by_zero(const char* description)
+{
+  const struct bs_host_ops* ops = bk_host_ops(NULL);
+  if (ops != NULL)
+    ops->divide_by_zero(bk_host_ctx(NULL), description);
+  /* not reached unless there are no host ops or the host's
+   * divide_by_zero operation violates its contract by returning
+   */
+  halt_process();
+}
+
+/* Report a fatal out-of-bounds memory primitive access through the
+ * host operations.  Does not return.
+ */
+void bk_out_of_bounds(tSimStateHdl simHdl,
+                      const char* prim,
+                      const char* instance,
+                      const char* access,
+                      tUInt64 addr,
+                      tUInt64 lo,
+                      tUInt64 hi)
+{
+  const struct bs_host_ops* ops = bk_host_ops(simHdl);
+  if (ops != NULL)
+    ops->out_of_bounds(bk_host_ctx(simHdl), prim, instance, access,
+                       addr, lo, hi);
+  /* not reached unless there are no host ops or the host's
+   * out_of_bounds operation violates its contract by returning
+   */
+  halt_process();
+}
+
+/* Report a fatal event-queue overflow through the host operations.
+ * Called by the event queue when an event is scheduled into a full
+ * queue (the capacity is fixed at bk_sync_init()).  Does not return.
+ */
+void bk_event_queue_overflow(tSimStateHdl simHdl, tUInt32 capacity)
+{
+  const struct bs_host_ops* ops = bk_host_ops(simHdl);
+  if (ops != NULL)
+    ops->event_queue_overflow(bk_host_ctx(simHdl), capacity);
+  /* not reached unless there are no host ops or the host's
+   * event_queue_overflow operation violates its contract by
+   * returning
+   */
+  halt_process();
+}
+
+/* Get the most events the queue has ever held at once.  This is a
+ * test/debug aid for validating event-queue capacity budgets against
+ * bk_max_event_queue_depth().
+ */
+tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl)
+{
+  if ((simHdl == NULL) || (simHdl->queue == NULL))
+    return 0;
+  return simHdl->queue->high_water();
 }
 
 /* Add edges into the event queue for a particular clock waveform.
@@ -987,7 +1077,7 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
- * This should be called before the first bk_advance() call.
+ * This should be called before the first bk_sync_run() call.
  */
 void bk_use_default_reset(tSimStateHdl simHdl)
 {
@@ -1053,10 +1143,8 @@ tStatus bk_set_timescale(tSimStateHdl simHdl, const char* scale_unit, tTime scal
  */
 tBool bk_is_same_time(tSimStateHdl simHdl, tTime t)
 {
-  /* This access is not protected by a mutex, for performance reasons.
-   * It should be safe to access, because this will only be called from
-   * primitives during event execution, or from a SystemC wrapper after
-   * bk_advance has returned.
+  /* This will only be called from primitives during event execution,
+   * or from a SystemC wrapper after bk_sync_run has returned.
    */
   if (simHdl->sim_running && (simHdl->sim_time == t))
     return 1;
@@ -1166,74 +1254,14 @@ tStatus bk_quit_after_edge(tSimStateHdl simHdl,
   return BK_SUCCESS;
 }
 
-/* Execute simulation events until none remain, simulation is
- * interrupted, or a stopping condition (time limit, etc.) is
- * encountered.
- */
-tStatus bk_advance(tSimStateHdl simHdl, tBool async)
-{
-  if ((simHdl == NULL) || (simHdl->queue == NULL))
-    return BK_ERROR;
-
-  /* a sync-mode handle has no simulation thread; use bk_sync_run() */
-  if (simHdl->sync_mode)
-    return BK_ERROR;
-
-  /* check if the simulation is already running */
-  if (bk_is_running(simHdl))
-    return BK_ERROR;
-
-  /* in case there was no bk_sync(), we want the stop semaphore to
-   * return to 0.
-   */
-  trywait_on_semaphore(simHdl->stop_semaphore);
-
-  /* kick off the simulation thread by posting to the start_semaphore */
-  lock_sim_state(simHdl);
-  simHdl->sim_running = true;
-  unlock_sim_state(simHdl);
-  post_semaphore(simHdl->start_semaphore);
-
-  if (async)
-    return BK_SUCCESS;  // don't wait for simulation to complete
-
-  /* handle the synchronous case */
-  wait_for_sim_stop(simHdl);
-
-  return BK_SUCCESS;
-}
-
-/* Test if the simulation thread is still running.
+/* Test if simulation events are currently being executed.
  *
- * Returns 0 if the thread is not running and non-zero if
- * the thread is running.
+ * Returns 0 if the simulation is not running and non-zero if
+ * it is running.
  */
 tBool bk_is_running(tSimStateHdl simHdl)
 {
-  tBool ret = 0;
-  lock_sim_state(simHdl);
-  if (simHdl->sim_running) ret = 1;
-  unlock_sim_state(simHdl);
-  return ret;
-}
-
-/* Wait for a simulation started using bk_advance in async mode
- * to complete.
- *
- * Returns the simulation time at which execution stopped.
- */
-tTime bk_sync(tSimStateHdl simHdl)
-{
-  /* a sync-mode handle has no simulation thread to wait for;
-   * return the current simulation time immediately
-   */
-  if (simHdl->sync_mode)
-    return simHdl->sim_time;
-
-  if (bk_is_running(simHdl))
-    wait_for_sim_stop(simHdl);
-
-  return simHdl->sim_time;
+  return simHdl->sim_running ? 1 : 0;
 }
 
 /* Execute the events in the simulation queue on the caller's
@@ -1242,12 +1270,10 @@ tTime bk_sync(tSimStateHdl simHdl)
  */
 static tStatus sync_run_events(tSimStateHdl simHdl)
 {
-  lock_sim_state(simHdl);
   simHdl->sim_running = true;
-  unlock_sim_state(simHdl);
 
   /* execute the events in the simulation queue, resetting the
-   * transient halt flag first, as the simulation thread does
+   * transient halt flag first
    */
   simHdl->force_halt = false;
   simHdl->queue->execute(simHdl);
@@ -1255,16 +1281,13 @@ static tStatus sync_run_events(tSimStateHdl simHdl)
   /* already false if a yield event ended the run; clear it here
    * in case the queue drained instead
    */
-  lock_sim_state(simHdl);
   simHdl->sim_running = false;
-  unlock_sim_state(simHdl);
 
-  /* flush open file buffers once per return to the caller, matching
-   * the one flush per pause performed on the threaded path (unless
-   * the embedder disabled it with bk_set_flush_on_pause())
+  /* flush the host's open file buffers once per return to the caller
+   * (unless the embedder disabled it with bk_set_flush_on_pause())
    */
   if (simHdl->flush_on_pause)
-    fflush(NULL);
+    simHdl->host_ops->flush(simHdl->host_ctx, NULL);
 
   return BK_SUCCESS;
 }
@@ -1276,7 +1299,7 @@ static tStatus sync_run_events(tSimStateHdl simHdl)
  */
 tStatus bk_sync_run(tSimStateHdl simHdl)
 {
-  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
+  if ((simHdl == NULL) || (simHdl->queue == NULL))
     return BK_ERROR;
 
   /* check if the simulation is already running (not re-entrant) */
@@ -1294,7 +1317,7 @@ tStatus bk_sync_run(tSimStateHdl simHdl)
  */
 tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk)
 {
-  if ((simHdl == NULL) || (simHdl->queue == NULL) || !simHdl->sync_mode)
+  if ((simHdl == NULL) || (simHdl->queue == NULL))
     return BK_ERROR;
 
   /* check if the simulation is already running (not re-entrant) */
@@ -1424,12 +1447,22 @@ tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl)
   return simHdl->call_dump_cycle_counts ? 1 : 0;
 }
 
+/* helper for bk_dump_cycle_counts: "%llu %s cycles\n" */
+static void dump_cycle_count(tSimStateHdl simHdl, tClock clk)
+{
+  host_write_dec(simHdl, BS_HOST_STDOUT, bk_clock_cycle_count(simHdl, clk));
+  host_write_char(simHdl, BS_HOST_STDOUT, ' ');
+  host_write_str(simHdl, BS_HOST_STDOUT, simHdl->clocks[clk].name);
+  host_write_str(simHdl, BS_HOST_STDOUT, " cycles\n");
+}
+
 void bk_dump_cycle_counts(tSimStateHdl simHdl, const char* label, tClock clk)
 {
   unsigned int indent = 0;
   if (label)
   {
-    printf("%s: ", label);
+    host_write_str(simHdl, BS_HOST_STDOUT, label);
+    host_write_str(simHdl, BS_HOST_STDOUT, ": ");
     indent = strlen(label) + 2;
   }
   if (clk >= simHdl->clocks.size())
@@ -1437,14 +1470,12 @@ void bk_dump_cycle_counts(tSimStateHdl simHdl, const char* label, tClock clk)
     for (tClock n = 0; n < simHdl->clocks.size(); ++n)
     {
       if (n > 0 && indent != 0)
-        printf("%*s", indent, "");
-      printf("%llu %s cycles\n",
-             bk_clock_cycle_count(simHdl, n), simHdl->clocks[n].name);
+        host_write_char(simHdl, BS_HOST_STDOUT, ' ', indent);
+      dump_cycle_count(simHdl, n);
     }
   }
   else
-    printf("%llu %s cycles\n",
-           bk_clock_cycle_count(simHdl, clk), simHdl->clocks[clk].name);
+    dump_cycle_count(simHdl, clk);
 }
 
 /* Call to enable clock edges without logic (for interactive stepping) */

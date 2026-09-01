@@ -1,0 +1,26 @@
+state elements: 13 (688 bytes)
+  top.byte_r       reg      bits=8   entries=1   offset=0    size=1
+  top.cnt          reg      bits=10  entries=1   offset=4    size=4
+  top.flag         reg      bits=1   entries=1   offset=8    size=1
+  top.mid_r        reg      bits=48  entries=1   offset=16   size=8
+  top.pw           wire     bits=0   entries=1   offset=24   size=1
+  top.q2           fifo     bits=13  entries=2   offset=28   size=8
+  top.qw           fifo     bits=70  entries=1   offset=36   size=12
+  top.ram          bram     bits=33  entries=64  offset=48   size=512
+  top.rf           regfile  bits=20  entries=10  offset=560  size=40
+  top.rw           wire     bits=5   entries=1   offset=600  size=1
+  top.sub.pipe     fifo     bits=65  entries=5   offset=604  size=60
+  top.sub.total    reg      bits=9   entries=1   offset=664  size=4
+  top.wide_r       reg      bits=128 entries=1   offset=668  size=16
+input ports: 4 (8 bytes)
+  EN_grab          bits=1   offset=0    size=1
+  EN_push          bits=1   offset=1    size=1
+  grab_a           bits=3   offset=2    size=1
+  push_x           bits=17  offset=4    size=4
+output ports: 5 (8 bytes)
+  RDY_grab         bits=1   offset=0    size=1
+  RDY_peek         bits=1   offset=1    size=1
+  RDY_push         bits=1   offset=2    size=1
+  grab             bits=5   offset=3    size=1
+  peek             bits=17  offset=4    size=4
+harness: all checks passed

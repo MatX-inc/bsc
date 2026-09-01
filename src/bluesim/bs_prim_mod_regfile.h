@@ -1,7 +1,6 @@
 #ifndef __BS_PRIM_MOD_REGFILE_H__
 #define __BS_PRIM_MOD_REGFILE_H__
 
-#include <cstdio>
 #include <string>
 
 #include "bluesim_kernel_api.h"
@@ -9,6 +8,7 @@
 #include "bs_mem_file.h"
 #include "bs_module.h"
 #include "bs_range_tracker.h"
+#include "bs_reset.h"
 
 // forward declaration
 template<typename AT, typename DT> class MOD_RegFile;
@@ -72,9 +72,10 @@ class BinFormatHandler : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_RegFile<AT,DT>* rf;
@@ -147,9 +148,10 @@ class HexFormatHandler : public FormatHandler
     return status;
   }
 
-  virtual void checkRange(const char* filename, const char* memname)
+  virtual void checkRange(tSimStateHdl simHdl,
+			  const char* filename, const char* memname)
   {
-    rt.checkRange(filename, memname, start, end);
+    rt.checkRange(simHdl, filename, memname, start, end);
   }
  private:
   MOD_RegFile<AT,DT>* rf;
@@ -274,7 +276,7 @@ class MOD_RegFile : public Module
       reader = new HexFormatHandler<AT,DT>(this, true,
 					   addr_bits, data_bits,
 					   lo_addr, hi_addr);
-    read_mem_file(memfile.c_str(), inst_name, reader);
+    read_mem_file(sim_hdl, memfile.c_str(), inst_name, reader);
   }
 
   void* new_block(unsigned int level)
@@ -350,6 +352,17 @@ class MOD_RegFile : public Module
     }
   }
 
+  /* Report an out-of-bounds access through the out_of_bounds host
+   * operation.  Does not return.
+   */
+  BS_HOST_NORETURN void oob_panic(const char* access, const AT& addr) const
+  {
+    BufferTarget name_buf(sim_hdl, 1024);
+    write_name(&name_buf);
+    bk_out_of_bounds(sim_hdl, "RegFile", name_buf.str(), access,
+                     (tUInt64) addr, (tUInt64) lo_addr, (tUInt64) hi_addr);
+  }
+
  public:
   // Note: there is RegFileWCF variant of RegFile that
   // allows upd before sub, but sub should be able to read the
@@ -358,16 +371,19 @@ class MOD_RegFile : public Module
   {
     if (addr < lo_addr || addr > hi_addr)
     {
-      FileTarget dest(stdout);
-      printf("Warning: RegFile '");
-      write_name(&dest);
-      printf("' -- Read address is out of bounds: ");
-      dump_val(addr, addr_bits);
-      putchar('\n');
-      DT v;
-      init_val(v, data_bits);
-      write_undet(&v, data_bits);
-      return v;
+      if (any_reset_asserted(sim_hdl))
+      {
+	// While some reset is asserted, rule bodies execute this read
+	// speculatively (before their in-reset check) with the address
+	// register possibly still at its undetermined initial pattern,
+	// so tolerate the access: silently return an undetermined
+	// value, as the pre-panic runtime did (see bs_reset.h).
+	DT v;
+	init_val(v, data_bits);
+	write_undet(&v, data_bits);
+	return v;
+      }
+      oob_panic("Read address", addr);
     }
     else if ((upd_addr == addr) && bk_is_same_time(sim_hdl, upd_at))
     {
@@ -391,6 +407,14 @@ class MOD_RegFile : public Module
   }
   void METH_upd(const AT& addr, const DT& val, bool immediate = false)
   {
+    if (addr < lo_addr || addr > hi_addr)
+    {
+      if (any_reset_asserted(sim_hdl))
+	return; // in-reset carve-out: drop the write silently instead
+		// of panicking (lookup_value() must not run: it would
+		// alias an out-of-bounds address onto a valid entry)
+      oob_panic("Write address", addr);
+    }
     DT* value_ptr = lookup_value(addr, true);
     if (value_ptr != NULL)
     {
@@ -401,15 +425,6 @@ class MOD_RegFile : public Module
 	upd_prev = *value_ptr;
       }
       *value_ptr = val;
-    }
-    else
-    {
-      FileTarget dest(stdout);
-      printf("Warning: RegFile '");
-      write_name(&dest);
-      printf("' -- Write address is out of bounds: ");
-      dump_val(addr, addr_bits);
-      putchar('\n');
     }
   }
 

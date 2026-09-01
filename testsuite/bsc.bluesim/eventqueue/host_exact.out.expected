@@ -1,0 +1,7 @@
+harness: model exposes a maximum event-queue depth
+harness: zero capacity rejected
+harness: running with capacity == exposed bound
+cycles = 100
+countR = 74
+harness: simulation finished with status 0
+harness: high water within bound: yes

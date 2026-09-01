@@ -19,11 +19,15 @@ class FormatHandler
   virtual ~FormatHandler() {}
   virtual tMemFileStatus updateAddress(const char* addr_str) = 0;
   virtual tMemFileStatus setEntry(const char* data_str) = 0;
-  virtual void checkRange(const char* filename, const char* memname) = 0;
+  virtual void checkRange(tSimStateHdl simHdl,
+                          const char* filename, const char* memname) = 0;
 };
 
-// This is the top-level file parser/loader
-extern void read_mem_file(const char* filename,
+// This is the top-level file parser/loader.  The file is read (and
+// any errors are reported) through the host operations registered
+// with bk_sync_init() for the given simulation handle.
+extern void read_mem_file(tSimStateHdl simHdl,
+                          const char* filename,
                           const char* memname,
                           FormatHandler* handler);
 

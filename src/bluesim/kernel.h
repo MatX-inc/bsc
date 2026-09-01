@@ -7,7 +7,6 @@
 #include "bs_model.h"
 #include "bs_symbol.h"
 #include "event_queue.h"
-#include "portability.h"
 
 
 /* A tLabel provides the information for creating a label when
@@ -51,6 +50,11 @@ struct tSimState {
   // handle to the design
   Model* model;
 
+  // host operations through which all runtime I/O is performed,
+  // and the host context passed to every operation (bk_sync_init)
+  const struct bs_host_ops* host_ops;
+  void* host_ctx;
+
   // current simulation time
   tTime sim_time;
   // scaling factor used for $time/$stime
@@ -59,21 +63,12 @@ struct tSimState {
   // a priority queue of locally-defined clock edges
   EventQueue* queue;
 
-  // flag set when the kernel runs events on the caller's thread
-  // (bk_sync_init) instead of on a separate simulation thread (bk_init)
-  bool sync_mode;
-
-  // flag controlling whether the sync path flushes open file buffers
+  // flag controlling whether the kernel flushes open file buffers
   // each time it returns control to the caller (bk_set_flush_on_pause)
   bool flush_on_pause;
 
-  // semaphores, etc. used for synchronization between API and sim_thread
+  // flag set while simulation events are being executed
   volatile bool sim_running;
-  volatile bool sim_shutting_down;
-  tSemaphore* start_semaphore; /* used to trigger simulation start */
-  tSemaphore* stop_semaphore;  /* used to indicate simulation stop */
-  pthread_mutex_t sim_mutex;   /* used to protect sim_running, etc. */
-  pthread_t sim_thread_id;
 
   // flag to record when executing a combinational logic schedule
   bool in_combo_schedule;
@@ -111,6 +106,12 @@ struct tSimState {
 
   // Count the number of primitives that have requested reset ticks
   unsigned int reset_tick_requests;
+
+  // Count the reset sources whose output reset is currently asserted
+  // (see set_reset_output() in bs_reset.h), and the recorded level of
+  // the kernel's own default reset waveform (one such source).
+  unsigned int resets_asserted;
+  bool default_reset_asserted;
 
 };
 

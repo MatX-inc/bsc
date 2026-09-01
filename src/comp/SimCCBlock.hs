@@ -107,6 +107,15 @@ data SimCCBlock =
              , sb_resetDefs :: [(AType,AId)]       -- reset values
              -- method enable, argument and return value ports
              , sb_methodPorts :: [(AType,AId,VName)]
+             -- interface ports with direction, for introspection
+             -- descriptors: (is_input, type, Verilog port name).
+             -- True = input to the module (module argument ports,
+             -- method enables and method arguments), False = output
+             -- (method results, readies included).  Clock and reset
+             -- ports are excluded.  Recorded at block construction,
+             -- BEFORE optimization, so the described interface does
+             -- not depend on which ports SimCOpt moves or deletes.
+             , sb_ifcPorts :: [(Bool,AType,String)]
              , sb_publicDefs :: [(AType,AId)]      -- defs available outside
              , sb_privateDefs :: [(AType,AId)]     -- defs private to the block
              , sb_rules :: [SBFnSet]               -- functions for rules
@@ -136,6 +145,7 @@ instance Eq SimCCBlock where
                , (sb_parameters a) == (sb_parameters b)
                , (sb_resetDefs a) == (sb_resetDefs b)
                , (sb_methodPorts a) == (sb_methodPorts b)
+               , (sb_ifcPorts a) == (sb_ifcPorts b)
                , (sb_publicDefs a) == (sb_publicDefs b)
                , (sb_privateDefs a) == (sb_privateDefs b)
                , (sb_rules a) == (sb_rules b)
@@ -157,6 +167,7 @@ instance Show SimCCBlock where
                          , show (sb_parameters sb)
                          , show (sb_resetDefs sb)
                          , show (sb_methodPorts sb)
+                         , show (sb_ifcPorts sb)
                          , show (sb_publicDefs sb)
                          , show (sb_privateDefs sb)
                          , show (sb_rules sb)
@@ -521,7 +532,7 @@ primBlocks :: [SimCCBlock]
 primBlocks =
   let mods = [ (name, (f name mod)) | (name, mod, f, _) <- primMap ]
       mkMod n (name,fn) = SimCCBlock n name fn
-                              [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
+                              [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
   in zipWith mkMod [1..] mods
 
 -- Test if a block is one of the primitive blocks
@@ -745,6 +756,44 @@ maskedPrim2 ret out_width op op_name arg1 arg2 =
        if out_width > 64
          then return v
          else return $ addMask out_width v
+
+-- Generate an expression for a division operator (quot or rem).
+-- This is maskedPrim2, except that C/C++ division by zero is
+-- undefined behavior (x86 traps, arm64 silently yields 0), so a
+-- narrow divisor which is not a known non-zero constant is wrapped
+-- in a guard (primChkDiv in bs_prim_ops.h) which reports a zero
+-- divisor through the divide_by_zero host operation and does not
+-- return.  This covers signed division too, since the Prelude
+-- implements it by stripping the signs and calling the unsigned
+-- primitives.  A wide divisor needs no emitted guard: the wide
+-- operations (wop_quot/wop_rem and WideData's operator/ and
+-- operator%) all funnel into wide_quot_rem in the runtime library,
+-- which performs the same check itself.
+divPrim :: (Maybe (Bool,AId)) -> Integer
+        -> (CCExpr -> CCExpr -> CCExpr) -> String
+        -> AExpr -> AExpr -> ExprConv
+divPrim ret out_width op op_name arg1 arg2 =
+    do wdata_test <- getWDataTest
+       v1 <- aExprToCExpr noRet arg1
+       v2 <- aExprToCExpr noRet arg2
+       let needs_guard = (aSize arg2 <= 64) &&
+                         (case getConstVal arg2 of
+                            Just v  -> v == 0
+                            Nothing -> True)
+           g_v2 = if needs_guard
+                  then (var "primChkDiv") `cCall` [v2]
+                  else v2
+           (w_ret,w_wret) = -- w_wret is true if ret exists & is wide-data
+               case ret of
+                 Nothing            -> ([], False)
+                 (Just (False,aid)) -> ([aDefIdToC aid], (wdata_test aid))
+                 (Just (True,aid))  -> ([aPortIdToC aid], (wdata_test aid))
+       if w_wret
+         then do let wop_name = var ("wop_"++op_name)
+                 return $ wop_name `cCall` ([v1, v2]++w_ret)
+         else if out_width > 64
+              then return $ v1 `op` g_v2
+              else return $ addMask out_width (v1 `op` g_v2)
 
 -- Generate an expression for a multiplication operator.
 -- Multiplication is special because we want to use the built-in operator
@@ -971,9 +1020,9 @@ aExprToCExpr ret p@(APrim _ _ PrimSub args) = argCount (==2) args $
 aExprToCExpr ret p@(APrim _ _ PrimMul args) = argCount (==2) args $
   mulPrim ret (aSize p) (toWString PrimMul) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimQuot args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cQuot) (toWString PrimQuot) (args!!0) (args!! 1)
+  divPrim ret (aSize p) (cQuot) (toWString PrimQuot) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimRem args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cRem) (toWString PrimRem) (args!!0) (args!! 1)
+  divPrim ret (aSize p) (cRem) (toWString PrimRem) (args!!0) (args!! 1)
 aExprToCExpr ret (APrim _ _ PrimAnd args) = argCount (>1) args $
   simplePrimN ret (cBitAnd) (toWString PrimAnd) args
 aExprToCExpr ret (APrim _ _ PrimOr args) = argCount (>1) args $
@@ -1922,8 +1971,8 @@ instance PPrint SimCCReset where
 -- NFData instances (needed by phase dumping routines)
 
 instance NFData SimCCBlock where
-  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19) =
-    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19
+  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20) =
+    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf n20
 
 instance NFData SimCCFn where
   rnf (SimCCFn n a r b) = rnf4 n a r b

@@ -40,12 +40,21 @@ struct tEvent
 // an event queue.
 typedef bool (*tEventPredicate)(tSimStateHdl, const tEvent&);
 
-// An EventQueue provides a simple priority queue interface
+// An EventQueue provides a simple priority queue interface.
+//
+// The queue has a fixed capacity, chosen by the host at
+// bk_sync_init() and preallocated at construction: it NEVER grows.
+// Scheduling an event into a full queue reports the fatal condition
+// through the host's event_queue_overflow operation (via
+// bk_event_queue_overflow), which does not return.
 class EventQueue
 {
  private:
-  std::vector<tEvent> events;
+  tSimStateHdl        sim_hdl;
+  std::vector<tEvent> events;   // fixed storage of 'capacity' slots
+  unsigned int        capacity;
   unsigned int        count;
+  unsigned int        max_count; // high-water mark of 'count'
 
   bool                in_event;
   tEvent              executing_event;
@@ -57,10 +66,10 @@ class EventQueue
   mutable unsigned int curr_find_idx;
 
  public:
-  EventQueue();
+  EventQueue(tSimStateHdl simHdl, unsigned int queue_capacity);
   ~EventQueue();
 
-  // schedule an event
+  // schedule an event (calls the noreturn overflow hook when full)
   void schedule(const tEvent& e);
 
   // execute events in sequence
@@ -71,6 +80,10 @@ class EventQueue
 
   // get the number of events in the queue
   unsigned int size() const;
+
+  // get the most events the queue has ever held at once
+  // (for validating capacity budgets in tests)
+  unsigned int high_water() const;
 
   // find an event satisfying the predicate in the queue
   // Note: giving a NULL predicate repeats the previous

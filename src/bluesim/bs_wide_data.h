@@ -17,8 +17,9 @@ class WideData;
 extern void init_val(WideData& v, unsigned int width);
 extern void init_val(unsigned long long /* unused */,
                      unsigned int /* unused */);
-extern void dump_val(unsigned long long v, unsigned int width);
-extern void dump_val(const WideData& v, unsigned int /* unused */);
+extern void dump_val(Target* dest, unsigned long long v, unsigned int width);
+extern void dump_val(Target* dest, const WideData& v,
+                     unsigned int /* unused */);
 extern void write_undet(bool* pValue, unsigned int width);
 extern void write_undet(unsigned char* pValue, unsigned int width);
 extern void write_undet(unsigned int* pValue, unsigned int width);

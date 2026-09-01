@@ -2,10 +2,24 @@
 #define __BLUESIM_KERNEL_H__
 
 #include "bluesim_types.h"
+#include "bluesim_host_ops.h"
+#include "bluesim_introspection.h"
 
 /*
  * Declarations of all functions in the Bluesim kernel API.
  * All functions have C linkage.
+ *
+ * The kernel is synchronous: it creates no threads and installs no
+ * signal handlers.  Simulation events are executed on the caller's
+ * thread by bk_sync_run() and bk_sync_step(), which return when a
+ * stopping condition is encountered.  An embedder that wants
+ * asynchronous execution or Ctrl-C handling provides them itself
+ * (as bluetcl does with its simulation worker thread).
+ *
+ * The kernel and model also perform no I/O of their own: all runtime
+ * I/O ($display output, $fopen/$fwrite file access, memory-file
+ * preloads, warnings, ...) goes through the host operations the
+ * embedder passes to bk_sync_init() (see bluesim_host_ops.h).
  */
 
 #if __cplusplus
@@ -21,32 +35,181 @@ extern "C" {
  * When master is non-zero, it indicates that the model
  * is its own master.
  *
- * Returns a handle to the simulation state, which is needed
- * as an argument to the other Bluesim kernel API functions.
- */
-tSimStateHdl bk_init(tModel model, tBool master);
-
-/* Like bk_init(), but initializes the kernel in synchronous mode:
- * no simulation thread is created and no SIGINT/SIGPIPE handlers
- * are installed.  Simulation events are executed on the caller's
- * thread by calling bk_sync_run(); bk_advance() and bk_sync() may
- * not be used with a handle returned by this function.
+ * The 'ops' argument supplies the host operations through which the
+ * runtime performs all of its I/O, and 'ctx' is the host context
+ * passed as the first argument of every operation (it may be NULL if
+ * the operations need no context).  The initialization is rejected
+ * (NULL is returned) if 'ops' is NULL, if any operation is missing,
+ * or if the table is older (by size or version) than this kernel
+ * requires; embedders that want the traditional stdio behavior pass
+ * the implementation from bluesim_host_ops_default.h, as bluetcl
+ * does.  Both 'ops' and 'ctx' are borrowed: they must remain valid
+ * until bk_shutdown().
  *
- * Returns a handle to the simulation state, which is needed
- * as an argument to the other Bluesim kernel API functions.
+ * Note: system tasks that are not passed a simulation handle (the
+ * $fopen family) use the ops of the most recent bk_sync_init() in
+ * the process, so when several models are loaded into one process
+ * they must all be initialized with the same 'ops' and 'ctx'.
+ *
+ * 'event_queue_capacity' fixes the capacity of the kernel's event
+ * queue: the storage is preallocated here and NEVER grows, and
+ * scheduling an event into a full queue fails through the host's
+ * noreturn event_queue_overflow operation.  The host chooses the
+ * capacity; the intended budget is
+ *
+ *   bk_max_event_queue_depth(model) + headroom
+ *
+ * where the headroom covers the host's own event-enqueuing calls
+ * (each documents its cost below).  bluetcl and the generated
+ * SystemC wrappers use a headroom of 16, which generously covers
+ * their usage (at most one extra pending UI yield event, one
+ * bk_quit_at event and one host-triggered edge pair at a time).  A
+ * capacity of 0 is rejected (NULL is returned).
+ *
+ * Returns an owned handle to the simulation state, which is needed
+ * as an argument to the other Bluesim kernel API functions and is
+ * released by bk_shutdown().  Returns NULL on error.
  */
-tSimStateHdl bk_sync_init(tModel model, tBool master);
+own tSimStateHdl bk_sync_init(tModel model, tBool master,
+                              const struct bs_host_ops* ops, void* ctx,
+                              tUInt32 event_queue_capacity);
+
+/* Get the host operations / host context registered with
+ * bk_sync_init().  A NULL simHdl returns the process-wide copy
+ * (that of the most recent bk_sync_init()), which is what system
+ * tasks without a simulation handle use.
+ */
+const struct bs_host_ops* bk_host_ops(tSimStateHdl simHdl);
+void* bk_host_ctx(tSimStateHdl simHdl);
+
+/* Report a fatal condition in the model through the corresponding
+ * host operation and do not return.  These are called by the runtime
+ * library and by generated model code, not by embedders.
+ * bk_divide_by_zero uses the process-wide host operations (see
+ * bk_host_ops above), since division is performed in contexts that
+ * have no simulation handle at hand.
+ */
+BS_HOST_NORETURN void bk_divide_by_zero(const char* description);
+BS_HOST_NORETURN void bk_out_of_bounds(tSimStateHdl simHdl,
+                                       const char* prim,
+                                       const char* instance,
+                                       const char* access,
+                                       tUInt64 addr,
+                                       tUInt64 lo,
+                                       tUInt64 hi);
+
+/* Report that the kernel's event queue is full through the host's
+ * event_queue_overflow operation and do not return.  This is called
+ * by the event queue itself when an event is scheduled past the
+ * fixed capacity chosen at bk_sync_init(); it is not for embedders
+ * to call.  'capacity' is the fixed capacity that was exceeded.
+ */
+BS_HOST_NORETURN void bk_event_queue_overflow(tSimStateHdl simHdl,
+                                              tUInt32 capacity);
+
+/* Get the most events the kernel's event queue has ever held at
+ * once.  This is a test/debug aid for validating event-queue
+ * capacity budgets against bk_max_event_queue_depth(); it never
+ * exceeds the capacity fixed at bk_sync_init().
+ */
+tUInt32 bk_event_queue_high_water(tSimStateHdl simHdl);
 
 /* This should be called at the end of simulation
  * to free resources controlled by the simulation kernel.
  * After bk_shutdown() is called, no other Bluesim kernel
- * API functions may be called unless bk_init() has been
+ * API functions may be called unless bk_sync_init() has been
  * called first.
  */
 void bk_shutdown(tSimStateHdl simHdl);
 
 /* Get version information about the Bluesim model */
 void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
+
+/* Get the design's maximum event-queue depth: an upper bound on the
+ * number of events the model can have live in the kernel's event
+ * queue at any one time, ASSUMING NO HOST CALLS THAT ENQUEUE EVENTS.
+ * The value is a static per-design constant computed at code
+ * generation from the clocks and reset primitives the model
+ * registers; it takes the model handle from new_MODEL_*() (not a
+ * simulation handle) so that an embedder can query it before
+ * bk_sync_init(), which is where the embedder chooses the actual
+ * event-queue capacity.
+ *
+ * Host calls that enqueue events are NOT included in this bound and
+ * must be budgeted by the embedder on top of it; each such call
+ * documents its cost below.  They are: bk_quit_at(),
+ * bk_schedule_ui_event() at times beyond the single included yield
+ * event, bk_trigger_clock_edge() and bk_enqueue_initial_clock_edge()
+ * when invoked by the embedder rather than by clock primitives,
+ * bk_enable_cycle_dumping(), and bk_define_clock()/bk_alter_clock()
+ * for clocks the embedder adds beyond those the model registers.
+ *
+ * Returns 0 if 'model' is NULL.
+ */
+tUInt32 bk_max_event_queue_depth(tModel model);
+
+/*
+ * Non-allocating introspection of a model's state elements and of
+ * its top-module input and output ports.
+ *
+ * These walk functions read static per-design descriptor tables
+ * emitted by the code generator: they allocate nothing, and like
+ * bk_max_event_queue_depth() they take the model handle from
+ * new_MODEL_*() (not a simulation handle) so a host can size and
+ * inspect a design before bk_sync_init().
+ *
+ * The descriptor types, the state-element kinds, and the documented
+ * ordering, alignment and flat-layout rules (byte offsets within
+ * planned contiguous state/input/output areas, and the total byte
+ * size of each area) live in bluesim_introspection.h.
+ *
+ * The bk_get_* functions return a borrowed pointer -- NOT 'own' --
+ * into 'static const' storage in the generated model: the caller
+ * must not free it, and it remains valid for the lifetime of the
+ * loaded model.  They return NULL if 'model' is NULL or the index is
+ * out of range; the counting and sizing functions return 0 if
+ * 'model' is NULL.
+ */
+
+/* Number of state elements (Bluesim primitive instances) in the
+ * design's whole module tree.
+ */
+tUInt32 bk_num_state_elements(tModel model);
+
+/* Descriptor of the nth state element (0-based), in the documented
+ * table order.
+ */
+const tBkStateInfo* bk_get_state_element(tModel model, tUInt32 n);
+
+/* Total byte size of the planned contiguous state area. */
+tUInt64 bk_state_bytes(tModel model);
+
+/* Number of top-module input ports (module argument ports, method
+ * enables and method arguments; clock and reset ports are driven
+ * through the kernel and are not included).
+ */
+tUInt32 bk_num_input_ports(tModel model);
+
+/* Descriptor of the nth input port (0-based), in the documented
+ * table order.
+ */
+const tBkPortInfo* bk_get_input_port(tModel model, tUInt32 n);
+
+/* Total byte size of the planned contiguous input area. */
+tUInt64 bk_input_bytes(tModel model);
+
+/* Number of top-module output ports (method results, ready results
+ * included).
+ */
+tUInt32 bk_num_output_ports(tModel model);
+
+/* Descriptor of the nth output port (0-based), in the documented
+ * table order.
+ */
+const tBkPortInfo* bk_get_output_port(tModel model, tUInt32 n);
+
+/* Total byte size of the planned contiguous output area. */
+tUInt64 bk_output_bytes(tModel model);
 
 /*
  * Kernel clock definition
@@ -69,6 +232,12 @@ void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
  *
  * Note: when the total period is 0, it indicates that the clock is
  * to be managed explicitly by calling bk_trigger_clock_edge().
+ *
+ * Event-queue depth cost: this call enqueues no events itself, but a
+ * clock with a waveform holds up to 5 live events once its schedule
+ * callbacks are registered (see bk_set_clock_event_fn()).  Clocks the
+ * model registers are counted in bk_max_event_queue_depth(); a clock
+ * the HOST defines is not, and costs up to 5 further events.
  */
 tClock bk_define_clock(tSimStateHdl simHdl,
 		       const char* name,
@@ -81,6 +250,14 @@ tClock bk_define_clock(tSimStateHdl simHdl,
 /* Allow a clock definition to be altered (overridden from the UI, etc.)
  *
  * Returns BK_ERROR on error, BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: re-derives the clock's schedule events
+ * (replacing any it had), leaving up to 5 live events for a clock
+ * with a waveform: the two edge events, the two post-edge
+ * combinational events and possibly a time-0 initial edge.  This is
+ * within the per-clock allotment of bk_max_event_queue_depth() for
+ * clocks the model registers; for a host-defined clock it is host
+ * cost (see bk_define_clock()).
  */
 tStatus bk_alter_clock(tSimStateHdl simHdl,
 		       tClock      handle,
@@ -99,6 +276,10 @@ tStatus bk_alter_clock(tSimStateHdl simHdl,
  *   dir                  - direction of the clock edge
  *
  * Returns BK_ERROR on error, BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: like bk_alter_clock(), re-derives the
+ * clock's schedule events -- up to 5 live per clock with a waveform,
+ * counted in bk_max_event_queue_depth() for model-registered clocks.
  */
 tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
 			      tClock handle,
@@ -112,6 +293,12 @@ tStatus bk_set_clock_event_fn(tSimStateHdl simHdl,
  *
  * Returns BK_ERROR on error, or the number of events scheduled
  * for the clock edge on success.
+ *
+ * Event-queue depth cost: 2 events per call (the edge event and its
+ * post-edge combinational event), consumed within the timeslice they
+ * are scheduled for.  Calls made by the clock primitives inside the
+ * model are counted in bk_max_event_queue_depth(); a call made by
+ * the HOST is not, and costs 2 further events until they execute.
  */
 tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
 			      tClock handle, tEdgeDirection dir, tTime at);
@@ -122,6 +309,11 @@ tStatus bk_trigger_clock_edge(tSimStateHdl simHdl,
  *
  * Returns BK_ERROR on error, or the number of events scheduled for the
  * clock edge on success.
+ *
+ * Event-queue depth cost: 1 event, live until time 0 executes.
+ * Calls made by clock primitives inside the model are counted in
+ * bk_max_event_queue_depth(); a HOST call is not, and costs 1
+ * further event.
  */
 tStatus bk_enqueue_initial_clock_edge(tSimStateHdl simHdl,
 				      tClock handle, tEdgeDirection dir);
@@ -162,7 +354,13 @@ tUInt64 bk_clock_edge_count(tSimStateHdl simHdl,
 
 /*
  * Setup a default reset waveform (asserted at time 0, deasserted at time 2).
- * This should be called before the first bk_advance() call.
+ * This should be called before the first bk_sync_run() call.
+ *
+ * Event-queue depth cost: 2 events (the assert and deassert), live
+ * until they execute at times 0 and 2.  The generated model calls
+ * this from create_model() when it is the master, and the 2 events
+ * are counted in bk_max_event_queue_depth(); a further HOST call
+ * costs 2 more.
  */
 void bk_use_default_reset(tSimStateHdl simHdl);
 
@@ -198,53 +396,36 @@ tBool bk_is_combo_sched(tSimStateHdl simHdl);
 tTime bk_clock_last_edge(tSimStateHdl simHdl, tClock handle);
 tTime bk_clock_combinational_time(tSimStateHdl simHdl, tClock handle);
 
-/* Quit simulation at the end of the current time slice. */
+/* Quit simulation at the end of the current time slice.
+ *
+ * Event-queue depth cost: 1 event per call, live until time t
+ * executes.  This is a HOST call: it is NOT counted in
+ * bk_max_event_queue_depth() and each call must be budgeted on top
+ * of that bound.
+ */
 void bk_quit_at(tSimStateHdl simHdl, tTime t);
 
 /* Quit simulation at the end of the given time slice.
  *
  * Returns BK_ERROR on error and BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: none at call time (it only sets a limit),
+ * but when the limit is reached the kernel schedules the
+ * deduplicated UI yield event for the current time -- the single
+ * yield event that IS counted in bk_max_event_queue_depth() (see
+ * bk_schedule_ui_event()).
  */
 tStatus bk_quit_after_edge(tSimStateHdl simHdl,
 			   tClock handle, tEdgeDirection dir, tUInt64 cycle);
 
-/* Execute simulation events until none remain, simulation is
- * interrupted, or a stopping condition (time limit, etc.) is
- * encountered.
+/* Test if simulation events are currently being executed.
  *
- * When called with an argument of 0, it will not return until
- * the simulation has completed.  When called with a non-zero
- * argument it will return immediately, and bk_sync() and
- * bk_is_running() should be used to synchronize with the simulation
- * thread.
- *
- * Returns BK_ERROR on error and BK_SUCCESS on success.
- * Handles created with bk_sync_init() have no simulation thread,
- * so this returns BK_ERROR for them; use bk_sync_run() instead.
- */
-tStatus bk_advance(tSimStateHdl simHdl, tBool async);
-
-/* Test if the simulation thread is still running.
- *
- * Returns 0 if the thread is not running and non-zero if
- * the thread is running.
+ * Returns 0 if the simulation is not running and non-zero if
+ * it is running.
  */
 tBool bk_is_running(tSimStateHdl simHdl);
 
-/* Wait for a simulation started using bk_advance in async mode
- * to complete.
- *
- * Returns the simulation time at which execution stopped.
- * For handles created with bk_sync_init() there is no simulation
- * thread to wait for, so this returns the current simulation time
- * immediately.
- */
-tTime bk_sync(tSimStateHdl simHdl);
-
-/* Execute simulation events on the caller's thread, for handles
- * created with bk_sync_init().  Despite the similar name, this is
- * unrelated to bk_sync(), which waits for the simulation thread
- * of a bk_init() handle to pause.
+/* Execute simulation events on the caller's thread.
  *
  * Returns when the event queue drains or at the end of a stopping
  * timeslice: $stop/$finish/$fatal, bk_abort_now(), an edge limit
@@ -252,12 +433,12 @@ tTime bk_sync(tSimStateHdl simHdl);
  * bk_schedule_ui_event() (which is how running to a target time is
  * composed).  The cause can be distinguished using bk_stopped(),
  * bk_finished(), bk_fataled(), bk_aborted() and bk_sync_pending().
- * Calling it again resumes the simulation.  Note that no signal
- * handlers are installed in sync mode, so Ctrl-C is not converted
- * into bk_abort_now().
+ * Calling it again resumes the simulation.  Note that the kernel
+ * installs no signal handlers, so Ctrl-C is not converted into
+ * bk_abort_now() unless the embedder arranges it.
  *
- * Returns BK_ERROR on error (including a non-sync-mode handle or a
- * call while the simulation is running) and BK_SUCCESS on success.
+ * Returns BK_ERROR on error (including a call while the simulation
+ * is running) and BK_SUCCESS on success.
  */
 tStatus bk_sync_run(tSimStateHdl simHdl);
 
@@ -278,9 +459,9 @@ tStatus bk_sync_run(tSimStateHdl simHdl);
  * bk_sync_run() early, and a pending bk_quit_after_edge() limit
  * survives (limits on other clocks are never modified).
  *
- * Returns BK_ERROR on error (including a non-sync-mode handle, an
- * invalid clock, a call while the simulation is running, or a call
- * after $finish) and BK_SUCCESS on success.
+ * Returns BK_ERROR on error (including an invalid clock, a call
+ * while the simulation is running, or a call after $finish) and
+ * BK_SUCCESS on success.
  */
 tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
 
@@ -291,16 +472,14 @@ tStatus bk_sync_step(tSimStateHdl simHdl, tClock clk);
 tBool bk_sync_pending(tSimStateHdl simHdl);
 
 /* Control whether bk_sync_run() and bk_sync_step() flush open file
- * buffers (fflush(NULL)) each time they return control to the caller.
+ * buffers each time they return control to the caller, by calling
+ * the host ops flush entry with a NULL stream (the equivalent of
+ * fflush(NULL) in the default host implementation).
  *
- * The default is enabled.  Embedders whose I/O does not go through
- * the C library's buffered streams can disable it to reduce per-step
- * overhead; with flushing disabled, pending $display output
- * stays in the C library's buffers until the embedder flushes them
- * itself or bk_shutdown() is called.
- *
- * The threaded path (bk_init/bk_advance) is unaffected by this
- * setting.
+ * The default is enabled.  Embedders whose host ops do not buffer
+ * can disable it to reduce per-step overhead; with flushing
+ * disabled, pending $display output stays in the host's buffers
+ * until the embedder flushes them itself.
  */
 void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
 
@@ -308,6 +487,13 @@ void bk_set_flush_on_pause(tSimStateHdl simHdl, tBool enabled);
  * unless there is already one scheduled at that time.
  *
  * Returns BK_ERROR on error or BK_SUCCESS on success.
+ *
+ * Event-queue depth cost: 1 event per distinct target time (a repeat
+ * for the same time is deduplicated).  bk_max_event_queue_depth()
+ * includes exactly ONE yield event -- the one the model itself
+ * schedules for the current time via $stop/$finish/$fatal or a
+ * reached edge limit.  Each ADDITIONAL pending yield event at some
+ * other time is a HOST cost on top of the bound.
  */
 tStatus bk_schedule_ui_event(tSimStateHdl simHdl, tTime at);
 
@@ -321,17 +507,35 @@ tStatus bk_remove_ui_event(tSimStateHdl simHdl, tTime at);
  * Routines to control debugging functionality.
  */
 
+/* Event-queue depth cost of bk_enable_cycle_dumping(): one recurring
+ * cycle-dump event per live schedule event (so up to 4 per clock with
+ * a waveform, plus initial-edge dumps at time 0).  This is a HOST
+ * call, NOT counted in bk_max_event_queue_depth(); budget up to 5
+ * events per clock on top of the bound while dumping is enabled.
+ */
 void bk_enable_cycle_dumping(tSimStateHdl simHdl);
 void bk_disable_cycle_dumping(tSimStateHdl simHdl);
 tBool bk_is_cycle_dumping_enabled(tSimStateHdl simHdl);
 void bk_dump_cycle_counts(tSimStateHdl simHdl,
 			  const char* label, tClock handle);
 
-/* Call to enable clock edges without logic (for interactive stepping) */
+/* Call to enable clock edges without logic (for interactive stepping)
+ *
+ * Event-queue depth cost: none beyond the per-clock allotment already
+ * counted in bk_max_event_queue_depth() -- it re-derives each clock's
+ * schedule events (keeping edges that have no logic), never exceeding
+ * the 5 live events a clock with a waveform is budgeted for.
+ */
 void bk_set_interactive(tSimStateHdl simHdl);
 
 /*
  * Callbacks to stop simulation within a schedule or model.
+ *
+ * Event-queue depth cost of bk_stop_now(), bk_finish_now() and
+ * bk_fatal_now(): each schedules the deduplicated UI yield event for
+ * the current time -- the single yield event already counted in
+ * bk_max_event_queue_depth() (these are called by the model's $stop,
+ * $finish and $fatal).
  */
 
 /* Pause the simulation and return to the UI at the end of this

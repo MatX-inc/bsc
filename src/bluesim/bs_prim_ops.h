@@ -4,6 +4,7 @@
 #include <string>
 
 #include "bluesim_types.h"
+#include "bluesim_kernel_api.h"
 #include "bs_wide_data.h"
 
 /* These are utility functions used when implementing
@@ -49,6 +50,23 @@
  * it is safe.
  */
 
+
+/* Divisor guard for the C/C++ '/' and '%' operators in generated
+ * code.  C leaves division by zero undefined (x86 traps, arm64
+ * silently yields 0), so the compiler wraps every divisor that is
+ * not a known non-zero constant in this check, which reports a zero
+ * divisor through the divide_by_zero host operation instead of
+ * reaching the division (bk_divide_by_zero does not return).
+ * Wide division needs no guard: it is implemented by wide_quot_rem
+ * in the runtime library, which performs the same check itself.
+ */
+template <typename T>
+static inline T primChkDiv(T divisor)
+{
+  if (divisor == 0)
+    bk_divide_by_zero("integer division or remainder");
+  return divisor;
+}
 
 /* The caller of the mask operations is responsible for ensuring that
  * the number of bits requested is less than or equal to the result size.
