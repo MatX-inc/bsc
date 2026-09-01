@@ -1,0 +1,13 @@
+harness: construction and init use the allocators: yes
+harness: warmed up (200 cycles, now at time 1990)
+harness: segment 0 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0
+harness: segment 1 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0
+harness: segment 2 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0
+harness: segment 3 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0
+harness: segment 4 (100 cycles): alloc_mem +0, free_mem +0, malloc +0, free +0
+harness: steady state is allocation-free: yes
+r1=a1e054edc04bd927f4c1290c15a5530ee7156da19bdd56d80b3ed6f3ea5aacf0
+r2=bd43e9d76d3f38362dc7f039c92b828ee21b4d2d22bdd5e7574fa4e2573f2d86ca228ea9d1345a758768e374bf84e37818eb1b4be7125780dfae2b4d5667b780
+r3=161201451214f6e7385be52bbb6454742c74d24fbbea57ed2b93a688553e0077
+wideVal=654320fedcbb000000000000000000000000000000000000000000000000000055555555555600000000000000000000000000000000123456789abcdef0fedd
+harness: simulation finished with status 0

@@ -11,7 +11,8 @@ import System.FilePath(takeDirectory)
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
-import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
+import System.Directory(getDirectoryContents, doesFileExist,
+                        doesDirectoryExist, getCurrentDirectory)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
@@ -38,7 +39,7 @@ import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName,
                     mkAName, mkVName, mkVPICName,
                     mkNameWithoutSuffix,
-                    mkSoName, mkObjName, mkMakeName,
+                    mkSoName, mkObjName, mkMakeName, mkCxxName,
                     bscSrcSuffix, binSuffix,
                     hSuffix, cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, useSuffix,
@@ -1443,15 +1444,23 @@ simLink errh flags toplevel afilenames cfilenames = do
                       )
                       cfilenames_unique
 
+    -- compile the generated files with stack-usage/callgraph output
+    -- (for the link-time stack-depth analysis) when the C++ compiler
+    -- supports it; these flags are pure diagnostics and do not
+    -- change code generation
+    su_ok <- probeStackUsageFlags flags
+    let su_switches = if su_ok then stackUsageFlags else []
+
     start flags DFbluesimcompile
     let jobs = parallelSimLink flags
     (gen_ofiles, compiled_user_ofiles) <-
         if (jobs > 1)
         then do
-          compileParallelCFiles errh flags False
+          compileParallelCFiles errh flags False su_switches
               toplevel gen_cfiles user_cfiles
         else do
-          ofiles0 <- mapM (compileBluesimCFile errh flags) gen_cfiles
+          ofiles0 <- mapM (compileBluesimCFile errh flags su_switches)
+                          gen_cfiles
           t <- timestampStr flags "compile generated C++ files" t
 
           ofiles1 <- mapM (compileUserCFile errh flags False) user_cfiles
@@ -1464,10 +1473,16 @@ simLink errh flags toplevel afilenames cfilenames = do
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
+    -- the callgraph files needed by the stack-depth analysis: one per
+    -- generated object, including reused ones (whose .ci from the
+    -- earlier compile sits next to the reused .o)
+    let gen_ci_files = [ (dropSuf o) ++ "." ++ ciSuffix
+                       | o <- gen_ofiles ++ ofiles_reused ]
+
     -- if not generating a SystemC model, link to a Bluesim executable
     start flags DFbluesimlink
     when (not (genSysC flags)) $
-      cxxLink errh flags toplevel ofiles creation_time
+      cxxLink errh flags toplevel ofiles su_ok gen_ci_files creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
     -- final verbose message
@@ -1491,11 +1506,38 @@ reuseBluesimCFile flags oName = do
     unless (quiet flags) $ putStrLnF msg
     return oName
 
+-- The compiler flags which make gcc emit the per-function
+-- stack-usage (.su) and callgraph (.ci) files next to each object,
+-- for the link-time stack-depth analysis (bluesim_stack_bound.py).
+-- Pure diagnostics: they do not change code generation.
+stackUsageFlags :: [String]
+stackUsageFlags = ["-fstack-usage", "-fcallgraph-info=su"]
+
+-- The suffix of the callgraph files emitted by -fcallgraph-info
+ciSuffix :: String
+ciSuffix = "ci"
+
+-- Check whether the C++ compiler accepts the stack-usage/callgraph
+-- flags (GCC does; clang lacks -fcallgraph-info, and without it the
+-- stack-depth analysis is skipped and the model reports no bound).
+probeStackUsageFlags :: Flags -> IO Bool
+probeStackUsageFlags flags = do
+    comp <- getEnvDef "CXX" dfltCxxCompile
+    -- compile in a temp directory so the probe's .o/.su/.ci aux
+    -- files never land in the user's directory
+    let cmd = "t=`mktemp -d` && " ++
+              unwords ([comp] ++ stackUsageFlags ++
+                       ["-c", "-o", "\"$t/p.o\"", "-x", "c++", "-",
+                        "< /dev/null > /dev/null 2>&1"]) ++
+              "; rc=$?; rm -rf \"$t\"; exit $rc"
+    rc <- system cmd
+    return (rc == ExitSuccess)
+
 -- compile a Bluesim generated CXX file
 -- returns the name of the object file created
-compileBluesimCFile :: ErrorHandle -> Flags -> String -> IO String
-compileBluesimCFile errh flags cName = do
-    (cmd, oName, msg) <- cmdCompileBluesimCFile flags cName
+compileBluesimCFile :: ErrorHandle -> Flags -> [String] -> String -> IO String
+compileBluesimCFile errh flags extra_switches cName = do
+    (cmd, oName, msg) <- cmdCompileBluesimCFile flags extra_switches cName
     execCmd errh flags cmd
     unless (quiet flags) $ putStrLnF msg
     return oName
@@ -1504,8 +1546,9 @@ compileBluesimCFile errh flags cName = do
 -- and return the name of the object file
 -- and the message to display to the user
 -- (this is shared by the serial and parallel compilation paths)
-cmdCompileBluesimCFile :: Flags -> String -> IO (String, String, String)
-cmdCompileBluesimCFile flags cName = do
+cmdCompileBluesimCFile :: Flags -> [String] -> String ->
+                          IO (String, String, String)
+cmdCompileBluesimCFile flags extra_switches cName = do
     systemc <- getEnvDef "SYSTEMC" ""
     let engine = if (genSysC flags) && ("_systemc" `isSuffixOf` (dropSuf cName))
                  then "SystemC"
@@ -1518,7 +1561,7 @@ cmdCompileBluesimCFile flags cName = do
                     else [])
         -- Generated C++ code may reference uninitialized variables when it
         -- is known to be safe.
-        switches = incflags ++
+        switches = incflags ++ extra_switches ++
                    [ "-Wno-uninitialized"
                    , "-fPIC"
                    , "-c"
@@ -1602,14 +1645,14 @@ cmdCompileUserCFile flags forVerilog cName = do
     return (cmd, oName, msg)
 
 -- Compile Bluesim and user C/C++ files in parallel, using "make"
-compileParallelCFiles :: ErrorHandle -> Flags -> Bool ->
+compileParallelCFiles :: ErrorHandle -> Flags -> Bool -> [String] ->
                          String -> [String] -> [String] ->
                          IO ([String], [String])
 -- avoid having "make" report "nothing to be done"
-compileParallelCFiles errh flags forVerilog toplevel [] [] = return ([], [])
-compileParallelCFiles errh flags forVerilog toplevel gen_cNames user_cNames = do
+compileParallelCFiles errh flags forVerilog _ toplevel [] [] = return ([], [])
+compileParallelCFiles errh flags forVerilog gen_switches toplevel gen_cNames user_cNames = do
     let mkBluesimRule cName = do
-          (cmd, oName, msg) <- cmdCompileBluesimCFile flags cName
+          (cmd, oName, msg) <- cmdCompileBluesimCFile flags gen_switches cName
           let esc_oName = escMakeTarget oName
               esc_cmd = escMakeRecipe cmd
               esc_msg = escMakeRecipe msg
@@ -1761,13 +1804,91 @@ execCmd errh flags cmd = do
         ExitFailure n -> exitFailWith errh n
 
 
+-- Compute the design's static stack-depth bound (the value returned
+-- by bk_stack_depth_bound()) and compile the small TU which injects
+-- it into the shared library.  Returns the object file to link.
+--
+-- The bound is computed by bluesim_stack_bound.py from the .ci
+-- callgraph files of every generated object plus those of the
+-- prebuilt runtime libraries (shipped in lib/Bluesim/stack-usage).
+-- Whenever the analysis cannot run (compiler without the callgraph
+-- flags, reused objects with no .ci, missing python3) or cannot
+-- produce a sound bound (e.g. BDPI imports), the TU defines the
+-- documented "no bound available" value 0 instead; the tool prints
+-- its reasons to stderr.
+genStackBoundObj :: ErrorHandle -> Flags -> String -> Bool -> [String] ->
+                    IO String
+genStackBoundObj errh flags toplevel su_ok ci_files = do
+    pwd <- getCurrentDirectory
+    let pwdpath = createEncodedFullFilePath "placeholder" pwd
+        prefix = (dirName pwdpath) ++ "/"
+        basename = "stack_bound_" ++ toplevel
+    fname_init <- genFileName mkCxxName (cdir flags) prefix basename
+    let cxxName = getFullFilePath fname_init
+
+    let bsimLibDir = (bluespecDir flags) ++ "/Bluesim/"
+        tool = bsimLibDir ++ "bluesim_stack_bound.py"
+        rt_ci_dir = bsimLibDir ++ "stack-usage"
+
+    -- all inputs must be present for the analysis to be sound
+    tool_ok <- doesFileExist tool
+    rt_ok <- doesDirectoryExist rt_ci_dir
+    cis_ok <- liftM and $ mapM doesFileExist ci_files
+
+    ran <- if (su_ok && tool_ok && rt_ok && cis_ok)
+           then do
+             python <- getEnvDef "BSC_PYTHON" "python3"
+             -- show is used for quoting
+             let args = ["--emit-tu", show (mangleFileName cxxName)] ++
+                        (if (verbose flags) then ["--report"] else []) ++
+                        map (show . mangleFileName) ci_files ++
+                        [show rt_ci_dir]
+                 cmd = unwords $ [python, show tool] ++ args ++
+                                 ["> /dev/null"]
+             when (verbose flags) $ putStrLnF ("exec: " ++ cmd)
+             rc <- system cmd
+             return (rc == ExitSuccess)
+           else return False
+    when (not ran) $ do
+        let reason
+              | not su_ok = "the C++ compiler does not support " ++
+                            unwords stackUsageFlags
+              | not tool_ok = "missing " ++ tool
+              | not rt_ok = "missing " ++ rt_ci_dir
+              | not cis_ok = "missing callgraph (.ci) files for some " ++
+                             "generated objects"
+              | otherwise = "the analysis tool failed"
+        unless (quiet flags) $
+            putStrLnF ("Stack-depth analysis skipped (" ++ reason ++
+                       "); the model will report no stack bound.")
+        writeFileCatch errh cxxName $ unlines
+            [ "/* Generated by bsc -- do not edit."
+            , " * No stack-depth analysis was performed: " ++ reason
+            , " */"
+            , "#include \"bluesim_types.h\""
+            , ""
+            , "/* 0 = no bound available (see bk_stack_depth_bound()) */"
+            , "extern \"C\" const tUInt64 bs_stack_depth_bound = 0llu;"
+            ]
+    -- compile without the "Bluesim object created" message: this TU
+    -- is internal to the link step (and has no companion header)
+    (cmd, oName, _) <- cmdCompileBluesimCFile flags [] cxxName
+    execCmd errh flags cmd
+    return oName
+
 -- link object files into a shared library
-cxxLink :: ErrorHandle -> Flags -> String -> [String] -> TimeInfo -> IO ()
-cxxLink errh flags toplevel names creation_time = do
+cxxLink :: ErrorHandle -> Flags -> String -> [String] -> Bool -> [String] ->
+           TimeInfo -> IO ()
+cxxLink errh flags toplevel names su_ok ci_files creation_time = do
     -- Construct the Bluesim object names
     let bsimLibDir = (bluespecDir flags) ++ "/Bluesim/"
         bsim_names = [ bsimLibDir ++ "lib" ++ name ++ ".a"
                      | name <- ["bskernel", "bsprim"] ]
+
+    -- Inject the design's static stack-depth bound (the strong
+    -- definition of bs_stack_depth_bound; the kernel carries a weak
+    -- 0 default)
+    stack_bound_name <- genStackBoundObj errh flags toplevel su_ok ci_files
 
     -- The schedule.o object should come after libkernel.a
     -- in the link order.  We remove it from names and let
@@ -1775,6 +1896,7 @@ cxxLink errh flags toplevel names creation_time = do
     let isSchedule n = (baseName n == ("model_" ++ toplevel ++ ".o"))
         (schedule_name, other_names) = partition isSchedule names
         compile_names =
+            stack_bound_name :
             other_names ++
             schedule_name ++
             bsim_names

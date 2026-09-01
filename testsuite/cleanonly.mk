@@ -16,6 +16,8 @@ TRYDELFILES = $(wildcard \
 	*.o \
 	*.h \
 	*.cxx \
+	*.su \
+	*.ci \
 	*.so \
 	*.filtered \
 	*.sorted \
@@ -27,6 +29,7 @@ TRYDELFILES = $(wildcard \
 	*.cdf \
 	*-out \
 	*.out \
+	*.err \
 	*.v \
 	*.final-state \
 	sys* \

@@ -1680,6 +1680,15 @@ static inline void wop_primExtractWide(unsigned int dst_sz,
   src.wop_extractWide(high, low, dst);
 }
 
+static inline void wop_primTruncWide( tUInt32 result_sz
+                                    , tUInt32 data_sz
+                                    , const tUWide& data
+                                    , tUWide& dst
+                                    )
+{
+  data.wop_extractWide(result_sz - 1, 0, dst);
+}
+
 /* Routines for managing copies of arguments to foreign functions */
 
 // Copy a value into a temporary array

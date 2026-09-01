@@ -1,0 +1,4 @@
+harness: NULL model handle reads as no bound: yes
+harness: BDPI design exposes the no-bound value 0: yes
+x=100
+harness: simulation finished with status 0

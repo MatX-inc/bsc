@@ -575,6 +575,13 @@ data ConvState = CS { literals :: [(ASize,Integer)]
                     , gate_map :: M.Map AExpr Int
                     -- choice for don't-care values ("0", "1", or "A")
                     , undet_type :: String
+                    -- stack storage for wide temporaries in the current
+                    -- function: declarations hoisted to the top of the
+                    -- function body, a fresh-name counter, and the array
+                    -- names already declared (to avoid duplicates)
+                    , stk_decls :: [CCFragment]
+                    , stk_count :: Integer
+                    , stk_names :: [String]
                     }
   deriving (Eq,Show);
 
@@ -582,7 +589,7 @@ type WideDefMap = M.Map String [AId]
 
 initialState :: ForeignFuncMap -> WideDefMap -> String -> ConvState
 initialState ff_map wdef_map undet_type =
-    CS [] 1 M.empty False ff_map wdef_map [] [] M.empty undet_type
+    CS [] 1 M.empty False ff_map wdef_map [] [] M.empty undet_type [] 0 []
 
 type ExprConv  = State ConvState CCExpr
 type ExprsConv = State ConvState [CCExpr]
@@ -614,6 +621,52 @@ getStringLiteralName s =
        case M.lookup s sm of
          (Just n) -> return $ mkStringLiteralName n
          Nothing  -> internalError $ "unknown string literal: " ++ s
+
+-- ----------------------
+-- Stack storage for wide temporaries
+--
+-- Wide temporaries (function-local wide defs, concatenation
+-- intermediates and nested wide primitive results) are backed by
+-- fixed 'unsigned int' arrays declared at the top of the enclosing
+-- function, wrapped in non-owning WideData views.  Their widths are
+-- statically known, so evaluating them makes no allocator calls.
+
+-- declare 'unsigned int <name>[<words>];' for a value of 'w' bits
+mkStkArrayDecl :: String -> Integer -> CCFragment
+mkStkArrayDecl name w =
+    decl $ arraySz ((w + 31) `div` 32) $ unsigned . int $ (mkVar name)
+
+-- record a declaration to be hoisted to the top of the current function
+addStkDecl :: CCFragment -> State ConvState ()
+addStkDecl d = modify (\s -> s { stk_decls = d:(stk_decls s) })
+
+-- record a stack array declaration, at most once per name
+addStkArray :: String -> Integer -> State ConvState ()
+addStkArray name w =
+    do names <- gets stk_names
+       when (name `notElem` names) $
+           do modify (\s -> s { stk_names = name:(stk_names s) })
+              addStkDecl (mkStkArrayDecl name w)
+
+-- create a fresh stack-backed wide temporary (array plus non-owning
+-- view) of the given width and return an expression referencing it
+mkStkTempView :: Integer -> State ConvState CCExpr
+mkStkTempView w =
+    do n <- gets stk_count
+       modify (\s -> s { stk_count = n+1 })
+       let arr_name = "STKARR_" ++ (itos n)
+           tmp_name = "STKTMP_" ++ (itos n)
+       addStkArray arr_name w
+       addStkDecl (construct ((mkVar tmp_name) `ofType` (bitsType 65 CTunsigned))
+                             [var arr_name, mkUInt32 w])
+       return (var tmp_name)
+
+-- take (and clear) the hoisted declarations for the function just converted
+takeStkDecls :: State ConvState [CCFragment]
+takeStkDecls =
+    do ds <- gets stk_decls
+       modify (\s -> s { stk_decls = [], stk_count = 0, stk_names = [] })
+       return (reverse ds)
 
 setFuncWData :: [AId] -> State ConvState ()
 setFuncWData wids = modify (\s -> s {func_wdata = wids})
@@ -881,7 +934,10 @@ wideConcatPrim ret out_width args =
                   else (base `cDot` "build_concat") `cCall` [e, mkUInt32 sh, mkUInt32 w]
        if w_wret
          then do return $ foldl add_concat_part (head w_ret) (zip3 arg_exprs shift_amounts arg_widths)
-         else do return $ foldl add_concat_part ((var "bs_wide_tmp") `cCall` [mkUInt32 out_width]) (zip3 arg_exprs shift_amounts arg_widths)
+         else do -- build the concatenation in a stack-backed temporary
+                 -- instead of an allocated bs_wide_tmp() value
+                 tmp <- mkStkTempView out_width
+                 return $ foldl add_concat_part tmp (zip3 arg_exprs shift_amounts arg_widths)
 
 -- -------------------------------------------------
 -- Converting expressions from ASyntax into CCSyntax
@@ -897,11 +953,21 @@ mkPrimCall ret sz name args =
                    Nothing -> []
                    (Just (False,aid)) -> [aDefIdToC aid]
                    (Just (True,aid))  -> [aPortIdToC aid]
-         (arg_list_ret, call_name) =
-             if (sz > 64 && not (null w_ret))
-             then ((arg_list'++(w_ret)), ("wop_prim" ++ (sizedName name sz)))
-             else (arg_list', "prim" ++ (sizedName name sz))
-     return $ (var call_name) `cCall` arg_list_ret
+     if (sz > 64 && (null w_ret))
+       -- a wide result used inside a larger expression: compute it
+       -- into a stack-backed temporary with the in-place wop_ variant
+       -- instead of returning an allocated value, and hand the
+       -- temporary to the enclosing expression
+       then do tmp <- mkStkTempView sz
+               let call_name = "wop_prim" ++ (sizedName name sz)
+                   call = (var call_name) `cCall` (arg_list' ++ [tmp])
+               return $ cGroup (call `cComma` tmp)
+       else do let (arg_list_ret, call_name) =
+                       if (sz > 64)
+                       then ((arg_list'++(w_ret)),
+                             ("wop_prim" ++ (sizedName name sz)))
+                       else (arg_list', "prim" ++ (sizedName name sz))
+               return $ (var call_name) `cCall` arg_list_ret
   where arg_size :: AExpr -> ASize
         arg_size expr = case (aType expr) of
                           (ATString Nothing) -> 0
@@ -1165,10 +1231,20 @@ aExprToCExpr _ x = internalError ("Unhandled expr: " ++ (show x))
 -- ==============================================
 -- Converting SimCCBlock structures into CCSyntax
 
+-- Convert a SimCCFn argument into a C function argument.
+-- Wide arguments are passed by const reference (as the primitive
+-- modules already do), so that calling a generated function does not
+-- copy-construct --- and therefore does not allocate --- a temporary
+-- for each wide argument.
+aArgToCFnArg :: (AType, AId) -> CCFragment
+aArgToCFnArg (ty, aid) | wideDataType ty =
+    reference $ constant $ (aTypeToCType ty) (aArgIdToCLval aid)
+aArgToCFnArg (ty, aid) = (aTypeToCType ty) (aArgIdToCLval aid)
+
 -- Generate a C method declaration from a SimCCFn
 simFnToCDeclaration :: SimCCFn -> CCFragment
 simFnToCDeclaration (SimCCFn name args ret _) =
-  let arg_list = [ (aTypeToCType ty) (aArgIdToCLval id) | (ty,id) <- args]
+  let arg_list = map aArgToCFnArg args
       rt = maybe void aTypeToCType ret
   in  decl $ function rt (mkVar name) arg_list
 
@@ -1176,7 +1252,7 @@ simFnToCDeclaration (SimCCFn name args ret _) =
 simFnToStaticCDeclaration :: SimCCFn -> CCFragment
 simFnToStaticCDeclaration (SimCCFn name args ret _) =
   let class_ptr = ptr $ void (mkVar myThis)
-      arg_list = [ (aTypeToCType ty) (aArgIdToCLval id) | (ty,id) <- args]
+      arg_list = map aArgToCFnArg args
       rt = maybe void aTypeToCType ret
       static_name = mkStaticName name
   in  static $ decl $ function rt (mkVar static_name) (class_ptr:arg_list)
@@ -1193,8 +1269,16 @@ simFnStmtToCStmt (SFSDef isPort (ty,aid) Nothing) =
   let w = aSize ty
       dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
       typed_id = (aTypeToCType ty) dst
-  in if w > 64 || isTupleType ty   -- for wide data, use (bits,false) constructor to avoid initialization penalty
-     then return $ construct typed_id [mkUInt32 w, mkBool False]
+  in if w > 64 || isTupleType ty
+     -- wide data: back the local by a fixed stack array (hoisted to
+     -- the top of the function) and construct a non-owning,
+     -- uninitialized view over it, so that neither constructing nor
+     -- destroying the local calls the allocator
+     then do let (_, base) = adjustInstQuals aid
+                 arr_name = (if isPort then pfxPort else pfxDef) ++
+                            base ++ "__arr"
+             addStkArray arr_name w
+             return $ construct typed_id [var arr_name, mkUInt32 w]
      else return $ decl typed_id
 simFnStmtToCStmt (SFSDef isPort (ty@(ATString (Just sz)),aid) (Just expr)) =
   do let dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
@@ -1305,7 +1389,24 @@ simFnStmtToCStmt (SFSResets stmts) =
 simFnStmtToCStmt (SFSReturn Nothing) = do return $ ret Nothing
 simFnStmtToCStmt (SFSReturn (Just expr)) =
   do v <- aExprToCExpr noRet expr
-     return $ ret (Just v)
+     fwdata <- gets func_wdata
+     -- Returning wide data by value would allocate storage for the
+     -- returned temporary.  When the returned value is a wide member
+     -- of the module (a method's return port; wide defs are never
+     -- moved into functions), return a non-owning view of the member
+     -- instead: the member outlives the caller's use of the returned
+     -- temporary, values of a value-method port are stable within a
+     -- rule evaluation, and the view's construction, copy-elided
+     -- return and destruction make no allocator calls.
+     let isStableWideLval (ASPort t aid) = wideDataType t &&
+                                           (aid `notElem` fwdata)
+         isStableWideLval (ASDef t aid)  = wideDataType t &&
+                                           (aid `notElem` fwdata)
+         isStableWideLval _              = False
+     if isStableWideLval expr
+       then return $ ret (Just ((var "tUWide") `cCall`
+                                    [v `cDot` "data", mkUInt32 (aSize expr)]))
+       else return $ ret (Just v)
 simFnStmtToCStmt (SFSOutputReset rstId expr) =
   do let rstFn = mkResetFnDefName rstId
      rst_expr <- aExprToCExpr noRet expr
@@ -1352,7 +1453,7 @@ aActionToCFunCall ret act =
 simFnToStaticCDefinition :: String -> SimCCFn -> CCFragment
 simFnToStaticCDefinition cls (SimCCFn name args rty _) =
   let class_ptr = ptr $ void (mkVar myThis)
-      arg_list = [ (aTypeToCType ty) (aArgIdToCLval id) | (ty,id) <- args]
+      arg_list = map aArgToCFnArg args
       rt = maybe void aTypeToCType rty
       prefix = cls ++ "::"
       static_name = mkStaticName name
@@ -1379,8 +1480,7 @@ simFnToCDefinition :: Bool -> (Maybe String) ->
 simFnToCDefinition is_static scope c_args prologue
                    fn@(SimCCFn name args ret stmts) =
   do let prefix = maybe "" (++ "::") scope
-         arg_list = c_args ++
-                    [ (aTypeToCType ty) (aArgIdToCLval id) | (ty,id) <- args]
+         arg_list = c_args ++ (map aArgToCFnArg args)
          rt = maybe void aTypeToCType ret
          (return_stmts,non_return_stmts) = partition isReturn stmts
          wdata_fn = concatMap (wideLocalDef) stmts
@@ -1388,11 +1488,15 @@ simFnToCDefinition is_static scope c_args prologue
      setFuncArgs (map snd args)
      body_stmts <- mapM simFnStmtToCStmt non_return_stmts
      final_stmts <- mapM simFnStmtToCStmt return_stmts
+     -- stack storage for the function's wide temporaries, declared
+     -- ahead of the statements that construct views over it
+     stk_decl_stmts <- takeStkDecls
      has_copies <- gets copied_args
      let free_copies = if has_copies
                        then [ stmt $ (var "delete_arg_copies") `cCall` [] ]
                        else []
-         body = block (prologue ++ body_stmts ++ free_copies ++ final_stmts)
+         body = block (prologue ++ stk_decl_stmts ++ body_stmts ++
+                       free_copies ++ final_stmts)
      clearHasCopiedArg
      setFuncArgs []
      let def = define (function rt (mkVar (prefix ++ name)) arg_list) body

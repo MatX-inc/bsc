@@ -148,6 +148,39 @@ void bk_version(tSimStateHdl simHdl, tBluesimVersionInfo* version);
  */
 tUInt32 bk_max_event_queue_depth(tModel model);
 
+/* Get the design's static stack-depth bound: an upper bound, in
+ * bytes, on the stack consumed on the simulation thread by a call to
+ * bk_sync_run() or bk_sync_step(), measured from those functions'
+ * own frames downward.  The value is computed at link time by
+ * bluesim_stack_bound.py from per-function stack-usage data
+ * (gcc -fstack-usage -fcallgraph-info=su) for every object linked
+ * into the model, plus a hand-annotated table for the runtime's
+ * indirect calls; see that tool for the full accounting, including
+ * the declared assumptions on reset-chain depth, module hierarchy
+ * depth ($display %m) and the width of values formatted or divided
+ * through the wide-data VLA paths.
+ *
+ * The bound deliberately EXCLUDES:
+ *   - everything on the far side of the bs_host_ops table: the
+ *     embedder supplies those operations at bk_sync_init(), so their
+ *     stack cost is the embedder's to add on top;
+ *   - terminating/unwinding paths (abort, assertion failures,
+ *     allocation-failure throws), which end the run rather than
+ *     returning into it;
+ *   - bk_sync_init(), new_MODEL_*() and everything else outside the
+ *     bk_sync_run()/bk_sync_step() call trees.
+ *
+ * Returns 0 when no sound bound is available: the design imports
+ * foreign (BDPI) functions, the link-time analysis could not run
+ * (e.g. no python3, a non-GCC compiler without -fcallgraph-info, or
+ * reused objects with no callgraph data), or the model was linked
+ * outside bsc's Bluesim link step (e.g. a SystemC build).  Like
+ * bk_max_event_queue_depth() it takes the model handle from
+ * new_MODEL_*() so an embedder can size a stack before
+ * bk_sync_init(); returns 0 if 'model' is NULL.
+ */
+tUInt64 bk_stack_depth_bound(tModel model);
+
 /*
  * Non-allocating introspection of a model's state elements and of
  * its top-module input and output ports.

@@ -1,0 +1,103 @@
+# Tests the static stack-depth bound a Bluesim model exposes through
+# bk_stack_depth_bound():
+#
+#  * bsc's Bluesim link step runs bluesim_stack_bound.py over the
+#    gcc stack-usage/callgraph data (.su/.ci) of every object linked
+#    into the .so and injects the resulting bound as the constant
+#    behind the accessor;
+#
+#  * sysStackBound (wide arithmetic, wide division, a wide FIFO and
+#    periodic $display) must expose a positive bound, and the bound
+#    must be sound: the host_stackbound harness dlopen()s the model,
+#    runs it on a thread whose stack the harness owns, paints the
+#    region below the stack pointer after warm-up, steps 1000 busy
+#    cycles, and requires the painted high-water mark to stay within
+#    the exposed bound (the harness installs raw read(2)/write(2)
+#    host operations so the host-ops side of the boundary stays a few
+#    hundred bytes);
+#
+#  * sysStackBoundBdpi imports a foreign C function, which is
+#    compiled outside the stack-usage scheme, so it must expose the
+#    documented "no bound available" value 0 -- and still simulate
+#    normally.
+#
+# Bluesim only; the bound under test is computed for Bluesim links.
+
+proc build_host_harness { exe srcs } {
+    global env
+    global bsdir
+    global srcdir
+    global subdir
+
+    if [info exists env(CXX)] then {
+        set cxx $env(CXX)
+    } else {
+        set cxx "c++"
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$cxx -g -I$bsdir/Bluesim -o $exe $srcs -ldl -lpthread >& $exe.build.out"
+    set status [exec_with_log "build_host_harness" $cmd 2]
+    cd $here
+
+    if { $status == 0 } then {
+        pass "Host harness `$exe' builds"
+    } else {
+        fail "Host harness `$exe' should build"
+    }
+    return [expr $status == 0]
+}
+
+proc run_host_harness { cmd expstatus logfile } {
+    global srcdir
+    global subdir
+    global lasterr
+
+    # only stdout is compared: the harness prints the build-varying
+    # numbers (the bound itself, the measured high-water) to stderr,
+    # which is kept in a .err file for inspection
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set errfile "[file rootname $logfile].err"
+    set status [catch "exec ./$cmd > $logfile 2> $errfile" lasterr]
+    cd $here
+
+    set status [get_exec_status $status]
+    if { [lsearch -exact $expstatus $status] != -1 } then {
+        pass "Host harness `$cmd' exits with expected status"
+    } else {
+        fail "Host harness `$cmd' exits with status $status (expected $expstatus)"
+    }
+}
+
+if { $ctest == 1 } {
+
+    # the busy design runs to completion through the normal flow
+    compile_object_pass sysStackBound.bsv sysStackBound
+    link_objects_pass {sysStackBound} sysStackBound
+    sim_output sysStackBound
+    compare_file sysStackBound.out
+
+    # the BDPI design runs to completion through the normal flow
+    compile_object_pass sysStackBoundBdpi.bsv sysStackBoundBdpi
+    link_objects_pass {sysStackBoundBdpi} sysStackBoundBdpi {stackbound_c.c}
+    sim_output sysStackBoundBdpi
+    compare_file sysStackBoundBdpi.out
+
+    if [build_host_harness host_stackbound host_stackbound.cxx] {
+
+        # the busy design's bound is positive and the measured
+        # high-water stays within it
+        run_host_harness \
+            "host_stackbound sysStackBound.cexe.so sysStackBound measure" \
+            [list 0] host_stackbound.out
+        compare_file host_stackbound.out
+
+        # the BDPI design exposes the documented no-bound value 0
+        run_host_harness \
+            "host_stackbound sysStackBoundBdpi.cexe.so sysStackBoundBdpi nobound" \
+            [list 0] host_stackbound_bdpi.out
+        compare_file host_stackbound_bdpi.out
+    }
+}

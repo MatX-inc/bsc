@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include <algorithm>
 
+#include "mem_alloc.h"
+
 #define MAX_CHUNK_WORDS 16
 
 // superimpose this structure on allocated memory to create a free list structure
@@ -12,6 +14,11 @@ struct tMemHeader
 
 static bool is_active = false;
 static tMemHeader* free_list[MAX_CHUNK_WORDS+1];
+
+// cumulative call counts, for the bs_mem_alloc_counters()
+// test-support accessor
+static unsigned long long alloc_count = 0;
+static unsigned long long free_count = 0;
 
 void init_mem_allocator()
 {
@@ -45,6 +52,7 @@ void shutdown_mem_allocator()
 void* alloc_mem(unsigned int nWords)
 {
   static unsigned int min_words = (sizeof(tMemHeader) + sizeof(unsigned int) - 1) / sizeof(unsigned int);
+  ++alloc_count;
   if ((nWords > MAX_CHUNK_WORDS) || (free_list[nWords] == NULL))
   {
     return new unsigned int[std::max(nWords,min_words)];
@@ -59,6 +67,7 @@ void* alloc_mem(unsigned int nWords)
 
 void free_mem(void* ptr, unsigned int nWords)
 {
+  ++free_count;
   if (nWords > MAX_CHUNK_WORDS)
     delete[] ((unsigned int*)ptr);
   else if (ptr != NULL)
@@ -67,4 +76,13 @@ void free_mem(void* ptr, unsigned int nWords)
     mem->next = free_list[nWords];
     free_list[nWords] = mem;
   }
+}
+
+extern "C" void bs_mem_alloc_counters(unsigned long long* allocs,
+                                      unsigned long long* frees)
+{
+  if (allocs)
+    *allocs = alloc_count;
+  if (frees)
+    *frees = free_count;
 }

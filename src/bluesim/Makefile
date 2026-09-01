@@ -43,6 +43,11 @@ HEADERS = bluesim_kernel_api.h \
 LINKFILES = bs_elf_export_map.txt \
             bs_mach-o_export_map.txt
 
+# The link-time stack-depth analysis tool (see bk_stack_depth_bound()
+# in bluesim_kernel_api.h); installed alongside the libraries so that
+# bsc can run it when linking a model.
+SCRIPTS = bluesim_stack_bound.py
+
 # -------------------------
 
 CFLAGS += -Wall -Wextra -Werror \
@@ -92,7 +97,22 @@ endif
 COPT ?= -O3
 CDEBUG ?= -UUSE_ENTER
 CFLAGS += $(PROF) $(COPT) $(CDEBUG)
-CXXFLAGS += $(PROF) $(COPT) $(CDEBUG) 
+CXXFLAGS += $(PROF) $(COPT) $(CDEBUG)
+
+# Emit per-function stack usage and a call graph (.su/.ci files)
+# alongside each object, for the link-time stack-depth analysis
+# (bluesim_stack_bound.py).  These are pure diagnostics: they do not
+# change code generation.  Clang lacks -fcallgraph-info, so probe for
+# support; without it no .su/.ci ship and bk_stack_depth_bound()
+# reports 0 (no bound available).
+STACK_USAGE_FLAGS = -fstack-usage -fcallgraph-info=su
+STACK_USAGE_OK := $(shell t=`mktemp -d` && \
+	{ echo 'int bs_su_probe;' > $$t/p.cxx; \
+	  $(CXX) $(STACK_USAGE_FLAGS) -c -o $$t/p.o $$t/p.cxx \
+	    >/dev/null 2>&1 && echo yes; }; rm -rf $$t)
+ifeq ($(STACK_USAGE_OK),yes)
+CXXFLAGS += $(STACK_USAGE_FLAGS)
+endif
 
 # Description of library of Bluesim primitives
 LIB_PRIM = libbsprim.a
@@ -112,7 +132,7 @@ PRIM_OBJS = prim_ops.o wide_data.o mem_alloc.o target.o \
 # Description of Bluesim kernel library
 LIB_KERNEL = libbskernel.a
 KERNEL_OBJS = kernel.o event_queue.o priority.o symbol.o \
-              reset.o plusargs.o portability.o
+              reset.o plusargs.o portability.o stack_bound_default.o
 
 LIBS = $(LIB_PRIM) $(LIB_KERNEL)
 
@@ -163,11 +183,17 @@ install: $(LIBS) test-headers
 	$(INSTALL) -m 644 $(HEADERS) $(INSTALLDIR)
 	$(INSTALL) -m 644 $(LINKFILES) $(INSTALLDIR)
 	$(INSTALL) -m 644 $(LIBS) $(INSTALLDIR)
+	$(INSTALL) -m 755 $(SCRIPTS) $(INSTALLDIR)
+ifeq ($(STACK_USAGE_OK),yes)
+	$(INSTALL) -m 755 -d $(INSTALLDIR)/stack-usage
+	$(INSTALL) -m 644 $(sort $(DEPEND_OBJS:.o=.su) $(DEPEND_OBJS:.o=.ci)) \
+		$(INSTALLDIR)/stack-usage
+endif
 
 .PHONY: clean
 clean:
 	$(RM) test_hdr.cxx version.h
-	$(RM) *.o *.p *.d $(LIBS)
+	$(RM) *.o *.p *.d *.su *.ci $(LIBS)
 
 .PHONY: full_clean
 full_clean: clean
