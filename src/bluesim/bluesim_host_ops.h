@@ -153,9 +153,6 @@ struct bs_host_ops {
                          const char* format,
                          double value);
 
-  /* -- Operations below were appended in version 2: the noreturn
-   *    fatal-condition reports (divide_by_zero, out_of_bounds) -- */
-
   /* Report that the model attempted to divide by zero, and terminate
    * execution: this operation must not return (see BS_HOST_NORETURN
    * above).  'description' is a static string describing the
