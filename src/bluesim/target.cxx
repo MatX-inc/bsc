@@ -1,4 +1,3 @@
-#include <cerrno>
 #include <cstring>
 
 #include "bs_target.h"
@@ -164,7 +163,7 @@ void FileTarget::write_data(const void* data,
     // report the failure on the host's stderr stream, in the manner
     // of perror("FileTarget::write_data")
     struct bs_host_file* err = host_ops->std_stream(host_ctx, BS_HOST_STDERR);
-    const char* reason = strerror(errno);
+    const char* reason = host_ops->last_error(host_ctx);
     host_ops->write(host_ctx, err, "FileTarget::write_data: ", 24);
     host_ops->write(host_ctx, err, reason, strlen(reason));
     host_ops->write(host_ctx, err, "\n", 1);

@@ -18,8 +18,10 @@
  * be included from multiple translation units of a host program.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "bluesim_host_ops.h"
 
@@ -89,6 +91,12 @@ static inline tSInt32 bs_default_format_real(void* ctx, char* buf, size_t buf_si
 {
   (void) ctx;
   return (tSInt32) snprintf(buf, buf_size, format, value);
+}
+
+static inline const char* bs_default_last_error(void* ctx)
+{
+  (void) ctx;
+  return strerror(errno);
 }
 
 static inline void bs_default_divide_by_zero(void* ctx,
@@ -168,6 +176,7 @@ static inline const struct bs_host_ops* bs_default_host_ops(void)
     ops.divide_by_zero = bs_default_divide_by_zero;
     ops.out_of_bounds  = bs_default_out_of_bounds;
     ops.event_queue_overflow = bs_default_event_queue_overflow;
+    ops.last_error  = bs_default_last_error;
 
     /* Bluesim's standard output has always been line-buffered (the
      * runtime used to setlinebuf() every stream it wrote to).

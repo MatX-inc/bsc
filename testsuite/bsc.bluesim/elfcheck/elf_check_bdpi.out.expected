@@ -1,0 +1,6 @@
+bluesim_elf_check: sysElfBdpi.cexe.so (BDPI exclusions admitted)
+  DT_NEEDED entries: libc only (documented BDPI exclusion)
+  unresolved dynamic symbols: malloc/free only (documented BDPI exclusion)
+  dynamic relocations: relative + eager bindings of the documented BDPI exclusion
+  system-call instructions: none
+  PASS

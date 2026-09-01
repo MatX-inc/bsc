@@ -1,4 +1,4 @@
 _bk_*
-_vlog_*
-_vpi_*
 _new_MODEL_*
+_bs_stack_depth_bound
+_bs_mem_alloc_counters

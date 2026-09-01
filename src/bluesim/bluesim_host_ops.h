@@ -73,7 +73,7 @@ typedef enum { BS_HOST_STDIN  = 0
  * refuses a table whose version (or size) is older than the one it
  * was compiled against.
  */
-#define BS_HOST_OPS_VERSION 3u
+#define BS_HOST_OPS_VERSION 4u
 
 struct bs_host_ops {
   /* The size in bytes of the structure as compiled into the host,
@@ -95,7 +95,8 @@ struct bs_host_ops {
   /* Open the named file, in the manner of fopen(): 'mode' is a C
    * stdio mode string ("r", "w", "a", "r+", ...).  Returns a stream
    * handle owned by the caller, to be released with 'close', or NULL
-   * on failure (with errno set, as fopen() does).
+   * on failure (a description of which is available from
+   * 'last_error').
    */
   own struct bs_host_file* (*open)(void* ctx,
                                    const char* filename,
@@ -108,7 +109,8 @@ struct bs_host_ops {
   void (*close)(void* ctx, own struct bs_host_file* file);
 
   /* Write 'len' bytes to a stream.  Returns non-zero if all bytes
-   * were written and 0 on failure (with errno set).
+   * were written and 0 on failure (a description of which is
+   * available from 'last_error').
    */
   tBool (*write)(void* ctx,
                  struct bs_host_file* file,
@@ -210,6 +212,22 @@ struct bs_host_ops {
    */
   void (*event_queue_overflow)(void* ctx,
                                tUInt32 capacity) BS_HOST_NORETURN;
+
+  /* -- Operations below were appended in version 4: the
+   *    failure-description string -- */
+
+  /* Describe the most recent failure reported by one of the
+   * operations above ('open' returning NULL, 'write' returning 0,
+   * 'read' returning a negative count), as a short human-readable
+   * string for the runtime's error messages -- in the manner of
+   * strerror(errno), which is what the default implementation
+   * returns.  The returned string is owned by the host and only
+   * needs to stay valid until the next host operation.  The model
+   * itself has no errno: this operation exists so that its error
+   * reports can still carry the host's reason without the model
+   * importing __errno_location/strerror from a C library.
+   */
+  const char* (*last_error)(void* ctx);
 
   /* New operations are appended here in later versions; each
    * addition bumps BS_HOST_OPS_VERSION.

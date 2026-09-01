@@ -1561,7 +1561,25 @@ cmdCompileBluesimCFile flags extra_switches cName = do
                     else [])
         -- Generated C++ code may reference uninitialized variables when it
         -- is known to be safe.
-        switches = incflags ++ extra_switches ++
+        --
+        -- A Bluesim model's translation units are compiled the way the
+        -- runtime libraries are (see src/bluesim/Makefile): the shared
+        -- object they are linked into must be freestanding, so
+        -- exceptions, RTTI and the stack protector are off (their
+        -- support code lives in libgcc/libstdc++/libc) and everything
+        -- but the BS_EXPORT-marked public entry points has hidden
+        -- visibility.  SystemC builds compile as before: their objects
+        -- are linked into the user's SystemC program, not into a
+        -- freestanding shared object.
+        freestanding_switches =
+            if (genSysC flags)
+            then []
+            else [ "-fno-exceptions"
+                 , "-fno-rtti"
+                 , "-fno-stack-protector"
+                 , "-fvisibility=hidden"
+                 ]
+        switches = incflags ++ extra_switches ++ freestanding_switches ++
                    [ "-Wno-uninitialized"
                    , "-fPIC"
                    , "-c"
@@ -1868,7 +1886,8 @@ genStackBoundObj errh flags toplevel su_ok ci_files = do
             , "#include \"bluesim_types.h\""
             , ""
             , "/* 0 = no bound available (see bk_stack_depth_bound()) */"
-            , "extern \"C\" const tUInt64 bs_stack_depth_bound = 0llu;"
+            , "extern \"C\" BS_EXPORT const tUInt64 bs_stack_depth_bound " ++
+              "= 0llu;"
             ]
     -- compile without the "Bluesim object created" message: this TU
     -- is internal to the link step (and has no companion header)
@@ -1880,10 +1899,17 @@ genStackBoundObj errh flags toplevel su_ok ci_files = do
 cxxLink :: ErrorHandle -> Flags -> String -> [String] -> Bool -> [String] ->
            TimeInfo -> IO ()
 cxxLink errh flags toplevel names su_ok ci_files creation_time = do
-    -- Construct the Bluesim object names
+    -- Construct the Bluesim object names.  The vendored string/ctype
+    -- routines (libbsstring.a, see src/vendor/musl/) go last so that
+    -- they resolve the references of every other object; they give the
+    -- ELF shared object local definitions of the C library leaf
+    -- functions (memcpy and friends) instead of dynamic imports.
     let bsimLibDir = (bluespecDir flags) ++ "/Bluesim/"
+        bsim_lib_list = case getBinFmtType of
+                          ELF -> ["bskernel", "bsprim", "bsstring"]
+                          _   -> ["bskernel", "bsprim"]
         bsim_names = [ bsimLibDir ++ "lib" ++ name ++ ".a"
-                     | name <- ["bskernel", "bsprim"] ]
+                     | name <- bsim_lib_list ]
 
     -- Inject the design's static stack-depth bound (the strong
     -- definition of bs_stack_depth_bound; the kernel carries a weak
@@ -1914,9 +1940,41 @@ cxxLink errh flags toplevel names su_ok ci_files creation_time = do
                                "bs_" ++ binfmt ++ "_export_map.txt"
         -- this flag doesn't seem to work, so we use a separate call to "strip"
         stripflags = [] -- if (cDebug flags) then [] else ["-Wl,-x"]
+        -- The ELF shared object is linked freestanding:
+        --   * -nostartfiles drops the crt objects, whose weak
+        --     tooling references (_ITM_*, __gmon_start__,
+        --     __cxa_finalize) would otherwise be the last entries in
+        --     the dynamic symbol table (the model registers no
+        --     static destructors, so it needs nothing from them);
+        --   * --as-needed records no DT_NEEDED for the default
+        --     libraries nothing references.  With the translation
+        --     units compiled -fno-exceptions -fno-rtti a model
+        --     references none of them: a model without BDPI imports
+        --     gets no DT_NEEDED at all, and the documented BDPI
+        --     fallback's malloc/free keep libc;
+        --   * -static-libstdc++ -static-libgcc guarantee the same
+        --     when a toolchain would otherwise emit a stray C++
+        --     runtime reference.  With string values represented as
+        --     tStr trees (see bs_str.h) nothing in a model calls
+        --     out-of-line into libstdc++, so these are true no-ops
+        --     today -- nothing gets pulled from the static archives,
+        --     no load-time allocation appears (the loadalloc and
+        --     elfcheck suites hold this) -- and they keep a future
+        --     leak from silently re-adding a DT_NEEDED entry;
+        --   * -z relro -z now: every relocation is resolved at load
+        --     and the relocated sections are then made read-only, so
+        --     no PLT/GOT entry needs runtime resolution.
+        -- The export map keeps only the public entry points dynamic
+        -- (see bs_elf_export_map.txt); -lm was vestigial (nothing in
+        -- a model references libm; reals go through the host ops).
         switches =
           case getBinFmtType of
-            ELF   -> ["-shared", "-fPIC", "-Wl,-Bsymbolic"] ++ libdirflags ++
+            ELF   -> ["-shared", "-fPIC", "-Wl,-Bsymbolic"] ++
+                     [ "-nostartfiles"
+                     , "-static-libstdc++", "-static-libgcc"
+                     , "-Wl,--as-needed"
+                     , "-Wl,-z,relro", "-Wl,-z,now"
+                     ] ++ libdirflags ++
                      ["-Wl,--version-script=" ++ exportmap] ++ stripflags ++
                      ["-o", soFile]
             MachO -> ["-dynamiclib", "-fPIC"] ++ libdirflags ++
@@ -1924,7 +1982,7 @@ cxxLink errh flags toplevel names su_ok ci_files creation_time = do
                      ["-o", soFile]
         -- show is used for quoting
         opts = map show $ linkFlags flags
-        files = map show compile_names ++ ["-lm"] ++ userlibs
+        files = map show compile_names ++ userlibs
     cxxCompile errh flags (opts ++ switches) files
     when (not (cDebug flags)) $ cleanseSharedLib errh flags soFile
     unless (quiet flags) $ putStrLnF ("Simulation shared library created: " ++ soFile)

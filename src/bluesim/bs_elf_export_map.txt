@@ -1,7 +1,17 @@
+/* The dynamic exports of a Bluesim model shared object: the bk_*
+ * kernel/introspection API, the generated model constructor, the
+ * injected static stack-depth bound, and the allocator-counter
+ * test-support accessor.  Everything else -- the vendored C string
+ * routines included -- is local to the shared object.  The same list
+ * is marked BS_EXPORT in the sources (see bluesim_types.h), since the
+ * objects are compiled with -fvisibility=hidden.
+ */
 VERS_1.0 {
    global:
       bk_*;
-      vpi_*;
-      vlog_*;
       new_MODEL_*;
+      bs_stack_depth_bound;
+      bs_mem_alloc_counters;
+   local:
+      *;
 };

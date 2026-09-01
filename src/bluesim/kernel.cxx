@@ -16,6 +16,22 @@
 static void setup_clock_edges(tSimStateHdl simHdl, tClock clk);
 
 /*
+ * The C++ ABI's pure-virtual-call handler.  The runtime's abstract
+ * base classes (Model, Target, FormatHandler) keep their honest pure
+ * virtuals, so their vtables reference this handler; defining it here
+ * -- kernel.o is linked into every model -- keeps it out of the model
+ * shared object's dynamic imports.  Calling a pure virtual function
+ * is only reachable through memory corruption or a constructor /
+ * destructor bug, so the honest response is to trap immediately
+ * rather than to print through machinery that may itself be in an
+ * undefined state.
+ */
+extern "C" void __cxa_pure_virtual(void)
+{
+  __builtin_trap();
+}
+
+/*
  * All I/O performed by the kernel goes through the host operations
  * registered with bk_sync_init().  These are small helpers for
  * writing the kernel's own messages (cycle dumps, warnings) to the

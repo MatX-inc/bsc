@@ -25,14 +25,15 @@
  *
  * Because this TU is the unbounded consumer, it also carries the
  * strong definitions of the Bluesim allocator's heap hooks
- * (bs_mem_heap_*, declared weak in mem_alloc.cxx): linking a design
+ * (bs_mem_heap_*, defined weak in mem_alloc.cxx): linking a design
  * with BDPI imports is what gives the model an unbounded
- * program-allocator fallback -- and the operator new[]/delete[]
- * imports in its shared object, the documented exclusion from the
- * no-allocator-imports property.  Models without BDPI imports never
- * pull in this TU and stay free of allocator imports.
+ * program-allocator fallback -- and the malloc/free imports in its
+ * shared object, the documented exclusion from the freestanding
+ * (no-import) property.  Models without BDPI imports never pull in
+ * this TU and stay fully freestanding.
  */
 
+#include <cstdlib>
 #include <cstring>
 
 #include "bluesim_types.h"
@@ -41,16 +42,24 @@
 #include "mem_alloc.h"
 
 /* The strong definitions of the Bluesim allocator's unbounded
- * fallback hooks (see mem_alloc.cxx).
+ * fallback hooks (see mem_alloc.cxx).  These call malloc/free
+ * directly rather than operator new[]/delete[]: the imports are the
+ * whole point (they are the documented BDPI exclusion), and the raw
+ * allocator keeps them to exactly two symbols -- a statically linked
+ * operator new would drag in libstdc++'s new-handler and
+ * exception-raising machinery, and with it a pile of further C
+ * library imports.  A NULL malloc result is returned as-is:
+ * alloc_mem() treats it as arena exhaustion and stops through the
+ * host operations.
  */
 extern "C" void* bs_mem_heap_alloc(unsigned int nWords)
 {
-  return new unsigned int[(nWords > 0u) ? nWords : 1u];
+  return malloc(4u * (size_t)((nWords > 0u) ? nWords : 1u));
 }
 
 extern "C" void bs_mem_heap_free(void* ptr, unsigned int /* nWords */)
 {
-  delete[] ((unsigned int*) ptr);
+  free(ptr);
 }
 
 /* Size of the bump arena serving one foreign call batch's argument

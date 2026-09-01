@@ -8,12 +8,12 @@
  *
  * The one truly unbounded consumer is BDPI argument marshaling
  * (prim_ops.cxx).  That translation unit -- linked into a model only
- * when the design imports BDPI functions -- provides the strong
- * definitions of the bs_mem_heap_* hooks declared weak below, giving
- * such models an unbounded program-allocator fallback once the arena
- * is exhausted (and, with it, the documented operator new[]/delete[]
- * imports).  In a model without BDPI imports the hooks resolve to
- * NULL and exhausting the arena is a fatal error, reported through
+ * when the design imports BDPI functions -- overrides the weak
+ * bs_mem_heap_* hook definitions below, giving such models an
+ * unbounded program-allocator fallback once the arena is exhausted
+ * (and, with it, the documented malloc/free imports).  In a model
+ * without BDPI imports the weak defaults stand: they provide no
+ * heap, and exhausting the arena is a fatal error, reported through
  * the process-wide host operations in the manner of the other fixed
  * runtime capacities (see e.g. the event queue).
  */
@@ -68,14 +68,29 @@ static unsigned long long alloc_count = 0;
 static unsigned long long free_count = 0;
 
 /* The unbounded fallback hooks.  Only the BDPI marshaling TU
- * (prim_ops.cxx) defines them; the weak references resolve to NULL
- * everywhere else.  (An undefined weak symbol is legal in the model
- * shared object: the dynamic linker resolves it to NULL.)
+ * (prim_ops.cxx) provides real definitions; everywhere else these
+ * weak DEFAULTS stand and report that no program heap is available.
+ * They are weak definitions rather than weak references
+ * deliberately: an undefined weak symbol would linger in the model
+ * shared object's dynamic symbol table as an unresolved import, and
+ * the freestanding contract is zero unresolved dynamic symbols.
  */
-extern "C" void* bs_mem_heap_alloc(unsigned int nWords)
-  __attribute__((weak));
-extern "C" void  bs_mem_heap_free(void* ptr, unsigned int nWords)
-  __attribute__((weak));
+extern "C" __attribute__((weak)) void* bs_mem_heap_alloc(unsigned int nWords)
+{
+  (void) nWords;
+  return NULL; /* no heap: alloc_mem() reports arena exhaustion */
+}
+
+extern "C" __attribute__((weak)) void bs_mem_heap_free(void* ptr,
+                                                       unsigned int nWords)
+{
+  (void) ptr;
+  (void) nWords;
+  /* unreachable: a block outside the arena can only come from
+   * bs_mem_heap_alloc, and this default never produces one
+   */
+  __builtin_trap();
+}
 
 /* is this pointer inside the arena? */
 static bool in_arena(const void* ptr)
@@ -169,10 +184,11 @@ void* alloc_mem(unsigned int nWords)
 
   /* the arena is exhausted: models with BDPI imports fall back to
    * the program allocator (the documented unbounded path); others
-   * stop
+   * stop (the weak default hook has no heap to offer)
    */
-  if (bs_mem_heap_alloc != NULL)
-    return bs_mem_heap_alloc(nWords);
+  void* ret = bs_mem_heap_alloc(nWords);
+  if (ret != NULL)
+    return ret;
   arena_exhausted();
 }
 
@@ -197,7 +213,7 @@ void free_mem(void* ptr, unsigned int nWords)
       large_free_list = mem;
     }
   }
-  else if (bs_mem_heap_free != NULL)
+  else
   {
     /* a block outside the arena can only have come from the heap
      * fallback
