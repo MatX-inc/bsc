@@ -162,6 +162,21 @@ fn load_file_inner(
             d
         }
     };
+    // BIR-level Extract-of-Concat folding (TRS_BIR_FOLD).  Off by
+    // default: it fires on a small minority of concats and shows no
+    // wall-clock win yet -- see trs_ir::fold.  TRS_FOLD_STATS prints the
+    // census, which is the part actually worth having.
+    let mut design = design;
+    if std::env::var_os("TRS_BIR_FOLD").is_some_and(|v| v != "0") {
+        let mut tot = trs_ir::fold::FoldStats::default();
+        for m in design.modules.iter_mut() {
+            tot.merge(trs_ir::fold::fold_module(m));
+        }
+        if std::env::var_os("TRS_FOLD_STATS").is_some() {
+            eprintln!("{tot}");
+        }
+        sl.lap("bir fold (extract-of-concat)");
+    }
     let mut interp = Interp::new_bound(design, binds)?;
     sl.lap("interp build (instantiate)");
     // the bind salt differentiates compiled artifacts by their baked

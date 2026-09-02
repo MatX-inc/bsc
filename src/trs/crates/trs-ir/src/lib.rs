@@ -15,6 +15,7 @@ pub mod expr;
 pub mod merge;
 mod psq;
 pub mod schedule;
+pub mod fold;
 pub mod verify;
 
 use std::collections::HashMap;
