@@ -831,7 +831,7 @@ data HTclObj  = TLst [HTclObj]
               | TInt Int
               | TDbl Double
               | TCL TclObj
- deriving (Show, Eq)
+ deriving (Show, Eq, Ord)
 
 -- instance for HTclObj
 instance  TclObjCvt HTclObj where
