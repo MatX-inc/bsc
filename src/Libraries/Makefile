@@ -23,14 +23,27 @@ BUILD_ORDER= \
 # Find files to build tags
 SRCS = $(shell find . -name "*.bsv")
 
-.PHONY: all install clean full_clean
+BLOOGLEDIR = $(LIBDIR)/bloogle
+
+.PHONY: all build tconcheck install clean full_clean bloogle
 
 all: install TAGS
 
 build:
 	$(foreach dir, $(BUILD_ORDER), $(MAKE) -C $(dir) $@ &&) true
 
-install: build
+bloogle: build
+	install -d $(BLOOGLEDIR)
+	$(BO2BLOOGLE) bluespec $(BUILDDIR)/*.bo > $(BLOOGLEDIR)/bluespec.txt
+
+# Check that the compiler's handwritten tycon constants agree with the
+# just-built Prelude (see src/comp/tconcheck.hs); drift fails the build
+TCONCHECK ?= $(BINDIR)/tconcheck
+
+tconcheck: build
+	$(TCONCHECK) $(BUILDDIR)
+
+install: build bloogle tconcheck
 	install -d $(INSTALLDIR)
 	install -m644 $(BUILDDIR)/* $(INSTALLDIR)
 

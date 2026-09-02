@@ -21,6 +21,7 @@ Compiler flags:
 -Xv arg                 pass argument to the Verilog link process
 -aggressive-conditions  construct implicit conditions aggressively
 -bdir dir               output directory for .bo and .ba files
+-c module               generate code for ``module'' from its elaborated .ba file
 -check-assert           test assertions with the Assert library
 -continue-after-errors  aggressively continue compilation after an error has been detected
 -cpp                    preprocess the source with the C preprocessor
@@ -45,6 +46,7 @@ Compiler flags:
 -promote-warnings list  treat a list of warnings as errors (``:'' sep list of tags)
 -q                      same as -quiet
 -quiet                  be less talkative
+-remap-path-prefix from=to remap FROM path prefixes to TO in paths stored in generated .bo and .ba files (for reproducible builds)
 -remove-dollar          remove dollar signs from Verilog identifiers
 -remove-empty-rules     remove rules whose bodies have no actions
 -remove-false-rules     remove rules whose condition is provably false
@@ -79,7 +81,6 @@ Compiler flags:
 -unspecified-to val     remaining unspecified values are set to: 'X', '0', '1', 'Z', or 'A'
 -use-dpi                use DPI instead of VPI in generated Verilog
 -v                      same as -verbose
--v95                    generate strict Verilog 95 code
 -vdir dir               output directory for .v files
 -verbose                be more talkative
 -verilog                compile BSV generating Verilog file

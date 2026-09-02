@@ -29,7 +29,6 @@ import System.Environment(getEnv)
 import System.Mem(performGC)
 import System.Posix.Signals
 import Text.Regex
-import Data.Generics (listify)
 import qualified Data.Map as M
 
 -- Bluespec imports
@@ -68,11 +67,13 @@ import ISyntaxUtil(itBool, itClock, itReset)
 import ASyntax
 import ASyntaxUtil
 import Pragma
+import DefProp
 import AScheduleInfo
 import AUses(MethodId(..))
 import VModInfo
 import ADumpSchedule
 import BackendNamingConventions
+import WireAnalysis(getWireTypeMap)
 
 import TclParseUtils
 
@@ -979,7 +980,8 @@ moduleGrammar = (tclcmd "module" namespace helpStr "") .+.
                 (oneOf [ loadGrammar, clearGrammar, submodsGrammar
                        , rulesGrammar, ifcGrammar, methodsGrammar
                        , bflagsGrammar
-                       , portsGrammar, porttypesGrammar, listGrammar
+                       , portsGrammar, porttypesGrammar, wiretypemapGrammar
+                       , listGrammar
                        , methodConditionsGrammar
                        ])
     where helpStr = "Load and query information on a module"
@@ -1002,6 +1004,11 @@ moduleGrammar = (tclcmd "module" namespace helpStr "") .+.
           listGrammar = (kw "list" "List the loaded modules" "")
           porttypesGrammar =
               (kw "porttypes" "Show the types of the ports of a module" "") .+.
+              (arg "module" StringArg "module name")
+          wiretypemapGrammar =
+              (kw "wiretypemap"
+                  "Map wire names to source types, for VCD correlation"
+                  "") .+.
               (arg "module" StringArg "module name")
 
 
@@ -1121,7 +1128,14 @@ tclModule ["methods",modname] = do
                ifc_map = [ (aif_name aif, rawIfcFieldFromAIFace pps aif)
                            | aif <- ifc ]
            let tifc = getModuleIfc abmi
-           fs <- getIfcHierarchy Nothing ifc_map tifc
+           fs <-
+             let defl_fs = [ Field fId inf Nothing | (fId, inf) <- ifc_map ]
+             in do mres <- runExceptT $ mgetIfcHierarchy Nothing ifc_map tifc
+                   case mres of
+                     Right res -> return res
+                     Left _ -> -- source ifc type didn't match the synthesized
+                               --   ports (e.g. SplitPorts); use the flat list
+                               return defl_fs
            return (dispIfcHierarchyNames fs)
 
 ------
@@ -1158,6 +1172,10 @@ tclModule ["methodconditions", modname] = do
            doProp (DefP_Method i) = [ tagStr "method" (getIdBaseString i) ]
            doProp (DefP_Instance i) = [ tagStr "instance" (getIdBaseString i) ]
            doProp DefP_NoCSE = []
+           -- lifted-dictionary evidence props live on IDefs, not ADefs
+           doProp (DefP_DictRendering {}) = []
+           doProp (DefP_DictKids {}) = []
+           doProp (DefP_DictTypes {}) = []
            convert :: ADef -> HTclObj
            convert (ADef i _t e ps) =
                 TLst $ [ TStr (getIdBaseString i)
@@ -1191,6 +1209,18 @@ tclModule ["porttypes",modname] = do
            let h_arg_types = concatMap dispPortsModArg arginfo
                h_ifc_types = concatMap dispPortsIfc ifcinfo
            return $ TLst $ nub (h_arg_types ++ h_ifc_types)
+------
+tclModule ["wiretypemap",modname] = do
+  if (isPrimitiveModule modname)
+   then return $ TLst []
+   else do
+     minfo <- findModule modname
+     case minfo of
+       Nothing -> return $ TLst []
+       Just abmi -> do
+           let apkg = abemi_apkg abmi
+               mkEntryObj (name, t) = TLst [TStr name, TStr (pfpString t)]
+           return $ TLst $ map mkEntryObj $ getWireTypeMap apkg
 ------
 tclModule ["flags",modname] = do
   if (isPrimitiveModule modname)
@@ -3070,9 +3100,14 @@ simWaveform fmt args = do
   g <- readIORef globalVar
   case (tp_bluesim g) of
     Just bs -> case args of
-                 []      -> -- return name of the current dump file, if any
+                 []      -> -- return the name of the current dump file,
+                            -- but only if it is being dumped in this
+                            -- command's format ("sim fst" must not
+                            -- report a VCD file, nor vice versa)
                             do fn <- bk_get_VCD_file_name bs
-                               l <- toTclObj (if null fn then [] else [fn])
+                               cur <- bk_get_waveform_format bs
+                               let match = not (null fn) && (cur == fmt)
+                               l <- toTclObj (if match then [fn] else [])
                                return $ TCL l
                  ["on"]  -> -- turn on waveform dumping
                             do st <- bk_set_waveform_format bs fmt
@@ -3551,7 +3586,14 @@ getModPortInfo apkg pps tifc = do
     let -- map from flattened ifc name to its raw info
         ifc_map = [ (aif_name aif, rawIfcFieldFromAIFace pps aif)
                     | aif <- ifc ]
-    ifc_hier <- getIfcHierarchy Nothing ifc_map tifc
+    ifc_hier <-
+      let defl_ifc_hier = [ Field fId inf Nothing | (fId, inf) <- ifc_map ]
+      in do mres <- runExceptT $ mgetIfcHierarchy Nothing ifc_map tifc
+            case mres of
+              Right res -> return res
+              Left _ -> -- the source ifc type didn't match the synthesized
+                        --   ports (e.g. SplitPorts), so use the flat list
+                        return defl_ifc_hier
 
     -- module arguments
     let inps :: [(AAbstractInput, VArgInfo)]
@@ -4221,12 +4263,27 @@ tclDepend ["recomp",fname]= do
 
 tclDepend xs = internalError $ "tclDepend: grammar mismatch: " ++ (show xs)
 
+-- VModInfo reaches an IPackage only through ICVerilog: the synthesis
+-- boundary re-abstracts every synthesized module as a Verilog wrapper
+-- (the same representation as a hand-written import "BVI"), and the
+-- richer elaboration products (ICStateVar, ICClock, ICReset, ...)
+-- flow to the .ba and never re-enter package vocabulary.
 find_vmodinfo :: (IPackage Id) -> [VModInfo]
-find_vmodinfo = listify
-                (let
-                    tagVMI :: VModInfo -> Bool
-                    tagVMI _ = True
-                 in tagVMI)
+find_vmodinfo ipkg = concatMap defVMIs (ipkg_defs ipkg)
+  where
+    defVMIs :: IDef Id -> [VModInfo]
+    defVMIs (IDef _ _ dbody _) = exprVMIs dbody
+
+    exprVMIs :: IExpr Id -> [VModInfo]
+    exprVMIs (ILam _ _ body) = exprVMIs body
+    exprVMIs (IAps fun _ args) = concatMap exprVMIs (fun:args)
+    exprVMIs (IVar _) = []
+    exprVMIs (ILAM _ _ body) = exprVMIs body
+    exprVMIs (ICon _ (ICVerilog { vInfo = vmi })) = [vmi]
+    exprVMIs (ICon _ (ICDef { iConDef = body })) = exprVMIs body
+    exprVMIs (ICon _ (ICUndet { imVal = Just body })) = exprVMIs body
+    exprVMIs (ICon _ _) = []
+    exprVMIs (IRefT {}) = []
 
 package_vsignals :: TclP -> [(Id,String)]
 package_vsignals tclp =

@@ -36,7 +36,7 @@ import SCC(scc)
 import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
-import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName,
+import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
@@ -57,6 +57,7 @@ import IOUtil(getEnvDef)
 import Exceptions(bsCatch)
 import Flags(
         Flags(..),
+        remapFlagsPaths,
         DumpFlag(..),
         hasDump,
         verbose, extraVerbose, quiet)
@@ -73,7 +74,7 @@ import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
              bsError, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith)
-import Position(noPosition, cmdPosition)
+import Position(noPosition, cmdPosition, remapPositionFile)
 import CVPrint
 import Id
 import Backend
@@ -81,7 +82,8 @@ import Pragma
 import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
-import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
+import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
+                  getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
@@ -91,7 +93,9 @@ import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef)
+import LiftDicts(liftDictsPkg)
+import ISimpDicts(iSimpDicts)
+import FixupDefs(fixupDefs, updDef, mkDictBuckets)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -228,6 +232,10 @@ hmain args = do
         DSimLink flags top abinFiles cSrcFiles ->
             do { setFlags flags; doWarnings; showPreamble flags;
                  simLink errh flags top abinFiles cSrcFiles;
+                 exitOK errh }
+        DCodeGen flags mods abinFiles ->
+            do { setFlags flags; doWarnings; showPreamble flags;
+                 codeGen errh flags mods abinFiles;
                  exitOK errh }
 
 
@@ -371,7 +379,7 @@ compilePackage
     -- symbols.
     --
     start flags DFsyminitial
-    symt00 <- mkSymTab errh mop
+    symt00 <- mkSymTabWithWarnings errh mop
     t <- dump errh flags t DFsyminitial dumpnames symt00
 
     -- whether we are doing code generation for modules
@@ -460,12 +468,21 @@ compilePackage
     t <- dump errh flags t DFsimplified dumpnames mod'
     stats flags DFsimplified mod'
 
+    -- Lift dictionaries to top level (constructed directly as IDefs
+    -- over interned types; iConvPackage splices them into the package)
+    start flags DFliftdicts
+    let (mod_lifted, lifted_defs) =
+            if liftDicts flags then liftDictsPkg errh flags symt mod'
+            else (mod', [])
+    t <- dump errh flags t DFliftdicts dumpnames mod_lifted
+    stats flags DFliftdicts mod_lifted
+
     --------------------------------------------
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
     let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
-    imod <- iConvPackage errh flags symt combinedATFCache mod'
+    imod <- iConvPackage errh flags symt combinedATFCache lifted_defs mod_lifted
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
@@ -502,6 +519,14 @@ compilePackage
         -- so they can be put into the current IPackage for linking info
         binmods = zip (map (adjEnv env) binmods0) pkgsigs
 
+        -- The lifted-dictionary buckets used by "fixupDefs" and
+        -- "updDef" depend only on the imported packages ("binmods"),
+        -- which are fixed for the entire compile; so build them once
+        -- here and thread them through, rather than rebuilding them on
+        -- every call (once per compile plus once per synthesized
+        -- module, via "updDef").
+        dictBuckets = mkDictBuckets binmods
+
     t <- dump errh flags t DFbinary dumpnames binmods
 
     -- For "genModule" we construct a symbol table that includes all defs,
@@ -516,14 +541,19 @@ compilePackage
     t <- dump errh flags t DFsympostbinary dumpnames mint
 
     start flags DFfixup
-    let (imodf, alldefsList) = fixupDefs imod binmods
+    let (imodf, alldefsList) = fixupDefs dictBuckets imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
+    start flags DFisimpdicts
+    let imodsd = iSimpDicts imodf
+    iPCheck flags symt imodsd "isimpdicts"
+    t <- dump errh flags t DFisimpdicts dumpnames imodsd
+
     start flags DFisimplify
     let imods :: IPackage HeapData
-        imods = iSimplify imodf
+        imods = iSimplify imodsd
     iPCheck flags symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
@@ -622,7 +652,7 @@ compilePackage
             -- references
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
-            let im' = updDef idef im binmods
+            let im' = updDef dictBuckets idef im binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
@@ -651,7 +681,8 @@ compilePackage
 
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
-    genBinFile errh bin_filename bi_sig bo_sig imodr
+    let remapP = remapPositionFile (remapPathPrefix flags)
+    genBinFile errh remapP bin_filename bi_sig bo_sig imodr
 
     -- Print one message for the two files
     let rel_binname = getRelativeFilePath bin_filename
@@ -1019,9 +1050,11 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                   Nothing -> "Elaborated module file created: "
                   Just be ->
                       "Elaborated " ++ ppString be ++ " module file created: "
+           remapP = remapPositionFile (remapPathPrefix flags)
+           remapS = remapPath (remapPathPrefix flags)
            modinfo = ABinModInfo {
-                          abmi_path = prefix,
-                          abmi_src_name = srcName,
+                          abmi_path = remapS prefix,
+                          abmi_src_name = remapS srcName,
                           --abmi_time = now,
                           abmi_apkg        = amod_for_abin,
                           abmi_aschedinfo  = sched_info,
@@ -1029,12 +1062,12 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_oqt         = oqt,
                           abmi_method_dump = methodConflict,
                           abmi_pathinfo = vPathInfo,
-                          abmi_flags       = flags,
+                          abmi_flags       = remapFlagsPaths remapPath flags,
                           abmi_vprogram    = if (genABinVerilog flags)
                                              then vprog else Nothing
                      }
            abin = ABinMod modinfo (bscVersionStr True)
-       genABinFile errh afilename abin
+       genABinFile errh remapP afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
@@ -1051,17 +1084,19 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
        let afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            abinPrintPrefix = "Elaborated error module file created: "
+           remapP = remapPositionFile (remapPathPrefix flags)
+           remapS = remapPath (remapPathPrefix flags)
            modinfo = ABinModSchedErrInfo {
-                          abmsei_path          = prefix,
-                          abmsei_src_name      = srcName,
+                          abmsei_path          = remapS prefix,
+                          abmsei_src_name      = remapS srcName,
                           abmsei_apkg          = amod,
                           abmsei_aschederrinfo = sched_info,
                           abmsei_pps           = pps,
                           abmsei_oqt           = oqt,
-                          abmsei_flags         = flags
+                          abmsei_flags         = remapFlagsPaths remapPath flags
                      }
            abin = ABinModSchedErr modinfo (bscVersionStr True)
-       genABinFile errh afilename abin
+       genABinFile errh remapP afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
@@ -1329,8 +1364,11 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
+       -- (in -c mode, all files are always regenerated)
        start flags DFsimDepend
-       reused <- analyzeBluesimDependencies flags sim_system prefix
+       reused <- if (blockCodegen flags)
+                 then return []
+                 else analyzeBluesimDependencies flags sim_system prefix
        time <- dump errh flags time DFsimDepend dumpnames reused
 
        -- optimize the SimPackages and SimSchedules
@@ -1442,6 +1480,19 @@ genModuleC_cxx errh flags dumpnames time toplevel prefix reused sim_system_opt =
        return (time, names, reused_names, creation_time)
 
 -- ===============
+-- CodeGen
+
+-- The -c mode: generate code for a module from its elaborated (.ba)
+-- file, the middle stage of the three-stage flow (elaborate -> codegen ->
+-- link).  For Bluesim this reuses the front half of simLink, which under
+-- blockCodegen generates each module's C++ as a reusable block (no
+-- schedule or top-level wrapper) and skips compiling and linking.
+codeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
+codeGen errh flags mods abinFiles =
+    let flags' = flags { blockCodegen = True }
+    in  mapM_ (\m -> simLink errh flags' m abinFiles []) mods
+
+-- ===============
 -- SimLink
 
 simLink :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
@@ -1503,7 +1554,10 @@ simLink errh flags toplevel afilenames cfilenames = do
     start flags DFbluesimcompile
     let jobs = parallelSimLink flags
     (gen_ofiles, compiled_user_ofiles) <-
-        if (jobs > 1)
+        if (blockCodegen flags)
+        then -- the user's build system compiles the generated files
+          return ([], [])
+        else if (jobs > 1)
         then do
           compileParallelCFiles errh flags False
               toplevel gen_cfiles user_cfiles
@@ -1522,10 +1576,11 @@ simLink errh flags toplevel afilenames cfilenames = do
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
-    -- if not generating a SystemC model, link to a Bluesim executable
+    -- if generating a SystemC model or only generating code,
+    -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
-    when (not (genSysC flags)) $
-        cxxLink errh flags toplevel ofiles creation_time
+    when (not (genSysC flags) && not (blockCodegen flags)) $
+      cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
     -- final verbose message
@@ -1586,7 +1641,13 @@ cmdCompileBluesimCFile flags cName = do
         -- show is used for quoting
         opts = map show (cxxFlags flags)
         files = [show (mangleFileName cName)]
-    cmd <- cmdCXXCompile flags (opts ++ switches) files
+        -- the generated model/schedule file (model_<top>.cxx) is dispatch code:
+        -- compiling it at -O3 is disproportionately slow and buys no measurable
+        -- run time, so allow its flags to be overridden with TOP_CXXFLAGS
+        cflags_var = if ("model_" `isPrefixOf` (baseName cName))
+                     then "TOP_CXXFLAGS"
+                     else "CXXFLAGS"
+    cmd <- cmdCXXCompileWithEnv cflags_var flags (opts ++ switches) files
     let cNameRel = getRelativeFilePath cName
     -- we lie here and mention both header and object (un-mangled name)
     let msg = engine ++ " object created: " ++ (dropSuf cNameRel) ++
@@ -1801,9 +1862,19 @@ cxxCompile errh flags sws fs = do
 --   sws = switches (like -c, -o)
 --   fs  = filenames
 cmdCXXCompile :: Flags -> [String] -> [String] -> IO String
-cmdCXXCompile flags sws fs = do
+cmdCXXCompile = cmdCXXCompileWithEnv "CXXFLAGS"
+
+-- Same, but taking the name of the environment variable that supplies the
+-- compiler flags (falling back to CXXFLAGS if that variable is not set).
+-- This lets specific generated files (e.g. the Bluesim model/schedule file,
+-- via TOP_CXXFLAGS) be compiled with different flags: the model file is
+-- dispatch code whose g++ -O3 compile time grows much faster than any
+-- run-time benefit, so users can set e.g. TOP_CXXFLAGS=-O1.
+cmdCXXCompileWithEnv :: String -> Flags -> [String] -> [String] -> IO String
+cmdCXXCompileWithEnv cflags_var flags sws fs = do
     comp <- getEnvDef "CXX" dfltCxxCompile
-    cflags <- getEnvDef "CXXFLAGS" dfltCXXFLAGS
+    base_cflags <- getEnvDef "CXXFLAGS" dfltCXXFLAGS
+    cflags <- getEnvDef cflags_var base_cflags
     let debug_flags = if (cDebug flags) then "-g" else ""
     bsc_cflags <- getEnvDef "BSC_CXXFLAGS" dfltBSC_CXXFLAGS
     let cmd = unwords $ [ comp, cflags, debug_flags, bsc_cflags ] ++ sws ++ fs

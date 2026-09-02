@@ -1192,7 +1192,7 @@ The general concepts behind classes, instances, overloading etc.
 were introduced in section {\ref{sec-overloading}}.  A new class is
 declared using the following:
 
-\gram{topDefn}{\term{class} \opt{\nterm{context} \term{=>}} \nterm{classId} \many{\nterm{tyVarId}} \opt{\term{|} \nterm{funDep}}
+\gram{topDefn}{\term{class} \opt{\term{coherent} {\alt} \term{incoherent}} \opt{\nterm{context} \term{=>}} \nterm{classId} \many{\nterm{tyVarId}} \opt{\term{|} \nterm{funDep}}
         \term{where} \term{\{}} \\
 \grammore{ \many{\nterm{varId} \term{::} \nterm{ctxType} \term{;}} } \\
 \grammore{ \term{\}} }
@@ -1263,9 +1263,45 @@ two of the types uniquely determines the remaining type, {\ie}
 See section {\ref{sec-primitives-size-types}} for more detailed
 insights into the use of functional dependencies.
 
-\begin{NOTE}
-Functional dependencies are not currently checked by the compiler.
-\end{NOTE}
+Functional dependencies are enforced by the compiler.  At a use of an
+overloaded identifier, instances are ordered from more specific to
+less specific and selection is driven by the determining (left-hand
+side) parameters of the dependency alone: the compiler selects the
+most specific instance whose determining parameters match, and that
+instance then fixes the dependent parameters, as the dependency
+promises.  If the context demands dependent types that conflict with
+the selected instance, the program is rejected; the compiler does not
+fall through to a less specific instance, since the demanded result
+would then be choosing the instance ({\emph{incoherence}}).
+
+The compiler also checks that each instance declaration honors the
+class's dependencies: within an instance, the dependent parameters
+should be determined by the determining parameters, directly or
+through the instance's context, and the compiler warns otherwise,
+since an uncovered instance lets the same inputs be satisfied with
+many different results, contradicting what the dependency promises.
+
+\index{coherent@\te{coherent} (keyword)}
+\index{incoherent@\te{incoherent} (keyword)}
+The optional coherence annotation ({\te{coherent}} or
+{\te{incoherent}}, immediately after the {\te{class}} keyword) opts a
+class out of this discipline.  For an {\te{incoherent}} class, an
+instance whose dependent parameters conflict is skipped and a less
+specific instance may be selected instead, so resolution may be
+driven by the demanded result type and may differ from context to
+context; the coverage warning is suppressed for its instances.  This
+is appropriate for classes whose dependency is declared to guide type
+inference even though resolution is intentionally structural (the
+Prelude's tuple-selection classes are an example).  {\te{coherent}}
+states the default explicitly.  The compiler flag
+{\te{-legacy-defer-instances}} restores the older, output-driven
+resolution behavior globally, as a temporary migration aid.
+
+Example:
+\begin{verbatim}
+ class incoherent Pick a b | a -> b where
+     pick :: a -> b
+\end{verbatim}
 
 % ----------------------------------------------------------------
 
@@ -3452,6 +3488,11 @@ A number of properties can be specified for a module which affects
 \gramalt{\term{bitBlast}}\\
 \gramalt{\term{CLK} \term{=} \nterm{varName}}\\
 \gramalt{\term{RSTN} \term{=} \nterm{varName}}\\
+\gramalt{\term{no{\US}default{\US}clock}}\\
+\gramalt{\term{no{\US}default{\US}reset}}\\
+\gramalt{\term{default{\US}clock} \term{=} \nterm{varName}}\\
+\gramalt{\term{default{\US}reset} \term{=} \nterm{varName}}\\
+\gramalt{\term{default{\US}reset{\US}port} \term{=} \nterm{varName}}\\
 \gramalt{\term{options} \term{=} \term{\LBRACE} \many{\nterm{string} \term{,}} \term{\RBRACE}}
 
 \gram{varName}{\nterm{varId} \alt \nterm{conId} \alt \nterm{string}}
@@ -3482,6 +3523,25 @@ multiple bits into the individual bits, and also make all port names upper case.
 specify the name of the clock, the default is \te{CLK}.
 \litem{\te{RSTN}}
 specify the name of the reset, the default is \te{RST{\US}N}.
+\litem{\te{no{\US}default{\US}clock}}
+remove the implicit default clock port from the generated module.
+\litem{\te{no{\US}default{\US}reset}}
+remove the implicit default reset port from the generated module.
+\litem{\te{default{\US}clock}}
+designate the named \te{Clock} argument of the module as the module's
+default clock: the implicit default clock port is not generated and,
+inside the module, the designated argument is the clock used wherever
+the default clock would be (for instance, by submodule instantiations,
+rules, and methods which do not specify a clock).
+\litem{\te{default{\US}reset}}
+designate the named \te{Reset} argument of the module as the module's
+default reset: the implicit default reset port is not generated and,
+inside the module, the designated argument is the reset used wherever
+the default reset would be.
+\litem{\te{default{\US}reset{\US}port}}
+specify the name of the implicit default reset port (or, when an
+argument is designated with \te{default{\US}reset}, the name of that
+argument's port).
 \litem{\te{options}}
 specify additional compiler flags that override the current compiler flags
 (as given on the command line).

@@ -26,15 +26,16 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260714-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-6"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-genBinFile :: ErrorHandle ->
+genBinFile :: ErrorHandle -> (Position -> Position) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
-genBinFile errh fn bi_sig bo_sig ipkg =
-    writeBinaryFileCatch errh fn (header ++ encode (bi_sig, bo_sig, ipkg))
+genBinFile errh remapP fn bi_sig bo_sig ipkg =
+    writeBinaryFileCatch errh fn
+        (header ++ encodeWith remapP (bi_sig, bo_sig, ipkg))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)
@@ -92,8 +93,8 @@ instance Bin CDefn where
     writeBytes (Cprimitive i cqt) = do putI 5; toBin i; toBin cqt
     writeBytes (CprimType ik) = do putI 6; toBin ik
     writeBytes (CIinstance i cqt) = do putI 7; toBin i; toBin cqt
-    writeBytes (CIclass incoh ps ik is deps ats poss) =
-        do putI 8; toBin incoh; toBin ps; toBin ik; toBin is; toBin deps; toBin ats; toBin poss
+    writeBytes (CIclass incoh ps ik is deps ats ms poss) =
+        do putI 8; toBin incoh; toBin ps; toBin ik; toBin is; toBin deps; toBin ats; toBin ms; toBin poss
     writeBytes (CIValueSign i cqt) = do putI 9; toBin i; toBin cqt
     writeBytes (CItype ik is poss) = do putI 10; toBin ik; toBin is; toBin poss
     writeBytes (CPragma p) = do putI 11; toBin p
@@ -150,8 +151,9 @@ instance Bin CDefn where
                               is <- fromBin
                               deps <- fromBin
                               ats <- fromBin
+                              ms <- fromBin
                               poss <- fromBin
-                              return (CIclass incoh ps ik is deps ats poss)
+                              return (CIclass incoh ps ik is deps ats ms poss)
                      9  -> do when doTrace $ traceM ("CIValueSign")
                               i <- fromBin; cqt <- fromBin
                               return (CIValueSign i cqt)
@@ -610,8 +612,8 @@ instance Bin ConTagInfo where
 instance Bin (IConInfo a) where
     writeBytes (ICDef t _)      = do putI 0; toBin t
     writeBytes (ICPrim t p)     = do putI 1; toBin t; toBin (fromEnum p)
-    writeBytes (ICForeign t n isC ps Nothing) =
-        do putI 2; toBin t; toBin n; toBin isC; toBin ps
+    writeBytes (ICForeign t n isC ps tvns Nothing) =
+        do putI 2; toBin t; toBin n; toBin isC; toBin ps; toBin tvns
     writeBytes (ICForeign { fcallNo = (Just _) }) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICForeign with cookie"
     writeBytes (ICCon t cti)    = do putI 3; toBin t; toBin cti
@@ -652,6 +654,10 @@ instance Bin (IConInfo a) where
         internalError "GenBin.Bin(IConInfo).writeBytes: ICInout"
     writeBytes (ICLazyArray _ _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyArray"
+    writeBytes (ICLazyPack {}) =
+        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyPack"
+    writeBytes (ICLazyUnpack {}) =
+        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyUnpack"
     writeBytes (ICPred _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICPred"
     writeBytes (ICHandle { }) =
@@ -669,7 +675,8 @@ instance Bin (IConInfo a) where
                      2  -> do n <- fromBin
                               isC <- fromBin
                               ps <- fromBin
-                              return (ICForeign t n isC ps Nothing)
+                              tvns <- fromBin
+                              return (ICForeign t n isC ps tvns Nothing)
                      3  -> do cti <- fromBin; return (ICCon t cti)
                      4  -> do cti <- fromBin; return (ICIs t cti)
                      5  -> do cti <- fromBin; return (ICOut t cti)

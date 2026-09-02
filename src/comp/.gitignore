@@ -20,7 +20,9 @@ fstcheck
 fstscopes
 showrules
 vcdcheck
+tconcheck
 
 # Ignore TAGS files
 TAGS
 tags
+bo2bloogle

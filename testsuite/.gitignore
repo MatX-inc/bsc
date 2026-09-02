@@ -1,5 +1,8 @@
 # Makefile
 all_tests.mk
+timing.txt
+timing.txt.new
+timing.txt.merged
 
 # Testsuite
 bsc.sum
@@ -76,6 +79,11 @@ sudoku.exp
 *.fst-vcd
 *.fst-hier
 *.fsthier
+
+# correlation test build/run trees
+bsc.bluetcl/*_correlation/bo_*/
+bsc.bluetcl/*_correlation/veri_*/
+bsc.bluetcl/*_correlation/sim/
 
 # ModelSim/Questa output
 transcript

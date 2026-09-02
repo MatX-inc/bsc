@@ -258,10 +258,14 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
+BO2BLOOGLEEXES = bo2bloogle
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
+# Build-consistency checkers: installed as part of the normal install
+# (not just install-extra), because the library build runs them
+CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -388,8 +392,20 @@ fstcheck: $(SOURCES) $(LIBFST_OBJS)
 		$(LIBFST_OBJS) -lz
 	$(POSTBUILDCOMMAND)
 
+.PHONY: tconcheck
+tconcheck: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
+	$(POSTBUILDCOMMAND)
+
 .PHONY: showrules
 showrules: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
+	$(POSTBUILDCOMMAND)
+
+.PHONY: bo2bloogle
+bo2bloogle: $(SOURCES)
 	$(PREBUILDCOMMAND)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
@@ -429,7 +445,7 @@ endif
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
@@ -454,6 +470,11 @@ install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
 install-bluetcl: $(addprefix $(BINDIR)/core/,$(TCLEXES))
 install-bluetcl: $(PKGINFO)
 
+.PHONY: install-bo2bloogle
+install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(PKGINFO)
+
 .PHONY: install-utils
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
 install-utils: $(addprefix $(BINDIR)/core/,$(UTILEXES))
@@ -463,6 +484,11 @@ install-utils: $(PKGINFO)
 install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
 install-showrules: $(addprefix $(BINDIR)/core/,$(SHOWRULESEXES))
 install-showrules: $(PKGINFO)
+
+.PHONY: install-checkers
+install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
+install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
+install-checkers: $(PKGINFO)
 
 # ----
 # Other targets

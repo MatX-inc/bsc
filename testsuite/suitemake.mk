@@ -123,15 +123,37 @@ LOCALCHKCMD ?= $(RUNTESTENV) $(RUNTEST) $(RUNTESTFLAGS) *.exp
 localcheck: $(LOCALCHECKPREREQUISITES)
 	$(LOCALCHKCMD)
 
+# The tool whose tests are collected by 'run-tests-setup'.  This must be
+# non-empty so that the generated 'all_tests.mk' is limited to test
+# directories (and can be sorted by time); with an empty value, stray
+# non-test .exp files (config/unix.exp, site.exp, lib/bsc.exp) are also
+# treated as tests.
+tool ?= bsc
+
+# TESTDIRS (space-separated directory prefixes, e.g. "bsc.mcd
+# bsc.lib/BRAM") restricts the run to tests under those directories;
+# empty runs everything.  Used by CI to shard the suite across jobs.
+# The empty-list guard below makes a TESTDIRS value that matches
+# nothing loudly fatal rather than a silent zero-test run.
+TESTDIRS ?=
+export TESTDIRS
+
 # This creates the file 'all_tests.mk', that is used by the 'run-tests'
 # target in the 'parallel.mk' file.  It also checks for duplicates
 # which can cause problems.
 .PHONY: run-tests-setup
 run-tests-setup:
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| awk '{t=t " " $$0} END{print "ALL_TESTS :=" t}' \
 		> $(CONFDIR)/all_tests.mk
+	@grep -q '\.exp' $(CONFDIR)/all_tests.mk || \
+		{ echo "ERROR: run-tests-setup produced an empty test list" \
+		       "(all_tests.mk has no .exp entries); refusing to run" \
+		       "zero tests" >&2; \
+		  exit 1; }
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| perl $(CONFDIR)/scripts/double-directory.pl
 
 
@@ -152,6 +174,24 @@ generate-stats:
 	@echo ""
 	@echo "=== Brief list of results ==="
 	@find . -name '*.sum' | sort | perl $(CONFDIR)/scripts/process-summary-file.pl
+	@echo ""
+	@echo "Refreshing timing.txt (used for time-ordered scheduling when"
+	@echo "RUN_TESTCASES_IN_ORDER_OF_TIME=1 is set)"
+	@find . -name time.out -exec cat '{}' \; \
+		| perl $(CONFDIR)/scripts/times-by-directory.pl \
+		> $(CONFDIR)/timing.txt.new
+	@if [ -f $(CONFDIR)/timing.txt ]; then \
+		awk '!seen[$$2]++' $(CONFDIR)/timing.txt.new $(CONFDIR)/timing.txt \
+			> $(CONFDIR)/timing.txt.merged && \
+		mv $(CONFDIR)/timing.txt.merged $(CONFDIR)/timing.txt.new; \
+	fi
+	@if [ -s $(CONFDIR)/timing.txt.new ]; then \
+		mv $(CONFDIR)/timing.txt.new $(CONFDIR)/timing.txt; \
+	else \
+		echo "No timing data found; leaving timing.txt as-is" \
+		     "(an empty timing.txt would defeat time-ordered scheduling)"; \
+		rm -f $(CONFDIR)/timing.txt.new; \
+	fi
 
 
 #we call "false" in the else branch to cause a error exit status

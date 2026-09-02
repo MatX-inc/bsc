@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, FlexibleInstances, TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances, TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImplicitParams #-}
 module IExpandUtils(
@@ -77,7 +77,6 @@ import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.Map as M
 import qualified Data.Set as S
-import qualified Data.Generics as Generic
 
 import Eval
 import PPrint
@@ -273,7 +272,7 @@ pTermToIExpr (PSel idx idx_sz es) =
 
 -- An expression with an implicit condition.
 data PExpr = P !HPred HExpr
-        deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+        deriving (Eq, Ord, Show)
 
 instance PPrint PExpr where
     pPrint d prec (P p e) = pPrint d prec (iePrimWhen (iGetType e) (predToIExpr p) e)
@@ -328,6 +327,14 @@ canLiftCond' m (ICon _ (ICMethArg _)) = (False, m)
 -- other arrays are unexpected
 canLiftCond' m (ICon _ (ICLazyArray arr_ty arr u)) =
     internalError ("IExpandUtils.canLiftCond: unexpected array")
+-- held pack/unpack coercions should have been squeezed out by the
+-- condition-handling paths (doIf, evalStaticOp', walkNF) before any
+-- condition-liftability question is asked; this cannot force them (pure
+-- context), so fail loudly rather than answer wrongly
+canLiftCond' m (ICon _ (ICLazyPack {})) =
+    internalError ("IExpandUtils.canLiftCond: unexpected held coercion (pack)")
+canLiftCond' m (ICon _ (ICLazyUnpack {})) =
+    internalError ("IExpandUtils.canLiftCond: unexpected held coercion (unpack)")
 canLiftCond' m (ICon _ _) = (True, m)
 canLiftCond' m ref@(IRefT t p poss r) =
     -- only follow references for which we haven't yet computed the answer
@@ -391,7 +398,7 @@ isPrimTAp (ITAp a (ITNum _)) = isPrimTAp a
 isPrimTAp _ = False
 
 isParamOnlyType :: IType -> Bool
-isParamOnlyType t = t == itString || t == itReal
+isParamOnlyType t = t == itString || t == itReal || t == itInteger
 
 -----------------------------------------------------------------------------
 
@@ -413,7 +420,7 @@ data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo }
               | HNF { hc_pexpr :: PExpr, hc_wire_set :: HWireSet,
                       hc_name :: NameInfo }
               | HLoop { hc_name :: NameInfo }
-        deriving (Show, Eq, Ord, Generic.Data, Generic.Typeable)
+        deriving (Show, Eq, Ord)
 
 -- should I drop the predicate for better printing of error messages?
 heapCellToHExpr :: HeapCell -> HExpr
@@ -442,7 +449,6 @@ instance PPrint HeapCell where
             text "HLoop" <+> pPrint d 0 name
 
 newtype HeapData = HeapData (IORef (HeapCell))
-  deriving (Generic.Data, Generic.Typeable)
 
 {-
 instance Eq HeapData where
@@ -2058,19 +2064,10 @@ chkIfcPortNames :: ErrorHandle -> [IAbstractInput] -> [HEFace] -> VClockInfo -> 
 chkIfcPortNames errh args ifcs (ClockInfo ci co _ _) (ResetInfo ri ro) =
     when (not (null emsgs)) $ bsError errh emsgs
   where
-    input_clock_ports i =
-      case lookup i ci of
-        Just (Just (VName o, Right (VName g))) -> [o, g]
-        Just (Just (VName o, Left _)) -> [o]
-        _ -> []
     output_clock_ports i =
       case lookup i co of
         Just (Just (VName o, Just (VName g, _))) -> [o, g]
         Just (Just (VName o, Nothing)) -> [o]
-        _ -> []
-    input_reset_ports i =
-      case lookup i ri of
-        Just (Just (VName r), _) -> [r]
         _ -> []
     output_reset_ports i =
       case lookup i ro of
@@ -2079,15 +2076,21 @@ chkIfcPortNames errh args ifcs (ClockInfo ci co _ _) (ResetInfo ri ro) =
 
     arg_port_names = [ (getIdBaseString i, i) | IAI_Port (i, _) <- args ]
     arg_inout_names = [ (getIdBaseString i, i) | IAI_Inout i _ <- args ]
-    arg_clock_names = [ (n, i) | IAI_Clock i _ <- args, n <- input_clock_ports i ]
-    arg_reset_names = [ (n, i) | IAI_Reset i <- args, n <- input_reset_ports i ]
 
-    default_clock_names = [ (n, idDefaultClock) | n <- input_clock_ports idDefaultClock ]
-    default_reset_names = [ (n, idDefaultReset) | n <- input_reset_ports idDefaultReset ]
+    -- the input clock/reset infos pair each input's name (which, for
+    -- arguments, is the argument name) with its port names; this covers
+    -- renamed ports and the implicit default clock and reset
+    in_clock_ports (Just (VName o, Right (VName g))) = [o, g]
+    in_clock_ports (Just (VName o, Left _)) = [o]
+    in_clock_ports Nothing = []
+    in_reset_ports (Just (VName r), _) = [r]
+    in_reset_ports _ = []
+
+    arg_clock_names = [ (n, i) | (i, inf) <- ci, n <- in_clock_ports inf ]
+    arg_reset_names = [ (n, i) | (i, inf) <- ri, n <- in_reset_ports inf ]
 
     arg_names = sort $
-      arg_port_names ++ arg_inout_names ++ arg_clock_names ++ arg_reset_names ++
-      default_clock_names ++ default_reset_names
+      arg_port_names ++ arg_inout_names ++ arg_clock_names ++ arg_reset_names
 
     ifc_port_names =
       [ (n, i)
@@ -2602,7 +2605,7 @@ fullTypeNormalizer flags symt cache t@(ITAp _ _)
                ((ITCon _ _ (TIatf {})), _) -> internalError $
                     "fullTypeNormalizer - unsimplified: " ++ ppReadable (t,t')
                _ -> t'
-fullTypeNormalizer flags symt cache (ITAp f a) = changed2 normITAp f a f' a'
+fullTypeNormalizer flags symt cache (ITAp f a) = changed2 ITAp f a f' a'
   where f' = fullTypeNormalizer flags symt cache f
         a' = fullTypeNormalizer flags symt cache a
 
@@ -2906,23 +2909,22 @@ inferName expr@(ICon inst_name (ICStateVar {})) = return (Just inst_name)
 inferName _ = return Nothing
 
 unCacheableType :: IType -> Bool
-unCacheableType (ITForAll _ _ _) = True
 -- top-level pure values of Clock and Reset involve no work
 -- and sometimes we want to play games (e.g. disabled clocks)
 unCacheableType (ITCon i _ _) = i == idClock ||
                                 i == idReset
-unCacheableType t = isFunType t ||
-                    isitActionValue t
+unCacheableType t = isitActionValue t
 
 --- caching of previously evaluated definitions
 cacheDef :: Id -> IType -> HExpr -> G HExpr
 cacheDef i t e | unCacheableType t = return e
-cacheDef i t e@(ICon {}) = return e
-cacheDef i t e = do
+cacheDef i t e@(IAps _ _ _) = do
   s <- get
   let m = defCache s
   case (M.lookup i m) of
     Just e' -> do when doTraceDefCache $
+                    -- e' should be a constant or heap reference,
+                    -- so it should be cheap to print
                     traceM ("cache hit: " ++ ppReadable (i, t, e'))
                   return e'
     Nothing -> do e' <- toHeap "cache-def" t e (Just i)
@@ -2932,6 +2934,7 @@ cacheDef i t e = do
                   when doTraceDefCache $
                     traceM ("cache miss: " ++ ppReadable (i, t))
                   return e'
+cacheDef i t e = return e -- no application, not worth caching
 
 -- caching of dynamically evaluated CSyntax expressions
 lookupCExprCache :: CExpr -> IType -> G (Maybe HExpr)
@@ -3480,6 +3483,12 @@ instance Wireable HExpr where
   extractWires (ICon i (ICModPort {})) = ?mkport i
 
   extractWires (ICon i (ICInout { iInout = inout })) = ?mkinout i inout
+
+  -- a held pack/unpack coercion: its wires are those of the value it
+  -- holds (lzApplied references the same state, plus the dictionary,
+  -- which is pure)
+  extractWires (ICon _ (ICLazyPack { lzOrig = o })) = extractWires o
+  extractWires (ICon _ (ICLazyUnpack { lzOrig = o })) = extractWires o
 
   extractWires _ = return ?z
 

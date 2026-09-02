@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternGuards #-}
 module MakeSymTab(
-                  mkSymTab,
+                  mkSymTab, mkSymTabWithWarnings,
                   getPackagesUsedInTypes,
                   cConvInst,
                   convCQType, convCQTypeWithAssumps,
@@ -28,7 +28,7 @@ import Id
 -- for PPrint and PVPrint Id instances
 import IdPrint()
 import Error(internalError, EMsg, EMsgs(..), ErrMsg(..),
-             ErrorHandle, bsError, bsErrorUnsafe)
+             ErrorHandle, bsError, bsErrorUnsafe, bsWarning)
 import CSyntax
 import CSyntaxUtil(isEnum)
 import SymTab
@@ -62,7 +62,17 @@ useLegacyInstIndex :: Bool
 useLegacyInstIndex = "-legacy-inst-index" `elem` progArgs
 
 mkSymTab :: ErrorHandle -> CPackage -> IO SymTab
-mkSymTab errh (CPackage mi _ imps impsigs _ ds _) =
+mkSymTab = mkSymTab' False
+
+-- Also emit instance-hygiene warnings (fundep coverage).  Used for the
+-- first symbol table built from the user-written package; the
+-- pipeline re-derives symbol tables from transformed packages several
+-- times, which must not repeat the warnings.
+mkSymTabWithWarnings :: ErrorHandle -> CPackage -> IO SymTab
+mkSymTabWithWarnings = mkSymTab' True
+
+mkSymTab' :: Bool -> ErrorHandle -> CPackage -> IO SymTab
+mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
     let
         mmi = Just mi
 
@@ -94,7 +104,7 @@ mkSymTab errh (CPackage mi _ imps impsigs _ ds _) =
                  [ (iKName ik, vs, fds) | CImpSign _ _ (CSignature _ _ _ ids) <- impsigs,
                                           Cclass _ _ ik vs fds _ _ <- ids ] ++
                  [ (iKName ik, vs, fds) | CImpSign _ _ (CSignature _ _ _ ids) <- impsigs,
-                                          CIclass _ _ ik vs fds _ _ <- ids ] ++
+                                          CIclass _ _ ik vs fds _ _ _ <- ids ] ++
                  [ (qualId mi (iKName ik), vs, fds) | Cclass _ _ ik vs fds _ _ <- ds ]
 
         -- XXX imported fundeps don't need to be checked
@@ -173,11 +183,73 @@ mkSymTab errh (CPackage mi _ imps impsigs _ ds _) =
             | Cinstance (CQType _ t) _ <- ds
             , let c = fromJustOrErr "mkSymTab: leftCon" (leftCon t) ]
 
+        -- Warn when an instance of a coherent class leaves a
+        -- fundep-determined position underdetermined: a variable in a
+        -- determined position of the instance head that is not a
+        -- function of the input positions -- directly or through the
+        -- closure of the instance's proviso fundeps (numeric classes
+        -- included) -- means the same inputs can match with many
+        -- different results, so nothing premised on the dependency
+        -- can rely on that instance.
+        -- `incoherent' classes have declared exactly that and are
+        -- exempt.
+        covWarns =
+            [ (getPosition t,
+               WFunDepCoverage (pfpString t) (pfpString c)
+                               (map pfpString uncovered))
+            | Cinstance (CQType provisos t) _ <- ds
+            , Just c <- [leftCon t]
+            , Just cls <- [findSClass symT (CTypeclass c)]
+            , allowIncoherent cls /= Just True
+            , not (null (funDeps cls))
+            , let args = tyConArgs t
+            , row <- funDeps cls
+            , length row == length args
+            , let sideVars det = S.fromList $
+                      concat [ tv a | (a, d) <- zip args row, d == det ]
+                  inp_vs = sideVars False
+                  det_vs = sideVars True
+                  predAdds acc (CPred (CTypeclass pc) pts) =
+                      case findSClass symT (CTypeclass pc) of
+                        Just pcls
+                          | not (null (funDeps pcls))
+                          , all ((== length pts) . length) (funDeps pcls)
+                          -> foldl (rowAdd pts) acc (funDeps pcls)
+                        _ -> acc
+                  rowAdd pts acc prow =
+                      let p_in = S.fromList $ concat
+                              [ tv a | (a, d) <- zip pts prow, not d ]
+                          p_out = S.fromList $ concat
+                              [ tv a | (a, d) <- zip pts prow, d ]
+                      in  if p_in `S.isSubsetOf` acc
+                            then acc `S.union` p_out
+                            else acc
+                  closure vs =
+                      let vs' = foldl predAdds vs provisos
+                      in  if vs' == vs then vs else closure vs'
+                  uncovered = S.toList (det_vs `S.difference` closure inp_vs)
+            , not (null uncovered)
+            ]
+
         allClsErrs = instHeadCheck `seq` (impClsErrs ++ clsErrs)
 
         -- finally, add constructors, fields, and variables
         -- XXX and something about top vars?
         -- XXX and something about instances?
+        --
+        -- NOTE: the insertion order below is LOAD-BEARING.  Class methods
+        -- are added to the variable table first (symAddVars, as VarMeth)
+        -- and top-level definitions after (getTopVars/addVarsUQ), so a
+        -- top-level definition with the same name as a class method
+        -- silently replaces the method's variable entry (addVars is a
+        -- plain map insert; the duplicate-definition check cannot see
+        -- method names, see CFreeVars.getVDefIds).  The Prelude relies on
+        -- this: its top-level pack/unpack wrappers shadow the Bits class
+        -- methods of the same names, routing all calls through the
+        -- primPack/primUnpack coercion primitives, while instance
+        -- declarations still resolve their method bindings through the
+        -- FIELD table (see convInst), which is unaffected.  The same
+        -- ordering is relied on in addImpSyms below for the import path.
         final_symT =
             let s1 = symAddCons mkQuals mmi local_pkg symT ds
                 s2 = symAddFields mkQuals mmi local_pkg s1 ds
@@ -205,7 +277,8 @@ mkSymTab errh (CPackage mi _ imps impsigs _ ds _) =
             bsError errh fundepErrs
         else if not (null allClsErrs) then
             bsError errh allClsErrs
-        else
+        else do
+            when (warn && not (null covWarns)) $ bsWarning errh covWarns
             -- report the kind inference error safely
             case miks of
                 Left msg -> bsError errh [msg]
@@ -304,8 +377,15 @@ orderInstHead ts1 ts2 =
           (False, False) -> Right True
   where vs1 = tv ts1
         vs2 = tv ts2
-        mu1 = mgu vs1 ts1 ts2
-        mu2 = mgu vs2 ts2 ts1
+        -- Overlap is a modal question (could any type satisfy both
+        -- heads?), answered by unifying fully and then attributing
+        -- direction by inspecting whose variables the substitution
+        -- had to bind (okSubst).  mguModal keeps each head's own
+        -- variables substitutable -- the strict mgu would refuse the
+        -- binding outright and orthogonal overlaps (each head concrete
+        -- in a different position) would look disjoint.
+        mu1 = mguModal vs1 ts1 ts2
+        mu2 = mguModal vs2 ts2 ts1
         okSubst vs (s,eqs) = not (any (flip elem $ vs) (getSubstDomain s)) && null eqs
 
 cmpQInsts :: [[Bool]] -> QInst -> QInst -> Either EMsg (Maybe Ordering)
@@ -464,10 +544,39 @@ checkNoTypeFunInHead errh r mi clsId args =
             | otherwise = []
         findTypeFun (TAp f a) = findTypeFun f ++ findTypeFun a
         findTypeFun _ = []
+        -- A type function can also be hidden behind a type synonym.
+        -- Expand each saturated synonym application and reject any type
+        -- function application in it that mentions a type variable (or
+        -- is not fully applied): such an application can neither be
+        -- reduced away nor used for instance matching.  Ground
+        -- applications are left alone; context reduction expands and
+        -- reduces them to a concrete type (Bug 1729, GitHub issue #311;
+        -- see ExpSizeOf_InstancesBaseSyn in the testsuite).  The error
+        -- is reported at the position of the synonym use.
+        synArity i | Just (TypeInfo { ti_sort = TItype n _ }) <- findType r i = Just n
+                   | otherwise = Nothing
+        findSynTypeFun t =
+            case splitTAp t of
+              (TCon (TyCon i _ _), as)
+                | Just n <- synArity i, toInteger (length as) >= n ->
+                    [ (getPosition i, tf)
+                    | tf <- varTypeFuns (expandSyn (updTypes r t)) ]
+              (_, as) -> concatMap findSynTypeFun as
+        varTypeFuns t =
+            case splitTAp t of
+              (TCon (TyCon i _ (TIatf { atf_param_idxs = pIdxs })), as)
+                | length as /= length pIdxs || not (null (tv as)) ->
+                    i : concatMap varTypeFuns as
+              (_, as) -> concatMap varTypeFuns as
         -- Only check non-determined positions
         nonDetArgs = [ arg | (idx, arg) <- zip [0..] args
                      , not (S.member idx determinedIdxs) ]
-        found = concatMap findTypeFun nonDetArgs
+        -- Report both the directly-written type functions and the ones
+        -- hidden behind synonyms, deduplicated (a directly-written type
+        -- function inside a synonym's argument can also appear in the
+        -- synonym's expansion).
+        checkArg a = nub (findTypeFun a ++ findSynTypeFun a)
+        found = concatMap checkArg nonDetArgs
     in if null found then ()
        else bsErrorUnsafe errh
                 [ (pos, EATFInInstanceHead (pfpString tfId))
@@ -544,8 +653,11 @@ convInst _ _ _ d = d
 mkInstId :: Id -> CType -> Id
 mkInstId mi t =
 --    trace ("mkInstId " ++ ppReadable (mi,t, expandSyn t)) $
-    mkQId (getPosition t) (getIdFString mi) (concatFString (intersperse fsTilde (map getIdFStringP (flat (expandSyn t)))))
-  where flat (TVar (TyVar i _ _)) = [i]
+    addIdProp (mkQId pos qfs inst_fs) IdPDict
+  where pos = getPosition t
+        qfs = getIdFString mi
+        inst_fs = concatFString (intersperse fsTilde (map getIdFStringP (flat (expandSyn t))))
+        flat (TVar (TyVar i _ _)) = [i]
         flat (TCon (TyCon i _ _)) = [i]
         flat (TCon (TyNum n _)) = [mkNumId n]
         flat (TCon (TyStr s _)) = [mkStrId s]
@@ -685,7 +797,28 @@ chkTopDef r mi src_pkg isDep (CIValueSign i ct) = do
     sc <- mkSchemeWithSymTab r ct
     return [(i, VarInfo VarDefn (i :>: sc) (isDep i) src_pkg)]
 chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
-    sc@(Forall _ (_ :=> t)) <- mkSchemeWithSymTab r qt
+    qual_t@(preds :=> t) <- convCQType r qt
+    -- Only numeric provisos are permitted on foreign functions: they are
+    -- checked at each application and then erased (their dictionaries
+    -- carry no content), so the foreign implementation never sees them.
+    -- Anything else (e.g. Bits) would need real dictionary content or
+    -- coercion insertion, which a foreign body cannot provide.
+    let numericClassIds = [idAdd, idMul, idDiv, idLog, idMax, idMin, idNumEq]
+        isNumericPred p = let (IsIn cl _) = removePredPositions p
+                          in  any (qualEq (typeclassId (name cl))) numericClassIds
+    -- (noinline-created foreign functions carry WrapField provisos at
+    -- this stage; they are checked in typecheck, as before)
+    case filter (not . isNumericPred) preds of
+      (p:_) | not ni -> throwError (getPosition i,
+                            EForeignCtxNotNumeric (pfpString i)
+                                (pfpString (removePredPositions p)))
+      _ -> return ()
+    let tvs = tv qual_t
+        -- quantification order (mkSchemeWithSymTab uses the same order),
+        -- which is also the order of the type arguments at applications;
+        -- these names become the Verilog instance parameter names
+        tvnames = map (getIdString . getTyVarId) tvs
+        sc = quantify tvs qual_t
     let name = case on of
                 Just s -> s
                 Nothing -> getIdString i
@@ -704,12 +837,36 @@ chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
                        in  (all isGoodArg args) && (isGoodResult res)
 
     let i' = qual mi i
+    -- For foreign functions bound to a module (a port list is given),
+    -- every bit width in the type must be a bare type variable or a
+    -- numeric literal: the widths are passed to the module as instance
+    -- parameters NAMED by the type variables, and the module must never
+    -- have to compute a width from others (a type-function width would
+    -- force the Verilog to reimplement the type arithmetic).
+    let widthArgs :: CType -> [CType]
+        widthArgs ty = case ty of
+                         (TAp (TCon _) w) | isTypeBit ty -> [w]
+                                          | isTypeActionValue_ ty -> [w]
+                         _ -> []
+        isBareWidth (TVar _) = True
+        isBareWidth (TCon (TyNum _ _)) = True
+        isBareWidth _ = False
+        (arg_ts, res_t) = getArrows (expandSyn t)
+        bad_widths = [ w | w <- concatMap widthArgs (res_t : arg_ts),
+                           not (isBareWidth w) ]
     -- This check is skipped for noinline-created foreign functions, since their type is
     -- determined by the WrapField type class, and a bad foreign type will raise an error in typecheck.
-    if ni || isGoodType (expandSyn t) then
-        return [(i', VarInfo (VarForg name ops) (i' :>: sc) (isDep i) src_pkg)]
-     else
-        throwError (getPosition i, EForeignNotBit (pfpString i) (pfpString t))
+    -- (the check applies only to foreign functions bound to a module;
+    -- a "true" foreign function has no port list and takes no parameters)
+    case bad_widths of
+      (w:_) | not ni && isJust ops ->
+        throwError (getPosition i,
+                    EForeignWidthNotBare (pfpString i) (pfpString w))
+      _ ->
+        if ni || isGoodType (expandSyn t) then
+            return [(i', VarInfo (VarForg name tvnames ops) (i' :>: sc) (isDep i) src_pkg)]
+         else
+            throwError (getPosition i, EForeignNotBit (pfpString i) (pfpString t))
 chkTopDef r mi src_pkg isDep (CValueSign (CDef v t _)) = do
             sc <- mkSchemeWithSymTab r t
             let v' = qual mi v
@@ -738,10 +895,13 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
         (cls, errss) =
             unzip $
-              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats ifs qts
+              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats ifs Nothing qts
                     | Cclass  incoh ps ik vs fds ats ifs <- defs ] ++
-              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats []  qts
-                    | CIclass incoh ps ik vs fds ats _   <- defs ]
+              -- The class's fields are hidden, but CIclass threads the
+              -- defining package's sort member list so tyConOf carries
+              -- the same TIstruct SClass payload as the defining compile.
+              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats [] (Just ms) qts
+                    | CIclass incoh ps ik vs fds ats ms _ <- defs ]
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
     in  (r, concat errss)
 
@@ -778,12 +938,18 @@ getTI errh mi src_pkg _ iks (Cclass _ ps ik vs fds ats fs) =
 getTI _ mi src_pkg _ iks (CItype ik vs _) =
     [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract src_pkg)]
   where i = qual mi (iKName ik)
-getTI _ mi src_pkg _ iks (CIclass _ ps ik vs _ ats _) =
+getTI _ mi src_pkg _ iks (CIclass _ _ ik vs _ ats ms _) =
     (i, TypeInfo (Just i) k vs ti src_pkg) : mkATFTIs mi src_pkg i vs ks ats
   where i = qual mi (iKName ik)
         k = getK iks ik
         ks = getArgKinds k
-        ti = TIstruct SClass (map (\ (CPred (CTypeclass i) _) -> i) ps)
+        -- ms is the defining package's sort member list (field names ++
+        -- superclass ids), threaded through the signature so this
+        -- TypeInfo's sort matches the defining compile's exactly: the
+        -- class tycon's TIstruct SClass payload should be
+        -- package-independent, not rebuilt (impoverished) from the
+        -- superclass preds alone.
+        ti = TIstruct SClass ms
 getTI _ mi src_pkg _ iks (CprimType ik) =
     [(i, TypeInfo (Just i) (getK iks ik) vs TIabstract src_pkg)]
   where i = qual mi (iKName ik)
@@ -939,8 +1105,11 @@ getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
           -- class components
           Maybe Bool -> [CPred] -> IdK -> [Id] -> CFunDeps -> [CAssocDepFun] ->
           CFields ->
+          -- sort member list override: for CIclass (fields hidden), the
+          -- defining package's list threaded through the signature
+          Maybe [Id] ->
           QInsts -> (Class, [EMsg])
-getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs qts =
+getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
     let k = getK iks ik
         i = iKName ik
         ks = getNK (genericLength vs) k
@@ -987,8 +1156,10 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs qts =
             genInsts  = genInsts',
             getInsts  = getInsts',
             tyConOf = TyCon qi (Just k)
-                      (TIstruct SClass (map cf_name ifs ++
-                                        map (\ (CPred (CTypeclass i) _) -> i) ps)),
+                      (TIstruct SClass
+                           (fromMaybe (map cf_name ifs ++
+                                       map (\ (CPred (CTypeclass i) _) -> i) ps)
+                                      msort)),
             funDeps = bss,
             funDeps2 = bss2,
             inputPositions = pureInputPositions bss (length tvs),
@@ -1240,6 +1411,11 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
                 else mkDefaultQuals name
             (s1, errs1) = mkTypeSyms errh mkQuals Nothing src_pkg M.empty ds insts s
             s2 = symAddFields mkQuals mi src_pkg s1 ds
+            -- NOTE: methods (symAddVars) before top-level values (addVars
+            -- of getTopVars below): this order is LOAD-BEARING, exactly as
+            -- in mkSymTab's final_symT above -- the Prelude's pack/unpack
+            -- wrapper values must shadow the Bits class methods when a
+            -- package imports the Prelude's signature.
             s3 = symAddVars mkQuals mi src_pkg s2 ds
         in  case (getTopVars s3 mi src_pkg ds) of
             Left msgs -> bsErrorUnsafe errh (errmsgs msgs)

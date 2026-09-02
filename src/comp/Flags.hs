@@ -1,5 +1,6 @@
 module Flags(
              Flags(..),
+             remapFlagsPaths,
              redSteps,
              ResourceFlag(..), SATFlag(..), MsgListFlag(..),
 
@@ -26,6 +27,10 @@ data Flags = Flags {
         backend :: Maybe Backend,
         bdir :: Maybe String,
         biasMethodScheduling :: Bool,
+        -- internal: set by the driver when in -c mode (generate a module's
+        -- code from its .ba, as a reusable block rather than a runnable top);
+        -- never settable from the command line -- see codegenNames
+        blockCodegen :: Bool,
         bluespecDir :: String,
         cIncPath :: [String],
         cLibPath :: [String],
@@ -46,7 +51,13 @@ data Flags = Flags {
         dumpFormats :: [String], -- waveform dump formats compiled into the sim
                                  -- (subset of vcd/fst/fsdb; [] means none)
         dumps :: [(DumpFlag, Maybe FilePath)], -- dump to file or stdout
+        -- prefix remappings applied to file paths stored in .bo/.ba
+        -- files (source positions, the .ba module path fields, and the
+        -- path-valued fields of this record as stored in .ba), so that
+        -- outputs do not depend on the build machine's directory layout
+        remapPathPrefix :: [(String, String)],
         enablePoisonPills :: Bool,
+        codegenNames :: [String],
         entry :: Maybe String,
         expandATSlimit :: Int,
         expandIf :: Bool,
@@ -68,6 +79,7 @@ data Flags = Flags {
         kill :: Maybe (DumpFlag, Maybe String),
         ifLift :: Bool,
         letGen :: Bool,
+        liftDicts :: Bool,
         maxTIStackDepth :: Int,
         methodBVI :: Bool,
         methodConf :: Bool,
@@ -144,7 +156,6 @@ data Flags = Flags {
         usePrelude :: Bool,
         useProvisoSAT :: Bool,
         stdlibNames :: Bool,
-        v95 :: Bool,
         vFlags :: [String],
         vdir :: Maybe String,
         vPathRaw :: [String],
@@ -217,9 +228,11 @@ data DumpFlag
         | DFgenforeign
         | DFgenVPI
         | DFsimplified
+        | DFliftdicts
         | DFinternal
         | DFbinary
         | DFfixup
+        | DFisimpdicts
         | DFisimplify
         | DFwriteBin
 
@@ -331,3 +344,36 @@ dumpInfo :: Flags -> DumpFlag -> Maybe (Maybe FilePath)
 dumpInfo f d = lookup d (dumps f) <|> dumpAll f
 
 -- -------------------------
+
+-- Apply the -remap-path-prefix mappings to the path-valued fields of
+-- the record itself.  Used on the copy of Flags stored in .ba files
+-- (which is consumed only by bluetcl introspection), so that .ba
+-- bytes do not depend on the build machine's directory layout.  The
+-- remapping helper lives in FileNameUtil; it is passed in here to
+-- avoid an import cycle.
+remapFlagsPaths :: ([(String, String)] -> FilePath -> FilePath) -> Flags -> Flags
+remapFlagsPaths remap flags =
+    let ps = remapPathPrefix flags
+        r = remap ps
+        rM = fmap r
+        rL = map r
+    in  if null ps then flags else flags {
+            -- the stored flags describe the remapped world: no further
+            -- remapping applies (and the FROM prefixes are themselves
+            -- machine-specific, which is the very thing being scrubbed)
+            remapPathPrefix = [],
+            bdir = rM (bdir flags),
+            bluespecDir = r (bluespecDir flags),
+            cIncPath = rL (cIncPath flags),
+            cLibPath = rL (cLibPath flags),
+            cdir = rM (cdir flags),
+            fdir = rM (fdir flags),
+            ifcPathRaw = rL (ifcPathRaw flags),
+            ifcPath = rL (ifcPath flags),
+            infoDir = rM (infoDir flags),
+            oFile = r (oFile flags),
+            vdir = rM (vdir flags),
+            vPathRaw = rL (vPathRaw flags),
+            vPath = rL (vPath flags),
+            dumps = [ (d, rM mf) | (d, mf) <- dumps flags ]
+        }

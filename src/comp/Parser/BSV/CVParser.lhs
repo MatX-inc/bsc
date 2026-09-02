@@ -869,15 +869,28 @@ though can it ever be anything other than KStar?)
 optional "deriving (Class, Class, ...)" clause
 returns names of classes to be derived, or error if deriving not permitted
 
-> pDerivationsIf :: Bool -> SV_Parser [CTypeclass]
+> pDerivationsIf :: Bool -> SV_Parser [CDeriving]
 > pDerivationsIf False = option [] $
 >     do pos <- getPos
 >        pKeyword SV_KW_deriving
 >        failWithErr (pos, EForbiddenDeriving)
-> pDerivationsIf True = option [] $
->     do pKeyword SV_KW_deriving
->        pInParens (pCommaSep1 (pTypeclass <?> "typeclass name"))
+> pDerivationsIf True = many pDeriving
 
+> pDeriving :: SV_Parser CDeriving
+> pDeriving = pKeyword SV_KW_deriving
+>        *> ( pDerivingStock
+>      -- <|> pDerivingVia
+>           )
+
+> pDerivingStock :: SV_Parser CDeriving
+> pDerivingStock = CStock <$> pInParens (pCommaSep1 (pTypeclass <?> "typeclass name"))
+
+For now Deriving Via is disabled for bsv.
+pDerivingVia :: SV_Parser CDeriving
+pDerivingVia = CVia
+           <$> (pTypeclass <?> "typeclass name")
+            *> pKeyword SV_KW_via
+           <*> (pIdentifier <?> "via target")
 
 > pTypeclass :: SV_Parser CTypeclass
 > pTypeclass = CTypeclass <$> pQualConstructor
@@ -895,7 +908,7 @@ if prefix is provided, sub-union and sub-struct constructors start with it
 > pTypedefStructField ::
 >     SV_Parser (Maybe Id {- constructor ID prefix -}
 >                -> [(Id, PartialKind)] {- type parameters collected thus far -}
->                -> [CTypeclass] {- derivings collected thus far -}
+>                -> [CDeriving] {- derivings collected thus far -}
 >                -> (CField, [CDefn] {- accum'd defs -}))
 > pTypedefStructField =
 >         do mkSubUnion <- pTypedefTaggedUnionType False False
@@ -919,7 +932,7 @@ if prefix is provided, sub-union and sub-struct constructors start with it
 >                                 cf_type = typ,
 >                                 cf_default = []
 >                               }
->            return (const $ const  $ const (field, []))
+>            return (const $ const $ const (field, []))
 
 many struct fields
 returns a function which requires a supertype prefix
@@ -928,7 +941,7 @@ if prefix is provided, sub-union and sub-struct constructors start with it
 > pTypedefStructFields ::
 >     SV_Parser (Maybe Id {- constructor ID prefix -}
 >                -> [(Id, PartialKind)] {- type parameters accumulated thus far -}
->                -> [CTypeclass] {- derivations accumulated thus far -}
+>                -> [CDeriving] {- derivations accumulated thus far -}
 >                -> [(CField, [CDefn] {- accum'd defs -})])
 > pTypedefStructFields =
 >     do mks <- many pTypedefStructField
@@ -946,7 +959,7 @@ if prefix is provided, sub-union and sub-struct constructors start with it
 >                    -> SV_Parser
 >                       (Maybe Id {- constructor ID prefix -}
 >                        -> [(Id, PartialKind)] {- type parameters collected thus far -}
->                        -> [CTypeclass] {- derivations collected thus far -}
+>                        -> [CDeriving] {- derivations collected thus far -}
 >                        -> ((Id, CType, [Id], [CQType]), [CDefn]))
 > pTypedefStructType isTopLevel =
 >     do pKeyword SV_KW_struct
@@ -981,7 +994,7 @@ if prefix is provided, sub-union and sub-struct constructors start with it
 >     SV_Parser (Maybe Id {- constructor ID prefix -}
 >                -> Integer {- tag encoding -}
 >                -> [(Id, PartialKind)] {- type parameters collected thus far -}
->                -> [CTypeclass] {- derivations collected thus far -}
+>                -> [CDeriving] {- derivations collected thus far -}
 >                -> (TaggedUnionField, [CDefn] {- accum'd defs -}))
 > pTypedefTaggedUnionField =
 >         do mkSubStruct <- pTypedefStructType False
@@ -1052,7 +1065,7 @@ if prefix is provided, sub-union and sub-struct constructors start with it
 > pTypedefTaggedUnionFields ::
 >     SV_Parser (Maybe Id {- constructor ID prefix -}
 >                -> [(Id, PartialKind)] {- type parameters collected thus far -}
->                -> [CTypeclass] {- derivations collected thus far -}
+>                -> [CDeriving] {- derivations collected thus far -}
 >                -> [(TaggedUnionField, [CDefn])])
 > pTypedefTaggedUnionFields =
 >     do mks <- many1 pTypedefTaggedUnionField
@@ -1075,7 +1088,7 @@ will be a field inside a struct and should be an identifier
 >                            -> SV_Parser
 >                               (Maybe Id {- constructor ID prefix -}
 >                                -> [(Id, PartialKind)] {- type params collected thus far -}
->                                -> [CTypeclass] {- derivations collected thus far -}
+>                                -> [CDeriving] {- derivations collected thus far -}
 >                                -> ((Id, CType, [CQType]), [CDefn]))
 > pTypedefTaggedUnionType isTopLevel uppercaseName =
 >     do pKeyword SV_KW_union >> pKeyword SV_KW_tagged
@@ -1128,6 +1141,13 @@ TYPE CLASSES AND INSTANCES
 >        when (not (allowTypeclass flags))
 >                 (failWithErr (pos, EForbiddenTypeclass (pvpString (stmtContext flags))))
 >        assertEmptyAttributes EAttribsTypeclass atts
+>        -- optional coherence annotation, a soft keyword like
+>        -- "dependencies": unambiguous because typeclass names are
+>        -- uppercase (Just True = incoherent, Just False = coherent,
+>        -- omitted = follow the -incoherent-instance-matches flag)
+>        coherence <- option Nothing
+>                       (    (pTheString "incoherent" >> return (Just True))
+>                        <|> (pTheString "coherent"   >> return (Just False)))
 >        (name, params) <- pTypedefConParams <?> "typeclass name"
 >        context <- option [] pProvisos
 >        deps <- option [] pDependencies
@@ -1138,7 +1158,7 @@ TYPE CLASSES AND INSTANCES
 >            functions  = [f | Right f <- items]
 >        pEndClause SV_KW_endtypeclass (Just $ iKName name)
 >        -- XXX dependencies
->        return [ISTypeclass pos name context deps params assocTypes functions]
+>        return [ISTypeclass pos coherence name context deps params assocTypes functions]
 
 > pTypeclassModule :: SV_Parser CField
 > pTypeclassModule =
@@ -5056,9 +5076,10 @@ process attributes attached to a module
 >                    "clock_prefix", "gate_prefix", "reset_prefix",
 >                    "doc", "descending_urgency", "preempts",
 >                    "execution_order", "mutually_exclusive", "conflict_free",
->                    "default_clock_osc", "default_clock_gate",
+>                    "default_clock", "default_clock_osc", "default_clock_gate",
 >                    "default_gate_inhigh", "default_gate_unused",
->                    "default_reset", "no_default_clock", "no_default_reset",
+>                    "default_reset", "default_reset_port",
+>                    "no_default_clock", "no_default_reset",
 >                    "gate_all_clocks", "gate_input_clocks",
 >                    "clock_family", "clock_ancestors" ]
 
@@ -5142,13 +5163,28 @@ the error message
 >        "clock_prefix" -> stringP PPCLK  name
 >        "gate_prefix"  -> stringP PPGATE name
 >        "reset_prefix" -> stringP PPRSTN name
+>        "default_clock" ->
+>            -- the value names a Clock argument of the module, to be
+>            -- designated as the module's default clock
+>            let pos = getPosition value
+>                mkPProp s = return (PPdefault_clock_arg (mk_dangling_id s pos))
+>            in  nonEmptyStringPM mkPProp name
 >        "default_clock_osc" ->
 >            stringP (mkDef PPclock_osc def_clk) name
 >        "default_clock_gate" ->
 >            nonEmptyStringP (mkDef PPclock_gate def_clk) name
 >        "default_gate_inhigh" -> numeric (PPgate_inhigh [def_clk]) name
 >        "default_gate_unused" -> numeric (PPgate_unused [def_clk]) name
->        "default_reset" -> stringP (mkDef PPreset_port def_rst) name
+>        "default_reset" ->
+>            -- the value names a Reset argument of the module, to be
+>            -- designated as the module's default reset
+>            -- (in earlier releases, this attribute provided a port name
+>            -- for the implicit default reset; that meaning has moved to
+>            -- the "default_reset_port" attribute)
+>            let pos = getPosition value
+>                mkPProp s = return (PPdefault_reset_arg (mk_dangling_id s pos))
+>            in  nonEmptyStringPM mkPProp name
+>        "default_reset_port" -> stringP (mkDef PPreset_port def_rst) name
 >        "no_default_clock" -> numeric (PPclock_osc [(def_clk,"")]) name
 >        "no_default_reset" -> numeric (PPreset_port [(def_rst,"")]) name
 >        "options" -> case value of

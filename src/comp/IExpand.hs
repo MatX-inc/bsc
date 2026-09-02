@@ -28,12 +28,12 @@ import Control.Monad.Fix(mfix)
 --import Control.Monad.Fix
 import Control.Monad.State(State, evalState, liftIO, get, put)
 import Data.Graph
-import qualified Data.Generics as Generic
 import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
                  hSetBuffering, hIsOpen, hIsClosed)
 import System.FilePath(isRelative)
 import qualified Data.Array as Array
 import qualified Data.IntMap as IM
+import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Debug.Trace(traceM)
@@ -53,7 +53,7 @@ import FStringCompat
 import PreStrings(fsUnderscore)
 import PreIds
 import Flags
-import SymTab(SymTab)
+import SymTab(SymTab, findType, TypeInfo(..))
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle,
              recordHandleOpen, recordHandleClose)
 import Position
@@ -66,6 +66,7 @@ import qualified TIMonad as TM
 import TypeCheck(topExpr)
 import VModInfo
 import Pragma
+import DefProp
 import Changed(changedOrId)
 import ISyntax
 import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
@@ -105,6 +106,17 @@ doDebug = elem "-trace-debug" progArgs
 doFunExpand, doFunExpand2 :: Bool
 doFunExpand = elem "-trace-fun-expand" progArgs
 doFunExpand2 = length (filter (== "-trace-fun-expand") progArgs) > 1
+
+-- -hack-eager-pack-unpack
+--   Debugging aid (not a supported configuration): disable the holding of
+--   pack/unpack coercions and resolve them eagerly instead -- ISimplify
+--   resolves the ones with statically-known dictionaries (see
+--   ISimplify.selectDictMethod), and the evaluator unfolds the rest on
+--   contact -- reproducing the behavior of a compiler without coercion
+--   holding, at the same pipeline stages.  Useful for A/B comparison of
+--   the netlist effects of coercion cancellation.
+doEagerPackUnpack :: Bool
+doEagerPackUnpack = elem "-hack-eager-pack-unpack" progArgs
 
 -- doConAp
 --   Trace the entrance and exit to "conAp" (called when evaluating ICon)
@@ -276,11 +288,17 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a list of just the pointers
       ptrs0 = IM.keys iheap
       -- CSE the pointers and return a map from old pointers to the remaining
-      -- canonical ones.  The pointers are returned in tsorted order.
-      -- The tsort does a non-circularity check, which is a property we
-      -- expect in IModule, but the function "pDef" below also relies on it
-      -- (since "pDef" and "m" are recursively built)
-      (tsorted_cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
+      -- canonical ones.  NOTE: despite the internal tsort, the pointers are
+      -- NOT returned in topological order -- they come back in the CSE
+      -- map's key order (canonicalized-expression order), so the defs list
+      -- built from them below is not dependencies-first and downstream
+      -- code must not assume it is.  The tsort orders only the internal
+      -- CSE fold (dependencies first, so duplicate detection compares
+      -- canonical pointers) and performs a non-circularity check, which is
+      -- a property we expect in IModule and which the function "pDef"
+      -- below also relies on (since "pDef" and "m" are recursively built,
+      -- the lazy knot terminates only on acyclic references)
+      (cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
       -- function for translating old pointers to new ones
       ptran p = IM.findWithDefault p p ptr_map
 
@@ -331,7 +349,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a map from the new pointers to their expressions
       --    Actually, a map to a pair of an expression and maybe an IDef;
       --    if the expr is a def reference, the maybe contains the def.
-      ptr_info = [ (p, pDef p) | p <- tsorted_cse_ptrs ]
+      ptr_info = [ (p, pDef p) | p <- cse_ptrs ]
 
       -- a lookup function for the "ptr_info" map,
       -- returning just the expression to replace the ptr reference
@@ -532,14 +550,114 @@ unpack_method_call' _ e =
   -- trace ("unpack_method_call unable to match " ++ show e) $
   --[(mk_homeless_id "NOSTATE", mk_homeless_id "NOMETHOD")]
 
+-- Apply 'removeIdInlinedPositions' to the Id of every ICon reachable
+-- in the IModule.  Heap references are leaves: IRefT payloads and the
+-- cells of ICLazyArray sit behind IORefs and are not traversed.
+-- Clock, reset and inout wires can be cyclic (a state variable's
+-- output clock selects from the state variable itself), so the
+-- rebuilding must stay lazy; consumers only force finite prefixes of
+-- such wires.  Subtrees that cannot contain an ICon are returned
+-- unchanged, rather than reallocated.
 removeInlinedPositions :: Flags -> IModule HeapData -> IModule HeapData
 removeInlinedPositions flags imod0 | (not (methodConditions flags)) = imod0
 removeInlinedPositions flags imod0 =
-    let removeFn :: HExpr -> HExpr
-        removeFn (ICon i ic) = (ICon (removeIdInlinedPositions i) ic)
-        -- XXX do we need a recursive branch for IAps?
-        removeFn e = e
-    in  Generic.everywhere (Generic.mkT removeFn) imod0
+    imod0 { imod_clock_domains =
+                [ (d, map rmClock cs) | (d, cs) <- imod_clock_domains imod0 ],
+            imod_resets = map rmReset (imod_resets imod0),
+            imod_state_insts =
+                [ (i, rmStateVar sv) | (i, sv) <- imod_state_insts imod0 ],
+            imod_local_defs = map rmDef (imod_local_defs imod0),
+            imod_rules = rmRules (imod_rules imod0),
+            imod_interface = map rmIFace (imod_interface imod0)
+          }
+  where
+    rmExpr :: HExpr -> HExpr
+    rmExpr (ILam i t e) = ILam i t (rmExpr e)
+    rmExpr (IAps f ts es) = IAps (rmExpr f) ts (map rmExpr es)
+    rmExpr e@(IVar _) = e
+    rmExpr (ILAM i k e) = ILAM i k (rmExpr e)
+    rmExpr (ICon i ic) = ICon (removeIdInlinedPositions i) (rmConInfo ic)
+    rmExpr e@(IRefT _ _ _ _) = e
+
+    -- only the payloads that can carry an IExpr are rebuilt;
+    -- all other constructors are returned unchanged
+    rmConInfo :: IConInfo HeapData -> IConInfo HeapData
+    rmConInfo (ICDef t d) = ICDef t (rmExpr d)
+    rmConInfo (ICUndet t k mv) = ICUndet t k (fmap rmExpr mv)
+    rmConInfo (ICStateVar t sv) = ICStateVar t (rmStateVar sv)
+    rmConInfo (ICValue t d) = ICValue t (rmExpr d)
+    rmConInfo (ICMethod t ins outs m) = ICMethod t ins outs (rmExpr m)
+    rmConInfo (ICClock t c) = ICClock t (rmClock c)
+    rmConInfo (ICReset t r) = ICReset t (rmReset r)
+    rmConInfo (ICInout t io) = ICInout t (rmInout io)
+    rmConInfo (ICLazyArray t arr mu) =
+        -- the array cells are heap references, thus leaves
+        ICLazyArray t arr (fmap (\ (e1, e2) -> (rmExpr e1, rmExpr e2)) mu)
+    rmConInfo (ICPred t p) = ICPred t (rmPred p)
+    rmConInfo ic@(ICPrim {}) = ic
+    rmConInfo ic@(ICForeign {}) = ic
+    rmConInfo ic@(ICCon {}) = ic
+    rmConInfo ic@(ICIs {}) = ic
+    rmConInfo ic@(ICOut {}) = ic
+    rmConInfo ic@(ICTuple {}) = ic
+    rmConInfo ic@(ICSel {}) = ic
+    rmConInfo ic@(ICVerilog {}) = ic
+    rmConInfo ic@(ICInt {}) = ic
+    rmConInfo ic@(ICReal {}) = ic
+    rmConInfo ic@(ICString {}) = ic
+    rmConInfo ic@(ICChar {}) = ic
+    rmConInfo ic@(ICHandle {}) = ic
+    rmConInfo ic@(ICMethArg {}) = ic
+    rmConInfo ic@(ICModPort {}) = ic
+    rmConInfo ic@(ICModParam {}) = ic
+    rmConInfo ic@(ICIFace {}) = ic
+    rmConInfo ic@(ICRuleAssert {}) = ic
+    rmConInfo ic@(ICSchedPragmas {}) = ic
+    rmConInfo ic@(ICName {}) = ic
+    rmConInfo ic@(ICAttrib {}) = ic
+    rmConInfo ic@(ICPosition {}) = ic
+    rmConInfo ic@(ICType {}) = ic
+
+    rmClock :: HClock -> HClock
+    rmClock c = c { ic_wires = rmExpr (ic_wires c) }
+
+    rmReset :: HReset -> HReset
+    rmReset r = r { ir_clock = rmClock (ir_clock r),
+                    ir_wire = rmExpr (ir_wire r) }
+
+    rmInout :: HInout -> HInout
+    rmInout io = io { io_clock = rmClock (io_clock io),
+                      io_reset = rmReset (io_reset io),
+                      io_wire = rmExpr (io_wire io) }
+
+    rmStateVar :: HStateVar -> HStateVar
+    rmStateVar sv =
+        sv { isv_iargs = map rmExpr (isv_iargs sv),
+             isv_clocks = [ (i, rmClock c) | (i, c) <- isv_clocks sv ],
+             isv_resets = [ (i, rmReset r) | (i, r) <- isv_resets sv ] }
+
+    rmPred :: HPred -> HPred
+    rmPred (PConj ps) = PConj (S.map rmPTerm ps)
+
+    rmPTerm :: PTerm HeapData -> PTerm HeapData
+    rmPTerm (PAtom e) = PAtom (rmExpr e)
+    rmPTerm (PIf c t e) = PIf (rmExpr c) (rmPred t) (rmPred e)
+    rmPTerm (PSel idx sz ps) = PSel (rmExpr idx) sz (map rmPred ps)
+
+    rmDef :: HDef -> HDef
+    rmDef (IDef i t e p) = IDef i t (rmExpr e) p
+
+    rmRules :: HRules -> HRules
+    rmRules (IRules sps rs) = IRules sps (map rmRule rs)
+
+    rmRule :: HRule -> HRule
+    rmRule r = r { irule_pred = rmExpr (irule_pred r),
+                   irule_body = rmExpr (irule_body r) }
+
+    rmIFace :: HEFace -> HEFace
+    rmIFace ief =
+        ief { ief_value = fmap (\ (e, t) -> (rmExpr e, t)) (ief_value ief),
+              ief_body = fmap rmRules (ief_body ief) }
 
 -- -----
 
@@ -560,12 +678,45 @@ eqPtrs heap ptrs =
         heapOf p =
                 case (getHeapCell p) of
                 HNF { hc_pexpr = P _ e } -> e
-                e -> internalError ("eqPtrs.heapOf " ++ ppReadable e)
-        hptrs (IAps f _ es) = foldr (union . hptrs) [] (f:es)
-        hptrs (ICon _ (ICStateVar { iVar = IStateVar { isv_iargs = es } }))
-                            = foldr (union . hptrs) [] es
-        hptrs (IRefT _ p _ _) = [p]
-        hptrs _ = []
+                e -> internalError ("eqPtrs.heapOf: cell " ++ show p ++
+                                    " not in NF: " ++ ppReadable e)
+        -- Collect the heap pointers referenced by a cell's expression.
+        -- An IntSet provides the duplicate check (the old formulation
+        -- was quadratic in the number of references, via Data.List.union
+        -- per subexpression), but the result is kept in first-occurrence
+        -- order rather than IntSet (sorted) order: the tsort's output
+        -- order is sensitive to edge order, the CSE fold's processing
+        -- order follows the tsort, and that decides -- between duplicate
+        -- defs -- which pointer becomes the representative whose number
+        -- appears in generated def names.  (The emitted defs LIST is in
+        -- canonicalized-expression order, not tsort order; see the note
+        -- at the call site.)  First-occurrence order therefore keeps
+        -- this rewrite from renaming defs across generated modules --
+        -- and def names are the one piece of this that is user-visible,
+        -- surfacing as signal names in the generated code, where a
+        -- gratuitous rename shows up in netlist diffs, waveform setups
+        -- and constraint files.
+        -- Preserving it is essentially free -- versus dumping the set
+        -- sorted, it costs one extra membership test and one cons per
+        -- pointer -- and is a convenience, not a contract: nothing
+        -- downstream is entitled to particular def names or order, so a
+        -- future rewrite that has a reason to change them may.
+        hptrs e0 = reverse (snd (go e0 (IS.empty, [])))
+          where
+            go (IAps f _ es) acc = foldl (flip go) acc (f:es)
+            go (ICon _ (ICStateVar { iVar = IStateVar { isv_iargs = es } })) acc =
+                foldl (flip go) acc es
+            -- array elements are heap pointers hidden from expression
+            -- traversal (see the ArrayCell comment in ISyntax); without
+            -- this arm the tsort has no edges from a residual dynamic
+            -- selection to its element cells, and the CSE below can
+            -- never identify two selections over equal arrays
+            go (ICon _ (ICLazyArray _ arr _)) acc =
+                foldl (\a (ArrayCell p _) -> ins p a) acc (Array.elems arr)
+            go (IRefT _ p _ _) acc = ins p acc
+            go _ acc = acc
+            ins p acc@(s, xs) | p `IS.member` s = acc
+                              | otherwise       = (IS.insert p s, p : xs)
         g = [(p, hptrs (heapOf p)) | p <- ptrs ]
         -- tSortInt (Data.Graph), not SCC.tsort: the two sorts break ties
         -- between independent nodes differently, and the tie order decides
@@ -586,7 +737,23 @@ eqPtrs heap ptrs =
                         case IM.lookup i ptrm of
                         Nothing -> e
                         -- hd_ref errors because we don't use it once we have the iheap
-                        Just i' -> IRefT t i' (internalError "eqPtrs ref") (internalError "eqPtrs ref")
+                        -- poss must be a real value (S.empty): the position
+                        -- readers and NFData force it.  The ref payload is
+                        -- genuinely never touched, so it stays an error.
+                        Just i' -> IRefT t i' S.empty (internalError "eqPtrs ref")
+                    -- canonicalize array element pointers the same way,
+                    -- so that selections over CSE-equal arrays compare
+                    -- equal (cmpC compares arrays by ac_ptr); like the
+                    -- IRefT arm, this only affects the comparison key --
+                    -- emission goes through the pointer-translation map
+                    -- built by the caller, which translates the original
+                    -- pointers cell by cell
+                    sub (ICon i ic@(ICLazyArray { iArray = arr })) =
+                        let remap cell@(ArrayCell q _) =
+                                case IM.lookup q ptrm of
+                                  Nothing -> cell
+                                  Just q' -> ArrayCell q' (internalError "eqPtrs ref")
+                        in  ICon i (ic { iArray = fmap remap arr })
                     sub e = e
                 in  case M.lookup e dsm of
                     Nothing -> (M.insert e p dsm, ptrm)
@@ -662,34 +829,91 @@ iExpandModuleDef (IDef i t e _) = do
     fmod <- isNoInlinedFunc
     pps <- getPragmas
 
-    (clkRst, default_args, default_vargs) <-
-        if (fmod)
-        then return ((missingDefaultClock, missingDefaultReset), [], [])
-        else do
-           let def_clk_id = setIdPosition mod_pos idDefaultClock
-               def_rst_id = setIdPosition mod_pos idDefaultReset
-               has_clk = hasDefaultClk pps
-               has_rst = hasDefaultRst pps
-               gated   = isGatedDefaultClk pps ||
-                         -- continue to consult the trace flag
-                         gateDefaultClock
-           (topClk, clockargs, vclkargs) <-
-               if has_clk
-               then do (c, a, v) <- makeInputClk gated def_clk_id
-                       return (c, [a], [v])
-               else return (missingDefaultClock, [], [])
-           -- associate the default reset with the default clock
-           let reset_clock_family = if has_clk
-                                    then (Just def_clk_id)
-                                    else Nothing
-           (topRstn, resetargs, vrstargs) <-
-               if has_rst
-               then do (r, a, v) <- makeInputRstn def_rst_id reset_clock_family
-                       return (r, [a], [v])
-               else return (missingDefaultReset, [], [])
-           return ((topClk, topRstn), clockargs ++ resetargs, vclkargs ++ vrstargs)
+    let def_clk_id = setIdPosition mod_pos idDefaultClock
+        def_rst_id = setIdPosition mod_pos idDefaultReset
+        has_clk = hasDefaultClk pps
+        has_rst = hasDefaultRst pps
+        m_clk_arg = getDefaultClockArg pps
+        m_rst_arg = getDefaultResetArg pps
+        gated   = isGatedDefaultClk pps ||
+                  -- continue to consult the trace flag
+                  gateDefaultClock
+
+    -- The implicit default clock is created up front (before the module
+    -- arguments are processed), so that it exists when reset arguments
+    -- refer to it with clocked_by; likewise the implicit default reset,
+    -- preserving the traditional order of clock and domain creation.
+    -- When an argument is designated as the default clock or reset (with
+    -- the "default_clock"/"default_reset" attributes), the default can
+    -- only be determined after the arguments have been processed; that
+    -- work is left for "resolveDefaults", which iExpandModuleLam runs
+    -- after processing the clock and reset arguments.
+    (m_topClk, clk_dargs, clk_dvargs) <-
+        if fmod
+        then return (Just missingDefaultClock, [], [])
+        else case m_clk_arg of
+               Just _ -> return (Nothing, [], [])
+               Nothing
+                 | has_clk -> do (c, a, v) <- makeInputClk gated def_clk_id
+                                 return (Just c, [a], [v])
+                 | otherwise -> return (Just missingDefaultClock, [], [])
+    (m_topRstn, rst_dargs, rst_dvargs) <-
+        if fmod
+        then return (Just missingDefaultReset, [], [])
+        else case (m_clk_arg, m_rst_arg) of
+               (Nothing, Nothing)
+                 | has_rst ->
+                     do -- associate the default reset with the default clock
+                        let fam = if has_clk then (Just def_clk_id) else Nothing
+                        (r, a, v) <- makeInputRstn def_rst_id fam
+                        return (Just r, [a], [v])
+                 | otherwise -> return (Just missingDefaultReset, [], [])
+               _ -> return (Nothing, [], [])
+
+    let resolveDefaults :: G ((HClock, HReset), [IAbstractInput], [VArgInfo])
+        resolveDefaults = do
+          topClk <-
+              case m_topClk of
+                Just c -> return c
+                Nothing -> do
+                    -- an argument was designated as the default clock
+                    -- (its input clock was created with the other args)
+                    let clk_arg = fromJustOrErr
+                                    "iExpandModuleDef: no default clock arg"
+                                    m_clk_arg
+                    mclk <- getBoundaryClock clk_arg
+                    case mclk of
+                      Just c -> return c
+                      Nothing -> internalError
+                                   ("iExpandModuleDef: unknown default " ++
+                                    "clock arg: " ++ ppReadable clk_arg)
+          (topRstn, extra_args, extra_vargs) <-
+              case m_topRstn of
+                Just r -> return (r, [], [])
+                Nothing ->
+                  case m_rst_arg of
+                    -- an argument was designated as the default reset
+                    Just rst_arg -> do
+                        mrst <- getBoundaryReset rst_arg
+                        case mrst of
+                          Just r -> return (r, [], [])
+                          Nothing -> internalError
+                                       ("iExpandModuleDef: unknown default " ++
+                                        "reset arg: " ++ ppReadable rst_arg)
+                    -- the default clock is a designated argument, but the
+                    -- implicit default reset remains; it is created here,
+                    -- in the family of the designated clock
+                    Nothing
+                      | has_rst -> do (r, a, v) <- makeInputRstn def_rst_id m_clk_arg
+                                      return (r, [a], [v])
+                      | otherwise -> return (missingDefaultReset, [], [])
+          return ((topClk, topRstn),
+                  clk_dargs ++ rst_dargs ++ extra_args,
+                  clk_dvargs ++ rst_dvargs ++ extra_vargs)
+
     -- iExpandModuleLam elaborates the actual module
-    (args, vargs, (P p_ifc ifc)) <- iExpandModuleLam i clkRst e
+    (args, vargs, clkRst, default_args, default_vargs, (P p_ifc ifc))
+        <- iExpandModuleLam i resolveDefaults e
 
     showTopProgress "Elaborating interface"
     pushIfcSchedNameScope
@@ -715,9 +939,16 @@ iExpandModuleDef (IDef i t e _) = do
 -- ----------
 
 -- Elaborate a (top-level) module with arguments
-iExpandModuleLam :: Id -> (HClock, HReset) -> HExpr
-                 -> G ([IAbstractInput], [VArgInfo], PExpr)
-iExpandModuleLam i clkRst e = do
+-- The given action completes the default clock/reset info; it is run
+-- after the clock/reset arguments have been processed, for when an
+-- argument is designated as a default (with the "default_clock" or
+-- "default_reset" attribute).
+iExpandModuleLam :: Id
+                 -> G ((HClock, HReset), [IAbstractInput], [VArgInfo])
+                 -> HExpr
+                 -> G ([IAbstractInput], [VArgInfo], (HClock, HReset),
+                       [IAbstractInput], [VArgInfo], PExpr)
+iExpandModuleLam i resolveDefaults e = do
     -- the separation of the core expression from the ILam
     -- relies on the property that none of the ILam ids are the same
     -- (so the substitution is safe to do on just the core expression)
@@ -737,6 +968,9 @@ iExpandModuleLam i clkRst e = do
     (as1, mod_expr1) <- iExpandModuleClockArgs i as0 mod_expr0
     -- process resets
     (as2, mod_expr2) <- iExpandModuleResetArgs i as1 mod_expr1
+    -- the clock/reset arguments are processed, so the default clock/reset
+    -- can now be determined, if it wasn't created up front
+    (clkRst, default_args, default_vargs) <- resolveDefaults
     -- process inouts
     (as3, mod_expr3) <- iExpandModuleInoutArgs i clkRst as2 mod_expr2
     -- process ifc args
@@ -755,7 +989,7 @@ iExpandModuleLam i clkRst e = do
     -- elaborate the module body
     e' <- iExpandModule False clkRst [] pTrue mod_expr
     -- return the results
-    return (absinps, vargs, e')
+    return (absinps, vargs, clkRst, default_args, default_vargs, e')
 
 type ArgState = Either (IAbstractInput, VArgInfo) (Id, IType)
 
@@ -1210,20 +1444,24 @@ iExpandMethod' implicitCond curClk (i, bi, outs, e0) p0 = do
 
         -- action methods get the default clock when there is no other
         -- XXX distinguish between "no clock" and "noClock"?
-        let (final_e, final_ws) =
+        (final_e, final_ws) <-
               if isActionType methType then
                 case (fixupActionWireSet curClk ws) of
-                  Just ws' -> (e', ws')
-                  Nothing ->
+                  Just ws' -> return (e', ws')
+                  Nothing -> do
+                      -- there is no clock for this method to default to,
+                      -- so it becomes noClock and loses its actions
+                      eWarning (getIdPosition i,
+                                WMethodNoDefaultClock (pfpString i))
                       case e' of
                         IAps f@(ICon _ (ICTuple {})) ts [e1, e2]
                           | isActionType methType
                           -> let pos = getIdPosition i
                                  vt = getAV_Type methType
                                  v = icUndetAt pos vt UNotUsed
-                             in  (IAps f ts [v, icNoActions], ws)
+                             in  return (IAps f ts [v, icNoActions], ws)
                         _ -> internalError "iExpandMethod: fixupActionWireSet"
-              else (e', ws)
+              else return (e', ws)
 
         methClock <- methodClockName i methType final_ws
         when doTraceClock $ traceM ("methType: " ++ ppReadable methType ++
@@ -2042,16 +2280,23 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
 
         -- if there is no associated clock, add the default clock
         -- XXX distinguish between "no clock" and "noClock"?
-        let (final_a, final_ws) =
+        (final_a, final_ws, final_rps) <-
                 case (fixupActionWireSet curClk ws) of
-                  Just ws' -> (a', ws')
-                  Nothing -> (icNoActions, ws)
+                  Just ws' -> return (a', ws', rps)
+                  Nothing -> do
+                      -- there is no clock for this rule to default to,
+                      -- so it becomes noClock and loses its body
+                      eWarning (getPosition rId, WRuleNoDefaultClock str')
+                      -- the warning already says that the body is removed,
+                      -- so suppress the follow-on warning (G0023) about the
+                      -- rule having no actions
+                      return (icNoActions, ws, nub (RPnoWarn : rps))
         let wp  = wsToProps final_ws
 
         when doTraceClock $ traceM ("convRules2: " ++ ppReadable final_ws)
         showRuleProgress ns hide str' ("Finished rule")
         popRuleSchedNameScope
-        return (IRules [] [IRule rId rps str' wp c' final_a Nothing ns'])
+        return (IRules [] [IRule rId final_rps str' wp c' final_a Nothing ns'])
       (ICon _ (ICPrim { primOp = PrimNoRules })) ->
         return iREmpty
       (IAps (ICon _ (ICPrim { primOp = PrimAddSchedPragmas })) _ [ICon _ (ICSchedPragmas { iPragmas = sps1 }), rs]) -> do
@@ -2711,6 +2956,44 @@ walkNF e =
                     upd p0 e ws
                 (ICon _ (ICLazyArray arr_t arr _)) -> do
                     internalError "walkNF array"
+
+                -- Squeeze out a held pack/unpack coercion by walking its
+                -- applied form, and upd the dispatched-on cell with the
+                -- materialized result.  The upd is load-bearing: walked
+                -- structures can retain pointers to their sub-cells
+                -- rather than the walk's substituted results (the
+                -- PrimArrayDynSelect arm above keeps the original
+                -- ArrayCells), and later consumers of those cells demand
+                -- HNF (eqPtrs/pDef heapOf at module output,
+                -- canLiftCond' via unheapNFNoImpEvil during condition
+                -- lifting -- which cannot force a held node from its
+                -- pure context).  Leaving the cell HWHNF was an
+                -- optimization to keep it cancellable after the walk,
+                -- but that case is essentially unrealizable: every
+                -- forcing consumer (squeeze, this arm) substitutes the
+                -- applied form into its own result and never revisits
+                -- the cell, so the cell is only overwritten when a
+                -- walked structure RETAINS it -- and the one structure
+                -- that does (the dynsel arm's ArrayCells) previously
+                -- ICEd in the HNF-demanding consumers rather than ever
+                -- delivering a late cancellation.  A consumer that
+                -- nevertheless found the cell overwritten would get the
+                -- materialized value -- exactly what its squeeze would
+                -- have produced -- so correctness never depended on the
+                -- policy either way (the WalkThenCancel test pins the
+                -- demand-then-cancel orders).  Sharing of the
+                -- materialized form lives in lzApplied's own cell, which
+                -- the walkNF below updates to HNF on the first walk
+                -- (later walks are the memoized-ref fast path).
+                (ICon _ (ICLazyPack { lzApplied = a })) -> do
+                    _ <- evalUH a  -- force the applied cell to WHNF
+                    (P pa a', ws) <- walkNF a
+                    upd (pConj p0 pa) a' ws
+                (ICon _ (ICLazyUnpack { lzApplied = a })) -> do
+                    _ <- evalUH a
+                    (P pa a', ws) <- walkNF a
+                    upd (pConj p0 pa) a' ws
+
                 -- any remaining constants, etc. cannot have a HWireSet attached
                 _ -> upd p0 e wsEmpty
 
@@ -2897,6 +3180,15 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
       let kind_integer = undefKindToInteger k
       addPredG p $ doBuildUndefined resultType (getPosition i) kind_integer []
 
+    -- squeeze out a held pack/unpack coercion: redirect the static op to
+    -- the applied form (the coercion node itself stays in its cell, so
+    -- consumers that can still cancel against it are unaffected; sharing
+    -- of the forced method application lives in lzApplied's heap cell)
+    ICon _ (ICLazyPack { lzApplied = a }) ->
+      addPredG p $ evalStaticOp' doUH doBK doUndet a resultType handler
+    ICon _ (ICLazyUnpack { lzApplied = a }) ->
+      addPredG p $ evalStaticOp' doUH doBK doUndet a resultType handler
+
     -- found dynamic expression
     IAps f@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els] -> do
       P pthn thn' <- evalStaticOp' doUH doBK doUndet thn resultType handler
@@ -2988,7 +3280,9 @@ data Arg = E HExpr | T IType deriving (Eq, Show)
 
 getArgPosition :: Arg -> Position
 getArgPosition (E e) = getIExprPosition e
-getArgPosition (T t) = getITypePosition t
+-- type arguments have no positions: Ids embedded in ITypes carry
+-- noPosition by construction (IType normalizes them on entry)
+getArgPosition (T _) = noPosition
 
 evalArgUH :: Arg -> G Arg
 evalArgUH (T t) = return (T t)
@@ -3212,6 +3506,56 @@ bldApUH' s f as = do
         when doConAp $ traceM ("bldApUH' " ++ s ++ " " ++ ppReadable e)
         return (P pTrue e)
 
+-- evalUH, then squeeze through any held pack/unpack coercion: for
+-- consumers that need the real value (e.g. strict primitives), the
+-- applied form is forced instead, evaluated at most once via its heap
+-- cell.  Recurses because a method body can itself produce a coercion.
+evalUHSqueezed :: HExpr -> G (HExpr, PExpr)
+evalUHSqueezed e = do
+    r@(_, P p e') <- evalUH e
+    case e' of
+      ICon _ (ICLazyPack { lzApplied = a }) -> do
+          (aee, P pa aw) <- evalUHSqueezed a
+          return (aee, P (pConj p pa) aw)
+      ICon _ (ICLazyUnpack { lzApplied = a }) -> do
+          (aee, P pa aw) <- evalUHSqueezed a
+          return (aee, P (pConj p pa) aw)
+      _ -> return r
+
+-- Build the ICSel selector for a Bits class method (pack or unpack), as
+-- IConv.iConvField would, with the field indices taken from the symbol
+-- table rather than hard-coded so that a change to the shape of the Bits
+-- class cannot silently select the wrong dictionary field.  The
+-- selector's type is the primitive's own type: (Bits a n) => a -> Bit n
+-- converts (iConvSc/qualToType) to exactly the selector type that
+-- IConv.lookupSelType produces for the method.
+mkBitsMethodSel :: Id -> IType -> Id -> G HExpr
+mkBitsMethodSel prim_i selty meth_i = do
+    symt <- getSymTab
+    case findType symt idBits of
+      Just (TypeInfo _ _ _ (TIstruct _ fs) _)
+        | Just k <- findIndex (qualEq meth_i) fs ->
+          return (ICon (setIdPosition (getIdPosition prim_i) meth_i)
+                       (ICSel { iConType = selty,
+                                selNo = toInteger k,
+                                numSel = toInteger (length fs) }))
+      ti -> internalError ("mkBitsMethodSel: " ++ ppReadable (meth_i, ti))
+
+-- Unfold a primPack/primUnpack application into the underlying Bits class
+-- method, picked out of the dictionary argument (the primitives take the
+-- Bits dictionary; see Prelude.bs).  A dictionary in WHNF is an ICTuple
+-- application whose fieldIds name the class methods, so the method is
+-- taken from it directly by name.
+unfoldBitsCoercion :: String -> Id -> HExpr -> [Arg] -> G PExpr
+unfoldBitsCoercion tag meth_i dictE rest = do
+    (_, P pd d) <- evalUH dictE
+    case d of
+      IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
+        | Just k <- findIndex (qualEq meth_i) fs, k < length ms ->
+            addPredG pd $ evalAp tag (ms !! k) rest
+      _ -> internalError ("unfoldBitsCoercion (" ++ tag ++ "): " ++
+                          "unexpected dictionary: " ++ ppReadable d)
+
 conAp' :: Id -> IConInfo HeapData -> HExpr -> [Arg] -> G PExpr
 
 -- Delta rules: execute primitives (constants)
@@ -3222,6 +3566,9 @@ conAp' _ (ICMethArg { })  e as = bldApUH' "ICMethArg" e as
 conAp' _ (ICModPort { })  e as = bldApUH' "ICModPort" e as
 conAp' _ (ICModParam { }) e as = bldApUH' "ICModParam" e as
 conAp' _ (ICValue { })    e as = bldApUH' "ICValue" e as
+-- held coercions are WHNF values
+conAp' _ (ICLazyPack { })   e as = bldApUH' "ICLazyPack" e as
+conAp' _ (ICLazyUnpack { }) e as = bldApUH' "ICLazyUnpack" e as
 
 -- Constants
 conAp' _ (ICInt { })    e as = bldApUH' "ICInt" e as
@@ -3257,13 +3604,18 @@ conAp' i (ICPrim _ PrimBuildUndefined) _ (T t : E pos_e : E kind_e : as) = do
   kind_integer <- evalInteger kind_e
   doBuildUndefined t pos kind_integer as
 
-conAp' i (ICPrim _ PrimIsRawUndefined) _ (T t : E e : as) = do
+conAp' i (ICPrim _ PrimIsRawUndefined) f (T t : E e : as) = do
   -- XXX should we propagate the implicit condition here?
   (P p e') <- eval1 e
   -- traceM ("IsRawUndefined: " ++ show e')
   case e' of
     ICon _ (ICUndet { }) -> -- do traceM ("IsRawUndefined: True")
                                return (P p iTrue)
+    -- a held coercion answers as its applied form would
+    ICon _ (ICLazyPack { lzApplied = a }) ->
+        addPredG p $ evalAp "PrimIsRawUndefined" f (T t : E a : as)
+    ICon _ (ICLazyUnpack { lzApplied = a }) ->
+        addPredG p $ evalAp "PrimIsRawUndefined" f (T t : E a : as)
     _ -> -- do traceM ("IsRawUndefined: False")
             return (P p iFalse)
 
@@ -3622,6 +3974,95 @@ conAp' _ (ICPrim _ PrimZeroExt) _ [t2@(T t), t1, t3, e] =
 conAp' i (ICPrim _ PrimTrunc) _   [_, n@(T _), m@(T _), e@(E _)] =
         evalAp "PrimTrunc" (icSelect (getIdPosition i)) [n, T (mkNumConT 0), m, e]
 
+-- primPack/primUnpack: the implicit Bits pack/unpack coercions applied by
+-- the Prelude wrappers (see Prelude.bs).  For now, unfold immediately to
+-- the class method picked out of the dictionary argument, evaluating
+-- exactly what a direct call of the class method would have.
+-- The payload argument may be absent (a higher-order use such as
+-- "map pack xs" can leave the wrapper partially applied); the method
+-- applied to no arguments is a legal value in that case.
+--
+-- Fast path first: at type Bit n the Bits instance is the identity (the
+-- Prelude owns that instance, and the class is coherent, so no other can
+-- exist), so return the payload without touching the dictionary.  Besides
+-- saving work, this keeps the heap shape at Bit-typed coercion sites
+-- (every GenWrap boundary, every Bit-typed register write) identical to a
+-- compiler without the coercion prims.
+conAp' _ (ICPrim _ PrimPack) _ (T ta : T tn : E _ : E x : rest)
+    | ta == aitBit tn = evalAp "PrimPack-id" x rest
+conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E _ : E x : rest)
+    | ta == aitBit tn = evalAp "PrimUnpack-id" x rest
+
+-- Hold mode (the default): a fully-applied coercion at a non-Bit type
+-- wider than one bit becomes a symbolic ICLazyPack/ICLazyUnpack value.
+-- Zero- and one-bit coercions are never held: a lawful one-bit instance
+-- is a bijection on a two-point space -- identity or negation, the same
+-- map up to relabeling -- so its body is at most an inverter and there
+-- is nothing for cancellation to save (a one-bit padded singleton's
+-- body is a constant or a don't-care, cheaper still); meanwhile held
+-- one-bit values (e.g. Bool) would permeate the rule-condition
+-- machinery, the most shape-sensitive part of the evaluator.
+-- ISimplify resolves the statically-resolvable small ones before we
+-- ever see them (see ISimplify.selectDictMethod).
+-- A held node carries the payload heaped (lzOrig) alongside an
+-- unevaluated application
+-- of the underlying class method (lzApplied); consumers that demand the
+-- coerced value force lzApplied (evaluating the instance method at most
+-- once, shared through its heap cell), while a matching opposite
+-- coercion cancels against lzOrig without ever touching the dictionary.
+-- Cancellation needs only the type arguments to match: Bits is coherent,
+-- so dictionaries at equal types are interchangeable.
+-- Undetermined payloads (and, for unpack, constant payloads) are
+-- coerced eagerly so that undefined-value propagation and static folding
+-- (case tags, if conditions, always-ready proofs) behave as without
+-- holding.
+conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
+    | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
+        (xee, P px xw) <- evalUH x
+        case xw of
+          ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b }) | ta == ta' ->
+              return (P px b)
+          ICon _ (ICUndet {}) ->
+              addPredG px $ unfoldBitsCoercion "PrimPack" idPack d [E xee]
+          _ -> do
+              sel <- mkBitsMethodSel i (iConType ci) idPack
+              aref <- toHeap "coerce" (aitBit tn)
+                             (IAps sel [ta, tn] [d, xee]) Nothing
+              let node = ICLazyPack { iConType = aitBit tn, lzTa = ta,
+                                      lzTn = tn, lzOrig = xee,
+                                      lzApplied = aref }
+              -- NB: px is deliberately NOT attached here: the payload's
+              -- implicit conditions live in its heap cell (xee) and
+              -- re-surface when the coercion is forced or cancelled;
+              -- attaching them eagerly would hoist them into contexts
+              -- (e.g. static Integer computations) that the payload's
+              -- evaluation would never actually have reached
+              return (P pTrue (ICon i node))
+conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
+    | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
+        (xee, P px xw) <- evalUH x
+        case xw of
+          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v }) | ta == ta' ->
+              return (P px v)
+          ICon _ (ICUndet {}) ->
+              addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
+          ICon _ (ICInt {}) ->
+              addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
+          _ -> do
+              sel <- mkBitsMethodSel i (iConType ci) idUnpack
+              aref <- toHeap "coerce" ta
+                             (IAps sel [ta, tn] [d, xee]) Nothing
+              let node = ICLazyUnpack { iConType = ta, lzTa = ta,
+                                        lzTn = tn, lzOrig = xee,
+                                        lzApplied = aref }
+              -- NB: px is deliberately NOT attached (see PrimPack above)
+              return (P pTrue (ICon i node))
+
+conAp' _ (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
+        unfoldBitsCoercion "PrimPack" idPack d rest
+conAp' _ (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
+        unfoldBitsCoercion "PrimUnpack" idUnpack d rest
+
 -- Special case of doPrimOp that checks bounds and keeps the base.
 conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty@(ITNum k), E e] = evalStaticOp e (itBitN k) handleInt
   where handleInt (ICon i (ICInt { iVal = il@(IntLit { ilValue = l, ilWidth = w, ilBase = b }) }))
@@ -3634,6 +4075,12 @@ conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty@(ITNum k), E e] = evalStaticOp e
             | otherwise        = result
           where err = errG (getIdPosition i, EInvalidLiteral "Bit" k (pfpString il))
                 result = return $ pExpr $ iMkLitWBAt (getIdPosition i) (itBitN k) w b (mask k l)
+        -- a module parameter of type Integer has no literal value at
+        -- elaboration time; re-type the reference at the target size so
+        -- it lowers to a reference to the Verilog parameter
+        -- (no range check is possible on a symbolic value)
+        handleInt (ICon i (ICModParam it)) | it == itInteger =
+            return $ pExpr $ ICon i (ICModParam (itBitN k))
         handleInt e' = nfError "primIntegerToBit" $ mkAp fe [T ty, E e']
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
@@ -3644,6 +4091,9 @@ conAp' tfs (ICPrim _ PrimIntegerToUIntBits) fe [T ty@(ITNum k), E e] = evalStati
             errG (getIdPosition i, EInvalidLiteral "UInt" k (pfpString il))
           else
             return $ pExpr $ iMkLitWBAt (getIdPosition i) (itBitN k) w b (mask k l)
+        -- symbolic Integer module parameter (see PrimIntegerToBit)
+        handleInt (ICon i (ICModParam it)) | it == itInteger =
+            return $ pExpr $ ICon i (ICModParam (itBitN k))
         handleInt e' = nfError "primIntegerToUIntBits" $ mkAp fe [T ty, E e']
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
@@ -3659,6 +4109,9 @@ conAp' tfs (ICPrim _ PrimIntegerToIntBits) fe [T ty@(ITNum k), E e] = evalStatic
             | otherwise        = result
           where err = errG (getIdPosition i, EInvalidLiteral "Int" k (pfpString il))
                 result = return $ pExpr $ iMkLitWBAt (getIdPosition i) (itBitN k) w b (mask k l)
+        -- symbolic Integer module parameter (see PrimIntegerToBit)
+        handleInt (ICon i (ICModParam it)) | it == itInteger =
+            return $ pExpr $ ICon i (ICModParam (itBitN k))
         handleInt e' = nfError "primIntegerToIntBits" $ mkAp fe [T ty, E e']
 
 -- XXX This could go in doPrimOp
@@ -3686,6 +4139,10 @@ conAp' tfs (ICPrim _ PrimAreStaticBits) fe [T t, E e] = do
   case e' of
     ICon i (ICInt { }) -> do -- traceM ("true\n")
                              return (pExpr iTrue)
+    -- a held coercion answers as its applied form would (e.g. a packed
+    -- constant must still be recognized as static, for toStaticIndex)
+    ICon _ (ICLazyPack { lzApplied = a }) ->
+        evalAp "PrimAreStaticBits" fe [T t, E a]
     _                  -> do -- traceM ("false\n")
                              return (pExpr iFalse)
 
@@ -3882,7 +4339,7 @@ conAp' _ prim@(ICPrim _ op) fe@(ICon prim_id _) [E e1, E e2]
 -- Strict primitives
 conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
         when doDebug $ traceM ("prim " ++ ppReadable (mkAp fe as))
-        let f (E e) = do (ee, P p e') <- evalUH e; return $ (p, E ee, E e')
+        let f (E e) = do (ee, P p e') <- evalUHSqueezed e; return $ (p, E ee, E e')
             f a     = return (pTrue, a, a)
         pas <- mapM f as
         let (ps, ees, as') = unzip3 pas
@@ -3917,12 +4374,22 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
          else
             case (op, as') of
             (PrimBNot, [E e]) | isDyn e ->
-                -- Push the negation through conditional structure with
-                -- per-heap-cell memoization (see pushBNot): pushing once
-                -- per PATH instead of once per cell is exponential in the
-                -- depth of a shared conditional DAG.  The WHNF arg is used
-                -- (not the heaped form) so that re-dispatch through the
-                -- evaluator can collapse all-equal dynamic selects.
+                -- The iTransExpr catch-all will handle PrimIf but not
+                -- arrays.  The push is memoized per heap cell (pushBNot):
+                -- pushing through the branches of a SHARED conditional
+                -- structure once per path instead of once per cell is
+                -- exponential in the structure's depth (reachable now
+                -- that held pack/unpack coercions keep conditional
+                -- structures alive across pipeline stages).
+                --
+                -- The push starts from the WHNF "e" (as the stock
+                -- static-op path did), NOT from the heaped "ees" arg:
+                -- re-evaluating the WHNF re-enters the evaluator, and
+                -- for a dyn-select that re-entry (doDynSel) is the only
+                -- place that strips the elements' implicit conditions
+                -- (carrying them in pSel) and merges all-equal
+                -- elements; a heaped arg is already-WHNF and would be
+                -- returned frozen, leaving the select uncollapsible.
                 addPredG p $ pushBNot bestPosition fe e
             -- name primitives
             (PrimJoinNames, [E (ICon _ (ICName { iName = n1 })),
@@ -4327,6 +4794,40 @@ getBuriedPreds (IAps ic@(ICon i_sel (ICSel { })) ts1 [e])
     | (i_sel == idAVValue_ || i_sel == idAVAction_) = do
   --traceM("getBuriedPreds: AV sel")
   getBuriedPreds e
+-- Struct and union constructions are lazy (their conAp' arms do not
+-- force the arguments), so implicit conditions can still be buried in
+-- unevaluated field cells, which the IRefT arm above cannot unheap.
+-- Force each field to WHNF and recurse; the constructor itself adds no
+-- implicit condition.  This is reached through the held-coercion arms
+-- below: a held pack's payload is exactly such a raw construction.
+getBuriedPreds (IAps (ICon _ (ICTuple { })) _ es) = getBuriedPredsForced es
+getBuriedPreds (IAps (ICon _ (ICCon { })) _ es) = getBuriedPredsForced es
+-- Held pack/unpack coercions detach their payload's implicit
+-- conditions at creation (see the PrimPack/PrimUnpack hold arms in
+-- conAp'): the conditions live in the payload's heap cell and
+-- re-surface when the coercion is forced or cancelled.  This function
+-- is a third kind of consumer -- it neither forces nor cancels -- so it
+-- must look through the node itself.  Recurse through the payload
+-- (lzOrig), where the buried conditions live; forcing lzApplied would
+-- surface the same conditions, but at the cost of materializing the
+-- instance method.  A lawful pack is strict in the whole payload (it
+-- produces all of the bits), so no conditioning of the payload's
+-- conditions is needed.
+getBuriedPreds (ICon _ (ICLazyPack { lzOrig = o })) = getBuriedPredsForced [o]
+getBuriedPreds (ICon _ (ICLazyUnpack { lzOrig = o })) = getBuriedPredsForced [o]
+-- An unselected array can likewise bury conditions in its element
+-- cells (a held pack's payload can be a Vector, whose pack instance is
+-- strict in every element)
+getBuriedPreds (ICon _ (ICLazyArray arr_ty arr u)) =
+  if (isJust u)
+    then return pTrue
+    else do
+      let elem_ty = case arr_ty of
+                      (ITAp c t) | (c == itPrimArray) -> t
+                      _ -> internalError ("getBuriedPreds: array type: " ++
+                                          ppReadable arr_ty)
+          mkRef (ArrayCell p r) = IRefT elem_ty p S.empty r
+      getBuriedPredsForced (map mkRef (Array.elems arr))
 getBuriedPreds e@(ICon _ _) = do
   --traceM("getBuriedPreds: con: e = " ++ ppReadable e ++ show e)
   return pTrue
@@ -4336,6 +4837,18 @@ getBuriedPreds e@(ICon _ _) = do
 getBuriedPreds e = do
   --traceM("getBuriedPreds: other: e = " ++ ppReadable e ++ show e)
   return pTrue
+
+-- Force each expression to WHNF -- surfacing the implicit condition
+-- recorded in its heap cell, which "unheap" alone cannot do for a cell
+-- that is still unevaluated -- and collect the buried conditions of
+-- the results
+getBuriedPredsForced :: [HExpr] -> G HPred
+getBuriedPredsForced es = do
+  let f e = do (_, P p e') <- evalUH e
+               p' <- getBuriedPreds e'
+               return (pConj p p')
+  ps <- mapM f es
+  return (pConjs ps)
 
 {-
 -- Quick utility for printing the refs in an HPred or HExpr,
@@ -4500,6 +5013,13 @@ doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
     case cnd' of
       ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }) -> addPredG p $ eval1 els
       ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) -> addPredG p $ eval1 thn
+      -- a held coercion as the condition: squeeze it, so that constant
+      -- conditions still fold statically (rule pruning, always-ready
+      -- proofs) exactly as without holding
+      ICon _ (ICLazyPack { lzApplied = a }) ->
+          addPredG p $ doIf f [T t, E a, E thn, E els]
+      ICon _ (ICLazyUnpack { lzApplied = a }) ->
+          addPredG p $ doIf f [T t, E a, E thn, E els]
       _ ->
       -- The condition did not evaluate, but there is still a chance to proceed.
       -- If the then and else branch are "equal" the condition can be ignored.
@@ -4533,6 +5053,101 @@ doIf f as = internalError("IExpand.doIf : " ++ ppReadable f ++ ppReadable as)
 -- improve the static elaboration of the output of an if
 -- to prevent exponential growth with conditional assignments and updates
 improveIf :: HExpr -> IType -> HExpr -> HExpr -> HExpr -> G (HExpr, Bool)
+-- Merge two held coercions of the same kind at the same type into ONE
+-- held coercion over a merged payload, materializing NEITHER: the
+-- merged node's payload (lzOrig) and applied form (lzApplied) are both
+-- unevaluated ifs over the branches' respective cells, so a
+-- distinct-payload mux (e.g. r2 <= (c ? r1 : r3) at a non-Bit type)
+-- stays cancellable against a later opposite coercion, where the
+-- squeeze clauses below would materialize both instance-method
+-- applications and leave the round trip's residue to ITransform.
+-- Nothing is forced here, and held nodes carry no predicate of their
+-- own (creation deliberately detaches the payload's implicit
+-- conditions; see the PrimPack/PrimUnpack hold arms in conAp'), so no
+-- pa == pTrue guard is needed: the branch cells' conditions surface
+-- later, exactly when (and if) the merged node is forced or cancelled.
+-- Fast path: when both nodes hold the SAME payload cell (two
+-- independently created coercions of one value; cmpC deliberately
+-- ignores lzApplied), the "then" node is returned unchanged, keeping
+-- the shared lzOrig ref.  Mixed kinds or mismatched type arguments
+-- fall through to the squeeze clauses below, so this arm only ever
+-- ADDS cancellations.
+improveIf f t cnd thn@(ICon i1 n1@(ICLazyPack { lzTa = ta1, lzTn = tn1,
+                                                lzOrig = o1, lzApplied = a1 }))
+                  (ICon _ (ICLazyPack { lzTa = ta2, lzTn = tn2,
+                                        lzOrig = o2, lzApplied = a2 }))
+    | ta1 == ta2, tn1 == tn2 =
+    if o1 == o2
+     then return (thn, True)
+     else do
+       when doTraceIf $ traceM("improveIf held pack merge: " ++ ppReadable (ta1, tn1))
+       -- the payload if has the payload type (ta), the applied if the
+       -- packed type (t = Bit tn = iConType of the node)
+       -- lzOrig must reference an evaluated cell (the creation path in
+       -- conAp' builds it with evalUH, and the cancellation path hands
+       -- it to consumers that unheap it), so heap the residual payload
+       -- mux in WHNF state; lzApplied stays unevaluated, as at creation.
+       o' <- toHeapWHNF "improve-if-held" ta1 (P pTrue (IAps f [ta1] [cnd, o1, o2])) Nothing
+       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
+improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
+                                                  lzOrig = o1, lzApplied = a1 }))
+                  (ICon _ (ICLazyUnpack { lzTa = ta2, lzTn = tn2,
+                                          lzOrig = o2, lzApplied = a2 }))
+    | ta1 == ta2, tn1 == tn2 =
+    if o1 == o2
+     then return (thn, True)
+     else do
+       when doTraceIf $ traceM("improveIf held unpack merge: " ++ ppReadable (ta1, tn1))
+       -- the payload if has the packed type (Bit tn), the applied if
+       -- the payload type (t = ta = iConType of the node)
+       -- see the pack arm above: lzOrig must be an evaluated cell
+       o' <- toHeapWHNF "improve-if-held" (aitBit tn1) (P pTrue (IAps f [aitBit tn1] [cnd, o1, o2])) Nothing
+       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
+-- Muxing a held coercion against an undefined value drops the undefined
+-- side and keeps the held node, subject to the same improveIfUndet
+-- policy as the general undefined-dropping clauses at the end of this
+-- function.  These clauses must come BEFORE the squeeze clauses below:
+-- a held node reaching the squeeze would forcibly materialize the
+-- instance method -- destroying the cancellability of exactly the
+-- residue this feature exists to remove -- only to then merge with an
+-- undefined value that the policy says can simply be dropped.  When the
+-- policy refuses the drop (a user-written don't-care, or a Bit-typed
+-- mux, i.e. a held pack), fall through to the squeeze clauses as
+-- before.
+improveIf f t cnd thn els@(ICon _ (ICUndet { iuKind = u }))
+    | isHeldCoercion thn, improveIfUndet u t = do
+  when doTraceIf $ traceM ("improveIf held/Undet (els) triggered " ++ ppReadable (cnd, thn, els))
+  return (thn, True)
+improveIf f t cnd thn@(ICon _ (ICUndet { iuKind = u })) els
+    | isHeldCoercion els, improveIfUndet u t = do
+  when doTraceIf $ traceM ("improveIf held/Undet (thn) triggered " ++ ppReadable (cnd, thn, els))
+  return (els, True)
+-- Squeeze a held pack/unpack coercion in either branch, so that it can
+-- merge with the other branch's structure.  Without this, a conditional
+-- update chain over an unpacked register (v' = if c then upd(v) else v,
+-- where v is a held unpack) never merges: the if residualizes, every
+-- subsequent operation is pushed into both branches, and elaboration
+-- explodes exponentially.  Squeezing is only done when forcing the
+-- applied form surfaces no implicit condition; otherwise the branches
+-- are left unmerged (safe, just unimproved).
+improveIf f t cnd thn@(ICon _ (ICLazyPack { lzApplied = a })) els = do
+    (_, P pa aw) <- evalUH a
+    if pa == pTrue then improveIf f t cnd aw els
+     else return (IAps f [t] [cnd, thn, els], False)
+improveIf f t cnd thn@(ICon _ (ICLazyUnpack { lzApplied = a })) els = do
+    (_, P pa aw) <- evalUH a
+    if pa == pTrue then improveIf f t cnd aw els
+     else return (IAps f [t] [cnd, thn, els], False)
+improveIf f t cnd thn els@(ICon _ (ICLazyPack { lzApplied = a })) = do
+    (_, P pa aw) <- evalUH a
+    if pa == pTrue then improveIf f t cnd thn aw
+     else return (IAps f [t] [cnd, thn, els], False)
+improveIf f t cnd thn els@(ICon _ (ICLazyUnpack { lzApplied = a })) = do
+    (_, P pa aw) <- evalUH a
+    if pa == pTrue then improveIf f t cnd thn aw
+     else return (IAps f [t] [cnd, thn, els], False)
 -- merge cells if the arrays have the same size (since our bounds are always 0 .. n - 1)
 improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
                   (ICon i2 (ICLazyArray { iConType = ct2, iArray = arr2 })) | Array.bounds arr1 == Array.bounds arr2 =
@@ -4744,6 +5359,11 @@ improveIfUndet UDontCare _ = False
 -- Removing undefined bits gets in the way of pack . unpack optimization
 improveIfUndet _         t = not $ isBitType t
 
+isHeldCoercion :: HExpr -> Bool
+isHeldCoercion (ICon _ (ICLazyPack { }))   = True
+isHeldCoercion (ICon _ (ICLazyUnpack { })) = True
+isHeldCoercion _                           = False
+
 -- simplify evaluated dyn-sel expressions, not just to reduce the order of
 -- growth of elaboration, but also to avoid triggering elaboration errors
 -- in those trimmed paths
@@ -4884,7 +5504,7 @@ pushBNot pos fe e = pushBNot' pos fe S.empty e
 
 pushBNot' :: Position -> HExpr -> S.Set HeapPointer -> HExpr -> G PExpr
 pushBNot' pos fe visited e = do
-    (ee, P pe ew) <- evalUH e
+    (ee, P pe ew) <- evalUHSqueezed e
     let mkey = case ee of
                  IRefT _ ptr _ _ -> Just ptr
                  _ -> Nothing
@@ -5391,6 +6011,17 @@ instance HeapToDef HExpr where
                     Just e -> (mapIExprPosition True (r, e))
                     Nothing -> internalError ("hToDef IRefT " ++ show p)
         in value
+    -- A held coercion surviving inline (not behind a heap ref, so not
+    -- caught by the heapOf HNF check) would otherwise pass through
+    -- silently and die far downstream (or never); fail here, where the
+    -- evaluator's invariant -- walkNF substitutes or materializes every
+    -- held node -- is supposed to hold
+    hToDef _ e@(ICon _ (ICLazyPack { })) =
+        internalError ("hToDef: held coercion escaped elaboration: " ++
+                       showTypeless e)
+    hToDef _ e@(ICon _ (ICLazyUnpack { })) =
+        internalError ("hToDef: held coercion escaped elaboration: " ++
+                       showTypeless e)
     hToDef m e = e
 
 instance HeapToDef HStateVar where

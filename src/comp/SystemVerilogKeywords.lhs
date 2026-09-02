@@ -292,6 +292,7 @@ Data type declaration for the keywords:
 >     | SV_KW_actionvalue
 >     | SV_KW_endactionvalue
 >     | SV_KW_deriving
+>     | SV_KW_via
 >     | SV_KW_endinstance
 >     | SV_KW_let
 >     | SV_KW_method
@@ -667,6 +668,7 @@ scanner and to prettyprint keywords.
 >      (SV_KW_actionvalue,         "actionvalue",          Bluespec38),
 >      (SV_KW_endactionvalue,      "endactionvalue",       Bluespec38),
 >      (SV_KW_deriving,            "deriving",             Bluespec38),
+>      (SV_KW_deriving,            "deriving",             Bluespec38),
 >      (SV_KW_endinstance,         "endinstance",          Bluespec38),
 >      (SV_KW_let,                 "let",                  Bluespec38),
 >      (SV_KW_match,               "match",                Bluespec38),
@@ -698,6 +700,8 @@ scanner and to prettyprint keywords.
 >      (SV_KW_powered_by,           "powered_by",            Bluespec38),
 >      (SV_KW_Action,              "Action",               Bluespec38),
 >      (SV_KW_ActionValue,         "ActionValue",          Bluespec38)]
+>      -- Bluespec X.X keywords
+>      -- (SV_KW_via,                 "via",                  BluespecXX)]
 
 Symbol table
 

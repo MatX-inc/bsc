@@ -693,6 +693,7 @@ data ErrMsg =
         | ESVPNoClosingParen String
         | ESVPNoId String
         | ENotUTF8
+        | EDefaultResetNoSuchArg String  -- ^ value of the default_reset attr
 
         -- Type checker and static elaboration errors
 
@@ -727,6 +728,8 @@ data ErrMsg =
             Position -- ^ previous decl position
 
         | EForeignNotBit String String
+        | EForeignWidthNotBare String String
+        | EForeignCtxNotNumeric String String
         | EPartialTypeApp String Integer Integer -- synonym (# expected) (# given)
         | ENotStructId String
         | ENotStructUpd String
@@ -773,6 +776,11 @@ data ErrMsg =
         | EWeakCtxBitExtendNeedsAddCtx String [String] String [String] [Position]
         | EContextReduction String [Position] [(String, Position)]
         | EContextReductionReduces String [String] [Position] [(String, Position)]
+        | EFunDepConflict String String String [Position]
+            -- class name, context, conflicting instance head, positions
+        | WFunDepCoverage String String [String]
+        | EBoundTyVarEscape String [String]
+            -- escaping type variable, enclosing bindings that capture it
         | ECtxRedWrongBitSize String Integer Integer [Position]
         | ECtxRedBitwiseBool [Position]
         | ECtxRedBitwise String [Position]
@@ -1008,6 +1016,8 @@ data ErrMsg =
         | WSVStdIdentExternal String
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
+        | WRuleNoDefaultClock String
+        | WMethodNoDefaultClock String
 
         | WMethodAnnotChange String String [String]
         | WSATNotAvailable String String (Maybe String)
@@ -1157,6 +1167,12 @@ data ErrMsg =
 
         -- Bluesim-specific errors/warnings
         | EBluesimNoXZ String
+
+        -- Errors for the .ba -> code generation mode (-c)
+        | EGenWithEntry String
+        | EGenWithSrcFile String
+        | EGenVerilogNotSupported
+        | EGenWithSystemC
 
         -- Errors/warnings from the SystemC wrapper generator
         | ESystemCWrapperComboPaths String
@@ -1732,7 +1748,7 @@ getErrorText (EEmptyPrefixNoPortName s)
   | s == "default_clock" =
     (Parse 177, empty, s2par ("The default clock must be given a name if no prefix is used.  Either remove the empty clock_prefix/gate_prefix, use default_clock_osc/default_clock_gate to provide a port name, or use no_default_clock to remove the port entirely."))
   | s == "default_reset" =
-    (Parse 177, empty, s2par ("The default reset must be given a name if no prefix is used.  Either remove the empty reset_prefix, use default_reset to provide a port name, or use no_default_reset to remove the port entirely."))
+    (Parse 177, empty, s2par ("The default reset must be given a name if no prefix is used.  Either remove the empty reset_prefix, use default_reset_port to provide a port name, or use no_default_reset to remove the port entirely."))
   | otherwise =
     (Parse 177, empty, s2par (s ++ " must be given a name if no prefix is used."))
 getErrorText (EConflictingGateAttr s) =
@@ -1896,6 +1912,12 @@ getErrorText (WUnusedDef i) =
      s2par ("Definition of " ++ quote i ++ " is not used."))
 getErrorText ENotUTF8 =
     (Parse 224, empty, s2par "File encoding is not UTF-8")
+getErrorText (EDefaultResetNoSuchArg name) =
+    (Parse 225, empty,
+     s2par ("The module argument " ++ quote name ++ " named in the " ++
+            "default_reset attribute does not exist.  If the intent was " ++
+            "to provide a port name for the implicit default reset, use " ++
+            "the " ++ quote "default_reset_port" ++ " attribute instead."))
 
 -- Type check and elaboration errors
 
@@ -1946,6 +1968,21 @@ getErrorText (EMultipleDecl name prevPos) =
 getErrorText (EForeignNotBit i t) =
   (Type 12, empty, hdr $$ text "Type:" <+> nest 2 (text t))
   where hdr = s2par ("Foreign function " ++ ishow i ++ " has a non-Bit argument or result.")
+getErrorText (EForeignCtxNotNumeric i p) =
+  (Type 163, empty, hdr $$ text "Proviso:" <+> nest 2 (text p))
+  where hdr = s2par ("Foreign function " ++ ishow i ++ " has a proviso" ++
+                     " that is not a numeric relationship." ++
+                     " Only Add, Mul, Div, Log, Max, Min and NumEq" ++
+                     " provisos are permitted on foreign functions:" ++
+                     " they are checked at each application and then" ++
+                     " erased.")
+getErrorText (EForeignWidthNotBare i t) =
+  (Type 162, empty, hdr $$ text "Width:" <+> nest 2 (text t))
+  where hdr = s2par ("Foreign function " ++ ishow i ++ " has a bit width" ++
+                     " that is not a bare type variable or a literal." ++
+                     " Widths are passed to the module as instance" ++
+                     " parameters named by the type variables, so a" ++
+                     " derived width must be given its own variable.")
 getErrorText (EPartialTypeApp i expected given) =
     (Type 13, empty,
      s2par ("Partially applied type synonym: " ++ ishow i) $$
@@ -1973,8 +2010,10 @@ getErrorText (EConstrAmb t f) =
     (Type 19, empty, s2par ("Constructor " ++ ishow f ++ " is not disambiguated by type " ++ ishow t))
 getErrorText (EUnify e t1 t2) =
     (Type 20, empty,
-     s2par "Type error at:" $$
-     nest 2 (text e) $$
+     (if null e
+      then s2par "Type mismatch"
+      else s2par "Type error at:" $$
+           nest 2 (text e)) $$
      s2par "Expected type:" $$
      nest 2 (text t2) $$
      s2par "Inferred type:" $$
@@ -2064,6 +2103,62 @@ getErrorText (EContextReduction context positions vps) =
 -}
      in  msg
     )
+
+-- Type 158 is reserved for the transitive-incoherence diagnostics
+-- (origin/transitive-incoherent)
+getErrorText (EFunDepConflict cls context inst positions) =
+    (Type 159, empty,
+     let ctx = if isClassic() then "context" else "proviso"
+         intro_msg =
+           s2par ("The " ++ ctx ++ " cannot be satisfied:") $$
+           nest 2 (text context)
+         conflict_msg =
+           s2par ("Its arguments select the instance:") $$
+           nest 2 (text inst) $$
+           s2par ("(instances of class " ++ quote cls ++ " are selected " ++
+                  "by the arguments at the input positions of the " ++
+                  "class's functional dependencies), but the types the " ++
+                  "instance determines at the dependent positions differ " ++
+                  "from the types the " ++ ctx ++ " requires.")
+         pos_msg =
+           s2par ("The " ++ ctx ++ " was implied by expressions at " ++
+                  "the following positions:") $$
+           nest 2 (vcat (map (text . prPosition) (nub positions)))
+         msg = if null positions
+               then intro_msg $$ conflict_msg
+               else intro_msg $$ conflict_msg $$ pos_msg
+     in  msg
+    )
+
+getErrorText (WFunDepCoverage inst cls vars) =
+    (Type 160, empty,
+     s2par ("The instance " ++ quote inst ++ " does not cover the " ++
+            "functional dependencies of class " ++ quote cls ++ ": " ++
+            unwordsAnd (map quote vars) ++
+            (if length vars == 1 then " appears" else " appear") ++
+            " in a dependent (determined) position without being " ++
+            "determined by the input positions, directly or through " ++
+            "the instance's " ++
+            (if isClassic() then "context" else "provisos") ++ ". " ++
+            "The same inputs can then be satisfied with many " ++
+            "different results.  If the class's resolution is " ++
+            "intentionally not a function of its inputs, declare the " ++
+            "class " ++ quote "incoherent" ++ "."))
+
+getErrorText (EBoundTyVarEscape v capturers) =
+    (Type 161, empty,
+     s2par ((if null v
+             then "A type variable which is quantified "
+             else "The type variable " ++ quote v ++
+                  ", which is quantified ") ++
+            "at this definition, would escape its scope" ++
+            (if null capturers
+             then ""
+             else " into the type of " ++
+                  unwordsAnd (map quote capturers)) ++
+            ".  A value whose type mentions a locally quantified " ++
+            "variable cannot be used or bound outside the " ++
+            "quantifier's scope."))
 
 -- Type 32 was EContextReductionVar until it merged with EContextReduction
 -- sufficiently long ago that we can reuse the number now
@@ -4016,6 +4111,28 @@ getErrorText (WRuleUndetPred is_meth rule poss) =
               nest 4 (vcat (map (text . prPosition) poss))
     )
 
+getErrorText (WRuleNoDefaultClock rule) =
+    (Generate 129, empty,
+     s2par ("The rule " ++ quote rule ++ " has no associated clock, " ++
+            "so it would be clocked by the default clock; but the default " ++
+            "clock is missing or is " ++ quote "noClock" ++ ".  The rule " ++
+            "will be clocked by " ++ quote "noClock" ++ " and its body " ++
+            "will be removed.  If this is not intended, provide a clock " ++
+            "(for instance, by designating an input clock as the module's " ++
+            "default clock with the " ++ quote "default_clock" ++
+            " attribute)."))
+
+getErrorText (WMethodNoDefaultClock method) =
+    (Generate 130, empty,
+     s2par ("The method " ++ quote method ++ " has no associated clock, " ++
+            "so it would be clocked by the default clock; but the default " ++
+            "clock is missing or is " ++ quote "noClock" ++ ".  The method " ++
+            "will be clocked by " ++ quote "noClock" ++ " and any actions " ++
+            "in its body will be removed.  If this is not intended, " ++
+            "provide a clock (for instance, by designating an input clock " ++
+            "as the module's default clock with the " ++
+            quote "default_clock" ++ " attribute)."))
+
 getErrorText (WSVReservedIdent name) =
     (Generate 131, empty,
      s2par ("The identifier " ++ quote name ++ " is a reserved word in " ++
@@ -4538,6 +4655,27 @@ getErrorText (EMissingVPIWrapperFile fname is_dpi) =
      let ifctype = if is_dpi then "DPI" else "VPI"
      in  s2par ("Cannot find the " ++ ifctype ++ " file " ++ ishow fname ++
                 " in the Verilog search path."))
+
+getErrorText (EGenWithEntry entry) =
+    (System 96, empty,
+     s2par ("The flag -c generates code from an elaborated module; " ++
+            "it cannot be combined with -e (linking).  To link " ++
+            ishow entry ++ ", run bsc again with -e."))
+
+getErrorText (EGenWithSrcFile fname) =
+    (System 97, empty,
+     s2par ("The flag -c operates on elaborated (.ba) files, so a " ++
+            "source file (" ++ ishow fname ++ ") cannot be provided.  " ++
+            "To compile and generate from source, use -g."))
+
+getErrorText EGenVerilogNotSupported =
+    (System 98, empty,
+     s2par ("The flag -c is only supported with the Bluesim " ++
+            "back end (-sim)."))
+
+getErrorText EGenWithSystemC =
+    (System 99, empty,
+     s2par ("The flag -c is not supported with -systemc; use -sim."))
 
 -- Runtime errors
 getErrorText (EMutuallyExclusiveRulesFire r1 r2) =

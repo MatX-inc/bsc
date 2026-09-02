@@ -33,6 +33,7 @@ module CSyntax(
         CFields,
         CStmt(..),
         CStmts,
+        CDeriving(..),
         IdK(..),
         CLiteral(..),
         CMStmt(..),
@@ -196,12 +197,11 @@ data CDefn
                   cd_type_vars :: [Id],
                   cd_original_summands :: COSummands,
                   cd_internal_summands :: CSummands,
-                  cd_derivings :: [CTypeclass] }
+                  cd_derivings :: [CDeriving] }
         | Cstruct Bool StructSubType IdK [Id] CFields
-                  [CTypeclass]
+                  [CDeriving]
                   -- Bool indicates the constrs are visible
                   -- first [Id] are the names of this definition's argument type variables
-                  -- last [CTypeclass] are derived classes
         -- incoherent_matches superclasses name_with_kind variables fundeps assoc_dep_funs default_methods
         | Cclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocDepFun] CFields
         | Cinstance CQType [CDefl]
@@ -219,7 +219,15 @@ data CDefn
         | CIinstance Id CQType
         -- CItype is imported abstractly
         | CItype IdK [Id] [Position] -- positions of use that caused export
-        | CIclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocDepFun] [Position] -- positions of use that caused export
+        -- The [Id] before the positions is the class tycon's sort member
+        -- list (field names ++ superclass ids) exactly as the defining
+        -- package's symtab computed it (MakeSymTab.getTI on Cclass), so
+        -- importers reconstruct an identical TIstruct SClass payload for
+        -- the class tycon even though the fields themselves are hidden.
+        -- Without it, importers could only rebuild the sort from the
+        -- superclass preds, leaving a payload divergent from the
+        -- defining compile's (papered over by SymTab.pickBetter).
+        | CIclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocDepFun] [Id] [Position] -- positions of use that caused export
         | CIValueSign Id CQType
         deriving (Eq, Ord, Show)
 
@@ -237,7 +245,7 @@ instance NFData CDefn where
     rnf (CPragma pr) = rnf pr
     rnf (CIinstance i qt) = rnf2 i qt
     rnf (CItype i as poss) = rnf3 i as poss
-    rnf (CIclass incoh ps ik is fd ats poss) = rnf7 incoh ps ik is fd ats poss
+    rnf (CIclass incoh ps ik is fd ats ms poss) = rnf8 incoh ps ik is fd ats ms poss
     rnf (CIValueSign i ty) = rnf2 i ty
 
 -- Since IdPKind is only expected in some disjuncts of CDefn, we could
@@ -254,6 +262,16 @@ instance NFData IdK where
     rnf (IdK i) = rnf i
     rnf (IdKind i k) = rnf2 i k
     rnf (IdPKind i pk) = rnf2 i pk
+
+data CDeriving
+        = CStock [CTypeclass]
+        -- TODO: expr?
+        | CVia CTypeclass Id
+        deriving (Eq, Ord, Show)
+
+instance NFData CDeriving where
+   rnf (CStock tcs) = rnf tcs
+   rnf (CVia tc target) = rnf2 tc target
 
 type CFunDeps = [([Id],[Id])]
 
@@ -904,7 +922,7 @@ getName (Cstruct _ _ i _ _ _) = Right $ iKName i
 getName (Cclass _ _ i _ _ _ _) = Right $ iKName i
 getName (Cinstance qt _) = Left $ getPosition qt
 getName (CItype i _ _) = Right $ iKName i
-getName (CIclass _ _ i _ _ _ _) = Right $ iKName i
+getName (CIclass _ _ i _ _ _ _ _) = Right $ iKName i
 getName (CIinstance _ qt) = Left $ getPosition qt
 getName (CIValueSign i _) = Right i
 
@@ -928,7 +946,7 @@ isTDef (Cdata {}) = True
 isTDef (Cstruct _ _ _ _ _ _) = True
 isTDef (Cclass _ _ _ _ _ _ _) = True
 isTDef (CItype _ _ _) = True
-isTDef (CIclass _ _ _ _ _ _ _) = True
+isTDef (CIclass _ _ _ _ _ _ _ _) = True
 isTDef (CprimType _) = True
 isTDef _ = False
 
@@ -1181,7 +1199,7 @@ instance PPrint CDefn where
         t"instance" <+> ppConId d i <+> pPrint d 0 qt
     pPrint d p (CItype i as positions) =
         sep (t"type" <+> ppConIdK d i : map (nest 2 . ppVarId d) as)
-    pPrint d p (CIclass incoh ps ik is fd ats positions) =
+    pPrint d p (CIclass incoh ps ik is fd ats _ positions) =
         t_cls <+> ppPreds d ps (sep (ppConIdK d ik : map (nest 2 . ppVarId d) is)) <> ppFDs d fd
       where t_cls = case incoh of
                      Just False -> t"class coherent"
@@ -1242,10 +1260,14 @@ pBlock _ n nl xs =
         foldr1 ($+$) (map (\ x -> x <> if nl then t";" $+$ t"" else t";") (init xs) ++ [last xs])) $+$
         t"}"
 
-ppDer :: PDetail -> [CTypeclass] -> Doc
-ppDer d [] = text ""
-ppDer d is = text " deriving (" <> sepList (map (pPrint d 0) is) (text ",") <> text ")"
+instance PPrint CDeriving where
+    pPrint d _ (CStock tcs) = case tcs of
+      [] -> t""
+      is -> t" deriving (" <> sepList (map (pPrint d 0) is) (t",") <> t")"
+    pPrint d _ (CVia tc tgt) = t" deriving " <> pPrint d 0 tc <> t" via " <> pPrint d 0 tgt
 
+ppDer :: PDetail -> [CDeriving] -> Doc
+ppDer d drvs = vcatList (map (pPrint d 0) drvs) empty
 
 instance PPrint CExpr where
     pPrint d p (CLam ei e) = ppQuant "\\ "  d p ei e

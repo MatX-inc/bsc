@@ -9,7 +9,7 @@ module BinData ( Byte
                , getN, getB, getI -- , getBytesRead
                , Bin(..)
                , section
-               , encode, decode, decodeWithHash
+               , encode, encodeWith, decode, decodeWithHash
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -42,8 +42,10 @@ import VModInfo
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..),
                  extractFromMethodConflictInfo)
 import Pragma
+import DefProp
 import ASyntax
 import ISyntax
+import IType(iTypeNodeId)
 import Wires
 import CType
 import IntLit
@@ -259,8 +261,18 @@ type_key (TDefMonad _) = internalError $ "BinData.type_key: TDefMonad"
 
 -- We don't use the IType as a key since the Eq instance for some
 -- variants (like ITForAll) ignore Kinds in the equality test.
-data ITypeKey = ITKF IdKey IKind ITypeKey
-              | ITKA ITypeKey ITypeKey
+--
+-- Interior nodes (ITAp/ITForAll) are hash-consed (see IType): the
+-- intern table guarantees one node per exact-serialization-granularity
+-- key, so the intern unique IS the node's structural identity, and the
+-- deep structural key that used to be built here (which re-walked
+-- shared subtrees once per path, exponentially many times on
+-- DAG-shaped types) is unnecessary.  Leaves are not interned and keep
+-- their exact keys.  The unique never enters the byte stream: it only
+-- keys the writer-local sharing map, and the emitted bytes remain
+-- structure plus first-occurrence LOCAL indices, fully
+-- content-determined.
+data ITypeKey = ITKI {-# UNPACK #-} !Int
               | ITKV IdKey
               | ITKC IdKey IKind TISort
               | ITKN Integer
@@ -268,12 +280,12 @@ data ITypeKey = ITKF IdKey IKind ITypeKey
   deriving (Eq, Ord, Show)
 
 itype_key :: IType -> ITypeKey
-itype_key (ITForAll i k t) = ITKF (id_key i) k (itype_key t)
-itype_key (ITAp t1 t2)     = ITKA (itype_key t1) (itype_key t2)
-itype_key (ITVar i)        = ITKV (id_key i)
-itype_key (ITCon i k s)    = ITKC (id_key i) k s
-itype_key (ITNum n)        = ITKN n
-itype_key (ITStr s)        = ITKS s
+itype_key t@(ITForAll _ _ _) = ITKI (iTypeNodeId t)
+itype_key t@(ITAp _ _)       = ITKI (iTypeNodeId t)
+itype_key (ITVar i)          = ITKV (id_key i)
+itype_key (ITCon i k s)      = ITKC (id_key i) k s
+itype_key (ITNum n)          = ITKN n
+itype_key (ITStr s)          = ITKS s
 
 -- -------------------------------------------------------------
 -- The Out monad makes it easy to generate composite BinData
@@ -730,6 +742,7 @@ instance Bin IdProp where
                                   = do putI 35 ; toBin poss
     writeBytes IdPParserGenerated = putI 36
     writeBytes IdPIncoherent      = putI 37
+    writeBytes IdPCAF             = putI 38
     readBytes = do
         i <- getI
         case i of
@@ -762,6 +775,7 @@ instance Bin IdProp where
           35 -> do poss <- fromBin; return (IdPInlinedPositions poss)
           36 -> return IdPParserGenerated
           37 -> return IdPIncoherent
+          38 -> return IdPCAF
           n  -> internalError $ "BinData.Bin(IdProp).readBytes: " ++ show n
 
 
@@ -801,6 +815,8 @@ instance Bin PProp where
     writeBytes (PPdeprecate txt)        = do putI 31; toBin txt
     writeBytes (PPinst_hide)            = putI 32
     writeBytes (PPinst_hide_all)        = putI 33
+    writeBytes (PPdefault_clock_arg i)  = do putI 34; toBin i
+    writeBytes (PPdefault_reset_arg i)  = do putI 35; toBin i
     readBytes = do
         i <- getI
         case i of
@@ -837,6 +853,8 @@ instance Bin PProp where
           31 -> do txt <- fromBin; return (PPdeprecate txt)
           32 -> return PPinst_hide
           33 -> return PPinst_hide_all
+          34 -> do i <- fromBin; return (PPdefault_clock_arg i)
+          35 -> do i <- fromBin; return (PPdefault_reset_arg i)
           n  -> internalError $ "BinData.Bin(PProp).readBytes: " ++ show n
 
 instance Bin PPnm where
@@ -1115,6 +1133,9 @@ instance Bin DefProp where
     writeBytes (DefP_Method i) = do putI 1 ; toBin i
     writeBytes (DefP_Instance i) = do putI 2 ; toBin i
     writeBytes DefP_NoCSE = putI 3
+    writeBytes (DefP_DictRendering s) = do putI 4 ; toBin s
+    writeBytes (DefP_DictKids ks) = do putI 5 ; toBin ks
+    writeBytes (DefP_DictTypes ts) = do putI 6 ; toBin ts
     readBytes = do
       select <- getI
       case select of
@@ -1122,6 +1143,9 @@ instance Bin DefProp where
         1 -> do i <- fromBin ; return $ DefP_Method i
         2 -> do i <- fromBin ; return $ DefP_Instance i
         3 -> return DefP_NoCSE
+        4 -> do s <- fromBin ; return $ DefP_DictRendering s
+        5 -> do ks <- fromBin ; return $ DefP_DictKids ks
+        6 -> do ts <- fromBin ; return $ DefP_DictTypes ts
         n -> internalError $ "BinData.Bin(DefProp).readBytes: " ++ show n
 
 -- ------------
@@ -1482,14 +1506,18 @@ buildHistogram bes = snd (foldl build (["<UNCLAIMED>"], M.empty) bes)
 -- matching (Left value) the first time it is encountered
 -- and (Right idx) each time afterward, updating the cache
 -- to track known values.
-share :: BinElem -> BinCache -> ([BinElem], BinCache)
-share (S s)   bc = share' s s bc
-share (I i)   bc = share' (id_key i) i bc
-share (P p)   bc = share' p p bc
-share (T t)   bc = share' (type_key t) t bc
-share (IT t)  bc = share' (itype_key t) t bc
--- share (ASL l) bc = share' l l bc
-share be      bc = ([be], bc)
+-- The Position transform (-remap-path-prefix) is applied before
+-- sharing, so the cache is keyed on the stored (remapped) value:
+-- positions that remap equal share a single payload, and the reader
+-- (which reconstructs sharing by occurrence) sees a canonical stream.
+share :: (Position -> Position) -> BinElem -> BinCache -> ([BinElem], BinCache)
+share _ (S s)   bc = share' s s bc
+share _ (I i)   bc = share' (id_key i) i bc
+share remapP (P p) bc = let p' = remapP p in share' p' p' bc
+share _ (T t)   bc = share' (type_key t) t bc
+share _ (IT t)  bc = share' (itype_key t) t bc
+-- share _ (ASL l) bc = share' l l bc
+share _ be      bc = ([be], bc)
 
 share' :: (Bin v, Shared k v) => k -> v -> BinCache -> ([BinElem], BinCache)
 share' k x bc =
@@ -1499,13 +1527,13 @@ share' k x bc =
                            addKey k x bc)
 
 
-compress :: [BinElem] -> [BinElem]
-compress bes = compress' (bes, unknownCache)
+compress :: (Position -> Position) -> [BinElem] -> [BinElem]
+compress remapP bes = compress' (bes, unknownCache)
   where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
         compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
         compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
         compress' ((x:xs), cache) =
-          let (bes, cache') = share x cache
+          let (bes, cache') = share remapP x cache
           in -- trace ((show x) ++ " -> " ++ (show bes)) $
              compress' (bes ++ xs, cache')
         compress' ([], _) = []
@@ -1514,18 +1542,24 @@ compress bes = compress' (bes, unknownCache)
 -- byte stream is generated lazily through the monad and preserves
 -- sharing.
 
-runOut :: Out () -> [Byte]
-runOut (Out xs _) = let bes   = compress $ toList xs
-                        bytes = concat [ bs | B bs <- bes ]
-                    in -- trace ("xs = " ++ (show xs)) $
-                       -- trace ("bytes = " ++ (show bytes)) $
-                       if trace_bindata
-                       then trace (showHist (buildHistogram bes)) $ bytes
-                       else bytes
+runOutWith :: (Position -> Position) -> Out () -> [Byte]
+runOutWith remapP (Out xs _) =
+    let bes   = compress remapP $ toList xs
+        bytes = concat [ bs | B bs <- bes ]
+    in -- trace ("xs = " ++ (show xs)) $
+       -- trace ("bytes = " ++ (show bytes)) $
+       if trace_bindata
+       then trace (showHist (buildHistogram bes)) $ bytes
+       else bytes
 
 -- Convenience function for encoding structures in the Bin typeclass
 encode :: (Bin a) => a -> [Byte]
-encode x = runOut (toBin x)
+encode = encodeWith id
+
+-- encode with a Position transform applied to stored positions
+-- (-remap-path-prefix; see share)
+encodeWith :: (Bin a) => (Position -> Position) -> a -> [Byte]
+encodeWith remapP x = runOutWith remapP (toBin x)
 
 runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
 runIn (In f) bs do_hash =

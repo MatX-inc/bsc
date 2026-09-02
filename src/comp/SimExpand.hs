@@ -2,7 +2,8 @@
 module SimExpand ( simExpand, simExpandWith, simCheckBluesimTop,
                    simExpandSched, simCheckPackage ) where
 
-import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList)
+import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList,
+                   fromMaybe, listToMaybe)
 import Data.List (partition, union, nub, sort, sortBy, delete, intercalate)
 import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
@@ -19,14 +20,15 @@ import FStringCompat(mkFString)
 import Backend
 
 import PreStrings (sSigned, sUnsigned)
-import PreIds (idDefaultClock, idDefaultReset)
+import PreIds (idDefaultClock, idDefaultReset, idInteger)
 import Id (mkId,
            setSignedId, getIdString, unQualId, isRdyId,
            getIdBaseString, getIdQualString, setIdQualString, emptyId,
            mkIdTempReturn)
 import VModInfo
 import Wires(WireProps(..), ClockDomain)
-import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..))
+import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..),
+              getDefaultClockArg, getDefaultResetArg)
 import ASyntax
 import ASyntaxUtil(aSubst, findAExprs, exprFold, aAnds)
 import AScheduleInfo
@@ -95,17 +97,39 @@ simExpandWith errh flags checkTop topname fabis = do
     let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
 
     -- record default clock and reset for top module
-    let def_clk = msum $ [ lookup idDefaultClock xs
-                         | (PPclock_osc xs) <- (abmi_pps topModInfo)
-                         ] ++
-                         [Just "CLK"]
+    -- (when an argument is designated as the default clock/reset, its
+    -- port serves as the top-level default clock/reset)
+    let top_pps = abmi_pps topModInfo
+        arg_port_name prefix rename_lookups arg =
+            let base = getIdBaseString arg
+                m_name = msum [ lookup arg xs | xs <- rename_lookups ]
+                dflt = if (null prefix) then base else (prefix ++ "_" ++ base)
+            in  fromMaybe dflt m_name
+        def_clk = case (getDefaultClockArg top_pps) of
+                    Just arg ->
+                        let prefix = fromMaybe "CLK" $
+                                       listToMaybe [ s | PPCLK s <- top_pps ]
+                            renames = [ xs | PPclock_osc xs <- top_pps ]
+                        in  Just (arg_port_name prefix renames arg)
+                    Nothing ->
+                        msum $ [ lookup idDefaultClock xs
+                               | (PPclock_osc xs) <- top_pps
+                               ] ++
+                               [Just "CLK"]
         top_clk = do x <- def_clk
                      guard (not (null x))
                      return x
-        def_rst = msum $ [ lookup idDefaultReset xs
-                         | (PPreset_port xs) <- (abmi_pps topModInfo)
-                         ] ++
-                         [Just "RSTN"]
+        def_rst = case (getDefaultResetArg top_pps) of
+                    Just arg ->
+                        let prefix = fromMaybe (resetName flags) $
+                                       listToMaybe [ s | PPRSTN s <- top_pps ]
+                            renames = [ xs | PPreset_port xs <- top_pps ]
+                        in  Just (arg_port_name prefix renames arg)
+                    Nothing ->
+                        msum $ [ lookup idDefaultReset xs
+                               | (PPreset_port xs) <- top_pps
+                               ] ++
+                               [Just "RSTN"]
         top_rst = do x <- def_rst
                      guard (not (null x))
                      return x
@@ -220,13 +244,24 @@ simExpandABin errh flags (abi,ver) = do
 
     let insts = apkg_state_instances apkg
 
+    let
+        -- Integer parameters are canonicalized to Bit 32 at instantiation
+        -- (see PrimParam in the Prelude) and referenced at Bit types, so
+        -- give the input the same representation; Bluesim has no value
+        -- type for an abstract Integer
+        cvtIntegerParam (AAI_Port (i, ATAbstract t []), vai)
+            | isParam vai && t == idInteger = AAI_Port (i, ATBit 32)
+        cvtIntegerParam (ai, _) = ai
+
+        inputs = map cvtIntegerParam (getAPackageInputs apkg)
+
     let simpkg = SimPackage {
                      sp_name = apkg_name apkg,
                      sp_is_wrapped = apkg_is_wrapped apkg,
                      sp_version = ver,
                      sp_pps = abmi_pps abi,
                      sp_size_params = apkg_size_params apkg,
-                     sp_inputs = apkg_inputs apkg,
+                     sp_inputs = inputs,
                      sp_clock_domains = apkg_clock_domains apkg,
                      sp_external_wires = apkg_external_wires apkg,
                      sp_reset_list = apkg_reset_list apkg,
@@ -2524,9 +2559,11 @@ getWPropDomain i wprops =
 -- An always_enabled interface method is refused because the model has
 -- no caller to fire it; SystemC is exempt because its wrapper is that
 -- caller.  Top-level arguments and parameters are refused outright,
--- since nothing supplies a value for them.
+-- since nothing supplies a value for them.  In -c mode the output is
+-- never executed, so any module may serve as the codegen root and
+-- neither refusal applies.
 simCheckBluesimTop :: ErrorHandle -> Flags -> ABinModInfo -> IO ()
-simCheckBluesimTop errh flags topModInfo = do
+simCheckBluesimTop errh flags topModInfo = when (not (blockCodegen flags)) $ do
     when ((not (genSysC flags)) && hasEnabledMethod topModInfo) $
         bsError errh [(noPosition, EBSimEnablePragma)]
     let (top_args, top_params) = getArgsAndParams topModInfo

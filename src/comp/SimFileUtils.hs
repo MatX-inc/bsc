@@ -31,10 +31,16 @@ getModTime f =
                 return $ Just (modificationTime s)
         else return Nothing
 
+-- Settings that make an object unreusable under a different setting (isStale
+-- checks these before reuse).  blockCodegen (-c mode) is omitted: its output
+-- equals the submodule form (see DEVELOP.md).  "top" marks top form (the
+-- form the -e link's schedule and model_ expect), so a block-form artifact
+-- can never be taken as a link's top, nor vice versa.
 codeGenOptionDescr :: Flags -> Bool -> String
 codeGenOptionDescr flags is_top =
     unwords $ [ "Generation options:" ] ++
               (if (keepFires flags) then ["keep-fires"] else []) ++
+              (if is_top then ["top"] else []) ++
               (if (is_top && (genSysC flags)) then ["sysc-top"] else []) ++
               -- with -dump-formats none the per-signal waveform dumping
               -- code is not generated, so such objects cannot be reused
@@ -42,7 +48,12 @@ codeGenOptionDescr flags is_top =
               -- code is the same for all formats, so which format does
               -- not matter, only whether any is enabled
               (if (any (`elem` ["vcd", "fst"]) (dumpFormats flags))
-               then [] else ["no-wave-dump"])
+               then [] else ["no-wave-dump"]) ++
+              -- ASAny lowering happens at codegen time (SimPackageOpt and
+              -- SimBlocksToC read unSpecTo), so an object generated under
+              -- a different -unspecified-to must not be reused: its bytes
+              -- would silently dishonor the link's requested lowering
+              [ "unspec-" ++ unSpecTo flags ]
 
 readCodeGenOptionDescr :: FilePath -> IO (Maybe String)
 readCodeGenOptionDescr f =

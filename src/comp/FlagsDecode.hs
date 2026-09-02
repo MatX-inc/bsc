@@ -147,6 +147,8 @@ data Decoded = DHelp Flags       -- Display the public help message
              | DVerLink Flags String [VFileName] [String] [String]
                -- entry, ABin files and C files to be generated and linked
              | DSimLink Flags String [String] [String]
+               -- modules to generate code for (-c) and ABin files
+             | DCodeGen Flags [String] [String]
 
 decodeArgs :: String -> [String] -> String -> ([WMsg], Decoded)
 decodeArgs prog args cdir =
@@ -164,6 +166,11 @@ decodeArgs prog args cdir =
                                (printFlagsHidden flags) ||
                                (printFlagsRaw flags))
                            then (warnings, DNoSrc flags)
+                           else
+                           -- -c mode needs no file names; the .ba files
+                           -- are found by module name on the search path
+                           if not (null (codegenNames flags))
+                           then (warnings, checkCodeGenFlags flags [])
                            else -- We allow the file names to be omitted if the
                                 -- backend and entry point are both specified
                                 case (entry flags) of
@@ -201,6 +208,12 @@ decodeArgs prog args cdir =
                                                     ELinkFilesWithSrc name known_ext_names)]
                                               else DError [(cmdPosition,
                                                             EUnrecognizedCmdLineText (head names))])
+                             -- -c mode consumes only .ba files; this must
+                             -- come before the all-HDL case below, so that
+                             -- "-c mkFoo foo.v" errors rather than being
+                             -- treated as implicit-Verilog linking
+                             ([], names) | not (null (codegenNames flags)) ->
+                                 (warnings, checkCodeGenFlags flags names)
                              -- Backwards support for optional -verilog.
                              ([], names) | all isHDLSrcFile names ->
                                  -- generation flag not supported during linking
@@ -232,6 +245,10 @@ decodeArgs prog args cdir =
 -- check that the flags are OK for compiling Bluespec src file
 checkBSrcFlags :: Flags -> String -> Decoded
 checkBSrcFlags flags filename =
+    -- -c generates from .ba files, not from source
+    if not (null (codegenNames flags))
+    then DError [(cmdPosition, EGenWithSrcFile filename)]
+    else
     -- if generate is requested, require a backend
     if not (null (genName flags)) && (backend flags == Nothing)
     then DError [(cmdPosition, ENoBackendCodeGen (genName flags))]
@@ -307,6 +324,52 @@ checkLinkFlags flags names =
                      DSimLink flags top anames cnames
         -- error if no backend chosen
         else DError [(cmdPosition, ENoBackendLinking)]
+
+
+-- check that the flags are OK for the .ba -> code generation mode (-c)
+checkCodeGenFlags :: Flags -> [String] -> Decoded
+checkCodeGenFlags flags names =
+    let (anames, bad_names) = partition isABinFile names
+        mods = codegenNames flags
+        errBadName name =
+            if not (elem '.' name)
+            then (cmdPosition, ENoSrcExt name)
+            else (cmdPosition, EUnknownSrcExt (takeSuf name))
+        bad_name_errs = map errBadName bad_names
+    in  -- check for flags after file names
+        checkNamesForFlag bad_names $
+        -- -c consumes only .ba files (C and HDL files belong to link mode)
+        if not (null bad_names)
+        then DError bad_name_errs
+        else
+        -- -g compiles and generates from source, not from .ba
+        if not (null (genName flags))
+        then DError [(cmdPosition, EGenNamesForLinking (genName flags))]
+        else
+        -- -e selects link mode, which is a separate step
+        case (entry flags) of
+          Just e -> DError [(cmdPosition, EGenWithEntry e)]
+          Nothing ->
+            -- SystemC generation has no per-module codegen mode
+            if (genSysC flags)
+            then DError [(cmdPosition, EGenWithSystemC)]
+            else
+            case (backend flags) of
+              Nothing -> DError [(cmdPosition, ENoBackendCodeGen mods)]
+              Just Bluesim ->
+                  -- Only 2-state values are allowed for don't-cares
+                  if ( (unSpecTo flags == "X") || (unSpecTo flags == "Z") )
+                  then DError [(cmdPosition, EBluesimNoXZ (unSpecTo flags))]
+                  else
+                  -- The -remove-dollar flag only applies to Verilog
+                  if (removeVerilogDollar flags)
+                  then DError [(cmdPosition, EDollarNoVerilog)]
+                  else
+                  -- Everything is OK for Bluesim code generation
+                  DCodeGen flags mods anames
+              Just Verilog ->
+                  -- .ba -> .v generation is not supported yet
+                  DError [(cmdPosition, EGenVerilogNotSupported)]
 
 
 -- and, if so, error that flags must go before source files
@@ -446,6 +509,7 @@ traceflags = [
           "trace-atf-cache-miss",
           "trace-ctxreduce",
           "trace-debug",
+          "trace-drop-dicts",
           "trace-eval-steps",
           "trace-eval-types",
           "trace-eval-if",
@@ -462,8 +526,10 @@ traceflags = [
           "trace-inst-tree",
           "trace-instance-overlap",
           "legacy-inst-index",
+          "legacy-defer-instances",
           "trace-kind-inference",
           "trace-lift",
+          "trace-lift-dicts",
           "trace-mergesched",
           "trace-mutatormap",
           "trace-ncsets",
@@ -480,6 +546,7 @@ traceflags = [
           "trace-schedinfo",
           "trace-scmap",
           "trace-scmaps",
+          "trace-simp-dicts",
           "trace-skip-trim",
           "trace-simplify",
           "trace-smt-conv",
@@ -494,13 +561,16 @@ traceflags = [
           "trace-type-extsubst",
           "trace-usemap",
           "trace-disjoint-tests",
+          "check-subst-bound",
           "trace-a-definitions",
           "trace-clock",
           "trace-def-cache",
           "trace-cexpr-cache",
           "hack-disable-urgency-warnings",
+          "hack-eager-pack-unpack",
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
+          "hack-no-itype-ftv-cache",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",
           "show-qualifiers",
@@ -514,10 +584,12 @@ traceflags = [
 defaultFlags :: String -> Flags
 defaultFlags bluespecdir = Flags {
         aggImpConds = True,
+        remapPathPrefix = [],
         allowIncoherentMatches = False,
         backend = Nothing,
         bdir = Nothing,
         biasMethodScheduling = False,
+        blockCodegen = False,
         bluespecDir = bluespecdir,
         cIncPath = [],
         cLibPath = [],
@@ -528,6 +600,7 @@ defaultFlags bluespecdir = Flags {
         cppFlags = [],
         linkFlags = [],
         cdir = Nothing,
+        codegenNames = [],
         cpp = False,
         defines = [],
         demoteErrors = SomeMsgs [],
@@ -567,6 +640,7 @@ defaultFlags bluespecdir = Flags {
         kill = Nothing,
         ifLift = True,
         letGen = False,
+        liftDicts = True,
         maxTIStackDepth = 1000,
         methodBVI = False,
         methodConf = False,
@@ -644,7 +718,6 @@ defaultFlags bluespecdir = Flags {
         usePrelude = True,
         useProvisoSAT = True,
         stdlibNames = False,
-        v95 = False,
         vFlags = [],
         vdir = Nothing,
         -- The vPath value will be produced from the raw value,
@@ -1110,6 +1183,10 @@ externalFlags = [
          (Toggle (\f x -> f {biasMethodScheduling=x}) (showIfTrue biasMethodScheduling),
           "schedule methods before rules when possible", Hidden)),
 
+        ("c",
+         (Arg "module" (\f s -> Left (f {codegenNames = codegenNames f ++ [s]})) (Just (FRTListString codegenNames)),
+          "generate code for `module' from its elaborated .ba file", Visible)),
+
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
           "test assertions with the Assert library", Visible)),
@@ -1254,6 +1331,10 @@ externalFlags = [
         ("l",
          (Arg "library" (\f s -> Left (f {cLibs = cLibs f ++ [s]})) (Just (FRTListString cLibs)),
           "library to use when linking foreign C/C++ objects", Visible)),
+
+        ("lift-dicts",
+         (Toggle (\f x -> f {liftDicts=x}) (showIfTrue liftDicts),
+          "lift and deduplicate typeclass dictionaries", Hidden)),
 
         ("lift",
          (Toggle (\f x -> f {ifLift=x}) (showIfTrue ifLift),
@@ -1429,6 +1510,20 @@ externalFlags = [
         ("resource-simple",
          (Resource RFsimple,
           "reschedule on insufficient resources", Visible)),
+
+        ("remap-path-prefix",
+         (Arg "from=to"
+              (\f s -> case break (== '=') s of
+                         (from@(_:_), '=':to) ->
+                             Left (f { remapPathPrefix =
+                                           remapPathPrefix f ++ [(from, to)] })
+                         _ -> Right (cmdPosition,
+                                     EBadArgFlag "-remap-path-prefix" s
+                                         ["FROM=TO"]))
+              (Just (FRTListString (map (\(from, to) -> from ++ "=" ++ to)
+                                       . remapPathPrefix))),
+          "remap FROM path prefixes to TO in paths stored in generated" ++
+          " .bo and .ba files (for reproducible builds)", Visible)),
 
         ("remove-dollar",
          (Toggle (\f x -> f { removeVerilogDollar = x }) (showIfTrue removeVerilogDollar),
@@ -1668,10 +1763,6 @@ externalFlags = [
          (Toggle (\f x -> f {stdlibNames=x}) (showIfTrue stdlibNames),
           "the source file is from the standard library", Hidden)),
 
-        ("v95",
-         (Toggle (\f x -> f {v95=x}) (showIfTrue v95),
-          "generate strict Verilog 95 code", Visible)),
-
         ("vdir",
          (Arg "dir" (\f s -> Left (f {vdir = Just s})) (Just (FRTMaybeString vdir)),
           "output directory for .v files", Visible)),
@@ -1687,6 +1778,20 @@ externalFlags = [
           "be less talkative", Visible)),
         ("q",
          (Alias "quiet", "same as -quiet", Visible)),
+
+        -- Removed flag (2026-07): the generated Verilog stopped conforming
+        -- to Verilog-95 long before the flag was removed, so requests for
+        -- it fail with a specific message rather than EUnknownFlag.
+        ("v95",
+         (NoArg (\_ -> Right (cmdPosition,
+                              EObsolete "flag" "-v95"
+                                  ("The generated Verilog has not conformed to " ++
+                                   "Verilog-1995 for some time, so the flag has " ++
+                                   "been removed.  The output now always uses " ++
+                                   "named instance parameters and other " ++
+                                   "post-1995 constructs.")))
+                Nothing,
+          "removed: bsc no longer generates Verilog-1995 output", Hidden)),
 
         ("verilog",
          let setFn f = setBackend f Verilog
@@ -1862,6 +1967,7 @@ showFlagsRaw flags =
           ("cLibPath", show (cLibPath flags)),
           ("cLibs", show (cLibs flags)),
           ("cdir", show (cdir flags)),
+          ("codegenNames", show (codegenNames flags)),
           ("cpp", show (cpp flags)),
           ("cppFlags", show (cppFlags flags)),
           ("cxxFlags", show (cxxFlags flags)),
@@ -1895,6 +2001,7 @@ showFlagsRaw flags =
           ("keepInlined", show (keepInlined flags)),
           ("kill", show (kill flags)),
           ("letGen", show (letGen flags)),
+          ("liftDicts", show (liftDicts flags)),
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
           ("methodBVI", show (methodBVI flags)),
@@ -1973,7 +2080,6 @@ showFlagsRaw flags =
           ("useNegate", show (useNegate flags)),
           ("usePrelude", show (usePrelude flags)),
           ("useProvisoSAT", show (useProvisoSAT flags)),
-          ("v95", show (v95 flags)),
           ("vFlags", show (vFlags flags)),
           ("vPath", show (vPath flags)),
           ("vPathRaw", show (vPathRaw flags)),

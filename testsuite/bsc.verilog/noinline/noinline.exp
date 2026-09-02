@@ -56,11 +56,17 @@ test_c_veri_bsv_modules NoInlineInSched {module_inv}
 
 if { $vtest == 1 } {
 
-compile_verilog_fail_error NoInline_ArgNotInBits.bsv T0043
+# two T0043s: the definition-level report (with the module name) and the
+# unresolved Bits residual rooted back to the interface method (with the
+# method position)
+compile_verilog_fail_error NoInline_ArgNotInBits.bsv T0043 2
 # compare for good measure, since the error has a configurable string
 compare_file NoInline_ArgNotInBits.bsv.bsc-vcomp-out
 
-compile_verilog_fail_error NoInline_ResNotInBits.bsv T0043
+# the combined tree reports the interface-method residual through the
+# WrapMethod proviso chain (T0032) instead of a third T0043; detection
+# is intact and richer (same adjustment as release-2026.07.rc3)
+compile_verilog_fail_error NoInline_ResNotInBits.bsv T0043 2
 # compare for good measure, since the error has a configurable string
 compare_file NoInline_ResNotInBits.bsv.bsc-vcomp-out
 
@@ -73,5 +79,17 @@ compile_verilog_fail NoInline_PredNotReducible.bsv T0110
 compile_verilog_pass NoInline_PredReducible.bsv
 
 compile_verilog_fail NoInline_Polymorphic.bsv T0111
+
+# A foreign function bound to a module must use a bare type variable or
+# a literal for every bit width (widths become instance parameters named
+# by the type variables; a type-function width has no name to pass)
+compile_verilog_fail BadForeignWidth.bs T0162
+
+# Numeric provisos on foreign functions are permitted (checked at each
+# application, then erased); anything else is rejected
+compile_verilog_pass ForeignCtxGood.bs
+find_regexp sysForeignCtxGood.v {Dup #\(\.iw\(8\), \.ow\(16\)\)}
+compile_verilog_fail ForeignCtxViolated.bs T0031
+compile_verilog_fail ForeignCtxBad.bs T0163
 }
 
