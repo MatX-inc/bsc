@@ -42,9 +42,16 @@ while read -r rel; do
     [ -n "$top" ] || { skipped=$((skipped + 1)); continue; }
     d=$wk/$(echo "$rel" | tr / _)
     mkdir -p "$d" && cp "$root/$rel" "$d/" || { skipped=$((skipped + 1)); continue; }
+    # A design whose schedule needs dynamic ordering does not compile
+    # statically at all, so fall back to -sched-dynamic rather than
+    # dropping it: those are exactly the designs whose compositions
+    # carry guarded alternatives, and skipping them would leave that
+    # part of the merge unmeasured.
     if ( cd "$d" \
-         && "$bin/bsc" -sim "$n.bsv" >/dev/null 2>&1 \
-         && "$bin/bsc" -sim -e "$top" -o o.out >/dev/null 2>&1 \
+         && { "$bin/bsc" -sim "$n.bsv" >/dev/null 2>&1 \
+              && "$bin/bsc" -sim -e "$top" -o o.out >/dev/null 2>&1 \
+              || "$bin/bsc" -sim -sched-dynamic -u -g "$top" "$n.bsv" \
+                   >/dev/null 2>&1; } \
          && "$bin/trs-bir" "$top" >/dev/null 2>&1 \
          && echo "# $rel" >> "$diff" \
          && TRS_MERGE_CHECK="$diff" "$bin/trs" ir dump "$top.bir" >/dev/null 2>&1 )

@@ -962,23 +962,35 @@ fn combine_sched_map(
 /// instantiation; walking the instance tree says the same thing, and
 /// says plainly that the result grows with the instance count.  What a
 /// module says about itself is still read once, through `Inputs`.
-pub fn merged_graph(
-    inp: &Inputs,
-) -> BTreeMap<QNode, Vec<QNode>> {
-    let mut sub: Vec<BTreeMap<QNode, Vec<QNode>>> = vec![BTreeMap::new(); inp.hier.insts.len()];
+pub fn merged_graph(inp: &Inputs) -> (BTreeMap<QNode, Vec<QNode>>, Vec<DynFact>) {
+    let n = inp.hier.insts.len();
+    let mut sub: Vec<BTreeMap<QNode, Vec<QNode>>> = vec![BTreeMap::new(); n];
+    let mut facts: Vec<Vec<DynFact>> = (0..n).map(|_| Vec::new()).collect();
 
     // a parent's index is always below its children's, so counting down
     // reaches every child before its parent
-    for i in (0..inp.hier.insts.len()).rev() {
+    for i in (0..n).rev() {
         let (csi, uses) = inp.at(i);
         let mut g: BTreeMap<QNode, Vec<QNode>> = csi
             .sched
             .iter()
             .map(|(n, tos)| (q(i as u32, *n), tos.iter().map(|t| q(i as u32, *t)).collect()))
             .collect();
+        let mut mine: Vec<DynFact> = inp
+            .module(i as u32)
+            .schedule
+            .dyn_scheds
+            .iter()
+            .map(|d| DynFact {
+                inst: i as u32,
+                sched: d.clone(),
+                drops_l: Vec::new(),
+                drops_e: Vec::new(),
+            })
+            .collect();
 
         for &(c, cpos) in &inp.hier.kids[i] {
-            let cmod = &inp.module(c as u32);
+            let cmod = inp.module(c as u32);
             let mut pu: Vec<(QNode, Vec<QNode>)> = Vec::new();
             let mut add = |e: SchedEntity, meths: &Vec<StrId>, sched: bool| {
                 let ns: Vec<QNode> = meths
@@ -1001,12 +1013,32 @@ pub fn merged_graph(
             }
 
             let child = std::mem::take(&mut sub[c]);
+
+            // a self-call fact on this child: the edges its two flagged
+            // calls fuse in are what each of its states makes vacuous,
+            // and the child's graph is what says so
+            let rev = reverse(&child);
+            for f in &mut mine {
+                let crate::schedule::DynSched::SelfCall { rule, early, late, .. } = &f.sched
+                else {
+                    continue;
+                };
+                if early.instance != cpos {
+                    continue;
+                }
+                let caller = q(i as u32, SchedNode::Exec(SchedEntity::Rule(*rule)));
+                f.drops_l = fused_edges(&child, &rev, c as u32, caller, late.method);
+                f.drops_e = fused_edges(&child, &rev, c as u32, caller, early.method);
+            }
+
             combine_sched_map(&mut g, c as u32, &child, &pu);
+            mine.append(&mut facts[c]);
         }
         sub[i] = g;
+        facts[i] = mine;
     }
 
-    sub.swap_remove(0)
+    (sub.swap_remove(0), std::mem::take(&mut facts[0]))
 }
 
 /// The design's disjointness (`combineSchedDRDB`), folded the same way.
@@ -1376,14 +1408,8 @@ pub fn compositions(inp: &Inputs) -> Result<Vec<Composition>, String> {
     // the inhibitor walk whichever of the two it was recorded under
     let both_ways = symmetric(&disjoint);
     let up = unified_domains(inp);
-    let graph = merged_graph(inp);
-    let orders = domain_orders(inp, &up, &graph).map_err(|stuck| {
-        format!(
-            "cycle in the merged graph: {} nodes unplaced, first {}",
-            stuck.len(),
-            stuck.first().map(|n| qname(inp, *n)).unwrap_or_default()
-        )
-    })?;
+    let (graph, facts) = merged_graph(inp);
+    let orders = domain_orders(inp, &up, &facts, &graph)?;
 
     let mut out = Vec::new();
     for d in orders {
@@ -1397,22 +1423,35 @@ pub fn compositions(inp: &Inputs) -> Result<Vec<Composition>, String> {
             .and_then(|osc| osc_name(inp, osc))
             .and_then(|n| inp.design.str_id(&n))
             .unwrap_or(0);
-        let (ticks, neg_ticks) = domain_ticks(inp, &up, d.domain);
-        out.push(Composition {
-            clock,
-            posedge: true,
-            entries: units
+        let entries_of = |units: Vec<Unit>| -> Vec<CompositionEntry> {
+            units
                 .into_iter()
                 .map(|(i, domain, segment)| CompositionEntry {
                     instance: inst_id(inp, i),
                     domain,
                     segment,
                 })
-                .collect(),
+                .collect()
+        };
+        let mut alts = Vec::new();
+        for a in &d.alts {
+            let aunits = derive_entries(inp, &a.order, &a.graph, &disjoint)?;
+            alts.push(crate::schedule::SchedAlt {
+                guard_inst: inst_id(inp, a.inst),
+                guard: a.guard.clone(),
+                cross_inhibits: cross_inhibits(inp, &aunits, &both_ways),
+                entries: entries_of(aunits),
+            });
+        }
+        let (ticks, neg_ticks) = domain_ticks(inp, &up, d.domain);
+        out.push(Composition {
+            clock,
+            posedge: true,
+            entries: entries_of(units),
             ticks,
             early: early_rules(inp, &up, d.domain),
             cross_inhibits: inhibits,
-            alts: vec![],
+            alts,
         });
         // The falling edge of the same clock runs no rules, but it does
         // tick whatever asked to be ticked there.
@@ -1695,6 +1734,231 @@ fn node_domain(
     resolved(up, QDomain::of_module(n.inst, d))
 }
 
+/// One dynamic-scheduling fact, as the merge accumulates it.
+///
+/// A fact records an ordering the static schedule cannot pin across a
+/// submodule, together with the edges each of its per-cycle states
+/// makes vacuous -- which can only be worked out where the child's own
+/// graph is still to hand, so they are filled in as the fold passes.
+pub struct DynFact {
+    /// the instance whose module stated it
+    pub inst: u32,
+    pub sched: crate::schedule::DynSched,
+    /// a self-call's fused edges: the late call's, then the early one's
+    pub drops_l: Vec<(QNode, QNode)>,
+    pub drops_e: Vec<(QNode, QNode)>,
+}
+
+/// The edges fusing `r`'s use of `meth` creates, with the multiplicity
+/// `combine_sched_map` gives them: everything before the method comes
+/// before the rule, and the rule comes before everything after it.
+fn fused_edges(
+    child: &BTreeMap<QNode, Vec<QNode>>,
+    rev: &BTreeMap<QNode, Vec<QNode>>,
+    c: u32,
+    caller: QNode,
+    meth: crate::MethodRef,
+) -> Vec<(QNode, QNode)> {
+    let e = SchedEntity::Method(meth);
+    let nodes = [q(c, SchedNode::Sched(e)), q(c, SchedNode::Exec(e))];
+    let mut out = Vec::new();
+    for u in nodes {
+        for p in rev.get(&u).into_iter().flatten() {
+            if !is_method(&p.node) {
+                out.push((*p, caller));
+            }
+        }
+    }
+    for u in nodes {
+        for s in child.get(&u).into_iter().flatten() {
+            if !is_method(&s.node) {
+                out.push((caller, *s));
+            }
+        }
+    }
+    out
+}
+
+/// Which edges one per-cycle state of a fact makes vacuous.
+enum Vacuous {
+    /// a rule that cannot fire: its execution's cross-instance edges go,
+    /// in both directions.  Its module-local edges stay, which keeps
+    /// the flat order as close to the base as it can be.
+    Idle(Vec<QNode>),
+    /// a call that cannot happen: the edges fusing it drop, one
+    /// occurrence each, so an edge another live use also justifies
+    /// keeps its other occurrences.
+    Edges(Vec<(QNode, QNode)>),
+}
+
+/// The states one fact can be in on a given cycle, each with what it
+/// makes vacuous, guardless default last.
+fn fact_states(f: &DynFact) -> Vec<(Option<Expr>, Vacuous)> {
+    use crate::schedule::DynSched as D;
+    match &f.sched {
+        D::Pair { rule_e, guard_e, rule_l, guard_l, .. } => {
+            let e = q(f.inst, SchedNode::Exec(SchedEntity::Rule(*rule_e)));
+            let l = q(f.inst, SchedNode::Exec(SchedEntity::Rule(*rule_l)));
+            match guard_l {
+                None => vec![
+                    (Some(guard_e.clone()), Vacuous::Idle(vec![l])),
+                    (None, Vacuous::Idle(vec![e])),
+                ],
+                Some(gl) => vec![
+                    (Some(guard_e.clone()), Vacuous::Idle(vec![l])),
+                    (Some(gl.clone()), Vacuous::Idle(vec![e])),
+                    (None, Vacuous::Idle(vec![e, l])),
+                ],
+            }
+        }
+        D::SelfCall { guard, .. } => vec![
+            (Some(guard.clone()), Vacuous::Edges(f.drops_l.clone())),
+            (None, Vacuous::Edges(f.drops_e.clone())),
+        ],
+    }
+}
+
+/// Drop a node's cross-instance edges, both ways.
+fn drop_idle(g: &mut BTreeMap<QNode, Vec<QNode>>, n: QNode) {
+    if let Some(tos) = g.get_mut(&n) {
+        tos.retain(|t| t.inst == n.inst);
+    }
+    for (k, tos) in g.iter_mut() {
+        if k.inst != n.inst {
+            if let Some(i) = tos.iter().position(|t| *t == n) {
+                tos.remove(i);
+            }
+        }
+    }
+}
+
+/// Drop one occurrence of an edge.
+fn drop_edge(g: &mut BTreeMap<QNode, Vec<QNode>>, (a, b): (QNode, QNode)) {
+    if let Some(tos) = g.get_mut(&a) {
+        if let Some(i) = tos.iter().position(|t| *t == b) {
+            tos.remove(i);
+        }
+    }
+}
+
+fn apply(g: &mut BTreeMap<QNode, Vec<QNode>>, v: &Vacuous) {
+    match v {
+        Vacuous::Idle(ns) => {
+            for n in ns {
+                drop_idle(g, *n);
+            }
+        }
+        Vacuous::Edges(es) => {
+            for e in es {
+                drop_edge(g, *e);
+            }
+        }
+    }
+}
+
+/// The conjunction of some guards, spelled as bsc spells it (`aAnds`).
+fn all_of(gs: &[Expr]) -> Expr {
+    let is_const = |e: &Expr, v: u32| {
+        matches!(e, Expr::Const { limbs, .. }
+                 if limbs.first().copied().unwrap_or(0) == v
+                    && limbs.iter().skip(1).all(|&w| w == 0))
+    };
+    let konst = |v: u32| Expr::Const { width: 1, limbs: vec![v] };
+    if gs.len() == 1 {
+        return gs[0].clone();
+    }
+    if gs.iter().any(|g| is_const(g, 0)) {
+        return konst(0);
+    }
+    let mut args: Vec<Expr> = Vec::new();
+    for g in gs.iter().filter(|g| !is_const(g, 1)) {
+        if !args.contains(g) {
+            args.push(g.clone());
+        }
+    }
+    match args.len() {
+        0 => konst(1),
+        1 => args.pop().expect("just checked"),
+        _ => Expr::Prim { op: crate::PrimOp::And, width: 1, args },
+    }
+}
+
+/// One domain's base schedule and its guarded alternatives.
+///
+/// Each fact is in one of a few states on any given cycle, and in each
+/// state some of the orderings it imposes are vacuous -- the rule
+/// cannot fire, or the call cannot happen.  Every combination of the
+/// facts' states gives one interleaving; the combination that needs no
+/// guard is the base, and the rest become alternatives the runtime
+/// selects by testing guards in order.  Most-active first, so a
+/// combination is reached only when every more-active one failed and
+/// its guard needs no negations.
+fn dyn_alternatives(
+    graph: &BTreeMap<QNode, Vec<QNode>>,
+    facts: &[&DynFact],
+) -> Result<(BTreeMap<QNode, Vec<QNode>>, Vec<(u32, Expr, BTreeMap<QNode, Vec<QNode>>)>), String>
+{
+    if facts.is_empty() {
+        return Ok((graph.clone(), Vec::new()));
+    }
+    // one alternative's guard is a conjunction read in a single
+    // instance, so every fact has to live in the same one
+    let inst = facts[0].inst;
+    if facts.iter().any(|f| f.inst != inst) {
+        return Err("dynamic scheduling across more than one module".to_string());
+    }
+
+    let per: Vec<Vec<(Option<Expr>, Vacuous)>> = facts.iter().map(|f| fact_states(f)).collect();
+    let mut combos: Vec<Vec<usize>> = vec![Vec::new()];
+    for states in &per {
+        combos = combos
+            .into_iter()
+            .flat_map(|c| {
+                (0..states.len()).map(move |k| {
+                    let mut c = c.clone();
+                    c.push(k);
+                    c
+                })
+            })
+            .collect();
+    }
+
+    let guards_of = |c: &[usize]| -> Vec<Expr> {
+        c.iter()
+            .enumerate()
+            .filter_map(|(i, &k)| per[i][k].0.clone())
+            .collect()
+    };
+    let map_of = |c: &[usize]| -> BTreeMap<QNode, Vec<QNode>> {
+        let mut g = graph.clone();
+        for (i, &k) in c.iter().enumerate() {
+            apply(&mut g, &per[i][k].1);
+        }
+        g
+    };
+
+    let (defaults, mut others): (Vec<_>, Vec<_>) =
+        combos.into_iter().partition(|c| guards_of(c).is_empty());
+    let [base] = defaults.as_slice() else {
+        return Err(format!(
+            "dynamic scheduling: {} guardless combinations, expected one",
+            defaults.len()
+        ));
+    };
+    others.sort_by_key(|c| std::cmp::Reverse(guards_of(c).len()));
+    if others.len() > 15 {
+        return Err(format!(
+            "dynamic scheduling: {} order combinations, at most 16 are selectable",
+            others.len() + 1
+        ));
+    }
+    let alts = others
+        .iter()
+        .map(|c| (inst, all_of(&guards_of(c)), map_of(c)))
+        .collect();
+    Ok((map_of(base), alts))
+}
+
 /// The design's execution order, one per clock domain
 /// (`splitCSIByClock`, `SimExpand.hs`).
 ///
@@ -1704,9 +1968,9 @@ fn node_domain(
 pub fn domain_orders(
     inp: &Inputs,
     up: &BTreeMap<QDomain, Fate>,
+    facts: &[DynFact],
     graph: &BTreeMap<QNode, Vec<QNode>>,
-) -> Result<Vec<DomainSched>, Vec<QNode>> {
-
+) -> Result<Vec<DomainSched>, String> {
     // every domain, including those no rule is in: bsc splits by the
     // domain map, not by what the graph happens to mention
     let mut per: BTreeMap<QDomain, BTreeMap<QNode, Vec<QNode>>> =
@@ -1714,18 +1978,44 @@ pub fn domain_orders(
     for (n, tos) in graph {
         let Some(d) = node_domain(inp, up, *n) else { continue };
         let g = per.entry(d).or_default();
-        let kept: Vec<QNode> = tos
-            .iter()
-            .filter(|t| node_domain(inp, up, **t).is_some())
-            .copied()
-            .collect();
+        let kept: Vec<QNode> =
+            tos.iter().filter(|t| node_domain(inp, up, **t).is_some()).copied().collect();
         g.insert(*n, kept);
     }
 
+    let stuck = |what: &str, nodes: Vec<QNode>| {
+        format!(
+            "cycle in the {what}: {} nodes unplaced, first {}",
+            nodes.len(),
+            nodes.first().map(|n| qname(inp, *n)).unwrap_or_default()
+        )
+    };
+
     let mut out = Vec::new();
     for (domain, g) in per {
-        let (order, graph) = flatten(inp, &g)?;
-        out.push(DomainSched { domain, graph, order });
+        // only the facts about rules of this domain bear on it
+        let mine: Vec<&DynFact> = facts
+            .iter()
+            .filter(|f| {
+                let r = match &f.sched {
+                    crate::schedule::DynSched::Pair { rule_e, .. } => *rule_e,
+                    crate::schedule::DynSched::SelfCall { rule, .. } => *rule,
+                };
+                let n = q(f.inst, SchedNode::Exec(SchedEntity::Rule(r)));
+                g.contains_key(&n)
+            })
+            .collect();
+
+        let (base, alt_specs) = dyn_alternatives(&g, &mine)?;
+        let (order, graph) =
+            flatten(inp, &base).map_err(|ns| stuck("merged graph", ns))?;
+        let mut alts = Vec::new();
+        for (inst, guard, amap) in alt_specs {
+            let (aorder, agraph) = flatten(inp, &amap)
+                .map_err(|ns| stuck("merged graph of an alternative", ns))?;
+            alts.push(DomainAlt { inst, guard, graph: agraph, order: aorder });
+        }
+        out.push(DomainSched { domain, graph, order, alts });
     }
     Ok(out)
 }
@@ -2137,6 +2427,14 @@ fn domain_ticks(
 }
 
 /// One clock domain's share of the merged schedule.
+pub struct DomainAlt {
+    /// the instance the guard is read in
+    pub inst: u32,
+    pub guard: Expr,
+    pub graph: BTreeMap<QNode, Vec<QNode>>,
+    pub order: Vec<QNode>,
+}
+
 pub struct DomainSched {
     pub domain: QDomain,
     /// The graph the order was taken from.  A foreign-function edge
@@ -2144,6 +2442,8 @@ pub struct DomainSched {
     /// downstream re-imposes an ordering the sort had to give up.
     pub graph: BTreeMap<QNode, Vec<QNode>>,
     pub order: Vec<QNode>,
+    /// interleavings the runtime picks between by testing guards
+    pub alts: Vec<DomainAlt>,
 }
 
 /// Whether the merged graph holds together, independent of whether it
@@ -2152,7 +2452,7 @@ pub struct DomainSched {
 /// are checkable before anything downstream can compare against the
 /// oracle.
 pub fn graph_anomalies(inp: &Inputs) -> Vec<String> {
-    let g = merged_graph(inp);
+    let (g, _) = merged_graph(inp);
     let mut out = Vec::new();
     // a submodule's methods are the seam the merge joins along and do
     // not survive it; the top's have no caller to be fused into
@@ -2353,6 +2653,44 @@ fn composition_diff(
             want.alts.len()
         ));
     }
+    for (k, (a, b)) in got.alts.iter().zip(want.alts.iter()).enumerate() {
+        let shown = |x: &crate::schedule::SchedAlt| {
+            (
+                inp.name(x.guard_inst).to_string(),
+                format!("{:?}", x.guard),
+                x.entries
+                    .iter()
+                    .map(|e| (inp.name(e.instance).to_string(), e.domain, e.segment))
+                    .collect::<Vec<_>>(),
+                x.cross_inhibits
+                    .iter()
+                    .map(|(p, q)| {
+                        (inp.name(p.instance).to_string(), p.rule.idx(),
+                         inp.name(q.instance).to_string(), q.rule.idx())
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let (ga, gb) = (shown(a), shown(b));
+        if ga.0 != gb.0 || ga.1 != gb.1 {
+            return Some(format!(
+                "comp {i} alternative {k} guard: computed {:?} in {:?}, exported {:?} in {:?}",
+                ga.1, ga.0, gb.1, gb.0
+            ));
+        }
+        if ga.2 != gb.2 {
+            return Some(format!(
+                "comp {i} alternative {k} entries: computed {:?}, exported {:?}",
+                ga.2, gb.2
+            ));
+        }
+        if ga.3 != gb.3 {
+            return Some(format!(
+                "comp {i} alternative {k} inhibitors: computed {:?}, exported {:?}",
+                ga.3, gb.3
+            ));
+        }
+    }
     let shown_pairs = |c: &Composition| {
         c.cross_inhibits
             .iter()
@@ -2471,9 +2809,9 @@ pub fn diff(design: &Design) -> Vec<String> {
     // `-trace-mergesched`; printing ours beside the disagreement makes
     // the two directly comparable.
     {
-        let g = merged_graph(&inp);
+        let (g, facts) = merged_graph(&inp);
         let up = unified_domains(&inp);
-        if let Ok(orders) = domain_orders(&inp, &up, &g) {
+        if let Ok(orders) = domain_orders(&inp, &up, &facts, &g) {
             for d in orders {
                 out.push(format!("  order {:?}:", d.domain));
                 for n in d.order {
@@ -3133,7 +3471,7 @@ mod tests {
         d.modules.push(bot);
 
         assert_eq!(inputs(&d).hier.insts.len(), 3, "top, middle and bottom");
-        let g = merged_graph(&inputs(&d));
+        let (g, _) = merged_graph(&inputs(&d));
 
         let top_exec = q(0, SchedNode::Exec(SchedEntity::Rule(RuleRef(0))));
         let bot_exec = q(2, bot_rule);
