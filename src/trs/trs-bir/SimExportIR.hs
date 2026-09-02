@@ -1679,23 +1679,36 @@ encClockOut :: Id -> EncM C.Encoding
 encClockOut i =
     let qual = getIdQualString i
     in  if '.' `elem` qual
-          then internalError
-                 ("SimExportIR: output clock qualified by a path, not an "
-                  ++ "instance: " ++ show qual ++ "$" ++ getIdBaseString i)
+          then internalError (pathQualified "output clock" qual (getIdBaseString i))
           else do instE <- strE qual
                   clkE <- strE (getIdBaseString i)
                   return $ encVariant "ClockOut" $ encStruct
                     [ ("instance", instE), ("clock", clkE) ]
+
+-- | A clock reference the format cannot spell.
+--
+-- `Expr::Gate` and `Expr::ClockOut` name one instance, and the reader
+-- resolves them by asking that instance -- for a submodule, by reading
+-- the gate it records for the clock it exports, which may itself be a
+-- reference one level further down.  A submodule that exports a clock
+-- it gates internally reaches the exporter already flattened to a wire
+-- of the grandchild ("s.gc$CLK_GATE_OUT"), and there is nothing to hand
+-- the reader that it can follow: the merge derives the reference the
+-- reader wants, but the composition bsc hands over does not carry it.
+-- The whole construct is unsupported rather than half-supported --
+-- encoding the flattened form would turn this into a panic at run time.
+pathQualified :: String -> String -> String -> String
+pathQualified what qual base =
+    "SimExportIR: " ++ what ++ " qualified by a path, not an instance: "
+    ++ show qual ++ "$" ++ base
+    ++ "\n  (a submodule exporting a clock it gates internally)"
 
 encGate :: AExpr -> EncM C.Encoding
 encGate g = case g of
     ASPort _ i | not (null (getIdQualString i)) ->
         let qual = getIdQualString i
         in  if '.' `elem` qual
-              then internalError
-                     ("SimExportIR: gate qualified by a path, not an "
-                      ++ "instance: " ++ show qual ++ "$"
-                      ++ getIdBaseString i)
+              then internalError (pathQualified "gate" qual (getIdBaseString i))
               else do instE <- strE qual
                       clkE <- strE (getIdBaseString i)
                       return $ encVariant "Gate" $ encStruct
