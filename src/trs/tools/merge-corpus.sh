@@ -46,11 +46,15 @@ while read -r rel; do
          && "$bin/bsc" -sim "$n.bsv" >/dev/null 2>&1 \
          && "$bin/bsc" -sim -e "$top" -o o.out >/dev/null 2>&1 \
          && "$bin/trs-bir" "$top" >/dev/null 2>&1 \
+         && echo "# $rel" >> "$diff" \
          && TRS_MERGE_CHECK="$diff" "$bin/trs" ir dump "$top.bir" >/dev/null 2>&1 )
     then linked=$((linked + 1))
     else skipped=$((skipped + 1))
     fi
 done < "$list"
+
+# each design is preceded by a "# <path>" line, so a disagreement can be
+# traced back to the design that produced it
 
 # grep -c exits nonzero on no matches, so count with awk instead
 tally() { awk "$1"' { n++ } END { print n + 0 }' "$diff"; }
@@ -58,4 +62,5 @@ tally() { awk "$1"' { n++ } END { print n + 0 }' "$diff"; }
 echo "linked=$linked skipped=$skipped"
 echo "matched=$(tally '/^ok [0-9]/')" \
      "vacuous=$(tally '/^ok vacuous/')" \
-     "disagreed=$(tally '!/^ok/')"
+     "pending=$(tally '/^pending/')" \
+     "disagreed=$(tally '!/^(ok|pending|#| )/')"

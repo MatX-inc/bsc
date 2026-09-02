@@ -54,7 +54,8 @@ import SCC (tsort)
 import Pragma (RulePragma(..), isAlwaysEn)
 import Wires (ClockDomain(..), ResetId, writeResetId, WireProps(..), wpResets)
 import VModInfo (vName, getVNameString, VWireInfo(..), VClockInfo(..),
-                 VResetInfo(..), VArgInfo(..), vRst)
+                 VResetInfo(..), VArgInfo(..), vRst, lookupOutputClockWires,
+                 lookupInputClockWires)
 import AUses (MethodId(..))
 import AScheduleInfo (AScheduleInfo(..), ADynSched(..), Conflicts(..), RuleRelationDB(..),
                       RuleRelationInfo(..))
@@ -62,7 +63,8 @@ import ASyntax (getInstArgs)
 import ASyntaxUtil (aVars, tupleElemRange, argInputPorts)
 import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
-import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg)
+import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg,
+                            getPrimDomainInfo)
 import SimDomainInfo (DomainInfo(..))
 import ForeignFunctions (ForeignFunction(..), ForeignType(..))
 import ASyntax
@@ -71,7 +73,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 9
+birVersion = 10
 
 -- ===============
 -- String interning
@@ -83,18 +85,22 @@ birVersion = 9
 
 data StrTable = StrTable !(M.Map String Word32) ![String] !Word32
 
-type EncM = State StrTable
+-- | The string table, which spans the design, and the output-clock
+-- wires of the one module being encoded (see 'outClockOscs').
+data EncState = EncState !StrTable !(M.Map AId (String, String))
 
-emptyStrTable :: StrTable
-emptyStrTable = StrTable M.empty [] 0
+type EncM = State EncState
+
+emptyState :: EncState
+emptyState = EncState (StrTable M.empty [] 0) M.empty
 
 str :: String -> EncM Word32
 str s = do
-    StrTable m rev n <- gets id
+    EncState (StrTable m rev n) oscs <- gets id
     case M.lookup s m of
       Just i  -> return i
       Nothing -> do
-        modify (\_ -> StrTable (M.insert s n m) (s : rev) (n + 1))
+        modify (\_ -> EncState (StrTable (M.insert s n m) (s : rev) (n + 1)) oscs)
         return n
 
 strE :: String -> EncM C.Encoding
@@ -103,8 +109,8 @@ strE s = encW32 <$> str s
 idE :: Id -> EncM C.Encoding
 idE = strE . getIdBaseString
 
-tableStrings :: StrTable -> [String]
-tableStrings (StrTable _ rev _) = reverse rev
+tableStrings :: EncState -> [String]
+tableStrings (EncState (StrTable _ rev _) _) = reverse rev
 
 -- ===============
 -- Encoding helpers (ciborium/serde conventions)
@@ -171,28 +177,28 @@ schedHeader = L.pack (magic ++ leWord32 birVersion)
     leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
                  | k <- [0, 8, 16, 24] ]
 
-simSystemToBir :: Bool -> M.Map String (S.Set AId) -> SimSystem
-               -> L.ByteString
-simSystemToBir keepF symMap ssys =
-    birHeader <> CW.toLazyByteString (encDesign keepF symMap ssys)
+simSystemToBir :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
+               -> SimSystem -> L.ByteString
+simSystemToBir keepF symMap elabs ssys =
+    birHeader <> CW.toLazyByteString (encDesign keepF symMap elabs ssys)
 
 -- | Write the design's .bir file.
-writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
-             -> IO ()
-writeBirFile path keepF symMap ssys =
-    L.writeFile path (simSystemToBir keepF symMap ssys)
+writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId)
+             -> M.Map String [AId] -> SimSystem -> IO ()
+writeBirFile path keepF symMap elabs ssys =
+    L.writeFile path (simSystemToBir keepF symMap elabs ssys)
 
 -- | Write the merged design schedule beside it, for inspection and for
 -- comparison against a schedule computed some other way.
-writeSchedFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
-               -> IO ()
-writeSchedFile path keepF symMap ssys =
+writeSchedFile :: FilePath -> Bool -> M.Map String (S.Set AId)
+               -> M.Map String [AId] -> SimSystem -> IO ()
+writeSchedFile path keepF symMap elabs ssys =
     L.writeFile path (schedHeader
-                      <> CW.toLazyByteString (encSched keepF symMap ssys))
+                      <> CW.toLazyByteString (encSched keepF symMap elabs ssys))
 
-encDesignFields :: Bool -> M.Map String (S.Set AId) -> SimSystem
-                -> [(String, C.Encoding)]
-encDesignFields keepF symMap ssys =
+encDesignFields :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
+                -> SimSystem -> [(String, C.Encoding)]
+encDesignFields keepF symMap elabs ssys =
     let pkgs = M.elems (ssys_packages ssys)
         pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
         instmap = M.toList (ssys_instmap ssys)
@@ -215,6 +221,8 @@ encDesignFields keepF symMap ssys =
                                    (msis M.! getIdBaseString (sp_name p))
                                    (M.findWithDefault S.empty
                                       (getIdBaseString (sp_name p)) symMap)
+                                   (M.findWithDefault []
+                                      (getIdBaseString (sp_name p)) elabs)
                                    p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
@@ -236,23 +244,26 @@ encDesignFields keepF symMap ssys =
             , ("uses_wave_tasks", encBool (designUsesWaveTasks pkgs))
             ]
 
-        (fields, finalTbl) = runState action emptyStrTable
+        (fields, finalTbl) = runState action emptyState
         strsEnc = encList (map encStr (tableStrings finalTbl))
         fields' = [ (k, if k == "strings" then strsEnc else v)
                   | (k, v) <- fields ]
     in  fields'
 
 -- | The whole design.
-encDesign :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
-encDesign keepF symMap ssys = encStruct (encDesignFields keepF symMap ssys)
+encDesign :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
+          -> SimSystem -> C.Encoding
+encDesign keepF symMap elabs ssys =
+    encStruct (encDesignFields keepF symMap elabs ssys)
 
 -- | The design schedule alone, with the table its ids index.  Same
 -- derivation and same encoding as the .bir carries -- a separate one
 -- could drift from what bsc actually computes, and this exists to be
 -- compared against.
-encSched :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
-encSched keepF symMap ssys =
-    encStruct [ f | f@(k, _) <- encDesignFields keepF symMap ssys
+encSched :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
+         -> SimSystem -> C.Encoding
+encSched keepF symMap elabs ssys =
+    encStruct [ f | f@(k, _) <- encDesignFields keepF symMap elabs ssys
               , k `elem` ["strings", "compositions"] ]
 
 -- ===============
@@ -817,14 +828,15 @@ oscName clk = case aclock_osc clk of
 -- Modules
 
 encModule :: S.Set String -> M.Map String ModSchedInfo -> ModSchedInfo
-          -> S.Set AId -> SimPackage
+          -> S.Set AId -> [AId] -> SimPackage
           -> EncM C.Encoding
-encModule pkgNames msis msi symSet pkg = do
+encModule pkgNames msis msi symSet elab_ids pkg = do
     nameId <- idE (sp_name pkg)
     -- the modules this fragment reaches across its boundary
     let externNames = externsOf pkgNames pkg
         externIx = M.fromList (zip externNames [0 ..])
     externIds <- mapM str externNames
+    setOutClockOscs (M.elems (sp_state_instances pkg))
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
     insEnc0 <- concat <$> mapM encInput (sp_inputs pkg)
@@ -841,9 +853,14 @@ encModule pkgNames msis msi symSet pkg = do
     let insEnc = insEnc0 ++ enInsEnc
     -- construction order matters for load-time output (RegFileLoad gap
     -- warnings): match the C++ backend's alphabetization (raw_avis)
-    let avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
+    -- Constructed alphabetically, to match the C++ backend, but the
+    -- order the module elaborated them is what tick accumulation
+    -- follows, so each instance carries its place in it.
+    let elab = M.fromList (zip elab_ids [0 :: Int ..])
+        avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                       (M.elems (sp_state_instances pkg))
-    instsEnc0 <- mapM (encInstance pkgNames externIx (sp_method_order_map pkg)) avis
+    instsEnc0 <- mapM (encInstance pkgNames externIx elab
+                                   (sp_method_order_map pkg)) avis
     -- noinline functions instantiate as argument-less modules whose one
     -- value method computes the function
     niEnc <- mapM (\(iname, mname) -> do
@@ -877,6 +894,18 @@ encModule pkgNames msis msi symSet pkg = do
     schedEnc <- encSchedule msis msi pkg
     -- interface output clocks: external port name -> the internal osc
     -- wire being re-exported (constant = noClock, never ticks)
+    -- the clocks this module takes in, and the ports they arrive on.
+    -- inputs carries the ports; only this says which clock they are.
+    inClksEnc <- sequence
+      [ do n <- idE clkId
+           o <- strE (getVNameString osc)
+           g <- traverse (strE . getVNameString) mgate
+           return $ encStruct
+             [ ("name", n), ("osc", o), ("gate", encMaybe id g) ]
+      | (clkId, Just (osc, gatePort)) <- input_clocks (wClk (sp_external_wires pkg))
+      , let mgate = case gatePort of
+                      Right gv -> Just gv
+                      Left _   -> Nothing ]
     let oclks = output_clocks (wClk (sp_external_wires pkg))
         oclkPortName n = case lookup n oclks of
                            Just (Just (vn, _)) -> getVNameString vn
@@ -886,12 +915,7 @@ encModule pkgNames msis msi symSet pkg = do
     ifcClksEnc <- sequence
       [ do pn <- str (oclkPortName (aif_name f))
            oscEnc <- case aclock_osc (aif_clock f) of
-                       -- an osc qualified by an instance is that
-                       -- submodule's output clock; name the submodule
-                       -- rather than splice it into a port name
-                       ASPort _ i | not (null (getIdQualString i)) ->
-                           encClockOut i
-                       p@(ASPort {}) -> encExpr p
+                       p@(ASPort {}) -> encOsc p
                        _ -> return constZero
            return (encPair (encW32 pn) oscEnc)
       | f@(AIClock {}) <- sp_interface pkg ]
@@ -929,6 +953,7 @@ encModule pkgNames msis msi symSet pkg = do
       , ("clock_domains", encList domsEnc)
       , ("resets", encList rstsEnc)
       , ("inputs", encList insEnc)
+      , ("input_clocks", encList inClksEnc)
       , ("ifc_clocks", encList ifcClksEnc)
       , ("ifc_clock_gates", encList ifcClkGatesEnc)
       , ("ifc_resets", encList ifcRstsEnc)
@@ -1105,10 +1130,43 @@ encRuleRefName msi n =
                    ("SimExportIR: no rule " ++ show n
                     ++ " in its own module's rule list")
 
+-- | Every wire in this module that carries a submodule's output clock,
+-- paired with the submodule and the port it leaves the submodule on.
+--
+-- The wire's own name has the instance spliced into it, and by the time
+-- a clock domain names it the two halves are one string.  Resolving it
+-- here, where the instance is still a thing rather than a substring, is
+-- what lets the format name the submodule directly.
+outClockOscs :: [AVInst] -> M.Map AId (String, String)
+outClockOscs avis = M.fromList
+    [ (osc_wire, (getIdBaseString (avi_vname avi), getVNameString port))
+    | avi <- avis
+    , (clk_id, osc_wire, _) <- getOutputClockWires avi
+    , let (port, _) = lookupOutputClockWires clk_id (avi_vmi avi) ]
+
+-- | Record the output-clock wires of the module about to be encoded.
+setOutClockOscs :: [AVInst] -> EncM ()
+setOutClockOscs avis =
+    modify (\(EncState t _) -> EncState t (outClockOscs avis))
+
+-- | A clock's oscillator, naming the submodule that exports it where
+-- there is one.
+encOsc :: AExpr -> EncM C.Encoding
+encOsc e@(ASPort _ i) = do
+    EncState _ oscs <- gets id
+    case M.lookup i oscs of
+      Just (inst, port) -> do instE <- strE inst
+                              clkE <- strE port
+                              return $ encVariant "ClockOut" $ encStruct
+                                [ ("instance", instE), ("clock", clkE) ]
+      Nothing | not (null (getIdQualString i)) -> encClockOut i
+              | otherwise -> encExpr e
+encOsc e = encExpr e
+
 encClockDomain :: AClockDomain -> EncM C.Encoding
 encClockDomain (ClockDomain n, clocks) = do
-    clksEnc <- mapM (\c -> encPair <$> encExpr (aclock_osc c)
-                                   <*> encExpr (aclock_gate c))
+    clksEnc <- mapM (\c -> encPair <$> encOsc (aclock_osc c)
+                                   <*> encGate (aclock_gate c))
                     clocks
     return $ encStruct
       [ ("id", encW32 (fromIntegral n))
@@ -1203,9 +1261,9 @@ externsOf pkgNames pkg =
                  , let m = getVNameString (vName (avi_vmi avi))
                  , m `S.member` pkgNames ]
 
-encInstance :: S.Set String -> M.Map String Int -> MethodOrderMap -> AVInst
-            -> EncM C.Encoding
-encInstance pkgNames externIx mom avi = do
+encInstance :: S.Set String -> M.Map String Int -> M.Map AId Int
+            -> MethodOrderMap -> AVInst -> EncM C.Encoding
+encInstance pkgNames externIx elab mom avi = do
     nameId <- idE (avi_vname avi)
     -- the instance's clock wiring, as VArgInfo describes it: which
     -- argument carries which named clock, and whether that clock has an
@@ -1264,10 +1322,41 @@ encInstance pkgNames externIx mom avi = do
     portsEnc <- mapM (\(m, n) -> encPair <$> idE m
                                          <*> pure (encW32 (fromIntegral n)))
                      (avi_iarray avi)
+    -- A primitive has no fragment of its own, so its clock domains --
+    -- a divider's slow output, a crossing register's two sides -- have
+    -- to be carried by the module that instantiates it, the same three
+    -- facts a submodule's fragment would state for itself.
+    primClksEnc <- case getPrimDomainInfo avi modName of
+      Nothing -> return C.encodeNull
+      Just (avi', doms, outs) -> do
+        let vmi' = avi_vmi avi'
+        insEnc <- sequence
+          [ do n <- idE clk_id
+               o <- strE (getVNameString osc)
+               g <- traverse (strE . getVNameString) mgate
+               return $ encStruct
+                 [ ("name", n), ("osc", o), ("gate", encMaybe id g) ]
+          | (ClockArg clk_id, _) <- getInstArgs avi'
+          , Just (osc, mgate) <- [lookupInputClockWires clk_id vmi'] ]
+        domsEnc <- mapM encClockDomain doms
+        outsEnc <- sequence
+          [ do p <- strE (getVNameString port)
+               o <- encOsc (aclock_osc aclk)
+               return (encPair p o)
+          | AIClock clk_id aclk _ <- outs
+          , let (port, _) = lookupOutputClockWires clk_id vmi' ]
+        return $ encStruct
+          [ ("inputs", encList insEnc)
+          , ("domains", encList domsEnc)
+          , ("outputs", encList outsEnc)
+          ]
     return $ encStruct
       [ ("name", nameId)
       , ("kind", kindEnc)
       , ("clock_args", encList clkArgsEnc)
+      , ("elab_order",
+         encW32 (fromIntegral (M.findWithDefault 0 (avi_vname avi) elab)))
+      , ("prim_clocks", primClksEnc)
       , ("args", encList argsEnc)
       , ("method_order", encList morderEnc)
       , ("port_counts", encList portsEnc)
@@ -1668,8 +1757,8 @@ encExpr (AMGate _ obj clk) = do
       , ("clock", c)
       ]
 encExpr (ASClock _ clk) = do
-    oscEnc <- encExpr (aclock_osc clk)
-    gateEnc <- encExpr (aclock_gate clk)
+    oscEnc <- encOsc (aclock_osc clk)
+    gateEnc <- encGate (aclock_gate clk)
     return $ encVariant "Clock" $ encStruct
       [ ("osc", oscEnc)
       , ("gate", gateEnc)
@@ -1799,7 +1888,7 @@ encAction _ (ACall obj meth (cond : args)) = do
       , ("cond", condEnc)
       , ("args", encList argsEnc)
       ]
-encAction sgn (AFCall _ fun _ (cond : args) _) = do
+encAction sgn (AFCall _ fun _ (cond : args) assump) = do
     f <- strE fun
     condEnc <- encExpr cond
     argsEnc <- mapM encExpr args
@@ -1808,8 +1897,9 @@ encAction sgn (AFCall _ fun _ (cond : args) _) = do
       , ("cond", condEnc)
       , ("args", encList argsEnc)
       , ("signed", encList (map (encBool . argSigned sgn) args))
+      , ("assumption", encBool assump)
       ]
-encAction sgn (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
+encAction sgn (ATaskAction _ fun _ cookie (cond : args) mtemp mty assump) = do
     f <- strE fun
     tempEnc <- traverse idE mtemp
     condEnc <- encExpr cond
@@ -1822,6 +1912,7 @@ encAction sgn (ATaskAction _ fun _ cookie (cond : args) mtemp mty _) = do
       , ("cond", condEnc)
       , ("args", encList argsEnc)
       , ("signed", encList (map (encBool . argSigned sgn) args))
+      , ("assumption", encBool assump)
       ]
 encAction _ a = internalError ("SimExportIR.encAction: " ++ ppReadable a)
 

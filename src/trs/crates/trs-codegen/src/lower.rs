@@ -6204,7 +6204,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 Stmt::Action(a) => self.action(f, func, a, stop_bb)?,
                 Stmt::AvAction { def, action } => match action {
-                    Action::Task { func: tf, cookie, temp, width, cond, args, signed } => {
+                    Action::Task { func: tf, cookie, temp, width, cond, args, signed, .. } => {
                         let v = self.task_call(
                             f, func, *tf, *cookie, *temp, *width, cond, args, signed,
                             stop_bb,
@@ -7581,7 +7581,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.builder.position_at_end(sk_bb);
                 Ok(())
             }
-            Action::Foreign { func: ff, cond, args, signed } => {
+            Action::Foreign { func: ff, cond, args, signed, .. } => {
                 let wc = self.expr_width(f, cond)?;
                 let c = self.expr(f, cond)?;
                 let cz = self.nonzero(c, wc);
@@ -7603,7 +7603,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.builder.position_at_end(sk_bb);
                 Ok(())
             }
-            Action::Task { func: tf, cookie, temp, width, cond, args, signed } => {
+            Action::Task { func: tf, cookie, temp, width, cond, args, signed, .. } => {
                 self.task_call(
                     f, func, *tf, *cookie, *temp, *width, cond, args, signed, stop_bb,
                 )?;

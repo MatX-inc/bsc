@@ -13,6 +13,7 @@
 
 pub mod expr;
 pub mod merge;
+mod psq;
 pub mod schedule;
 pub mod verify;
 
@@ -27,7 +28,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 9;
+pub const BIR_VERSION: u32 = 10;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -354,6 +355,13 @@ pub struct Module {
     pub clock_domains: Vec<ClockDomain>,
     pub resets: Vec<Reset>,
     pub inputs: Vec<Port>,
+    /// The clocks this module imports: the clock's own name, and the
+    /// ports carrying its oscillator and gate.  `inputs` has the ports
+    /// but not which clock they belong to, and the link needs the
+    /// grouping to unify a child's domain with the parent clock wired
+    /// to it (`lookupInputClockWires`).
+    #[serde(default)]
+    pub input_clocks: Vec<InputClock>,
     /// Interface output clocks: external port name (e.g. CLK_outclk) ->
     /// the internal osc wire being re-exported (a constant = noClock,
     /// which never ticks).
@@ -413,6 +421,36 @@ pub enum PortKind {
     Parameter,
 }
 
+/// A clock a module takes in, and the ports it arrives on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputClock {
+    /// the clock's name in this module's interface
+    pub name: StrId,
+    /// the port carrying its oscillator
+    pub osc: StrId,
+    /// the port carrying its gate, when it is gated
+    pub gate: Option<StrId>,
+}
+
+/// The clock structure of a primitive instance.
+///
+/// A submodule brings its own fragment, which says what domains it has
+/// and which clocks it exports.  A primitive has none, so the module
+/// instantiating it carries the same three facts on its behalf
+/// (`getPrimDomainInfo`, `SimPrimitiveModules.hs`).  A clock
+/// divider, for instance, has a domain for the clock it takes in and
+/// another for the slower one it hands back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrimClocks {
+    /// Clocks it takes in, by the port each arrives on.
+    pub inputs: Vec<InputClock>,
+    /// Its own clock domains, over its ports.
+    pub domains: Vec<ClockDomain>,
+    /// Clocks it exports: the port each leaves on, and the oscillator
+    /// behind it.
+    pub outputs: Vec<(StrId, Expr)>,
+}
+
 /// A clock argument of an instantiated module, as bsc's `VArgInfo`
 /// describes it.  A fragment carries this rather than a reader looking
 /// it up in a table of known primitives: an imported Verilog module's
@@ -467,8 +505,17 @@ pub struct Instance {
     /// link reads from their own fragment.
     #[serde(default)]
     pub clock_args: Vec<ClockArg>,
+    /// Where this instance sits in the order the module elaborated its
+    /// instances.  The list itself is ordered for construction, which
+    /// is what load-time output depends on; tick accumulation follows
+    /// elaboration order instead (`di_prims`), and the two differ.
+    #[serde(default)]
+    pub elab_order: u32,
+    /// Present for a primitive that has clock domains of its own.
+    #[serde(default)]
+    pub prim_clocks: Option<PrimClocks>,
     /// Instantiation arguments; constant by construction (Bluesim rejects
-    /// dynamic instantiation args, `SimExpand.hs:2158`).
+    /// dynamic instantiation args, `SimExpand.hs`).
     pub args: Vec<Expr>,
     /// Pairs (a, b) of methods where a must execute before b within one
     /// atomic action — the `sSB` relation (`MethodOrderMap`).
@@ -487,7 +534,7 @@ pub enum InstanceKind {
 }
 
 /// Primitives the backend knows how to lay out or call into trs-rt.
-/// The full set today is `SimPrimitiveModules.hs:263-348`; this enum grows
+/// The full set today is `SimPrimitiveModules.hs`; this enum grows
 /// with the phases in DESIGN.md §10.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Primitive {
@@ -554,7 +601,7 @@ pub struct Rule {
     /// Intra-module ME inhibitors: disjoint rules executing *earlier* in
     /// this module's segment order whose CAN_FIREs are negated into this
     /// rule's effective CAN_FIRE — the destructive-execution correctness
-    /// patch (`mkMERuleInhibits`, `SimMakeCBlocks.hs:1636-1658`).  Fixed
+    /// patch (`mkMERuleInhibits`, `SimMakeCBlocks.hs`).  Fixed
     /// per module type; cross-module pairs are in
     /// `Composition::cross_inhibits`.
     pub me_inhibits: Vec<RuleRef>,
@@ -821,7 +868,7 @@ impl Design {
     /// Build `str_ids` from `strings`.  Every path that produces a
     /// Design must call this — the field is derived, so neither the
     /// CBOR body nor the snapshot image carries it.
-    fn index_strings(&mut self) {
+    pub(crate) fn index_strings(&mut self) {
         self.str_ids = self
             .strings
             .iter()
@@ -874,6 +921,7 @@ mod tests {
                 clock_domains: vec![],
                 resets: vec![],
                 inputs: vec![],
+                input_clocks: vec![],
                 ifc_clocks: vec![],
                 ifc_clock_gates: vec![],
                 ifc_resets: vec![],

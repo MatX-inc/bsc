@@ -2189,7 +2189,7 @@ impl Interp {
                 let child = self.child_of(inst, *instance);
                 self.call_action(child, *method, *port, &argv);
             }
-            Action::Foreign { func, cond, args, signed } => {
+            Action::Foreign { func, cond, args, signed, .. } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
@@ -2203,7 +2203,7 @@ impl Interp {
                 let loc = self.loc_of(inst);
                 self.foreign_action(&fname, &argv, &loc);
             }
-            Action::Task { func, cookie, temp, width, cond, args, signed } => {
+            Action::Task { func, cookie, temp, width, cond, args, signed, .. } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }

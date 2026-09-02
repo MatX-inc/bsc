@@ -32,14 +32,18 @@ import System.Process(rawSystem)
 import System.IO(hSetBuffering, hSetEncoding, stdout, stderr, hPutStr,
                  hPutStrLn, BufferMode(..), utf8)
 
-import ABinUtil(readAndCheckABin)
+import ABinUtil(readAndCheckABin, getABIHierarchy)
 import Backend(Backend(..))
+import SimCCBlock(SimCCBlock(..), primBlocks)
 import ForeignFunctions(ForeignFunction(..))
 import Id(getIdString)
-import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK)
+import ASyntax(apkg_state_instances, avi_vname)
+import ABin(abmi_apkg)
+import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK,
+             convExceptTToIO)
 import Exceptions(bsCatch)
 import FileNameUtil(baseName, dirName, createEncodedFullFilePath)
-import Flags(Flags(..), Verbosity(..))
+import Flags(Flags(..), Verbosity(..), verbose)
 import FlagsDecode(defaultFlags)
 import IOUtil(getEnvDef)
 import SimCCBlock
@@ -233,10 +237,21 @@ exportBir errh flags opts toplevel afilenames = do
                         S.fromList [ i | (_, i) <- sb_publicDefs sb, isOkId i ])
                      | sb <- sbs_opt ]
 
-    writeBirFile birfile (keepFires flags) symMap sim_system_opt
+    -- The order each module elaborated its instances in.  A SimPackage
+    -- keys its instances by name and so loses it, but the primitives'
+    -- ticks accumulate in this order, so it is read back off the
+    -- APackages the .ba files carry.
+    (_, _, _, _, _, _, emis) <- convExceptTToIO errh $
+        getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
+                        (map sb_name primBlocks) toplevel abis
+    let elabs = M.fromList
+                  [ (nm, map avi_vname (apkg_state_instances (abmi_apkg mi)))
+                  | (nm, (Right mi, _)) <- emis ]
+
+    writeBirFile birfile (keepFires flags) symMap elabs sim_system_opt
     case optDumpSched opts of
       Nothing -> return ()
-      Just p  -> writeSchedFile p (keepFires flags) symMap sim_system_opt
+      Just p  -> writeSchedFile p (keepFires flags) symMap elabs sim_system_opt
     writeBdpiSo opts toplevel prefix sim_system_opt
 
 -- | The companion the trs runtime dlopens for BDPI imports.

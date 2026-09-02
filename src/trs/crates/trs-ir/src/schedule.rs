@@ -10,7 +10,7 @@
 //! The factoring trick: the only points where a module's internal execution
 //! order interacts with the outside world are its *interface methods* —
 //! cross-boundary constraints attach to method nodes, which the merge fuses
-//! into the calling parent rules (`SimExpand.hs:1040-1076`).  So a module's
+//! into the calling parent rules (`SimExpand.hs`).  So a module's
 //! internal order can be split into **segments** at the positions its
 //! method nodes occupy in its own schedule, and the whole-design order
 //! becomes a **composition**: an interleaving of (instance, segment)
@@ -23,7 +23,7 @@
 //! level instead:
 //! - cross-module disjointness: the merge derives parent-rule ↔ child-rule
 //!   disjoint pairs through method use (`combineSchedDRDB`,
-//!   `SimExpand.hs:1362-1429`); the ME inhibitors for those pairs depend on
+//!   `SimExpand.hs`); the ME inhibitors for those pairs depend on
 //!   the composed order, so they are exported as qualified pairs.
 //! - primitive tick ordering across instances (producers before consumers,
 //!   `sortTickCalls`) and clock-crossing "early" rules.
@@ -34,7 +34,7 @@ use crate::expr::Expr;
 use crate::{MethodRef, RuleRef, SchedEntity, StrId};
 
 /// `Sched r` computes r's fire conditions; `Exec r` runs r's body.
-/// (`SchedNode`, `AScheduleInfo.hs:218`.)  Ordered so the merge can key
+/// (`SchedNode`, `AScheduleInfo.hs`.)  Ordered so the merge can key
 /// maps on it: bsc's own Ord puts every Sched before every Exec, and
 /// the derived order does the same because Sched is declared first.
 #[derive(
@@ -128,7 +128,7 @@ pub struct Schedule {
     #[serde(default)]
     pub finish_rules: Vec<RuleRef>,
     /// The module's own schedule graph: each node paired with the nodes
-    /// that must follow it (`asi_sched_graph`).  The design-level merge
+    /// that must precede it (`asi_sched_graph`).  The design-level merge
     /// reads this; the segments above are what the merge produces.
     #[serde(default)]
     pub sched_graph: Vec<(SchedNode, Vec<SchedNode>)>,
@@ -173,7 +173,7 @@ pub struct Segment {
 }
 
 /// A tick on a primitive instance (`di_prims`; `doTickCall`,
-/// `SimMakeCBlocks.hs:618`).
+/// `SimMakeCBlocks.hs`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TickCall {
     pub instance: StrId,

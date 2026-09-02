@@ -1,5 +1,5 @@
 //! Expressions and actions — the `AExpr`/`AAction` analogues
-//! (`ASyntax.hs:936-1148`).
+//! (`ASyntax.hs`).
 
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     /// The returned value of an ActionValue method; the action side carries
-    /// the arguments (split as in `AMethValue`, `ASyntax.hs:1049`).
+    /// the arguments (split as in `AMethValue`, `ASyntax.hs`).
     MethValue { width: u32, instance: StrId, method: StrId },
     /// Value of an ActionValue foreign task, correlated by cookie
     /// (`ATaskValue`).
@@ -156,8 +156,16 @@ pub enum Action {
         cond: Expr,
         args: Vec<Expr>,
         /// Per-arg signed-display flags (`encodeArgs`'s "-" prefix,
-        /// `ForeignFunctions.hs:256-262`).
+        /// `ForeignFunctions.hs`).
         signed: Vec<bool>,
+        /// A check the compiler inserted to police an assumption it was
+        /// given (a mutual-exclusion pragma, say).  It executes like any
+        /// other call, but what it reads does not order anything: bsc
+        /// leaves an assumption out of the use map the schedule merge
+        /// reads (`aUses`, `SimExpand.hs`), so the rule it sits in
+        /// is not ordered against the submodules it mentions.
+        #[serde(default)]
+        assumption: bool,
     },
     /// Foreign ActionValue task; `cookie` links to `Expr::TaskValue`,
     /// `temp` is the def receiving the value (`ATaskAction`).
@@ -170,5 +178,9 @@ pub enum Action {
         args: Vec<Expr>,
         /// Per-arg signed-display flags.
         signed: Vec<bool>,
+        /// As for `Foreign`: a compiler-inserted assumption check,
+        /// whose reads order nothing.
+        #[serde(default)]
+        assumption: bool,
     },
 }
