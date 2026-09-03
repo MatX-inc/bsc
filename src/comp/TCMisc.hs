@@ -834,7 +834,7 @@ findAssump i as =
     [] -> do
         s <- getSymTab
         case findVar s i of
-         Nothing -> errorAtId EUnboundVar i
+         Nothing -> errorAtId (\v -> EUnboundVar v []) i
          Just (VarInfo _ a d pkg) -> do
             recordPackageUse pkg
             case d of

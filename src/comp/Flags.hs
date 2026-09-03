@@ -26,6 +26,7 @@ data Flags = Flags {
         backend :: Maybe Backend,
         bdir :: Maybe String,
         biasMethodScheduling :: Bool,
+        bloogleDb :: Maybe String,
         bluespecDir :: String,
         cIncPath :: [String],
         cLibPath :: [String],

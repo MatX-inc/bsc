@@ -518,6 +518,7 @@ defaultFlags bluespecdir = Flags {
         backend = Nothing,
         bdir = Nothing,
         biasMethodScheduling = False,
+        bloogleDb = Nothing,
         bluespecDir = bluespecdir,
         cIncPath = [],
         cLibPath = [],
@@ -1107,6 +1108,11 @@ externalFlags = [
         ("bias-method-scheduling",
          (Toggle (\f x -> f {biasMethodScheduling=x}) (showIfTrue biasMethodScheduling),
           "schedule methods before rules when possible", Hidden)),
+
+        ("bloogle-db",
+         (Arg "path" (\f s -> Left (f {bloogleDb = Just s}))
+                                        (Just (FRTMaybeString bloogleDb)),
+          "bloogle database used to suggest matches for typed holes and unbound variables", Visible)),
 
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
