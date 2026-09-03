@@ -53,6 +53,7 @@ module CSyntax(
         leftCon,
         anyExpr,
         anyExprAt,
+        holeExprAt,
         anyTExpr,
         noType,
         cTApply,
@@ -951,6 +952,10 @@ getNK n k = internalError ("getNK: " ++ ppReadable (n, k))
 anyExprAt :: Position -> CExpr
 anyExprAt pos = CAny pos UDontCare
 
+-- a typed hole ("__"): a dont-care whose inferred type is reported
+holeExprAt :: Position -> CExpr
+holeExprAt pos = CAny pos UHole
+
 anyExpr :: CExpr
 anyExpr = anyExprAt noPosition
 
@@ -1279,6 +1284,7 @@ instance PPrint CExpr where
     pPrint d p (CCon i []) = ppConId d i
     pPrint d p (CCon i es) = pPrint d p (CApply (CCon i []) es)
     pPrint d p (Ccase pos e arms) = pparen (p > 0) $ ppCase d e arms
+    pPrint d p (CAny _ UHole) = text "__"
     pPrint d p (CAny {}) = text "_"
     pPrint d p (CVar i) = ppVarId d i
     pPrint d p (CStruct _ tyc []) | tyc == idPrimUnit = text "()"
