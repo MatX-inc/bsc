@@ -12,6 +12,7 @@
 //! - This models what the *backend* needs, not everything bsc knows.
 
 pub mod expr;
+pub mod link;
 pub mod merge;
 mod psq;
 pub mod schedule;
@@ -29,7 +30,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 10;
+pub const BIR_VERSION: u32 = 11;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -193,7 +194,92 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
     }
 }
 
-/// A whole linked design: the top module and every module in its hierarchy.
+/// The contents of one .bir file.
+///
+/// A .bir holds either one synthesized module or a whole linked
+/// design, and nothing else -- those are the two things anything
+/// produces.  bsc writes the first (`trs-bir --single-fragment`); a
+/// link writes the second, as the .bir an artifact carries beside it.
+/// bsc has no whole-design format of its own: its .ba set *is* the
+/// design, and everything design-level is derived by whatever walks
+/// the hierarchy.  This format follows that, one reduction further
+/// along.
+///
+/// The fields out here are the ones both bodies need.  `strings` is
+/// file-wide: every `StrId` under `body` indexes it, whichever body it
+/// is.  `foreign_funcs` is the same kind of thing, a table the content
+/// references by position.  `uses_wave_tasks` is a fact about the
+/// content as a whole, which a link takes the union of.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bir {
+    pub strings: Vec<String>,
+    /// Foreign (BDPI) function signatures the content calls.
+    pub foreign_funcs: Vec<ForeignFunc>,
+    /// Whether the content calls a wave-recording task ($dumpvars and
+    /// family).  Recorded by the exporter, where rule bodies are plain
+    /// data: the runtime sees them deferred behind `Lazy`, and the
+    /// string table cannot distinguish a call to `$dumpvars` from a
+    /// string literal equal to it.
+    pub uses_wave_tasks: bool,
+    pub body: BirBody,
+}
+
+/// Exactly the two things a .bir can hold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BirBody {
+    /// One synthesized module: one `(* synthesize *)`, one .ba.  What
+    /// bsc writes.  It names no top and carries no schedule, because
+    /// those describe a design and this is not one.
+    Fragment(Module),
+    /// A linked design.  What a link writes.
+    Design(BirDesign),
+}
+
+/// The design body of a .bir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BirDesign {
+    pub modules: Vec<Module>,
+    pub top: StrId,
+    /// Per-(clock, edge) interleavings of instance segments -- the
+    /// design schedule, exported hierarchically (see `schedule` module
+    /// docs).
+    pub compositions: Vec<Composition>,
+}
+
+/// A borrowed view of a `Design` in the file's shape, so writing one
+/// out copies nothing.
+#[derive(Serialize)]
+struct BirOut<'a> {
+    strings: &'a Vec<String>,
+    foreign_funcs: &'a Vec<ForeignFunc>,
+    uses_wave_tasks: bool,
+    body: BirBodyOut<'a>,
+}
+
+/// Only the design case: a `Design` is never written as a fragment.
+/// serde tags externally, by variant name, so this encodes exactly as
+/// `BirBody::Design` does.
+#[derive(Serialize)]
+enum BirBodyOut<'a> {
+    Design(BirDesignOut<'a>),
+}
+
+#[derive(Serialize)]
+struct BirDesignOut<'a> {
+    modules: &'a Vec<Module>,
+    top: StrId,
+    compositions: &'a Vec<Composition>,
+}
+
+/// A whole linked design: the top module, every module in its
+/// hierarchy, and the schedule over them.
+///
+/// This is the runtime object, not a file: it is what `link::assemble`
+/// produces and what everything downstream reads.  `Bir` is the file,
+/// and the two are deliberately separate -- a .bir normally holds one
+/// module and no design at all.  The serde derive here is for the
+/// `.birsnap` sidecar, which caches this object; the .bir encoding is
+/// `Bir`'s.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Design {
     /// String table; all `StrId`s index into this.
@@ -211,8 +297,6 @@ pub struct Design {
     pub uses_wave_tasks: bool,
     pub top: StrId,
     pub modules: Vec<Module>,
-    /// Hierarchical instance path -> module name (`ssys_instmap` analogue).
-    pub instance_map: Vec<(StrId, StrId)>,
     /// Per-(clock, edge) interleavings of instance segments — the design
     /// schedule, exported hierarchically (see `schedule` module docs).
     pub compositions: Vec<Composition>,
@@ -220,11 +304,6 @@ pub struct Design {
     pub foreign_funcs: Vec<ForeignFunc>,
     pub default_clock: Option<StrId>,
     pub default_reset: Option<StrId>,
-    /// bsc was invoked with -keep-fires: CAN_FIRE/WILL_FIRE defs and
-    /// method ports are never demoted to stack locals, so they all get
-    /// VCD variables (SimCOpt shouldMove's cfwfOkToMove/portOkToMove).
-    #[serde(default)]
-    pub keep_fires: bool,
 }
 
 /// A rule, as its position in its module's `rules` list.  A rule
@@ -353,6 +432,25 @@ pub struct Module {
     method_ix: HashMap<StrId, usize>,
     /// Hash of the module's exported content, for the object cache.
     pub content_hash: [u8; 32],
+    /// This module was built with -keep-fires: its CAN_FIRE/WILL_FIRE
+    /// defs and method ports were never demoted to stack locals, so
+    /// they all get VCD variables (SimCOpt shouldMove's
+    /// cfwfOkToMove/portOkToMove).  Per module because the effect is:
+    /// a design may keep the fire signals of some boundaries and not
+    /// others, and get waveforms for just those.
+    #[serde(default)]
+    pub keep_fires: bool,
+    /// The oscillator and reset names bsc derives for this module when
+    /// it is the top of a design: its `default_clock` port's osc, and a
+    /// legacy reset name that matches no port.  Both come from the
+    /// module's own pragmas (`abmi_pps`), so they belong here rather
+    /// than to a design -- but bsc only derives them for the module an
+    /// export was rooted at, so in a whole-design .bir every other
+    /// module leaves them None.  A link reads the top's.
+    #[serde(default)]
+    pub default_clock: Option<StrId>,
+    #[serde(default)]
+    pub default_reset: Option<StrId>,
     pub clock_domains: Vec<ClockDomain>,
     pub resets: Vec<Reset>,
     pub inputs: Vec<Port>,
@@ -697,6 +795,8 @@ pub enum DecodeError {
     Invalid(verify::VerifyError),
     /// the design's fragments do not compose into a schedule
     Unschedulable(String),
+    /// the files given do not make up one design
+    Link(String),
 }
 
 impl std::fmt::Display for DecodeError {
@@ -710,6 +810,7 @@ impl std::fmt::Display for DecodeError {
                  (regenerate with a matching bsc)"
             ),
             DecodeError::Invalid(e) => write!(f, "invalid BIR: {e}"),
+            DecodeError::Link(e) => write!(f, "{e}"),
         }
     }
 }
@@ -819,7 +920,38 @@ impl Design {
         Some(d)
     }
 
+    /// Read one .bir and link it on its own.
+    ///
+    /// A whole-design file is the one-input case of a link, not a
+    /// separate path: it is derived and checked exactly as a set of
+    /// fragments would be.
     pub fn decode(bytes: &[u8]) -> Result<Design, DecodeError> {
+        link::assemble(vec![Bir::decode(bytes)?])
+    }
+
+    /// Write this design as a .bir with a design body.
+    pub fn encode(&self) -> Vec<u8> {
+        let out = BirOut {
+            strings: &self.strings,
+            foreign_funcs: &self.foreign_funcs,
+            uses_wave_tasks: self.uses_wave_tasks,
+            body: BirBodyOut::Design(BirDesignOut {
+                modules: &self.modules,
+                top: self.top,
+                compositions: &self.compositions,
+            }),
+        };
+        let mut bytes = Vec::with_capacity(BIR_HEADER);
+        bytes.extend_from_slice(BIR_MAGIC);
+        bytes.extend_from_slice(&BIR_VERSION.to_le_bytes());
+        ciborium::into_writer(&out, &mut bytes)
+            .expect("CBOR encoding cannot fail");
+        bytes
+    }
+}
+
+impl Bir {
+    pub fn decode(bytes: &[u8]) -> Result<Bir, DecodeError> {
         // header first, and completely: everything below assumes a body
         // this reader understands
         if bytes.len() < BIR_HEADER || &bytes[..8] != BIR_MAGIC {
@@ -834,11 +966,24 @@ impl Design {
         }
         // deep expression trees (long fold chains) exceed ciborium's
         // default recursion limit of 128
-        let mut design: Design =
-            ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
-                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
-        design.index_strings();
-        verify::verify(&design).map_err(DecodeError::Invalid)?;
+        ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
+            .map_err(|e| DecodeError::Cbor(e.to_string()))
+    }
+
+}
+
+impl Design {
+
+    /// Everything a design needs that its file does not carry: the
+    /// structural check and the merged schedule.  Shared by the
+    /// whole-design decode and by `link::assemble`.
+    pub(crate) fn finish(&mut self) -> Result<(), DecodeError> {
+        let design = self;
+        verify::verify(design).map_err(DecodeError::Invalid)?;
+        // the merge reaches for a composition's instance paths and
+        // clock names through the string table, so they have to be in
+        // there before it runs
+        merge::intern_names(design);
         // TRS_MERGE_CHECK=<file>: while the exporter still writes the
         // design schedule, it is the oracle for the merge being ported
         // here.  Appends to the named file rather than a stream the
@@ -848,11 +993,11 @@ impl Design {
         // so it can be frozen while the oracle above still vouches for
         // it.  That recording is the coverage that outlives the export.
         if let Some(p) = std::env::var_os("TRS_MERGE_DUMP") {
-            let _ = std::fs::write(&p, merge::render(&design));
+            let _ = std::fs::write(&p, merge::render(design));
         }
         if let Some(p) = std::env::var_os("TRS_MERGE_CHECK") {
             use std::io::Write;
-            let lines = merge::diff(&design);
+            let lines = merge::diff(design);
             if let Ok(mut f) =
                 std::fs::OpenOptions::new().create(true).append(true).open(&p)
             {
@@ -882,14 +1027,14 @@ impl Design {
         // exported answer.  Falling back would hide exactly the case
         // worth knowing about, and the design would be running on a
         // schedule nothing in trs derived.
-        let inp = merge::Inputs::of(&design);
+        let inp = merge::Inputs::of(design);
         if inp.is_some() {
             design.compositions =
                 merge::compositions(inp.as_ref().expect("just checked"))
                     .map_err(DecodeError::Unschedulable)?;
         }
 
-        Ok(design)
+        Ok(())
     }
 
     /// Build `str_ids` from `strings`.  Every path that produces a
@@ -916,12 +1061,15 @@ impl Design {
         self.str_ids.get(name).copied()
     }
 
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(BIR_HEADER);
-        out.extend_from_slice(BIR_MAGIC);
-        out.extend_from_slice(&BIR_VERSION.to_le_bytes());
-        ciborium::into_writer(self, &mut out).expect("CBOR encoding cannot fail");
-        out
+    /// The id of a string, adding it to the table if it is new.
+    pub(crate) fn intern(&mut self, s: &str) -> StrId {
+        if let Some(i) = self.str_ids.get(s) {
+            return *i;
+        }
+        let i = self.strings.len() as StrId;
+        self.strings.push(s.to_string());
+        self.str_ids.insert(s.to_string(), i);
+        i
     }
 
     pub fn name(&self, id: StrId) -> &str {
@@ -945,6 +1093,9 @@ mod tests {
                 def_ix: HashMap::new(),
                 method_ix: HashMap::new(),
                 content_hash: [0; 32],
+                keep_fires: false,
+                default_clock: None,
+                default_reset: None,
                 clock_domains: vec![],
                 resets: vec![],
                 inputs: vec![],
@@ -958,12 +1109,10 @@ mod tests {
                 methods: vec![],
                 schedule: Schedule::default(),
             }],
-            instance_map: vec![],
             compositions: vec![],
             foreign_funcs: vec![],
             default_clock: None,
             default_reset: None,
-            keep_fires: false,
         }
     }
 

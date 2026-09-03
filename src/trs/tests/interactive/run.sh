@@ -61,17 +61,18 @@ build() { # src top [flags and/or C link files]...
             *) flags="$flags $a";;
         esac
     done
-    $BSC -sim -u -g "$top" "$src" > "$top.bsc.log" 2>&1 \
+    # -keep-fires is asked for at elaboration: the .ba records it and
+    # everything downstream reads it from there
+    elabflags=""
+    case " $flags " in *" -keep-fires "*) elabflags="-keep-fires";; esac
+    $BSC -sim $elabflags -u -g "$top" "$src" > "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc compile)"; fail=1; return 1; }
     $BSC -sim $flags -e "$top" -o "ref_$top" $cfiles >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc link)"; fail=1; return 1; }
-    # the exporter takes the one bsc flag that reaches the IR, and the
-    # BDPI sources one at a time
-    birflags=""
-    case " $flags " in *" -keep-fires "*) birflags="--keep-fires";; esac
+    # the exporter reads the .ba files; the BDPI sources go one at a time
     bdpi=""
     for c in $cfiles; do bdpi="$bdpi --bdpi $c"; done
-    $TRSBIR $birflags $bdpi "$top" >> "$top.bsc.log" 2>&1 \
+    $TRSBIR $bdpi "$top" >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (trs-bir)"; fail=1; return 1; }
     # which waveform writers a model carries is a link-time contract on
     # both sides, so the trs link is told what the reference was told

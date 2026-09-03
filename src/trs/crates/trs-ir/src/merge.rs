@@ -1172,14 +1172,56 @@ fn symmetric(
     out
 }
 
-/// An instance's path, interned.
+/// Intern every name a composition refers to by string.
 ///
-/// Every instance the design names has its path in the string table --
-/// that is how a composition entry refers to one -- so for a design the
-/// exporter wrote this is a lookup and not a search that can come up
-/// empty.
+/// A composition names its instances by path and its clock by
+/// oscillator name, and reaches both through the string table.  Those
+/// are strings the merge composes rather than reads, so nothing
+/// guarantees a design already has them: a whole-design .bir does only
+/// because the exporter wrote the same compositions.  Interning them
+/// up front is what makes those lookups total, and a lookup that can
+/// fail is a silently wrong name rather than an error.
+pub(crate) fn intern_names(design: &mut Design) {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(hier) = Hier::of(design) {
+        names.extend(hier.insts.iter().map(|(p, _)| p.clone()));
+    }
+    // an oscillator can be a submodule's output clock, which is named
+    // by joining the instance to the clock ("mc$CLK_OUT") -- a string
+    // neither half puts in the table on its own
+    for m in &design.modules {
+        let mut doms: Vec<&crate::ClockDomain> = m.clock_domains.iter().collect();
+        for i in &m.instances {
+            if let Some(pc) = &i.prim_clocks {
+                doms.extend(pc.domains.iter());
+            }
+        }
+        let clocks = doms.iter().flat_map(|d| d.clocks.iter());
+        let ifc = m.ifc_clocks.iter().chain(m.ifc_clock_gates.iter());
+        for e in clocks
+            .flat_map(|(osc, gate)| [osc, gate])
+            .chain(ifc.map(|(_, e)| e))
+        {
+            if let Expr::ClockOut { instance, clock } = e {
+                names.push(format!(
+                    "{}${}",
+                    design.name(*instance),
+                    design.name(*clock)
+                ));
+            }
+        }
+    }
+    for n in &names {
+        design.intern(n);
+    }
+}
+
+/// An instance's path, interned.
 fn inst_id(inp: &Inputs, i: u32) -> StrId {
-    inp.design.str_id(inp.path(i)).unwrap_or(0)
+    let path = inp.path(i);
+    inp.design
+        .str_id(path)
+        .unwrap_or_else(|| panic!("instance path {path:?} is not interned"))
 }
 
 /// The nodes a unit stands for: the segment's own, in order.
@@ -1419,10 +1461,17 @@ pub fn compositions(inp: &Inputs) -> Result<Vec<Composition>, String> {
         // The format records the clock by name.  The oscillator itself
         // is what this field wants to hold, and what the merge has; the
         // name is what the format spells today.
-        let clock = canonical_clock(inp, d.domain)
+        // no name at all means the oscillator is not one the format
+        // can spell (a constant); a name that is not interned means
+        // intern_names missed a case, which is a bug and not a 0
+        let clock = match canonical_clock(inp, d.domain)
             .and_then(|osc| osc_name(inp, osc))
-            .and_then(|n| inp.design.str_id(&n))
-            .unwrap_or(0);
+        {
+            None => 0,
+            Some(n) => inp.design.str_id(&n).unwrap_or_else(|| {
+                panic!("clock name {n:?} is not interned")
+            }),
+        };
         let entries_of = |units: Vec<Unit>| -> Vec<CompositionEntry> {
             units
                 .into_iter()

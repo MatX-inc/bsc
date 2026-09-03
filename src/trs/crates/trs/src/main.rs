@@ -14,8 +14,16 @@ use trs_interp::hostlink;
 fn usage() -> ExitCode {
     eprintln!("trs {} (phase P0 scaffold)", env!("CARGO_PKG_VERSION"));
     eprintln!("usage: trs ir dump <module.bir>");
+    eprintln!("       trs ir dump --multi-fragments <module.bir>...");
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
+    eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [+NAME=value...]");
+    eprintln!();
+    eprintln!("--multi-fragments takes one design's fragments -- one per");
+    eprintln!("synthesized module, written by bsc's `trs-bir");
+    eprintln!("--single-fragment' -- in place of one whole-design .bir, and");
+    eprintln!("derives what no fragment carries.  Name the top module's");
+    eprintln!("fragment last: the artifact is named after it.");
     eprintln!();
     eprintln!("Top-level bindings: a top module compiled with -trs may take");
     eprintln!("Bit-typed arguments/parameters; bind them with +NAME=value or");
@@ -189,8 +197,52 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        ["ir", "dump", path] => match std::fs::read(path) {
-            Ok(bytes) => match trs_ir::Design::decode(&bytes) {
+        // trs ir dump: the decoded design.  --multi-fragments dumps
+        // what the same set of fragments would link to, which is the
+        // only way to see the assembled design without building it.
+        ["ir", "dump", "--multi-fragments", paths @ ..]
+            if !paths.is_empty() =>
+        {
+            let mut birs = Vec::with_capacity(paths.len());
+            for p in paths {
+                let b = std::fs::read(p).map_err(|e| format!("{p}: {e}")).and_then(
+                    |b| {
+                        trs_ir::Bir::decode(&b).map_err(|e| format!("{p}: {e}"))
+                    },
+                );
+                match b {
+                    Ok(b) => birs.push(b),
+                    Err(e) => {
+                        eprintln!("trs: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            match trs_ir::link::assemble(birs) {
+                Ok(design) => {
+                    println!("{design:#?}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("trs: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        // A design body is linked before it is printed, so what comes
+        // out is the design as it will run -- the derived schedule
+        // included.  A fragment cannot be linked on its own, so it
+        // prints as the fragment it is.
+        ["ir", "dump", path] => match std::fs::read(path)
+            .map_err(|e| format!("{path}: {e}"))
+            .and_then(|b| {
+                trs_ir::Bir::decode(&b).map_err(|e| format!("{path}: {e}"))
+            }) {
+            Ok(bir) if matches!(bir.body, trs_ir::BirBody::Fragment(_)) => {
+                println!("{bir:#?}");
+                ExitCode::SUCCESS
+            }
+            Ok(bir) => match trs_ir::link::assemble(vec![bir]) {
                 Ok(design) => {
                     println!("{design:#?}");
                     ExitCode::SUCCESS
@@ -201,7 +253,7 @@ fn main() -> ExitCode {
                 }
             },
             Err(e) => {
-                eprintln!("trs: {path}: {e}");
+                eprintln!("trs: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -209,8 +261,17 @@ fn main() -> ExitCode {
         // persistent artifact: <out> (wrapper script with the same CLI
         // as reference Bluesim), <out>.bir, <out>.so.  Runs never
         // compile again — same amortization as Verilator/VCS/Bluesim.
-        ["link", path, rest @ ..] => {
+        ["link", rest @ ..] if !rest.is_empty() => {
             let mut out: Option<String> = None;
+            // --multi-fragments: the positional arguments are one
+            // design's fragments -- one per synthesized module, from
+            // trs-bir --single-fragment -- rather than one
+            // whole-design .bir.  The link derives what no fragment
+            // carries.  Read
+            // before the loop, so it governs the positionals whatever
+            // order they were written in.
+            let multi = rest.contains(&"--multi-fragments");
+            let mut frags: Vec<&str> = Vec::new();
             let mut interactive = false;
             let mut exe = false;
             // -dump-formats plumbing from bsc: which waveform writers
@@ -246,6 +307,7 @@ fn main() -> ExitCode {
                             }
                         }
                     }
+                    "--multi-fragments" => {}
                     "--interactive" => interactive = true,
                     "--exe" => exe = true,
                     "--dump-formats" => {
@@ -295,12 +357,25 @@ fn main() -> ExitCode {
                     }
                     "--no-fusion" => std::env::set_var("TRS_NO_FUSION", "1"),
                     "--jit-novec" => std::env::set_var("TRS_JIT_NOVEC", "1"),
+                    other if !other.starts_with('-') => frags.push(other),
                     other => {
                         eprintln!("Error: invalid link option '{other}'");
                         return ExitCode::from(2);
                     }
                 }
             }
+            if !multi && frags.len() != 1 {
+                eprintln!(
+                    "Error: link takes one .bir (or several with \
+                     --multi-fragments)"
+                );
+                return ExitCode::from(2);
+            }
+            // the top's fragment is named last, so it is the one the
+            // artifact is named after and the one a .bdpi.so sits
+            // beside -- the same role the single whole-design .bir
+            // plays
+            let path = *frags.last().expect("at least one positional");
             let base = out.unwrap_or_else(|| {
                 format!("{}.cexe", path.strip_suffix(".bir").unwrap_or(path))
             });
@@ -316,9 +391,25 @@ fn main() -> ExitCode {
             let _ = std::fs::remove_file(format!("{base}.arena"));
             // _fresh: link WRITES the snapshot, so it decodes the .bir
             // source of truth, never a prior sidecar (see startup.rs)
-            let mut interp = match trs_interp::startup::load_file_fresh(
-                path, &[], &binds, None,
-            ) {
+            // every load this link does -- the one below and the
+            // RunCore bake's -- has to see the same design it was
+            // given, so they all go through here.  A fragment set has
+            // no snapshot to prefer: the sidecar is keyed by one
+            // file's fingerprint.
+            let load = |binds: &[trs_interp::TopBind], fresh: bool| {
+                match (multi, fresh) {
+                    (true, _) => trs_interp::startup::load_fragments_fresh(
+                        &frags, &[], binds, None,
+                    ),
+                    (false, true) => trs_interp::startup::load_file_fresh(
+                        path, &[], binds, None,
+                    ),
+                    (false, false) => {
+                        trs_interp::startup::load_file(path, &[], binds, None)
+                    }
+                }
+            };
+            let mut interp = match load(&binds, true) {
                 Ok(i) => i,
                 Err(e) => {
                     eprintln!("trs link: {e}");
@@ -340,6 +431,20 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
+            // A fragment link has no single input file that stands for
+            // the design, so the assembled one is written now: the
+            // artifact's sidecar, the interactive shim's baked path
+            // and the bake's reload all name it from here on.
+            let bir_dst = format!("{base}.bir");
+            let path = if multi {
+                if let Err(e) = interp.write_bir(&bir_dst) {
+                    eprintln!("trs link: {e}");
+                    return ExitCode::FAILURE;
+                }
+                bir_dst.as_str()
+            } else {
+                path
+            };
             let fmt_vcd = fmt_arg.split(',').any(|t| t == "vcd");
             let fmt_fst = fmt_arg.split(',').any(|t| t == "fst");
             // `none` turns recording off: the artifact is the pure
@@ -439,7 +544,8 @@ fn main() -> ExitCode {
                 }
             };
             // .bir sibling: the script runs <base>.bir next to the .so
-            let bir_dst = format!("{base}.bir");
+            // (already written, and so already `path`, for a fragment
+            // link)
             if std::path::Path::new(path).canonicalize().ok()
                 != std::path::Path::new(&bir_dst).canonicalize().ok()
             {
@@ -628,7 +734,7 @@ fn main() -> ExitCode {
                 let sidecar = format!("{base}.arena");
                 let bake = (|| -> Result<bool, String> {
                     let mut b1 =
-                        trs_interp::startup::load_file(path, &[], &[], None)?;
+                        load(&[], false)?;
                     b1.aot_request_code(format!("{base}.so").into());
                     if !b1.runcore_has_loads() {
                         let Some(cap) = b1.runcore_bake_capture(None) else {
@@ -646,7 +752,7 @@ fn main() -> ExitCode {
                         return Ok(false);
                     };
                     let mut b2 =
-                        trs_interp::startup::load_file(path, &[], &[], None)?;
+                        load(&[], false)?;
                     b2.aot_request_code(format!("{base}.so").into());
                     let Some(b) =
                         b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))

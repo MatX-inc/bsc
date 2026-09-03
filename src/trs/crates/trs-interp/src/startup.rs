@@ -121,6 +121,42 @@ pub fn load_file_fresh(
     load_file_inner(path, plusargs, binds, vcd_file, false)
 }
 
+/// `load_file_fresh` over one design's fragments -- one per
+/// synthesized module -- linked into a design by
+/// `trs_ir::link::assemble`.  No snapshot: the sidecar is keyed by a
+/// single file's fingerprint, and the design here is not any one of
+/// these files.
+#[cold]
+#[inline(never)]
+pub fn load_fragments_fresh(
+    paths: &[&str],
+    plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    let mut sl = StartupLap::new();
+    // the top's fragment is named last: it is where a companion
+    // .bdpi.so sits and what a diagnostic should name
+    let path = *paths.last().ok_or("no fragments to link")?;
+    let mut birs = Vec::with_capacity(paths.len());
+    for p in paths {
+        let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
+        birs.push(
+            trs_ir::Bir::decode(&bytes).map_err(|e| format!("{p}: {e}"))?,
+        );
+    }
+    sl.lap("fragment read+decode");
+    let design = trs_ir::link::assemble(birs).map_err(|e| e.to_string())?;
+    // the fingerprint is of the ASSEMBLED design, not of the files it
+    // came from: it is what stamps the compiled artifact, and what the
+    // artifact carries alongside is that same design
+    // (Interp::write_bir).  Keyed by the inputs instead, every run
+    // would find the stamp stale and compile again.
+    let hash = bir_fingerprint(&design.encode());
+    sl.lap("fragment link");
+    finish_load(design, hash, sl, path, plusargs, binds, vcd_file)
+}
+
 #[cold]
 #[inline(never)]
 fn load_file_inner(
@@ -177,6 +213,21 @@ fn load_file_inner(
         }
         sl.lap("bir fold (extract-of-concat)");
     }
+    finish_load(design, hash, sl, path, plusargs, binds, vcd_file)
+}
+
+/// The half of a load that does not care where the design came from.
+#[cold]
+#[inline(never)]
+fn finish_load(
+    design: Design,
+    hash: u64,
+    mut sl: StartupLap,
+    path: &str,
+    plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
     let mut interp = Interp::new_bound(design, binds)?;
     sl.lap("interp build (instantiate)");
     // the bind salt differentiates compiled artifacts by their baked
@@ -203,6 +254,18 @@ fn load_file_inner(
 }
 
 impl Interp {
+    /// Write the design this interp holds as a whole-design .bir.
+    ///
+    /// What a fragment link puts in its artifact is the assembled
+    /// design: there is no single input file to copy, and the top's
+    /// fragment alone would decode as a design of one module.
+    #[cold]
+    #[inline(never)]
+    pub fn write_bir(&self, path: &str) -> Result<(), String> {
+        std::fs::write(path, self.d.encode())
+            .map_err(|e| format!("{path}: {e}"))
+    }
+
     /// Write the decoded-design snapshot sidecar (`Design::snap_encode`)
     /// keyed by this interp's .bir fingerprint.  The snapshot holds
     /// the DECODED DESIGN, which is binding-independent, so the key

@@ -32,6 +32,7 @@ import System.Process(rawSystem)
 import System.IO(hSetBuffering, hSetEncoding, stdout, stderr, hPutStr,
                  hPutStrLn, BufferMode(..), utf8)
 
+import ABin(abemi_flags)
 import ABinUtil(readAndCheckABin, getABIHierarchy)
 import Backend(Backend(..))
 import SimCCBlock(SimCCBlock(..), primBlocks)
@@ -49,7 +50,7 @@ import IOUtil(getEnvDef)
 import SimCCBlock
 import SimCOpt(simCOpt)
 import SimExpand(simExpandWith)
-import SimExportIR(writeBirFile, writeSchedFile)
+import SimExportIR(writeBirFile, writeSchedFile, Scope(..))
 import SimMakeCBlocks(simMakeCBlocks)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
@@ -64,11 +65,11 @@ import Version(bscVersionStr)
 data Options = Options
     { optOut       :: Maybe FilePath
     , optPath      :: [FilePath]
-    , optKeepFires :: Bool
     , optBdpi      :: [FilePath]
     , optLibPath   :: [String]
     , optLibs      :: [String]
     , optDumpSched :: Maybe FilePath
+    , optFragment  :: Bool
     , optVerbose   :: Bool
     , optVersion   :: Bool
     , optHelp      :: Bool
@@ -78,11 +79,11 @@ defaultOptions :: Options
 defaultOptions = Options
     { optOut       = Nothing
     , optPath      = []
-    , optKeepFires = False
     , optBdpi      = []
     , optLibPath   = []
     , optLibs      = []
     , optDumpSched = Nothing
+    , optFragment  = False
     , optVerbose   = False
     , optVersion   = False
     , optHelp      = False
@@ -96,9 +97,6 @@ options =
     , Option ['p'] ["path"]
         (ReqArg (\d o -> o { optPath = optPath o ++ [d] }) "DIR")
         "search DIR for .ba files (repeatable)"
-    , Option []    ["keep-fires"]
-        (NoArg (\o -> o { optKeepFires = True }))
-        "export CAN_FIRE/WILL_FIRE definitions"
     , Option []    ["bdpi"]
         (ReqArg (\d o -> o { optBdpi = optBdpi o ++ [d] }) "FILE")
         "a BDPI implementation: .c/.cxx compiled here, .o/.a taken as is"
@@ -108,6 +106,9 @@ options =
     , Option ['l'] []
         (ReqArg (\d o -> o { optLibs = optLibs o ++ [d] }) "LIB")
         "link LIB into the BDPI companion (repeatable)"
+    , Option []    ["single-fragment"]
+        (NoArg (\o -> o { optFragment = True }))
+        "write <top> alone: no submodules, no design-level data"
     , Option []    ["dump-schedule"]
         (ReqArg (\d o -> o { optDumpSched = Just d }) "FILE")
         "also write the merged design schedule here, for inspection"
@@ -142,6 +143,12 @@ usage prog = usageInfo header options ++ trailer
         , ""
         , "Given --bdpi or -l, a <top>.bdpi.so companion is written beside"
         , "the BIR for the runtime to load.  CC and CXX name the compilers."
+        , ""
+        , "With --single-fragment the file holds <top> and nothing else:"
+        , "neither the synthesized modules it instantiates nor the"
+        , "design-level data.  Export one per synthesized module -- the"
+        , "same set bsc wrote a .ba for -- and hand them to `trs link"
+        , "--multi-fragments', which derives what the fragments leave out."
         ]
 
 -- ========================================================================
@@ -198,7 +205,6 @@ birFlags :: String -> Options -> Flags
 birFlags bluespecdir opts = (defaultFlags bluespecdir)
     { backend   = Just Bluesim
     , ifcPath   = optPath opts ++ [".", bluespecdir ++ "/Libraries"]
-    , keepFires = optKeepFires opts
     , verbosity = if optVerbose opts then Verbose else Normal
     }
 
@@ -221,16 +227,43 @@ exportBir errh flags opts toplevel afilenames = do
     -- for one module is, and simExpand is what catches it
     abis <- mapM (readAndCheckABin errh (Just Bluesim)) (nub afilenames)
 
-    sim_system <- simExpandWith errh flags (checkTrsTop errh) toplevel abis
-    sim_system_opt <- simPackageOpt errh flags sim_system
+    -- The hierarchy, read before anything is derived from it: the
+    -- .ba files carry the flags each module was elaborated with, and
+    -- -keep-fires is one of them.
+    (_, _, _, _, _, _, emis) <- convExceptTToIO errh $
+        getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
+                        (map sb_name primBlocks) toplevel abis
+
+    -- Whether a module's fire signals were kept is that module's own
+    -- setting, asked for when it was elaborated, and it is written on
+    -- the module.
+    --
+    -- The passes below take one Flags for the whole run, so only the
+    -- modules this export WRITES get a say.  A fragment writes one, so
+    -- that one decides and nothing leaks in from the subtree walked
+    -- around it.  A whole-design export writes them all and one Flags
+    -- cannot say different things about different modules, so it keeps
+    -- whatever any of them asked for; a module that did not ask still
+    -- carries its own answer in the BIR, so nothing gives it waveforms
+    -- it did not want.
+    let keepMap = M.fromList [ (nm, keepFires (abemi_flags emi))
+                             | (nm, (emi, _)) <- emis ]
+        scope = if optFragment opts then Fragment toplevel else WholeDesign
+        flags' = flags
+                   { keepFires = case scope of
+                       Fragment m  -> M.findWithDefault False m keepMap
+                       WholeDesign -> or (M.elems keepMap) }
+
+    sim_system <- simExpandWith errh flags' (checkTrsTop errh) toplevel abis
+    sim_system_opt <- simPackageOpt errh flags' sim_system
 
     -- The debug-tier symbol set: the defs that survive as C++ members,
     -- which is what names a signal in an interactive session.  Deriving
     -- it means running the C++ block construction, but only for its
     -- answer -- the blocks themselves are discarded.
-    let (sbs, sscheds, scgs, sgis, _sbtop) = simMakeCBlocks flags sim_system_opt
+    let (sbs, sscheds, scgs, sgis, _sbtop) = simMakeCBlocks flags' sim_system_opt
         (sbs_opt, _, _, _) =
-            simCOpt flags (ssys_instmap sim_system_opt)
+            simCOpt flags' (ssys_instmap sim_system_opt)
                     (sbs, sscheds, scgs, sgis)
         symMap = M.fromListWith S.union
                      [ (sb_name sb,
@@ -241,17 +274,14 @@ exportBir errh flags opts toplevel afilenames = do
     -- keys its instances by name and so loses it, but the primitives'
     -- ticks accumulate in this order, so it is read back off the
     -- APackages the .ba files carry.
-    (_, _, _, _, _, _, emis) <- convExceptTToIO errh $
-        getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
-                        (map sb_name primBlocks) toplevel abis
     let elabs = M.fromList
                   [ (nm, map avi_vname (apkg_state_instances (abmi_apkg mi)))
                   | (nm, (Right mi, _)) <- emis ]
 
-    writeBirFile birfile (keepFires flags) symMap elabs sim_system_opt
+    writeBirFile birfile keepMap symMap elabs scope sim_system_opt
     case optDumpSched opts of
       Nothing -> return ()
-      Just p  -> writeSchedFile p (keepFires flags) symMap elabs sim_system_opt
+      Just p  -> writeSchedFile p keepMap symMap elabs sim_system_opt
     writeBdpiSo opts toplevel prefix sim_system_opt
 
 -- | The companion the trs runtime dlopens for BDPI imports.

@@ -23,6 +23,7 @@
 -- wrong data.
 module SimExportIR
     ( birVersion
+    , Scope(..)
     , simSystemToBir
     , writeSchedFile
     , writeBirFile
@@ -73,7 +74,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 10
+birVersion = 11
 
 -- ===============
 -- String interning
@@ -177,36 +178,70 @@ schedHeader = L.pack (magic ++ leWord32 birVersion)
     leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
                  | k <- [0, 8, 16, 24] ]
 
-simSystemToBir :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
-               -> SimSystem -> L.ByteString
-simSystemToBir keepF symMap elabs ssys =
-    birHeader <> CW.toLazyByteString (encDesign keepF symMap elabs ssys)
+simSystemToBir :: M.Map String Bool -> M.Map String (S.Set AId)
+               -> M.Map String [AId] -> Scope -> SimSystem -> L.ByteString
+simSystemToBir keepF symMap elabs scope ssys =
+    birHeader <> CW.toLazyByteString (encDesign keepF symMap elabs scope ssys)
 
 -- | Write the design's .bir file.
-writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId)
-             -> M.Map String [AId] -> SimSystem -> IO ()
-writeBirFile path keepF symMap elabs ssys =
-    L.writeFile path (simSystemToBir keepF symMap elabs ssys)
+writeBirFile :: FilePath -> M.Map String Bool -> M.Map String (S.Set AId)
+             -> M.Map String [AId] -> Scope -> SimSystem -> IO ()
+writeBirFile path keepF symMap elabs scope ssys =
+    L.writeFile path (simSystemToBir keepF symMap elabs scope ssys)
 
 -- | Write the merged design schedule beside it, for inspection and for
 -- comparison against a schedule computed some other way.
-writeSchedFile :: FilePath -> Bool -> M.Map String (S.Set AId)
+writeSchedFile :: FilePath -> M.Map String Bool -> M.Map String (S.Set AId)
                -> M.Map String [AId] -> SimSystem -> IO ()
 writeSchedFile path keepF symMap elabs ssys =
     L.writeFile path (schedHeader
                       <> CW.toLazyByteString (encSched keepF symMap elabs ssys))
 
-encDesignFields :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
-                -> SimSystem -> [(String, C.Encoding)]
-encDesignFields keepF symMap elabs ssys =
-    let pkgs = M.elems (ssys_packages ssys)
-        pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
-        instmap = M.toList (ssys_instmap ssys)
+-- | Which of a design's modules to write, and whether to write the
+-- design-level data alongside them.
+--
+-- The unit is the synthesis boundary, because that is the unit bsc
+-- already has: one @(* synthesize *)@, one .ba, one module in the BIR.
+-- A BSV module that is not a boundary is not a candidate -- elaboration
+-- inlined it into the boundary that instantiated it long before this
+-- point, leaving its primitives behind under prefixed names.  So a
+-- fragment is one boundary, and how a design divides into fragments
+-- follows from where @(* synthesize *)@ was written.
+--
+-- A fragment holds that one boundary and nothing else: not the
+-- boundaries it instantiates, and no instance map or compositions.
+-- Those describe a design, and a fragment is not one -- the link step
+-- derives them from the set of fragments it is given.
+--
+-- What a fragment does still carry is a top, a default clock and a
+-- default reset, all naming itself.  It has to: an export roots its
+-- hierarchy walk at the boundary it is asked for, so within that run
+-- that boundary IS the top.  A default reset is in any case a legacy
+-- name matching no port, so nothing could recover it from module
+-- content, and a fragment naming no top would not decode as a design
+-- at all.  The link finds the set's real top among the modules and
+-- reads the clock and reset off that one's fragment.
+data Scope = WholeDesign | Fragment String
 
+encDesignFields :: M.Map String Bool -> M.Map String (S.Set AId)
+                -> M.Map String [AId] -> Scope -> SimSystem
+                -> [(String, C.Encoding)]
+encDesignFields keepF symMap elabs scope ssys =
+    let pkgs = case scope of
+                 WholeDesign -> M.elems (ssys_packages ssys)
+                 Fragment m ->
+                   [ p | p <- M.elems (ssys_packages ssys)
+                       , getIdBaseString (sp_name p) == m ]
+        -- which boundaries to WRITE is what a scope narrows; what
+        -- counts as a submodule rather than a primitive, and every
+        -- submodule's schedule analysis, are facts about the walked
+        -- hierarchy and stay whole
+        allPkgs = M.elems (ssys_packages ssys)
+        pkgNames = S.fromList (map (getIdBaseString . sp_name) allPkgs)
         -- per-module schedule analysis (segments, exec order, disjointness)
         msis = M.fromList [ (getIdBaseString (sp_name p),
                              analyzeModule p)
-                          | p <- pkgs ]
+                          | p <- allPkgs ]
         instToMod = ssys_instmap ssys
 
         -- gates of top-level input clocks are always on in simulation
@@ -214,34 +249,57 @@ encDesignFields keepF symMap elabs ssys =
         top_pkg = findPkg (ssys_packages ssys) (ssys_top ssys)
         topGates = [ gate | (AAI_Clock _ (Just gate)) <- sp_inputs top_pkg ]
 
+        topName = getIdBaseString (ssys_top ssys)
+
+        -- bsc derives a default clock and reset for the module an
+        -- export was rooted at, and only for that one.  It is that
+        -- module's own fact (its pragmas), so it is written on the
+        -- module; a link reads whichever module turns out to be top.
+        defaultsOf p
+          | getIdBaseString (sp_name p) == topName =
+              (ssys_default_clk ssys, ssys_default_rst ssys)
+          | otherwise = (Nothing, Nothing)
+
+        encOne p = encModule pkgNames msis
+                     (msis M.! getIdBaseString (sp_name p))
+                     (M.findWithDefault S.empty
+                        (getIdBaseString (sp_name p)) symMap)
+                     (M.findWithDefault []
+                        (getIdBaseString (sp_name p)) elabs)
+                     (M.findWithDefault False
+                        (getIdBaseString (sp_name p)) keepF)
+                     (defaultsOf p)
+                     p
+
+        -- a body is one of exactly two things: one module, or a linked
+        -- design.  Externally tagged, as serde writes an enum.
+        encBody :: EncM C.Encoding
+        encBody = case scope of
+          Fragment m -> case pkgs of
+            [p] -> do modEnc <- encOne p
+                      return (encStruct [("Fragment", modEnc)])
+            _   -> internalError ("no such module to export: " ++ m)
+          WholeDesign -> do
+            modsEnc <- mapM encOne pkgs
+            topId <- str topName
+            compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
+                                        (ssys_schedules ssys)
+            return $ encStruct
+              [ ("Design", encStruct
+                  [ ("modules", encList modsEnc)
+                  , ("top", encW32 topId)
+                  , ("compositions", encList compsEnc)
+                  ]) ]
+
         action :: EncM [(String, C.Encoding)]
         action = do
-          topId <- str (getIdBaseString (ssys_top ssys))
-          modsEnc <- mapM (\p -> encModule pkgNames msis
-                                   (msis M.! getIdBaseString (sp_name p))
-                                   (M.findWithDefault S.empty
-                                      (getIdBaseString (sp_name p)) symMap)
-                                   (M.findWithDefault []
-                                      (getIdBaseString (sp_name p)) elabs)
-                                   p)
-                          pkgs
-          instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
-          compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
-                                       (ssys_schedules ssys)
+          bodyEnc <- encBody
           ffEnc <- mapM encForeignFunc (M.toList (ssys_ffuncmap ssys))
-          clkId <- traverse str (ssys_default_clk ssys)
-          rstId <- traverse str (ssys_default_rst ssys)
           return
             [ ("strings", mempty)   -- placeholder, replaced below
-            , ("top", encW32 topId)
-            , ("modules", encList modsEnc)
-            , ("instance_map", encList instEnc)
-            , ("compositions", encList compsEnc)
             , ("foreign_funcs", encList ffEnc)
-            , ("default_clock", encMaybe encW32 clkId)
-            , ("default_reset", encMaybe encW32 rstId)
-            , ("keep_fires", encBool keepF)
             , ("uses_wave_tasks", encBool (designUsesWaveTasks pkgs))
+            , ("body", bodyEnc)
             ]
 
         (fields, finalTbl) = runState action emptyState
@@ -251,19 +309,19 @@ encDesignFields keepF symMap elabs ssys =
     in  fields'
 
 -- | The whole design.
-encDesign :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
-          -> SimSystem -> C.Encoding
-encDesign keepF symMap elabs ssys =
-    encStruct (encDesignFields keepF symMap elabs ssys)
+encDesign :: M.Map String Bool -> M.Map String (S.Set AId)
+          -> M.Map String [AId] -> Scope -> SimSystem -> C.Encoding
+encDesign keepF symMap elabs scope ssys =
+    encStruct (encDesignFields keepF symMap elabs scope ssys)
 
 -- | The design schedule alone, with the table its ids index.  Same
 -- derivation and same encoding as the .bir carries -- a separate one
 -- could drift from what bsc actually computes, and this exists to be
 -- compared against.
-encSched :: Bool -> M.Map String (S.Set AId) -> M.Map String [AId]
-         -> SimSystem -> C.Encoding
+encSched :: M.Map String Bool -> M.Map String (S.Set AId)
+         -> M.Map String [AId] -> SimSystem -> C.Encoding
 encSched keepF symMap elabs ssys =
-    encStruct [ f | f@(k, _) <- encDesignFields keepF symMap elabs ssys
+    encStruct [ f | f@(k, _) <- encDesignFields keepF symMap elabs WholeDesign ssys
               , k `elem` ["strings", "compositions"] ]
 
 -- ===============
@@ -828,9 +886,9 @@ oscName clk = case aclock_osc clk of
 -- Modules
 
 encModule :: S.Set String -> M.Map String ModSchedInfo -> ModSchedInfo
-          -> S.Set AId -> [AId] -> SimPackage
-          -> EncM C.Encoding
-encModule pkgNames msis msi symSet elab_ids pkg = do
+          -> S.Set AId -> [AId] -> Bool -> (Maybe String, Maybe String)
+          -> SimPackage -> EncM C.Encoding
+encModule pkgNames msis msi symSet elab_ids keepF (defClk, defRst) pkg = do
     nameId <- idE (sp_name pkg)
     -- the modules this fragment reaches across its boundary
     let externNames = externsOf pkgNames pkg
@@ -945,11 +1003,16 @@ encModule pkgNames msis msi symSet elab_ids pkg = do
                    _          -> str ""
            return (encPair (encW32 pn) (encW32 wn))
       | f@(AIReset {}) <- sp_interface pkg ]
+    defClkId <- traverse str defClk
+    defRstId <- traverse str defRst
     return $ encStruct
       [ ("name", nameId)
       , ("externs", encList [ encStruct [("module", encW32 i)]
                             | i <- externIds ])
       , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
+      , ("keep_fires", encBool keepF)
+      , ("default_clock", encMaybe encW32 defClkId)
+      , ("default_reset", encMaybe encW32 defRstId)
       , ("clock_domains", encList domsEnc)
       , ("resets", encList rstsEnc)
       , ("inputs", encList insEnc)

@@ -2595,7 +2595,7 @@ impl Interp {
             let is_task = matches!(*d.expr, Expr::TaskValue { .. });
             // -keep-fires pins CAN_FIRE/WILL_FIRE defs (cfwfOkToMove)
             let pinned_fire =
-                self.d.keep_fires && (d.props.can_fire || d.props.will_fire);
+                m.keep_fires && (d.props.can_fire || d.props.will_fire);
             let keep =
                 n_fns >= 2 || (n_fns >= 1 && (d.width > 64 || is_task || pinned_fire));
             if keep {
@@ -2628,7 +2628,7 @@ impl Interp {
             if is_action {
                 if let Some(en_id) = me.en {
                     let n_fns = usage.get(&en_id).map(|s| s.len()).unwrap_or(0);
-                    if n_fns >= 2 || (self.d.keep_fires && n_fns >= 1) {
+                    if n_fns >= 2 || (m.keep_fires && n_fns >= 1) {
                         ports.push(ModVar {
                             name: self.s(en_id).to_string(),
                             src: VcdSrc::PortEn(me.name),
@@ -2641,7 +2641,7 @@ impl Interp {
             }
             for (ai, a) in me.args.iter().enumerate() {
                 let n_fns = usage.get(&a.name).map(|s| s.len()).unwrap_or(0);
-                if n_fns >= 2 || a.width > 64 || (self.d.keep_fires && n_fns >= 1) {
+                if n_fns >= 2 || a.width > 64 || (m.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(a.name).to_string(),
                         src: VcdSrc::PortArg(me.name, ai),
@@ -2670,7 +2670,7 @@ impl Interp {
                         .unwrap_or(0),
                     e => e.width(),
                 };
-                if n_fns >= 2 || w > 64 || (self.d.keep_fires && n_fns >= 1) {
+                if n_fns >= 2 || w > 64 || (m.keep_fires && n_fns >= 1) {
                     ports.push(ModVar {
                         name: self.s(me.name).to_string(),
                         src: VcdSrc::PortRes(me.name),
