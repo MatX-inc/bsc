@@ -554,7 +554,7 @@ getDef generating ds (i, pps) =
                                  cqt, vtis, pps')]
                 else return []
           Right _ -> internalError ("genWrapE::getDef unexpected CtxReduce def" ++ show d )
-     _ -> bad (getIdPosition i, EUnboundVar (pfpString i))
+     _ -> bad (getIdPosition i, EUnboundVar (pfpString i) [])
  where
    expandArg :: (Id, CType) -> GWMonad (Id, CType, ArgInfo)
    expandArg (v_orig, vt_orig) = do

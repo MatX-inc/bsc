@@ -709,7 +709,7 @@ data ErrMsg =
 
         | EUndefinedTask String
         | EUnboundCon String (Maybe String)
-        | EUnboundVar String
+        | EUnboundVar String [String] -- ^ var name, bloogle exact name matches
         | EUnboundField String
         | EUnboundClCon String
         | EUnboundTyCon String
@@ -1910,8 +1910,8 @@ getErrorText (EUnboundCon c maybeSuggest) =
            Nothing -> intro_msg
            Just fname -> intro_msg ++ ".  Perhaps " ++ quote fname ++ " is missing?"
      in s2par msg)
-getErrorText (EUnboundVar c) =
-    (Type 4, empty, s2par ("Unbound variable " ++ ishow c))
+getErrorText (EUnboundVar c ms) =
+    (Type 4, empty, s2par ("Unbound variable " ++ ishow c) $$ bloogleMatchesDoc "exact name" ms)
 getErrorText (EUnboundField c) =
     (Type 5, empty,
      s2par ("Unbound field " ++ ishow c ++ ".  " ++
