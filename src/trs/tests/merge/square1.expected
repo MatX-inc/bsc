@@ -1,0 +1,97 @@
+clock CLK posedge
+  run "" domain 0 segment 5
+  run "" domain 0 segment 3
+  run "" domain 0 segment 11
+  run "" domain 0 segment 9
+  run "" domain 0 segment 13
+  run "" domain 0 segment 50
+  run "" domain 0 segment 36
+  run "" domain 0 segment 48
+  run "" domain 0 segment 35
+  run "" domain 0 segment 31
+  run "" domain 0 segment 34
+  run "" domain 0 segment 25
+  run "" domain 0 segment 7
+  run "" domain 0 segment 29
+  run "" domain 0 segment 30
+  run "" domain 0 segment 0
+  run "" domain 0 segment 2
+  run "" domain 0 segment 1
+  run "" domain 0 segment 6
+  run "" domain 0 segment 4
+  run "" domain 0 segment 12
+  run "" domain 0 segment 10
+  run "" domain 0 segment 14
+  run "" domain 0 segment 37
+  run "" domain 0 segment 38
+  run "" domain 0 segment 39
+  run "" domain 0 segment 32
+  run "" domain 0 segment 33
+  run "" domain 0 segment 8
+  run "" domain 0 segment 17
+  run "" domain 0 segment 18
+  run "" domain 0 segment 21
+  run "" domain 0 segment 15
+  run "" domain 0 segment 23
+  run "" domain 0 segment 27
+  run "" domain 0 segment 19
+  run "" domain 0 segment 40
+  run "" domain 0 segment 16
+  run "" domain 0 segment 24
+  run "" domain 0 segment 26
+  run "" domain 0 segment 28
+  run "" domain 0 segment 20
+  run "" domain 0 segment 22
+  run "" domain 0 segment 41
+  run "" domain 0 segment 51
+  run "" domain 0 segment 49
+  run "" domain 0 segment 46
+  run "" domain 0 segment 47
+  run "" domain 0 segment 42
+  run "" domain 0 segment 45
+  run "" domain 0 segment 43
+  run "" domain 0 segment 44
+  tick "" testFSM_par_blocks_1_fired_1 port clk
+  tick "" testFSM_par_blocks_1_abort port clk
+  tick "" testFSM_par_blocks_1_start_reg_1 port clk
+  tick "" testFSM_par_blocks_1_start_wire port clk
+  tick "" testFSM_par_blocks_fired_1 port clk
+  tick "" testFSM_par_blocks_abort port clk
+  tick "" testFSM_par_blocks_start_reg_1 port clk
+  tick "" testFSM_par_blocks_start_wire port clk
+  tick "" testFSM_par_running port clk
+  tick "" testFSM_state_fired_1 port clk
+  tick "" testFSM_state_overlap_pw port clk
+  tick "" testFSM_state_set_pw port clk
+  tick "" testFSM_abort port clk
+  tick "" testFSM_start_reg_2 port clk
+  tick "" testFSM_start_wire port clk
+  tick "square" dataIn port clk
+  tick "" loop port _clk__1 reset
+  tick "" testFSM_start_reg port _clk__1 reset
+  tick "" testFSM_start_reg_1 port _clk__1 reset
+  tick "" testFSM_jj_repeat_count port _clk__1 reset
+  tick "" testFSM_state_mkFSMstate port _clk__1 reset
+  tick "" testFSM_state_fired port _clk__1 reset
+  tick "" testFSM_state_can_overlap port _clk__1 reset
+  tick "" testFSM_par_blocks_start_reg port _clk__1 reset
+  tick "" testFSM_par_blocks_fired port _clk__1 reset
+  tick "" testFSM_par_blocks_1_start_reg port _clk__1 reset
+  tick "" testFSM_par_blocks_1_fired port _clk__1 reset
+  tick "" started port _clk__1 reset
+  inhibit RL_testFSM_actionpar_run_l53c19 -> RL_testFSM_action_l51c24
+  inhibit RL_testFSM_actionpar_start_l53c19 -> RL_testFSM_action_l51c24
+  inhibit RL_exit -> RL_testFSM_action_l58c7
+  inhibit RL_start -> RL_testFSM_action_l58c7
+  inhibit RL_testFSM_actionpar_run_l53c19 -> RL_testFSM_action_l58c7
+  inhibit RL_testFSM_actionpar_start_l53c19 -> RL_testFSM_action_l58c7
+  inhibit RL_testFSM_fsm_start -> RL_testFSM_action_l58c7
+  inhibit RL_testFSM_actionpar_run_l53c19 -> RL_testFSM_action_ovlp_r_update_l49c9
+  inhibit RL_testFSM_actionpar_start_l53c19 -> RL_testFSM_action_ovlp_r_update_l49c9
+  inhibit RL_testFSM_actionpar_run_l53c19 -> RL_testFSM_action_r_init_l49c9
+  inhibit RL_testFSM_actionpar_start_l53c19 -> RL_testFSM_action_r_init_l49c9
+  inhibit RL_testFSM_actionpar_run_l53c19 -> RL_testFSM_idle_l48c5
+  inhibit RL_testFSM_actionpar_start_l53c19 -> RL_testFSM_idle_l48c5
+  inhibit RL_testFSM_actionpar_run_l53c19 -> RL_testFSM_state_handle_abort
+  inhibit RL_testFSM_actionpar_start_l53c19 -> RL_testFSM_state_handle_abort
+  inhibit RL_testFSM_restart -> RL_testFSM_state_handle_abort

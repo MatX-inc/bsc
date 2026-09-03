@@ -1,0 +1,15 @@
+clock CLK posedge
+  run "" domain 0 segment 1
+  run "" domain 0 segment 5
+  run "" domain 0 segment 8
+  run "" domain 0 segment 3
+  run "" domain 0 segment 0
+  run "" domain 0 segment 2
+  run "the_bank" domain 0 segment 1
+  run "the_bank" domain 0 segment 2
+  run "" domain 0 segment 6
+  run "" domain 0 segment 4
+  run "" domain 0 segment 7
+  run "" domain 0 segment 9
+  tick "" toMem_rw port clk
+  tick "the_bank" transferring port _clk__1 reset

@@ -1,0 +1,9 @@
+clock CLK posedge
+clock clk1$CLK_OUT posedge
+  run "" domain 1 segment 0
+  run "" domain 1 segment 1
+  run "" domain 1 segment 2
+  run "" domain 1 segment 3
+clock s$CLK_clk posedge
+  run "" domain 2 segment 0
+  run "" domain 2 segment 1

@@ -1,0 +1,21 @@
+clock CLK posedge
+clock clkA$CLK_OUT posedge
+  run "" domain 1 segment 0
+  run "" domain 1 segment 1
+  run "" domain 1 segment 2
+  run "" domain 1 segment 3
+  tick "" divClock port clk
+  tick "" iRstA port clk
+  tick "" divClock port clk reset
+  tick "" areg port _clk__1 reset
+clock divClock$CLK_OUT posedge
+  run "" domain 2 segment 0
+  run "" domain 2 segment 1
+  tick "" icrossingRegF_crossREGdst port realClock
+  tick "" crossreg_crossREGsrc port realClock
+  tick "" rstB port clk
+  tick "" breg port _clk__1 reset
+  tick "" crossreg_crossREGsrc port realClock reset
+  tick "" icrossingRegF_crossREGdst port realClock reset
+clock clk_src posedge
+clock clk_src posedge

@@ -1,0 +1,20 @@
+clock CLK posedge
+  run "" domain 0 segment 0
+  run "" domain 0 segment 1
+  tick "" mk_clkA port clk
+  tick "" mk_clkA port clk reset
+  tick "" clk_cntr port _clk__1 reset
+  tick "" gate_cntr port _clk__1 reset
+clock mk_clkA$CLK_OUT posedge
+  run "" domain 1 segment 0
+  run "" domain 1 segment 1
+  tick "" divClock port clk gated mk_clkA.CLK_GATE_OUT gate
+  tick "" rstA port clk gated mk_clkA.CLK_GATE_OUT gate
+  tick "" divClock port clk reset gated mk_clkA.CLK_GATE_OUT gate
+  tick "" areg port _clk__1 reset gated mk_clkA.CLK_GATE_OUT gate
+clock divClock$CLK_OUT posedge
+  run "" domain 2 segment 0
+  run "" domain 2 segment 1
+  tick "" rstB port clk gated divClock.CLK_GATE_OUT gate
+  tick "" breg port _clk__1 reset gated divClock.CLK_GATE_OUT gate
+clock CLK_IN posedge

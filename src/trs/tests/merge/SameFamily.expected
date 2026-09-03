@@ -1,0 +1,20 @@
+clock CLK posedge
+  run "" domain 0 segment 0
+  run "" domain 0 segment 2
+  run "sub" domain 0 segment 1
+  run "sub" domain 0 segment 2
+  run "sub" domain 0 segment 3
+  run "" domain 0 segment 3
+  run "sub" domain 0 segment 4
+  run "" domain 0 segment 1
+  run "sub" domain 0 segment 6
+  run "sub" domain 0 segment 7
+  tick "" gc port clk_in
+  tick "sub" running port _clk__1 reset
+  tick "sub" x port _clk__1 reset
+  tick "sub" y port _clk__1 reset gated gc.CLK_GATE_OUT gate
+  tick "" done port _clk__1 reset
+  tick "" count port _clk__1 reset
+  tick "" gc port clk reset
+clock CLK negedge
+  tick "" gc port clk_in

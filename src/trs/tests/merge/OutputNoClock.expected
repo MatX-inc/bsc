@@ -1,0 +1,10 @@
+clock CLK posedge
+  run "" domain 0 segment 0
+  run "" domain 0 segment 2
+  run "" domain 0 segment 1
+  run "" domain 0 segment 3
+  tick "" is_done port _clk__1 reset
+  tick "" counter1 port _clk__1 reset
+clock i$CLK_outclk posedge
+  run "" domain 1 segment 0
+  run "" domain 1 segment 1

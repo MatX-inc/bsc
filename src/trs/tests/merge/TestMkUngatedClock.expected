@@ -1,0 +1,13 @@
+clock CLK posedge
+  run "" domain 0 segment 0
+  run "" domain 0 segment 1
+  tick "" mc port clk
+  tick "" cntr port _clk__1 reset
+  tick "" mc port clk reset
+clock mc$CLK_OUT posedge
+  run "" domain 1 segment 0
+  run "s" domain 0 segment 1
+  run "" domain 1 segment 1
+  run "s" domain 0 segment 2
+  tick "" rst2 port clk gated mc.CLK_GATE_OUT gate
+  tick "s" cntr2 port _clk__1 reset gated mc.CLK_GATE_OUT gate

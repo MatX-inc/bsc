@@ -841,6 +841,12 @@ impl Design {
         // here.  Appends to the named file rather than a stream the
         // tests compare, so measuring does not perturb what it
         // measures.  Scaffolding -- it goes when the export does.
+        // TRS_MERGE_DUMP=<file>: what the merge computes, written out
+        // so it can be frozen while the oracle above still vouches for
+        // it.  That recording is the coverage that outlives the export.
+        if let Some(p) = std::env::var_os("TRS_MERGE_DUMP") {
+            let _ = std::fs::write(&p, merge::render(&design));
+        }
         if let Some(p) = std::env::var_os("TRS_MERGE_CHECK") {
             use std::io::Write;
             let lines = merge::diff(&design);

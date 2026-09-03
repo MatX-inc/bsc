@@ -1,0 +1,18 @@
+clock CLK posedge
+  run "" domain 0 segment 1
+  run "" domain 0 segment 0
+  run "s" domain 0 segment 1
+  run "s" domain 0 segment 2
+  run "" domain 0 segment 2
+  run "" domain 0 segment 3
+  tick "s" w2 port clk
+  tick "s" w1 port clk
+  tick "s" acc port _clk__1 reset
+  tick "" cnt port _clk__1 reset
+  alternative in "" when And(Ult(cnt.read#0(), 8'd8), Extract(cnt.read#0(), 32'd0, 32'd0))
+    run "" domain 0 segment 1
+    run "" domain 0 segment 0
+    run "" domain 0 segment 2
+    run "s" domain 0 segment 1
+    run "" domain 0 segment 3
+    run "s" domain 0 segment 2

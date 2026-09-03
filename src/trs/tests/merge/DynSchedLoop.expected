@@ -1,0 +1,87 @@
+clock CLK posedge
+  run "" domain 0 segment 1
+  run "" domain 0 segment 2
+  run "" domain 0 segment 6
+  run "" domain 0 segment 8
+  run "" domain 0 segment 4
+  run "" domain 0 segment 10
+  run "" domain 0 segment 0
+  run "s1" domain 0 segment 1
+  run "s2" domain 0 segment 1
+  run "s1" domain 0 segment 2
+  run "" domain 0 segment 3
+  run "" domain 0 segment 5
+  run "" domain 0 segment 7
+  run "s2" domain 0 segment 2
+  run "" domain 0 segment 9
+  run "" domain 0 segment 11
+  run "" domain 0 segment 12
+  run "" domain 0 segment 13
+  tick "" pw4 port clk
+  tick "" pw3 port clk
+  tick "" pw2 port clk
+  tick "" pw1 port clk
+  tick "s2" w2 port clk
+  tick "s2" w1 port clk
+  tick "s1" w2 port clk
+  tick "s1" w1 port clk
+  tick "s1" acc port _clk__1 reset
+  tick "s2" acc port _clk__1 reset
+  tick "" cnt port _clk__1 reset
+  alternative in "" when And(Ult(cnt.read#0(), 8'd8), Extract(cnt.read#0(), 32'd0, 32'd0))
+    run "" domain 0 segment 1
+    run "" domain 0 segment 2
+    run "" domain 0 segment 6
+    run "" domain 0 segment 8
+    run "" domain 0 segment 4
+    run "" domain 0 segment 10
+    run "" domain 0 segment 0
+    run "" domain 0 segment 3
+    run "" domain 0 segment 9
+    run "" domain 0 segment 5
+    run "" domain 0 segment 7
+    run "s2" domain 0 segment 1
+    run "" domain 0 segment 11
+    run "" domain 0 segment 12
+    run "s1" domain 0 segment 1
+    run "" domain 0 segment 13
+    run "s1" domain 0 segment 2
+    run "s2" domain 0 segment 2
+  alternative in "" when And(Ult(cnt.read#0(), 8'd8), Extract(cnt.read#0(), 32'd0, 32'd0))
+    run "" domain 0 segment 1
+    run "" domain 0 segment 2
+    run "" domain 0 segment 6
+    run "" domain 0 segment 8
+    run "" domain 0 segment 4
+    run "" domain 0 segment 10
+    run "" domain 0 segment 0
+    run "s2" domain 0 segment 1
+    run "" domain 0 segment 3
+    run "" domain 0 segment 5
+    run "" domain 0 segment 7
+    run "s2" domain 0 segment 2
+    run "" domain 0 segment 9
+    run "" domain 0 segment 11
+    run "" domain 0 segment 12
+    run "s1" domain 0 segment 1
+    run "" domain 0 segment 13
+    run "s1" domain 0 segment 2
+  alternative in "" when And(Ult(cnt.read#0(), 8'd8), Extract(cnt.read#0(), 32'd0, 32'd0))
+    run "" domain 0 segment 1
+    run "" domain 0 segment 2
+    run "" domain 0 segment 6
+    run "" domain 0 segment 8
+    run "" domain 0 segment 4
+    run "" domain 0 segment 10
+    run "" domain 0 segment 0
+    run "s1" domain 0 segment 1
+    run "s1" domain 0 segment 2
+    run "" domain 0 segment 3
+    run "" domain 0 segment 9
+    run "" domain 0 segment 5
+    run "" domain 0 segment 7
+    run "s2" domain 0 segment 1
+    run "" domain 0 segment 11
+    run "" domain 0 segment 12
+    run "" domain 0 segment 13
+    run "s2" domain 0 segment 2

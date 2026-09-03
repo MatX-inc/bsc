@@ -2765,6 +2765,151 @@ fn composition_diff(
     })
 }
 
+/// An expression with its names in place of its string ids.
+///
+/// The recorded schedules have to survive the exporter interning
+/// strings in a different order, so nothing in them may be an id.
+fn show(design: &Design, e: &Expr) -> String {
+    let n = |s: StrId| design.name(s).to_string();
+    let list = |es: &[Expr]| {
+        es.iter().map(|x| show(design, x)).collect::<Vec<_>>().join(", ")
+    };
+    match e {
+        Expr::Const { width, limbs } => {
+            let v = limbs.first().copied().unwrap_or(0);
+            if limbs.iter().skip(1).all(|&w| w == 0) {
+                format!("{width}'d{v}")
+            } else {
+                format!("{width}'{limbs:?}")
+            }
+        }
+        Expr::Def(x) => n(*x),
+        Expr::Port(x) => n(*x),
+        Expr::Param(x) => format!("param {}", n(*x)),
+        Expr::Str(x) => format!("{:?}", design.name(*x)),
+        Expr::Real(v) => format!("{v}"),
+        Expr::MethCall { instance, method, port, args, .. } => {
+            format!("{}.{}#{port}({})", n(*instance), n(*method), list(args))
+        }
+        Expr::MethValue { instance, method, .. } => {
+            format!("{}.{} value", n(*instance), n(*method))
+        }
+        Expr::TaskValue { cookie, .. } => format!("task value {cookie}"),
+        Expr::ForeignCall { func, args, .. } => format!("{}({})", n(*func), list(args)),
+        Expr::Clock { osc, gate } => {
+            format!("clock {} gated {}", show(design, osc), show(design, gate))
+        }
+        Expr::Reset { wire } => format!("reset {}", show(design, wire)),
+        Expr::Gate { instance, clock } => format!("{}.{} gate", n(*instance), n(*clock)),
+        Expr::ClockOut { instance, clock } => format!("{}.{} out", n(*instance), n(*clock)),
+        Expr::Prim { op, args, .. } => format!("{op:?}({})", list(args)),
+        Expr::If { cond, then_, else_, .. } => format!(
+            "if {} then {} else {}",
+            show(design, cond),
+            show(design, then_),
+            show(design, else_)
+        ),
+        Expr::Case { scrutinee, arms, default, .. } => format!(
+            "case {} of [{}] else {}",
+            show(design, scrutinee),
+            arms.iter()
+                .map(|(k, v)| format!("{k:?} => {}", show(design, v)))
+                .collect::<Vec<_>>()
+                .join(", "),
+            show(design, default)
+        ),
+    }
+}
+
+/// What the merge computes, rendered so it can be checked in and
+/// compared later.
+///
+/// The differential check against the exporter is scaffolding and goes
+/// when the export does; recording its answer while it is still
+/// vouched for is what keeps the evidence afterwards.  A frozen answer
+/// only catches *change*, not error -- its authority is entirely that
+/// it agreed with bsc on the day it was written.
+///
+/// Names rather than ids throughout, so a change to the string table
+/// does not read as a change to the schedule.
+pub fn render(design: &Design) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let Some(inp) = Inputs::of(design) else {
+        return "no top module\n".to_string();
+    };
+    let comps = match compositions(&inp) {
+        Ok(c) => c,
+        Err(why) => return format!("{why}\n"),
+    };
+    let rule = |r: &crate::schedule::QualRule| {
+        let path = design.name(r.instance);
+        let m = &design.modules[inp.hier.insts[
+            inp.hier.insts.iter().position(|(p, _)| p == path).unwrap_or(0)
+        ].1];
+        let name = m.rules.get(r.rule.idx()).map(|x| design.name(x.name)).unwrap_or("?");
+        if path.is_empty() { name.to_string() } else { format!("{path}.{name}") }
+    };
+    for c in &comps {
+        let _ = writeln!(
+            out,
+            "clock {} {}",
+            design.name(c.clock),
+            if c.posedge { "posedge" } else { "negedge" }
+        );
+        for e in &c.entries {
+            let _ = writeln!(
+                out,
+                "  run {:?} domain {} segment {}",
+                design.name(e.instance),
+                e.domain,
+                e.segment
+            );
+        }
+        for t in &c.ticks {
+            let _ = writeln!(
+                out,
+                "  tick {:?} {} port {}{}{}",
+                design.name(t.instance),
+                design.name(t.prim),
+                design.name(t.port),
+                if t.reset { " reset" } else { "" },
+                match &t.gate {
+                    Some(g) => format!(" gated {}", show(design, g)),
+                    None => String::new(),
+                }
+            );
+        }
+        for e in &c.early {
+            let _ = writeln!(out, "  early {}", rule(e));
+        }
+        for (a, b) in &c.cross_inhibits {
+            let _ = writeln!(out, "  inhibit {} -> {}", rule(a), rule(b));
+        }
+        for a in &c.alts {
+            let _ = writeln!(
+                out,
+                "  alternative in {:?} when {}",
+                design.name(a.guard_inst),
+                show(design, &a.guard)
+            );
+            for e in &a.entries {
+                let _ = writeln!(
+                    out,
+                    "    run {:?} domain {} segment {}",
+                    design.name(e.instance),
+                    e.domain,
+                    e.segment
+                );
+            }
+            for (x, y) in &a.cross_inhibits {
+                let _ = writeln!(out, "    inhibit {} -> {}", rule(x), rule(y));
+            }
+        }
+    }
+    out
+}
+
 pub fn diff(design: &Design) -> Vec<String> {
     let Some(inp) = Inputs::of(design) else {
         return vec!["no top module".to_string()];
@@ -2846,6 +2991,380 @@ mod tests {
             cross_inhibits: vec![],
             alts: vec![],
         }
+    }
+
+    /// A domain names itself by the clock highest up that reaches it:
+    /// ungated before gated, then fewest levels, then fewest `$`.  What
+    /// this picks is what the composition is recorded under, so a
+    /// different choice renames a clock the runtime then looks up.
+    #[test]
+    fn a_domain_takes_the_name_of_its_shallowest_ungated_clock() {
+        use crate::ClockDomain;
+
+        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let mut d = crate::tests::tiny_design();
+        // 0 mkTop, 1 CLK, 2 gc, 3 CLK_OUT, 4 new_clk, 5 gc$CLK_OUT
+        d.strings = ["mkTop", "CLK", "gc", "CLK_OUT", "new_clk", "gc$CLK_OUT"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let gated = Expr::ClockOut { instance: 2, clock: 3 };
+        // the generated clock is listed first, so a reader that simply
+        // took the first would take it
+        d.modules[0].clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![
+                (gated.clone(), Expr::Gate { instance: 2, clock: 4 }),
+                (Expr::Port(1), one()),
+            ],
+        }];
+        d.index_strings();
+        let inp = inputs(&d);
+        let dom = QDomain::of_module(0, 0);
+
+        assert_eq!(
+            canonical_clock(&inp, dom).and_then(|o| osc_name(&inp, o)),
+            Some("CLK".to_string()),
+            "the ungated clock names the domain"
+        );
+
+        // with the ungated one gone, the generated clock names it, and
+        // by the wire it arrives on
+        let mut only_gated = d.clone();
+        only_gated.modules[0].clock_domains[0].clocks.pop();
+        let inp2 = inputs(&only_gated);
+        assert_eq!(
+            canonical_clock(&inp2, dom).and_then(|o| osc_name(&inp2, o)),
+            Some("gc$CLK_OUT".to_string()),
+            "a domain with only a gated clock still has a name"
+        );
+    }
+
+    /// A rule is inhibited by every rule disjoint from it that has
+    /// already executed when its own guard is computed -- and by no
+    /// others.  Which those are depends on the composed order, so the
+    /// same pair inhibits the other way round when the order flips.
+    #[test]
+    fn an_inhibitor_is_a_disjoint_rule_that_already_ran() {
+        let d = two_rule_design();
+        let inp = inputs(&d);
+        let (a, b) = (SchedEntity::Rule(RuleRef(0)), SchedEntity::Rule(RuleRef(1)));
+        let disjoint: BTreeMap<QEntity, BTreeSet<QEntity>> =
+            [((0, a), [(0, b)].into_iter().collect()),
+             ((0, b), [(0, a)].into_iter().collect())]
+            .into_iter()
+            .collect();
+
+        // a's segment first: a executes before b's guard is computed
+        let a_first = [(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)];
+        let pairs = cross_inhibits(&inp, &a_first, &disjoint);
+        assert_eq!(
+            pairs.iter().map(|(p, q)| (p.rule.idx(), q.rule.idx())).collect::<Vec<_>>(),
+            vec![(0, 1)],
+            "the rule that ran inhibits the one still to be guarded"
+        );
+
+        // the other order, and the same pair points the other way
+        let b_first = [(0, 0, 2), (0, 0, 3), (0, 0, 0), (0, 0, 1)];
+        let pairs = cross_inhibits(&inp, &b_first, &disjoint);
+        assert_eq!(
+            pairs.iter().map(|(p, q)| (p.rule.idx(), q.rule.idx())).collect::<Vec<_>>(),
+            vec![(1, 0)],
+            "order decides which way the inhibitor runs"
+        );
+
+        // rules that are not disjoint inhibit nothing, whatever the order
+        assert!(
+            cross_inhibits(&inp, &a_first, &BTreeMap::new()).is_empty(),
+            "only a disjoint pair can inhibit"
+        );
+    }
+
+    /// Which edge a primitive ticks on comes off its clock argument,
+    /// reset ticks come after the rest, and a group's members come out
+    /// in the reverse of the order they were collected -- which is how
+    /// a dual-port memory ticks its first port first.
+    #[test]
+    fn ticks_split_by_edge_and_reset() {
+        use crate::{ClockArg, ClockDomain, Instance, InstanceKind, Primitive, Ticks};
+
+        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let mut d = crate::tests::tiny_design();
+        // 0 mkTop, 1 CLK, 2 p_pos, 3 p_neg, 4 p_rst, 5 p_pos2, 6 clk,
+        // 7 RegN, 8 ""
+        d.strings = ["mkTop", "CLK", "p_pos", "p_neg", "p_rst", "p_pos2", "clk", "RegN", ""]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        d.modules[0].clock_domains =
+            vec![ClockDomain { id: 0, clocks: vec![(Expr::Port(1), one())] }];
+        let prim = |name, order, ticks, has_reset| Instance {
+            name,
+            kind: InstanceKind::Prim(Primitive::Other { name: 7 }),
+            clock_args: vec![ClockArg { name: 6, arg: 0, has_reset, ticks }],
+            elab_order: order,
+            prim_clocks: None,
+            args: vec![Expr::Clock { osc: Box::new(Expr::Port(1)), gate: Box::new(one()) }],
+            method_order: vec![],
+            port_counts: vec![],
+        };
+        d.modules[0].instances = vec![
+            prim(2, 0, Ticks::Pos, false),
+            prim(3, 1, Ticks::Neg, false),
+            prim(4, 2, Ticks::Never, true),
+            prim(5, 3, Ticks::Pos, false),
+        ];
+        d.index_strings();
+
+        let inp = inputs(&d);
+        let up = unified_domains(&inp);
+        let (pos, neg) = domain_ticks(&inp, &up, QDomain::of_module(0, 0));
+        let names = |ts: &[QualifiedTick]| {
+            ts.iter()
+                .map(|t| (inp.name(t.prim).to_string(), t.reset, t.gate.is_some()))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            names(&pos),
+            vec![
+                ("p_pos2".to_string(), false, false),
+                ("p_pos".to_string(), false, false),
+                ("p_rst".to_string(), true, false),
+            ],
+            "rising-edge ticks in reverse collection order, then the reset tick"
+        );
+        assert_eq!(
+            names(&neg),
+            vec![("p_neg".to_string(), false, false)],
+            "the falling edge ticks only what asked for it"
+        );
+
+        // gating the domain's clock reaches every tick on it
+        let mut gated = d.clone();
+        let g = Expr::Gate { instance: 2, clock: 6 };
+        gated.modules[0].clock_domains[0].clocks[0].1 = g;
+        let inp2 = inputs(&gated);
+        let up2 = unified_domains(&inp2);
+        let (pos2, _) = domain_ticks(&inp2, &up2, QDomain::of_module(0, 0));
+        assert!(
+            pos2.iter().all(|t| t.gate.is_some()),
+            "a gated clock gates the ticks it drives"
+        );
+    }
+
+    /// Every combination of the facts' states is one interleaving.  The
+    /// combination needing no guard is the base; the rest are tried
+    /// most-active first, so reaching one implies the more-active ones
+    /// failed and its guard needs no negations.
+    #[test]
+    fn alternatives_cover_every_combination_most_active_first() {
+        use crate::schedule::DynSched;
+
+        let g: BTreeMap<QNode, Vec<QNode>> = BTreeMap::new();
+        let guard = |k: u32| Expr::Port(k);
+        let pair = |e: u32, l: u32, ge: u32, gl: Option<Expr>| DynFact {
+            inst: 0,
+            sched: DynSched::Pair {
+                rule_e: RuleRef(e),
+                guard_e: guard(ge),
+                rule_l: RuleRef(l),
+                guard_l: gl,
+                meths: vec![],
+                between: vec![],
+            },
+            drops_l: vec![],
+            drops_e: vec![],
+        };
+
+        // one fact, guarded on one side: two states, so one alternative
+        let f = pair(0, 1, 0, None);
+        let (_, alts) = dyn_alternatives(&g, &[&f]).unwrap();
+        assert_eq!(alts.len(), 1, "two states leave one guarded alternative");
+        assert_eq!(alts[0].1, guard(0), "and it is guarded by the early rule");
+
+        // Three facts, because with two the combinations come out in
+        // descending order anyway and the sort proves nothing.  Their
+        // guards are all distinct: the sort keys on how many guards a
+        // combination needs, which the conjunction then deduplicates,
+        // so a shared guard would make the two disagree for reasons
+        // that have nothing to do with the ordering.
+        let facts =
+            [pair(0, 1, 10, None), pair(1, 0, 11, None), pair(0, 1, 12, Some(guard(13)))];
+        let refs: Vec<&DynFact> = facts.iter().collect();
+        let (_, alts) = dyn_alternatives(&g, &refs).unwrap();
+        let widths: Vec<usize> = alts
+            .iter()
+            .map(|(_, guard, _)| match guard {
+                Expr::Prim { args, .. } => args.len(),
+                _ => 1,
+            })
+            .collect();
+        assert!(
+            widths.windows(2).all(|w| w[0] >= w[1]),
+            "the most-active combination is tried first, got {widths:?}"
+        );
+        assert_eq!(widths[0], 3, "and the most active needs every guard");
+        assert!(
+            matches!(&alts[0].1, Expr::Prim { op: crate::PrimOp::And, args, .. }
+                     if args.len() == 3),
+            "a combination of live facts is guarded by their conjunction"
+        );
+        assert!(
+            alts.iter().any(|(_, g, _)| !matches!(g, Expr::Prim { .. })),
+            "and a combination needing one guard is guarded by it alone"
+        );
+
+        // facts in different instances cannot share one guard
+        let mut elsewhere = pair(0, 1, 0, None);
+        elsewhere.inst = 1;
+        assert!(
+            dyn_alternatives(&g, &[&facts[0], &elsewhere])
+                .is_err_and(|e| e.contains("more than one module")),
+            "a guard is read in one instance, so the facts must live in one"
+        );
+    }
+
+    fn sched(r: u32) -> SchedNode {
+        SchedNode::Sched(SchedEntity::Rule(RuleRef(r)))
+    }
+    fn exec(r: u32) -> SchedNode {
+        SchedNode::Exec(SchedEntity::Rule(RuleRef(r)))
+    }
+
+    /// The composed entries are the flat order projected onto whole
+    /// segments, and where the graph says nothing the flat order
+    /// decides -- but where it does say something, it wins.
+    #[test]
+    fn entries_follow_the_graph_before_the_flat_order() {
+        let d = two_rule_design();
+        let inp = inputs(&d);
+        let n = |x: SchedNode| q(0, x);
+        let acyclic = |extra: Vec<(SchedNode, SchedNode)>| {
+            let mut g: BTreeMap<QNode, Vec<QNode>> = BTreeMap::new();
+            for r in 0..2 {
+                g.insert(n(sched(r)), vec![n(exec(r))]);
+                g.entry(n(exec(r))).or_default();
+            }
+            for (a, b) in extra {
+                g.entry(n(a)).or_default().push(n(b));
+            }
+            g
+        };
+        let order: Vec<QNode> =
+            [sched(0), exec(0), sched(1), exec(1)].into_iter().map(n).collect();
+
+        // nothing orders the two rules against each other, so the flat
+        // order stands
+        assert_eq!(
+            derive_entries(&inp, &order, &acyclic(vec![]), &BTreeMap::new()).unwrap(),
+            vec![(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)],
+            "with nothing to say, the graph leaves the flat order alone"
+        );
+
+        // an edge from b's execution back to a's guard: b's segment has
+        // to come first, though a appears first in the flat order
+        let pushed = derive_entries(
+            &inp,
+            &order,
+            &acyclic(vec![(exec(1), sched(0))]),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            pushed,
+            vec![(0, 0, 2), (0, 0, 3), (0, 0, 0), (0, 0, 1)],
+            "an edge outranks first appearance"
+        );
+
+        // and a graph that cannot be satisfied is reported, not
+        // silently linearised
+        let cyclic = acyclic(vec![(exec(1), sched(0)), (exec(0), sched(1))]);
+        assert!(
+            derive_entries(&inp, &order, &cyclic, &BTreeMap::new())
+                .is_err_and(|e| e.contains("cyclic")),
+            "a cycle among segments has no composition"
+        );
+    }
+
+    /// A disjoint pair carries no graph edge, but the flat order still
+    /// fixes which state each guard sees: if one rule's guard is
+    /// computed after the other has executed, that has to stay true of
+    /// the composed order too.
+    ///
+    /// With one node per segment the pin can only ever agree with the
+    /// flat order it was derived from, so what this establishes is
+    /// consistency, not that the pin decides anything.  It would decide
+    /// something only where a segment holds several nodes and the pin
+    /// reaches between two of them -- the interlock the exporter
+    /// refuses.
+    #[test]
+    fn a_disjoint_pair_pins_the_segments_it_straddles() {
+        let d = two_rule_design();
+        let inp = inputs(&d);
+        let n = |x: SchedNode| q(0, x);
+        let mut g: BTreeMap<QNode, Vec<QNode>> = BTreeMap::new();
+        for r in 0..2 {
+            g.insert(n(sched(r)), vec![n(exec(r))]);
+            g.entry(n(exec(r))).or_default();
+        }
+        // b's guard is computed after a has executed
+        let order: Vec<QNode> =
+            [sched(0), exec(0), sched(1), exec(1)].into_iter().map(n).collect();
+        let (a, b) = (SchedEntity::Rule(RuleRef(0)), SchedEntity::Rule(RuleRef(1)));
+        let disjoint: BTreeMap<QEntity, BTreeSet<QEntity>> =
+            [((0, b), [(0, a)].into_iter().collect())].into_iter().collect();
+
+        let with = derive_entries(&inp, &order, &g, &disjoint).unwrap();
+        let without = derive_entries(&inp, &order, &g, &BTreeMap::new()).unwrap();
+        assert_eq!(with, without, "the pin agrees with the flat order here");
+
+        // the pin is real: reverse only the disjointness direction that
+        // the order justifies and the edge disappears
+        let other: BTreeMap<QEntity, BTreeSet<QEntity>> =
+            [((0, a), [(0, b)].into_iter().collect())].into_iter().collect();
+        assert_eq!(
+            derive_entries(&inp, &order, &g, &other).unwrap(),
+            without,
+            "a pair the order does not straddle adds nothing"
+        );
+    }
+
+    /// A top module with two rules and a segment per schedule node.
+    fn two_rule_design() -> Design {
+        use crate::schedule::{ModuleSchedule, Segment};
+        use crate::Rule;
+
+        let mut d = crate::tests::tiny_design();
+        d.strings = ["mkTop", "a", "b", ""].iter().map(|s| (*s).to_string()).collect();
+        let rule = |name| Rule {
+            name,
+            can_fire: name,
+            will_fire: name,
+            body: crate::Lazy::new(vec![]),
+            clock_domain: 0,
+            crossing: false,
+            me_inhibits: vec![],
+        };
+        d.modules[0].rules = vec![rule(1), rule(2)];
+        d.modules[0].clock_domains = vec![crate::ClockDomain {
+            id: 0,
+            clocks: vec![(Expr::Port(1), Expr::Const { width: 1, limbs: vec![1] })],
+        }];
+        // one segment per node, which is what the exporter cuts: a
+        // method call can land between a rule's Sched and its Exec, so
+        // the two have to be independently placeable
+        let seg = |n: SchedNode| Segment { nodes: vec![n], cut: vec![] };
+        let (sa, ea) = (sched(0), exec(0));
+        let (sb, eb) = (sched(1), exec(1));
+        d.modules[0].schedule.domains = vec![ModuleSchedule {
+            domain: 0,
+            posedge: true,
+            segments: vec![seg(sa), seg(ea), seg(sb), seg(eb)],
+            ticks: vec![],
+        }];
+        d.index_strings();
+        d
     }
 
     /// The harness is the only thing standing behind the port, so it

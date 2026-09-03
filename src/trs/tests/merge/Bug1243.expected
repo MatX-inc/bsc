@@ -1,0 +1,9 @@
+clock CLK posedge
+  run "" domain 0 segment 0
+  run "" domain 0 segment 2
+  run "i" domain 0 segment 1
+  run "i" domain 0 segment 4
+  run "i" domain 0 segment 5
+  run "" domain 0 segment 1
+  run "" domain 0 segment 3
+  run "i" domain 0 segment 2
