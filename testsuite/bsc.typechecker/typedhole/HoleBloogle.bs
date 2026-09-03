@@ -1,0 +1,4 @@
+package HoleBloogle(holeBloogle) where
+
+holeBloogle :: Bit 12 -> Bit 12
+holeBloogle v = v + __

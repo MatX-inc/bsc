@@ -1,0 +1,41 @@
+
+#
+# typed holes: "__" is a dont-care whose inferred type is reported
+#
+
+# a hole whose type comes from the definition's signature (Classic)
+compile_pass_warning HoleInDef.bs T0159
+compare_file HoleInDef.bs.bsc-out
+
+# holes inside a module: a submodule argument and a rule body
+compile_pass_warning HoleInModule.bs T0159 2
+compare_file HoleInModule.bs.bsc-out
+
+# holes in BSV
+compile_pass_warning HoleBsv.bsv T0159 2
+compare_file HoleBsv.bsv.bsc-out
+
+# -----
+
+#
+# with -bloogle-db, hole and unbound-variable diagnostics carry
+# bloogle suggestions (using the stub bloogle script in this directory)
+#
+
+global env
+set here [file join [absolute $srcdir] $subdir]
+set path_save $env(PATH)
+set env(PATH) "$here:$path_save"
+
+# a typed hole gets approximate (type search) matches
+compile_pass_warning HoleBloogle.bs T0159 1 {-bloogle-db fake.db}
+compare_file HoleBloogle.bs.bsc-out
+
+# an unbound variable gets exact name matches only
+compile_fail_error UnboundBloogle.bs T0004 1 {-bloogle-db fake.db}
+compare_file UnboundBloogle.bs.bsc-out
+
+set env(PATH) $path_save
+
+# without the flag, the same unbound variable gets no suggestions
+compile_fail_error UnboundBloogle.bs T0004
