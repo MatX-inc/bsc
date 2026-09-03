@@ -111,6 +111,8 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             outlined: None,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -546,6 +548,8 @@ pub fn compile_scheds(
             outlined: None,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -594,6 +598,8 @@ pub fn compile_execs(
             outlined: None,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -733,6 +739,8 @@ pub fn compile_object_chunk(
             outlined: None,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -885,6 +893,8 @@ fn lower_helpers<'ctx>(
             outlined: Some(refs),
             helper_self: Some((hs.mir, hs.def)),
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -929,6 +939,21 @@ impl Drop for BoundaryGuard {
 /// boxed-prim trampolines — their tokens would dangle from the
 /// sentinel spec) stays INLINE: its function is deleted, the map
 /// omits it, and every call site falls back to the default path.
+/// Fold a boundary lowering's outcome and the subtree check into one
+/// verdict, so the caller has a single reason string to report.
+fn lower_res_check(
+    r: Result<u32, Ineligible>,
+    outside: bool,
+    sub: Option<(u32, u32)>,
+) -> Result<u32, String> {
+    match r {
+        Err(e) => Err(format!("{e}")),
+        Ok(_) if sub.is_none() => Err("no region for exemplar".to_string()),
+        Ok(_) if outside => Err("call site outside the fragment's subtree".to_string()),
+        Ok(w) => Ok(w),
+    }
+}
+
 fn lower_boundary_fns<'ctx>(
     env: &PlanEnv,
     ctx: &'ctx Context,
@@ -970,22 +995,56 @@ fn lower_boundary_fns<'ctx>(
             outlined: refs,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
         };
-        match lc.lower_boundary_fn(rq, external) {
-            Ok(ret_w) if lc.foreign_stmts.is_empty() && lc.prim_calls.is_empty() => {
+        // A cone that records call sites is fine: they become templates
+        // the caller materialises into its own table (BoundaryFn).  What
+        // is NOT fine is a site naming an instance outside this
+        // fragment's subtree -- the delta would not be a delta -- so
+        // that one method stays inline.
+        let sub = env.insts.get(&rq.exemplar).map(|ie| ie.region);
+        let rebase =
+            |inst: usize| -> Option<usize> { (inst >= rq.exemplar).then_some(inst - rq.exemplar) };
+        let outside = lc
+            .prim_calls
+            .iter()
+            .map(|p| p.inst)
+            .chain(lc.foreign_stmts.iter().map(|f| f.inst))
+            .any(|i| rebase(i).is_none());
+        match lower_res_check(lc.lower_boundary_fn(rq, external), outside, sub) {
+            Ok(ret_w) => {
+                let prim_sites = lc
+                    .prim_calls
+                    .iter()
+                    .map(|p| PrimCallSpec {
+                        inst: rebase(p.inst).expect("checked above"),
+                        ..p.clone()
+                    })
+                    .collect();
+                let foreign_sites = lc
+                    .foreign_stmts
+                    .iter()
+                    .map(|f| ForeignSpec {
+                        inst: rebase(f.inst).expect("checked above"),
+                        ..f.clone()
+                    })
+                    .collect();
                 map.insert(
                     (rq.mir, rq.method, rq.kind),
-                    (rq.sym.clone(), ret_w, rq.args.clone()),
+                    BoundaryFn {
+                        sym: rq.sym.clone(),
+                        ret_width: ret_w,
+                        args: rq.args.clone(),
+                        prim_sites,
+                        foreign_sites,
+                    },
                 );
             }
-            r => {
-                let why = match r {
-                    Ok(_) => "callback sites in method cone".to_string(),
-                    Err(e) => format!("{e}"),
-                };
+            Err(why) => {
                 eprintln!("trs boundary: {} stays inline: {why}", rq.sym);
                 if let Some(f) = module.get_function(&rq.sym) {
                     unsafe { f.delete() };
@@ -1101,6 +1160,8 @@ pub fn compile_design_object(
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1123,6 +1184,8 @@ pub fn compile_design_object(
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1343,6 +1406,8 @@ fn compile_type_module(
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1394,8 +1459,17 @@ pub fn compile_design_objects_split(
         let _bg = BoundaryGuard;
         lower_boundary_fns(env, &ctx, &module, cbs, boundary_reqs, refs_opt, false)
     };
+    let with_sites = full_map
+        .values()
+        .filter(|b| !b.prim_sites.is_empty() || !b.foreign_sites.is_empty())
+        .count();
+    let nsites: usize = full_map
+        .values()
+        .map(|b| b.prim_sites.len() + b.foreign_sites.len())
+        .sum();
     eprintln!(
-        "trs shard: {} of {} boundary method fns realized",
+        "trs shard: {} of {} boundary method fns realized \
+         ({with_sites} carrying {nsites} call-site templates)",
         full_map.len(),
         boundary_reqs.len()
     );
@@ -1450,6 +1524,8 @@ pub fn compile_design_objects_split(
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
+            bnd_prim_tok: None,
+            bnd_foreign_tok: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1947,6 +2023,8 @@ fn lower_edge_ssa<'ctx>(
                     outlined: None,
                     helper_self: None,
                     dedup: None,
+                    bnd_prim_tok: None,
+                    bnd_foreign_tok: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: None,
@@ -2088,6 +2166,8 @@ fn lower_edge_ssa<'ctx>(
                     outlined,
                     helper_self: None,
                     dedup: None,
+                    bnd_prim_tok: None,
+                    bnd_foreign_tok: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: Some(std::mem::take(&mut edge_ctx)),
@@ -2291,6 +2371,8 @@ fn lower_edge_ssa<'ctx>(
                                 outlined,
                                 helper_self: None,
                                 dedup: None,
+                                bnd_prim_tok: None,
+                                bnd_foreign_tok: None,
                                 foreign_stmts: Vec::new(),
                                 prim_calls: Vec::new(),
                                 edge: Some(EdgeCtx {
@@ -2632,6 +2714,13 @@ struct Lower<'a, 'ctx> {
     /// region.0); call-site tokens OR the runtime token base.  None =
     /// baked absolute addressing (sched fns, trial).
     dedup: Option<(u32, u32, IntValue<'ctx>, IntValue<'ctx>)>,
+    /// While lowering a shared boundary fn: the token seeds its caller
+    /// passed, one per call-site table (the two have independent local
+    /// index spaces).  Each is `caller_token_base + the first index of
+    /// the block the caller reserved`, so a site adds its own index.
+    /// None in a rule body, which indexes its own table from zero.
+    bnd_prim_tok: Option<IntValue<'ctx>>,
+    bnd_foreign_tok: Option<IntValue<'ctx>>,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -2890,6 +2979,35 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         self.builder
             .build_int_compare(IntPredicate::NE, v, self.ity(w).const_zero(), "nz")
+            .unwrap()
+    }
+
+    /// The runtime token for call site `local` in this function.  The
+    /// local index is ADDED to the base rather than OR'd: a rule body's
+    /// base is `ordinal << 17`, whose low bits are zero, so the two
+    /// agree there -- but a base that already carries a local offset
+    /// (a boundary fn, whose caller reserved it a block in its own
+    /// table) needs the add.  The kind bit sits above the 16-bit local
+    /// field and stays an OR.
+    fn site_token(&self, base: IntValue<'ctx>, local: u64, seeded: bool) -> IntValue<'ctx> {
+        let i64t = self.ctx.i64_type();
+        if !seeded {
+            // a rule body's base is `ordinal << 17`: the local field is
+            // zero, so one OR places the index and the kind bit
+            let k = self.token_kind | local;
+            return self
+                .builder
+                .build_or(base, i64t.const_int(k, false), "tok")
+                .unwrap();
+        }
+        // a boundary fn's base already carries the block its caller
+        // reserved in its own table, so the index has to be added
+        let off = self
+            .builder
+            .build_int_add(base, i64t.const_int(local, false), "tokl")
+            .unwrap();
+        self.builder
+            .build_or(off, i64t.const_int(self.token_kind, false), "tok")
             .unwrap()
     }
 
@@ -4251,20 +4369,32 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         } else {
             0
         };
-        if let Some((sym, brw, bargs)) = self.boundary_hit(cie.mir, method, bkind) {
+        if let Some(bnd) = self.boundary_hit(cie.mir, method, bkind) {
+            let (sym, brw, bargs) = (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
             if let Some(envp) = f.envp {
                 if bargs.iter().all(|(p, _)| cf.args.contains_key(p)) {
                     let i64t = self.ctx.i64_type();
                     let ptrt = self.ctx.ptr_type(AddressSpace::default());
-                    let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                        vec![ptrt.into(), ptrt.into(), i64t.into()];
+                    let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+                        ptrt.into(),
+                        ptrt.into(),
+                        i64t.into(),
+                        i64t.into(),
+                        i64t.into(),
+                    ];
                     for (_, pw) in &bargs {
                         ptys.push(self.ity(*pw).into());
                     }
                     let bty = self.ity(brw).fn_type(&ptys, false);
                     let base = self.slot_index(cie.region.0);
-                    let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> =
-                        vec![f.arena.into(), envp.into(), base.into()];
+                    let (ptok, ftok) = self.boundary_tok_bases(&bnd, child)?;
+                    let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        f.arena.into(),
+                        envp.into(),
+                        base.into(),
+                        ptok.into(),
+                        ftok.into(),
+                    ];
                     for (pn, pw) in &bargs {
                         let (v, vw) = cf.args[pn];
                         bargv.push(self.to_w(v, vw, *pw, false).into());
@@ -4599,7 +4729,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             off += words;
         }
-        let token_const = self.token_kind | self.prim_calls.len() as u64;
+        let local = self.prim_calls.len() as u64;
+        let token_const = self.token_kind | local;
         if self.prim_calls.len() >= 1 << 16 {
             return nope("prim call-site count exceeds the 16-bit token field");
         }
@@ -4612,12 +4743,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ret_width: if is_action { 0 } else { ret_width },
             is_action,
         });
-        let tokv = match self.dedup {
-            Some((_, _, _, tb)) => self
-                .builder
-                .build_or(tb, i64t.const_int(token_const, false), "tok")
-                .unwrap(),
-            None => i64t.const_int(token, false),
+        let tokv = match (self.bnd_prim_tok, self.dedup) {
+            (Some(seed), _) => self.site_token(seed, local, true),
+            (None, Some((_, _, _, tb))) => self.site_token(tb, local, false),
+            (None, None) => i64t.const_int(token, false),
         };
         let prim_callee = self.cb_callee(self.cbs.prim);
         self.builder
@@ -5937,12 +6066,55 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
     /// Boundary-tax experiment: the realized entry for (type, method,
     /// kind) when a boundary map is active for this emission.
-    fn boundary_hit(
-        &self,
-        mir: usize,
-        method: StrId,
-        kind: u8,
-    ) -> Option<(String, u32, Vec<(StrId, u32)>)> {
+    /// Reserve a block in each of this function's call-site tables for
+    /// a boundary call on `child`, materialising the callee's templates
+    /// into them with that child's absolute instances, and return the
+    /// (prim, foreign) token bases to hand the callee.  Each is this
+    /// function's own base offset to the block just reserved, so a site
+    /// inside the callee adds its index and lands in OUR table.
+    fn boundary_tok_bases(
+        &mut self,
+        bf: &BoundaryFn,
+        child: usize,
+    ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), Ineligible> {
+        let i64t = self.ctx.i64_type();
+        let pbase = self.prim_calls.len() as u64;
+        let fbase = self.foreign_stmts.len() as u64;
+        if pbase + bf.prim_sites.len() as u64 >= 1 << 16
+            || fbase + bf.foreign_sites.len() as u64 >= 1 << 16
+        {
+            return nope("boundary block exceeds the 16-bit token field");
+        }
+        for p in &bf.prim_sites {
+            self.prim_calls.push(PrimCallSpec {
+                inst: child + p.inst,
+                ..p.clone()
+            });
+        }
+        for f in &bf.foreign_sites {
+            self.foreign_stmts.push(ForeignSpec {
+                inst: child + f.inst,
+                ..f.clone()
+            });
+        }
+        let own = |me: &Self, seeded: Option<IntValue<'ctx>>| match seeded {
+            Some(v) => v,
+            None => match me.dedup {
+                Some((_, _, _, tb)) => tb,
+                None => i64t.const_int(me.spec.token_base, false),
+            },
+        };
+        let p0 = own(self, self.bnd_prim_tok);
+        let f0 = own(self, self.bnd_foreign_tok);
+        let add = |b: IntValue<'ctx>, off: u64| {
+            self.builder
+                .build_int_add(b, i64t.const_int(off, false), "btok")
+                .unwrap()
+        };
+        Ok((add(p0, pbase), add(f0, fbase)))
+    }
+
+    fn boundary_hit(&self, mir: usize, method: StrId, kind: u8) -> Option<BoundaryFn> {
         BOUNDARY.with(|b| {
             b.borrow()
                 .as_ref()
@@ -5950,11 +6122,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         })
     }
 
-    /// One boundary method function (boundary-tax experiment).  ABI:
-    ///   kind 0: iN  sym(arena, env, base, args...)       value result
-    ///   kind 3: iN  sym(arena, env, base, args...)       AV result cone
-    ///   kind 1: i32 sym(arena, env, base, args...)       action body
-    ///   kind 2: i32 sym(arena, env, base, out, args...)  AV body+result
+    /// One boundary method function.  ABI, with `t` = the pair
+    /// (prim_tok_base, foreign_tok_base) -- this call's token base, the
+    /// caller's own offset to the block it reserved in each of its two
+    /// call-site tables (see `BoundaryFn::prim_sites`):
+    ///   kind 0: iN  sym(arena, env, base, t, args...)       value result
+    ///   kind 3: iN  sym(arena, env, base, t, args...)       AV result cone
+    ///   kind 1: i32 sym(arena, env, base, t, args...)       action body
+    ///   kind 2: i32 sym(arena, env, base, t, out, args...)  AV body+result
     /// Base-relative addressing throughout (one fn serves every
     /// instance of the type); the i32 status is 1 when a $finish path
     /// fired (the caller branches to its stop block).  internal +
@@ -6000,8 +6175,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             };
             self.expr_width(&df, res)?.max(1)
         };
-        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
-            vec![ptrt.into(), ptrt.into(), i64t.into()];
+        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+            ptrt.into(),
+            ptrt.into(),
+            i64t.into(),
+            i64t.into(),
+            i64t.into(),
+        ];
         if rq.kind == 2 {
             ptys.push(ptrt.into());
         }
@@ -6027,11 +6207,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             region.0,
             region.1,
             func.get_nth_param(2).unwrap().into_int_value(),
-            // callback-free by construction (enforced by the caller):
-            // token base unused
+            // unused: a site here takes its base from bnd_*_tok
             i64t.const_zero(),
         ));
-        let nfix: u32 = if rq.kind == 2 { 4 } else { 3 };
+        self.bnd_prim_tok = Some(func.get_nth_param(3).unwrap().into_int_value());
+        self.bnd_foreign_tok = Some(func.get_nth_param(4).unwrap().into_int_value());
+        let nfix: u32 = if rq.kind == 2 { 6 } else { 5 };
         let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
         for (k, (pn, pw)) in rq.args.iter().enumerate() {
             args.insert(
@@ -6491,19 +6672,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         if self.foreign_stmts.len() >= 1 << 16 {
             return nope("foreign call-site count exceeds the 16-bit token field");
         }
-        let token_const = self.token_kind | (self.foreign_stmts.len() as u64);
+        let local = self.foreign_stmts.len() as u64;
         self.foreign_stmts.push(ForeignSpec {
             inst: f.inst,
             func: func_id,
             ret_width,
             args: spec_args,
         });
-        let tokv = match self.dedup {
-            Some((_, _, _, tb)) => self
-                .builder
-                .build_or(tb, i64t.const_int(token_const, false), "tok")
-                .unwrap(),
-            None => i64t.const_int(token, false),
+        let tokv = match (self.bnd_foreign_tok, self.dedup) {
+            (Some(seed), _) => self.site_token(seed, local, true),
+            (None, Some((_, _, _, tb))) => self.site_token(tb, local, false),
+            (None, None) => i64t.const_int(token, false),
         };
         let cb_callee = self.cb_callee(self.cbs.cb);
         let call = self
@@ -6716,25 +6895,36 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // routes $finish paths to stop_bb.  AE
                             // methods never enter the map, so the rdy
                             // gate never coexists with a hit.
-                            let bhit =
-                                self.boundary_hit(cie.mir, *method, 2).filter(|(_, _, ba)| {
-                                    rdy_id.is_none()
-                                        && f.envp.is_some()
-                                        && ba.iter().all(|(p, _)| cf.args.contains_key(p))
-                                });
+                            let bhit = self.boundary_hit(cie.mir, *method, 2).filter(|bn| {
+                                rdy_id.is_none()
+                                    && f.envp.is_some()
+                                    && bn.args.iter().all(|(p, _)| cf.args.contains_key(p))
+                            });
                             let mut brv: Option<IntValue<'ctx>> = None;
-                            if let Some((sym, brw, bargs)) = bhit {
+                            if let Some(bnd) = bhit {
+                                let (sym, brw, bargs) =
+                                    (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
                                 let envp = f.envp.unwrap();
                                 let i64t = self.ctx.i64_type();
                                 let i32t = self.ctx.i32_type();
                                 let ptrt = self.ctx.ptr_type(AddressSpace::default());
                                 let obuf = self.entry_alloca(i64t, words_for(brw) as u64, "avbo");
-                                let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                    vec![ptrt.into(), ptrt.into(), i64t.into(), ptrt.into()];
+                                let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+                                    ptrt.into(),
+                                    ptrt.into(),
+                                    i64t.into(),
+                                    i64t.into(),
+                                    i64t.into(),
+                                    ptrt.into(),
+                                ];
+                                let base = self.slot_index(cie.region.0);
+                                let (ptok, ftok) = self.boundary_tok_bases(&bnd, child)?;
                                 let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                                     f.arena.into(),
                                     envp.into(),
-                                    self.slot_index(cie.region.0).into(),
+                                    base.into(),
+                                    ptok.into(),
+                                    ftok.into(),
                                     obuf.into(),
                                 ];
                                 for (pn, pw) in &bargs {
@@ -7925,23 +8115,31 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 } else {
                     1u8
                 };
-                let bhit = self
-                    .boundary_hit(cie.mir, *method, bkind)
-                    .filter(|(_, _, ba)| {
-                        f.envp.is_some() && ba.iter().all(|(p, _)| cf.args.contains_key(p))
-                    });
+                let bhit = self.boundary_hit(cie.mir, *method, bkind).filter(|bn| {
+                    f.envp.is_some() && bn.args.iter().all(|(p, _)| cf.args.contains_key(p))
+                });
                 match bhit {
-                    Some((sym, brw, bargs)) => {
+                    Some(bnd) => {
+                        let (sym, brw, bargs) = (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
                         let envp = f.envp.unwrap();
                         let i64t = self.ctx.i64_type();
                         let i32t = self.ctx.i32_type();
                         let ptrt = self.ctx.ptr_type(AddressSpace::default());
-                        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                            vec![ptrt.into(), ptrt.into(), i64t.into()];
+                        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+                            ptrt.into(),
+                            ptrt.into(),
+                            i64t.into(),
+                            i64t.into(),
+                            i64t.into(),
+                        ];
+                        let base = self.slot_index(cie.region.0);
+                        let (ptok, ftok) = self.boundary_tok_bases(&bnd, child)?;
                         let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                             f.arena.into(),
                             envp.into(),
-                            self.slot_index(cie.region.0).into(),
+                            base.into(),
+                            ptok.into(),
+                            ftok.into(),
                         ];
                         if bkind == 2 {
                             ptys.push(ptrt.into());

@@ -5911,6 +5911,53 @@ impl Interp {
             },
         };
 
+        // A boundary fn's call sites live in its CALLER's table, at a
+        // block whose offset is baked into the one shared body -- so
+        // every member of a dedup class must lay its tables out
+        // identically.  Membership already implies same module type,
+        // same rule, same region-relative slots and same baked params
+        // (inst_sig), so a divergence means the key stopped covering
+        // something the lowering reads, or the walk became
+        // nondeterministic.  That is a compiler bug, not a property of
+        // the design: fail loudly at link time rather than silently
+        // mis-index a table at run time, and never fall back -- a
+        // fallback would turn the bug into unexplained slowness.
+        for (rep, members) in &classes {
+            let r = &protos[*rep];
+            for &m in members {
+                let p = &protos[m];
+                let shaped = p.exec_prims.len() == r.exec_prims.len()
+                    && p.exec_foreign.len() == r.exec_foreign.len()
+                    && p.exec_prims.iter().zip(&r.exec_prims).all(|(a, b)| {
+                        a.method == b.method
+                            && a.port == b.port
+                            && a.arg_widths == b.arg_widths
+                            && a.ret_width == b.ret_width
+                            && a.is_action == b.is_action
+                    })
+                    && p.exec_foreign.iter().zip(&r.exec_foreign).all(|(a, b)| {
+                        a.func == b.func && a.ret_width == b.ret_width && a.args == b.args
+                    })
+                    && p.sched_prims.len() == r.sched_prims.len()
+                    && p.sched_foreign.len() == r.sched_foreign.len();
+                assert!(
+                    shaped,
+                    "trs: dedup class rep ordinal {rep} and member {m} \
+                     (instances {} and {}) share a compiled body but \
+                     lay out different call-site tables \
+                     (prim {}/{}, foreign {}/{}).  Baked block offsets \
+                     would mis-index; the dedup key no longer covers \
+                     everything the lowering reads.",
+                    specs[*rep].inst,
+                    specs[m].inst,
+                    r.exec_prims.len(),
+                    p.exec_prims.len(),
+                    r.exec_foreign.len(),
+                    p.exec_foreign.len(),
+                );
+            }
+        }
+
         // trs link: emit the artifact .so and stop (nothing runs)
         #[cfg(not(feature = "jit"))]
         if let JitRequest::Emit { .. } = &request {

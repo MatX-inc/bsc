@@ -80,7 +80,7 @@ pub static STDIO_CB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 /// prim's name, quiet-engine gated.  Unset = silent (unit tests).
 pub static BRAM_WARN: std::sync::OnceLock<fn(block: usize, addr: u64)> = std::sync::OnceLock::new();
 /// One compiled prim call site (resolved by the trampoline).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrimCallSpec {
     /// global instance index of the prim
     pub inst: usize,
@@ -276,7 +276,7 @@ pub struct RuleSpec {
 
 /// One compiled foreign call site: everything the interpreter needs
 /// to rebuild the Arg list and dispatch ($display family, value tasks).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ForeignSpec {
     /// instance for $display location reporting
     pub inst: usize,
@@ -290,7 +290,7 @@ pub struct ForeignSpec {
 /// numeric value of the given width with its signed-display flag, or a
 /// real value (one marshaled word carrying the f64 bits — the decode
 /// rebuilds the interp's Arg::Real so formatting is identical).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum FArgSpec {
     Str(StrId),
     Num {
@@ -568,7 +568,26 @@ pub struct BoundaryReq {
 /// The realized boundary map, built while the functions are emitted
 /// (result widths are known only at lowering): call sites consult it
 /// to divert.  Keyed (mir, method, kind).
-pub type BoundaryMap = HashMap<(usize, StrId, u8), (String, u32, Vec<(StrId, u32)>)>;
+/// A realized boundary method fn: one compiled body serving every
+/// instance of its module type.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BoundaryFn {
+    pub sym: String,
+    pub ret_width: u32,
+    pub args: Vec<(StrId, u32)>,
+    /// This body's call sites, in emission order, as TEMPLATES: `inst`
+    /// holds the DELTA from the fragment instance the body runs as, not
+    /// an absolute index.  A shared body cannot own a call-site table --
+    /// the table is per ordinal and its entries name absolute instances
+    /// -- so each caller instead reserves a block in its OWN table and
+    /// materialises these into it with the callee's absolute instance.
+    /// The caller passes the block's start folded into a token base, and
+    /// a site here adds its own index to that (see `site_token`).
+    pub prim_sites: Vec<PrimCallSpec>,
+    pub foreign_sites: Vec<ForeignSpec>,
+}
+
+pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
