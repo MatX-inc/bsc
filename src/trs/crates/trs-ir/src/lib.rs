@@ -695,12 +695,15 @@ pub enum DecodeError {
     Cbor(String),
     VersionMismatch { found: u32, expected: u32 },
     Invalid(verify::VerifyError),
+    /// the design's fragments do not compose into a schedule
+    Unschedulable(String),
 }
 
 impl std::fmt::Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DecodeError::Cbor(e) => write!(f, "CBOR decode error: {e}"),
+            DecodeError::Unschedulable(e) => write!(f, "cannot schedule the design: {e}"),
             DecodeError::VersionMismatch { found, expected } => write!(
                 f,
                 "BIR version mismatch: file has {found}, this trs expects {expected} \
@@ -869,6 +872,23 @@ impl Design {
                 }
             }
         }
+
+        // The schedule the design runs on is the one derived here, not
+        // the one the exporter wrote.  Both are still in the file and
+        // the check above compares them -- which is why it has to run
+        // first, or it would be comparing the merge against itself.
+        //
+        // A design the merge cannot schedule does not fall back to the
+        // exported answer.  Falling back would hide exactly the case
+        // worth knowing about, and the design would be running on a
+        // schedule nothing in trs derived.
+        let inp = merge::Inputs::of(&design);
+        if inp.is_some() {
+            design.compositions =
+                merge::compositions(inp.as_ref().expect("just checked"))
+                    .map_err(DecodeError::Unschedulable)?;
+        }
+
         Ok(design)
     }
 
