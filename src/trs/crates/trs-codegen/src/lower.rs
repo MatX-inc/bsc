@@ -6212,7 +6212,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         ));
         self.bnd_prim_tok = Some(func.get_nth_param(3).unwrap().into_int_value());
         self.bnd_foreign_tok = Some(func.get_nth_param(4).unwrap().into_int_value());
-        let nfix: u32 = if rq.kind == 2 { 6 } else { 5 };
+        // Parameter layout: 0 arena, 1 env, 2 region base, 3 prim token
+        // base, 4 foreign token base, then (kind 2 only) the out
+        // pointer at BND_OUT, then the method's arguments.  Both the
+        // out read and the argument offset come from the one constant:
+        // a kind 2 whose two disagree is a type panic deep in the
+        // lowering rather than anything the caller can see.
+        const BND_OUT: u32 = 5;
+        let nfix: u32 = if rq.kind == 2 { BND_OUT + 1 } else { BND_OUT };
         let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
         for (k, (pn, pw)) in rq.args.iter().enumerate() {
             args.insert(
@@ -6269,7 +6276,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let rw = self.expr_width(&f, res)?;
                 let v = self.expr_scalar(&mut f, res)?;
                 let vv = self.to_w(v, rw, ret_w, false);
-                let outp = func.get_nth_param(3).unwrap().into_pointer_value();
+                let outp = func.get_nth_param(BND_OUT).unwrap().into_pointer_value();
                 for k in 0..words_for(ret_w) {
                     let piece = if k == 0 {
                         vv
