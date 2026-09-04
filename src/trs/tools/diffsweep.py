@@ -1,21 +1,36 @@
 #!/usr/bin/env python3
 """P1 differential sweep: interpreter vs Bluesim over the testsuite.
 
-For every testsuite `sys*.out.expected` whose top module can be located:
-compile with `bsc -sim`, export the .bir with trs-bir, run the reference
-Bluesim
+For every testsuite design whose top module can be located: compile
+with `bsc -sim`, export the .bir with trs-bir, run the reference Bluesim
 executable and `trs run` on the exported BIR, and diff stdout.
+
+The oracle is a reference Bluesim built here, not a recorded file, so a
+design needs no <top>.out.expected to be swept: that file is an index of
+the corpus, not an answer about it, and the testsuite checks plenty of
+designs by other means (compile-only, bluetcl, Verilog-gen).  Tops come
+from the sources as well.  A design bsc cannot compile is COMPILE_FAIL,
+cached, and costs one compile ever.
 
 Every failure is classified so the output is a work list, not a score:
   COMPILE_FAIL   bsc could not compile the design (env/flags/etc)
+  EXPECTED_FAIL  bsc rejected a design its own recipe expects it to
+                 reject: a bsc negative test, upstream of trs, kept out
+                 of the report
   LINK_FAIL      bsc link failed for reasons other than export
-  NOT_SUPPORTED  reference Bluesim cannot run the design either (BVI)
+  NOT_SUPPORTED  reference Bluesim cannot run the design either (BVI),
+                 and trs declines it too
+  NOSIM_RAN      reference Bluesim refuses (BVI) but trs ran it: no
+                 oracle, so exercised for crashes only
   EXPORT_FAIL    SimExportIR internalError (unhandled IR construct)
   REF_FAIL       reference Bluesim run failed/timed out
   DECODE_FAIL    trs could not decode the .bir
   INTERP_PANIC   interpreter hit an unimplemented feature (reason kept)
   TIMEOUT        trs exceeded the per-run limit (known-slow interp)
   DIFF           both ran; stdout differs
+  DIFF_UNRUN     stdout differs on a design the testsuite never runs:
+                 its recipe stops at compile or link, so no reference
+                 output is sanctioned and this is not a gate
   PASS           bit-identical stdout
 """
 
@@ -143,6 +158,128 @@ def _golden_key(testdir, top):
     return h.hexdigest()
 
 
+# How far a design's own .exp recipe takes it.  A recipe that stops at
+# compile or link says the testsuite has no sanctioned output for the
+# design, so a stdout mismatch there is the sweep asking a question the
+# test does not: it lands in DIFF_UNRUN, outside the 0-DIFF gate.  The
+# design is still exported, linked and run -- a crash is a defect at any
+# depth, and most of the corpus's link failures live on compile-only
+# tests.
+_RUN = ("test_c_veri", "test_c_only_bsv", "test_veri_only_bsv",
+        "sim_output", "test_ovl", "test_bsc_veri")
+_LINK = ("link_objects_pass", "link_verilog_pass", "link_verilog_no_main_pass")
+_COMP = ("compile_pass", "compile_verilog_pass", "compile_object_pass",
+         "compile_verilog_schedule_pass")
+# a recipe that expects bsc to reject the design: the rejection is the
+# test's subject, so trs never sees it and it is not a trs result.  The
+# suffix carries this, not the prefix -- compile_verilog_pass_bug_error
+# asserts an error bsc arguably should not give, and reads as a pass
+# directive from the front.
+def _exp_rejects(tok):
+    return (tok.startswith(("compile", "link", "test"))
+            and ("_fail" in tok or tok.endswith("_error")))
+_WORD = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
+_DEPTH_MEMO = {}
+DEPTH_RUN = 3
+
+
+def _exp_lines(path):
+    """A recipe's lines with backslash continuations joined."""
+    out, buf = [], ""
+    for raw in open(path, errors="replace"):
+        line = raw.rstrip("\n")
+        if line.rstrip().endswith("\\"):
+            buf += line.rstrip()[:-1] + " "
+            continue
+        out.append(buf + line)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _exp_stage(tok):
+    if tok.startswith(_RUN):
+        return DEPTH_RUN
+    if tok.startswith(_LINK):
+        return 2
+    if tok.startswith(_COMP):
+        return 1
+    return 0
+
+
+def _recipe_depths(testdir):
+    """(name -> deepest stage, names bsc is expected to reject)."""
+    d = collections.defaultdict(int)
+    rejects = set()
+    for f in sorted(os.listdir(testdir)):
+        if not f.endswith(".exp"):
+            continue
+        path = os.path.join(testdir, f)
+        lines = _exp_lines(path)
+        # `set V [list ...]` driving a `foreach x $V { ... }`: the loop
+        # body's directives apply to every name in the list.  The list
+        # runs past its last continuation, so it is read from the raw
+        # text rather than the joined lines.
+        text = open(path, errors="replace").read()
+        lists = {v: _WORD.findall(body) for v, body in
+                 re.findall(r"set\s+(\w+)\s+\[list(.*?)\]", text, re.S)}
+        loopvars = set(re.findall(r"foreach\s+\w+\s+\$(\w+)", text))
+        deepest = max((_exp_stage(l.split()[0]) for l in lines if l.split()),
+                      default=0)
+        anyfail = any(l.split() and _exp_rejects(l.split()[0])
+                      for l in lines)
+        for v in loopvars & set(lists):
+            for n in lists[v]:
+                d[n] = max(d[n], deepest)
+                if anyfail:
+                    rejects.add(n)
+        for line in lines:
+            t = line.strip()
+            if t.startswith("#"):
+                continue
+            toks = t.split()
+            if not toks:
+                continue
+            if _exp_rejects(toks[0]):
+                rejects.update(_WORD.findall(t)[1:])
+            st = _exp_stage(toks[0])
+            if st:
+                for w in _WORD.findall(t)[1:]:
+                    d[w] = max(d[w], st)
+    return d, rejects
+
+
+def _recipe_info(testdir):
+    info = _DEPTH_MEMO.get(testdir)
+    if info is None:
+        info = _DEPTH_MEMO[testdir] = _recipe_depths(testdir)
+    return info
+
+
+def _keys(top):
+    return [top] + ([top[3:]] if top.startswith("sys") else [])
+
+
+def recipe_depth(testdir, top):
+    """0 unknown, 1 compile, 2 link, 3 run.  Unknown is treated as run:
+    a name the matcher cannot place must not lose its oracle."""
+    m, _ = _recipe_info(testdir)
+    d = max((m.get(k, 0) for k in _keys(top)), default=0)
+    return d or DEPTH_RUN
+
+
+def recipe_expects_reject(testdir, top):
+    """Does the design's own recipe expect bsc to refuse it?
+
+    Read only when bsc HAS refused: a name this over-attributes still
+    compiles and sweeps normally, so the guess can only mislabel a
+    failure the sweep was never going to report as trs's.
+    """
+    _, rejects = _recipe_info(testdir)
+    return any(k in rejects for k in _keys(top))
+
+
 def find_source(testdir, top):
     def scan(name):
         for ext in (".bsv", ".bs"):
@@ -193,6 +330,11 @@ def run(cmd, cwd, timeout=TIMEOUT, env=None):
         return subprocess.run(
             cmd, cwd=cwd, env=env or ENV, timeout=timeout,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            # a design is free to print bytes that are not UTF-8, and
+            # a strict decode raises out of the pool worker, ending the
+            # sweep.  Both sides decode alike, so a real difference
+            # still differs.
+            errors="replace",
         )
     except subprocess.TimeoutExpired:
         return None
@@ -211,15 +353,58 @@ def _gold_terminal(gdir, cls, note):
         pass
 
 
+def copy_bdpi_sources(testdir, wk):
+    """The user's C files, into the work dir, named for the link.
+
+    BDPI implementations go to the link (the .exp recipes pass them;
+    .c.keep is the testsuite convention for an inactive copy).  The
+    cached-reference path needs them too: the .bdpi.so the link builds
+    from them does not exist when the reference is saved, so a cache
+    entry cannot carry one.
+    """
+    cfiles = []
+    has_bdpi = any(
+        'import "BDPI"' in open(os.path.join(testdir, f), errors="replace").read()
+        for f in os.listdir(testdir) if f.endswith(".bsv")
+    )
+    if not has_bdpi:
+        return cfiles
+    for f in os.listdir(testdir):
+        # Verilog-VPI wrapper residue (vpi_wrapper_*.c,
+        # vpi_startup_array.c) is generated IN-TREE by testsuite Verilog
+        # runs and needs vpi_user.h — never a BDPI link input (40
+        # phantom LINK_FAILs after a fullparallel run)
+        if f.startswith("vpi_"):
+            continue
+        if f.endswith(".c"):
+            shutil.copy(os.path.join(testdir, f), wk)
+            cfiles.append(f)
+        elif f.endswith(".c.keep"):
+            shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
+            cfiles.append(f[:-5])
+        elif f.endswith(".h"):
+            # C sources #include local headers (the foreign battery was
+            # LINK_FAIL-invisible for want of common.h)
+            shutil.copy(os.path.join(testdir, f), wk)
+        elif f.endswith(".h.keep"):
+            shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
+    return cfiles
+
+
 def _gold_save(gdir, wk, top, ref, ref_secs, ref_build_secs):
-    """Cache a successful reference: the .bir (trs's input), any
-    .bdpi.so, and the golden outputs + timings."""
+    """Cache a successful reference: the .bir set (trs's input), any
+    .bdpi.so, and the golden outputs + timings.
+
+    Every .bir, not just the top's: a design is a set of files, and the
+    link finds submodules by name beside the one it is given, so an
+    entry missing a sibling fails the link on every hit.
+    """
     if not gdir:
         return
     try:
         os.makedirs(gdir, exist_ok=True)
         for f in os.listdir(wk):
-            if f == top + ".bir" or f.endswith(".bdpi.so"):
+            if f.endswith((".bir", ".bdpi.so")):
                 shutil.copy(os.path.join(wk, f), gdir)
         with open(os.path.join(gdir, "ref.stdout"), "w") as f:
             f.write(ref.stdout)
@@ -291,9 +476,12 @@ def one_test(job):
                                 errors="replace").read(),
                     returncode=meta["returncode"],
                 )
+                cf = copy_bdpi_sources(testdir, wk)
                 return _trs_side(rel, top, wk, testdir,
                                  os.path.join(wk, top + ".bir"), ref,
-                                 meta["ref_secs"], meta["ref_build_secs"])
+                                 meta["ref_secs"], meta["ref_build_secs"],
+                                 [a for c in cf for a in ("--bdpi", c)],
+                                 recipe_depth(testdir, top))
 
     # sources are COPIED into the work dir and testdir stays OFF the
     # search path: fullparallel leaves version-matched .bo/.ba residue
@@ -311,33 +499,7 @@ def one_test(job):
     common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk,
               "-p", wk + ":+"]
 
-    # BDPI designs need the user's C files at link (the .exp recipes pass
-    # them; .c.keep is the testsuite convention for inactive copies)
-    cfiles = []
-    has_bdpi = any(
-        'import "BDPI"' in open(os.path.join(testdir, f), errors="replace").read()
-        for f in os.listdir(testdir) if f.endswith(".bsv")
-    )
-    if has_bdpi:
-        for f in os.listdir(testdir):
-            # Verilog-VPI wrapper residue (vpi_wrapper_*.c,
-            # vpi_startup_array.c) is generated IN-TREE by testsuite
-            # Verilog runs and needs vpi_user.h — never a BDPI link
-            # input (40 phantom LINK_FAILs after a fullparallel run)
-            if f.startswith("vpi_"):
-                continue
-            if f.endswith(".c"):
-                shutil.copy(os.path.join(testdir, f), wk)
-                cfiles.append(f)
-            elif f.endswith(".c.keep"):
-                shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
-                cfiles.append(f[:-5])
-            elif f.endswith(".h"):
-                # C sources #include local headers (the foreign battery
-                # was LINK_FAIL-invisible for want of common.h)
-                shutil.copy(os.path.join(testdir, f), wk)
-            elif f.endswith(".h.keep"):
-                shutil.copy(os.path.join(testdir, f), os.path.join(wk, f[:-5]))
+    cfiles = copy_bdpi_sources(testdir, wk)
     r = run([BSC, "-sim", "-u", "-g", top] + common + [src], cwd=wk, timeout=180)
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
@@ -347,8 +509,10 @@ def one_test(job):
             # Inout is not supported by Bluesim at all
             _gold_terminal(gdir, "NOT_SUPPORTED", first_error(msg))
             return (rel, top, "NOT_SUPPORTED", first_error(msg))
-        _gold_terminal(gdir, "COMPILE_FAIL", first_error(msg))
-        return (rel, top, "COMPILE_FAIL", first_error(msg))
+        cls = ("EXPECTED_FAIL" if recipe_expects_reject(testdir, top)
+               else "COMPILE_FAIL")
+        _gold_terminal(gdir, cls, first_error(msg))
+        return (rel, top, cls, first_error(msg))
 
     import time as _time
     tb0 = _time.monotonic()
@@ -364,15 +528,18 @@ def one_test(job):
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
         if "(G0084)" in msg or ("Bluesim" in msg and "import" in msg):
-            # reference Bluesim cannot run this design either (BVI import)
-            cls = "NOT_SUPPORTED"
-        else:
-            cls = "LINK_FAIL"
-        if cls != "LINK_FAIL":
-            # LINK_FAIL stays uncached: it includes build TIMEOUTS,
-            # which are load- and box-dependent (ConflictFree*Large)
-            _gold_terminal(gdir, cls, first_error(msg))
-        return (rel, top, cls, first_error(msg))
+            # Reference Bluesim cannot run this design (BVI import),
+            # but the elaboration above succeeded, so the .ba are there
+            # and trs can be pointed at them.  A BVI import is what
+            # per-fragment execution substitutes a Verilated module
+            # into, so it is the last set worth leaving unexercised.
+            # Uncached, unlike the Inout refusal: the verdict is partly
+            # about trs, which changes under us.
+            return _nosim_probe(rel, top, wk, cfiles, build_limit,
+                                first_error(msg))
+        # LINK_FAIL stays uncached: it includes build TIMEOUTS, which
+        # are load- and box-dependent (ConflictFree*Large)
+        return (rel, top, "LINK_FAIL", first_error(msg))
 
     # the user's C files go to the LINK, as they do for bsc: the export
     # knows nothing about them
@@ -398,7 +565,7 @@ def one_test(job):
 
     _gold_save(gdir, wk, top, ref, ref_secs, ref_build_secs)
     return _trs_side(rel, top, wk, testdir, bir, ref, ref_secs,
-                     ref_build_secs, bdpi)
+                     ref_build_secs, bdpi, recipe_depth(testdir, top))
 
 
 def _trsonly_test(rel, top, wk, testdir, src, trsonly):
@@ -520,11 +687,49 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
     return (rel, top, "PASS", timing)
 
 
+def _nosim_probe(rel, top, wk, cfiles, build_limit, why):
+    """Exercise trs on a design reference Bluesim refuses.
+
+    No reference runs, so the only verdict available is whether trs
+    crashes -- worth having, since a panic is a defect whatever Bluesim
+    makes of the design.
+    """
+    export_fragments(TRSBIR, top, wk,
+                     lambda f: run([TRSBIR, f], cwd=wk, timeout=build_limit))
+    rb = run([TRSBIR, top + ".ba"], cwd=wk, timeout=build_limit)
+    bir = os.path.join(wk, top + ".bir")
+    if rb is None or rb.returncode != 0 or not os.path.exists(bir):
+        msg = "" if rb is None else (rb.stderr + rb.stdout)
+        return (rel, top, "EXPORT_FAIL", first_error(msg) or "no .bir produced")
+    bdpi = [a for c in cfiles for a in ("--bdpi", c)]
+    cexe = os.path.join(wk, top + ".nosim.cexe")
+    lk = run([TRS, "link", bir] + bdpi + ["-o", cexe], cwd=wk, timeout=300)
+    if lk is None:
+        return (rel, top, "LINK_FAIL", "nosim link timeout")
+    if lk.returncode != 0:
+        msg = lk.stderr + lk.stdout
+        if "panicked" in lk.stderr:
+            return (rel, top, "INTERP_PANIC", panic_reason(lk.stderr))
+        # both engines decline it, which is what the bucket says
+        return (rel, top, "NOT_SUPPORTED", first_error(msg) or why)
+    env = dict(ENV)
+    env["PATH"] = os.path.dirname(TRS) + os.pathsep + env.get("PATH", "")
+    inp = run([cexe, "-m", MAX_CYCLES], cwd=wk, timeout=TIMEOUT, env=env)
+    if inp is None:
+        return (rel, top, "TIMEOUT", f"nosim limit {TIMEOUT:.0f}s")
+    if inp.returncode != 0 and "panicked" in inp.stderr:
+        return (rel, top, "INTERP_PANIC", panic_reason(inp.stderr))
+    return (rel, top, "NOSIM_RAN", why)
+
+
 def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs,
-              bdpi=()):
+              bdpi=(), depth=DEPTH_RUN):
     """The trs half of one_test: link, run, byte-compare against the
     reference result (live or golden-replayed)."""
     import time as _time
+    # a mismatch on a design the testsuite only compiles or links is
+    # outside the gate: see recipe_depth
+    DIFF = "DIFF" if depth >= DEPTH_RUN else "DIFF_UNRUN"
     is_long = any(f.endswith(".exp.golden") for f in os.listdir(testdir))
     limit = max(TIMEOUT_FLOOR, TIMEOUT_FACTOR * ref_secs) if is_long else TIMEOUT
     # trs may compile INSIDE the timed window (sync JIT); the
@@ -547,8 +752,14 @@ def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs,
         trs_link_secs = _time.monotonic() - tl0
         if lk is None or lk.returncode != 0:
             msg = "" if lk is None else (lk.stderr + lk.stdout)
-            return (rel, top, "AOT_LINK_FAIL",
-                    "timeout" if lk is None else first_error(msg))
+            if lk is None:
+                return (rel, top, "AOT_LINK_FAIL", "timeout")
+            # a panicking link names what broke on the line AFTER
+            # "panicked at"; first_error would take the trace's own
+            # chatter, identical across every such design
+            note = (panic_reason(lk.stderr) if "panicked" in lk.stderr
+                    else first_error(msg))
+            return (rel, top, "AOT_LINK_FAIL", note)
         # the sibling .so is the durable record of a compiled link —
         # it works for both artifact forms (the symlink-to-runner form
         # is a binary, so reading the artifact as text no longer does)
@@ -588,11 +799,11 @@ def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs,
         # run was NOT aot — never credit aot timings to a fallback
         engine_note = " engine=interp why=stale_artifact_load_fallback"
     if ref.stdout == inp.stdout and ref.stderr != inp_err:
-        return (rel, top, "DIFF",
+        return (rel, top, DIFF,
                 "stderr: " + diff_summary(ref.stderr, inp_err))
     if ref.stdout == inp.stdout:
         if ref.returncode != inp.returncode:
-            return (rel, top, "DIFF",
+            return (rel, top, DIFF,
                     f"exit codes differ: ref={ref.returncode} int={inp.returncode}")
         # timing columns (5th field): the corpus slowdown table —
         # ratios rank the next optimization targets.  ref_build is the
@@ -602,7 +813,7 @@ def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs,
                   f" trs_link={trs_link_secs:.2f} trs_run={trs_run_secs:.3f}"
                   f"{engine_note}")
         return (rel, top, "PASS", timing)
-    return (rel, top, "DIFF", diff_summary(ref.stdout, inp.stdout))
+    return (rel, top, DIFF, diff_summary(ref.stdout, inp.stdout))
 
 
 def link_fallback_reason(stderr):
@@ -655,6 +866,9 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="max tests (0 = all)")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
+    ap.add_argument("--golden-only", action="store_true",
+                    help="only designs with a recorded <top>.out.expected "
+                         "(the pre-widening corpus)")
     ap.add_argument("--out", default="diffsweep-results.json")
     ap.add_argument("--costs", default="",
                     help="prior sweep --out JSON for LPT scheduling "
@@ -711,11 +925,31 @@ def main():
 
     jobs = []
     workroot = os.path.join(os.path.dirname(args.out) or ".", "diffsweep-work")
+    # A top declared in a source but with no recorded output is swept
+    # like any other: the oracle is built here, so the expected file is
+    # an index and not an answer.  726 compiling designs have no such
+    # file -- the testsuite checks them by compiling, by bluetcl, or by
+    # generated Verilog.
+    src_tops = re.compile(r"^module\s+(?:\[[^\]]*\]\s*)?(sys\w+)", re.M)
     for dirpath, _dirs, files in os.walk(os.path.join(REPO, "testsuite")):
+        if args.filter and args.filter not in dirpath:
+            continue
+        tops = set()
         for f in files:
             m = re.match(r"((?:sys|mk)\w+)\.out\.expected$", f)
-            if m and (not args.filter or args.filter in dirpath):
-                jobs.append((dirpath, m.group(1), workroot))
+            if m:
+                tops.add(m.group(1))
+        if not args.golden_only:
+            for f in files:
+                if not f.endswith((".bsv", ".bs")):
+                    continue
+                try:
+                    text = open(os.path.join(dirpath, f),
+                                errors="replace").read()
+                except OSError:
+                    continue
+                tops.update(src_tops.findall(text))
+        jobs.extend((dirpath, t, workroot) for t in tops)
     jobs.sort()
     if args.limit:
         jobs = jobs[: args.limit]
@@ -765,7 +999,14 @@ def main():
     by_class = collections.Counter(r[2] for r in results)
     print("\n=== classes ===")
     for cls, n in by_class.most_common():
+        if cls == "EXPECTED_FAIL":
+            continue
         print(f"  {cls:14} {n}")
+    if by_class.get("EXPECTED_FAIL"):
+        # bsc negative tests: the rejection is what the test asserts, so
+        # trs is never reached and the count is not a trs result
+        print(f"  ({by_class['EXPECTED_FAIL']} designs their own recipe "
+              "expects bsc to reject, not counted)")
 
     # An --aot sweep run with a jit-less trs binary passes byte parity
     # on every design while measuring nothing about the compiled
@@ -793,6 +1034,13 @@ def main():
     print("\n=== diffs (first 10) ===")
     for r in [x for x in results if x[2] == "DIFF"][:10]:
         print(f"  {r[0]}/{r[1]}: {r[3]}")
+
+    unrun = [x for x in results if x[2] == "DIFF_UNRUN"]
+    if unrun:
+        print("\n=== diffs on designs the testsuite never runs "
+              f"({len(unrun)}, outside the gate) ===")
+        for r in unrun[:10]:
+            print(f"  {r[0]}/{r[1]}: {r[3]}")
 
     with open(args.out, "w") as f:
         json.dump([list(r) for r in results], f, indent=1)
