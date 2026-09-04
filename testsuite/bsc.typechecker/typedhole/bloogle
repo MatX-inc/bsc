@@ -14,11 +14,23 @@ case "$3" in
     echo "FakeVector fakeFold :: (a -> b -> b) -> b -> Fake n a -> b"
     echo "FakeVector fakeHead :: Fake n a -> a"
     ;;
-  *)
+  mep)
     # a name search: substring matches, of which only "mep" is exact
     echo "FakeVector mep :: Fake n a -> a"
     echo "FakeVector mepmep :: Fake n a -> Fake n a"
     echo "Fake.Qualified.mep :: Fake n a -> a"
     echo "-- plus more results not shown"
+    ;;
+  Vecktor)
+    # a type-name search: only the first line is an exact match
+    echo "FakeVector data Vecktor n a"
+    echo "FakeVector data Vecktor2 n a"
+    ;;
+  Juust)
+    echo "FakeMaybe Juust :: a -> FakeMaybe a"
+    echo "FakeMaybe JuustNot :: FakeMaybe a"
+    ;;
+  *)
+    echo "No results found"
     ;;
 esac

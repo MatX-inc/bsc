@@ -35,6 +35,14 @@ compare_file HoleBloogle.bs.bsc-out
 compile_fail_error UnboundBloogle.bs T0004 1 {-bloogle-db fake.db}
 compare_file UnboundBloogle.bs.bsc-out
 
+# so does an unbound type constructor
+compile_fail_error UnboundTyConBloogle.bs T0007 1 {-bloogle-db fake.db}
+compare_file UnboundTyConBloogle.bs.bsc-out
+
+# and an unbound data constructor
+compile_fail_error UnboundConBloogle.bs T0003 1 {-bloogle-db fake.db}
+compare_file UnboundConBloogle.bs.bsc-out
+
 set env(PATH) $path_save
 
 # without the flag, the same unbound variable gets no suggestions

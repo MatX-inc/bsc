@@ -1,0 +1,6 @@
+checking package dependencies
+compiling UnboundTyConBloogle.bs
+Error: "UnboundTyConBloogle.bs", line 3, column 5: (T0007)
+  Unbound type constructor `Vecktor'
+  bloogle found these exact name matches:
+    FakeVector data Vecktor n a
