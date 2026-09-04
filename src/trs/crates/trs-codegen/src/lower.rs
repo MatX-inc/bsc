@@ -3256,21 +3256,35 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return None;
         }
         let off = lo % w;
-        let low = words[wi as usize];
-        let loww = word_width_at(wi, srcw, w);
-        // the part of the field held by the low word
-        let sh = self.ity(loww).const_int(u64::from(off), false);
-        let got = self.builder.build_right_shift(low, sh, false, "wx").unwrap();
-        let mut acc = self.to_w(got, loww, width, false);
-        if wj > wi {
-            // the field straddles: bring in the head of the next word
-            let high = words[wj as usize];
-            let highw = word_width_at(wj, srcw, w);
-            let hz = self.to_w(high, highw, width, false);
-            let up = width.min(w - off);
-            let k = self.ity(width).const_int(u64::from(up), false);
-            let moved = self.builder.build_left_shift(hz, k, "wxh").unwrap();
-            acc = self.builder.build_or(acc, moved, "wxo").unwrap();
+        // A field spans wj - wi + 1 words, which for a value wider
+        // than two of them has a middle: every word in the range
+        // contributes, each at its own offset.
+        let mut acc = self.ity(width).const_zero();
+        for wk in wi..=wj {
+            let wkw = word_width_at(wk, srcw, w);
+            if wkw == 0 {
+                continue;
+            }
+            let src_lo = wk * w;
+            // the first word carries the field from `off`; shifting
+            // in the word's own type keeps the amount in range
+            let (part, k) = if src_lo < lo {
+                let sh = self.ity(wkw).const_int(u64::from(lo - src_lo), false);
+                (self.builder.build_right_shift(words[wk as usize], sh, false, "wx").unwrap(), 0)
+            } else {
+                (words[wk as usize], src_lo - lo)
+            };
+            if k >= width {
+                continue;
+            }
+            let pz = self.to_w(part, wkw, width, false);
+            let placed = if k == 0 {
+                pz
+            } else {
+                let ks = self.ity(width).const_int(u64::from(k), false);
+                self.builder.build_left_shift(pz, ks, "wxh").unwrap()
+            };
+            acc = self.builder.build_or(acc, placed, "wxo").unwrap();
         }
         Some(self.to_w(acc, width, width, false))
     }
