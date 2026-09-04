@@ -308,8 +308,7 @@ impl Vcd {
         if self.enabled {
             return true;
         }
-        if self.sink.is_none() && self.set_file(self.default_file_name()).is_err()
-        {
+        if self.sink.is_none() && self.set_file(self.default_file_name()).is_err() {
             return false;
         }
         self.enabled = true;
@@ -569,7 +568,9 @@ impl Vcd {
 
     fn flush_changes(&mut self) {
         loop {
-            let Some((&t, _)) = self.changes.iter().next() else { break };
+            let Some((&t, _)) = self.changes.iter().next() else {
+                break;
+            };
             if t >= self.min_pending {
                 break;
             }
@@ -603,10 +604,7 @@ impl Vcd {
             return;
         }
         let too_big = match self.sink.as_ref() {
-            Some(Sink::Text(f)) => f
-                .metadata()
-                .map(|m| m.len() > self.limit)
-                .unwrap_or(false),
+            Some(Sink::Text(f)) => f.metadata().map(|m| m.len() > self.limit).unwrap_or(false),
             Some(Sink::Fst(f)) => f.limit_exceeded(self.limit),
             None => false,
         };

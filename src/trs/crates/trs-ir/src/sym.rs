@@ -64,9 +64,7 @@ fn cone(m: &Module, by_name: &HashMap<StrId, usize>) -> BTreeSet<StrId> {
 fn each_def_ref(e: &Expr, f: &mut impl FnMut(StrId)) {
     match e {
         Expr::Def(n) => f(*n),
-        Expr::MethCall { args, .. }
-        | Expr::ForeignCall { args, .. }
-        | Expr::Prim { args, .. } => {
+        Expr::MethCall { args, .. } | Expr::ForeignCall { args, .. } | Expr::Prim { args, .. } => {
             for a in args {
                 each_def_ref(a, f);
             }
@@ -76,12 +74,19 @@ fn each_def_ref(e: &Expr, f: &mut impl FnMut(StrId)) {
             each_def_ref(gate, f);
         }
         Expr::Reset { wire } => each_def_ref(wire, f),
-        Expr::If { cond, then_, else_, .. } => {
+        Expr::If {
+            cond, then_, else_, ..
+        } => {
             each_def_ref(cond, f);
             each_def_ref(then_, f);
             each_def_ref(else_, f);
         }
-        Expr::Case { scrutinee, arms, default, .. } => {
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
             each_def_ref(scrutinee, f);
             for (_, a) in arms {
                 each_def_ref(a, f);
@@ -155,9 +160,7 @@ fn mark_stmts(
         match s {
             Stmt::Def { expr, .. } => mark(expr, site, m, by_name, refs, seen),
             Stmt::Action(a) => mark_action(a, site, m, by_name, refs, seen),
-            Stmt::AvAction { action, .. } => {
-                mark_action(action, site, m, by_name, refs, seen)
-            }
+            Stmt::AvAction { action, .. } => mark_action(action, site, m, by_name, refs, seen),
             Stmt::Cond { cond, then_, else_ } => {
                 mark(cond, site, m, by_name, refs, seen);
                 mark_stmts(then_, site, m, by_name, refs, seen);
@@ -188,8 +191,14 @@ fn references(
     let mut refs: HashMap<StrId, HashSet<Site>> = HashMap::new();
     for (ri, r) in m.rules.iter().enumerate() {
         let mut seen = HashSet::new();
-        mark_stmts(&r.body, Site::Rule(ri as u32), m, by_name, &mut refs, &mut seen);
-
+        mark_stmts(
+            &r.body,
+            Site::Rule(ri as u32),
+            m,
+            by_name,
+            &mut refs,
+            &mut seen,
+        );
     }
     for (mi, x) in m.methods.iter().enumerate() {
         let site = Site::Method(mi as u32);
@@ -241,15 +250,26 @@ fn references(
     }
     for (i, r) in m.resets.iter().enumerate() {
         let mut seen = HashSet::new();
-        mark(&r.wire, Site::Reset(i as u32), m, by_name, &mut refs, &mut seen);
+        mark(
+            &r.wire,
+            Site::Reset(i as u32),
+            m,
+            by_name,
+            &mut refs,
+            &mut seen,
+        );
     }
     refs
 }
 
 /// One module's symbols.
 fn one(m: &Module, is_top: bool) -> BTreeSet<StrId> {
-    let by_name: HashMap<StrId, usize> =
-        m.defs.iter().enumerate().map(|(i, d)| (d.name, i)).collect();
+    let by_name: HashMap<StrId, usize> = m
+        .defs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (d.name, i))
+        .collect();
     let public = cone(m, &by_name);
     let refs = references(m, &by_name, is_top);
     let syms = public
@@ -271,5 +291,9 @@ fn one(m: &Module, is_top: bool) -> BTreeSet<StrId> {
 /// The symbol set of each module of an assembled design, indexed as
 /// `design.modules` is.
 pub fn derive(design: &Design) -> Vec<BTreeSet<StrId>> {
-    design.modules.iter().map(|m| one(m, m.name == design.top)).collect()
+    design
+        .modules
+        .iter()
+        .map(|m| one(m, m.name == design.top))
+        .collect()
 }

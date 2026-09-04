@@ -24,8 +24,7 @@
 pub fn word_bits(data_layout: &str, pointer_bits: u32) -> u32 {
     for field in data_layout.split('-') {
         if let Some(rest) = field.strip_prefix('n') {
-            let widths: Vec<u32> =
-                rest.split(':').filter_map(|s| s.parse().ok()).collect();
+            let widths: Vec<u32> = rest.split(':').filter_map(|s| s.parse().ok()).collect();
             if let Some(&m) = widths.iter().max() {
                 if m > 0 {
                     return m;
@@ -46,7 +45,10 @@ mod tests {
 
     #[test]
     fn word_bits_reads_the_native_spec() {
-        assert_eq!(word_bits("e-m:e-p270:32:32-i64:64-n8:16:32:64-S128", 64), 64);
+        assert_eq!(
+            word_bits("e-m:e-p270:32:32-i64:64-n8:16:32:64-S128", 64),
+            64
+        );
         assert_eq!(word_bits("e-m:e-p:32:32-i64:64-n8:16:32-S128", 32), 32);
         // no n spec: fall back to the pointer size
         assert_eq!(word_bits("e-m:e-i64:64-S128", 32), 32);

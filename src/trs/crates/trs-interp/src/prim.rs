@@ -194,14 +194,7 @@ pub trait Prim {
     /// Told once per tick port which kernel clock drives it (for prims
     /// with several clock domains, e.g. SyncHandshake's sCLK/dCLK).
     fn vcd_port_clock(&mut self, _port: &str, _clk: usize, _clk_vcd_id: u32) {}
-    fn vcd_defs(
-        &mut self,
-        _w: &mut crate::vcd::Vcd,
-        _name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
-    }
+    fn vcd_defs(&mut self, _w: &mut crate::vcd::Vcd, _name: &str, _clk: usize, _clk_vcd_id: u32) {}
 
     /// VCD: dump values per the dump type.  `clk_edge_now` = the prim's
     /// clock posedged at `now` (gates method-signal resampling in
@@ -414,9 +407,7 @@ pub(crate) fn runcore_restore(
             }
             let entries = hi.checked_sub(lo)?.checked_add(1)?;
             let fp = usize::try_from(
-                2u64.checked_add(
-                    (vw(w) as u64).checked_mul(entries.checked_add(1)?)?,
-                )?,
+                2u64.checked_add((vw(w) as u64).checked_mul(entries.checked_add(1)?)?)?,
             )
             .ok()
             .filter(|&f| f <= 1 << 20)?;
@@ -448,26 +439,13 @@ pub(crate) fn runcore_restore(
                 1 => FifoType::Loopy,
                 _ => return None, // Bypass never seeds (stays boxed)
             };
-            let fp = usize::try_from(
-                7u64.checked_add(size.checked_mul(vw(w) as u64)?)?,
-            )
-            .ok()
-            .filter(|&f| f <= 1 << 20)?;
-            let p = Fifo::new(
-                w,
-                size,
-                guard != 0,
-                ftype,
-                zw != 0,
-                path_of(full_name),
-            );
+            let fp = usize::try_from(7u64.checked_add(size.checked_mul(vw(w) as u64)?)?)
+                .ok()
+                .filter(|&f| f <= 1 << 20)?;
+            let p = Fifo::new(w, size, guard != 0, ftype, zw != 0, path_of(full_name));
             Some((Box::new(p), fp))
         }
-        (
-            RC_PRIM_BRAM,
-            &[pipelined, dual, ab, w, hi_addr, chunk, nwens],
-            [full_name],
-        ) => {
+        (RC_PRIM_BRAM, &[pipelined, dual, ab, w, hi_addr, chunk, nwens], [full_name]) => {
             let w = width_of(w)?;
             let ab = u32::try_from(ab).ok().filter(|&b| b <= 64)?;
             let chunk = u32::try_from(chunk).ok()?;
@@ -485,11 +463,7 @@ pub(crate) fn runcore_restore(
             let fp = usize::try_from(
                 port_words
                     .checked_mul(2)?
-                    .checked_add(
-                        hi_addr
-                            .checked_add(1)?
-                            .checked_mul(vw(w) as u64)?,
-                    )?,
+                    .checked_add(hi_addr.checked_add(1)?.checked_mul(vw(w) as u64)?)?,
             )
             .ok()
             .filter(|&f| f <= 1 << 20)?;
@@ -543,7 +517,12 @@ pub enum ArenaKind {
     /// loopy contract (and why loopy reads are never schedule-stable).
     /// Layout: elems, saved_elems, fst, enq_at, deq_at, clear_at
     /// (1 word each), then size * ceil(max(width,1)/64) data words.
-    Fifo { width: u32, size: u32, guard: bool, loopy: bool },
+    Fifo {
+        width: u32,
+        size: u32,
+        guard: bool,
+        loopy: bool,
+    },
     /// RegFile/RegFileLoad small enough for a dense image.  Layout:
     /// upd_at, upd_addr (1 word each), upd_prev (w words), then
     /// (hi-lo+1) * w data words (w = ceil(max(width,1)/64)),
@@ -627,22 +606,108 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "RWire0" => Box::new(RWire::new(consts, true)),
         "BypassWire" => Box::new(BypassWire::new(consts, false)),
         "BypassWire0" => Box::new(BypassWire::new(consts, true)),
-        "CRegN5" | "CRegA5" | "CRegUN5" => Box::new(CReg::new(consts, !name.ends_with("UN5"), name == "CRegA5")),
+        "CRegN5" | "CRegA5" | "CRegUN5" => {
+            Box::new(CReg::new(consts, !name.ends_with("UN5"), name == "CRegA5"))
+        }
         // raw args: FIFO1/2/L1/L2 = [width, guarded]; the 0-variants drop
         // width; SizedFIFO(L) = [width, depth, cnt_width, guarded],
         // SizedFIFO0 = [depth, cnt_width, guarded]
-        "FIFO1" => Box::new(Fifo::new(carg(consts, 0) as u32, 1, carg(consts, 1) != 0, FifoType::Simple, false, path)),
-        "FIFO2" => Box::new(Fifo::new(carg(consts, 0) as u32, 2, carg(consts, 1) != 0, FifoType::Simple, false, path)),
-        "FIFO10" => Box::new(Fifo::new(0, 1, carg(consts, 0) != 0, FifoType::Simple, true, path)),
-        "FIFO20" => Box::new(Fifo::new(0, 2, carg(consts, 0) != 0, FifoType::Simple, true, path)),
-        "FIFOL1" => Box::new(Fifo::new(carg(consts, 0) as u32, 1, carg(consts, 1) != 0, FifoType::Loopy, false, path)),
-        "FIFOL2" => Box::new(Fifo::new(carg(consts, 0) as u32, 2, carg(consts, 1) != 0, FifoType::Loopy, false, path)),
-        "FIFOL10" => Box::new(Fifo::new(0, 1, carg(consts, 0) != 0, FifoType::Loopy, true, path)),
-        "FIFOL20" => Box::new(Fifo::new(0, 2, carg(consts, 0) != 0, FifoType::Loopy, true, path)),
-        "SizedFIFO" => Box::new(Fifo::new(carg(consts, 0) as u32, carg(consts, 1), carg(consts, 3) != 0, FifoType::Simple, false, path)),
-        "SizedFIFO0" => Box::new(Fifo::new(0, carg(consts, 0), carg(consts, 2) != 0, FifoType::Simple, true, path)),
-        "SizedFIFOL" => Box::new(Fifo::new(carg(consts, 0) as u32, carg(consts, 1), carg(consts, 3) != 0, FifoType::Loopy, false, path)),
-        "SizedFIFOL0" => Box::new(Fifo::new(0, carg(consts, 0), carg(consts, 2) != 0, FifoType::Loopy, true, path)),
+        "FIFO1" => Box::new(Fifo::new(
+            carg(consts, 0) as u32,
+            1,
+            carg(consts, 1) != 0,
+            FifoType::Simple,
+            false,
+            path,
+        )),
+        "FIFO2" => Box::new(Fifo::new(
+            carg(consts, 0) as u32,
+            2,
+            carg(consts, 1) != 0,
+            FifoType::Simple,
+            false,
+            path,
+        )),
+        "FIFO10" => Box::new(Fifo::new(
+            0,
+            1,
+            carg(consts, 0) != 0,
+            FifoType::Simple,
+            true,
+            path,
+        )),
+        "FIFO20" => Box::new(Fifo::new(
+            0,
+            2,
+            carg(consts, 0) != 0,
+            FifoType::Simple,
+            true,
+            path,
+        )),
+        "FIFOL1" => Box::new(Fifo::new(
+            carg(consts, 0) as u32,
+            1,
+            carg(consts, 1) != 0,
+            FifoType::Loopy,
+            false,
+            path,
+        )),
+        "FIFOL2" => Box::new(Fifo::new(
+            carg(consts, 0) as u32,
+            2,
+            carg(consts, 1) != 0,
+            FifoType::Loopy,
+            false,
+            path,
+        )),
+        "FIFOL10" => Box::new(Fifo::new(
+            0,
+            1,
+            carg(consts, 0) != 0,
+            FifoType::Loopy,
+            true,
+            path,
+        )),
+        "FIFOL20" => Box::new(Fifo::new(
+            0,
+            2,
+            carg(consts, 0) != 0,
+            FifoType::Loopy,
+            true,
+            path,
+        )),
+        "SizedFIFO" => Box::new(Fifo::new(
+            carg(consts, 0) as u32,
+            carg(consts, 1),
+            carg(consts, 3) != 0,
+            FifoType::Simple,
+            false,
+            path,
+        )),
+        "SizedFIFO0" => Box::new(Fifo::new(
+            0,
+            carg(consts, 0),
+            carg(consts, 2) != 0,
+            FifoType::Simple,
+            true,
+            path,
+        )),
+        "SizedFIFOL" => Box::new(Fifo::new(
+            carg(consts, 0) as u32,
+            carg(consts, 1),
+            carg(consts, 3) != 0,
+            FifoType::Loopy,
+            false,
+            path,
+        )),
+        "SizedFIFOL0" => Box::new(Fifo::new(
+            0,
+            carg(consts, 0),
+            carg(consts, 2) != 0,
+            FifoType::Loopy,
+            true,
+            path,
+        )),
         "ClockGen" => Box::new(ClockGen),
         // SyncBit = 2-flop; SyncBit15 = 2-flop ticked on both dst edges;
         // SyncBit05/SyncBit1 = 1-flop (negedge/posedge dst tick) -- edge
@@ -650,7 +715,10 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         "SyncBit" | "SyncBit15" => Box::new(SyncBit::new(consts, true)),
         "SyncBit05" | "SyncBit1" => Box::new(SyncBit::new(consts, false)),
         "SyncPulse" => Box::new(SyncPulse::new()),
-        "SyncHandshake" => Box::new(SyncHandshake { hs: Handshake::new(false, false), src_clk: 0 }),
+        "SyncHandshake" => Box::new(SyncHandshake {
+            hs: Handshake::new(false, false),
+            src_clk: 0,
+        }),
         "SyncRegister" => Box::new(SyncReg::new(consts)),
         // reset generators: args are [cycles] / [cycles, init?] per
         // bs_prim_mod_resets.h ctors; A-variants assert asynchronously
@@ -676,7 +744,11 @@ pub fn make_prim(name: &str, consts: &[Value], strs: &[String], path: &str) -> B
         // raw args: [width, depth, indexWidth] ([depth, indexWidth] for
         // the zero-width variants, [width] for depth-1); the clear
         // interface exists only on the Level variants
-        "SyncFIFO" => Box::new(SyncFifo::new(carg(consts, 0) as u32, carg(consts, 1), false)),
+        "SyncFIFO" => Box::new(SyncFifo::new(
+            carg(consts, 0) as u32,
+            carg(consts, 1),
+            false,
+        )),
         "SyncFIFO0" => Box::new(SyncFifo::new(0, carg(consts, 0), false)),
         "SyncFIFO1" => Box::new(SyncFifo::new(carg(consts, 0) as u32, 1, false)),
         "SyncFIFO10" => Box::new(SyncFifo::new(0, 1, false)),
@@ -755,24 +827,26 @@ struct Probe {
 impl Probe {
     fn new(consts: &[Value]) -> Probe {
         let width = carg(consts, 0) as u32;
-        Probe { value: Value::undet(width.max(1)), vcd_id: 0, vcd_back: None }
+        Probe {
+            value: Value::undet(width.max(1)),
+            vcd_id: 0,
+            vcd_back: None,
+        }
     }
 }
 
 impl Prim for Probe {
     fn sym_children(&self) -> Vec<PrimSym> {
-        vec![PrimSym { key: "", width: self.value.width, range: None }]
+        vec![PrimSym {
+            key: "",
+            width: self.value.width,
+            range: None,
+        }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         key.is_empty().then(|| self.value.clone())
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, clk: usize, _clk_vcd_id: u32) {
         self.vcd_id = w.reserve_ids(1);
         w.set_clock(self.vcd_id, clk);
         w.write_def(self.vcd_id, &format!("{name}$PROBE"), self.value.width);
@@ -877,7 +951,10 @@ struct CounterVcdBack {
 impl Counter {
     fn new(consts: &[Value]) -> Counter {
         let width = carg(consts, 0) as u32;
-        let init = consts.get(1).cloned().unwrap_or_else(|| Value::undet(width));
+        let init = consts
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Value::undet(width));
         Counter {
             width,
             val: Value::undet(width),
@@ -929,10 +1006,18 @@ impl Counter {
         unsafe { *self.slot.unwrap().add(off) = x }
     }
     fn load_val(&self) -> Value {
-        if self.slot.is_some() { self.arena_get(0) } else { self.val.clone() }
+        if self.slot.is_some() {
+            self.arena_get(0)
+        } else {
+            self.val.clone()
+        }
     }
     fn store_val(&mut self, v: Value) {
-        if self.slot.is_some() { self.arena_set(0, &v) } else { self.val = v }
+        if self.slot.is_some() {
+            self.arena_set(0, &v)
+        } else {
+            self.val = v
+        }
     }
     fn load_saved(&self) -> Value {
         if self.slot.is_some() {
@@ -1045,20 +1130,18 @@ impl Prim for Counter {
     // Counter (`sim ls` parity); the oracle still compares its
     // architectural value via state_children
     fn state_children(&self) -> Vec<PrimSym> {
-        vec![PrimSym { key: "", width: self.width, range: None }]
+        vec![PrimSym {
+            key: "",
+            width: self.width,
+            range: None,
+        }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         // the registered value (ticks have run at any stop boundary);
         // arena-authoritative when attached (the oracle compares this)
         (key.is_empty()).then(|| self.load_val())
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_counter.h:168-193: parent-scope var, then a scope
         // of clocked port signals; q_state/Q_OUT alias the parent var
         let n0 = w.reserve_ids(9);
@@ -1272,8 +1355,12 @@ impl Prim for Counter {
     fn arena_attach(&mut self, slot: *mut u64) {
         self.slot = Some(slot);
         let w = self.words();
-        let (v, sv, a, b) =
-            (self.val.clone(), self.saved_val.clone(), self.a.clone(), self.b.clone());
+        let (v, sv, a, b) = (
+            self.val.clone(),
+            self.saved_val.clone(),
+            self.a.clone(),
+            self.b.clone(),
+        );
         self.arena_set(0, &v);
         self.arena_set(w, &sv);
         self.arena_word_set(2 * w, self.saved_at);
@@ -1356,7 +1443,11 @@ impl RangeTracker {
             if lo < next_addr || full {
                 // overlap
                 let mut overlap_low = lo;
-                let overlap_high = if hi < next_addr || full { hi } else { next_addr - 1 };
+                let overlap_high = if hi < next_addr || full {
+                    hi
+                } else {
+                    next_addr - 1
+                };
                 if !overlap_full && overlap_high >= next_overlap_addr {
                     if overlap_low < next_overlap_addr {
                         overlap_low = next_overlap_addr;
@@ -1544,9 +1635,18 @@ impl RegFile {
     fn load_memfile(&mut self, path: &str, bin: bool) {
         let (addr_bits, width, lo, hi) = (self.addr_bits, self.width, self.lo, self.hi);
         let mem_name = self.mem_name.clone();
-        load_mem_file(path, bin, addr_bits, width, lo, hi, &mem_name, &mut |a, v| {
-            self.data.insert(a, v);
-        });
+        load_mem_file(
+            path,
+            bin,
+            addr_bits,
+            width,
+            lo,
+            hi,
+            &mem_name,
+            &mut |a, v| {
+                self.data.insert(a, v);
+            },
+        );
     }
 
     fn addr_hex(&self, a: u64) -> String {
@@ -1620,187 +1720,204 @@ fn load_mem_file(
     mem_name: &str,
     sink: &mut dyn FnMut(u64, Value),
 ) {
-        // bytes, not chars: the grammar is ASCII, tokens are contiguous
-        // slices of the buffer (no per-char String pushes), and the
-        // reference reads bytes too (read_to_string would reject a
-        // non-UTF-8 comment the reference accepts)
-        let text = match std::fs::read(path) {
-            Ok(x) => x,
-            Err(e) => {
-                let mut msg = e.to_string();
-                if let Some(i) = msg.find(" (os error") {
-                    msg.truncate(i);
-                }
-                qprintln!("Error: failed to open file '{path}' because {msg}");
-                return;
+    // bytes, not chars: the grammar is ASCII, tokens are contiguous
+    // slices of the buffer (no per-char String pushes), and the
+    // reference reads bytes too (read_to_string would reject a
+    // non-UTF-8 comment the reference accepts)
+    let text = match std::fs::read(path) {
+        Ok(x) => x,
+        Err(e) => {
+            let mut msg = e.to_string();
+            if let Some(i) = msg.find(" (os error") {
+                msg.truncate(i);
             }
-        };
-        let in_range = |a: u64| -> bool { a >= lo.min(hi) && a <= lo.max(hi) };
+            qprintln!("Error: failed to open file '{path}' because {msg}");
+            return;
+        }
+    };
+    let in_range = |a: u64| -> bool { a >= lo.min(hi) && a <= lo.max(hi) };
     let decreasing = lo > hi;
-        let mut addr = lo;
-        let mut rt = RangeTracker::new();
-        let mut set_entry = |rt: &mut RangeTracker, s: &[u8], addr: &mut u64,
-                             sink: &mut dyn FnMut(u64, Value)|
-         -> bool {
-            if in_range(*addr) {
-                let parsed = if bin {
-                    parse_mem_bin(s, width)
-                } else {
-                    parse_mem_hex(s, width)
-                };
-                match parsed {
-                    Some(v) => {
-                        sink(*addr, v);
-                        rt.set_addr(*addr);
-                    }
-                    None => return false,
-                }
-            }
-            if decreasing {
-                *addr = addr.wrapping_sub(1);
+    let mut addr = lo;
+    let mut rt = RangeTracker::new();
+    let mut set_entry = |rt: &mut RangeTracker,
+                         s: &[u8],
+                         addr: &mut u64,
+                         sink: &mut dyn FnMut(u64, Value)|
+     -> bool {
+        if in_range(*addr) {
+            let parsed = if bin {
+                parse_mem_bin(s, width)
             } else {
-                *addr += 1;
+                parse_mem_hex(s, width)
+            };
+            match parsed {
+                Some(v) => {
+                    sink(*addr, v);
+                    rt.set_addr(*addr);
+                }
+                None => return false,
             }
-            true
-        };
+        }
+        if decreasing {
+            *addr = addr.wrapping_sub(1);
+        } else {
+            *addr += 1;
+        }
+        true
+    };
 
-        #[derive(PartialEq)]
-        enum St {
-            Start,
-            BeginComment,
-            CppComment,
-            CComment,
-            EndCComment,
-            InAddr,
-            InValue,
-        }
-        let is_tok_byte = |b: u8| {
-            b.is_ascii_hexdigit() || matches!(b, b'_' | b'x' | b'X' | b'z' | b'Z')
-        };
-        let mut state = St::Start;
-        let mut line: u32 = 1;
-        let mut start_line: u32 = 1;
-        let mut comment_start_line: u32 = 0;
-        let mut tok_start = 0usize;
-        for (bi, &b) in text.iter().enumerate() {
-            let c = b as char;
-            match state {
-                St::Start => match b {
-                    b'/' => state = St::BeginComment,
-                    b'@' => {
-                        state = St::InAddr;
-                        tok_start = bi + 1;
-                        start_line = line;
-                    }
-                    b if b.is_ascii_hexdigit() => {
-                        state = St::InValue;
-                        tok_start = bi;
-                        start_line = line;
-                    }
-                    b'\n' => line += 1,
-                    b'\r' | b' ' | b'\t' => {}
-                    _ => {
-                        qprintln!("Error: syntax error at line {line} of file '{path}'");
-                        qprintln!("       Encountered '{c}' when expecting '/', '@', hex digit, end-of-line or whitespace.");
-                        return;
-                    }
-                },
-                St::BeginComment => match b {
-                    b'/' => state = St::CppComment,
-                    b'*' => {
-                        state = St::CComment;
-                        comment_start_line = line;
-                    }
-                    _ => {
-                        qprintln!("Error: syntax error at line {line} of file '{path}'");
-                        qprintln!("       Malformed comment start sequence.");
-                        return;
-                    }
-                },
-                St::CppComment => {
-                    if b == b'\n' {
-                        line += 1;
-                        state = St::Start;
-                    }
-                }
-                St::CComment => {
-                    if b == b'\n' {
-                        line += 1;
-                    } else if b == b'*' {
-                        state = St::EndCComment;
-                    }
-                }
-                St::EndCComment => {
-                    state = if b == b'/' { St::Start } else { St::CComment };
-                }
-                St::InAddr => {
-                    let done = matches!(b, b'\n' | b'\r' | b' ' | b'\t' | b'/');
-                    if done {
-                        let err = match parse_mem_hex(&text[tok_start..bi], addr_bits) {
-                            None => Some("Malformed address".to_string()),
-                            Some(v) => {
-                                let a = v.as_u64();
-                                if !in_range(a) {
-                                    Some("Address is outside of the allowed range".to_string())
-                                } else {
-                                    addr = a;
-                                    None
-                                }
-                            }
-                        };
-                        if let Some(e) = err {
-                            qprintln!("Error: address processing error at line {start_line} of file '{path}'");
-                            qprintln!("       {e}.");
-                            return;
-                        }
-                        if b == b'\n' {
-                            line += 1;
-                        }
-                        state = if b == b'/' { St::BeginComment } else { St::Start };
-                    } else if !is_tok_byte(b) {
-                        qprintln!("Error: address processing error at line {start_line} of file '{path}'");
-                        qprintln!("       Encountered '{c}' when expecting '/', hex digit, end-of-line or whitespace.");
-                        return;
-                    }
-                }
-                St::InValue => {
-                    let done = matches!(b, b'\n' | b'\r' | b' ' | b'\t' | b'/');
-                    if done {
-                        if !set_entry(&mut rt, &text[tok_start..bi], &mut addr, sink) {
-                            qprintln!("Error: value processing error at line {start_line} of file '{path}'");
-                            qprintln!("       Malformed value.");
-                            return;
-                        }
-                        if b == b'\n' {
-                            line += 1;
-                        }
-                        state = if b == b'/' { St::BeginComment } else { St::Start };
-                    } else if !is_tok_byte(b) {
-                        qprintln!("Error: value processing error at line {start_line} of file '{path}'");
-                        qprintln!("       Encountered '{c}' when expecting '/', digit, end-of-line or whitespace.");
-                        return;
-                    }
-                }
-            }
-        }
+    #[derive(PartialEq)]
+    enum St {
+        Start,
+        BeginComment,
+        CppComment,
+        CComment,
+        EndCComment,
+        InAddr,
+        InValue,
+    }
+    let is_tok_byte =
+        |b: u8| b.is_ascii_hexdigit() || matches!(b, b'_' | b'x' | b'X' | b'z' | b'Z');
+    let mut state = St::Start;
+    let mut line: u32 = 1;
+    let mut start_line: u32 = 1;
+    let mut comment_start_line: u32 = 0;
+    let mut tok_start = 0usize;
+    for (bi, &b) in text.iter().enumerate() {
+        let c = b as char;
         match state {
-            St::CComment | St::EndCComment => {
-                qprintln!("Error: syntax error at line {comment_start_line} of file '{path}'");
-                qprintln!("       Unterminated C-style comment.");
-            }
-            St::InValue => {
-                if !set_entry(&mut rt, &text[tok_start..], &mut addr, sink) {
-                    qprintln!("Error: value processing error at line {line} of file '{path}'");
-                    qprintln!("       Malformed value.");
+            St::Start => match b {
+                b'/' => state = St::BeginComment,
+                b'@' => {
+                    state = St::InAddr;
+                    tok_start = bi + 1;
+                    start_line = line;
                 }
+                b if b.is_ascii_hexdigit() => {
+                    state = St::InValue;
+                    tok_start = bi;
+                    start_line = line;
+                }
+                b'\n' => line += 1,
+                b'\r' | b' ' | b'\t' => {}
+                _ => {
+                    qprintln!("Error: syntax error at line {line} of file '{path}'");
+                    qprintln!("       Encountered '{c}' when expecting '/', '@', hex digit, end-of-line or whitespace.");
+                    return;
+                }
+            },
+            St::BeginComment => match b {
+                b'/' => state = St::CppComment,
+                b'*' => {
+                    state = St::CComment;
+                    comment_start_line = line;
+                }
+                _ => {
+                    qprintln!("Error: syntax error at line {line} of file '{path}'");
+                    qprintln!("       Malformed comment start sequence.");
+                    return;
+                }
+            },
+            St::CppComment => {
+                if b == b'\n' {
+                    line += 1;
+                    state = St::Start;
+                }
+            }
+            St::CComment => {
+                if b == b'\n' {
+                    line += 1;
+                } else if b == b'*' {
+                    state = St::EndCComment;
+                }
+            }
+            St::EndCComment => {
+                state = if b == b'/' { St::Start } else { St::CComment };
             }
             St::InAddr => {
-                // EOF inside an @address: the original char loop fell
-                // out without applying it, matching the reference
+                let done = matches!(b, b'\n' | b'\r' | b' ' | b'\t' | b'/');
+                if done {
+                    let err = match parse_mem_hex(&text[tok_start..bi], addr_bits) {
+                        None => Some("Malformed address".to_string()),
+                        Some(v) => {
+                            let a = v.as_u64();
+                            if !in_range(a) {
+                                Some("Address is outside of the allowed range".to_string())
+                            } else {
+                                addr = a;
+                                None
+                            }
+                        }
+                    };
+                    if let Some(e) = err {
+                        qprintln!(
+                            "Error: address processing error at line {start_line} of file '{path}'"
+                        );
+                        qprintln!("       {e}.");
+                        return;
+                    }
+                    if b == b'\n' {
+                        line += 1;
+                    }
+                    state = if b == b'/' {
+                        St::BeginComment
+                    } else {
+                        St::Start
+                    };
+                } else if !is_tok_byte(b) {
+                    qprintln!(
+                        "Error: address processing error at line {start_line} of file '{path}'"
+                    );
+                    qprintln!("       Encountered '{c}' when expecting '/', hex digit, end-of-line or whitespace.");
+                    return;
+                }
             }
-            _ => {}
+            St::InValue => {
+                let done = matches!(b, b'\n' | b'\r' | b' ' | b'\t' | b'/');
+                if done {
+                    if !set_entry(&mut rt, &text[tok_start..bi], &mut addr, sink) {
+                        qprintln!(
+                            "Error: value processing error at line {start_line} of file '{path}'"
+                        );
+                        qprintln!("       Malformed value.");
+                        return;
+                    }
+                    if b == b'\n' {
+                        line += 1;
+                    }
+                    state = if b == b'/' {
+                        St::BeginComment
+                    } else {
+                        St::Start
+                    };
+                } else if !is_tok_byte(b) {
+                    qprintln!(
+                        "Error: value processing error at line {start_line} of file '{path}'"
+                    );
+                    qprintln!("       Encountered '{c}' when expecting '/', digit, end-of-line or whitespace.");
+                    return;
+                }
+            }
         }
-        rt.check_range(path, mem_name, lo, hi);
+    }
+    match state {
+        St::CComment | St::EndCComment => {
+            qprintln!("Error: syntax error at line {comment_start_line} of file '{path}'");
+            qprintln!("       Unterminated C-style comment.");
+        }
+        St::InValue => {
+            if !set_entry(&mut rt, &text[tok_start..], &mut addr, sink) {
+                qprintln!("Error: value processing error at line {line} of file '{path}'");
+                qprintln!("       Malformed value.");
+            }
+        }
+        St::InAddr => {
+            // EOF inside an @address: the original char loop fell
+            // out without applying it, matching the reference
+        }
+        _ => {}
+    }
+    rt.check_range(path, mem_name, lo, hi);
 }
 
 impl RegFile {
@@ -1841,9 +1958,21 @@ impl Prim for RegFile {
     fn sym_children(&self) -> Vec<PrimSym> {
         // bs_prim_mod_regfile.h: "" SYM_RANGE, high_addr/low_addr params
         vec![
-            PrimSym { key: "", width: self.width, range: Some((self.lo, self.hi)) },
-            PrimSym { key: "high_addr", width: self.addr_bits, range: None },
-            PrimSym { key: "low_addr", width: self.addr_bits, range: None },
+            PrimSym {
+                key: "",
+                width: self.width,
+                range: Some((self.lo, self.hi)),
+            },
+            PrimSym {
+                key: "high_addr",
+                width: self.addr_bits,
+                range: None,
+            },
+            PrimSym {
+                key: "low_addr",
+                width: self.addr_bits,
+                range: None,
+            },
         ]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
@@ -1892,7 +2021,11 @@ impl Prim for RegFile {
                         } else {
                             format!(
                                 "C:{}{}:{}",
-                                if tok & (1 << 16) != 0 { "exec" } else { "sched" },
+                                if tok & (1 << 16) != 0 {
+                                    "exec"
+                                } else {
+                                    "sched"
+                                },
                                 tok >> 17,
                                 tok & 0xffff
                             )
@@ -1916,8 +2049,7 @@ impl Prim for RegFile {
                 if let Some(slot) = self.slot {
                     // arena-authoritative (compiled writes go directly
                     // to the slots): reproduce the one-deep bypass
-                    let (upd_at, upd_addr) =
-                        unsafe { (*slot, *slot.add(1)) };
+                    let (upd_at, upd_addr) = unsafe { (*slot, *slot.add(1)) };
                     if upd_at == now && upd_addr == a {
                         return self.arena_read(2);
                     }
@@ -1947,8 +2079,7 @@ impl Prim for RegFile {
                     return;
                 }
                 if let Some(slot) = self.slot {
-                    let (upd_at, upd_addr) =
-                        unsafe { (*slot, *slot.add(1)) };
+                    let (upd_at, upd_addr) = unsafe { (*slot, *slot.add(1)) };
                     if upd_at != now || upd_addr != a {
                         let prev = self.arena_read(self.data_off(a));
                         self.arena_write(2, &prev);
@@ -1979,8 +2110,7 @@ impl Prim for RegFile {
     fn arena_kind(&self) -> Option<ArenaKind> {
         // dense image: gate the slot budget — huge memories stay boxed
         let entries = self.hi.checked_sub(self.lo)?.checked_add(1)?;
-        let slots = 2u64
-            + (self.words() as u64) * (1 + entries);
+        let slots = 2u64 + (self.words() as u64) * (1 + entries);
         (slots <= 1 << 16).then_some(ArenaKind::RegFile {
             width: self.width,
             lo: self.lo,
@@ -2027,16 +2157,14 @@ impl Prim for RegFile {
     fn runcore_fill_region(&mut self, key: u64) {
         for a in self.lo..=self.hi {
             let w = runcore_fill_word(key, a);
-            let v =
-                Value::from_limbs64(self.width.max(1), vec![w; self.words()]);
+            let v = Value::from_limbs64(self.width.max(1), vec![w; self.words()]);
             self.arena_write(self.data_off(a), &v);
         }
     }
     fn runcore_region_is(&self, key: u64) -> bool {
         (self.lo..=self.hi).all(|a| {
             let w = runcore_fill_word(key, a);
-            let v =
-                Value::from_limbs64(self.width.max(1), vec![w; self.words()]);
+            let v = Value::from_limbs64(self.width.max(1), vec![w; self.words()]);
             self.arena_read(self.data_off(a)) == v
         })
     }
@@ -2091,13 +2219,7 @@ impl LatchCrossingReg {
 }
 
 impl Prim for LatchCrossingReg {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         let n = w.reserve_ids(2);
         self.vcd_base = n;
         w.write_def(n, &format!("{name}$L_OUT"), self.s_flop.width);
@@ -2293,8 +2415,7 @@ impl Reg {
     fn load(&self) -> Value {
         match self.slot {
             Some(p) => {
-                let limbs =
-                    unsafe { std::slice::from_raw_parts(p, self.words()) }.to_vec();
+                let limbs = unsafe { std::slice::from_raw_parts(p, self.words()) }.to_vec();
                 Value::from_limbs64(self.width, limbs)
             }
             None => self.value.clone(),
@@ -2303,8 +2424,7 @@ impl Reg {
     fn store(&mut self, v: Value) {
         match self.slot {
             Some(p) => {
-                let dst =
-                    unsafe { std::slice::from_raw_parts_mut(p, self.words()) };
+                let dst = unsafe { std::slice::from_raw_parts_mut(p, self.words()) };
                 for (i, d) in dst.iter_mut().enumerate() {
                     *d = v.limbs64().get(i).copied().unwrap_or(0);
                 }
@@ -2373,18 +2493,16 @@ impl Prim for Reg {
         "Reg"
     }
     fn sym_children(&self) -> Vec<PrimSym> {
-        vec![PrimSym { key: "", width: self.width, range: None }]
+        vec![PrimSym {
+            key: "",
+            width: self.width,
+            range: None,
+        }]
     }
     fn sym_read(&mut self, key: &str, now: u64) -> Option<Value> {
         (key.is_empty()).then(|| self.value_method("read", 0, &[], now))
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         self.vcd_id = vcd_flat_defs(w, name, self.value.width);
     }
     fn vcd_dump(
@@ -2433,8 +2551,7 @@ impl Prim for Reg {
                             self.store(v);
                         }
                         None => {
-                            self.prev =
-                                std::mem::replace(&mut self.value, args[0].clone());
+                            self.prev = std::mem::replace(&mut self.value, args[0].clone());
                             self.written_at = now;
                         }
                     }
@@ -2473,8 +2590,7 @@ impl Prim for Reg {
         // async-reset regs suppress writes while in reset (a check a raw
         // compiled store cannot honor), crossing regs need NBA tracking:
         // neither is arena-backable.  Wide regs take ceil(width/64) slots.
-        (!self.crossing && !self.async_rst)
-            .then_some(ArenaKind::Reg { width: self.width })
+        (!self.crossing && !self.async_rst).then_some(ArenaKind::Reg { width: self.width })
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         let words = self.words();
@@ -2672,7 +2788,11 @@ impl Prim for ConfigReg {
         "ConfigReg"
     }
     fn sym_children(&self) -> Vec<PrimSym> {
-        vec![PrimSym { key: "", width: self.value.width, range: None }]
+        vec![PrimSym {
+            key: "",
+            width: self.value.width,
+            range: None,
+        }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         // arena-attached engines write INLINE — re-read first (the
@@ -2683,13 +2803,7 @@ impl Prim for ConfigReg {
         self.refresh();
         (key.is_empty()).then(|| self.value.clone())
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         self.vcd_id = vcd_flat_defs(w, name, self.value.width);
     }
     fn vcd_dump(
@@ -2767,7 +2881,9 @@ impl Prim for ConfigReg {
         // async-reset ConfigRegs suppress writes while in reset, which
         // the trampoline write honors — but the reset re-mirror happens
         // out of tick order; keep them fully boxed like async Regs
-        (!self.async_rst).then_some(ArenaKind::ConfigReg { width: self.value.width })
+        (!self.async_rst).then_some(ArenaKind::ConfigReg {
+            width: self.value.width,
+        })
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         self.slot = Some(slot);
@@ -2820,10 +2936,8 @@ impl RWire {
     fn get_value(&self) -> Value {
         match self.slot {
             Some(p) => {
-                let limbs = unsafe {
-                    std::slice::from_raw_parts(p.add(1), self.value_words())
-                }
-                .to_vec();
+                let limbs =
+                    unsafe { std::slice::from_raw_parts(p.add(1), self.value_words()) }.to_vec();
                 Value::from_limbs64(self.width.max(1), limbs)
             }
             None => self.value.clone(),
@@ -2832,9 +2946,7 @@ impl RWire {
     fn set_value(&mut self, v: &Value) {
         match self.slot {
             Some(p) => {
-                let dst = unsafe {
-                    std::slice::from_raw_parts_mut(p.add(1), self.value_words())
-                };
+                let dst = unsafe { std::slice::from_raw_parts_mut(p.add(1), self.value_words()) };
                 for (i, d) in dst.iter_mut().enumerate() {
                     *d = v.limbs64().get(i).copied().unwrap_or(0);
                 }
@@ -2846,7 +2958,11 @@ impl RWire {
 
 impl RWire {
     fn new(consts: &[Value], zero_width: bool) -> RWire {
-        let width = if zero_width { 0 } else { carg(consts, 0) as u32 };
+        let width = if zero_width {
+            0
+        } else {
+            carg(consts, 0) as u32
+        };
         RWire {
             width,
             // the unset value plane is OBSERVABLE: aDropUndet collapses
@@ -2871,9 +2987,21 @@ impl Prim for RWire {
         // bs_prim_mod_wire.h: "" and "value" share the data member;
         // isValid is the 1-bit valid member
         vec![
-            PrimSym { key: "", width: self.width, range: None },
-            PrimSym { key: "isValid", width: 1, range: None },
-            PrimSym { key: "value", width: self.width, range: None },
+            PrimSym {
+                key: "",
+                width: self.width,
+                range: None,
+            },
+            PrimSym {
+                key: "isValid",
+                width: 1,
+                range: None,
+            },
+            PrimSym {
+                key: "value",
+                width: self.width,
+                range: None,
+            },
         ]
     }
     fn sym_transient(&self) -> bool {
@@ -2888,13 +3016,7 @@ impl Prim for RWire {
             _ => None,
         }
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_wire.h:87-97: one id, no scope; changes back-dated
         // to the clock edge; zero-width wires declare width 1
         self.vcd_id = w.reserve_ids(1);
@@ -2921,9 +3043,7 @@ impl Prim for RWire {
         }
         let written = self.written;
         let dump = match (&self.vcd_back, dt) {
-            (Some((bw, bv)), D::Changes) => {
-                written != *bw || (written && *bw && self.value != *bv)
-            }
+            (Some((bw, bv)), D::Changes) => written != *bw || (written && *bw && self.value != *bv),
             _ => true,
         };
         if dump {
@@ -2961,7 +3081,9 @@ impl Prim for RWire {
         }
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         // latch for VCD: did the wire fire during the cycle that just ended
         self.written = self.get_valid();
         self.set_valid(false);
@@ -3006,7 +3128,11 @@ struct BypassWire {
 
 impl BypassWire {
     fn new(consts: &[Value], zero_width: bool) -> BypassWire {
-        let width = if zero_width { 1 } else { carg(consts, 0) as u32 };
+        let width = if zero_width {
+            1
+        } else {
+            carg(consts, 0) as u32
+        };
         BypassWire {
             width,
             // same contract as RWire: pre-first-write reads must see
@@ -3021,10 +3147,7 @@ impl BypassWire {
     fn get_value(&self) -> Value {
         match self.slot {
             Some(p) => {
-                let limbs = unsafe {
-                    std::slice::from_raw_parts(p, self.value_words())
-                }
-                .to_vec();
+                let limbs = unsafe { std::slice::from_raw_parts(p, self.value_words()) }.to_vec();
                 Value::from_limbs64(self.width.max(1), limbs)
             }
             None => self.value.clone(),
@@ -3033,9 +3156,7 @@ impl BypassWire {
     fn set_value(&mut self, v: &Value) {
         match self.slot {
             Some(p) => {
-                let dst = unsafe {
-                    std::slice::from_raw_parts_mut(p, self.value_words())
-                };
+                let dst = unsafe { std::slice::from_raw_parts_mut(p, self.value_words()) };
                 for (i, d) in dst.iter_mut().enumerate() {
                     *d = v.limbs64().get(i).copied().unwrap_or(0);
                 }
@@ -3107,8 +3228,8 @@ const CREG_PORTS: usize = 5;
 /// CReg with up to 5 ports (bs_prim_mod_reg.h:817): sequential port
 /// writes are immediate; tick commits the registered view.
 struct CReg {
-    value: Value,       // live value, mutated by port writes
-    value_reg: Value,   // value registered at the last edge
+    value: Value,     // live value, mutated by port writes
+    value_reg: Value, // value registered at the last edge
     reset_value: Value,
     in_reset: bool,
     async_rst: bool,
@@ -3172,7 +3293,11 @@ impl CReg {
         }
     }
     fn load_val(&self) -> Value {
-        if self.slot.is_some() { self.arena_get(false) } else { self.value.clone() }
+        if self.slot.is_some() {
+            self.arena_get(false)
+        } else {
+            self.value.clone()
+        }
     }
     fn store_val(&mut self, v: Value) {
         if self.slot.is_some() {
@@ -3182,7 +3307,11 @@ impl CReg {
         }
     }
     fn load_val_reg(&self) -> Value {
-        if self.slot.is_some() { self.arena_get(true) } else { self.value_reg.clone() }
+        if self.slot.is_some() {
+            self.arena_get(true)
+        } else {
+            self.value_reg.clone()
+        }
     }
     fn store_val_reg(&mut self, v: Value) {
         if self.slot.is_some() {
@@ -3203,20 +3332,18 @@ impl Prim for CReg {
     // no sym_children: the reference registers NO symbols for CReg
     // (`sim ls` parity); the oracle compares the registered value
     fn state_children(&self) -> Vec<PrimSym> {
-        vec![PrimSym { key: "", width: self.value.width, range: None }]
+        vec![PrimSym {
+            key: "",
+            width: self.value.width,
+            range: None,
+        }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         // live value == registered value at any stop boundary (the
         // edge tick latched it); mid-cycle it is the port-write chain
         (key.is_empty()).then(|| self.load_val())
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_reg.h:989-1022: parent-scope alias shares Q_OUT_0's
         // id; per-port Q_OUT_i/EN_i/D_IN_i, all clock-backdated
         let bits = self.value.width;
@@ -3302,8 +3429,7 @@ impl Prim for CReg {
                 }
             }
         }
-        self.vcd_back =
-            Some((qouts, self.did_write_rec.clone(), self.write_val.clone()));
+        self.vcd_back = Some((qouts, self.did_write_rec.clone(), self.write_val.clone()));
     }
 
     fn value_method(&mut self, _method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
@@ -3323,7 +3449,9 @@ impl Prim for CReg {
         self.write_val[i] = args[0].clone();
     }
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         // Q_OUT_0 starts from the value registered before this cycle
         self.read_val0 = self.load_val_reg();
         let v = self.load_val();
@@ -3355,8 +3483,9 @@ impl Prim for CReg {
     fn arena_kind(&self) -> Option<ArenaKind> {
         // async-reset CRegs suppress writes while in reset (same gate
         // as Reg): not arena-backable
-        (!self.async_rst)
-            .then_some(ArenaKind::CReg5 { width: self.value.width })
+        (!self.async_rst).then_some(ArenaKind::CReg5 {
+            width: self.value.width,
+        })
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         self.slot = Some(slot);
@@ -3520,8 +3649,7 @@ impl Fifo {
         // suppressed ops to the boxed prim
         let width = self.width.max(1);
         for i in 0..self.size {
-            self.data[i] =
-                Value::from_limbs64(width, h[7 + i * w..7 + (i + 1) * w].to_vec());
+            self.data[i] = Value::from_limbs64(width, h[7 + i * w..7 + (i + 1) * w].to_vec());
         }
     }
 
@@ -3529,8 +3657,7 @@ impl Fifo {
     fn mirror_data(&self, idx: usize) {
         let Some(slot) = self.slot else { return };
         let w = self.arena_words();
-        let dst =
-            unsafe { std::slice::from_raw_parts_mut(slot.add(7 + idx * w), w) };
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(7 + idx * w), w) };
         for (i, d) in dst.iter_mut().enumerate() {
             *d = self.data[idx].limbs64().get(i).copied().unwrap_or(0);
         }
@@ -3555,8 +3682,16 @@ impl Prim for Fifo {
                 width: self.width,
                 range: Some((0, self.size.saturating_sub(1) as u64)),
             },
-            PrimSym { key: "depth", width: 32, range: None },
-            PrimSym { key: "level", width: 32, range: None },
+            PrimSym {
+                key: "depth",
+                width: 32,
+                range: None,
+            },
+            PrimSym {
+                key: "level",
+                width: 32,
+                range: None,
+            },
         ]
     }
     fn state_children(&self) -> Vec<PrimSym> {
@@ -3574,7 +3709,11 @@ impl Prim for Fifo {
                 width: self.width,
                 range: Some((0, self.size.saturating_sub(1) as u64)),
             },
-            PrimSym { key: "elems", width: 32, range: None },
+            PrimSym {
+                key: "elems",
+                width: 32,
+                range: None,
+            },
         ]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
@@ -3636,13 +3775,7 @@ impl Prim for Fifo {
                 .unwrap_or_else(|| Value::zero(self.width.max(1))),
         )
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, clk: usize, clk_vcd_id: u32) {
         // bs_prim_mod_fifo.h:263-293
         let bits = self.width;
         let extra = if bits > 0 { 1 } else { 0 };
@@ -3773,9 +3906,7 @@ impl Prim for Fifo {
                 num += 1;
                 for i in 0..self.size {
                     let idx = (self.fst + i) % self.size;
-                    if i < self.elems
-                        && (i >= back.elems || self.data[idx] != back.slots[i])
-                    {
+                    if i < self.elems && (i >= back.elems || self.data[idx] != back.slots[i]) {
                         w.write_val(num, &self.data[idx], now);
                     } else if i >= self.elems && i < back.elems {
                         w.write_x(num, bits, now);
@@ -4006,13 +4137,7 @@ impl Prim for Fifo {
 struct ClockGen;
 
 impl Prim for ClockGen {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, clk_vcd_id: u32) {
         // bs_prim_mod_clockgen.h:40-46: single CLK_OUT var aliasing the
         // kernel-owned clock id; no ids reserved, no value dumping
         w.scope_start(name, None);
@@ -4040,7 +4165,11 @@ struct SyncVar {
 
 impl SyncVar {
     fn new(v: Value) -> SyncVar {
-        SyncVar { prev: v.clone(), cur: v, written_at: u64::MAX }
+        SyncVar {
+            prev: v.clone(),
+            cur: v,
+            written_at: u64::MAX,
+        }
     }
     fn read(&self, now: u64) -> Value {
         if self.written_at == now {
@@ -4076,7 +4205,11 @@ struct SyncBit {
 
 impl SyncBit {
     fn new(consts: &[Value], two_stage: bool) -> SyncBit {
-        let rv = consts.first().cloned().unwrap_or_else(|| Value::zero(1)).zext(1);
+        let rv = consts
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Value::zero(1))
+            .zext(1);
         SyncBit {
             two_stage,
             d1: Value::undet(1),
@@ -4091,13 +4224,7 @@ impl SyncBit {
 }
 
 impl Prim for SyncBit {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         // MOD_Sync2/Sync15: dSyncReg1/dSyncReg2/sSyncReg;
         // MOD_Sync1: dSyncReg1/sSyncReg
         let n = w.reserve_ids(if self.two_stage { 3 } else { 2 });
@@ -4186,7 +4313,9 @@ impl Prim for SyncBit {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk_dst" => {
                 if self.two_stage {
@@ -4235,13 +4364,7 @@ impl SyncPulse {
 }
 
 impl Prim for SyncPulse {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         let n = w.reserve_ids(4);
         self.vcd_base = n;
         w.scope_start(name, None);
@@ -4288,8 +4411,12 @@ impl Prim for SyncPulse {
                 }
             }
         }
-        self.vcd_back =
-            Some((cur[0].clone(), cur[1].clone(), cur[2].clone(), cur[3].clone()));
+        self.vcd_back = Some((
+            cur[0].clone(),
+            cur[1].clone(),
+            cur[2].clone(),
+            cur[3].clone(),
+        ));
     }
 
     fn value_method(&mut self, method: &str, _port: u32, _args: &[Value], _now: u64) -> Value {
@@ -4311,7 +4438,9 @@ impl Prim for SyncPulse {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk_dst" => {
                 self.d_pulse = self.d2.clone();
@@ -4438,8 +4567,15 @@ impl Handshake {
         let mut n = w.reserve_ids(12);
         self.vcd_base = n;
         w.scope_start(name, None);
-        for v in ["dSyncReg1", "dSyncReg2", "dLastState", "sToggleReg", "sSyncReg1",
-                  "sSyncReg2", "sRDY"] {
+        for v in [
+            "dSyncReg1",
+            "dSyncReg2",
+            "dLastState",
+            "sToggleReg",
+            "sSyncReg1",
+            "sSyncReg2",
+            "sRDY",
+        ] {
             w.write_def(n, v, 1);
             n += 1;
         }
@@ -4548,13 +4684,7 @@ struct SyncHandshake {
 }
 
 impl Prim for SyncHandshake {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         let src = self.src_clk;
         self.hs.vcd_defs(w, name, src);
     }
@@ -4582,7 +4712,9 @@ impl Prim for SyncHandshake {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk_src" => self.hs.clk_src(now),
             "clk_dst" => self.hs.clk_dst(now),
@@ -4629,13 +4761,7 @@ impl SyncReg {
 }
 
 impl Prim for SyncReg {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_synchronizers.h:784-793: dD_OUT/sDataSyncIn plus
         // the nested "sync" handshake scope
         let bits = self.d_out.width;
@@ -4701,7 +4827,9 @@ impl Prim for SyncReg {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk_src" => self.hs.clk_src(now),
             "clk_dst" => {
@@ -4722,7 +4850,6 @@ impl Prim for SyncReg {
         }
     }
 }
-
 
 // ===============
 // Reset generators (bs_prim_mod_resets.h).  Output transitions are
@@ -4785,13 +4912,7 @@ impl SyncReset {
 }
 
 impl Prim for SyncReset {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, clk_vcd_id: u32) {
         // bs_prim_mod_resets.h SyncReset: CLK alias + IN_RST/OUT_RST.
         // The generated C++ never calls set_clk_0 on SyncReset, so its
         // CLK alias uses bk_clock_vcd_num(BAD_CLOCK_HANDLE) = the first
@@ -4844,7 +4965,9 @@ impl Prim for SyncReset {
         panic!("SyncReset: unknown action method {method:?}")
     }
     fn tick(&mut self, port: &str, _now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk" => self.clk(),
             p => panic!("SyncReset: unknown tick port {p:?}"),
@@ -4865,7 +4988,9 @@ struct SyncReset0 {
 
 impl SyncReset0 {
     fn new() -> SyncReset0 {
-        SyncReset0 { pending: Vec::new() }
+        SyncReset0 {
+            pending: Vec::new(),
+        }
     }
 }
 
@@ -4894,18 +5019,15 @@ struct InitialReset {
 
 impl InitialReset {
     fn new(count: u32) -> InitialReset {
-        InitialReset { count, pending: Vec::new() }
+        InitialReset {
+            count,
+            pending: Vec::new(),
+        }
     }
 }
 
 impl Prim for InitialReset {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_resets.h: InitialReset writes an empty scope yet
         // reserves 3 ids that are never used
         let _ = w.reserve_ids(3);
@@ -4919,7 +5041,9 @@ impl Prim for InitialReset {
         panic!("InitialReset: unknown action method {method:?}")
     }
     fn tick(&mut self, port: &str, _now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk" => {
                 if self.count > 0 {
@@ -4989,13 +5113,7 @@ impl MakeReset {
 }
 
 impl Prim for MakeReset {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_resets.h:340-347: one scope with a single 1-bit
         // "rst" var (the internal rstSync synchronizer dumps nothing)
         self.vcd_id = w.reserve_ids(1);
@@ -5033,7 +5151,9 @@ impl Prim for MakeReset {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk" => {
                 if !self.in_reset {
@@ -5119,13 +5239,7 @@ impl MakeClock {
 }
 
 impl Prim for MakeClock {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, clk_vcd_id: u32) {
         // CLK_OUT aliases the driven kernel clock; CLK_GATE_OUT and
         // CLK_VAL_OUT are the gate/value registers
         let n = w.reserve_ids(2);
@@ -5268,13 +5382,7 @@ impl Prim for ClockDivider {
         // the tick port is driven by the INPUT clock (CLK_IN alias)
         self.vcd_in_clk_id = clk_vcd_id;
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, clk_vcd_id: u32) {
         let n = w.reserve_ids(2);
         self.vcd_base = n;
         w.scope_start(name, None);
@@ -5305,9 +5413,7 @@ impl Prim for ClockDivider {
                 if self.in_reset != b_rst {
                     w.write_val(n, &bit(!self.in_reset), now);
                 }
-                if self.cntr != b_cntr
-                    && (pre || b_cntr != self.transition.wrapping_sub(1))
-                {
+                if self.cntr != b_cntr && (pre || b_cntr != self.transition.wrapping_sub(1)) {
                     w.write_val(n + 1, &bit(pre), now);
                 }
             }
@@ -5403,13 +5509,7 @@ impl Prim for ClockInverter {
     fn vcd_port_clock(&mut self, _port: &str, _clk: usize, clk_vcd_id: u32) {
         self.vcd_in_clk_id = clk_vcd_id;
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, clk_vcd_id: u32) {
         let n = w.reserve_ids(4);
         self.vcd_base = n;
         w.scope_start(name, None);
@@ -5440,8 +5540,7 @@ impl Prim for ClockInverter {
                 self.vcd_preedge = false;
             }
             D::Changes => {
-                let (bi, bg, bp, bo) =
-                    self.vcd_back.unwrap_or((false, false, false, false));
+                let (bi, bg, bp, bo) = self.vcd_back.unwrap_or((false, false, false, false));
                 if clk_in != bi {
                     w.write_val(n, &bit(clk_in), now);
                 }
@@ -5464,8 +5563,7 @@ impl Prim for ClockInverter {
                 w.write_val(n + 3, &bit(self.gate_out), now);
             }
         }
-        self.vcd_back =
-            Some((clk_in, self.gate_out, self.vcd_preedge, self.gate_out));
+        self.vcd_back = Some((clk_in, self.gate_out, self.vcd_preedge, self.gate_out));
     }
     fn gate_out(&self) -> bool {
         self.gate_out
@@ -5517,7 +5615,11 @@ struct SyncIdx {
 
 impl SyncIdx {
     fn new() -> SyncIdx {
-        SyncIdx { prev: 0, cur: 0, written_at: u64::MAX }
+        SyncIdx {
+            prev: 0,
+            cur: 0,
+            written_at: u64::MAX,
+        }
     }
     fn read(&self, now: u64) -> u64 {
         if self.written_at == now {
@@ -5683,8 +5785,7 @@ impl SyncFifo {
             };
             if self.not_empty {
                 if self.depth != 1 {
-                    self.d_dout =
-                        self.data[(self.dst_lo.read(now) % self.depth) as usize].clone();
+                    self.d_dout = self.data[(self.dst_lo.read(now) % self.depth) as usize].clone();
                 }
                 self.dst_lo.write(self.dst_lo_plus_1, now);
                 self.dst_lo_plus_1 = (self.dst_lo_plus_1 + 1) % (2 * self.depth);
@@ -5696,8 +5797,7 @@ impl SyncFifo {
                 (self.dst_hi + 2 * self.depth - self.dst_lo.read(now)) & self.mask
             };
             if self.depth != 1 && !self.not_empty && self.dst_hi != self.dst_lo.read(now) {
-                self.d_dout =
-                    self.data[(self.dst_lo.read(now) % self.depth) as usize].clone();
+                self.d_dout = self.data[(self.dst_lo.read(now) % self.depth) as usize].clone();
                 self.dst_lo.write(self.dst_lo_plus_1, now);
                 self.dst_lo_plus_1 = (self.dst_lo_plus_1 + 1) % (2 * self.depth);
                 self.not_empty = true;
@@ -5727,9 +5827,7 @@ impl Prim for SyncFifo {
                 Value::from_u64(1, self.meth_not_empty() as u64)
             }
             "first" => self.d_dout.clone(),
-            "notFull" | "sNotFull" | "RDY_enq" => {
-                Value::from_u64(1, self.meth_not_full() as u64)
-            }
+            "notFull" | "sNotFull" | "RDY_enq" => Value::from_u64(1, self.meth_not_full() as u64),
             "sCount" => Value::from_u64(self.idx_bits.max(1), self.s_count),
             "dCount" => Value::from_u64(self.idx_bits.max(1), self.d_count),
             "RDY_sClear" => Value::from_u64(1, self.s_clr.rdy_send() as u64),
@@ -5763,7 +5861,9 @@ impl Prim for SyncFifo {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk_src" => self.clk_src(now),
             "clk_dst" => self.clk_dst(now),
@@ -5928,7 +6028,11 @@ impl Bram {
         3 + self.wen_words() + 4 * self.vwords()
     }
     fn port_base(&self, port_b: bool) -> usize {
-        if port_b { self.port_words() } else { 0 }
+        if port_b {
+            self.port_words()
+        } else {
+            0
+        }
     }
     fn data_base(&self) -> usize {
         self.port_words() * if self.dual { 2 } else { 1 }
@@ -6100,8 +6204,7 @@ impl Bram {
             } else {
                 cur.clone()
             };
-            let (num_wens, chunk_size, width) =
-                (self.num_wens, self.chunk_size, self.width);
+            let (num_wens, chunk_size, width) = (self.num_wens, self.chunk_size, self.width);
             let merge_lanes = |base: Value, me: &BramPort| {
                 let mut r = base;
                 for n in 0..num_wens {
@@ -6156,13 +6259,7 @@ impl Prim for Bram {
     fn class_name(&self) -> &'static str {
         "Bram"
     }
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        clk: usize,
-        clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, clk: usize, clk_vcd_id: u32) {
         // bs_prim_mod_bram.h:756-797: ports only, never memory contents
         let mut n = w.reserve_ids(if self.dual { 10 } else { 5 });
         self.vcd_base = n;
@@ -6221,7 +6318,11 @@ impl Prim for Bram {
             let p = &p;
             let back = if pi == 0 { &mut back_a } else { &mut back_b };
             let en = p.upd_at == now;
-            let dout = if self.pipelined { p.out2.clone() } else { p.out.clone() };
+            let dout = if self.pipelined {
+                p.out2.clone()
+            } else {
+                p.out.clone()
+            };
             match dt {
                 D::Xs => {
                     w.write_x(num, 1, now);
@@ -6314,7 +6415,11 @@ impl Prim for Bram {
                 return self.rd_val(off, self.width, w);
             }
             let p = if port_b { &self.b } else { &self.a };
-            if self.pipelined { p.out2.clone() } else { p.out.clone() }
+            if self.pipelined {
+                p.out2.clone()
+            } else {
+                p.out.clone()
+            }
         };
         match method {
             "read" | "a_read" => read(false),
@@ -6338,7 +6443,9 @@ impl Prim for Bram {
         }
     }
     fn tick(&mut self, port: &str, now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "clk" | "clkA" => self.clk(false, now),
             "clkB" => self.clk(true, now),
@@ -6427,16 +6534,14 @@ impl Prim for Bram {
     fn runcore_fill_region(&mut self, key: u64) {
         for addr in 0..=self.hi_addr {
             let w = runcore_fill_word(key, addr);
-            let v =
-                Value::from_limbs64(self.width.max(1), vec![w; self.vwords()]);
+            let v = Value::from_limbs64(self.width.max(1), vec![w; self.vwords()]);
             self.mem_set(addr, v);
         }
     }
     fn runcore_region_is(&self, key: u64) -> bool {
         (0..=self.hi_addr).all(|addr| {
             let w = runcore_fill_word(key, addr);
-            let v =
-                Value::from_limbs64(self.width.max(1), vec![w; self.vwords()]);
+            let v = Value::from_limbs64(self.width.max(1), vec![w; self.vwords()]);
             self.mem_get(addr) == v
         })
     }
@@ -6454,8 +6559,6 @@ impl Prim for Bram {
         });
     }
 }
-
-
 
 // ===============
 // VCD helpers shared by flat single-var prims (MOD_Reg-style):
@@ -6527,7 +6630,9 @@ impl Prim for ResetMux {
         }
     }
     fn tick(&mut self, port: &str, _now: u64, _clk_val: bool, gate: bool) {
-        if !gate { return; }
+        if !gate {
+            return;
+        }
         match port {
             "xclk" => {
                 if self.new_sel_a != self.sel_a {
@@ -6555,7 +6660,11 @@ impl Prim for ResetMux {
             self.select_changed = false;
             self.sel_a = self.new_sel_a;
             if self.a_asserted != self.b_asserted {
-                let v = if self.sel_a { self.a_asserted } else { self.b_asserted };
+                let v = if self.sel_a {
+                    self.a_asserted
+                } else {
+                    self.b_asserted
+                };
                 self.pending.push((v, false));
             }
         }
@@ -6575,7 +6684,11 @@ struct ResetEither {
 
 impl ResetEither {
     fn new() -> ResetEither {
-        ResetEither { a_asserted: false, b_asserted: false, pending: Vec::new() }
+        ResetEither {
+            a_asserted: false,
+            b_asserted: false,
+            pending: Vec::new(),
+        }
     }
 }
 
@@ -6604,7 +6717,6 @@ impl Prim for ResetEither {
         std::mem::take(&mut self.pending)
     }
 }
-
 
 /// MOD_GatedClock: a gate-condition register (async-reset, ConfigReg-like
 /// latch) whose output gate updates while the input clock is low.
@@ -6644,13 +6756,7 @@ impl GatedClock {
 }
 
 impl Prim for GatedClock {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         // bs_prim_mod_gatedclock.h: one "new_gate" var = CLK_GATE_OUT
         self.vcd_id = w.reserve_ids(1);
         w.scope_start(name, None);
@@ -6771,13 +6877,7 @@ impl RegTwo {
 }
 
 impl Prim for RegTwo {
-    fn vcd_defs(
-        &mut self,
-        w: &mut crate::vcd::Vcd,
-        name: &str,
-        _clk: usize,
-        _clk_vcd_id: u32,
-    ) {
+    fn vcd_defs(&mut self, w: &mut crate::vcd::Vcd, name: &str, _clk: usize, _clk_vcd_id: u32) {
         self.vcd_id = vcd_flat_defs(w, name, self.value.width);
     }
     fn vcd_dump(

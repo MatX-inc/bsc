@@ -17,10 +17,7 @@ impl StartupLap {
     #[cold]
     #[inline(never)]
     pub(crate) fn new() -> Self {
-        Self(
-            std::env::var_os("TRS_STARTUP_TIME")
-                .map(|_| std::time::Instant::now()),
-        )
+        Self(std::env::var_os("TRS_STARTUP_TIME").map(|_| std::time::Instant::now()))
     }
     #[cold]
     #[inline(never)]
@@ -63,16 +60,15 @@ pub fn load_file_or_code(
     // the baked code.  Loading from the .bir recomputes the identity
     // from this run's bindings and the stamp check does its job.
     if let Some(so) = code.filter(|_| binds.is_empty()) {
-        if let Some((hash, design)) = crate::jit::aot_embedded_design(
-            &crate::jit::ArtifactSource::Path(so.into()),
-        ) {
+        if let Some((hash, design)) =
+            crate::jit::aot_embedded_design(&crate::jit::ArtifactSource::Path(so.into()))
+        {
             sl.lap("design load (artifact-embedded snap)");
             let mut interp = Interp::new_bound(design, binds)?;
             sl.lap("interp build (instantiate)");
             interp.bir_hash = hash ^ interp.top_binds_salt();
             interp.fe.plusargs = plusargs.to_vec();
-            interp.wave_pending =
-                vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
+            interp.wave_pending = vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
             // user BDPI code stays a companion .so: prefer the
             // artifact's sibling, fall back to the .bir's
             let stems = [
@@ -141,9 +137,7 @@ pub fn load_fragments_fresh(
     let mut birs = Vec::with_capacity(paths.len());
     for p in paths {
         let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
-        birs.push(
-            trs_ir::Bir::decode(&bytes).map_err(|e| format!("{p}: {e}"))?,
-        );
+        birs.push(trs_ir::Bir::decode(&bytes).map_err(|e| format!("{p}: {e}"))?);
     }
     sl.lap("fragment read+decode");
     let design = trs_ir::link::assemble(birs).map_err(|e| e.to_string())?;
@@ -186,16 +180,15 @@ fn library_dir() -> Option<std::path::PathBuf> {
 
 fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
     let first = trs_ir::Bir::decode(bytes).map_err(|e| format!("{path}: {e}"))?;
-    let dir = std::path::Path::new(path).parent().unwrap_or(std::path::Path::new("."));
+    let dir = std::path::Path::new(path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
 
     // Modules and BDPI imports are chased the same way -- each is a
     // name the file references and a .bir beside it -- but they are
     // separate namespaces, so a module never satisfies an import.
-    let strs = |v: Vec<&str>| -> Vec<String> {
-        v.into_iter().map(|s| s.to_string()).collect()
-    };
-    let mut have: std::collections::HashSet<(bool, String)> =
-        std::collections::HashSet::new();
+    let strs = |v: Vec<&str>| -> Vec<String> { v.into_iter().map(|s| s.to_string()).collect() };
+    let mut have: std::collections::HashSet<(bool, String)> = std::collections::HashSet::new();
     let mut want: Vec<(bool, String)> = Vec::new();
     let mut note = |bir: &trs_ir::Bir,
                     have: &mut std::collections::HashSet<(bool, String)>,
@@ -204,7 +197,9 @@ fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
         have.extend(strs(bir.foreign_names()).into_iter().map(|n| (true, n)));
         want.extend(strs(bir.extern_names()).into_iter().map(|n| (false, n)));
         want.extend(
-            strs(bir.foreign_call_names()).into_iter().map(|n| (true, n)),
+            strs(bir.foreign_call_names())
+                .into_iter()
+                .map(|n| (true, n)),
         );
     };
     note(&first, &mut have, &mut want);
@@ -233,8 +228,7 @@ fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
                 }
             }
         };
-        let bir = trs_ir::Bir::decode(&b)
-            .map_err(|e| format!("{}: {e}", p.display()))?;
+        let bir = trs_ir::Bir::decode(&b).map_err(|e| format!("{}: {e}", p.display()))?;
         note(&bir, &mut have, &mut want);
         birs.push(bir);
     }
@@ -257,8 +251,7 @@ fn load_file_inner(
     // skip the CBOR parse when every snap_decode gate passes (all
     // gates run BEFORE the payload deserialize, so a stale or corrupt
     // snap costs a header read, not a decode).
-    let snap =
-        format!("{}.birsnap", path.strip_suffix(".bir").unwrap_or(path));
+    let snap = format!("{}.birsnap", path.strip_suffix(".bir").unwrap_or(path));
     // NO threads here (or anywhere before the event loop): spawning
     // even one short-lived thread permanently drops glibc malloc's
     // single-threaded fast path, which cost interp-fallback designs
@@ -288,7 +281,11 @@ fn load_file_inner(
             d
         }
     };
-    let hash = if use_snap { hash } else { bir_fingerprint(&design.encode()) };
+    let hash = if use_snap {
+        hash
+    } else {
+        bir_fingerprint(&design.encode())
+    };
     // BIR-level Extract-of-Concat folding (TRS_BIR_FOLD).  Off by
     // default: it fires on a small minority of concats and shows no
     // wall-clock win yet -- see trs_ir::fold.  TRS_FOLD_STATS prints the
@@ -331,14 +328,17 @@ fn finish_load(
         .filter(|p| !interp.consumed_plus().iter().any(|c| c == *p))
         .cloned()
         .collect();
-    interp.wave_pending =
-        vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
+    interp.wave_pending = vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
     // user BDPI code lives in a companion shared object next to the .bir
     let so = path.strip_suffix(".bir").unwrap_or(path).to_string() + ".bdpi.so";
     if std::path::Path::new(&so).exists() {
         // dlopen treats a bare filename as a library-search-path lookup;
         // make the sibling path explicit
-        let so = if so.contains('/') { so } else { format!("./{so}") };
+        let so = if so.contains('/') {
+            so
+        } else {
+            format!("./{so}")
+        };
         interp.load_bdpi(&so)?;
     }
     Ok(interp)
@@ -353,8 +353,7 @@ impl Interp {
     #[cold]
     #[inline(never)]
     pub fn write_bir(&self, path: &str) -> Result<(), String> {
-        std::fs::write(path, self.d.encode())
-            .map_err(|e| format!("{path}: {e}"))
+        std::fs::write(path, self.d.encode()).map_err(|e| format!("{path}: {e}"))
     }
 
     /// Write the decoded-design snapshot sidecar (`Design::snap_encode`)

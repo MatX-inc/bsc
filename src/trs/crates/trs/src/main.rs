@@ -86,10 +86,7 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     // -c/-f: the debug/script tier — stock bluetcl + the capi shim
     // (bluesim.tcl), exactly the wrapper's dispatch
     let capi = dir.join(format!("{name}.capi.so"));
-    if user_args.iter().any(|a| a == "-c" || a == "-f")
-        && capi.is_file()
-        && !top.is_empty()
-    {
+    if user_args.iter().any(|a| a == "-c" || a == "-f") && capi.is_file() && !top.is_empty() {
         let bsdir = std::process::Command::new("bluetcl")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -107,16 +104,14 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
                     .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
             });
         if let Some(bsdir) = bsdir.filter(|b| !b.is_empty()) {
-            let e = std::process::Command::new(format!(
-                "{bsdir}/tcllib/bluespec/bluesim.tcl"
-            ))
-            .arg(&capi)
-            .arg(&top)
-            .arg("--script_name")
-            .arg(&name)
-            .args(user_args)
-            .env("TRS_CAPI_FORMATS", &formats)
-            .exec();
+            let e = std::process::Command::new(format!("{bsdir}/tcllib/bluespec/bluesim.tcl"))
+                .arg(&capi)
+                .arg(&top)
+                .arg("--script_name")
+                .arg(&name)
+                .args(user_args)
+                .env("TRS_CAPI_FORMATS", &formats)
+                .exec();
             eprintln!("trs: bluesim.tcl: {e}");
             std::process::exit(2);
         }
@@ -184,7 +179,12 @@ fn main() -> ExitCode {
     if let Some(synth) = artifact_dispatch(&args) {
         args = synth;
     }
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         // trs features: print the compiled-in feature set, one per line
         // (the testsuite probes for "jit" to decide whether link-artifact
         // checks are supported)
@@ -200,16 +200,12 @@ fn main() -> ExitCode {
         // trs ir dump: the decoded design.  --multi-fragments dumps
         // what the same set of fragments would link to, which is the
         // only way to see the assembled design without building it.
-        ["ir", "dump", "--multi-fragments", paths @ ..]
-            if !paths.is_empty() =>
-        {
+        ["ir", "dump", "--multi-fragments", paths @ ..] if !paths.is_empty() => {
             let mut birs = Vec::with_capacity(paths.len());
             for p in paths {
-                let b = std::fs::read(p).map_err(|e| format!("{p}: {e}")).and_then(
-                    |b| {
-                        trs_ir::Bir::decode(&b).map_err(|e| format!("{p}: {e}"))
-                    },
-                );
+                let b = std::fs::read(p)
+                    .map_err(|e| format!("{p}: {e}"))
+                    .and_then(|b| trs_ir::Bir::decode(&b).map_err(|e| format!("{p}: {e}")));
                 match b {
                     Ok(b) => birs.push(b),
                     Err(e) => {
@@ -235,9 +231,8 @@ fn main() -> ExitCode {
         // prints as the fragment it is.
         ["ir", "dump", path] => match std::fs::read(path)
             .map_err(|e| format!("{path}: {e}"))
-            .and_then(|b| {
-                trs_ir::Bir::decode(&b).map_err(|e| format!("{path}: {e}"))
-            }) {
+            .and_then(|b| trs_ir::Bir::decode(&b).map_err(|e| format!("{path}: {e}")))
+        {
             Ok(bir) if matches!(bir.body, trs_ir::BirBody::Fragment(_)) => {
                 println!("{bir:#?}");
                 ExitCode::SUCCESS
@@ -303,15 +298,13 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
-                    p if p.starts_with('+') => {
-                        match trs_interp::parse_bind(&p[1..], true) {
-                            Ok(b) => binds.push(b),
-                            Err(e) => {
-                                eprintln!("trs link: {e}");
-                                return ExitCode::from(2);
-                            }
+                    p if p.starts_with('+') => match trs_interp::parse_bind(&p[1..], true) {
+                        Ok(b) => binds.push(b),
+                        Err(e) => {
+                            eprintln!("trs link: {e}");
+                            return ExitCode::from(2);
                         }
-                    }
+                    },
                     "--multi-fragments" => {}
                     "--bdpi" | "-l" | "-L" => {
                         let Some(v) = it.next() else {
@@ -348,9 +341,9 @@ fn main() -> ExitCode {
                     // stay as the internal spelling — a flag wins by
                     // writing the env here, single-threaded, before
                     // any planning or workers.
-                    "--cc" | "--edge-ssa" | "--aot-one-module" | "--jit-split"
-                    | "--jit-opt" | "--jit-pipeline" | "--jit-threads"
-                    | "--outline" | "--outline-factor" | "--capi-lib" => {
+                    "--cc" | "--edge-ssa" | "--aot-one-module" | "--jit-split" | "--jit-opt"
+                    | "--jit-pipeline" | "--jit-threads" | "--outline" | "--outline-factor"
+                    | "--capi-lib" => {
                         let key = match *a {
                             "--cc" => "TRS_CC",
                             "--edge-ssa" => "TRS_EDGE_SSA",
@@ -392,9 +385,8 @@ fn main() -> ExitCode {
             // beside -- the same role the single whole-design .bir
             // plays
             let path = *frags.last().expect("at least one positional");
-            let base = out.unwrap_or_else(|| {
-                format!("{}.cexe", path.strip_suffix(".bir").unwrap_or(path))
-            });
+            let base = out
+                .unwrap_or_else(|| format!("{}.cexe", path.strip_suffix(".bir").unwrap_or(path)));
             // a .mem is an input to the simulation, not to the build:
             // the reference reads a load file when the model object is
             // constructed, so the artifact written here opens its own
@@ -412,18 +404,10 @@ fn main() -> ExitCode {
             // given, so they all go through here.  A fragment set has
             // no snapshot to prefer: the sidecar is keyed by one
             // file's fingerprint.
-            let load = |binds: &[trs_interp::TopBind], fresh: bool| {
-                match (multi, fresh) {
-                    (true, _) => trs_interp::startup::load_fragments_fresh(
-                        &frags, &[], binds, None,
-                    ),
-                    (false, true) => trs_interp::startup::load_file_fresh(
-                        path, &[], binds, None,
-                    ),
-                    (false, false) => {
-                        trs_interp::startup::load_file(path, &[], binds, None)
-                    }
-                }
+            let load = |binds: &[trs_interp::TopBind], fresh: bool| match (multi, fresh) {
+                (true, _) => trs_interp::startup::load_fragments_fresh(&frags, &[], binds, None),
+                (false, true) => trs_interp::startup::load_file_fresh(path, &[], binds, None),
+                (false, false) => trs_interp::startup::load_file(path, &[], binds, None),
             };
             let mut interp = match load(&binds, true) {
                 Ok(i) => i,
@@ -436,14 +420,16 @@ fn main() -> ExitCode {
             // nor auto-fire always_enabled methods, and a --exe PIE
             // adopts its embedded identity (no per-run rebind check):
             // both artifact forms refuse such designs (v1)
-            if (interactive || exe)
-                && (!binds.is_empty() || interp.has_autofire())
-            {
+            if (interactive || exe) && (!binds.is_empty() || interp.has_autofire()) {
                 eprintln!(
                     "trs link: {} does not support designs with \
                      top-level bindings or always_enabled top methods \
                      (batch artifacts only)",
-                    if interactive { "--interactive" } else { "--exe" }
+                    if interactive {
+                        "--interactive"
+                    } else {
+                        "--exe"
+                    }
                 );
                 return ExitCode::FAILURE;
             }
@@ -519,9 +505,7 @@ fn main() -> ExitCode {
                         )
                     }
                 }
-                return link_interactive(
-                    design_bir, &base, interp.top_name(), &fmt_arg,
-                );
+                return link_interactive(design_bir, &base, interp.top_name(), &fmt_arg);
             }
             if exe {
                 // artifact-as-executable: <base> becomes a real PIE
@@ -591,8 +575,7 @@ fn main() -> ExitCode {
             }
             // user BDPI code travels with the artifact: load_file looks
             // for <base>.bdpi.so next to the (renamed) .bir
-            let bdpi_src =
-                format!("{}.bdpi.so", path.strip_suffix(".bir").unwrap_or(path));
+            let bdpi_src = format!("{}.bdpi.so", path.strip_suffix(".bir").unwrap_or(path));
             let bdpi_dst = format!("{base}.bdpi.so");
             if std::path::Path::new(&bdpi_src).exists()
                 && std::path::Path::new(&bdpi_src).canonicalize().ok()
@@ -711,8 +694,7 @@ fn main() -> ExitCode {
             // baked link options for the argv[0] dispatch (one ~60-byte
             // read replaces the wrapper's two command-substitution
             // forks); written for both artifact forms
-            let mut opts =
-                format!("top={top}\nformats={fmt_arg}\nsplit={split}\n");
+            let mut opts = format!("top={top}\nformats={fmt_arg}\nsplit={split}\n");
             for b in &binds {
                 opts.push_str(&format!("bind={}={}\n", b.name, b.value));
             }
@@ -731,9 +713,7 @@ fn main() -> ExitCode {
                 Some(img) => {
                     let t = format!("{base}.arena.tmp");
                     let ok = std::fs::write(&t, img)
-                        .and_then(|()| {
-                            std::fs::rename(&t, format!("{base}.arena"))
-                        })
+                        .and_then(|()| std::fs::rename(&t, format!("{base}.arena")))
                         .is_ok();
                     if !ok {
                         eprintln!("trs link: note: {base}.arena not written");
@@ -762,8 +742,7 @@ fn main() -> ExitCode {
                 // replaces the only file-dependent state.
                 let sidecar = format!("{base}.arena");
                 let bake = (|| -> Result<bool, String> {
-                    let mut b1 =
-                        trs_interp::startup::load_file(design_bir, &[], &[], None)?;
+                    let mut b1 = trs_interp::startup::load_file(design_bir, &[], &[], None)?;
                     b1.aot_request_code(format!("{base}.so").into());
                     if !b1.runcore_has_loads() {
                         let Some(cap) = b1.runcore_bake_capture(None) else {
@@ -775,24 +754,15 @@ fn main() -> ExitCode {
                             None,
                         );
                     }
-                    let Some(a) =
-                        b1.runcore_bake_capture(Some(0x5555_5555_5555_5555))
-                    else {
+                    let Some(a) = b1.runcore_bake_capture(Some(0x5555_5555_5555_5555)) else {
                         return Ok(false);
                     };
-                    let mut b2 =
-                        trs_interp::startup::load_file(design_bir, &[], &[], None)?;
+                    let mut b2 = trs_interp::startup::load_file(design_bir, &[], &[], None)?;
                     b2.aot_request_code(format!("{base}.so").into());
-                    let Some(b) =
-                        b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
-                    else {
+                    let Some(b) = b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA)) else {
                         return Ok(false);
                     };
-                    trs_interp::runcore_bake_commit(
-                        std::path::Path::new(&sidecar),
-                        &a,
-                        Some(&b),
-                    )
+                    trs_interp::runcore_bake_commit(std::path::Path::new(&sidecar), &a, Some(&b))
                 })();
                 if let Err(e) = bake {
                     eprintln!("trs link: note: window bake skipped: {e}");
@@ -839,10 +809,7 @@ fn main() -> ExitCode {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        &base,
-                        std::fs::Permissions::from_mode(0o755),
-                    );
+                    let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755));
                 }
             }
             ExitCode::SUCCESS
@@ -882,9 +849,8 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            let out = out.unwrap_or_else(|| {
-                if rt { "libtrs_rt.so" } else { "libtrs_capi.so" }.to_string()
-            });
+            let out = out
+                .unwrap_or_else(|| if rt { "libtrs_rt.so" } else { "libtrs_capi.so" }.to_string());
             let Some(lib) = find_staticlib(if rt {
                 ("TRS_RT_LIB", "libtrs_rt.a")
             } else {
@@ -898,23 +864,25 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             };
-            let tmp = std::env::temp_dir()
-                .join(format!("trs-capi-so-{}", std::process::id()));
+            let tmp = std::env::temp_dir().join(format!("trs-capi-so-{}", std::process::id()));
             if let Err(e) = std::fs::create_dir_all(&tmp) {
                 eprintln!("trs capi-so: {}: {e}", tmp.display());
                 return ExitCode::FAILURE;
             }
             let map = tmp.join("export.map");
             // no new_MODEL_* here: the per-design shims provide those
-            if let Err(e) = std::fs::write(
-                &map,
-                "{ global: bk_*; trs_*; local: *; };\n",
-            ) {
+            if let Err(e) = std::fs::write(&map, "{ global: bk_*; trs_*; local: *; };\n") {
                 eprintln!("trs capi-so: write {}: {e}", map.display());
                 return ExitCode::FAILURE;
             }
-            let r = capi_cc_link(&out, &[], &lib, &map,
-                                 &["bk_*", "trs_*", "new_MODEL_*"], !rt);
+            let r = capi_cc_link(
+                &out,
+                &[],
+                &lib,
+                &map,
+                &["bk_*", "trs_*", "new_MODEL_*"],
+                !rt,
+            );
             let _ = std::fs::remove_dir_all(&tmp);
             match r {
                 Ok(()) => {
@@ -938,8 +906,7 @@ fn main() -> ExitCode {
             // binds when NAME is a top-level argument and stays an
             // ordinary plusarg otherwise (existing designs unchanged)
             let mut binds: Vec<trs_interp::TopBind> = Vec::new();
-            let mut wave: Option<(trs_interp::WaveFormat, Option<String>)> =
-                None;
+            let mut wave: Option<(trs_interp::WaveFormat, Option<String>)> = None;
             let mut vcd_file: Option<String> = None;
             let mut code_so: Option<String> = None;
             // (vcd, fst) writers this model carries; None = the
@@ -952,23 +919,19 @@ fn main() -> ExitCode {
             // DejaGnu suite drive it); env-armed runs suppress the
             // skip notes (announce=false) because byte-compare
             // harnesses capture stderr.
-            let mut selfcheck: Option<(u64, bool)> =
-                std::env::var_os("TRS_SELFCHECK").map(|_| {
-                    (
-                        std::env::var("TRS_SELFCHECK_EVERY")
-                            .ok()
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(1000),
-                        false,
-                    )
-                });
+            let mut selfcheck: Option<(u64, bool)> = std::env::var_os("TRS_SELFCHECK").map(|_| {
+                (
+                    std::env::var("TRS_SELFCHECK_EVERY")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1000),
+                    false,
+                )
+            });
             let mut script_cmds = String::new();
             // bluesim.tcl's usage text, printed for -h and after the
             // deprecated-flag notices; the driver exits 0 in both cases
-            let script = path
-                .strip_suffix(".bir")
-                .unwrap_or(path)
-                .to_string();
+            let script = path.strip_suffix(".bir").unwrap_or(path).to_string();
             let usage_exit = || -> ExitCode {
                 println!("Usage: {script} [opts]");
                 println!();
@@ -994,18 +957,13 @@ fn main() -> ExitCode {
                     // deprecated interactive-debug flags: notice + usage,
                     // exit 0 (matching bluesim.tcl)
                     f @ ("-s" | "-ss" | "-r" | "-cc") => {
-                        println!(
-                            "Error: {f} is deprecated in favor of scriptable debug"
-                        );
+                        println!("Error: {f} is deprecated in favor of scriptable debug");
                         println!("See entry #031 in the KPnS document.");
                         return usage_exit();
                     }
                     "-h" | "-help" | "--help" => return usage_exit(),
                     "-v" => {
-                        println!(
-                            "trs {} (TRS runtime)",
-                            env!("CARGO_PKG_VERSION")
-                        );
+                        println!("trs {} (TRS runtime)", env!("CARGO_PKG_VERSION"));
                         return ExitCode::SUCCESS;
                     }
                     "--script_name" => {
@@ -1046,16 +1004,12 @@ fn main() -> ExitCode {
                         Some(n) => match n.parse::<u64>() {
                             Ok(n) => selfcheck = Some((n, true)),
                             Err(_) => {
-                                eprintln!(
-                                    "Error: --selfcheck-every requires a number"
-                                );
+                                eprintln!("Error: --selfcheck-every requires a number");
                                 return ExitCode::from(2);
                             }
                         },
                         None => {
-                            eprintln!(
-                                "Error: --selfcheck-every requires a number"
-                            );
+                            eprintln!("Error: --selfcheck-every requires a number");
                             return ExitCode::from(2);
                         }
                     },
@@ -1189,8 +1143,7 @@ fn main() -> ExitCode {
             let so_direct;
             let (path, code_so): (&str, Option<String>) =
                 if path.ends_with(".so") && code_so.is_none() {
-                    so_direct =
-                        path.strip_suffix(".so").unwrap().to_string() + ".bir";
+                    so_direct = path.strip_suffix(".so").unwrap().to_string() + ".bir";
                     (so_direct.as_str(), Some(path.to_string()))
                 } else {
                     (path as &str, code_so)
@@ -1233,46 +1186,85 @@ fn main() -> ExitCode {
 /// The dlsym'd bk surface (docs/TCL-CAPI.md) — the -u keep list for
 /// the interactive .so link.
 const BK_EXPORTS: &[&str] = &[
-    "bk_init", "bk_shutdown", "bk_now", "bk_set_timescale", "bk_version",
-    "bk_append_argument", "bk_define_clock", "bk_num_clocks",
-    "bk_get_nth_clock", "bk_clock_name", "bk_get_clock_by_name",
-    "bk_clock_initial_value", "bk_clock_first_edge", "bk_clock_duration",
-    "bk_clock_val", "bk_clock_cycle_count", "bk_clock_edge_count",
-    "bk_clock_last_edge", "bk_quit_after_edge", "bk_schedule_ui_event",
-    "bk_remove_ui_event", "bk_set_interactive", "bk_advance",
-    "bk_is_running", "bk_sync", "bk_abort_now", "bk_finished",
-    "bk_exit_status", "bk_fataled", "bk_top_symbol", "bk_lookup_symbol",
-    "bk_get_size", "bk_get_key", "bk_is_module", "bk_is_rule",
-    "bk_is_single_value", "bk_is_value_range", "bk_peek_symbol_value",
-    "bk_get_range_min_addr", "bk_get_range_max_addr",
-    "bk_peek_range_value", "bk_num_symbols", "bk_get_nth_symbol",
-    "bk_set_VCD_file", "bk_get_VCD_file_name", "bk_enable_VCD_dumping",
-    "bk_disable_VCD_dumping", "bk_set_waveform_format",
+    "bk_init",
+    "bk_shutdown",
+    "bk_now",
+    "bk_set_timescale",
+    "bk_version",
+    "bk_append_argument",
+    "bk_define_clock",
+    "bk_num_clocks",
+    "bk_get_nth_clock",
+    "bk_clock_name",
+    "bk_get_clock_by_name",
+    "bk_clock_initial_value",
+    "bk_clock_first_edge",
+    "bk_clock_duration",
+    "bk_clock_val",
+    "bk_clock_cycle_count",
+    "bk_clock_edge_count",
+    "bk_clock_last_edge",
+    "bk_quit_after_edge",
+    "bk_schedule_ui_event",
+    "bk_remove_ui_event",
+    "bk_set_interactive",
+    "bk_advance",
+    "bk_is_running",
+    "bk_sync",
+    "bk_abort_now",
+    "bk_finished",
+    "bk_exit_status",
+    "bk_fataled",
+    "bk_top_symbol",
+    "bk_lookup_symbol",
+    "bk_get_size",
+    "bk_get_key",
+    "bk_is_module",
+    "bk_is_rule",
+    "bk_is_single_value",
+    "bk_is_value_range",
+    "bk_peek_symbol_value",
+    "bk_get_range_min_addr",
+    "bk_get_range_max_addr",
+    "bk_peek_range_value",
+    "bk_num_symbols",
+    "bk_get_nth_symbol",
+    "bk_set_VCD_file",
+    "bk_get_VCD_file_name",
+    "bk_enable_VCD_dumping",
+    "bk_disable_VCD_dumping",
+    "bk_set_waveform_format",
 ];
 
 /// A runtime staticlib (libtrs_capi.a or libtrs_rt.a): env override,
 /// then alongside the binary.
 fn find_staticlib((env, name): (&str, &str)) -> Option<std::path::PathBuf> {
-    std::env::var(env).ok().map(std::path::PathBuf::from).or_else(|| {
-        let exe = std::env::current_exe().ok()?;
-        let d = exe.parent()?;
-        [d.join(name), d.join("../lib").join(name)]
-            .into_iter()
-            .find(|p| p.exists())
-    })
+    std::env::var(env)
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let exe = std::env::current_exe().ok()?;
+            let d = exe.parent()?;
+            [d.join(name), d.join("../lib").join(name)]
+                .into_iter()
+                .find(|p| p.exists())
+        })
 }
 
 /// The shared libtrs_capi.so (built once by `trs capi-so`): env
 /// override, then alongside the binary — the fast link's shim tier
 /// exists only when this is installed.
 fn find_capi_shared() -> Option<std::path::PathBuf> {
-    std::env::var("TRS_CAPI_SO").ok().map(std::path::PathBuf::from).or_else(|| {
-        let exe = std::env::current_exe().ok()?;
-        let d = exe.parent()?;
-        [d.join("libtrs_capi.so"), d.join("../lib/libtrs_capi.so")]
-            .into_iter()
-            .find(|p| p.exists())
-    })
+    std::env::var("TRS_CAPI_SO")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let exe = std::env::current_exe().ok()?;
+            let d = exe.parent()?;
+            [d.join("libtrs_capi.so"), d.join("../lib/libtrs_capi.so")]
+                .into_iter()
+                .find(|p| p.exists())
+        })
 }
 
 /// The cc link shared by the fat `--interactive` .so and the
@@ -1293,8 +1285,8 @@ fn capi_cc_link(
     // the export list's format is the host's business, not the
     // caller's: a version script and an exported-symbols list say the
     // same thing in different shapes
-    let export_flags = hostlink::export_list(map, keep)
-        .map_err(|e| format!("write {}: {e}", map.display()))?;
+    let export_flags =
+        hostlink::export_list(map, keep).map_err(|e| format!("write {}: {e}", map.display()))?;
     let mut cc = std::process::Command::new(trs_interp::cc_tool());
     cc.arg("-shared").arg("-fPIC").arg("-o").arg(out);
     for i in inputs {
@@ -1345,11 +1337,11 @@ fn capi_cc_link(
         // compile time; the environment at run time belongs to whoever
         // is running trs and need not have it set at all.  A runtime
         // value still wins, for moving an install.
-        let prefix = |p: &str| {
-            std::path::Path::new(p).join("bin").join("llvm-config")
-        };
+        let prefix = |p: &str| std::path::Path::new(p).join("bin").join("llvm-config");
         let cfg = [
-            std::env::var("LLVM_SYS_181_PREFIX").ok().map(|p| prefix(&p)),
+            std::env::var("LLVM_SYS_181_PREFIX")
+                .ok()
+                .map(|p| prefix(&p)),
             option_env!("LLVM_SYS_181_PREFIX").map(prefix),
             Some(std::path::PathBuf::from("llvm-config-18")),
         ]
@@ -1466,8 +1458,7 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
     let Ok(bir_abs) = std::path::Path::new(bir_path).canonicalize() else {
         return note(format!("cannot resolve {bir_path}"));
     };
-    let tmp =
-        std::env::temp_dir().join(format!("trs-capi-shim-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("trs-capi-shim-{}", std::process::id()));
     if let Err(e) = std::fs::create_dir_all(&tmp) {
         return note(format!("{}: {e}", tmp.display()));
     }
@@ -1540,12 +1531,7 @@ fn write_capi_shim(bir_path: &str, base: &str, top: &str, compiled: bool) -> boo
 /// with the BIR embedded via incbin) and <base>, the same bluesim.tcl
 /// wrapper the reference emits — `sim load`-able by stock bluetcl and
 /// runnable by the interactive testsuite unchanged.
-fn link_interactive(
-    bir_path: &str,
-    base: &str,
-    top: &str,
-    formats: &str,
-) -> ExitCode {
+fn link_interactive(bir_path: &str, base: &str, top: &str, formats: &str) -> ExitCode {
     let fail = |m: String| {
         eprintln!("trs link --interactive: {m}");
         ExitCode::FAILURE
@@ -1569,8 +1555,14 @@ fn link_interactive(
     };
     let map = tmp.join("export.map");
     let so = format!("{base}.so");
-    if let Err(e) = capi_cc_link(&so, &[&shim_c, &shim_s], &lib, &map,
-                                 &["bk_*", "trs_*", "new_MODEL_*"], true) {
+    if let Err(e) = capi_cc_link(
+        &so,
+        &[&shim_c, &shim_s],
+        &lib,
+        &map,
+        &["bk_*", "trs_*", "new_MODEL_*"],
+        true,
+    ) {
         return fail(e);
     }
     let _ = std::fs::remove_dir_all(&tmp);
@@ -1740,8 +1732,11 @@ fn run_script(
             ["sim", "run"] | ["sim", "step"] | ["sim", "step", _] => {
                 // the reference kernel refuses to continue after $finish
                 if interp.is_finished() {
-                    let what =
-                        if words[1] == "run" { "run anymore" } else { "step" };
+                    let what = if words[1] == "run" {
+                        "run anymore"
+                    } else {
+                        "step"
+                    };
                     eprintln!("Error: $finish has been called -- cannot {what}");
                     interp.finish();
                     return ExitCode::FAILURE;
@@ -1749,9 +1744,9 @@ fn run_script(
                 // step N advances N default-clock posedges from the
                 // current cycle cursor; run goes to the -m limit
                 let target = match words.as_slice() {
-                    ["sim", "step", n] => {
-                        interp.cycles().saturating_add(n.parse::<u64>().unwrap_or(1))
-                    }
+                    ["sim", "step", n] => interp
+                        .cycles()
+                        .saturating_add(n.parse::<u64>().unwrap_or(1)),
                     ["sim", "step"] => interp.cycles() + 1,
                     _ => max_cycles,
                 };
@@ -1803,9 +1798,7 @@ fn run_script(
                         }
                     }
                     file => {
-                        if interp.wave_set_format(fmt)
-                            && interp.vcd_set_file(Some(file)).is_ok()
-                        {
+                        if interp.wave_set_format(fmt) && interp.vcd_set_file(Some(file)).is_ok() {
                             let _ = interp.vcd_enable();
                         }
                     }

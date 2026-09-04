@@ -41,22 +41,15 @@ extern "C" fn flush_at_exit() {
 
 fn sink() -> &'static Sink {
     SINK.get_or_init(|| {
-        if std::env::var_os("TRS_STDOUT_LINE").is_some()
-            || unsafe { libc::isatty(1) } != 0
-        {
+        if std::env::var_os("TRS_STDOUT_LINE").is_some() || unsafe { libc::isatty(1) } != 0 {
             Sink::Line
         } else {
             // SAFETY: fd 1 is open and stays open for the process
             // lifetime; the File lives in a never-dropped static, so
             // the fd is never closed through it.
-            let f = unsafe {
-                <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(1)
-            };
+            let f = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(1) };
             unsafe { libc::atexit(flush_at_exit) };
-            Sink::Block(Mutex::new(std::io::BufWriter::with_capacity(
-                1 << 16,
-                f,
-            )))
+            Sink::Block(Mutex::new(std::io::BufWriter::with_capacity(1 << 16, f)))
         }
     })
 }

@@ -157,15 +157,14 @@ pub fn link_shared(path: &std::path::Path, soname: &str) -> String {
 /// names what stays global *and* hides the rest, while an exported
 /// symbols list is only the keep-set, with the hiding implied.  Both
 /// take globs, and Mach-O wants each pattern in the linker's spelling.
-pub fn export_list(
-    path: &std::path::Path,
-    keep: &[&str],
-) -> std::io::Result<Vec<String>> {
+pub fn export_list(path: &std::path::Path, keep: &[&str]) -> std::io::Result<Vec<String>> {
     if MACHO {
-        let body: String =
-            keep.iter().map(|p| format!("{}\n", asm_name(p))).collect();
+        let body: String = keep.iter().map(|p| format!("{}\n", asm_name(p))).collect();
         std::fs::write(path, body)?;
-        Ok(vec![format!("-Wl,-exported_symbols_list,{}", path.display())])
+        Ok(vec![format!(
+            "-Wl,-exported_symbols_list,{}",
+            path.display()
+        )])
     } else {
         let body = format!("{{ global: {}; local: *; }};\n", keep.join("; "));
         std::fs::write(path, body)?;
@@ -184,7 +183,10 @@ pub fn incbin_stub(file: &std::path::Path, start: &str, end: &str) -> String {
     let (sec, note) = if MACHO {
         ("\t.section __TEXT,__const\n", "")
     } else {
-        ("\t.section .rodata\n", "\t.section .note.GNU-stack,\"\",@progbits\n")
+        (
+            "\t.section .rodata\n",
+            "\t.section .note.GNU-stack,\"\",@progbits\n",
+        )
     };
     format!(
         "{note}{sec}\t.p2align 3\n\

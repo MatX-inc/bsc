@@ -30,12 +30,8 @@ pub type SigfpeCb = unsafe extern "C" fn();
 /// ConfigRegs, RegFiles, ...): the interpreter unmarshals `args` per
 /// the call-site table, invokes the boxed prim, and writes the result
 /// words to `out`.  Token = rule ordinal << 16 | local call index.
-pub type PrimCb = unsafe extern "C" fn(
-    env: *mut core::ffi::c_void,
-    token: u64,
-    args: *const u64,
-    out: *mut u64,
-);
+pub type PrimCb =
+    unsafe extern "C" fn(env: *mut core::ffi::c_void, token: u64, args: *const u64, out: *mut u64);
 
 thread_local! {
     /// Edge-SSA site census (task #24 M1): static counts of the slot
@@ -70,8 +66,7 @@ pub fn edge_ssa_sites() -> [usize; 5] {
 /// baked-mode (JIT) call emission, set once by the interpreter after
 /// dlopening the user .so.  AOT artifacts use per-function pointer
 /// globals filled by the loader instead.
-pub static BDPI_SYMS: std::sync::OnceLock<HashMap<String, usize>> =
-    std::sync::OnceLock::new();
+pub static BDPI_SYMS: std::sync::OnceLock<HashMap<String, usize>> = std::sync::OnceLock::new();
 /// Address of the stdio-flush callback (phase 0 = flush Rust stdout
 /// before the C call, 1 = fflush(NULL) after) — preserves the byte
 /// interleaving of user printf with $display output, exactly like the
@@ -83,8 +78,7 @@ pub static STDIO_CB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 /// reference's warning (chunks_eq is literal equality upstream).  The
 /// interpreter installs a fn resolving the block base POINTER to the
 /// prim's name, quiet-engine gated.  Unset = silent (unit tests).
-pub static BRAM_WARN: std::sync::OnceLock<fn(block: usize, addr: u64)> =
-    std::sync::OnceLock::new();
+pub static BRAM_WARN: std::sync::OnceLock<fn(block: usize, addr: u64)> = std::sync::OnceLock::new();
 /// One compiled prim call site (resolved by the trampoline).
 #[derive(Clone)]
 pub struct PrimCallSpec {
@@ -299,7 +293,10 @@ pub struct ForeignSpec {
 #[derive(Clone)]
 pub enum FArgSpec {
     Str(StrId),
-    Num { width: u32, signed: bool },
+    Num {
+        width: u32,
+        signed: bool,
+    },
     Real,
     /// A dynamically-selected string: one marshaled word carrying the
     /// string id (static table or runtime-interned) — the decode
@@ -320,8 +317,7 @@ pub struct CompiledSched {
 /// A compiled rule body: (arena, env, region base index, token base).
 /// One compiled body serves every instance of its module type.
 pub struct CompiledExec {
-    pub exec:
-        unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
+    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
     pub foreign_stmts: Vec<ForeignSpec>,
     pub prim_calls: Vec<PrimCallSpec>,
 }
@@ -449,13 +445,21 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
                 // (review finding: unknown tags fell open as Num)
                 args.push(match tag {
                     0 => FArgSpec::Str(a),
-                    1 => FArgSpec::Num { width: a, signed: sg != 0 },
+                    1 => FArgSpec::Num {
+                        width: a,
+                        signed: sg != 0,
+                    },
                     2 => FArgSpec::Real,
                     3 => FArgSpec::StrDyn,
                     _ => return None,
                 });
             }
-            v.push(ForeignSpec { inst, func, ret_width, args });
+            v.push(ForeignSpec {
+                inst,
+                func,
+                ret_width,
+                args,
+            });
         }
         Some(v)
     }
@@ -479,7 +483,14 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
             for _ in 0..argc {
                 arg_widths.push(r(b, i)?);
             }
-            v.push(PrimCallSpec { inst, method, port, arg_widths, ret_width, is_action });
+            v.push(PrimCallSpec {
+                inst,
+                method,
+                port,
+                arg_widths,
+                ret_width,
+                is_action,
+            });
         }
         Some(v)
     }
@@ -557,8 +568,7 @@ pub struct BoundaryReq {
 /// The realized boundary map, built while the functions are emitted
 /// (result widths are known only at lowering): call sites consult it
 /// to divert.  Keyed (mir, method, kind).
-pub type BoundaryMap =
-    HashMap<(usize, StrId, u8), (String, u32, Vec<(StrId, u32)>)>;
+pub type BoundaryMap = HashMap<(usize, StrId, u8), (String, u32, Vec<(StrId, u32)>)>;
 
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
@@ -757,13 +767,7 @@ pub fn bram_tick_args(
 /// # Safety
 /// `arena` must be the design arena; the packed args must describe a
 /// BRAM block passB allocated inside it.
-pub unsafe extern "C" fn trs_bram_tick(
-    arena: *mut u64,
-    now: u64,
-    a0: u64,
-    a1: u64,
-    a2: u64,
-) {
+pub unsafe extern "C" fn trs_bram_tick(arena: *mut u64, now: u64, a0: u64, a1: u64, a2: u64) {
     let base = (a0 & 0xffff_ffff) as usize;
     let port_b = a0 >> 32 & 1 != 0;
     let width = (a1 & 0xffff_ffff) as u32;
@@ -777,8 +781,7 @@ pub unsafe extern "C" fn trs_bram_tick(
     let me = base + if port_b { pw } else { 0 };
     let other = base + if port_b { 0 } else { pw };
     let (o_wens, o_val) = (3, 3 + wenw);
-    let (o_prev, o_out, o_out2) =
-        (3 + wenw + w, 3 + wenw + 2 * w, 3 + wenw + 3 * w);
+    let (o_prev, o_out, o_out2) = (3 + wenw + w, 3 + wenw + 2 * w, 3 + wenw + 3 * w);
     unsafe {
         // single-limb fast path (width <= 64, one enable word — the
         // overwhelmingly common BRAM shape): straight scalar loads and
@@ -799,21 +802,15 @@ pub unsafe extern "C" fn trs_bram_tick(
                 return;
             }
             let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize;
-            let other_hit = dual
-                && *arena.add(other + 2) == now
-                && *arena.add(other + 1) == addr;
+            let other_hit = dual && *arena.add(other + 2) == now && *arena.add(other + 1) == addr;
             if wens != 0 {
                 // collision warning: other port PUT (upd_at, not
                 // written_at) same addr this instant, overlapping
                 // lane, equal chunk (see BRAM_WARN)
-                if dual
-                    && *arena.add(other) == now
-                    && *arena.add(other + 1) == addr
-                {
+                if dual && *arena.add(other) == now && *arena.add(other + 1) == addr {
                     let both = wens & *arena.add(other + o_wens);
                     if both != 0 {
-                        let x = *arena.add(me + o_val)
-                            ^ *arena.add(other + o_val);
+                        let x = *arena.add(me + o_val) ^ *arena.add(other + o_val);
                         let mut collide = false;
                         for n in 0..num_wens {
                             if both >> (n % 64) & 1 == 0 {
@@ -868,8 +865,7 @@ pub unsafe extern "C" fn trs_bram_tick(
                 // instant value, not the merged memory word
                 // (bs_prim_mod_bram.h:487-501); prev == memory
                 // otherwise, so the words agree
-                *arena.add(me + o_out) =
-                    *arena.add(me + o_prev) & !m | *arena.add(me + o_val) & m;
+                *arena.add(me + o_out) = *arena.add(me + o_prev) & !m | *arena.add(me + o_val) & m;
             } else {
                 *arena.add(me + o_out) = if other_hit {
                     *arena.add(other + o_prev)
@@ -881,17 +877,12 @@ pub unsafe extern "C" fn trs_bram_tick(
         }
         // general path (wide data / >64 enables)
         // out2 <- out (unconditional rotation, like the boxed clk)
-        std::ptr::copy_nonoverlapping(
-            arena.add(me + o_out),
-            arena.add(me + o_out2),
-            w,
-        );
+        std::ptr::copy_nonoverlapping(arena.add(me + o_out), arena.add(me + o_out2), w);
         if *arena.add(me) != now {
             return;
         }
         let addr = *arena.add(me + 1);
-        let wens_zero =
-            (0..wenw).all(|i| *arena.add(me + o_wens + i) == 0);
+        let wens_zero = (0..wenw).all(|i| *arena.add(me + o_wens + i) == 0);
         if addr >= size {
             // out-of-range: undet pattern, masked to width
             for i in 0..w {
@@ -903,9 +894,7 @@ pub unsafe extern "C" fn trs_bram_tick(
         let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize * w;
         // cross-port same-instant bypass: the other port wrote this
         // address at this instant -> its pre-write value
-        let other_hit = dual
-            && *arena.add(other + 2) == now
-            && *arena.add(other + 1) == addr;
+        let other_hit = dual && *arena.add(other + 2) == now && *arena.add(other + 1) == addr;
         if !wens_zero {
             // collision warning, wide shape (see the fast path / BRAM_WARN)
             if dual
@@ -916,10 +905,8 @@ pub unsafe extern "C" fn trs_bram_tick(
                 let mut collide = false;
                 for n in 0..num_wens {
                     let wi = (n / 64) as usize;
-                    let mine =
-                        *arena.add(me + o_wens + wi) >> (n % 64) & 1;
-                    let theirs =
-                        *arena.add(other + o_wens + wi) >> (n % 64) & 1;
+                    let mine = *arena.add(me + o_wens + wi) >> (n % 64) & 1;
+                    let theirs = *arena.add(other + o_wens + wi) >> (n % 64) & 1;
                     if mine == 0 || theirs == 0 {
                         continue;
                     }
@@ -939,10 +926,7 @@ pub unsafe extern "C" fn trs_bram_tick(
                         } else {
                             ((1u64 << take) - 1) << off
                         };
-                        if (*arena.add(me + o_val + w_i)
-                            ^ *arena.add(other + o_val + w_i))
-                            & m
-                            != 0
+                        if (*arena.add(me + o_val + w_i) ^ *arena.add(other + o_val + w_i)) & m != 0
                         {
                             eq = false;
                             break;
@@ -963,31 +947,17 @@ pub unsafe extern "C" fn trs_bram_tick(
             // merged
             *arena.add(me + 2) = now;
             if other_hit {
-                std::ptr::copy_nonoverlapping(
-                    arena.add(other + o_prev),
-                    arena.add(me + o_prev),
-                    w,
-                );
+                std::ptr::copy_nonoverlapping(arena.add(other + o_prev), arena.add(me + o_prev), w);
             } else {
-                std::ptr::copy_nonoverlapping(
-                    arena.add(daddr),
-                    arena.add(me + o_prev),
-                    w,
-                );
+                std::ptr::copy_nonoverlapping(arena.add(daddr), arena.add(me + o_prev), w);
             }
             // out starts from the just-latched prev: its DISABLED
             // lanes must show the begin-of-instant value on a collided
             // write, not the merged memory word
             // (bs_prim_mod_bram.h:487-501); prev == memory otherwise
-            std::ptr::copy_nonoverlapping(
-                arena.add(me + o_prev),
-                arena.add(me + o_out),
-                w,
-            );
+            std::ptr::copy_nonoverlapping(arena.add(me + o_prev), arena.add(me + o_out), w);
             for n in 0..num_wens {
-                let lane = *arena.add(me + o_wens + (n / 64) as usize)
-                    >> (n % 64)
-                    & 1;
+                let lane = *arena.add(me + o_wens + (n / 64) as usize) >> (n % 64) & 1;
                 if lane == 0 {
                     continue;
                 }
@@ -1020,11 +990,7 @@ pub unsafe extern "C" fn trs_bram_tick(
         } else {
             // read: bypassed pre-write value or the stored data
             let src = if other_hit { other + o_prev } else { daddr };
-            std::ptr::copy_nonoverlapping(
-                arena.add(src),
-                arena.add(me + o_out),
-                w,
-            );
+            std::ptr::copy_nonoverlapping(arena.add(src), arena.add(me + o_out), w);
         }
     }
 }

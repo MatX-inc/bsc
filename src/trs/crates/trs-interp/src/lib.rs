@@ -8,11 +8,11 @@
 //! Correctness and clarity over speed, everywhere.
 
 pub mod format;
-pub mod prim;
-pub mod value;
 pub mod fst;
-mod vcd;
+pub mod prim;
 pub mod startup;
+pub mod value;
+mod vcd;
 pub use vcd::WaveFormat;
 
 use std::cmp::Reverse;
@@ -87,7 +87,11 @@ pub(crate) struct GlibcRandom {
 impl GlibcRandom {
     pub(crate) fn new() -> GlibcRandom {
         // glibc's initial state is as if srandom(1)
-        let mut g = GlibcRandom { state: [0; 31], f: 3, r: 0 };
+        let mut g = GlibcRandom {
+            state: [0; 31],
+            f: 3,
+            r: 0,
+        };
         g.srandom(1);
         g
     }
@@ -445,8 +449,7 @@ struct VcdLayout {
 /// A periodic clock waveform.  The default clock is LOW with first edge
 /// at t=0, high 5 / low 5 (the generated model's bk_alter_clock call), so
 /// posedges land at 0 (in reset), 10, 20, ...
-#[derive(Clone, Copy)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Wave {
     init_high: bool,
     delay: u64,
@@ -462,8 +465,7 @@ struct Wave {
 /// runtime by a clock-generating primitive (bk_trigger_clock_edge), or
 /// never (noClock and top-level input clocks with no waveform — the
 /// kernel defines them with period 0 and they never fire).
-#[derive(Clone, Copy)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 enum ClockSource {
     Wave(Wave),
     Triggered { init_high: bool, driver: usize },
@@ -577,12 +579,19 @@ fn collect_def_refs(e: &Expr, out: &mut Vec<StrId>) {
                 collect_def_refs(a, out);
             }
         }
-        Expr::If { cond, then_, else_, .. } => {
+        Expr::If {
+            cond, then_, else_, ..
+        } => {
             collect_def_refs(cond, out);
             collect_def_refs(then_, out);
             collect_def_refs(else_, out);
         }
-        Expr::Case { scrutinee, arms, default, .. } => {
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
             collect_def_refs(scrutinee, out);
             for (_, a) in arms {
                 collect_def_refs(a, out);
@@ -677,8 +686,6 @@ struct Stepper {
     jit: Option<JitPlans>,
 }
 
-
-
 impl Interp {
     /// Identity salt of the top-level bindings, already folded into
     /// `bir_hash` by the loaders: a compiled artifact's stamp must
@@ -761,10 +768,7 @@ impl Interp {
     /// always_enabled method arguments BEFORE instantiation — child
     /// instantiation arguments may reference the top's parameters, so
     /// the values must be present when the instance tree is built.
-    pub fn new_bound(
-        d: Design,
-        binds: &[topbind::TopBind],
-    ) -> Result<Interp, String> {
+    pub fn new_bound(d: Design, binds: &[topbind::TopBind]) -> Result<Interp, String> {
         let rb = topbind::resolve(&d, binds)?;
         let str_ids: HashMap<&str, StrId> = d
             .strings
@@ -789,19 +793,30 @@ impl Interp {
                         me.args
                             .iter()
                             .map(|a| (a.name, (a.width, a.kind)))
-                            .chain(
-                                me.en
-                                    .map(|en| (en, (1, ir::PortKind::MethodEnable))),
-                            )
+                            .chain(me.en.map(|en| (en, (1, ir::PortKind::MethodEnable))))
                             .collect::<Vec<_>>()
                     }))
                     .collect(),
-                defs: m.defs.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
-                methods: m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect(),
+                defs: m
+                    .defs
+                    .iter()
+                    .enumerate()
+                    .map(|(k, x)| (x.name, k))
+                    .collect(),
+                methods: m
+                    .methods
+                    .iter()
+                    .enumerate()
+                    .map(|(k, x)| (x.name, k))
+                    .collect(),
             })
             .collect();
-        let mod_by_name: HashMap<StrId, usize> =
-            d.modules.iter().enumerate().map(|(i, m)| (m.name, i)).collect();
+        let mod_by_name: HashMap<StrId, usize> = d
+            .modules
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.name, i))
+            .collect();
 
         let mut it = Interp {
             d,
@@ -895,8 +910,7 @@ impl Interp {
         // same mechanism every child instance uses, so Port/Param
         // reads, the interp fallthroughs, and the compiled
         // port_consts/wide_consts folds all work unchanged
-        let top_params: HashMap<StrId, Value> =
-            rb.params.into_iter().collect();
+        let top_params: HashMap<StrId, Value> = rb.params.into_iter().collect();
         it.instantiate(
             "".to_string(),
             top_mod,
@@ -954,11 +968,15 @@ impl Interp {
         let slot = self.insts.len();
         let mir = self.mods[module].ir;
 
-        // resets generated inside this module (SyncReset/MakeReset/... 
+        // resets generated inside this module (SyncReset/MakeReset/...
         // children) appear in the module's reset list as fresh wire names;
         // give each its own node
         let mut resets = reset_binds;
-        let wires: Vec<Expr> = self.d.modules[mir].resets.iter().map(|r| r.wire.clone()).collect();
+        let wires: Vec<Expr> = self.d.modules[mir]
+            .resets
+            .iter()
+            .map(|r| r.wire.clone())
+            .collect();
         for w in wires {
             if let Expr::Port(name) = w {
                 resets.entry(name).or_insert_with(|| {
@@ -1033,21 +1051,13 @@ impl Interp {
                         match kind_ {
                             ir::PortKind::Clock => {
                                 if let Expr::Clock { osc, .. } = arg {
-                                    clk_binds.insert(
-                                        pname_,
-                                        (slot, osc.as_ref().clone()),
-                                    );
+                                    clk_binds.insert(pname_, (slot, osc.as_ref().clone()));
                                 }
-                                if pi < inputs.len()
-                                    && inputs[pi].1 == ir::PortKind::ClockGate
-                                {
+                                if pi < inputs.len() && inputs[pi].1 == ir::PortKind::ClockGate {
                                     let gname = inputs[pi].0;
                                     pi += 1;
                                     if let Expr::Clock { gate, .. } = arg {
-                                        gate_binds.insert(
-                                            gname,
-                                            (slot, gate.as_ref().clone()),
-                                        );
+                                        gate_binds.insert(gname, (slot, gate.as_ref().clone()));
                                     }
                                 }
                             }
@@ -1133,7 +1143,13 @@ impl Interp {
                         let (hi, lo) = if init_high { (v2, v1) } else { (v1, v2) };
                         self.clockgen_waves.insert(
                             format!("{cpath}$CLK_OUT"),
-                            Wave { init_high, delay, hi, lo, has_init: true },
+                            Wave {
+                                init_high,
+                                delay,
+                                hi,
+                                lo,
+                                has_init: true,
+                            },
                         );
                     }
                     // dynamic clocks: record the initial output level; the
@@ -1153,10 +1169,9 @@ impl Interp {
                             self.dynclk_init
                                 .insert(format!("{cpath}$CLK_OUT"), init_high);
                         }
-                        "ClockInverter" | "GatedClockInverter" | "ClockMux"
-                        | "UngatedClockMux" | "ClockSelect" | "UngatedClockSelect" => {
-                            self.dynclk_init
-                                .insert(format!("{cpath}$CLK_OUT"), false);
+                        "ClockInverter" | "GatedClockInverter" | "ClockMux" | "UngatedClockMux"
+                        | "ClockSelect" | "UngatedClockSelect" => {
+                            self.dynclk_init.insert(format!("{cpath}$CLK_OUT"), false);
                         }
                         _ => {}
                     }
@@ -1184,10 +1199,17 @@ impl Interp {
                     // in this module's reset list
                     if matches!(
                         pname.as_str(),
-                        "SyncReset" | "SyncResetA" | "SyncReset0" | "InitialReset"
-                            | "MakeReset" | "MakeResetA" | "MakeReset0"
-                            | "ResetMux" | "ResetEither"
-                            | "ClockSelect" | "UngatedClockSelect"
+                        "SyncReset"
+                            | "SyncResetA"
+                            | "SyncReset0"
+                            | "InitialReset"
+                            | "MakeReset"
+                            | "MakeResetA"
+                            | "MakeReset0"
+                            | "ResetMux"
+                            | "ResetEither"
+                            | "ClockSelect"
+                            | "UngatedClockSelect"
                     ) {
                         let t1 = format!("{}$OUT_RST", self.s(name));
                         let t2 = format!("{}$RST_OUT", self.s(name));
@@ -1236,8 +1258,14 @@ impl Interp {
             } else {
                 format!("{path}.{cname}")
             };
-            let Some(&ci) = self.inst_by_path.get(&cpath) else { continue };
-            let InstKind::User { module: cm, resets: crs, .. } = &self.insts[ci].kind
+            let Some(&ci) = self.inst_by_path.get(&cpath) else {
+                continue;
+            };
+            let InstKind::User {
+                module: cm,
+                resets: crs,
+                ..
+            } = &self.insts[ci].kind
             else {
                 continue; // prim reset generators are handled via rstgen_out
             };
@@ -1249,7 +1277,9 @@ impl Interp {
             else {
                 continue;
             };
-            let Some(&new_node) = crs.get(&wire) else { continue };
+            let Some(&new_node) = crs.get(&wire) else {
+                continue;
+            };
             let old_node = match &self.insts[slot].kind {
                 InstKind::User { resets, .. } => resets.get(&w).copied(),
                 _ => None,
@@ -1326,8 +1356,7 @@ impl Interp {
         let limbs = v.limbs64();
         unsafe {
             for k in 0..words {
-                *self.jit_arena_ptr.add(base as usize + k) =
-                    limbs.get(k).copied().unwrap_or(0);
+                *self.jit_arena_ptr.add(base as usize + k) = limbs.get(k).copied().unwrap_or(0);
             }
         }
     }
@@ -1335,10 +1364,9 @@ impl Interp {
     /// Read a value back from arena recording slots.
     fn rec_read(&self, base: u32, w: u32) -> Value {
         let words = (w.max(1) as usize).div_ceil(64);
-        let limbs = unsafe {
-            std::slice::from_raw_parts(self.jit_arena_ptr.add(base as usize), words)
-        }
-        .to_vec();
+        let limbs =
+            unsafe { std::slice::from_raw_parts(self.jit_arena_ptr.add(base as usize), words) }
+                .to_vec();
         Value::from_limbs64(w.max(1), limbs)
     }
 
@@ -1385,7 +1413,8 @@ impl Interp {
                 return;
             }
         }
-        self.vcd_meth_calls.insert((callee, method), (now, argv.to_vec()));
+        self.vcd_meth_calls
+            .insert((callee, method), (now, argv.to_vec()));
     }
 
     /// Record a value/AV method's returned value (result port).
@@ -1413,10 +1442,7 @@ impl Interp {
             if let Some(&(base, w)) = self.jit_eager_slots.get(&(inst, name)) {
                 let words = ((w.max(1) as usize) + 63) / 64;
                 let limbs = unsafe {
-                    std::slice::from_raw_parts(
-                        self.jit_arena_ptr.add(base as usize),
-                        words,
-                    )
+                    std::slice::from_raw_parts(self.jit_arena_ptr.add(base as usize), words)
                 }
                 .to_vec();
                 return Some(Value::from_limbs64(w.max(1), limbs));
@@ -1498,7 +1524,10 @@ impl Interp {
                 if let Some(v) = ctx.frame.get(name) {
                     return v.clone();
                 }
-                if let InstKind::User { params, str_params, .. } = &self.insts[inst].kind {
+                if let InstKind::User {
+                    params, str_params, ..
+                } = &self.insts[inst].kind
+                {
                     if let Some(v) = params.get(name) {
                         return v.clone();
                     }
@@ -1546,12 +1575,8 @@ impl Interp {
                         // arena; interpreted cones (PG_FINAL early
                         // rules, cold bodies) must read it there
                         if !self.jit_arena_ptr.is_null() {
-                            if let Some(&slot) =
-                                self.jit_en_slots.get(&(inst, *name))
-                            {
-                                let word = unsafe {
-                                    *self.jit_arena_ptr.add(slot as usize)
-                                };
+                            if let Some(&slot) = self.jit_en_slots.get(&(inst, *name)) {
+                                let word = unsafe { *self.jit_arena_ptr.add(slot as usize) };
                                 return Value::from_u64(w, word);
                             }
                             // rung-40 trap (external review): a pruned
@@ -1581,13 +1606,22 @@ impl Interp {
                     None => Value::from_u64(1, 1),
                 }
             }
-            Expr::MethCall { width, instance, method, port, args } => {
-                let argv: Vec<Value> =
-                    args.iter().map(|a| self.eval(inst, ctx, a)).collect();
+            Expr::MethCall {
+                width,
+                instance,
+                method,
+                port,
+                args,
+            } => {
+                let argv: Vec<Value> = args.iter().map(|a| self.eval(inst, ctx, a)).collect();
                 let child = self.child_of(inst, *instance);
                 self.call_value(child, *method, *port, &argv, *width)
             }
-            Expr::MethValue { width, instance, method } => {
+            Expr::MethValue {
+                width,
+                instance,
+                method,
+            } => {
                 let child = self.child_of(inst, *instance);
                 self.call_value(child, *method, 0, &[], *width)
             }
@@ -1641,14 +1675,24 @@ impl Interp {
             Expr::Reset { wire } => self.eval(inst, ctx, wire),
             Expr::Real(r) => Value::real(*r),
             Expr::Prim { op, width, args } => self.eval_prim(inst, ctx, *op, *width, args),
-            Expr::If { width, cond, then_, else_ } => {
+            Expr::If {
+                width,
+                cond,
+                then_,
+                else_,
+            } => {
                 if self.eval(inst, ctx, cond).as_bool() {
                     self.eval(inst, ctx, then_).zext(*width)
                 } else {
                     self.eval(inst, ctx, else_).zext(*width)
                 }
             }
-            Expr::Case { width, scrutinee, arms, default } => {
+            Expr::Case {
+                width,
+                scrutinee,
+                arms,
+                default,
+            } => {
                 let s = self.eval(inst, ctx, scrutinee);
                 for (k, v) in arms {
                     if s.as_u64() == *k && s.width <= 64 {
@@ -1842,7 +1886,12 @@ impl Interp {
         let mir = self.mods[callee_mod].ir;
         let m = &self.d.modules[mir].methods[mi];
         Ctx {
-            frame: m.args.iter().zip(argv.iter()).map(|(p, v)| (p.name, v.clone())).collect(),
+            frame: m
+                .args
+                .iter()
+                .zip(argv.iter())
+                .map(|(p, v)| (p.name, v.clone()))
+                .collect(),
             locals: HashMap::new(),
             memo,
         }
@@ -1862,8 +1911,7 @@ impl Interp {
             if let Some(a) = &self.arg_strs_vec[id as usize] {
                 return a.clone();
             }
-            let a: std::sync::Arc<str> =
-                std::sync::Arc::from(self.d.strings[id as usize].as_str());
+            let a: std::sync::Arc<str> = std::sync::Arc::from(self.d.strings[id as usize].as_str());
             self.arg_strs_vec[id as usize] = Some(a.clone());
             return a;
         }
@@ -1902,8 +1950,13 @@ impl Interp {
                 let r = p.value_method(mname, port, argv, self.now);
                 if self.trace_events {
                     let path = self.insts[callee].path.clone();
-                    eprintln!("[{}] {}.{} -> {}", self.cycle, path, mname,
-                              r.to_hex_string());
+                    eprintln!(
+                        "[{}] {}.{} -> {}",
+                        self.cycle,
+                        path,
+                        mname,
+                        r.to_hex_string()
+                    );
                 }
                 return r;
             }
@@ -1935,8 +1988,13 @@ impl Interp {
             if let InstKind::Prim(_) = &self.insts[callee].kind {
                 let mname = self.d.strings[method as usize].clone();
                 let args: Vec<String> = argv.iter().map(|v| v.to_hex_string()).collect();
-                eprintln!("[{}] {}.{}({})", self.cycle, self.insts[callee].path,
-                          mname, args.join(","));
+                eprintln!(
+                    "[{}] {}.{}({})",
+                    self.cycle,
+                    self.insts[callee].path,
+                    mname,
+                    args.join(",")
+                );
             }
         }
         if self.census.is_some() {
@@ -2116,14 +2174,19 @@ impl Interp {
             }
             Stmt::Action(a) => self.exec_action(inst, ctx, a),
             Stmt::AvAction { def, action } => match action {
-                Action::MethCall { instance, method, cond, args, .. } => {
+                Action::MethCall {
+                    instance,
+                    method,
+                    cond,
+                    args,
+                    ..
+                } => {
                     if !self.eval(inst, ctx, cond).as_bool() {
                         let dw = self.def_width(inst, *def).unwrap_or(1);
                         ctx.locals.insert(*def, Value::undet(dw));
                         return;
                     }
-                    let argv: Vec<Value> =
-                        args.iter().map(|x| self.eval(inst, ctx, x)).collect();
+                    let argv: Vec<Value> = args.iter().map(|x| self.eval(inst, ctx, x)).collect();
                     let child = self.child_of(inst, *instance);
                     let v = self.call_actionvalue(child, *method, &argv);
                     if self.vcd_trace {
@@ -2180,16 +2243,27 @@ impl Interp {
     fn exec_action(&mut self, inst: usize, ctx: &mut Ctx, a: &Action) {
         // no finished check — see exec_stmt
         match a {
-            Action::MethCall { instance, method, port, cond, args } => {
+            Action::MethCall {
+                instance,
+                method,
+                port,
+                cond,
+                args,
+            } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
-                let argv: Vec<Value> =
-                    args.iter().map(|x| self.eval(inst, ctx, x)).collect();
+                let argv: Vec<Value> = args.iter().map(|x| self.eval(inst, ctx, x)).collect();
                 let child = self.child_of(inst, *instance);
                 self.call_action(child, *method, *port, &argv);
             }
-            Action::Foreign { func, cond, args, signed, .. } => {
+            Action::Foreign {
+                func,
+                cond,
+                args,
+                signed,
+                ..
+            } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
@@ -2203,7 +2277,16 @@ impl Interp {
                 let loc = self.loc_of(inst);
                 self.foreign_action(&fname, &argv, &loc);
             }
-            Action::Task { func, cookie, temp, width, cond, args, signed, .. } => {
+            Action::Task {
+                func,
+                cookie,
+                temp,
+                width,
+                cond,
+                args,
+                signed,
+                ..
+            } => {
                 if !self.eval(inst, ctx, cond).as_bool() {
                     return;
                 }
@@ -2396,8 +2479,12 @@ impl Interp {
         let mir = self.mods[module].ir;
         let m = self.d.modules[mir].clone();
         // def table by name for cone recursion
-        let defs_by_name: HashMap<StrId, usize> =
-            m.defs.iter().enumerate().map(|(i, d)| (d.name, i)).collect();
+        let defs_by_name: HashMap<StrId, usize> = m
+            .defs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (d.name, i))
+            .collect();
 
         // usage[name] = set of function keys referencing the def/port
         type FnKey = (u8, u32, u32);
@@ -2439,12 +2526,19 @@ impl Interp {
                     mark_expr(gate, fk, m, defs_by_name, usage, seen);
                 }
                 Expr::Reset { wire } => mark_expr(wire, fk, m, defs_by_name, usage, seen),
-                Expr::If { cond, then_, else_, .. } => {
+                Expr::If {
+                    cond, then_, else_, ..
+                } => {
                     mark_expr(cond, fk, m, defs_by_name, usage, seen);
                     mark_expr(then_, fk, m, defs_by_name, usage, seen);
                     mark_expr(else_, fk, m, defs_by_name, usage, seen);
                 }
-                Expr::Case { scrutinee, arms, default, .. } => {
+                Expr::Case {
+                    scrutinee,
+                    arms,
+                    default,
+                    ..
+                } => {
                     mark_expr(scrutinee, fk, m, defs_by_name, usage, seen);
                     for (_, a) in arms {
                         mark_expr(a, fk, m, defs_by_name, usage, seen);
@@ -2509,8 +2603,12 @@ impl Interp {
 
         // schedule functions: the CF/WF cones of every rule in each
         // (domain, edge) schedule
-        let rules_by_name: HashMap<StrId, usize> =
-            m.rules.iter().enumerate().map(|(i, r)| (r.name, i)).collect();
+        let rules_by_name: HashMap<StrId, usize> = m
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.name, i))
+            .collect();
         for ms in m.schedule.domains.iter() {
             let fk = (0u8, ms.domain, ms.posedge as u32);
             let mut seen = std::collections::HashSet::new();
@@ -2587,17 +2685,21 @@ impl Interp {
         for d in &m.defs {
             let is_string = d.width == 0
                 || matches!(*d.expr, Expr::Str(_))
-                || matches!(&*d.expr, Expr::Prim { op: ir::PrimOp::StringConcat, .. });
+                || matches!(
+                    &*d.expr,
+                    Expr::Prim {
+                        op: ir::PrimOp::StringConcat,
+                        ..
+                    }
+                );
             if is_string {
                 continue;
             }
             let n_fns = usage.get(&d.name).map(|s| s.len()).unwrap_or(0);
             let is_task = matches!(*d.expr, Expr::TaskValue { .. });
             // -keep-fires pins CAN_FIRE/WILL_FIRE defs (cfwfOkToMove)
-            let pinned_fire =
-                m.keep_fires && (d.props.can_fire || d.props.will_fire);
-            let keep =
-                n_fns >= 2 || (n_fns >= 1 && (d.width > 64 || is_task || pinned_fire));
+            let pinned_fire = m.keep_fires && (d.props.can_fire || d.props.will_fire);
+            let keep = n_fns >= 2 || (n_fns >= 1 && (d.width > 64 || is_task || pinned_fire));
             if keep {
                 let dname = self.s(d.name).to_string();
                 // an action method's WILL_FIRE follows the call, like EN
@@ -2648,7 +2750,7 @@ impl Interp {
                         width: a.width,
                         clocked: true,
                         domain: Some(me.clock_domain),
-                        });
+                    });
                 }
             }
             if let Some(res) = &me.result {
@@ -2658,10 +2760,7 @@ impl Interp {
                 // declaration tables (TbGCD's 51-bit `result` port
                 // was declared as 1 bit)
                 let w = match res {
-                    Expr::Def(n) => defs_by_name
-                        .get(n)
-                        .map(|&di| m.defs[di].width)
-                        .unwrap_or(0),
+                    Expr::Def(n) => defs_by_name.get(n).map(|&di| m.defs[di].width).unwrap_or(0),
                     Expr::Port(n) => m
                         .inputs
                         .iter()
@@ -2677,7 +2776,7 @@ impl Interp {
                         width: w.max(1),
                         clocked: true,
                         domain: Some(me.clock_domain),
-                        });
+                    });
                 }
             }
         }
@@ -2789,7 +2888,10 @@ impl Interp {
         w.scope_end();
         self.vcd_layouts.insert(
             inst,
-            VcdLayout { base, back: vec![None; mv.members.len() + mv.ports.len()] },
+            VcdLayout {
+                base,
+                back: vec![None; mv.members.len() + mv.ports.len()],
+            },
         );
     }
 
@@ -2851,8 +2953,7 @@ impl Interp {
                     };
                     if let Expr::Port(n) = osc {
                         let name = self.s(n).to_string();
-                        return self
-                            .vcd_clock_index_wire(owner, &name, Some(n), depth + 1);
+                        return self.vcd_clock_index_wire(owner, &name, Some(n), depth + 1);
                     }
                 }
             }
@@ -2947,7 +3048,9 @@ impl Interp {
         let module = self.module_of(inst);
         let mv = self.vcd_mod_vars(module);
         let kids = self.vcd_children(inst);
-        let Some(mut layout) = self.vcd_layouts.remove(&inst) else { return };
+        let Some(mut layout) = self.vcd_layouts.remove(&inst) else {
+            return;
+        };
         let mut n = layout.base;
         for (k, v) in mv.members.iter().chain(mv.ports.iter()).enumerate() {
             match dt {
@@ -3039,7 +3142,14 @@ impl Interp {
                 self.vcd_dump_walk(&mut w, top, dt, now, levels);
             }
             D::Checkpoint | D::Restart => {
-                w.task(now, if dt == D::Checkpoint { "$dumpall" } else { "$dumpon" });
+                w.task(
+                    now,
+                    if dt == D::Checkpoint {
+                        "$dumpall"
+                    } else {
+                        "$dumpon"
+                    },
+                );
                 for c in &self.vcd_clocks {
                     w.write_val(c.vcd_id, &bit(c.cur), now);
                 }
@@ -3075,9 +3185,7 @@ impl Interp {
                     .domains
                     .iter()
                     .find(|ms| ms.domain == e.domain && ms.posedge == posedge)
-                    .or_else(|| {
-                        sched.domains.iter().find(|ms| ms.domain == e.domain)
-                    })
+                    .or_else(|| sched.domains.iter().find(|ms| ms.domain == e.domain))
                     .unwrap_or_else(|| {
                         panic!(
                             "no schedule for domain {} in {:?}",
@@ -3126,10 +3234,7 @@ impl Interp {
                 let d = &self.d.modules[mir].defs[di];
                 // CF/WF defs (rule or method) are never latched
                 // here; new cone defs attach to this entry
-                if !d.props.can_fire
-                    && !d.props.will_fire
-                    && !attached.contains(&(ii, dn))
-                {
+                if !d.props.can_fire && !d.props.will_fire && !attached.contains(&(ii, dn)) {
                     wanted.insert(dn);
                 }
                 collect_def_refs(&d.expr, &mut stack);
@@ -3159,8 +3264,7 @@ impl Interp {
         &mut self,
         pairs: &[(ir::QualRule, ir::QualRule)],
     ) -> BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>> {
-        let mut cross: BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>> =
-            BTreeMap::new();
+        let mut cross: BTreeMap<(usize, RuleRef), Vec<(usize, StrId)>> = BTreeMap::new();
         for (earlier, later) in pairs {
             let (e_inst, e_rule) = (self.inst_of_path(earlier.instance), earlier.rule);
             let (l_inst, l_rule) = (self.inst_of_path(later.instance), later.rule);
@@ -3168,7 +3272,10 @@ impl Interp {
             let e_mir = self.mods[e_mod].ir;
             let e_ri = e_rule.idx();
             let e_cf = self.d.modules[e_mir].rules[e_ri].can_fire;
-            cross.entry((l_inst, l_rule)).or_default().push((e_inst, e_cf));
+            cross
+                .entry((l_inst, l_rule))
+                .or_default()
+                .push((e_inst, e_cf));
         }
         cross
     }
@@ -3181,7 +3288,10 @@ impl Interp {
         if let Some(c) = self.census.as_mut() {
             c.begin_latch(inst, r.name, r.can_fire, r.will_fire);
         }
-        let mut ctx = Ctx { memo: true, ..Default::default() };
+        let mut ctx = Ctx {
+            memo: true,
+            ..Default::default()
+        };
 
         let mut cf = self.eval(inst, &mut ctx, &Expr::Def(r.can_fire));
         // intra-module ME inhibitors (earlier disjoint rules' CFs).
@@ -3217,11 +3327,18 @@ impl Interp {
         self.set_latched(inst, r.can_fire, cf);
         // recompute the WILL_FIRE cone against the (possibly inhibited)
         // latched CAN_FIRE, not the memoized pre-inhibitor values
-        let mut wf_ctx = Ctx { memo: true, ..Default::default() };
+        let mut wf_ctx = Ctx {
+            memo: true,
+            ..Default::default()
+        };
         let wf = self.eval(inst, &mut wf_ctx, &Expr::Def(r.will_fire));
         if self.trace_wf && wf.as_bool() {
-            eprintln!("[{}] FIRE {}.{}", self.cycle, self.insts[inst].path,
-                      self.s(r.name));
+            eprintln!(
+                "[{}] FIRE {}.{}",
+                self.cycle,
+                self.insts[inst].path,
+                self.s(r.name)
+            );
         }
         let wf_b = wf.as_bool();
         self.set_latched(inst, r.will_fire, wf);
@@ -3291,10 +3408,8 @@ impl Interp {
                 if let Some((cur, next, words)) = self.jit_gate {
                     unsafe {
                         for i in 0..words {
-                            *self.jit_arena_ptr.add((cur + i) as usize) =
-                                u64::MAX;
-                            *self.jit_arena_ptr.add((next + i) as usize) =
-                                u64::MAX;
+                            *self.jit_arena_ptr.add((cur + i) as usize) = u64::MAX;
+                            *self.jit_arena_ptr.add((next + i) as usize) = u64::MAX;
                         }
                     }
                 }
@@ -3324,7 +3439,9 @@ impl Interp {
     /// Poll one reset generator after its clock tick and route its
     /// pending output transitions.
     fn poll_rstgen(&mut self, idx: usize) {
-        let Some(&out) = self.rstgen_out.get(&idx) else { return };
+        let Some(&out) = self.rstgen_out.get(&idx) else {
+            return;
+        };
         let outs = if let InstKind::Prim(p) = &mut self.insts[idx].kind {
             p.take_reset_out()
         } else {
@@ -3358,7 +3475,9 @@ impl Interp {
     /// Poll a generator, treating everything as applicable now (used at
     /// flush time, when deferred == immediate).
     fn poll_rstgen_deferred(&mut self, idx: usize) {
-        let Some(&out) = self.rstgen_out.get(&idx) else { return };
+        let Some(&out) = self.rstgen_out.get(&idx) else {
+            return;
+        };
         let outs = if let InstKind::Prim(p) = &mut self.insts[idx].kind {
             p.take_reset_out()
         } else {
@@ -3370,7 +3489,13 @@ impl Interp {
     }
 
     fn default_wave() -> ClockSource {
-        ClockSource::Wave(Wave { init_high: false, delay: 0, hi: 5, lo: 5, has_init: false })
+        ClockSource::Wave(Wave {
+            init_high: false,
+            delay: 0,
+            hi: 5,
+            lo: 5,
+            has_init: false,
+        })
     }
 
     /// Resolve a composition clock: the default clock is the fixed 5/5
@@ -3457,8 +3582,10 @@ impl Interp {
         }
         // input clock port: chase the parent's instantiation binding
         if let InstKind::User { clk_binds, .. } = &self.insts[inst].kind {
-            if let Some((owner, osc)) =
-                clk_binds.iter().find(|(k, _)| self.s(**k) == wire).map(|(_, v)| v)
+            if let Some((owner, osc)) = clk_binds
+                .iter()
+                .find(|(k, _)| self.s(**k) == wire)
+                .map(|(_, v)| v)
             {
                 return match osc {
                     Expr::Port(p) => {
@@ -3576,10 +3703,7 @@ impl Interp {
                     self.now, self.cycle
                 );
                 for (kind, sh) in shadows.iter() {
-                    line.push_str(&format!(
-                        " {kind} (t={}, c={})",
-                        sh.now, sh.cycle
-                    ));
+                    line.push_str(&format!(" {kind} (t={}, c={})", sh.now, sh.cycle));
                 }
                 eprintln!("{line}");
             }
@@ -3599,24 +3723,17 @@ impl Interp {
             // disables the central player, and interactive stops use
             // the heap loop).  Time compares only where time is
             // architecturally visible: $finish/$stop/heap-dry stops.
-            let budget_stop = self.fe.finished.is_none()
-                && !self.fe.stop_request
-                && self.cycles() >= target;
+            let budget_stop =
+                self.fe.finished.is_none() && !self.fe.stop_request && self.cycles() >= target;
             for si in 0..shadows.len() {
                 let (kind, shadow) = &mut shadows[si];
                 let kind = *kind;
                 let mut diverged = Vec::new();
                 if !budget_stop && shadow.now != self.now {
-                    diverged.push(format!(
-                        "time {} vs primary {}",
-                        shadow.now, self.now
-                    ));
+                    diverged.push(format!("time {} vs primary {}", shadow.now, self.now));
                 }
                 if shadow.cycle != self.cycle {
-                    diverged.push(format!(
-                        "cycle {} vs primary {}",
-                        shadow.cycle, self.cycle
-                    ));
+                    diverged.push(format!("cycle {} vs primary {}", shadow.cycle, self.cycle));
                 }
                 if shadow.fe.finished != self.fe.finished {
                     diverged.push(format!(
@@ -3644,10 +3761,7 @@ impl Interp {
                     return 87;
                 }
             }
-            if self.fe.finished.is_some()
-                || self.fe.stop_request
-                || self.cycles() >= max_cycles
-            {
+            if self.fe.finished.is_some() || self.fe.stop_request || self.cycles() >= max_cycles {
                 break;
             }
             if self.cycles() < target {
@@ -3770,11 +3884,7 @@ impl Interp {
                         RAlt {
                             guard_inst: gi,
                             guard: a.guard.clone(),
-                            entries: self.resolve_entries(
-                                &a.entries,
-                                comp.posedge,
-                                &early,
-                            ),
+                            entries: self.resolve_entries(&a.entries, comp.posedge, &early),
                             cross: self.resolve_cross(&a.cross_inhibits),
                         }
                     })
@@ -3844,19 +3954,17 @@ impl Interp {
         let mut psl = startup::StartupLap::new();
         #[cfg(feature = "aot")]
         let plan = match &self.jit_request {
-            jit::JitRequest::Load { src } => {
-                match jit::aot_plan_a(src, self.bir_hash) {
-                    Some(p) => {
-                        psl.lap("plan-a (baked decode)");
-                        p
-                    }
-                    None => {
-                        let p = self.derive_plan_a();
-                        psl.lap("plan-a (derived: no valid bake)");
-                        p
-                    }
+            jit::JitRequest::Load { src } => match jit::aot_plan_a(src, self.bir_hash) {
+                Some(p) => {
+                    psl.lap("plan-a (baked decode)");
+                    p
                 }
-            }
+                None => {
+                    let p = self.derive_plan_a();
+                    psl.lap("plan-a (derived: no valid bake)");
+                    p
+                }
+            },
             _ => {
                 let p = self.derive_plan_a();
                 psl.lap("plan-a (derived)");
@@ -3875,9 +3983,14 @@ impl Interp {
         if matches!(self.jit_request, jit::JitRequest::Emit { .. }) {
             self.plan_a_bytes = bincode::serialize(&plan).ok();
         }
-        let PlanA { version: _, clocks, sources, driver_clock, rcomps } = plan;
-        let driver_clock: HashMap<usize, usize> =
-            driver_clock.into_iter().collect();
+        let PlanA {
+            version: _,
+            clocks,
+            sources,
+            driver_clock,
+            rcomps,
+        } = plan;
+        let driver_clock: HashMap<usize, usize> = driver_clock.into_iter().collect();
         // VCD clock state: reserve the kernel clock ids first (clock ids
         // are permanent across headers — vcd_keep_ids)
         if self.vcd_clocks.is_empty() {
@@ -4110,7 +4223,10 @@ impl Interp {
     /// index).  max_cycles counts default-clock posedges, including the
     /// in-reset edge at t=0.  Returns the exit code so far (1 iff $fatal).
     pub fn advance(&mut self, max_cycles: u64) -> i32 {
-        self.advance_until(&StopCond { max_cycles, ..Default::default() })
+        self.advance_until(&StopCond {
+            max_cycles,
+            ..Default::default()
+        })
     }
 
     /// advance() with the kernel's full stop machinery — the capi's
@@ -4158,343 +4274,387 @@ impl Interp {
                         break 'central;
                     }
 
-            let Some(j) = jit.as_ref() else {
-                central_tried = true;
-                { CENTRAL_BAIL[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            };
-            // fusion may not exist yet (JIT compiles it once bodies
-            // warm): don't burn the attempt until it does
-            let Some(fused) = j.fused.get() else { { CENTRAL_BAIL[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; } };
-            central_tried = true;
-            if self.vcd.is_active()
-                || !driver_clock.is_empty()
-                || !self.rstgen_out.is_empty()
-            {
-                { CENTRAL_BAIL[4].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            }
-            // the initial reset pulse is TRANSIENT: AOT artifacts have
-            // fused edges at t=0 while it is still in flight, and
-            // burning the attempt here left the central loop
-            // permanently off for every artifact run.  Un-burn and let
-            // the deassert boundary retry; without generators (bailed
-            // above) reset state cannot reassert, so the re-probe is
-            // bounded to the few reset slices.
-            if self.rst_asserted.iter().any(|&a| a) || !self.rst_pending.is_empty() {
-                central_tried = false;
-                { CENTRAL_BAIL[15].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            }
-            // exactly one periodic Wave clock
-            let mut wave = None;
-            for (ci2, src) in sources.iter().enumerate() {
-                if let ClockSource::Wave(w) = src {
-                    if wave.is_some() {
-                        { CENTRAL_BAIL[5].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-                    }
-                    wave = Some((ci2, w.hi, w.lo));
-                }
-            }
-            let Some((wci, hi, lo)) = wave else { { CENTRAL_BAIL[6].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; } };
-            if Some(clocks[wci]) != self.d.default_clock {
-                { CENTRAL_BAIL[7].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            }
-            // posedge comps: fused, no early rules, no residual ticks;
-            // negedge comps: none
-            let mut pos_rcis: Vec<usize> = Vec::new();
-            for (rci, rc) in rcomps.iter().enumerate() {
-                if rc.clk != wci {
-                    { CENTRAL_BAIL[8].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-                }
-                // a non-rst tick disqualifies unless its work is
-                // compiled into the loaded edge fns (wire clears);
-                // reset ticks are no-ops here: the preconditions
-                // guarantee reset stays deasserted (no generators,
-                // no drivers), and rst_tick acts only in_reset
-                let uncovered_tick = |rci: usize| {
-                    rc.ticks.iter().enumerate().any(|(ti, (_, _, is_rst, _, _))| {
-                        !*is_rst
-                            && !j.covered_ticks
-                                .get(rci)
-                                .is_some_and(|c| c.contains(&ti))
-                    })
-                };
-                if rc.posedge {
-                    if !rc.early.is_empty()
-                        || uncovered_tick(rci)
-                        || fused[rci] == 0
+                    let Some(j) = jit.as_ref() else {
+                        central_tried = true;
+                        {
+                            CENTRAL_BAIL[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    };
+                    // fusion may not exist yet (JIT compiles it once bodies
+                    // warm): don't burn the attempt until it does
+                    let Some(fused) = j.fused.get() else {
+                        {
+                            CENTRAL_BAIL[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    };
+                    central_tried = true;
+                    if self.vcd.is_active()
+                        || !driver_clock.is_empty()
+                        || !self.rstgen_out.is_empty()
                     {
-                        // name the disqualifiers: an uncovered tick is
-                        // the actionable one (which prim, which port)
-                        if std::env::var_os("TRS_JIT_TRACE").is_some() {
-                            for (ti, (ii, pname, is_rst, _, _)) in
-                                rc.ticks.iter().enumerate()
-                            {
-                                if !*is_rst
-                                    && !j.covered_ticks
-                                        .get(rci)
-                                        .is_some_and(|c| c.contains(&ti))
+                        {
+                            CENTRAL_BAIL[4].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    }
+                    // the initial reset pulse is TRANSIENT: AOT artifacts have
+                    // fused edges at t=0 while it is still in flight, and
+                    // burning the attempt here left the central loop
+                    // permanently off for every artifact run.  Un-burn and let
+                    // the deassert boundary retry; without generators (bailed
+                    // above) reset state cannot reassert, so the re-probe is
+                    // bounded to the few reset slices.
+                    if self.rst_asserted.iter().any(|&a| a) || !self.rst_pending.is_empty() {
+                        central_tried = false;
+                        {
+                            CENTRAL_BAIL[15].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    }
+                    // exactly one periodic Wave clock
+                    let mut wave = None;
+                    for (ci2, src) in sources.iter().enumerate() {
+                        if let ClockSource::Wave(w) = src {
+                            if wave.is_some() {
                                 {
-                                    eprintln!(
-                                        "trs jit: central bail #9: uncovered \
-                                         tick {} ({})",
-                                        self.insts[*ii].path, pname
-                                    );
+                                    CENTRAL_BAIL[5]
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    break 'central;
                                 }
                             }
-                            if !rc.early.is_empty() {
-                                eprintln!("trs jit: central bail #9: early rules");
-                            }
-                            if fused[rci] == 0 {
-                                eprintln!("trs jit: central bail #9: comp {rci} not fused");
+                            wave = Some((ci2, w.hi, w.lo));
+                        }
+                    }
+                    let Some((wci, hi, lo)) = wave else {
+                        {
+                            CENTRAL_BAIL[6].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    };
+                    if Some(clocks[wci]) != self.d.default_clock {
+                        {
+                            CENTRAL_BAIL[7].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    }
+                    // posedge comps: fused, no early rules, no residual ticks;
+                    // negedge comps: none
+                    let mut pos_rcis: Vec<usize> = Vec::new();
+                    for (rci, rc) in rcomps.iter().enumerate() {
+                        if rc.clk != wci {
+                            {
+                                CENTRAL_BAIL[8].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                break 'central;
                             }
                         }
-                        { CENTRAL_BAIL[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
+                        // a non-rst tick disqualifies unless its work is
+                        // compiled into the loaded edge fns (wire clears);
+                        // reset ticks are no-ops here: the preconditions
+                        // guarantee reset stays deasserted (no generators,
+                        // no drivers), and rst_tick acts only in_reset
+                        let uncovered_tick = |rci: usize| {
+                            rc.ticks
+                                .iter()
+                                .enumerate()
+                                .any(|(ti, (_, _, is_rst, _, _))| {
+                                    !*is_rst
+                                        && !j
+                                            .covered_ticks
+                                            .get(rci)
+                                            .is_some_and(|c| c.contains(&ti))
+                                })
+                        };
+                        if rc.posedge {
+                            if !rc.early.is_empty() || uncovered_tick(rci) || fused[rci] == 0 {
+                                // name the disqualifiers: an uncovered tick is
+                                // the actionable one (which prim, which port)
+                                if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                                    for (ti, (ii, pname, is_rst, _, _)) in
+                                        rc.ticks.iter().enumerate()
+                                    {
+                                        if !*is_rst
+                                            && !j
+                                                .covered_ticks
+                                                .get(rci)
+                                                .is_some_and(|c| c.contains(&ti))
+                                        {
+                                            eprintln!(
+                                                "trs jit: central bail #9: uncovered \
+                                         tick {} ({})",
+                                                self.insts[*ii].path, pname
+                                            );
+                                        }
+                                    }
+                                    if !rc.early.is_empty() {
+                                        eprintln!("trs jit: central bail #9: early rules");
+                                    }
+                                    if fused[rci] == 0 {
+                                        eprintln!("trs jit: central bail #9: comp {rci} not fused");
+                                    }
+                                }
+                                {
+                                    CENTRAL_BAIL[9]
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    break 'central;
+                                }
+                            }
+                            pos_rcis.push(rci);
+                        } else if rc.entries.iter().any(|e| !e.nodes.is_empty())
+                            || uncovered_tick(rci)
+                        {
+                            // rule-less negedge comps with only covered wire
+                            // clears are safe to skip entirely: wire ticks are
+                            // edge-duplicated (Both ports) and nothing reads
+                            // during a rule-less instant
+                            {
+                                CENTRAL_BAIL[10].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                break 'central;
+                            }
+                        }
                     }
-                    pos_rcis.push(rci);
-                } else if rc.entries.iter().any(|e| !e.nodes.is_empty())
-                    || uncovered_tick(rci)
-                {
-                    // rule-less negedge comps with only covered wire
-                    // clears are safe to skip entirely: wire ticks are
-                    // edge-duplicated (Both ports) and nothing reads
-                    // during a rule-less instant
-                    { CENTRAL_BAIL[10].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-                }
-            }
-            if pos_rcis.is_empty() || j.lazy.any_cold() {
-                { CENTRAL_BAIL[11].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            }
-            // heap must hold exactly this clock's periodic edges
-            let mut t_pos = None;
-            let mut t_neg = None;
-            for Reverse((t, prio, ci, pos)) in heap.iter() {
-                if *ci != wci || *prio == 0 {
-                    { CENTRAL_BAIL[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-                }
-                if *pos {
-                    t_pos = Some(*t);
-                } else {
-                    t_neg = Some(*t);
-                }
-            }
-            let (Some(mut tp), Some(mut tn)) = (t_pos, t_neg) else {
-                { CENTRAL_BAIL[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            };
-            if tp <= 2 {
-                // top reset not yet deasserted: let the general loop
-                // handle early instants
-                { CENTRAL_BAIL[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
-            }
-            heap.clear();
-            self.central_engaged = true;
-            // link-time window bake: this instant — reset just
-            // deasserted, no steady edge processed — is the state a
-            // RunCore boot starts from; capture it once
-            if self.runcore_bake && self.runcore_window.is_none() {
-                self.runcore_window = Some((
-                    self.runcore_window_encode(tp, tn),
-                    prim::WINDOW_EFFECTS
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    (tp, tn, self.cycle),
-                ));
-                // the bake wants the BOUNDARY, not simulation: stop
-                // the advance here — no steady cycle executes at link
-                // (stop_request is cleared at the next advance; the
-                // bake interp is discarded anyway)
-                self.fe.stop_request = true;
-            }
-            // RunCore descriptor witness (desc is parsed only under
-            // TRS_RUNCORE_CHECK): the engage decision and shape must
-            // match the baked claim
-            if let Some(d) = j.runcore_desc.as_ref() {
-                // negedge comps and the full wave, for the extended
-                // shape compare (panel finding: neg/delay/init were
-                // baked but witnessed by nothing)
-                let live_neg: Vec<usize> = rcomps
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, rc)| rc.clk == wci && !rc.posedge)
-                    .map(|(i, _)| i)
-                    .collect();
-                let wv = match &sources[wci] {
-                    ClockSource::Wave(w) => Some(*w),
-                    _ => None,
-                };
-                if !d.central {
-                    eprintln!(
-                        "trs runcore: MISMATCH: central loop engaged but \
-                         descriptor says central-ineligible ({})",
-                        d.reason
-                    );
-                } else if d.hi != hi
-                    || d.lo != lo
-                    || d.pos != pos_rcis
-                    || d.neg != live_neg
-                    || wv.is_none_or(|w| {
-                        (d.delay, d.init_high, d.has_init)
-                            != (w.delay, w.init_high, w.has_init)
-                    })
-                {
-                    eprintln!(
-                        "trs runcore: MISMATCH: engaged hi={hi} lo={lo} \
-                         pos={pos_rcis:?} vs descriptor hi={} lo={} pos={:?}",
-                        d.hi, d.lo, d.pos
-                    );
-                } else if let Some((wa, wtp, wtn, wcyc)) = d.window.as_ref() {
-                    // post-window image witness: a classic run's state
-                    // at this exact instant must equal what the link
-                    // baked — this is the byte-level proof that a
-                    // RunCore boot starting here is indistinguishable
-                    let live = unsafe {
-                        std::slice::from_raw_parts(
-                            self.jit_arena_ptr,
-                            self.jit_arena_len,
-                        )
+                    if pos_rcis.is_empty() || j.lazy.any_cold() {
+                        {
+                            CENTRAL_BAIL[11].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
+                    }
+                    // heap must hold exactly this clock's periodic edges
+                    let mut t_pos = None;
+                    let mut t_neg = None;
+                    for Reverse((t, prio, ci, pos)) in heap.iter() {
+                        if *ci != wci || *prio == 0 {
+                            {
+                                CENTRAL_BAIL[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                break 'central;
+                            }
+                        }
+                        if *pos {
+                            t_pos = Some(*t);
+                        } else {
+                            t_neg = Some(*t);
+                        }
+                    }
+                    let (Some(mut tp), Some(mut tn)) = (t_pos, t_neg) else {
+                        {
+                            CENTRAL_BAIL[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
                     };
-                    if (*wtp, *wtn, *wcyc) != (tp, tn, self.cycle) {
-                        eprintln!(
-                            "trs runcore: MISMATCH: window state tp/tn/cycle \
-                             {wtp}/{wtn}/{wcyc} vs live {tp}/{tn}/{}",
-                            self.cycle
-                        );
-                    } else if let Some(k) = {
-                        // mem-file data regions legitimately differ:
-                        // the bake never read the file (and perturbed
-                        // the regions for the two-fill gate); the
-                        // boot's overlay rewrites them from the file
-                        let mask = self.runcore_load_mask();
-                        (0..live.len()).find(|&k| {
-                            live[k] != wa[k]
-                                && !mask
-                                    .iter()
-                                    .any(|&(s, l)| k >= s && k < s + l)
-                        })
-                    } {
-                        eprintln!(
-                            "trs runcore: MISMATCH: window slot {k}: baked \
-                             {:#x}, live {:#x}",
-                            wa[k], live[k]
-                        );
-                    } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
-                        eprintln!(
-                            "trs runcore: descriptor + window MATCH \
-                             (central engage)"
-                        );
+                    if tp <= 2 {
+                        // top reset not yet deasserted: let the general loop
+                        // handle early instants
+                        {
+                            CENTRAL_BAIL[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            break 'central;
+                        }
                     }
-                } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
-                    eprintln!("trs runcore: descriptor MATCH (central engage)");
-                }
-            }
-            if std::env::var_os("TRS_JIT_TRACE").is_some() {
-                eprintln!("trs jit: central loop engaged (clock {wci})");
-            }
-            let period = hi + lo;
-            let ap = j.arena_ptr();
-            let envp = self as *mut Interp as *mut core::ffi::c_void;
-            let cycles0 = self.cycle;
-            let mut fin_break = false;
-            let mut vcd_yield = false;
-            while self.fe.finished.is_none()
-                && !self.fe.stop_request
-                && self.cycle < max_cycles
-            {
-                self.cycle += 1;
-                self.now = tp;
-                final_now = tp;
-                for &rci in &pos_rcis {
-                    let f: unsafe extern "C" fn(
-                        *mut u64,
-                        *mut core::ffi::c_void,
-                        u64,
-                    ) -> i32 = unsafe { std::mem::transmute(fused[rci]) };
-                    unsafe { f(ap, envp, tp) };
-                    // NO finished break here: $finish completes the
-                    // instant's edge schedules
-                }
-                // $finish/$stop stop ON this posedge: break BEFORE
-                // tp/tn advance so the exit bookkeeping and re-armed
-                // heap see the companion negedge as PENDING, exactly
-                // like the general loop's state at a yield (the
-                // fleet: crediting it made oracle edge compares
-                // diverge)
-                if self.fe.finished.is_some() || self.fe.stop_request {
-                    fin_break = true;
-                    break;
-                }
-                // a compiled $dumpvars/$dumpon armed the dump mid-
-                // slice: yield to the general loop, whose per-slice
-                // vcd_event takes over (and whose is_active probe
-                // blocks re-engagement).  The arming instant's own
-                // event fires below AFTER the clock bookkeeping — the
-                // reference writes the whole arming sequence
-                // (unstamped initial values, the time marker, the
-                // $dumpvars task, the checkpoint) in that one event.
-                // Cost on the hot path: three flag loads per posedge
-                // (the transition-tax budget).
-                if self.vcd.is_active() {
-                    vcd_yield = true;
-                    break;
-                }
-                if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
-                    break;
-                }
-                tp += period;
-                tn += period;
-            }
-            // clock bookkeeping for queries + re-arm the heap so the
-            // general loop (and later advance() calls) resume cleanly
-            {
-                let k = self.cycle - cycles0;
-                let c = &mut self.vcd_clocks[wci];
-                c.pos_at = self.now;
-                c.pos_count = self.cycle;
-                c.cur = true;
-                // negedges pass silently inside the central player
-                // (no negedge comps by precondition); keep the counts
-                // coherent for later bk queries.  On a $finish exit
-                // the finish posedge's companion negedge has NOT
-                // retired — the general loop leaves it pending —
-                // and on both exit shapes the last RETIRED negedge
-                // is tn - period (tp/tn advance only on completed
-                // iterations).
-                // the vcd yield credits the lagging companion negedge
-                // too (it was time-passed silently, like every negedge
-                // inside the player): the general loop must resume at
-                // its SUCCESSOR, or a stale past-time negedge event
-                // writes a time-disordered clock line into the dump
-                let done = if fin_break {
-                    k.saturating_sub(1)
-                } else {
-                    k
-                };
-                if done > 0 {
-                    c.neg_count += done;
-                    c.neg_at = tn - period;
-                }
-                if vcd_yield {
-                    c.neg_count += 1;
-                    c.neg_at = tn;
-                }
-            }
-            // on a yield exit tp still names the EXECUTED posedge —
-            // re-arming it verbatim would re-run that edge on a
-            // $stop resume; its successor is the pending one
-            let tp_pend =
-                if fin_break || vcd_yield { tp + period } else { tp };
-            let tn_pend = if vcd_yield { tn + period } else { tn };
-            heap.push(Reverse((tp_pend, 1, wci, true)));
-            heap.push(Reverse((tn_pend, 1, wci, false)));
-            if vcd_yield {
-                // the arming slice's full dump sequence, with the
-                // clock bookkeeping above already in place
-                self.vcd_event(tp);
-            }
-        
+                    heap.clear();
+                    self.central_engaged = true;
+                    // link-time window bake: this instant — reset just
+                    // deasserted, no steady edge processed — is the state a
+                    // RunCore boot starts from; capture it once
+                    if self.runcore_bake && self.runcore_window.is_none() {
+                        self.runcore_window = Some((
+                            self.runcore_window_encode(tp, tn),
+                            prim::WINDOW_EFFECTS.load(std::sync::atomic::Ordering::Relaxed),
+                            (tp, tn, self.cycle),
+                        ));
+                        // the bake wants the BOUNDARY, not simulation: stop
+                        // the advance here — no steady cycle executes at link
+                        // (stop_request is cleared at the next advance; the
+                        // bake interp is discarded anyway)
+                        self.fe.stop_request = true;
+                    }
+                    // RunCore descriptor witness (desc is parsed only under
+                    // TRS_RUNCORE_CHECK): the engage decision and shape must
+                    // match the baked claim
+                    if let Some(d) = j.runcore_desc.as_ref() {
+                        // negedge comps and the full wave, for the extended
+                        // shape compare (panel finding: neg/delay/init were
+                        // baked but witnessed by nothing)
+                        let live_neg: Vec<usize> = rcomps
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, rc)| rc.clk == wci && !rc.posedge)
+                            .map(|(i, _)| i)
+                            .collect();
+                        let wv = match &sources[wci] {
+                            ClockSource::Wave(w) => Some(*w),
+                            _ => None,
+                        };
+                        if !d.central {
+                            eprintln!(
+                                "trs runcore: MISMATCH: central loop engaged but \
+                         descriptor says central-ineligible ({})",
+                                d.reason
+                            );
+                        } else if d.hi != hi
+                            || d.lo != lo
+                            || d.pos != pos_rcis
+                            || d.neg != live_neg
+                            || wv.is_none_or(|w| {
+                                (d.delay, d.init_high, d.has_init)
+                                    != (w.delay, w.init_high, w.has_init)
+                            })
+                        {
+                            eprintln!(
+                                "trs runcore: MISMATCH: engaged hi={hi} lo={lo} \
+                         pos={pos_rcis:?} vs descriptor hi={} lo={} pos={:?}",
+                                d.hi, d.lo, d.pos
+                            );
+                        } else if let Some((wa, wtp, wtn, wcyc)) = d.window.as_ref() {
+                            // post-window image witness: a classic run's state
+                            // at this exact instant must equal what the link
+                            // baked — this is the byte-level proof that a
+                            // RunCore boot starting here is indistinguishable
+                            let live = unsafe {
+                                std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+                            };
+                            if (*wtp, *wtn, *wcyc) != (tp, tn, self.cycle) {
+                                eprintln!(
+                                    "trs runcore: MISMATCH: window state tp/tn/cycle \
+                             {wtp}/{wtn}/{wcyc} vs live {tp}/{tn}/{}",
+                                    self.cycle
+                                );
+                            } else if let Some(k) = {
+                                // mem-file data regions legitimately differ:
+                                // the bake never read the file (and perturbed
+                                // the regions for the two-fill gate); the
+                                // boot's overlay rewrites them from the file
+                                let mask = self.runcore_load_mask();
+                                (0..live.len()).find(|&k| {
+                                    live[k] != wa[k]
+                                        && !mask.iter().any(|&(s, l)| k >= s && k < s + l)
+                                })
+                            } {
+                                eprintln!(
+                                    "trs runcore: MISMATCH: window slot {k}: baked \
+                             {:#x}, live {:#x}",
+                                    wa[k], live[k]
+                                );
+                            } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                                eprintln!(
+                                    "trs runcore: descriptor + window MATCH \
+                             (central engage)"
+                                );
+                            }
+                        } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                            eprintln!("trs runcore: descriptor MATCH (central engage)");
+                        }
+                    }
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!("trs jit: central loop engaged (clock {wci})");
+                    }
+                    let period = hi + lo;
+                    let ap = j.arena_ptr();
+                    let envp = self as *mut Interp as *mut core::ffi::c_void;
+                    let cycles0 = self.cycle;
+                    let mut fin_break = false;
+                    let mut vcd_yield = false;
+                    while self.fe.finished.is_none()
+                        && !self.fe.stop_request
+                        && self.cycle < max_cycles
+                    {
+                        self.cycle += 1;
+                        self.now = tp;
+                        final_now = tp;
+                        for &rci in &pos_rcis {
+                            let f: unsafe extern "C" fn(
+                                *mut u64,
+                                *mut core::ffi::c_void,
+                                u64,
+                            ) -> i32 = unsafe { std::mem::transmute(fused[rci]) };
+                            unsafe { f(ap, envp, tp) };
+                            // NO finished break here: $finish completes the
+                            // instant's edge schedules
+                        }
+                        // $finish/$stop stop ON this posedge: break BEFORE
+                        // tp/tn advance so the exit bookkeeping and re-armed
+                        // heap see the companion negedge as PENDING, exactly
+                        // like the general loop's state at a yield (the
+                        // fleet: crediting it made oracle edge compares
+                        // diverge)
+                        if self.fe.finished.is_some() || self.fe.stop_request {
+                            fin_break = true;
+                            break;
+                        }
+                        // a compiled $dumpvars/$dumpon armed the dump mid-
+                        // slice: yield to the general loop, whose per-slice
+                        // vcd_event takes over (and whose is_active probe
+                        // blocks re-engagement).  The arming instant's own
+                        // event fires below AFTER the clock bookkeeping — the
+                        // reference writes the whole arming sequence
+                        // (unstamped initial values, the time marker, the
+                        // $dumpvars task, the checkpoint) in that one event.
+                        // Cost on the hot path: three flag loads per posedge
+                        // (the transition-tax budget).
+                        if self.vcd.is_active() {
+                            vcd_yield = true;
+                            break;
+                        }
+                        if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
+                            break;
+                        }
+                        tp += period;
+                        tn += period;
+                    }
+                    // clock bookkeeping for queries + re-arm the heap so the
+                    // general loop (and later advance() calls) resume cleanly
+                    {
+                        let k = self.cycle - cycles0;
+                        let c = &mut self.vcd_clocks[wci];
+                        c.pos_at = self.now;
+                        c.pos_count = self.cycle;
+                        c.cur = true;
+                        // negedges pass silently inside the central player
+                        // (no negedge comps by precondition); keep the counts
+                        // coherent for later bk queries.  On a $finish exit
+                        // the finish posedge's companion negedge has NOT
+                        // retired — the general loop leaves it pending —
+                        // and on both exit shapes the last RETIRED negedge
+                        // is tn - period (tp/tn advance only on completed
+                        // iterations).
+                        // the vcd yield credits the lagging companion negedge
+                        // too (it was time-passed silently, like every negedge
+                        // inside the player): the general loop must resume at
+                        // its SUCCESSOR, or a stale past-time negedge event
+                        // writes a time-disordered clock line into the dump
+                        let done = if fin_break { k.saturating_sub(1) } else { k };
+                        if done > 0 {
+                            c.neg_count += done;
+                            c.neg_at = tn - period;
+                        }
+                        if vcd_yield {
+                            c.neg_count += 1;
+                            c.neg_at = tn;
+                        }
+                    }
+                    // on a yield exit tp still names the EXECUTED posedge —
+                    // re-arming it verbatim would re-run that edge on a
+                    // $stop resume; its successor is the pending one
+                    let tp_pend = if fin_break || vcd_yield {
+                        tp + period
+                    } else {
+                        tp
+                    };
+                    let tn_pend = if vcd_yield { tn + period } else { tn };
+                    heap.push(Reverse((tp_pend, 1, wci, true)));
+                    heap.push(Reverse((tn_pend, 1, wci, false)));
+                    if vcd_yield {
+                        // the arming slice's full dump sequence, with the
+                        // clock bookkeeping above already in place
+                        self.vcd_event(tp);
+                    }
                 }
             };
         }
 
         while self.fe.finished.is_none() && !self.fe.stop_request {
-            let Some(Reverse((t, prio, ci, pos))) = heap.pop() else { break };
+            let Some(Reverse((t, prio, ci, pos))) = heap.pop() else {
+                break;
+            };
             // top reset deasserts at t=2 after that instant's logic
             if t > 2 && self.rst_asserted[0] {
                 self.apply_reset(0, false);
@@ -4525,8 +4685,7 @@ impl Interp {
             // bk_quit_at / UI events: every timeslice <= tq is done
             // once the next event lies beyond tq; the kernel's UI
             // callback is an event AT tq, so time advances to tq
-            if let Some(&tq) = cond.at_times.iter().filter(|&&tq| t > tq).min()
-            {
+            if let Some(&tq) = cond.at_times.iter().filter(|&&tq| t > tq).min() {
                 self.now = self.now.max(tq);
                 final_now = final_now.max(tq);
                 heap.push(Reverse((t, prio, ci, pos)));
@@ -4620,9 +4779,7 @@ impl Interp {
                             // first fix covered only the node-walk arm while
                             // AOT runs fuse from the first slice.
                             for i in 0..self.insts.len() {
-                                if let InstKind::User { latched, .. } =
-                                    &mut self.insts[i].kind
-                                {
+                                if let InstKind::User { latched, .. } = &mut self.insts[i].kind {
                                     latched.clear();
                                 }
                             }
@@ -4639,62 +4796,59 @@ impl Interp {
                                     *mut u64,
                                     *mut core::ffi::c_void,
                                     u64,
-                                ) -> i32 = unsafe { std::mem::transmute(fp) };
-                                let envp =
-                                    self as *mut Interp as *mut core::ffi::c_void;
+                                )
+                                    -> i32 = unsafe { std::mem::transmute(fp) };
+                                let envp = self as *mut Interp as *mut core::ffi::c_void;
                                 unsafe { f(ap, envp, t) };
                                 _ran_fused = true;
                                 true
                             } else {
-                            // ConfigReg reads compare written_at to now
-                            unsafe { *ap.add(j.now_slot as usize) = t };
-                            // the C++ schedule zeroes every enable at the
-                            // top of the pass; compiled call sites set them
-                            for &s in &j.en_slots {
-                                unsafe { *ap.add(s as usize) = 0 };
-                            }
-                            let envp = self as *mut Interp as *mut core::ffi::c_void;
-                            let _dt0 = jit::prof::on().then(std::time::Instant::now);
-                            for n in nodes {
-                                match *n {
-                                    jit::JitNode::Sched(ord) => {
-                                        let f = j.lazy.scheds[ord as usize].sched;
-                                        unsafe { f(ap, envp) }
-                                    }
-                                    jit::JitNode::Exec(ord) => {
-                                        match j.lazy.exec(ord as usize) {
-                                            Some(ce) => {
-                                                let f = ce.exec;
-                                                let (b, tb) =
-                                                    j.lazy.exec_args[ord as usize];
-                                                unsafe {
-                                                    f(ap, envp, b, tb);
+                                // ConfigReg reads compare written_at to now
+                                unsafe { *ap.add(j.now_slot as usize) = t };
+                                // the C++ schedule zeroes every enable at the
+                                // top of the pass; compiled call sites set them
+                                for &s in &j.en_slots {
+                                    unsafe { *ap.add(s as usize) = 0 };
+                                }
+                                let envp = self as *mut Interp as *mut core::ffi::c_void;
+                                let _dt0 = jit::prof::on().then(std::time::Instant::now);
+                                for n in nodes {
+                                    match *n {
+                                        jit::JitNode::Sched(ord) => {
+                                            let f = j.lazy.scheds[ord as usize].sched;
+                                            unsafe { f(ap, envp) }
+                                        }
+                                        jit::JitNode::Exec(ord) => {
+                                            match j.lazy.exec(ord as usize) {
+                                                Some(ce) => {
+                                                    let f = ce.exec;
+                                                    let (b, tb) = j.lazy.exec_args[ord as usize];
+                                                    unsafe {
+                                                        f(ap, envp, b, tb);
+                                                    }
                                                 }
-                                            }
-                                            None => {
-                                                // cold body: the native
-                                                // sched wrote the WF slot;
-                                                // interpret the body if set
-                                                let (inst, rname, wf_slot) =
-                                                    j.exec_fallback[ord as usize];
-                                                let wf = unsafe {
-                                                    *ap.add(wf_slot as usize)
-                                                };
-                                                if wf != 0 {
-                                                    self.exec_rule_forced(inst, rname);
+                                                None => {
+                                                    // cold body: the native
+                                                    // sched wrote the WF slot;
+                                                    // interpret the body if set
+                                                    let (inst, rname, wf_slot) =
+                                                        j.exec_fallback[ord as usize];
+                                                    let wf = unsafe { *ap.add(wf_slot as usize) };
+                                                    if wf != 0 {
+                                                        self.exec_rule_forced(inst, rname);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                    // NO finished break: $finish completes
+                                    // the in-flight edge schedule (see
+                                    // exec_stmt) — the walk runs every node
                                 }
-                                // NO finished break: $finish completes
-                                // the in-flight edge schedule (see
-                                // exec_stmt) — the walk runs every node
-                            }
-                            if let Some(t0) = _dt0 {
-                                jit::prof::add(&jit::prof::DISPATCH_NS, t0);
-                            }
-                            true
+                                if let Some(t0) = _dt0 {
+                                    jit::prof::add(&jit::prof::DISPATCH_NS, t0);
+                                }
+                                true
                             }
                         }
                         None => false,
@@ -4714,8 +4868,7 @@ impl Interp {
                     // auto-fired methods whose Exec cut precedes every
                     // node-bearing top segment run first
                     if !self.autofire.is_empty() {
-                        if let Some(idxs) = self.autofire_pre.get(&rci).cloned()
-                        {
+                        if let Some(idxs) = self.autofire_pre.get(&rci).cloned() {
                             for mi in idxs {
                                 let (m, argv) = self.autofire[mi].clone();
                                 self.call_action(0, m, 0, &argv);
@@ -4778,11 +4931,10 @@ impl Interp {
                                 continue;
                             }
                             match node {
-                                SchedNode::Sched(r) => { let r = r.rule();
-                                    let ci2 = walk_cross
-                                        .get(&(inst, r))
-                                        .cloned()
-                                        .unwrap_or_default();
+                                SchedNode::Sched(r) => {
+                                    let r = r.rule();
+                                    let ci2 =
+                                        walk_cross.get(&(inst, r)).cloned().unwrap_or_default();
                                     self.latch_rule(inst, r, &ci2);
                                 }
                                 SchedNode::Exec(r) => self.exec_rule(inst, r.rule()),
@@ -4794,9 +4946,7 @@ impl Interp {
                         // top params; call_action's check_rdy guards
                         // each fire; $finish semantics as for rules)
                         if !self.autofire_at.is_empty() {
-                            if let Some(idxs) =
-                                self.autofire_at.get(&(rci, ei)).cloned()
-                            {
+                            if let Some(idxs) = self.autofire_at.get(&(rci, ei)).cloned() {
                                 for mi in idxs {
                                     let (m, argv) = self.autofire[mi].clone();
                                     self.call_action(0, m, 0, &argv);
@@ -4810,9 +4960,7 @@ impl Interp {
                 // prim itself checks its reset line)
                 #[cfg(feature = "aot")]
                 let _tt0 = jit::prof::on().then(std::time::Instant::now);
-                for (_ti, (inst, pname, is_rst, owner, gexpr)) in
-                    rc.ticks.iter().enumerate()
-                {
+                for (_ti, (inst, pname, is_rst, owner, gexpr)) in rc.ticks.iter().enumerate() {
                     let inst = *inst;
                     // steady state: a reset tick is a no-op unless some
                     // reset node is asserted (rst_tick acts only
@@ -4829,10 +4977,7 @@ impl Interp {
                     #[cfg(feature = "aot")]
                     if _ran_fused {
                         if let Some(j) = jit.as_ref() {
-                            if j.covered_ticks
-                                .get(rci)
-                                .is_some_and(|c| c.contains(&_ti))
-                            {
+                            if j.covered_ticks.get(rci).is_some_and(|c| c.contains(&_ti)) {
                                 continue;
                             }
                         }
@@ -4873,13 +5018,8 @@ impl Interp {
                             if !self.jit_arena_ptr.is_null() {
                                 unsafe {
                                     for i in 0..words {
-                                        *self
-                                            .jit_arena_ptr
-                                            .add((cur + i) as usize) = u64::MAX;
-                                        *self
-                                            .jit_arena_ptr
-                                            .add((next + i) as usize) =
-                                            u64::MAX;
+                                        *self.jit_arena_ptr.add((cur + i) as usize) = u64::MAX;
+                                        *self.jit_arena_ptr.add((next + i) as usize) = u64::MAX;
                                     }
                                 }
                             }
@@ -4969,12 +5109,9 @@ impl Interp {
                                 continue;
                             }
                             match node {
-                                SchedNode::Sched(r) => { let r = r.rule();
-                                    let ci2 = rc
-                                        .cross
-                                        .get(&(inst, r))
-                                        .cloned()
-                                        .unwrap_or_default();
+                                SchedNode::Sched(r) => {
+                                    let r = r.rule();
+                                    let ci2 = rc.cross.get(&(inst, r)).cloned().unwrap_or_default();
                                     self.latch_rule(inst, r, &ci2);
                                 }
                                 SchedNode::Exec(r) => self.exec_rule(inst, r.rule()),
@@ -5024,9 +5161,7 @@ impl Interp {
             // never reaches the engage point — legitimately
             && self.now > 2
         {
-            if let Some(d) =
-                jit.as_ref().and_then(|j| j.runcore_desc.as_ref())
-            {
+            if let Some(d) = jit.as_ref().and_then(|j| j.runcore_desc.as_ref()) {
                 if d.central {
                     eprintln!(
                         "trs runcore: MISMATCH: descriptor says central-\
@@ -5053,7 +5188,11 @@ impl Interp {
                 self.census = Some(c);
             }
         }
-        if self.fe.fataled { 1 } else { 0 }
+        if self.fe.fataled {
+            1
+        } else {
+            0
+        }
     }
 
     /// End-of-simulation epilogue (bk_shutdown's VCD side): finish an
@@ -5073,9 +5212,12 @@ impl Interp {
         }
         self.vcd.set_final_min_pending(final_now);
         self.vcd.flush_all_pending();
-        if self.fe.fataled { 1 } else { 0 }
+        if self.fe.fataled {
+            1
+        } else {
+            0
+        }
     }
-
 }
 
 /// dollar_display's Target collects errors with push_front and prints
@@ -5147,13 +5289,17 @@ impl Interp {
         exe: std::path::PathBuf,
         libdir: std::path::PathBuf,
     ) {
-        self.jit_request = jit::JitRequest::Emit { so, exe: Some((exe, libdir)) };
+        self.jit_request = jit::JitRequest::Emit {
+            so,
+            exe: Some((exe, libdir)),
+        };
     }
 
     /// trs run --code: resolve compiled functions from the artifact.
     pub fn aot_request_code(&mut self, so: std::path::PathBuf) {
-        self.jit_request =
-            jit::JitRequest::Load { src: jit::ArtifactSource::Path(so) };
+        self.jit_request = jit::JitRequest::Load {
+            src: jit::ArtifactSource::Path(so),
+        };
     }
 
     /// Take the RunCore arena image encoded by an Emit plan; the
@@ -5166,8 +5312,9 @@ impl Interp {
     /// Artifact-as-executable: the design objects are linked into THIS
     /// process image — resolve compiled functions from ourselves.
     pub fn aot_request_code_self(&mut self) {
-        self.jit_request =
-            jit::JitRequest::Load { src: jit::ArtifactSource::This };
+        self.jit_request = jit::JitRequest::Load {
+            src: jit::ArtifactSource::This,
+        };
     }
 
     /// Outcome of an Emit request (valid after prime()).
@@ -5363,10 +5510,7 @@ impl Interp {
     /// Method-port symbols of a user-module instance (SYM_PORT):
     /// EN_<m> for action-kind methods, argument ports, RDY_<m>, and
     /// the result port named after value/AV methods.
-    pub fn method_port_symbols(
-        &self,
-        i: usize,
-    ) -> Vec<(String, u32, StrId, MethPortKind)> {
+    pub fn method_port_symbols(&self, i: usize) -> Vec<(String, u32, StrId, MethPortKind)> {
         let InstKind::User { module, .. } = &self.insts[i].kind else {
             return Vec::new();
         };
@@ -5435,10 +5579,8 @@ impl Interp {
                 // boxed latch map
                 if !set && !self.jit_arena_ptr.is_null() {
                     if let Some(id) = id {
-                        if let Some(&slot) = self.jit_en_slots.get(&(i, id as StrId))
-                        {
-                            set = unsafe { *self.jit_arena_ptr.add(slot as usize) }
-                                != 0;
+                        if let Some(&slot) = self.jit_en_slots.get(&(i, id as StrId)) {
+                            set = unsafe { *self.jit_arena_ptr.add(slot as usize) } != 0;
                         }
                     }
                 }
@@ -5567,11 +5709,7 @@ impl Interp {
     /// disagree, at most `max` findings.  Engines share instance
     /// indexing (same BIR).  Prim state is live on every tier
     /// (arena-attached or boxed), unlike def recordings.
-    pub fn state_divergence(
-        &mut self,
-        other: &mut Interp,
-        max: usize,
-    ) -> Vec<String> {
+    pub fn state_divergence(&mut self, other: &mut Interp, max: usize) -> Vec<String> {
         let fmt = |v: &Option<Value>| match v {
             Some(v) => v.to_hex_string(),
             None => "NoValue".into(),
@@ -5673,12 +5811,7 @@ impl Interp {
         }
     }
 
-    pub fn prim_sym_read_range(
-        &mut self,
-        i: usize,
-        key: &str,
-        addr: u64,
-    ) -> Option<Value> {
+    pub fn prim_sym_read_range(&mut self, i: usize, key: &str, addr: u64) -> Option<Value> {
         let now = self.now;
         match &mut self.insts[i].kind {
             InstKind::Prim(p) => p.sym_read_range(key, addr, now),
@@ -5823,8 +5956,7 @@ pub fn run_file(
             }
         }
     }
-    let mut interp =
-        startup::load_file_or_code(path, code, plusargs, binds, vcd_file)?;
+    let mut interp = startup::load_file_or_code(path, code, plusargs, binds, vcd_file)?;
     if let Some((vcd, fst)) = formats {
         interp.set_allowed_wave_formats(vcd, fst);
     }

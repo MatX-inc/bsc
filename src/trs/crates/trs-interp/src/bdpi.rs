@@ -15,8 +15,8 @@
 
 use crate::format::Arg;
 use crate::value::Value;
-use trs_ir::{ForeignFunc, ForeignType};
 use std::ffi::CString;
+use trs_ir::{ForeignFunc, ForeignType};
 
 pub struct Bdpi {
     /// Keeps the dlopened user code alive for the run.
@@ -37,10 +37,10 @@ impl Bdpi {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let mut syms = std::collections::HashMap::new();
         for (name, c_name) in funcs {
-            let sym: libloading::Symbol<unsafe extern "C" fn()> =
-                unsafe { lib.get(c_name.as_bytes()) }.map_err(|e| {
-                    format!("{}: undefined BDPI symbol {c_name:?}: {e}", path.display())
-                })?;
+            let sym: libloading::Symbol<unsafe extern "C" fn()> = unsafe {
+                lib.get(c_name.as_bytes())
+            }
+            .map_err(|e| format!("{}: undefined BDPI symbol {c_name:?}: {e}", path.display()))?;
             let fptr: unsafe extern "C" fn() = *sym;
             syms.insert(name.clone(), fptr as usize);
         }
@@ -95,8 +95,7 @@ impl Bdpi {
                     cstrs.push(c);
                 }
                 (ForeignType::Bits(_), Arg::Val(v, _)) => slots.push(v.as_u64()),
-                (ForeignType::Wide(_), Arg::Val(v, _))
-                | (ForeignType::Poly, Arg::Val(v, _)) => {
+                (ForeignType::Wide(_), Arg::Val(v, _)) | (ForeignType::Poly, Arg::Val(v, _)) => {
                     bufs.push(v.to_u32_limbs());
                     slots.push(bufs.last().unwrap().as_ptr() as u64);
                 }

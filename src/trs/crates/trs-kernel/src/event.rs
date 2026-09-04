@@ -112,7 +112,12 @@ mod tests {
     use crate::priority::{Group, Slot};
 
     fn ev(at: Time, group: Group, slot: Slot, clock: u32, kind: EventKind) -> Event {
-        Event { at, priority: Priority::new(group, slot, clock), kind, period: 0 }
+        Event {
+            at,
+            priority: Priority::new(group, slot, clock),
+            kind,
+            period: 0,
+        }
     }
 
     #[test]
@@ -120,12 +125,41 @@ mod tests {
         let mut q = EventQueue::new();
         // Insert out of order: a later edge, this timeslice's VCD flush,
         // this timeslice's edge, and an after-edge combo event.
-        q.schedule(ev(20, Group::Logic, Slot::Execute, 0, EventKind::ClockEdge { clock: ClockHandle(0), rising: true }));
+        q.schedule(ev(
+            20,
+            Group::Logic,
+            Slot::Execute,
+            0,
+            EventKind::ClockEdge {
+                clock: ClockHandle(0),
+                rising: true,
+            },
+        ));
         q.schedule(ev(10, Group::AfterLogic, Slot::Vcd, 0, EventKind::Wave));
-        q.schedule(ev(10, Group::Logic, Slot::Execute, 0, EventKind::ClockEdge { clock: ClockHandle(0), rising: true }));
-        q.schedule(ev(10, Group::Final, Slot::Combinational, 0, EventKind::AfterEdge { clock: ClockHandle(0), rising: true }));
+        q.schedule(ev(
+            10,
+            Group::Logic,
+            Slot::Execute,
+            0,
+            EventKind::ClockEdge {
+                clock: ClockHandle(0),
+                rising: true,
+            },
+        ));
+        q.schedule(ev(
+            10,
+            Group::Final,
+            Slot::Combinational,
+            0,
+            EventKind::AfterEdge {
+                clock: ClockHandle(0),
+                rising: true,
+            },
+        ));
 
-        let order: Vec<(Time, EventKind)> = std::iter::from_fn(|| q.pop()).map(|e| (e.at, e.kind)).collect();
+        let order: Vec<(Time, EventKind)> = std::iter::from_fn(|| q.pop())
+            .map(|e| (e.at, e.kind))
+            .collect();
         assert!(matches!(order[0], (10, EventKind::ClockEdge { .. })));
         assert!(matches!(order[1], (10, EventKind::Wave)));
         assert!(matches!(order[2], (10, EventKind::AfterEdge { .. })));
@@ -135,17 +169,50 @@ mod tests {
     #[test]
     fn simultaneous_edges_order_by_clock_number() {
         let mut q = EventQueue::new();
-        q.schedule(ev(5, Group::Logic, Slot::Execute, 1, EventKind::ClockEdge { clock: ClockHandle(1), rising: true }));
-        q.schedule(ev(5, Group::Logic, Slot::Execute, 0, EventKind::ClockEdge { clock: ClockHandle(0), rising: true }));
+        q.schedule(ev(
+            5,
+            Group::Logic,
+            Slot::Execute,
+            1,
+            EventKind::ClockEdge {
+                clock: ClockHandle(1),
+                rising: true,
+            },
+        ));
+        q.schedule(ev(
+            5,
+            Group::Logic,
+            Slot::Execute,
+            0,
+            EventKind::ClockEdge {
+                clock: ClockHandle(0),
+                rising: true,
+            },
+        ));
         let first = q.pop().unwrap();
-        assert!(matches!(first.kind, EventKind::ClockEdge { clock: ClockHandle(0), .. }));
+        assert!(matches!(
+            first.kind,
+            EventKind::ClockEdge {
+                clock: ClockHandle(0),
+                ..
+            }
+        ));
     }
 
     #[test]
     fn remove_where_cancels_events() {
         let mut q = EventQueue::new();
         q.schedule(ev(5, Group::AfterLogic, Slot::Vcd, 0, EventKind::Wave));
-        q.schedule(ev(5, Group::Logic, Slot::Execute, 0, EventKind::ClockEdge { clock: ClockHandle(0), rising: true }));
+        q.schedule(ev(
+            5,
+            Group::Logic,
+            Slot::Execute,
+            0,
+            EventKind::ClockEdge {
+                clock: ClockHandle(0),
+                rising: true,
+            },
+        ));
         q.remove_where(|e| matches!(e.kind, EventKind::Wave));
         assert_eq!(q.len(), 1);
         assert!(matches!(q.pop().unwrap().kind, EventKind::ClockEdge { .. }));

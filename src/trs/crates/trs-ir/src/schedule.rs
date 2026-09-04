@@ -37,18 +37,14 @@ use crate::{MethodRef, RuleRef, SchedEntity, StrId};
 /// (`SchedNode`, `AScheduleInfo.hs`.)  Ordered so the merge can key
 /// maps on it: bsc's own Ord puts every Sched before every Exec, and
 /// the derived order does the same because Sched is declared first.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SchedNode {
     Sched(SchedEntity),
     Exec(SchedEntity),
 }
 
 /// A call on a submodule, as the pair of positions naming it.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SubMethod {
     /// the submodule instance, in this module's instance list
     pub instance: u32,
@@ -110,7 +106,6 @@ pub enum DynSched {
         between: Vec<StrId>,
     },
 }
-
 
 /// Per-module (type) schedule information.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

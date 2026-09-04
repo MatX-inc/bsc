@@ -45,15 +45,19 @@ impl Hier {
         while let Some(i) = queue.pop() {
             let (path, mir) = (h.insts[i].0.clone(), h.insts[i].1);
             for (pos, inst) in design.modules[mir].instances.iter().enumerate() {
-                let crate::InstanceKind::Module(xr) = inst.kind else { continue };
+                let crate::InstanceKind::Module(xr) = inst.kind else {
+                    continue;
+                };
                 let cname = design.modules[mir].extern_module(xr);
-                let Some(cmir) = design.modules.iter().position(|m| m.name == cname)
-                else {
+                let Some(cmir) = design.modules.iter().position(|m| m.name == cname) else {
                     continue;
                 };
                 let leaf = design.name(inst.name);
-                let cpath =
-                    if path.is_empty() { leaf.to_string() } else { format!("{path}.{leaf}") };
+                let cpath = if path.is_empty() {
+                    leaf.to_string()
+                } else {
+                    format!("{path}.{leaf}")
+                };
                 let k = h.insts.len();
                 h.insts.push((cpath, cmir));
                 h.kids.push(Vec::new());
@@ -99,15 +103,23 @@ impl ModCsi {
         // schedule map does; the merge works forwards, so turn it
         // around here.  Every node stays a key even with nothing after
         // it, or a node nothing depends on would drop out of the order.
-        let mut sched: BTreeMap<SchedNode, Vec<SchedNode>> =
-            m.schedule.sched_graph.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        let mut sched: BTreeMap<SchedNode, Vec<SchedNode>> = m
+            .schedule
+            .sched_graph
+            .iter()
+            .map(|(n, _)| (*n, Vec::new()))
+            .collect();
         for (n, priors) in &m.schedule.sched_graph {
             for p in priors {
                 sched.entry(*p).or_default().push(*n);
             }
         }
-        let conflicts =
-            m.schedule.conflicts.iter().map(|(e, es)| (*e, es.clone())).collect();
+        let conflicts = m
+            .schedule
+            .conflicts
+            .iter()
+            .map(|(e, es)| (*e, es.clone()))
+            .collect();
         let disjoint = m
             .schedule
             .disjoint_rules
@@ -115,7 +127,12 @@ impl ModCsi {
             .map(|(e, es)| (*e, es.iter().copied().collect()))
             .collect();
         let ffunc = m.schedule.ffunc_edges.iter().copied().collect();
-        ModCsi { sched, conflicts, disjoint, ffunc }
+        ModCsi {
+            sched,
+            conflicts,
+            disjoint,
+            ffunc,
+        }
     }
 }
 
@@ -218,7 +235,11 @@ impl ModDomains {
         // last wins, as it does in the map bsc builds: two domains can
         // name the same oscillator, differing only in their gate, and
         // the index is keyed on the oscillator alone
-        self.by_osc.iter().rev().find(|(o, _)| o == osc).map(|(_, d)| *d)
+        self.by_osc
+            .iter()
+            .rev()
+            .find(|(o, _)| o == osc)
+            .map(|(_, d)| *d)
     }
 
     /// Read one module's domains out of its fragment.
@@ -230,7 +251,11 @@ impl ModDomains {
             for (osc, _) in &cd.clocks {
                 d.by_osc.push((osc.clone(), cd.id));
             }
-            d.info.entry(cd.id).or_default().clocks.extend(cd.clocks.iter().cloned());
+            d.info
+                .entry(cd.id)
+                .or_default()
+                .clocks
+                .extend(cd.clocks.iter().cloned());
         }
 
         // rules, by the domain their wire properties put them in
@@ -251,7 +276,9 @@ impl ModDomains {
                 let Some(osc) = inst.args.get(ca.arg as usize).and_then(clock_osc) else {
                     continue;
                 };
-                let Some(dom) = d.domain_of(osc) else { continue };
+                let Some(dom) = d.domain_of(osc) else {
+                    continue;
+                };
                 let e = d.info.entry(dom).or_default();
                 e.prims.push((i as u32, *ca));
                 if ca.has_reset {
@@ -263,7 +290,11 @@ impl ModDomains {
         // interface output clocks
         for (name, osc) in &m.ifc_clocks {
             if let Some(dom) = d.domain_of(osc) {
-                d.info.entry(dom).or_default().output_clocks.push((*name, osc.clone()));
+                d.info
+                    .entry(dom)
+                    .or_default()
+                    .output_clocks
+                    .push((*name, osc.clone()));
             }
         }
         d
@@ -299,8 +330,12 @@ pub struct Uses {
 impl Uses {
     pub fn of(m: &crate::Module) -> Uses {
         let mut u = Uses::default();
-        let inst_ix: BTreeMap<StrId, u32> =
-            m.instances.iter().enumerate().map(|(i, x)| (x.name, i as u32)).collect();
+        let inst_ix: BTreeMap<StrId, u32> = m
+            .instances
+            .iter()
+            .enumerate()
+            .map(|(i, x)| (x.name, i as u32))
+            .collect();
         let mut acc = Vec::new();
         let mut defs = DefUses::default();
 
@@ -361,7 +396,9 @@ fn record(
     acc: &[(StrId, StrId)],
 ) {
     for (inst, meth) in acc {
-        let Some(&i) = inst_ix.get(inst) else { continue };
+        let Some(&i) = inst_ix.get(inst) else {
+            continue;
+        };
         let v = into.entry((e, i)).or_default();
         if !v.contains(meth) {
             v.push(*meth);
@@ -371,12 +408,7 @@ fn record(
 
 /// Follow a def reference into its expression.  bsc resolves the same
 /// way, through the module's def graph.
-fn walk_def(
-    m: &crate::Module,
-    name: StrId,
-    defs: &mut DefUses,
-    out: &mut Vec<(StrId, StrId)>,
-) {
+fn walk_def(m: &crate::Module, name: StrId, defs: &mut DefUses, out: &mut Vec<(StrId, StrId)>) {
     if !defs.reaches.contains_key(&name) {
         if !defs.open.insert(name) {
             return;
@@ -399,15 +431,15 @@ fn walk_def(
     }
 }
 
-fn walk_expr(
-    m: &crate::Module,
-    e: &Expr,
-    defs: &mut DefUses,
-    out: &mut Vec<(StrId, StrId)>,
-) {
+fn walk_expr(m: &crate::Module, e: &Expr, defs: &mut DefUses, out: &mut Vec<(StrId, StrId)>) {
     match e {
         Expr::Def(n) => walk_def(m, *n, defs, out),
-        Expr::MethCall { instance, method, args, .. } => {
+        Expr::MethCall {
+            instance,
+            method,
+            args,
+            ..
+        } => {
             out.push((*instance, *method));
             for a in args {
                 walk_expr(m, a, defs, out);
@@ -418,7 +450,9 @@ fn walk_expr(
                 walk_expr(m, a, defs, out);
             }
         }
-        Expr::If { cond, then_, else_, .. } => {
+        Expr::If {
+            cond, then_, else_, ..
+        } => {
             walk_expr(m, cond, defs, out);
             walk_expr(m, then_, defs, out);
             walk_expr(m, else_, defs, out);
@@ -428,7 +462,12 @@ fn walk_expr(
                 walk_expr(m, a, defs, out);
             }
         }
-        Expr::Case { scrutinee, arms, default, .. } => {
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
             walk_expr(m, scrutinee, defs, out);
             for (_, e) in arms {
                 walk_expr(m, e, defs, out);
@@ -488,15 +527,31 @@ fn walk_action(
 ) {
     use crate::Action as A;
     match a {
-        A::MethCall { instance, method, cond, args, .. } => {
+        A::MethCall {
+            instance,
+            method,
+            cond,
+            args,
+            ..
+        } => {
             out.push((*instance, *method));
             walk_expr(m, cond, defs, out);
             for x in args {
                 walk_expr(m, x, defs, out);
             }
         }
-        A::Foreign { cond, args, assumption, .. }
-        | A::Task { cond, args, assumption, .. } => {
+        A::Foreign {
+            cond,
+            args,
+            assumption,
+            ..
+        }
+        | A::Task {
+            cond,
+            args,
+            assumption,
+            ..
+        } => {
             // an assumption check reads whatever it polices, but that
             // reading orders nothing -- bsc leaves it out of the use
             // map, and counting it here would order the rule against
@@ -541,7 +596,11 @@ pub struct QDomain {
 
 impl QDomain {
     fn of_module(inst: u32, id: u32) -> QDomain {
-        QDomain { inst, prim: None, id }
+        QDomain {
+            inst,
+            prim: None,
+            id,
+        }
     }
 }
 
@@ -628,7 +687,10 @@ fn child_domain_map(
         };
         let gate = match ic.gate {
             Some(g) => Expr::Port(g),
-            None => Expr::Const { width: 1, limbs: vec![1] },
+            None => Expr::Const {
+                width: 1,
+                limbs: vec![1],
+            },
         };
         let Some(cd) = child.domain_of_clock(&Expr::Port(ic.osc), &gate) else {
             continue;
@@ -663,15 +725,22 @@ fn child_domain_map(
     // the instance that exports it, so the two sides meet on the port
     // name it leaves on.
     for (port, osc) in child.outputs {
-        let Some(cd) = child.domain_of(osc) else { continue };
+        let Some(cd) = child.domain_of(osc) else {
+            continue;
+        };
         if out.contains_key(&key(cd)) {
             // a domain with an input clock is settled by that; an
             // output clock only speaks for a domain nothing was wired
             // into
             continue;
         }
-        let outer = Expr::ClockOut { instance: inst.name, clock: *port };
-        let Some(pd) = parent_dom.domain_of(&outer) else { continue };
+        let outer = Expr::ClockOut {
+            instance: inst.name,
+            clock: *port,
+        };
+        let Some(pd) = parent_dom.domain_of(&outer) else {
+            continue;
+        };
         out.insert(key(cd), Fate::Joins(QDomain::of_module(parent_inst, pd)));
     }
 
@@ -829,9 +898,14 @@ fn combine_disjoint(
             let mut disjoints: Vec<QEntity> = Vec::new();
             for d in ds {
                 if seam(d) {
-                    let SchedEntity::Method(dm) = d.1 else { continue };
+                    let SchedEntity::Method(dm) = d.1 else {
+                        continue;
+                    };
                     disjoints.extend(
-                        rev.get(&dm).into_iter().flatten().map(|r| (parent_inst, *r)),
+                        rev.get(&dm)
+                            .into_iter()
+                            .flatten()
+                            .map(|r| (parent_inst, *r)),
                     );
                 } else {
                     disjoints.push(*d);
@@ -873,7 +947,9 @@ fn combine_ffunc(
         if !seam(e) {
             return vec![*e];
         }
-        let SchedEntity::Method(mr) = e.1 else { return Vec::new() };
+        let SchedEntity::Method(mr) = e.1 else {
+            return Vec::new();
+        };
         callers
             .get(&mr)
             .into_iter()
@@ -897,12 +973,17 @@ fn combine_ffunc(
 /// caller's body must run to decide whether the method is scheduled.
 fn use_to_nodes(callee: &crate::Module, meth: StrId) -> Vec<SchedNode> {
     if let Some(i) = callee.methods.iter().position(|m| m.rdy == Some(meth)) {
-        return vec![SchedNode::Sched(SchedEntity::Method(crate::MethodRef(i as u32)))];
+        return vec![SchedNode::Sched(SchedEntity::Method(crate::MethodRef(
+            i as u32,
+        )))];
     }
     match callee.methods.iter().position(|m| m.name == meth) {
         Some(i) => {
             let r = crate::MethodRef(i as u32);
-            vec![SchedNode::Sched(SchedEntity::Method(r)), SchedNode::Exec(SchedEntity::Method(r))]
+            vec![
+                SchedNode::Sched(SchedEntity::Method(r)),
+                SchedNode::Exec(SchedEntity::Method(r)),
+            ]
         }
         None => Vec::new(),
     }
@@ -974,7 +1055,12 @@ pub fn merged_graph(inp: &Inputs) -> (BTreeMap<QNode, Vec<QNode>>, Vec<DynFact>)
         let mut g: BTreeMap<QNode, Vec<QNode>> = csi
             .sched
             .iter()
-            .map(|(n, tos)| (q(i as u32, *n), tos.iter().map(|t| q(i as u32, *t)).collect()))
+            .map(|(n, tos)| {
+                (
+                    q(i as u32, *n),
+                    tos.iter().map(|t| q(i as u32, *t)).collect(),
+                )
+            })
             .collect();
         let mut mine: Vec<DynFact> = inp
             .module(i as u32)
@@ -998,7 +1084,11 @@ pub fn merged_graph(inp: &Inputs) -> (BTreeMap<QNode, Vec<QNode>>, Vec<DynFact>)
                     .flat_map(|meth| use_to_nodes(cmod, *meth))
                     .map(|n| q(c as u32, n))
                     .collect();
-                let node = if sched { SchedNode::Sched(e) } else { SchedNode::Exec(e) };
+                let node = if sched {
+                    SchedNode::Sched(e)
+                } else {
+                    SchedNode::Exec(e)
+                };
                 pu.push((q(i as u32, node), ns));
             };
             for (&(e, ci), meths) in &uses.pred {
@@ -1019,7 +1109,9 @@ pub fn merged_graph(inp: &Inputs) -> (BTreeMap<QNode, Vec<QNode>>, Vec<DynFact>)
             // and the child's graph is what says so
             let rev = reverse(&child);
             for f in &mut mine {
-                let crate::schedule::DynSched::SelfCall { rule, early, late, .. } = &f.sched
+                let crate::schedule::DynSched::SelfCall {
+                    rule, early, late, ..
+                } = &f.sched
                 else {
                     continue;
                 };
@@ -1042,9 +1134,7 @@ pub fn merged_graph(inp: &Inputs) -> (BTreeMap<QNode, Vec<QNode>>, Vec<DynFact>)
 }
 
 /// The design's disjointness (`combineSchedDRDB`), folded the same way.
-pub fn merged_disjoint(
-    inp: &Inputs,
-) -> BTreeMap<QEntity, BTreeSet<QEntity>> {
+pub fn merged_disjoint(inp: &Inputs) -> BTreeMap<QEntity, BTreeSet<QEntity>> {
     let mut sub: Vec<BTreeMap<QEntity, BTreeSet<QEntity>>> =
         vec![BTreeMap::new(); inp.hier.insts.len()];
 
@@ -1053,9 +1143,7 @@ pub fn merged_disjoint(
         let mut d: BTreeMap<QEntity, BTreeSet<QEntity>> = csi
             .disjoint
             .iter()
-            .map(|(e, es)| {
-                ((i as u32, *e), es.iter().map(|x| (i as u32, *x)).collect())
-            })
+            .map(|(e, es)| ((i as u32, *e), es.iter().map(|x| (i as u32, *x)).collect()))
             .collect();
 
         for &(c, cpos) in &inp.hier.kids[i] {
@@ -1072,11 +1160,8 @@ pub fn merged_disjoint(
 
 /// The design's Esposito conflicts (`combineSchedConflicts`), folded
 /// the same way.
-pub fn merged_conflicts(
-    inp: &Inputs,
-) -> BTreeMap<QEntity, Vec<QEntity>> {
-    let mut sub: Vec<BTreeMap<QEntity, Vec<QEntity>>> =
-        vec![BTreeMap::new(); inp.hier.insts.len()];
+pub fn merged_conflicts(inp: &Inputs) -> BTreeMap<QEntity, Vec<QEntity>> {
+    let mut sub: Vec<BTreeMap<QEntity, Vec<QEntity>>> = vec![BTreeMap::new(); inp.hier.insts.len()];
 
     for i in (0..inp.hier.insts.len()).rev() {
         let (csi, uses) = inp.at(i);
@@ -1103,11 +1188,8 @@ pub fn merged_conflicts(
 
 /// The design's droppable foreign-function pairs
 /// (`combineSchedRuleRelDB`), folded the same way.
-pub fn merged_ffunc(
-    inp: &Inputs,
-) -> BTreeSet<(QEntity, QEntity)> {
-    let mut sub: Vec<BTreeSet<(QEntity, QEntity)>> =
-        vec![BTreeSet::new(); inp.hier.insts.len()];
+pub fn merged_ffunc(inp: &Inputs) -> BTreeSet<(QEntity, QEntity)> {
+    let mut sub: Vec<BTreeSet<(QEntity, QEntity)>> = vec![BTreeSet::new(); inp.hier.insts.len()];
 
     for i in (0..inp.hier.insts.len()).rev() {
         let (csi, uses) = inp.at(i);
@@ -1152,17 +1234,14 @@ fn seg_index(m: &crate::Module) -> BTreeMap<SchedNode, (u32, u32, u32)> {
 /// that is not part of any segment -- a top-level interface method,
 /// which is a cut point rather than something executed -- has none.
 fn resolve(inp: &Inputs, n: QNode) -> Option<(Unit, u32)> {
-    let (dom, seg, pos) =
-        *inp.segs[inp.hier.insts[n.inst as usize].1].get(&n.node)?;
+    let (dom, seg, pos) = *inp.segs[inp.hier.insts[n.inst as usize].1].get(&n.node)?;
     Some(((n.inst, dom, seg), pos))
 }
 
 /// Both orientations of every disjoint pair.  bsc's own map should
 /// already read the same from either side, and it says so, but the
 /// derivation below asks from one side only.
-fn symmetric(
-    d: &BTreeMap<QEntity, BTreeSet<QEntity>>,
-) -> BTreeMap<QEntity, BTreeSet<QEntity>> {
+fn symmetric(d: &BTreeMap<QEntity, BTreeSet<QEntity>>) -> BTreeMap<QEntity, BTreeSet<QEntity>> {
     let mut out = d.clone();
     for (a, bs) in d {
         for b in bs {
@@ -1258,12 +1337,21 @@ fn cross_inhibits(
             SchedEntity::Rule(r) => inp.name(m.rules[r.idx()].name),
             SchedEntity::Method(mr) => inp.name(m.methods[mr.idx()].name),
         };
-        if path.is_empty() { base.to_string() } else { format!("{path}.{base}") }
+        if path.is_empty() {
+            base.to_string()
+        } else {
+            format!("{path}.{base}")
+        }
     };
     // a method is not a rule and cannot be inhibited
     let qual = |e: QEntity| -> Option<crate::schedule::QualRule> {
-        let SchedEntity::Rule(rule) = e.1 else { return None };
-        Some(crate::schedule::QualRule { instance: inst_id(inp, e.0), rule })
+        let SchedEntity::Rule(rule) = e.1 else {
+            return None;
+        };
+        Some(crate::schedule::QualRule {
+            instance: inst_id(inp, e.0),
+            rule,
+        })
     };
 
     let mut seen: BTreeSet<QEntity> = BTreeSet::new();
@@ -1276,7 +1364,9 @@ fn cross_inhibits(
                 }
                 SchedNode::Sched(e) => {
                     let key = (u.0, e);
-                    let Some(ds) = disjoint.get(&key) else { continue };
+                    let Some(ds) = disjoint.get(&key) else {
+                        continue;
+                    };
                     let Some(r) = qual(key) else { continue };
                     // ordered by qualified name, which is how the
                     // disjointness map is keyed and so the order the
@@ -1318,7 +1408,9 @@ fn derive_entries(
     let mut units: Vec<Unit> = Vec::new();
     let mut first_pos: BTreeMap<Unit, usize> = BTreeMap::new();
     for (p, n) in order.iter().enumerate() {
-        let Some((u, _)) = resolve(inp, *n) else { continue };
+        let Some((u, _)) = resolve(inp, *n) else {
+            continue;
+        };
         if first_pos.insert(u, p).is_none() {
             units.push(u);
         }
@@ -1326,9 +1418,13 @@ fn derive_entries(
 
     let mut edges: BTreeSet<(Unit, Unit)> = BTreeSet::new();
     for (n, tos) in graph {
-        let Some((un, _)) = resolve(inp, *n) else { continue };
+        let Some((un, _)) = resolve(inp, *n) else {
+            continue;
+        };
         for t in tos {
-            let Some((ut, _)) = resolve(inp, *t) else { continue };
+            let Some((ut, _)) = resolve(inp, *t) else {
+                continue;
+            };
             if un != ut {
                 edges.insert((un, ut));
             }
@@ -1354,9 +1450,7 @@ fn derive_entries(
             }
             let sn = q(r.0, SchedNode::Sched(r.1));
             let en = q(d.0, SchedNode::Exec(d.1));
-            let (Some((su, sj)), Some((eu, ej))) =
-                (resolve(inp, sn), resolve(inp, en))
-            else {
+            let (Some((su, sj)), Some((eu, ej))) = (resolve(inp, sn), resolve(inp, en)) else {
                 continue;
             };
             if su != eu {
@@ -1412,8 +1506,11 @@ fn derive_entries(
         *indeg.entry(*b).or_insert(0) += 1;
     }
     let key = |u: &Unit| (first_pos.get(u).copied().unwrap_or(usize::MAX), *u);
-    let mut ready: BTreeSet<(usize, Unit)> =
-        indeg.iter().filter(|(_, d)| **d == 0).map(|(u, _)| key(u)).collect();
+    let mut ready: BTreeSet<(usize, Unit)> = indeg
+        .iter()
+        .filter(|(_, d)| **d == 0)
+        .map(|(u, _)| key(u))
+        .collect();
     indeg.retain(|_, d| *d != 0);
 
     let mut out = Vec::with_capacity(units.len());
@@ -1435,7 +1532,10 @@ fn derive_entries(
     if indeg.is_empty() {
         Ok(out)
     } else {
-        Err(format!("cyclic segment graph: {} units unplaced", indeg.len()))
+        Err(format!(
+            "cyclic segment graph: {} units unplaced",
+            indeg.len()
+        ))
     }
 }
 
@@ -1455,8 +1555,7 @@ pub fn compositions(inp: &Inputs) -> Result<Vec<Composition>, String> {
 
     let mut out = Vec::new();
     for d in orders {
-        let units =
-            derive_entries(inp, &d.order, &d.graph, &disjoint)?;
+        let units = derive_entries(inp, &d.order, &d.graph, &disjoint)?;
         let inhibits = cross_inhibits(inp, &units, &both_ways);
         // The format records the clock by name.  The oscillator itself
         // is what this field wants to hold, and what the merge has; the
@@ -1464,13 +1563,12 @@ pub fn compositions(inp: &Inputs) -> Result<Vec<Composition>, String> {
         // no name at all means the oscillator is not one the format
         // can spell (a constant); a name that is not interned means
         // intern_names missed a case, which is a bug and not a 0
-        let clock = match canonical_clock(inp, d.domain)
-            .and_then(|osc| osc_name(inp, osc))
-        {
+        let clock = match canonical_clock(inp, d.domain).and_then(|osc| osc_name(inp, osc)) {
             None => 0,
-            Some(n) => inp.design.str_id(&n).unwrap_or_else(|| {
-                panic!("clock name {n:?} is not interned")
-            }),
+            Some(n) => inp
+                .design
+                .str_id(&n)
+                .unwrap_or_else(|| panic!("clock name {n:?} is not interned")),
         };
         let entries_of = |units: Vec<Unit>| -> Vec<CompositionEntry> {
             units
@@ -1531,7 +1629,11 @@ pub fn qname(inp: &Inputs, n: QNode) -> String {
             SchedEntity::Method(mr) => inp.name(m.methods[mr.idx()].name),
         },
     };
-    if path.is_empty() { base.to_string() } else { format!("{path}.{base}") }
+    if path.is_empty() {
+        base.to_string()
+    } else {
+        format!("{path}.{base}")
+    }
 }
 
 /// Topologically sort the merged graph the way bsc's `tsort` does
@@ -1556,8 +1658,11 @@ fn tsort(
     let mut rank: Vec<(&(bool, String), QNode)> = keys.iter().map(|(n, k)| (k, *n)).collect();
     rank.sort_unstable();
     let by_rank: Vec<QNode> = rank.iter().map(|(_, n)| *n).collect();
-    let of_node: BTreeMap<QNode, u32> =
-        by_rank.iter().enumerate().map(|(i, n)| (*n, i as u32)).collect();
+    let of_node: BTreeMap<QNode, u32> = by_rank
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (*n, i as u32))
+        .collect();
 
     // Each node's successors, highest rank first.  bsc builds this map
     // with `fromListWith (++)`, which leaves each list reversed against
@@ -1578,14 +1683,19 @@ fn tsort(
         v.sort_unstable_by(|a, b| b.cmp(a));
     }
 
-    let bindings: Vec<(u32, u32)> =
-        (0..by_rank.len() as u32).map(|i| (i, indeg[i as usize])).collect();
+    let bindings: Vec<(u32, u32)> = (0..by_rank.len() as u32)
+        .map(|i| (i, indeg[i as usize]))
+        .collect();
     let mut q = psq::from_ord_list(&bindings);
     let mut out = Vec::with_capacity(by_rank.len());
     while let Some(((i, p), rest)) = psq::min_view(&q) {
         if p != 0 {
             let placed: BTreeSet<QNode> = out.iter().copied().collect();
-            return Err(by_rank.iter().copied().filter(|n| !placed.contains(n)).collect());
+            return Err(by_rank
+                .iter()
+                .copied()
+                .filter(|n| !placed.contains(n))
+                .collect());
         }
         out.push(by_rank[i as usize]);
         q = rest;
@@ -1614,9 +1724,8 @@ pub fn flatten(
 ) -> Result<(Vec<QNode>, BTreeMap<QNode, Vec<QNode>>), Vec<QNode>> {
     let mut keys: BTreeMap<QNode, (bool, String)> = BTreeMap::new();
     let note = |n: QNode, keys: &mut BTreeMap<QNode, (bool, String)>| {
-        keys.entry(n).or_insert_with(|| {
-            (matches!(n.node, SchedNode::Exec(_)), qname(inp, n))
-        });
+        keys.entry(n)
+            .or_insert_with(|| (matches!(n.node, SchedNode::Exec(_)), qname(inp, n)));
     };
     for (n, tos) in succs {
         note(*n, &mut keys);
@@ -1627,8 +1736,7 @@ pub fn flatten(
 
     // bsc's schedule map holds every node as a key, and the sort reads
     // its keys to know what it is sorting
-    let mut full: BTreeMap<QNode, Vec<QNode>> =
-        keys.keys().map(|n| (*n, Vec::new())).collect();
+    let mut full: BTreeMap<QNode, Vec<QNode>> = keys.keys().map(|n| (*n, Vec::new())).collect();
     for (n, tos) in succs {
         full.insert(*n, tos.clone());
     }
@@ -1665,9 +1773,7 @@ fn ffunc_edges(inp: &Inputs) -> BTreeSet<(QNode, QNode)> {
 /// Walking parent-before-child means a child's parent is already
 /// resolved when the child is reached, so a chain of instances sharing
 /// one clock collapses to a single domain rather than a chain of them.
-pub fn unified_domains(
-    inp: &Inputs,
-) -> BTreeMap<QDomain, Fate> {
+pub fn unified_domains(inp: &Inputs) -> BTreeMap<QDomain, Fate> {
     let mut to: BTreeMap<QDomain, Fate> = BTreeMap::new();
 
     // a parent is walked before its children, so whatever the parent's
@@ -1689,9 +1795,16 @@ pub fn unified_domains(
         // primitives, whose domains this module carries on their behalf
         for (pos, x) in m.instances.iter().enumerate() {
             let Some(pc) = &x.prim_clocks else { continue };
-            let child =
-                Clocks { inputs: &pc.inputs, domains: &pc.domains, outputs: &pc.outputs };
-            let key = |id| QDomain { inst, prim: Some(pos as u32), id };
+            let child = Clocks {
+                inputs: &pc.inputs,
+                domains: &pc.domains,
+                outputs: &pc.outputs,
+            };
+            let key = |id| QDomain {
+                inst,
+                prim: Some(pos as u32),
+                id,
+            };
             for (from, fate) in child_domain_map(mdom, inst, x, child, key) {
                 settle(&mut to, from, fate);
             }
@@ -1700,7 +1813,9 @@ pub fn unified_domains(
         // submodules, which state their own
         for &(c, cpos) in &inp.hier.kids[i] {
             let cmod = &inp.module(c as u32);
-            let Some(x) = m.instances.get(cpos as usize) else { continue };
+            let Some(x) = m.instances.get(cpos as usize) else {
+                continue;
+            };
             let child = Clocks {
                 inputs: &cmod.input_clocks,
                 domains: &cmod.clock_domains,
@@ -1730,10 +1845,7 @@ fn resolved(up: &BTreeMap<QDomain, Fate>, d: QDomain) -> Option<QDomain> {
 ///
 /// This is what `splitCSIByClock` divides the merged schedule by, and
 /// so how many compositions a design has.
-pub fn merged_domains(
-    inp: &Inputs,
-    up: &BTreeMap<QDomain, Fate>,
-) -> Vec<QDomain> {
+pub fn merged_domains(inp: &Inputs, up: &BTreeMap<QDomain, Fate>) -> Vec<QDomain> {
     let mut out: Vec<QDomain> = Vec::new();
     for (i, (_, mir)) in inp.hier.insts.iter().enumerate() {
         let m = &inp.design.modules[*mir];
@@ -1751,7 +1863,11 @@ pub fn merged_domains(
         for (pos, x) in m.instances.iter().enumerate() {
             let Some(pc) = &x.prim_clocks else { continue };
             for cd in &pc.domains {
-                note(QDomain { inst, prim: Some(pos as u32), id: cd.id });
+                note(QDomain {
+                    inst,
+                    prim: Some(pos as u32),
+                    id: cd.id,
+                });
             }
         }
     }
@@ -1765,11 +1881,7 @@ pub fn merged_domains(
 /// A method can be clocked by nothing -- an always-ready value method
 /// has no fire signals and nothing to schedule -- and bsc's domain map
 /// simply has no entry for it, so it takes part in no composition.
-fn node_domain(
-    inp: &Inputs,
-    up: &BTreeMap<QDomain, Fate>,
-    n: QNode,
-) -> Option<QDomain> {
+fn node_domain(inp: &Inputs, up: &BTreeMap<QDomain, Fate>, n: QNode) -> Option<QDomain> {
     let m = &inp.module(n.inst);
     let d = match n.node {
         SchedNode::Sched(e) | SchedNode::Exec(e) => match e {
@@ -1845,7 +1957,13 @@ enum Vacuous {
 fn fact_states(f: &DynFact) -> Vec<(Option<Expr>, Vacuous)> {
     use crate::schedule::DynSched as D;
     match &f.sched {
-        D::Pair { rule_e, guard_e, rule_l, guard_l, .. } => {
+        D::Pair {
+            rule_e,
+            guard_e,
+            rule_l,
+            guard_l,
+            ..
+        } => {
             let e = q(f.inst, SchedNode::Exec(SchedEntity::Rule(*rule_e)));
             let l = q(f.inst, SchedNode::Exec(SchedEntity::Rule(*rule_l)));
             match guard_l {
@@ -1912,7 +2030,10 @@ fn all_of(gs: &[Expr]) -> Expr {
                  if limbs.first().copied().unwrap_or(0) == v
                     && limbs.iter().skip(1).all(|&w| w == 0))
     };
-    let konst = |v: u32| Expr::Const { width: 1, limbs: vec![v] };
+    let konst = |v: u32| Expr::Const {
+        width: 1,
+        limbs: vec![v],
+    };
     if gs.len() == 1 {
         return gs[0].clone();
     }
@@ -1928,7 +2049,11 @@ fn all_of(gs: &[Expr]) -> Expr {
     match args.len() {
         0 => konst(1),
         1 => args.pop().expect("just checked"),
-        _ => Expr::Prim { op: crate::PrimOp::And, width: 1, args },
+        _ => Expr::Prim {
+            op: crate::PrimOp::And,
+            width: 1,
+            args,
+        },
     }
 }
 
@@ -1945,8 +2070,13 @@ fn all_of(gs: &[Expr]) -> Expr {
 fn dyn_alternatives(
     graph: &BTreeMap<QNode, Vec<QNode>>,
     facts: &[&DynFact],
-) -> Result<(BTreeMap<QNode, Vec<QNode>>, Vec<(u32, Expr, BTreeMap<QNode, Vec<QNode>>)>), String>
-{
+) -> Result<
+    (
+        BTreeMap<QNode, Vec<QNode>>,
+        Vec<(u32, Expr, BTreeMap<QNode, Vec<QNode>>)>,
+    ),
+    String,
+> {
     if facts.is_empty() {
         return Ok((graph.clone(), Vec::new()));
     }
@@ -2022,13 +2152,20 @@ pub fn domain_orders(
 ) -> Result<Vec<DomainSched>, String> {
     // every domain, including those no rule is in: bsc splits by the
     // domain map, not by what the graph happens to mention
-    let mut per: BTreeMap<QDomain, BTreeMap<QNode, Vec<QNode>>> =
-        merged_domains(inp, up).into_iter().map(|d| (d, BTreeMap::new())).collect();
+    let mut per: BTreeMap<QDomain, BTreeMap<QNode, Vec<QNode>>> = merged_domains(inp, up)
+        .into_iter()
+        .map(|d| (d, BTreeMap::new()))
+        .collect();
     for (n, tos) in graph {
-        let Some(d) = node_domain(inp, up, *n) else { continue };
+        let Some(d) = node_domain(inp, up, *n) else {
+            continue;
+        };
         let g = per.entry(d).or_default();
-        let kept: Vec<QNode> =
-            tos.iter().filter(|t| node_domain(inp, up, **t).is_some()).copied().collect();
+        let kept: Vec<QNode> = tos
+            .iter()
+            .filter(|t| node_domain(inp, up, **t).is_some())
+            .copied()
+            .collect();
         g.insert(*n, kept);
     }
 
@@ -2056,15 +2193,24 @@ pub fn domain_orders(
             .collect();
 
         let (base, alt_specs) = dyn_alternatives(&g, &mine)?;
-        let (order, graph) =
-            flatten(inp, &base).map_err(|ns| stuck("merged graph", ns))?;
+        let (order, graph) = flatten(inp, &base).map_err(|ns| stuck("merged graph", ns))?;
         let mut alts = Vec::new();
         for (inst, guard, amap) in alt_specs {
-            let (aorder, agraph) = flatten(inp, &amap)
-                .map_err(|ns| stuck("merged graph of an alternative", ns))?;
-            alts.push(DomainAlt { inst, guard, graph: agraph, order: aorder });
+            let (aorder, agraph) =
+                flatten(inp, &amap).map_err(|ns| stuck("merged graph of an alternative", ns))?;
+            alts.push(DomainAlt {
+                inst,
+                guard,
+                graph: agraph,
+                order: aorder,
+            });
         }
-        out.push(DomainSched { domain, graph, order, alts });
+        out.push(DomainSched {
+            domain,
+            graph,
+            order,
+            alts,
+        });
     }
     Ok(out)
 }
@@ -2079,15 +2225,16 @@ pub fn domain_orders(
 fn num_levels(inp: &Inputs, path: &str, e: &Expr, ch: char) -> usize {
     let count = |s: &str| s.matches(ch).count();
     // a name below the top is spelled "<path>.<name>"
-    let qual = if path.is_empty() { 0 } else { count(path) + usize::from(ch == '.') };
+    let qual = if path.is_empty() {
+        0
+    } else {
+        count(path) + usize::from(ch == '.')
+    };
     match e {
         Expr::Port(n) => 1 + qual + count(inp.name(*n)),
         // a submodule's output clock is one wire, named "<inst>$<port>"
         Expr::ClockOut { instance, clock } => {
-            1 + qual
-                + count(inp.name(*instance))
-                + count(inp.name(*clock))
-                + usize::from(ch == '$')
+            1 + qual + count(inp.name(*instance)) + count(inp.name(*clock)) + usize::from(ch == '$')
         }
         Expr::Gate { instance, clock } => {
             1 + qual + count(inp.name(*instance)) + count(inp.name(*clock))
@@ -2103,22 +2250,26 @@ fn domain_path(inp: &Inputs, d: QDomain) -> String {
         None => path.clone(),
         Some(pos) => {
             let leaf = inp.name(inp.design.modules[*mir].instances[pos as usize].name);
-            if path.is_empty() { leaf.to_string() } else { format!("{path}.{leaf}") }
+            if path.is_empty() {
+                leaf.to_string()
+            } else {
+                format!("{path}.{leaf}")
+            }
         }
     }
 }
 
 /// The clocks a domain holds, as its owner spells them.
-fn domain_clocks<'a>(
-    inp: &'a Inputs,
-    d: QDomain,
-) -> Option<&'a [(Expr, Expr)]> {
+fn domain_clocks<'a>(inp: &'a Inputs, d: QDomain) -> Option<&'a [(Expr, Expr)]> {
     let m = &inp.module(d.inst);
     let domains = match d.prim {
         None => &m.clock_domains,
         Some(pos) => &m.instances[pos as usize].prim_clocks.as_ref()?.domains,
     };
-    domains.iter().find(|cd| cd.id == d.id).map(|cd| cd.clocks.as_slice())
+    domains
+        .iter()
+        .find(|cd| cd.id == d.id)
+        .map(|cd| cd.clocks.as_slice())
 }
 
 /// A domain's clock: the one bsc would pick (`findBestClock`).
@@ -2182,7 +2333,10 @@ fn early_rules(
             if resolved(up, QDomain::of_module(i as u32, r.clock_domain)) != Some(d) {
                 continue;
             }
-            out.push(crate::schedule::QualRule { instance, rule: RuleRef(ri as u32) });
+            out.push(crate::schedule::QualRule {
+                instance,
+                rule: RuleRef(ri as u32),
+            });
         }
     }
     out
@@ -2199,19 +2353,29 @@ fn effective_clock(inp: &Inputs, inst: u32, clk: &Expr) -> (u32, Expr) {
     let mut inst = inst;
     let mut clk = clk.clone();
     loop {
-        let Expr::Clock { osc, .. } = &clk else { return (inst, clk) };
-        let Expr::Port(p) = &**osc else { return (inst, clk) };
+        let Expr::Clock { osc, .. } = &clk else {
+            return (inst, clk);
+        };
+        let Expr::Port(p) = &**osc else {
+            return (inst, clk);
+        };
         let m = &inp.module(inst);
         let Some(ic) = m.input_clocks.iter().find(|c| c.osc == *p) else {
             return (inst, clk);
         };
-        let Some((pi, pos)) = inp.hier.parents[inst as usize] else { return (inst, clk) };
+        let Some((pi, pos)) = inp.hier.parents[inst as usize] else {
+            return (inst, clk);
+        };
         let pm = &inp.module(pi as u32);
-        let Some(x) = pm.instances.get(pos as usize) else { return (inst, clk) };
+        let Some(x) = pm.instances.get(pos as usize) else {
+            return (inst, clk);
+        };
         let Some(ca) = x.clock_args.iter().find(|a| a.name == ic.name) else {
             return (inst, clk);
         };
-        let Some(arg) = x.args.get(ca.arg as usize) else { return (inst, clk) };
+        let Some(arg) = x.args.get(ca.arg as usize) else {
+            return (inst, clk);
+        };
         if !matches!(arg, Expr::Clock { .. }) {
             return (inst, clk);
         }
@@ -2248,16 +2412,21 @@ fn domain_gate(inp: &Inputs, at: u32, osc: &Expr) -> Option<Expr> {
         if let Some(g) = own {
             return Some(match g {
                 // a port of the generator, as the module outside names it
-                Expr::Port(p) => Expr::Gate { instance: *instance, clock: *p },
+                Expr::Port(p) => Expr::Gate {
+                    instance: *instance,
+                    clock: *p,
+                },
                 other => other.clone(),
             });
         }
     }
 
-    m.clock_domains
-        .iter()
-        .rev()
-        .find_map(|cd| cd.clocks.iter().find(|(o, _)| o == osc).map(|(_, g)| g.clone()))
+    m.clock_domains.iter().rev().find_map(|cd| {
+        cd.clocks
+            .iter()
+            .find(|(o, _)| o == osc)
+            .map(|(_, g)| g.clone())
+    })
 }
 
 /// One primitive that has to be ticked: where it is, what it is called,
@@ -2280,11 +2449,7 @@ struct TickPrim {
 /// the order the merge accumulates them: a module's children before
 /// the module's own primitives (`joinDomainInfo` puts the child's list
 /// first), and within a module in elaboration order.
-fn domain_prims(
-    inp: &Inputs,
-    up: &BTreeMap<QDomain, Fate>,
-    d: QDomain,
-) -> Vec<TickPrim> {
+fn domain_prims(inp: &Inputs, up: &BTreeMap<QDomain, Fate>, d: QDomain) -> Vec<TickPrim> {
     fn walk(
         inp: &Inputs,
         up: &BTreeMap<QDomain, Fate>,
@@ -2314,9 +2479,13 @@ fn domain_prims(
             // ticking its first port first.
             let mut mine = Vec::new();
             for ca in &x.clock_args {
-                let Some(arg) = x.args.get(ca.arg as usize) else { continue };
+                let Some(arg) = x.args.get(ca.arg as usize) else {
+                    continue;
+                };
                 let Some(osc) = clock_osc(arg) else { continue };
-                let Some(dom) = mdom.domain_of(osc) else { continue };
+                let Some(dom) = mdom.domain_of(osc) else {
+                    continue;
+                };
                 if resolved(up, QDomain::of_module(i as u32, dom)) != Some(d) {
                     continue;
                 }
@@ -2347,7 +2516,9 @@ fn domain_prims(
 /// The gate of a tick's clock, as the tick call reads it: `None` where
 /// the clock is ungated.
 fn tick_gate(clk: &Expr) -> Option<Expr> {
-    let Expr::Clock { gate, .. } = clk else { return None };
+    let Expr::Clock { gate, .. } = clk else {
+        return None;
+    };
     match &**gate {
         Expr::Const { limbs, .. } if limbs.iter().any(|&w| w != 0) => None,
         g => Some(g.clone()),
@@ -2382,14 +2553,20 @@ fn domain_ticks(
     let path_of = |i: u32, name: StrId| -> String {
         let base = inp.path(i);
         let leaf = inp.name(name);
-        if base.is_empty() { leaf.to_string() } else { format!("{base}.{leaf}") }
+        if base.is_empty() {
+            leaf.to_string()
+        } else {
+            format!("{base}.{leaf}")
+        }
     };
 
     // A group whose primitive drives another group's clock gate ticks
     // first, so the second group's gate argument reads the value the
     // first just wrote.
     let gate_src = |clk: &Expr, at: u32| -> Option<String> {
-        let Expr::Clock { gate, .. } = clk else { return None };
+        let Expr::Clock { gate, .. } = clk else {
+            return None;
+        };
         match &**gate {
             Expr::Gate { instance, .. } => Some(path_of(at, *instance)),
             _ => None,
@@ -2398,7 +2575,9 @@ fn domain_ticks(
     let mut before: Vec<Vec<usize>> = vec![Vec::new(); groups.len()];
     for (h, (clk, prs)) in groups.iter().enumerate() {
         let at = prs.first().map(|p| p.clk_inst).unwrap_or(0);
-        let Some(src) = gate_src(clk, at) else { continue };
+        let Some(src) = gate_src(clk, at) else {
+            continue;
+        };
         for (g, (_, gprs)) in groups.iter().enumerate() {
             if g != h && gprs.iter().any(|p| path_of(p.inst, p.name) == src) {
                 before[h].push(g);
@@ -2408,8 +2587,8 @@ fn domain_ticks(
     let mut order: Vec<usize> = Vec::with_capacity(groups.len());
     let mut placed = vec![false; groups.len()];
     while order.len() < groups.len() {
-        let Some(next) = (0..groups.len())
-            .find(|&g| !placed[g] && before[g].iter().all(|&p| placed[p]))
+        let Some(next) =
+            (0..groups.len()).find(|&g| !placed[g] && before[g].iter().all(|&p| placed[p]))
         else {
             // a cycle: no order satisfies it, so keep the rest as they
             // came rather than dropping them
@@ -2508,16 +2687,17 @@ pub fn graph_anomalies(inp: &Inputs) -> Vec<String> {
     if g.keys().any(|k| is_method(&k.node) && k.inst != 0) {
         out.push("merged graph keeps a submodule's method node".to_string());
     }
-    if g.values().flatten().any(|n| is_method(&n.node) && n.inst != 0) {
+    if g.values()
+        .flatten()
+        .any(|n| is_method(&n.node) && n.inst != 0)
+    {
         out.push("merged graph has an edge to a submodule's method node".to_string());
     }
-    let dangling = g
-        .values()
-        .flatten()
-        .filter(|n| !g.contains_key(n))
-        .count();
+    let dangling = g.values().flatten().filter(|n| !g.contains_key(n)).count();
     if dangling != 0 {
-        out.push(format!("merged graph has {dangling} edges to unknown nodes"));
+        out.push(format!(
+            "merged graph has {dangling} edges to unknown nodes"
+        ));
     }
     if g.is_empty() && !inp.design.modules.iter().all(|m| m.rules.is_empty()) {
         out.push("merged graph is empty but the design has rules".to_string());
@@ -2573,9 +2753,13 @@ pub fn graph_anomalies(inp: &Inputs) -> Vec<String> {
     {
         let up = unified_domains(inp);
         for (n, tos) in &g {
-            let Some(dn) = node_domain(inp, &up, *n) else { continue };
+            let Some(dn) = node_domain(inp, &up, *n) else {
+                continue;
+            };
             for t in tos {
-                let Some(dt) = node_domain(inp, &up, *t) else { continue };
+                let Some(dt) = node_domain(inp, &up, *t) else {
+                    continue;
+                };
                 if dn != dt {
                     out.push(format!(
                         "edge {:?} -> {:?} crosses from domain {dn:?} to {dt:?}",
@@ -2627,8 +2811,7 @@ pub fn domain_anomalies(inp: &Inputs) -> Vec<String> {
                 continue;
             }
             for ca in &inst.clock_args {
-                let Some(osc) = inst.args.get(ca.arg as usize).and_then(clock_osc)
-                else {
+                let Some(osc) = inst.args.get(ca.arg as usize).and_then(clock_osc) else {
                     out.push(format!(
                         "module {}: instance {} clock arg {} is not a clock",
                         inp.name(m.name),
@@ -2708,8 +2891,12 @@ fn composition_diff(
                 x.cross_inhibits
                     .iter()
                     .map(|(p, q)| {
-                        (inp.name(p.instance).to_string(), p.rule.idx(),
-                         inp.name(q.instance).to_string(), q.rule.idx())
+                        (
+                            inp.name(p.instance).to_string(),
+                            p.rule.idx(),
+                            inp.name(q.instance).to_string(),
+                            q.rule.idx(),
+                        )
                     })
                     .collect::<Vec<_>>(),
             )
@@ -2799,13 +2986,19 @@ fn composition_diff(
             want.len()
         ));
     }
-    let shown =
-        |e: &CompositionEntry| (inp.name(e.instance).to_string(), e.domain, e.segment);
-    got.iter().zip(want.iter()).enumerate().find_map(|(k, (a, b))| {
-        (shown(a) != shown(b)).then(|| {
-            format!("comp {i} entry {k}: computed {:?}, expected {:?}", shown(a), shown(b))
+    let shown = |e: &CompositionEntry| (inp.name(e.instance).to_string(), e.domain, e.segment);
+    got.iter()
+        .zip(want.iter())
+        .enumerate()
+        .find_map(|(k, (a, b))| {
+            (shown(a) != shown(b)).then(|| {
+                format!(
+                    "comp {i} entry {k}: computed {:?}, expected {:?}",
+                    shown(a),
+                    shown(b)
+                )
+            })
         })
-    })
 }
 
 #[cfg(test)]
@@ -2820,7 +3013,11 @@ mod tests {
             posedge: true,
             entries: entries
                 .into_iter()
-                .map(|(i, d, s)| CompositionEntry { instance: i, domain: d, segment: s })
+                .map(|(i, d, s)| CompositionEntry {
+                    instance: i,
+                    domain: d,
+                    segment: s,
+                })
                 .collect(),
             ticks: vec![],
             early: vec![],
@@ -2837,20 +3034,32 @@ mod tests {
     fn a_domain_takes_the_name_of_its_shallowest_ungated_clock() {
         use crate::ClockDomain;
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 CLK, 2 gc, 3 CLK_OUT, 4 new_clk, 5 gc$CLK_OUT
         d.strings = ["mkTop", "CLK", "gc", "CLK_OUT", "new_clk", "gc$CLK_OUT"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        let gated = Expr::ClockOut { instance: 2, clock: 3 };
+        let gated = Expr::ClockOut {
+            instance: 2,
+            clock: 3,
+        };
         // the generated clock is listed first, so a reader that simply
         // took the first would take it
         d.modules[0].clock_domains = vec![ClockDomain {
             id: 0,
             clocks: vec![
-                (gated.clone(), Expr::Gate { instance: 2, clock: 4 }),
+                (
+                    gated.clone(),
+                    Expr::Gate {
+                        instance: 2,
+                        clock: 4,
+                    },
+                ),
                 (Expr::Port(1), one()),
             ],
         }];
@@ -2885,17 +3094,21 @@ mod tests {
         let d = two_rule_design();
         let inp = inputs(&d);
         let (a, b) = (SchedEntity::Rule(RuleRef(0)), SchedEntity::Rule(RuleRef(1)));
-        let disjoint: BTreeMap<QEntity, BTreeSet<QEntity>> =
-            [((0, a), [(0, b)].into_iter().collect()),
-             ((0, b), [(0, a)].into_iter().collect())]
-            .into_iter()
-            .collect();
+        let disjoint: BTreeMap<QEntity, BTreeSet<QEntity>> = [
+            ((0, a), [(0, b)].into_iter().collect()),
+            ((0, b), [(0, a)].into_iter().collect()),
+        ]
+        .into_iter()
+        .collect();
 
         // a's segment first: a executes before b's guard is computed
         let a_first = [(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)];
         let pairs = cross_inhibits(&inp, &a_first, &disjoint);
         assert_eq!(
-            pairs.iter().map(|(p, q)| (p.rule.idx(), q.rule.idx())).collect::<Vec<_>>(),
+            pairs
+                .iter()
+                .map(|(p, q)| (p.rule.idx(), q.rule.idx()))
+                .collect::<Vec<_>>(),
             vec![(0, 1)],
             "the rule that ran inhibits the one still to be guarded"
         );
@@ -2904,7 +3117,10 @@ mod tests {
         let b_first = [(0, 0, 2), (0, 0, 3), (0, 0, 0), (0, 0, 1)];
         let pairs = cross_inhibits(&inp, &b_first, &disjoint);
         assert_eq!(
-            pairs.iter().map(|(p, q)| (p.rule.idx(), q.rule.idx())).collect::<Vec<_>>(),
+            pairs
+                .iter()
+                .map(|(p, q)| (p.rule.idx(), q.rule.idx()))
+                .collect::<Vec<_>>(),
             vec![(1, 0)],
             "order decides which way the inhibitor runs"
         );
@@ -2924,23 +3140,38 @@ mod tests {
     fn ticks_split_by_edge_and_reset() {
         use crate::{ClockArg, ClockDomain, Instance, InstanceKind, Primitive, Ticks};
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 CLK, 2 p_pos, 3 p_neg, 4 p_rst, 5 p_pos2, 6 clk,
         // 7 RegN, 8 ""
-        d.strings = ["mkTop", "CLK", "p_pos", "p_neg", "p_rst", "p_pos2", "clk", "RegN", ""]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        d.modules[0].clock_domains =
-            vec![ClockDomain { id: 0, clocks: vec![(Expr::Port(1), one())] }];
+        d.strings = [
+            "mkTop", "CLK", "p_pos", "p_neg", "p_rst", "p_pos2", "clk", "RegN", "",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        d.modules[0].clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![(Expr::Port(1), one())],
+        }];
         let prim = |name, order, ticks, has_reset| Instance {
             name,
             kind: InstanceKind::Prim(Primitive::Other { name: 7 }),
-            clock_args: vec![ClockArg { name: 6, arg: 0, has_reset, ticks }],
+            clock_args: vec![ClockArg {
+                name: 6,
+                arg: 0,
+                has_reset,
+                ticks,
+            }],
             elab_order: order,
             prim_clocks: None,
-            args: vec![Expr::Clock { osc: Box::new(Expr::Port(1)), gate: Box::new(one()) }],
+            args: vec![Expr::Clock {
+                osc: Box::new(Expr::Port(1)),
+                gate: Box::new(one()),
+            }],
             method_order: vec![],
             port_counts: vec![],
         };
@@ -2978,7 +3209,10 @@ mod tests {
 
         // gating the domain's clock reaches every tick on it
         let mut gated = d.clone();
-        let g = Expr::Gate { instance: 2, clock: 6 };
+        let g = Expr::Gate {
+            instance: 2,
+            clock: 6,
+        };
         gated.modules[0].clock_domains[0].clocks[0].1 = g;
         let inp2 = inputs(&gated);
         let up2 = unified_domains(&inp2);
@@ -3025,8 +3259,11 @@ mod tests {
         // combination needs, which the conjunction then deduplicates,
         // so a shared guard would make the two disagree for reasons
         // that have nothing to do with the ordering.
-        let facts =
-            [pair(0, 1, 10, None), pair(1, 0, 11, None), pair(0, 1, 12, Some(guard(13)))];
+        let facts = [
+            pair(0, 1, 10, None),
+            pair(1, 0, 11, None),
+            pair(0, 1, 12, Some(guard(13))),
+        ];
         let refs: Vec<&DynFact> = facts.iter().collect();
         let (_, alts) = dyn_alternatives(&g, &refs).unwrap();
         let widths: Vec<usize> = alts
@@ -3087,8 +3324,10 @@ mod tests {
             }
             g
         };
-        let order: Vec<QNode> =
-            [sched(0), exec(0), sched(1), exec(1)].into_iter().map(n).collect();
+        let order: Vec<QNode> = [sched(0), exec(0), sched(1), exec(1)]
+            .into_iter()
+            .map(n)
+            .collect();
 
         // nothing orders the two rules against each other, so the flat
         // order stands
@@ -3145,11 +3384,15 @@ mod tests {
             g.entry(n(exec(r))).or_default();
         }
         // b's guard is computed after a has executed
-        let order: Vec<QNode> =
-            [sched(0), exec(0), sched(1), exec(1)].into_iter().map(n).collect();
+        let order: Vec<QNode> = [sched(0), exec(0), sched(1), exec(1)]
+            .into_iter()
+            .map(n)
+            .collect();
         let (a, b) = (SchedEntity::Rule(RuleRef(0)), SchedEntity::Rule(RuleRef(1)));
         let disjoint: BTreeMap<QEntity, BTreeSet<QEntity>> =
-            [((0, b), [(0, a)].into_iter().collect())].into_iter().collect();
+            [((0, b), [(0, a)].into_iter().collect())]
+                .into_iter()
+                .collect();
 
         let with = derive_entries(&inp, &order, &g, &disjoint).unwrap();
         let without = derive_entries(&inp, &order, &g, &BTreeMap::new()).unwrap();
@@ -3158,7 +3401,9 @@ mod tests {
         // the pin is real: reverse only the disjointness direction that
         // the order justifies and the edge disappears
         let other: BTreeMap<QEntity, BTreeSet<QEntity>> =
-            [((0, a), [(0, b)].into_iter().collect())].into_iter().collect();
+            [((0, a), [(0, b)].into_iter().collect())]
+                .into_iter()
+                .collect();
         assert_eq!(
             derive_entries(&inp, &order, &g, &other).unwrap(),
             without,
@@ -3172,7 +3417,10 @@ mod tests {
         use crate::Rule;
 
         let mut d = crate::tests::tiny_design();
-        d.strings = ["mkTop", "a", "b", ""].iter().map(|s| (*s).to_string()).collect();
+        d.strings = ["mkTop", "a", "b", ""]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         let rule = |name| Rule {
             name,
             can_fire: name,
@@ -3185,12 +3433,21 @@ mod tests {
         d.modules[0].rules = vec![rule(1), rule(2)];
         d.modules[0].clock_domains = vec![crate::ClockDomain {
             id: 0,
-            clocks: vec![(Expr::Port(1), Expr::Const { width: 1, limbs: vec![1] })],
+            clocks: vec![(
+                Expr::Port(1),
+                Expr::Const {
+                    width: 1,
+                    limbs: vec![1],
+                },
+            )],
         }];
         // one segment per node, which is what the exporter cuts: a
         // method call can land between a rule's Sched and its Exec, so
         // the two have to be independently placeable
-        let seg = |n: SchedNode| Segment { nodes: vec![n], cut: vec![] };
+        let seg = |n: SchedNode| Segment {
+            nodes: vec![n],
+            cut: vec![],
+        };
         let (sa, ea) = (sched(0), exec(0));
         let (sb, eb) = (sched(1), exec(1));
         d.modules[0].schedule.domains = vec![ModuleSchedule {
@@ -3213,11 +3470,20 @@ mod tests {
         d.strings = vec!["mkTop".into(), "u".into()];
         let base = comp(vec![(0, 0, 0), (0, 0, 1), (0, 0, 2)]);
         let mutants: Vec<(&str, Composition)> = vec![
-            ("reordered entries", comp(vec![(0, 0, 1), (0, 0, 0), (0, 0, 2)])),
+            (
+                "reordered entries",
+                comp(vec![(0, 0, 1), (0, 0, 0), (0, 0, 2)]),
+            ),
             ("dropped an entry", comp(vec![(0, 0, 0), (0, 0, 1)])),
-            ("extra entry", comp(vec![(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)])),
+            (
+                "extra entry",
+                comp(vec![(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)]),
+            ),
             ("wrong segment", comp(vec![(0, 0, 0), (0, 0, 1), (0, 0, 5)])),
-            ("wrong instance", comp(vec![(0, 0, 0), (1, 0, 1), (0, 0, 2)])),
+            (
+                "wrong instance",
+                comp(vec![(0, 0, 0), (1, 0, 1), (0, 0, 2)]),
+            ),
             ("wrong domain", comp(vec![(0, 0, 0), (0, 1, 1), (0, 0, 2)])),
             ("wrong clock", {
                 let mut c = comp(vec![(0, 0, 0), (0, 0, 1), (0, 0, 2)]);
@@ -3245,39 +3511,69 @@ mod tests {
         use crate::{ClockArg, ClockDomain, Instance, InstanceKind, Primitive, Ticks};
 
         let mut d = crate::tests::tiny_design();
-        let osc = Expr::Const { width: 1, limbs: vec![1] };
+        let osc = Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         d.modules[0].clock_domains = vec![ClockDomain {
             id: 0,
-            clocks: vec![(osc.clone(), Expr::Const { width: 1, limbs: vec![1] })],
+            clocks: vec![(
+                osc.clone(),
+                Expr::Const {
+                    width: 1,
+                    limbs: vec![1],
+                },
+            )],
         }];
-        assert!(domain_anomalies(&inputs(&d)).is_empty(), "a consistent module must be quiet");
+        assert!(
+            domain_anomalies(&inputs(&d)).is_empty(),
+            "a consistent module must be quiet"
+        );
 
         // a primitive wired with a clock that belongs to no domain
-        let stray = Expr::Const { width: 1, limbs: vec![9] };
+        let stray = Expr::Const {
+            width: 1,
+            limbs: vec![9],
+        };
         let mut bad = d.clone();
         bad.modules[0].instances = vec![Instance {
             name: 0,
             kind: InstanceKind::Prim(Primitive::Other { name: 0 }),
-            clock_args: vec![ClockArg { name: 0, arg: 0, has_reset: false, ticks: Ticks::Pos }],
+            clock_args: vec![ClockArg {
+                name: 0,
+                arg: 0,
+                has_reset: false,
+                ticks: Ticks::Pos,
+            }],
             prim_clocks: None,
             elab_order: 0,
             args: vec![Expr::Clock {
                 osc: Box::new(stray),
-                gate: Box::new(Expr::Const { width: 1, limbs: vec![1] }),
+                gate: Box::new(Expr::Const {
+                    width: 1,
+                    limbs: vec![1],
+                }),
             }],
             method_order: vec![],
             port_counts: vec![],
         }];
         assert!(
-            domain_anomalies(&inputs(&bad)).iter().any(|l| l.contains("in no domain")),
+            domain_anomalies(&inputs(&bad))
+                .iter()
+                .any(|l| l.contains("in no domain")),
             "an unresolvable prim clock must be reported"
         );
 
         // a clock argument pointing at something that is not a clock
         let mut bad2 = bad.clone();
-        bad2.modules[0].instances[0].args = vec![Expr::Const { width: 1, limbs: vec![0] }];
+        bad2.modules[0].instances[0].args = vec![Expr::Const {
+            width: 1,
+            limbs: vec![0],
+        }];
         assert!(
-            domain_anomalies(&inputs(&bad2)).iter().any(|l| l.contains("is not a clock")),
+            domain_anomalies(&inputs(&bad2))
+                .iter()
+                .any(|l| l.contains("is not a clock")),
             "a non-clock clock argument must be reported"
         );
     }
@@ -3294,7 +3590,10 @@ mod tests {
         use crate::Rule;
 
         let mut d = crate::tests::tiny_design();
-        d.strings = ["mkTop", "b", "a"].iter().map(|s| (*s).to_string()).collect();
+        d.strings = ["mkTop", "b", "a"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         let rule = |name| Rule {
             name,
             can_fire: name,
@@ -3316,10 +3615,17 @@ mod tests {
         }
 
         let (order, _) = flatten(&inputs(&d), &g).expect("the graph is acyclic");
-        let names: Vec<String> = order.iter().map(|n| {
-            let k = if matches!(n.node, SchedNode::Exec(_)) { "exec" } else { "sched" };
-            format!("{k} {}", qname(&inputs(&d), *n))
-        }).collect();
+        let names: Vec<String> = order
+            .iter()
+            .map(|n| {
+                let k = if matches!(n.node, SchedNode::Exec(_)) {
+                    "exec"
+                } else {
+                    "sched"
+                };
+                format!("{k} {}", qname(&inputs(&d), *n))
+            })
+            .collect();
         assert_eq!(
             names,
             ["sched a", "sched b", "exec a", "exec b"],
@@ -3335,7 +3641,10 @@ mod tests {
         use crate::Rule;
 
         let mut d = crate::tests::tiny_design();
-        d.strings = ["mkTop", "a", "b"].iter().map(|s| (*s).to_string()).collect();
+        d.strings = ["mkTop", "a", "b"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         let rule = |name| Rule {
             name,
             can_fire: name,
@@ -3360,9 +3669,12 @@ mod tests {
         );
 
         d.modules[0].schedule.ffunc_edges = vec![(eb, ea)];
-        let (order, cut) =
-            flatten(&inputs(&d), &g).expect("the ffunc edge breaks the cycle");
-        assert_eq!(order, vec![exec(ea), exec(eb)], "the surviving edge decides");
+        let (order, cut) = flatten(&inputs(&d), &g).expect("the ffunc edge breaks the cycle");
+        assert_eq!(
+            order,
+            vec![exec(ea), exec(eb)],
+            "the surviving edge decides"
+        );
         assert!(
             !cut.get(&exec(eb)).is_some_and(|v| v.contains(&exec(ea))),
             "the dropped edge must be gone from the graph the order came from, \
@@ -3380,11 +3692,12 @@ mod tests {
     /// the instance's clock arguments connect the two names.
     #[test]
     fn a_wired_clock_makes_parent_and_child_one_domain() {
-        use crate::{
-            ClockArg, ClockDomain, Extern, InputClock, Instance, InstanceKind, Ticks,
-        };
+        use crate::{ClockArg, ClockDomain, Extern, InputClock, Instance, InstanceKind, Ticks};
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 mkChild, 2 u, 3 CLK, 4 CLK_child, 5 default_clock
         d.strings = ["mkTop", "mkChild", "u", "CLK", "CLK_child", "default_clock"]
@@ -3394,19 +3707,37 @@ mod tests {
 
         let mut child = d.modules[0].clone();
         child.name = 1;
-        child.input_clocks = vec![InputClock { name: 5, osc: 4, gate: None }];
-        child.clock_domains = vec![ClockDomain { id: 0, clocks: vec![(Expr::Port(4), one())] }];
+        child.input_clocks = vec![InputClock {
+            name: 5,
+            osc: 4,
+            gate: None,
+        }];
+        child.clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![(Expr::Port(4), one())],
+        }];
 
         let parent = &mut d.modules[0];
         parent.externs = vec![Extern { module: 1 }];
-        parent.clock_domains = vec![ClockDomain { id: 0, clocks: vec![(Expr::Port(3), one())] }];
+        parent.clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![(Expr::Port(3), one())],
+        }];
         parent.instances = vec![Instance {
             name: 2,
             kind: InstanceKind::Module(crate::ExternRef(0)),
-            clock_args: vec![ClockArg { name: 5, arg: 0, has_reset: false, ticks: Ticks::Pos }],
+            clock_args: vec![ClockArg {
+                name: 5,
+                arg: 0,
+                has_reset: false,
+                ticks: Ticks::Pos,
+            }],
             prim_clocks: None,
             elab_order: 0,
-            args: vec![Expr::Clock { osc: Box::new(Expr::Port(3)), gate: Box::new(one()) }],
+            args: vec![Expr::Clock {
+                osc: Box::new(Expr::Port(3)),
+                gate: Box::new(one()),
+            }],
             method_order: vec![],
             port_counts: vec![],
         }];
@@ -3444,8 +3775,14 @@ mod tests {
         // domain the schedule splits by
         let mut none = d.clone();
         none.modules[0].instances[0].args = vec![Expr::Clock {
-            osc: Box::new(Expr::Const { width: 1, limbs: vec![0] }),
-            gate: Box::new(Expr::Const { width: 1, limbs: vec![0] }),
+            osc: Box::new(Expr::Const {
+                width: 1,
+                limbs: vec![0],
+            }),
+            gate: Box::new(Expr::Const {
+                width: 1,
+                limbs: vec![0],
+            }),
         }];
         assert_eq!(
             unified_domains(&inputs(&none)).get(&QDomain::of_module(1, 0)),
@@ -3467,32 +3804,61 @@ mod tests {
     fn a_gate_mismatch_leaves_the_domain_standing() {
         use crate::{ClockArg, ClockDomain, Extern, InputClock, Instance, InstanceKind, Ticks};
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 mkChild, 2 u, 3 CLK, 4 CLK_IN, 5 default_clock,
         // 6 CLK_GATE_IN
-        d.strings = ["mkTop", "mkChild", "u", "CLK", "CLK_IN", "default_clock", "CLK_GATE_IN"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
+        d.strings = [
+            "mkTop",
+            "mkChild",
+            "u",
+            "CLK",
+            "CLK_IN",
+            "default_clock",
+            "CLK_GATE_IN",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
 
         // the child takes a gated clock in, but its domain is declared
         // around the ungated one
         let mut child = d.modules[0].clone();
         child.name = 1;
-        child.input_clocks = vec![InputClock { name: 5, osc: 4, gate: Some(6) }];
-        child.clock_domains = vec![ClockDomain { id: 0, clocks: vec![(Expr::Port(4), one())] }];
+        child.input_clocks = vec![InputClock {
+            name: 5,
+            osc: 4,
+            gate: Some(6),
+        }];
+        child.clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![(Expr::Port(4), one())],
+        }];
 
         let parent = &mut d.modules[0];
         parent.externs = vec![Extern { module: 1 }];
-        parent.clock_domains = vec![ClockDomain { id: 0, clocks: vec![(Expr::Port(3), one())] }];
+        parent.clock_domains = vec![ClockDomain {
+            id: 0,
+            clocks: vec![(Expr::Port(3), one())],
+        }];
         parent.instances = vec![Instance {
             name: 2,
             kind: InstanceKind::Module(crate::ExternRef(0)),
-            clock_args: vec![ClockArg { name: 5, arg: 0, has_reset: false, ticks: Ticks::Pos }],
+            clock_args: vec![ClockArg {
+                name: 5,
+                arg: 0,
+                has_reset: false,
+                ticks: Ticks::Pos,
+            }],
             prim_clocks: None,
             elab_order: 0,
-            args: vec![Expr::Clock { osc: Box::new(Expr::Port(3)), gate: Box::new(one()) }],
+            args: vec![Expr::Clock {
+                osc: Box::new(Expr::Port(3)),
+                gate: Box::new(one()),
+            }],
             method_order: vec![],
             port_counts: vec![],
         }];
@@ -3502,7 +3868,11 @@ mod tests {
             unified_domains(&inputs(&d)).is_empty(),
             "the gates differ, so the two domains are not the same domain"
         );
-        assert_eq!(merged_domains(&inputs(&d), &unified_domains(&inputs(&d))).len(), 2, "and the design has both");
+        assert_eq!(
+            merged_domains(&inputs(&d), &unified_domains(&inputs(&d))).len(),
+            2,
+            "and the design has both"
+        );
 
         // declare the domain around the gated clock and they meet
         let mut matched = d.clone();
@@ -3522,7 +3892,10 @@ mod tests {
     fn a_crossing_rule_belongs_to_its_own_domain() {
         use crate::{ClockDomain, Rule};
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 CLK, 2 CLK2, 3 cross_a, 4 plain, 5 cross_b,
         // 6 the top instance's own (empty) path
@@ -3541,8 +3914,14 @@ mod tests {
         };
         let top = &mut d.modules[0];
         top.clock_domains = vec![
-            ClockDomain { id: 0, clocks: vec![(Expr::Port(1), one())] },
-            ClockDomain { id: 1, clocks: vec![(Expr::Port(2), one())] },
+            ClockDomain {
+                id: 0,
+                clocks: vec![(Expr::Port(1), one())],
+            },
+            ClockDomain {
+                id: 1,
+                clocks: vec![(Expr::Port(2), one())],
+            },
         ];
         top.rules = vec![rule(3, 0, true), rule(4, 0, false), rule(5, 1, true)];
         d.index_strings();
@@ -3555,7 +3934,11 @@ mod tests {
                 .map(|q| q.rule.idx())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(of(0), vec![0], "only the crossing rule, and only this domain's");
+        assert_eq!(
+            of(0),
+            vec![0],
+            "only the crossing rule, and only this domain's"
+        );
         assert_eq!(of(1), vec![2], "the other domain has its own");
     }
 
@@ -3566,40 +3949,71 @@ mod tests {
     #[test]
     fn a_primitive_brings_its_own_domains() {
         use crate::{
-            ClockArg, ClockDomain, InputClock, Instance, InstanceKind, PrimClocks,
-            Primitive, Ticks,
+            ClockArg, ClockDomain, InputClock, Instance, InstanceKind, PrimClocks, Primitive, Ticks,
         };
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 div, 2 CLK, 3 CLK_IN, 4 CLK_OUT, 5 clk, 6 ClockDiv
-        d.strings = ["mkTop", "div", "CLK", "CLK_IN", "CLK_OUT", "clk", "ClockDiv"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
+        d.strings = [
+            "mkTop", "div", "CLK", "CLK_IN", "CLK_OUT", "clk", "ClockDiv",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
 
         let top = &mut d.modules[0];
         top.clock_domains = vec![
-            ClockDomain { id: 0, clocks: vec![(Expr::Port(2), one())] },
+            ClockDomain {
+                id: 0,
+                clocks: vec![(Expr::Port(2), one())],
+            },
             ClockDomain {
                 id: 1,
-                clocks: vec![(Expr::ClockOut { instance: 1, clock: 4 }, one())],
+                clocks: vec![(
+                    Expr::ClockOut {
+                        instance: 1,
+                        clock: 4,
+                    },
+                    one(),
+                )],
             },
         ];
         top.instances = vec![Instance {
             name: 1,
             kind: InstanceKind::Prim(Primitive::Other { name: 6 }),
-            clock_args: vec![ClockArg { name: 5, arg: 0, has_reset: false, ticks: Ticks::Pos }],
+            clock_args: vec![ClockArg {
+                name: 5,
+                arg: 0,
+                has_reset: false,
+                ticks: Ticks::Pos,
+            }],
             elab_order: 0,
             prim_clocks: Some(PrimClocks {
-                inputs: vec![InputClock { name: 5, osc: 3, gate: None }],
+                inputs: vec![InputClock {
+                    name: 5,
+                    osc: 3,
+                    gate: None,
+                }],
                 domains: vec![
-                    ClockDomain { id: 0, clocks: vec![(Expr::Port(4), one())] },
-                    ClockDomain { id: 1, clocks: vec![(Expr::Port(3), one())] },
+                    ClockDomain {
+                        id: 0,
+                        clocks: vec![(Expr::Port(4), one())],
+                    },
+                    ClockDomain {
+                        id: 1,
+                        clocks: vec![(Expr::Port(3), one())],
+                    },
                 ],
                 outputs: vec![(4, Expr::Port(4))],
             }),
-            args: vec![Expr::Clock { osc: Box::new(Expr::Port(2)), gate: Box::new(one()) }],
+            args: vec![Expr::Clock {
+                osc: Box::new(Expr::Port(2)),
+                gate: Box::new(one()),
+            }],
             method_order: vec![],
             port_counts: vec![],
         }];
@@ -3611,22 +4025,38 @@ mod tests {
         );
         let up = unified_domains(&inputs(&d));
         assert_eq!(
-            up.get(&QDomain { inst: 0, prim: Some(0), id: 1 }),
+            up.get(&QDomain {
+                inst: 0,
+                prim: Some(0),
+                id: 1
+            }),
             Some(&Fate::Joins(QDomain::of_module(0, 0))),
             "what feeds the divider is the clock the parent wired in"
         );
         assert_eq!(
-            up.get(&QDomain { inst: 0, prim: Some(0), id: 0 }),
+            up.get(&QDomain {
+                inst: 0,
+                prim: Some(0),
+                id: 0
+            }),
             Some(&Fate::Joins(QDomain::of_module(0, 1))),
             "what the divider hands back is the domain the parent uses it as"
         );
-        assert_eq!(merged_domains(&inputs(&d), &unified_domains(&inputs(&d))).len(), 2, "two domains, not four");
+        assert_eq!(
+            merged_domains(&inputs(&d), &unified_domains(&inputs(&d))).len(),
+            2,
+            "two domains, not four"
+        );
 
         // a divider whose output nothing uses keeps that domain to
         // itself: it still ticks, so it is still a domain
         let mut unused = d.clone();
         unused.modules[0].clock_domains.pop();
-        assert_eq!(merged_domains(&inputs(&unused), &unified_domains(&inputs(&unused))).len(), 2, "the parent's, and the divider's");
+        assert_eq!(
+            merged_domains(&inputs(&unused), &unified_domains(&inputs(&unused))).len(),
+            2,
+            "the parent's, and the divider's"
+        );
     }
 
     /// A clock can cross the other way too: the child exports one and
@@ -3637,7 +4067,10 @@ mod tests {
     fn an_exported_clock_makes_parent_and_child_one_domain() {
         use crate::{ClockDomain, Extern, Instance, InstanceKind};
 
-        let one = || Expr::Const { width: 1, limbs: vec![1] };
+        let one = || Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        };
         let mut d = crate::tests::tiny_design();
         // 0 mkTop, 1 mkDiv, 2 u, 3 CLK, 4 CLK_slow, 5 slow_osc
         d.strings = ["mkTop", "mkDiv", "u", "CLK", "CLK_slow", "slow_osc"]
@@ -3648,7 +4081,10 @@ mod tests {
         // the child divides its own clock and exports the result
         let mut child = d.modules[0].clone();
         child.name = 1;
-        child.clock_domains = vec![ClockDomain { id: 7, clocks: vec![(Expr::Port(5), one())] }];
+        child.clock_domains = vec![ClockDomain {
+            id: 7,
+            clocks: vec![(Expr::Port(5), one())],
+        }];
         child.ifc_clocks = vec![(4, Expr::Port(5))];
 
         // the parent has a domain for the clock coming back out
@@ -3656,7 +4092,13 @@ mod tests {
         parent.externs = vec![Extern { module: 1 }];
         parent.clock_domains = vec![ClockDomain {
             id: 0,
-            clocks: vec![(Expr::ClockOut { instance: 2, clock: 4 }, one())],
+            clocks: vec![(
+                Expr::ClockOut {
+                    instance: 2,
+                    clock: 4,
+                },
+                one(),
+            )],
         }];
         parent.instances = vec![Instance {
             name: 2,
@@ -3689,7 +4131,11 @@ mod tests {
             unified_domains(&inputs(&unused)).is_empty(),
             "an exported clock nothing uses unifies nothing"
         );
-        assert_eq!(merged_domains(&inputs(&unused), &unified_domains(&inputs(&unused))).len(), 2, "so there are two domains");
+        assert_eq!(
+            merged_domains(&inputs(&unused), &unified_domains(&inputs(&unused))).len(),
+            2,
+            "so there are two domains"
+        );
     }
 
     /// Fusing a child into its parent: the child's method node is the
@@ -3745,10 +4191,12 @@ mod tests {
         // 0 mkTop, 1 mkMid, 2 mkBot, 3 m (mid inst), 4 b (bot inst),
         // 5 go (mid's method), 6 tick (bot's method), 7 RL_top, 8 RL_bot
         let mut d = crate::tests::tiny_design();
-        d.strings = ["mkTop", "mkMid", "mkBot", "m", "b", "go", "tick", "RL_top", "RL_bot"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
+        d.strings = [
+            "mkTop", "mkMid", "mkBot", "m", "b", "go", "tick", "RL_top", "RL_bot",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
 
         let rule = |name, body: Vec<Stmt>| Rule {
             name,
@@ -3777,7 +4225,10 @@ mod tests {
                 instance,
                 method,
                 port: 0,
-                cond: Expr::Const { width: 1, limbs: vec![1] },
+                cond: Expr::Const {
+                    width: 1,
+                    limbs: vec![1],
+                },
                 args: vec![],
             })
         };
@@ -3820,8 +4271,7 @@ mod tests {
         top.externs = vec![Extern { module: 1 }];
         top.instances = vec![inst(3, 0)];
         top.rules = vec![rule(7, vec![call(3, 5)])];
-        top.schedule.sched_graph =
-            vec![(SchedNode::Exec(SchedEntity::Rule(RuleRef(0))), vec![])];
+        top.schedule.sched_graph = vec![(SchedNode::Exec(SchedEntity::Rule(RuleRef(0))), vec![])];
         d.modules.push(mid);
         d.modules.push(bot);
 
@@ -3835,7 +4285,9 @@ mod tests {
             "the bottom rule must precede the top rule that reaches it, got {g:#?}"
         );
         assert!(
-            !g.keys().chain(g.values().flatten()).any(|n| is_method(&n.node)),
+            !g.keys()
+                .chain(g.values().flatten())
+                .any(|n| is_method(&n.node)),
             "no method may survive: they are all below the top"
         );
     }
@@ -3859,7 +4311,8 @@ mod tests {
         combine_conflicts(&mut out, 0, 1, &child, &uses);
 
         assert!(
-            out.get(&(1, blocked)).is_some_and(|v| v.contains(&(0, caller))),
+            out.get(&(1, blocked))
+                .is_some_and(|v| v.contains(&(0, caller))),
             "the blocked rule must now be blocked by the caller"
         );
         assert!(
@@ -3909,8 +4362,14 @@ mod tests {
         let (a, b) = (SchedEntity::Rule(RuleRef(3)), SchedEntity::Rule(RuleRef(4)));
 
         let mut child: BTreeMap<QEntity, BTreeSet<QEntity>> = BTreeMap::new();
-        child.insert((1, SchedEntity::Method(m0)), [(1, SchedEntity::Method(m1))].into());
-        child.insert((1, SchedEntity::Method(m1)), [(1, SchedEntity::Method(m0))].into());
+        child.insert(
+            (1, SchedEntity::Method(m0)),
+            [(1, SchedEntity::Method(m1))].into(),
+        );
+        child.insert(
+            (1, SchedEntity::Method(m1)),
+            [(1, SchedEntity::Method(m0))].into(),
+        );
 
         let flat = [(a, vec![m0]), (b, vec![m1])].into_iter().collect();
         let mut out = BTreeMap::new();
@@ -3937,7 +4396,10 @@ mod tests {
         use crate::{Method, MethodKind};
 
         let mut d = crate::tests::tiny_design();
-        d.strings = ["mkTop", "go", "RDY_go", "r"].iter().map(|s| (*s).to_string()).collect();
+        d.strings = ["mkTop", "go", "RDY_go", "r"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         let child = crate::Module {
             methods: vec![Method {
                 name: 1,
@@ -3958,14 +4420,16 @@ mod tests {
         let cmod = &d.modules[1];
 
         let mut uses = Uses::default();
-        uses.pred.insert((SchedEntity::Rule(RuleRef(0)), 0), vec![2]);
+        uses.pred
+            .insert((SchedEntity::Rule(RuleRef(0)), 0), vec![2]);
         assert!(
             flat_uses(cmod, &uses, 0).is_empty(),
             "reading RDY_go is not calling go"
         );
 
         let mut uses = Uses::default();
-        uses.pred.insert((SchedEntity::Rule(RuleRef(0)), 0), vec![1]);
+        uses.pred
+            .insert((SchedEntity::Rule(RuleRef(0)), 0), vec![1]);
         assert_eq!(
             flat_uses(cmod, &uses, 0)
                 .get(&SchedEntity::Rule(RuleRef(0)))

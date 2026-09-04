@@ -41,7 +41,11 @@ fn max_width(bits: u32, base: u32, signed: bool) -> usize {
                 };
                 m.to_dec_string().len()
             } else {
-                let factor: i64 = if bits > 12 { 2 - ((bits as i64 - 3) / 10) } else { 2 };
+                let factor: i64 = if bits > 12 {
+                    2 - ((bits as i64 - 3) / 10)
+                } else {
+                    2
+                };
                 ((bits as i64 + factor) / 3) as usize
             };
             sign_digit + digits
@@ -100,7 +104,11 @@ fn fmt_val_into(
         let (mag, neg) = if base == 10 && signed && v.sign() {
             // two's-complement magnitude within the value's width
             let m = x.wrapping_neg()
-                & if v.width == 64 { u64::MAX } else { (1u64 << v.width) - 1 };
+                & if v.width == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << v.width) - 1
+                };
             (m, true)
         } else {
             (x, false)
@@ -132,7 +140,11 @@ fn fmt_val_into(
         };
         // %h/%b/%o strings are max-width with leading zeros: trim to
         // minimal digits (never below one digit)
-        let s = if base == 10 { s.as_str() } else { s.trim_start_matches('0') };
+        let s = if base == 10 {
+            s.as_str()
+        } else {
+            s.trim_start_matches('0')
+        };
         let s = if s.is_empty() { "0" } else { s };
         if s.len() < w {
             push_pad(out, pad, w - s.len());
@@ -145,12 +157,7 @@ fn fmt_val_into(
 /// tasks, 16/8/2 for $displayh/$displayo/$displayb.  Output errors
 /// (dollar_display's add_error) accumulate in `errs`; the caller prints
 /// them after the task output, newest first (Target's LIFO list).
-pub fn format_args(
-    args: &[Arg],
-    default_base: u32,
-    loc: &str,
-    errs: &mut Vec<String>,
-) -> String {
+pub fn format_args(args: &[Arg], default_base: u32, loc: &str, errs: &mut Vec<String>) -> String {
     let mut out = String::new();
     format_args_into(&mut out, args, default_base, loc, errs);
     out
@@ -174,8 +181,12 @@ pub fn format_args_into(
             }
             Arg::Val(v, sg) => {
                 fmt_val_into(
-                    out, v, default_base, default_base != 10,
-                    Some(max_width(v.width, default_base, *sg)), *sg,
+                    out,
+                    v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(v.width, default_base, *sg)),
+                    *sg,
                 );
                 i += 1;
             }
@@ -185,8 +196,12 @@ pub fn format_args_into(
                 errs.push("unexpected real number argument\n".to_string());
                 let v = Value::from_u64(64, (*r as i64) as u64);
                 fmt_val_into(
-                    out, &v, default_base, default_base != 10,
-                    Some(max_width(64, default_base, true)), true,
+                    out,
+                    &v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(64, default_base, true)),
+                    true,
                 );
                 i += 1;
             }
@@ -257,16 +272,24 @@ pub fn format_sformat(
             Arg::Str(text) => out.push_str(text),
             Arg::Val(v, sg) => {
                 fmt_val_into(
-                    &mut out, v, default_base, default_base != 10,
-                    Some(max_width(v.width, default_base, *sg)), *sg,
+                    &mut out,
+                    v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(v.width, default_base, *sg)),
+                    *sg,
                 );
             }
             Arg::Real(r) => {
                 errs.push("unexpected real number argument\n".to_string());
                 let v = Value::from_u64(64, (*r as i64) as u64);
                 fmt_val_into(
-                    &mut out, &v, default_base, default_base != 10,
-                    Some(max_width(64, default_base, true)), true,
+                    &mut out,
+                    &v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(64, default_base, true)),
+                    true,
                 );
             }
         }
@@ -303,9 +326,7 @@ fn next_double(args: &[Arg], i: &mut usize, errs: &mut Vec<String>) -> f64 {
         match a {
             Arg::Real(r) => return *r,
             Arg::Val(v, sg) => {
-                errs.push(
-                    "expected real argument, found non-real argument\n".to_string(),
-                );
+                errs.push("expected real argument, found non-real argument\n".to_string());
                 if v.width > 64 {
                     return 0.0; // tValueToDouble punts on wide data
                 }
@@ -321,9 +342,7 @@ fn next_double(args: &[Arg], i: &mut usize, errs: &mut Vec<String>) -> f64 {
                 return v.as_u64() as f64;
             }
             Arg::Str(_) => {
-                errs.push(
-                    "expected real argument, found non-real argument\n".to_string(),
-                );
+                errs.push("expected real argument, found non-real argument\n".to_string());
                 return 0.0; // string fills a wide tValue; wide -> 0
             }
         }
@@ -361,22 +380,22 @@ fn c_format_real(spec: char, width: Option<usize>, prec: Option<usize>, v: f64) 
         t.to_string()
     } else {
         match spec {
-        'f' => format!("{:.*}", prec.unwrap_or(6), v),
-        'e' => c_e(v, prec.unwrap_or(6)),
-        _ => {
-            // %g: %e if exp < -4 or exp >= P, else %f with P-1-exp
-            // decimals; trailing zeros removed
-            let p = prec.unwrap_or(6).max(1);
-            let es = format!("{:.*e}", p - 1, v);
-            let exp: i32 = es.split_once('e').unwrap().1.parse().unwrap();
-            if exp < -4 || exp >= p as i32 {
-                let m = trim_g(es.split_once('e').unwrap().0);
-                format!("{}e{}{:02}", m, if exp < 0 { '-' } else { '+' }, exp.abs())
-            } else {
-                let decs = (p as i32 - 1 - exp).max(0) as usize;
-                trim_g(&format!("{:.*}", decs, v))
+            'f' => format!("{:.*}", prec.unwrap_or(6), v),
+            'e' => c_e(v, prec.unwrap_or(6)),
+            _ => {
+                // %g: %e if exp < -4 or exp >= P, else %f with P-1-exp
+                // decimals; trailing zeros removed
+                let p = prec.unwrap_or(6).max(1);
+                let es = format!("{:.*e}", p - 1, v);
+                let exp: i32 = es.split_once('e').unwrap().1.parse().unwrap();
+                if exp < -4 || exp >= p as i32 {
+                    let m = trim_g(es.split_once('e').unwrap().0);
+                    format!("{}e{}{:02}", m, if exp < 0 { '-' } else { '+' }, exp.abs())
+                } else {
+                    let decs = (p as i32 - 1 - exp).max(0) as usize;
+                    trim_g(&format!("{:.*}", decs, v))
+                }
             }
-        }
         }
     };
     let w = width.unwrap_or(0);
@@ -526,8 +545,7 @@ fn format_str(
                     let n = ((v.width + 7) / 8) as usize;
                     let mut bytes = Vec::new();
                     for k in (0..n).rev() {
-                        let b =
-                            v.extract((k * 8 + 7) as u64, (k * 8) as u64, 8).as_u64() as u8;
+                        let b = v.extract((k * 8 + 7) as u64, (k * 8) as u64, 8).as_u64() as u8;
                         bytes.push(b);
                     }
                     let s: String = bytes
@@ -648,10 +666,7 @@ mod tests {
         // The reference copies an unrecognized conversion through as text
         // and leaves the argument for the next one; nothing aborts.
         let mut e = Vec::new();
-        let s = format_args(
-            &[Arg::Str("A %v B".into()), v(16, 0)],
-            10, "", &mut e,
-        );
+        let s = format_args(&[Arg::Str("A %v B".into()), v(16, 0)], 10, "", &mut e);
         assert_eq!(s, "A %v B    0");
         // flags, width and precision are echoed as written, case included
         let s = format_args(&[Arg::Str("%-7z|%0.3Q".into())], 10, "", &mut e);
@@ -666,23 +681,31 @@ mod tests {
         for spec in ["%f", "%e", "%g"] {
             let s = format_args(
                 &[Arg::Str(spec.into()), Arg::Real(f64::NAN)],
-                10, "", &mut e,
+                10,
+                "",
+                &mut e,
             );
             assert_eq!(s, "nan", "{spec} of NaN");
             let s = format_args(
                 &[Arg::Str(spec.into()), Arg::Real(f64::INFINITY)],
-                10, "", &mut e,
+                10,
+                "",
+                &mut e,
             );
             assert_eq!(s, "inf", "{spec} of +inf");
             let s = format_args(
                 &[Arg::Str(spec.into()), Arg::Real(f64::NEG_INFINITY)],
-                10, "", &mut e,
+                10,
+                "",
+                &mut e,
             );
             assert_eq!(s, "-inf", "{spec} of -inf");
         }
         let s = format_args(
             &[Arg::Str("%10e".into()), Arg::Real(f64::INFINITY)],
-            10, "", &mut e,
+            10,
+            "",
+            &mut e,
         );
         assert_eq!(s, "       inf");
     }
@@ -693,7 +716,9 @@ mod tests {
         // the report shape that found this: %5d/%-5d
         let s = format_args(
             &[Arg::Str("%5d/%-5d".into()), v(32, 12), v(32, 12)],
-            10, "", &mut e,
+            10,
+            "",
+            &mut e,
         );
         assert_eq!(s, "   12/12   ");
         // no padding to move when the value fills the field
@@ -717,7 +742,9 @@ mod tests {
         // strings has to revisit this deliberately
         let s = format_args(
             &[Arg::Str("[%-6s]".into()), Arg::Str("ab".into())],
-            10, "", &mut e,
+            10,
+            "",
+            &mut e,
         );
         assert_eq!(s, "[ab]");
         assert!(e.is_empty(), "unexpected errors: {e:?}");

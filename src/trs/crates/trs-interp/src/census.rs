@@ -151,13 +151,7 @@ impl Census {
             .insert((inst, name));
     }
 
-    pub(crate) fn begin_latch(
-        &mut self,
-        inst: usize,
-        rule: StrId,
-        cf: StrId,
-        wf: StrId,
-    ) {
+    pub(crate) fn begin_latch(&mut self, inst: usize, rule: StrId, cf: StrId, wf: StrId) {
         let next = self.rules.len();
         let id = *self.rule_ids.entry((inst, rule)).or_insert(next);
         if id == next {
@@ -195,9 +189,7 @@ impl Census {
     /// latched-def read (Def/EN/TaskValue served from the latch map)
     pub(crate) fn lread(&mut self, inst: usize, name: StrId) {
         if let Some(r) = self.cur_rule {
-            if self.lreads[r].insert((inst, name))
-                && self.cycles_seen >= self.from
-            {
+            if self.lreads[r].insert((inst, name)) && self.cycles_seen >= self.from {
                 self.union_growth_after_from += 1;
             }
         } else if self.eager_on {
@@ -249,8 +241,10 @@ impl Census {
         let mut transients_w: HashSet<usize> = HashSet::new();
         let mut state_w: Vec<usize> = Vec::new();
         for i in written {
-            let k = *self.kind.entry(i).or_insert_with(|| {
-                match &it.insts[i].kind {
+            let k = *self
+                .kind
+                .entry(i)
+                .or_insert_with(|| match &it.insts[i].kind {
                     crate::InstKind::Prim(p) => {
                         if p.sym_transient() {
                             1
@@ -267,8 +261,7 @@ impl Census {
                         }
                     }
                     _ => 0,
-                }
-            });
+                });
             match k {
                 1 => {
                     transients_w.insert(i);
@@ -286,10 +279,8 @@ impl Census {
         // a wire's revert-to-default when its writer stops is a change:
         // dirty = written this cycle OR last cycle (conservative — a
         // same-value rewrite still counts dirty)
-        let dirty_wires: HashSet<usize> = transients_w
-            .union(&self.transients_prev)
-            .copied()
-            .collect();
+        let dirty_wires: HashSet<usize> =
+            transients_w.union(&self.transients_prev).copied().collect();
 
         // 2. replay the edge's latch events in order (mask simulation)
         let events = std::mem::take(&mut self.events);
@@ -312,14 +303,11 @@ impl Census {
                     let er = self.eager_reads.get(e);
                     let el = self.eager_lreads.get(e);
                     let dirty = er.is_some_and(|s| {
-                        s.iter().any(|i| {
-                            self.changed_prev.contains(i)
-                                || dirty_wires.contains(i)
-                        })
+                        s.iter()
+                            .any(|i| self.changed_prev.contains(i) || dirty_wires.contains(i))
                     }) || el.is_some_and(|s| {
-                        s.iter().any(|k| {
-                            dirty_defs.contains(k) || exec_dirty.contains(k)
-                        })
+                        s.iter()
+                            .any(|k| dirty_defs.contains(k) || exec_dirty.contains(k))
                     });
                     if dirty {
                         if let Some(defs) = self.eager_defs.get(e) {
@@ -331,18 +319,19 @@ impl Census {
                 }
                 Ev::Latch { r, cf, wf } => {
                     let r = *r;
-                    let dirty = self.reads[r].iter().any(|i| {
-                        self.changed_prev.contains(i)
-                            || dirty_wires.contains(i)
-                    }) || self.lreads[r].iter().any(|k| {
-                        dirty_defs.contains(k) || exec_dirty.contains(k)
-                    }) || {
+                    let dirty = self.reads[r]
+                        .iter()
+                        .any(|i| self.changed_prev.contains(i) || dirty_wires.contains(i))
+                        || self.lreads[r]
+                            .iter()
+                            .any(|k| dirty_defs.contains(k) || exec_dirty.contains(k))
+                        || {
                             // eager defs of this rule's entry dirty =
                             // schedule-position inputs moved
                             let e = self.entry_of[r];
-                            self.eager_defs.get(&e).is_some_and(|defs| {
-                                defs.iter().any(|k| dirty_defs.contains(k))
-                            })
+                            self.eager_defs
+                                .get(&e)
+                                .is_some_and(|defs| defs.iter().any(|k| dirty_defs.contains(k)))
                         };
                     let prev = self.prev_cfwf[r];
                     let mut mark_dirty = dirty;
@@ -461,8 +450,7 @@ impl Census {
                 mass,
             ));
         }
-        let mut top: Vec<(usize, u64)> =
-            self.change_count.iter().map(|(a, b)| (*a, *b)).collect();
+        let mut top: Vec<(usize, u64)> = self.change_count.iter().map(|(a, b)| (*a, *b)).collect();
         top.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
         let topch: Vec<String> = top
             .iter()

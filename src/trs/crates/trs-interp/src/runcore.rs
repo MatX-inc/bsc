@@ -27,7 +27,10 @@ use std::collections::HashMap;
 
 use crate::foreign::ForeignEnv;
 use crate::format::Arg;
-use crate::jit::{rle_decode, RC_SEC_CLOCK, RC_SEC_COMPS, RC_SEC_ELIG, RC_SEC_LOADS, RC_SEC_PATHS, RC_SEC_PRIMS, RC_SEC_STRINGS, RC_SEC_WARENA, RC_SEC_WARNS, RC_SEC_WSTATE};
+use crate::jit::{
+    rle_decode, RC_SEC_CLOCK, RC_SEC_COMPS, RC_SEC_ELIG, RC_SEC_LOADS, RC_SEC_PATHS, RC_SEC_PRIMS,
+    RC_SEC_STRINGS, RC_SEC_WARENA, RC_SEC_WARNS, RC_SEC_WSTATE,
+};
 use crate::prim::Prim;
 use crate::value::Value;
 use trs_codegen::abi::{self, FArgSpec, FnProtos, TOKEN_KIND_EXEC};
@@ -63,9 +66,7 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
     if bytes.len() < 40 || &bytes[..8] != b"TRSARENA" {
         return None;
     }
-    let rd = |k: usize| {
-        u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
-    };
+    let rd = |k: usize| u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap());
     // version 5 = current eligibility semantics (mem-file overlay);
     // older versions' eligible flags were computed under different
     // gate rules — classic boot
@@ -79,9 +80,7 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
     let mut pos = 40usize;
     let mut slot = 0usize;
     while slot < nslots {
-        let run = u64::from_le_bytes(
-            bytes.get(pos + 8..pos + 16)?.try_into().ok()?,
-        );
+        let run = u64::from_le_bytes(bytes.get(pos + 8..pos + 16)?.try_into().ok()?);
         pos += 16;
         let run = usize::try_from(run).ok()?;
         if run == 0 || run > nslots - slot {
@@ -301,8 +300,7 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
     if let (Some(a), Some((tp, cyc))) = (warena, wstate) {
         b.window = Some((a, tp, cyc));
     }
-    (b.eligible && b.window.is_some() && b.hi + b.lo > 0 && !b.pos.is_empty())
-        .then_some(b)
+    (b.eligible && b.window.is_some() && b.hi + b.lo > 0 && !b.pos.is_empty()).then_some(b)
 }
 
 /// The boot's foreign context: ForeignEnv plus the baked tables —
@@ -370,10 +368,8 @@ impl RunCore {
             if let Some(a) = &self.arg_strs_vec[id as usize] {
                 return a.clone();
             }
-            let a: std::sync::Arc<str> = std::sync::Arc::from(table_str(
-                &self.buf,
-                self.strings[id as usize],
-            ));
+            let a: std::sync::Arc<str> =
+                std::sync::Arc::from(table_str(&self.buf, self.strings[id as usize]));
             self.arg_strs_vec[id as usize] = Some(a.clone());
             return a;
         }
@@ -421,10 +417,7 @@ unsafe extern "C" fn runcore_foreign_cb(
             FArgSpec::Num { width, signed } => {
                 let words = ((width.max(1) as usize) + 63) / 64;
                 let limbs = std::slice::from_raw_parts(args.add(off), words);
-                argv.push(Arg::Val(
-                    Value::from_limb_slice(width, limbs),
-                    signed,
-                ));
+                argv.push(Arg::Val(Value::from_limb_slice(width, limbs), signed));
                 off += words;
             }
             FArgSpec::Real => {
@@ -481,9 +474,7 @@ unsafe extern "C" fn runcore_foreign_cb(
     } else {
         let v = match rc.fe.value(&name, &argv, ret_width, rc.now, &loc) {
             Some(v) => v,
-            None if name == "rand32" => {
-                Value::from_u64(ret_width.max(1), rc.rng.next() as u64)
-            }
+            None if name == "rand32" => Value::from_u64(ret_width.max(1), rc.rng.next() as u64),
             None => panic!(
                 "trs runcore: value task {name:?} reached the boot \
                  (eligibility-gate bug)"
@@ -595,7 +586,9 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
     {
         return None;
     }
-    if plusargs.iter().any(|a| a.starts_with("bscvcd") || a.starts_with("bscfst"))
+    if plusargs
+        .iter()
+        .any(|a| a.starts_with("bscvcd") || a.starts_with("bscfst"))
     {
         return None;
     }
@@ -661,10 +654,8 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             bail("no protos table");
             return None;
         };
-        let Some(protos) = abi::decode_protos(std::slice::from_raw_parts(
-            *pb,
-            **pl as usize,
-        )) else {
+        let Some(protos) = abi::decode_protos(std::slice::from_raw_parts(*pb, **pl as usize))
+        else {
             bail("corrupt protos table");
             return None;
         };
@@ -707,10 +698,8 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         // geometry (absent = ungated); the mem-file overlays below
         // change state the BAKED bitmaps never witnessed, so they
         // saturate the bitmaps before the first steady edge
-        let gate_geom: Option<(u64, u64, u64)> = lib
-            .get::<*const u64>(b"trs_gate_geom")
-            .ok()
-            .map(|g| {
+        let gate_geom: Option<(u64, u64, u64)> =
+            lib.get::<*const u64>(b"trs_gate_geom").ok().map(|g| {
                 let p: *const u64 = *g;
                 (*p, *p.add(1), *p.add(2))
             });
@@ -732,11 +721,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         // BRAM collision warnings: same hook, same registry, keyed by
         // this arena's absolute pointers
         for (slot, bits, name) in &boot.warns {
-            crate::prim::bram_warn_register(
-                ap.add(*slot as usize) as usize,
-                name.clone(),
-                *bits,
-            );
+            crate::prim::bram_warn_register(ap.add(*slot as usize) as usize, name.clone(), *bits);
         }
         let _ = abi::BRAM_WARN.set(crate::prim::bram_warn_hook);
         // native bounce servicers (rung 3b): restore every baked prim
@@ -746,8 +731,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         // bound comes from the restored prim's own layout arithmetic.
         let mut prims: HashMap<usize, Box<dyn Prim>> = HashMap::new();
         for (inst, slot, tag, ws, ss) in &boot.prims {
-            let Some((mut p, fp)) = crate::prim::runcore_restore(*tag, ws, ss)
-            else {
+            let Some((mut p, fp)) = crate::prim::runcore_restore(*tag, ws, ss) else {
                 bail("prim seed unsupported or malformed");
                 return None;
             };
@@ -810,9 +794,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         // dirtiness re-establishes (bounds-guarded against skew)
         if !boot.loads.is_empty() {
             if let Some((cur, next, words)) = gate_geom {
-                if cur + words <= boot.nslots as u64
-                    && next + words <= boot.nslots as u64
-                {
+                if cur + words <= boot.nslots as u64 && next + words <= boot.nslots as u64 {
                     for i in 0..words {
                         *ap.add((cur + i) as usize) = u64::MAX;
                         *ap.add((next + i) as usize) = u64::MAX;
@@ -821,9 +803,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             }
         }
         let envp = &mut rc as *mut RunCore as *mut core::ffi::c_void;
-        let pos_fns: Vec<
-            unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32,
-        > = boot
+        let pos_fns: Vec<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32> = boot
             .pos
             .iter()
             .map(|&o| std::mem::transmute(edge_tab[o]))
@@ -842,8 +822,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         let period = boot.hi + boot.lo;
         let mut tp = *tp0;
         let mut cycle = *cycle0;
-        while rc.fe.finished.is_none() && !rc.fe.stop_request && cycle < max_cycles
-        {
+        while rc.fe.finished.is_none() && !rc.fe.stop_request && cycle < max_cycles {
             cycle += 1;
             rc.now = tp;
             for f in &pos_fns {

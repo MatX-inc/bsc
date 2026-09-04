@@ -125,11 +125,20 @@ enum SymKind {
     Module,
     /// a value prim's sub-signal (module -> "" redirect target,
     /// isValid/value/level/... — the reference's per-prim tables)
-    PrimValue { inst: usize, key: &'static str },
+    PrimValue {
+        inst: usize,
+        key: &'static str,
+    },
     /// a def signal; peeks read the LAST-COMPUTED value
-    Def { inst: usize, id: trs_ir::StrId },
+    Def {
+        inst: usize,
+        id: trs_ir::StrId,
+    },
     /// an instantiation parameter (value bound at elaboration)
-    Param { inst: usize, name: String },
+    Param {
+        inst: usize,
+        name: String,
+    },
     /// a method port (EN_/arg/RDY_/result — SYM_PORT semantics)
     MethPort {
         inst: usize,
@@ -138,7 +147,12 @@ enum SymKind {
     },
     Rule,
     /// an addressable range sub-symbol (RegFile/FIFO storage)
-    Range { inst: usize, key: &'static str, lo: u64, hi: u64 },
+    Range {
+        inst: usize,
+        key: &'static str,
+        lo: u64,
+        hi: u64,
+    },
 }
 
 impl SimState {
@@ -197,9 +211,8 @@ pub extern "C" fn bk_init(model: *mut c_void, _master: u8) -> *mut c_void {
     // engine loads (warm bodies from t=0).
     let model_base = {
         let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
-        let found =
-            unsafe { libc::dladdr(model as *const c_void, &mut info) } != 0
-                && !info.dli_fname.is_null();
+        let found = unsafe { libc::dladdr(model as *const c_void, &mut info) } != 0
+            && !info.dli_fname.is_null();
         found.then(|| {
             let p = unsafe { CStr::from_ptr(info.dli_fname) }
                 .to_string_lossy()
@@ -361,12 +374,19 @@ unsafe fn build_symbols(stp: *mut SimState) {
             syms[mod_sym[*p]].children.push(child);
         }
         if *is_user {
-            let mut taken: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
             for (pn, w, method, kind) in st.primary().method_port_symbols(i) {
                 taken.insert(pn.clone());
                 let k = syms.len();
-                syms.push(sym(&pn, w, SymKind::MethPort { inst: i, method, kind }));
+                syms.push(sym(
+                    &pn,
+                    w,
+                    SymKind::MethPort {
+                        inst: i,
+                        method,
+                        kind,
+                    },
+                ));
                 syms[mod_sym[i]].children.push(k);
             }
             for (pn, pv) in st.primary().inst_params(i) {
@@ -374,7 +394,10 @@ unsafe fn build_symbols(stp: *mut SimState) {
                 syms.push(sym(
                     &pn,
                     pv.width,
-                    SymKind::Param { inst: i, name: pn.clone() },
+                    SymKind::Param {
+                        inst: i,
+                        name: pn.clone(),
+                    },
                 ));
                 syms[mod_sym[i]].children.push(k);
             }
@@ -398,10 +421,16 @@ unsafe fn build_symbols(stp: *mut SimState) {
             for ps in st.primary().prim_sym_children(i) {
                 let k = syms.len();
                 let kind = match ps.range {
-                    Some((lo, hi)) => {
-                        SymKind::Range { inst: i, key: ps.key, lo, hi }
-                    }
-                    None => SymKind::PrimValue { inst: i, key: ps.key },
+                    Some((lo, hi)) => SymKind::Range {
+                        inst: i,
+                        key: ps.key,
+                        lo,
+                        hi,
+                    },
+                    None => SymKind::PrimValue {
+                        inst: i,
+                        key: ps.key,
+                    },
                 };
                 syms.push(sym(ps.key, ps.width, kind));
                 syms[mod_sym[i]].children.push(k);
@@ -414,13 +443,12 @@ unsafe fn build_symbols(stp: *mut SimState) {
         .map(|x| x.key.to_string_lossy().into_owned())
         .collect();
     for x in &mut syms {
-        x.children
-            .sort_by(|&a, &b| {
-                let (ka, kb) = (&keys[a], &keys[b]);
-                ka.to_lowercase()
-                    .cmp(&kb.to_lowercase())
-                    .then_with(|| ka.cmp(kb))
-            });
+        x.children.sort_by(|&a, &b| {
+            let (ka, kb) = (&keys[a], &keys[b]);
+            ka.to_lowercase()
+                .cmp(&kb.to_lowercase())
+                .then_with(|| ka.cmp(kb))
+        });
     }
     st.syms = syms;
 }
@@ -444,19 +472,20 @@ pub extern "C" fn bk_top_symbol(hdl: *mut c_void) -> *mut c_void {
 /// Dotted-path resolution happens in the KERNEL (bluetcl passes
 /// whole segments through).
 #[no_mangle]
-pub extern "C" fn bk_lookup_symbol(
-    root: *mut c_void,
-    name: *const c_char,
-) -> *mut c_void {
+pub extern "C" fn bk_lookup_symbol(root: *mut c_void, name: *const c_char) -> *mut c_void {
     let Some(mut cur) = sym(root) else {
         return std::ptr::null_mut();
     };
-    let path = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
+    let path = unsafe { CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned();
     let st = unsafe { &*cur.st };
     for seg in path.split('.') {
-        let Some(&k) = cur.children.iter().find(|&&k| {
-            st.syms[k].key.to_bytes() == seg.as_bytes()
-        }) else {
+        let Some(&k) = cur
+            .children
+            .iter()
+            .find(|&&k| st.syms[k].key.to_bytes() == seg.as_bytes())
+        else {
             return std::ptr::null_mut();
         };
         cur = &st.syms[k];
@@ -522,8 +551,7 @@ fn peek_words(st: &mut SimState, v: &trs_interp::value::Value) -> *const u32 {
 pub extern "C" fn bk_peek_symbol_value(p: *mut c_void) -> *const u32 {
     // a peek must NEVER abort the session: resolution failures on
     // exotic shapes answer NoValue (the reference's own vocabulary)
-    std::panic::catch_unwind(|| peek_symbol_value_inner(p))
-        .unwrap_or(std::ptr::null())
+    std::panic::catch_unwind(|| peek_symbol_value_inner(p)).unwrap_or(std::ptr::null())
 }
 
 fn peek_symbol_value_inner(p: *mut c_void) -> *const u32 {
@@ -545,9 +573,7 @@ fn peek_symbol_value_inner(p: *mut c_void) -> *const u32 {
         .map(|e| e.kind != EngineKind::Aot)
         .unwrap_or(false);
     match s.kind {
-        SymKind::Def { .. } | SymKind::MethPort { .. } if !recording => {
-            std::ptr::null()
-        }
+        SymKind::Def { .. } | SymKind::MethPort { .. } if !recording => std::ptr::null(),
         SymKind::Def { inst, id } => {
             // last-computed value; zeros before first computation
             // (reference member fields start zeroed)
@@ -557,12 +583,10 @@ fn peek_symbol_value_inner(p: *mut c_void) -> *const u32 {
                 .unwrap_or_else(|| trs_interp::value::Value::zero(s.width));
             peek_words(st, &v)
         }
-        SymKind::PrimValue { inst, key } => {
-            match st.primary().prim_sym_read(inst, key) {
-                Some(v) => peek_words(st, &v),
-                None => std::ptr::null(),
-            }
-        }
+        SymKind::PrimValue { inst, key } => match st.primary().prim_sym_read(inst, key) {
+            Some(v) => peek_words(st, &v),
+            None => std::ptr::null(),
+        },
         SymKind::MethPort { inst, method, kind } => {
             let w = s.width;
             let v = st.primary().method_port_peek(inst, method, kind, w);
@@ -602,8 +626,7 @@ pub extern "C" fn bk_get_range_max_addr(p: *mut c_void) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn bk_peek_range_value(p: *mut c_void, addr: u64) -> *const u32 {
-    std::panic::catch_unwind(|| peek_range_value_inner(p, addr))
-        .unwrap_or(std::ptr::null())
+    std::panic::catch_unwind(|| peek_range_value_inner(p, addr)).unwrap_or(std::ptr::null())
 }
 
 fn peek_range_value_inner(p: *mut c_void, addr: u64) -> *const u32 {
@@ -642,8 +665,6 @@ pub extern "C" fn bk_get_nth_symbol(p: *mut c_void, n: u32) -> *mut c_void {
     }
 }
 
-
-
 /// `bk_shutdown`: free everything.  bluetcl dlcloses afterwards.
 #[no_mangle]
 pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
@@ -655,7 +676,8 @@ pub extern "C" fn bk_shutdown(hdl: *mut c_void) {
         if let Some(r) = st.runner.take() {
             r.abort.store(true, std::sync::atomic::Ordering::SeqCst);
             // don't block teardown on a slow secondary's catch-up
-            r.catch_abort.store(true, std::sync::atomic::Ordering::SeqCst);
+            r.catch_abort
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             match r.join.join() {
                 Ok((engines, _)) => st.engines = engines.0,
                 Err(_) => eprintln!(
@@ -694,7 +716,9 @@ pub extern "C" fn bk_now(hdl: *mut c_void) -> u64 {
 /// `bk_append_argument`: stage a plusarg.
 #[no_mangle]
 pub extern "C" fn bk_append_argument(hdl: *mut c_void, arg: *const c_char) {
-    let s = unsafe { CStr::from_ptr(arg) }.to_string_lossy().into_owned();
+    let s = unsafe { CStr::from_ptr(arg) }
+        .to_string_lossy()
+        .into_owned();
     let st = state(hdl);
     for e in &mut st.engines {
         e.interp.append_plusarg(&s);
@@ -780,11 +804,10 @@ pub extern "C" fn bk_get_nth_clock(hdl: *mut c_void, n: u32) -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn bk_get_clock_by_name(
-    hdl: *mut c_void,
-    name: *const c_char,
-) -> u32 {
-    let want = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
+pub extern "C" fn bk_get_clock_by_name(hdl: *mut c_void, name: *const c_char) -> u32 {
+    let want = unsafe { CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned();
     let st = state(hdl);
     if st.engines.is_empty() {
         return BAD_CLOCK; // async run in flight
@@ -811,7 +834,10 @@ pub extern "C" fn bk_clock_name(hdl: *mut c_void, h: u32) -> *const c_char {
 
 #[no_mangle]
 pub extern "C" fn bk_clock_initial_value(hdl: *mut c_void, h: u32) -> u32 {
-    state(hdl).clock(h).map(|c| c.initial_val as u32).unwrap_or(0)
+    state(hdl)
+        .clock(h)
+        .map(|c| c.initial_val as u32)
+        .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -860,12 +886,7 @@ pub extern "C" fn bk_clock_last_edge(hdl: *mut c_void, h: u32) -> u64 {
 // now: async lands with the driver thread (async.cmd).
 
 #[no_mangle]
-pub extern "C" fn bk_quit_after_edge(
-    hdl: *mut c_void,
-    h: u32,
-    dir: u32,
-    count: u64,
-) -> i32 {
+pub extern "C" fn bk_quit_after_edge(hdl: *mut c_void, h: u32, dir: u32, count: u64) -> i32 {
     let st = state(hdl);
     if st.clock(h).is_none() {
         return BK_ERROR;
@@ -919,9 +940,7 @@ fn oracle_check(engines: &mut [Engine]) -> bool {
         if t != pt {
             shape.push(format!("engine {n}: time {t} vs primary {pt}"));
         }
-        for (ci, (a, b)) in
-            pc.iter().zip(e.interp.clock_info().iter()).enumerate()
-        {
+        for (ci, (a, b)) in pc.iter().zip(e.interp.clock_info().iter()).enumerate() {
             if (a.cycles, a.neg_edges) != (b.cycles, b.neg_edges) {
                 shape.push(format!(
                     "engine {n}: clock {ci} edges {}+{} vs primary {}+{}",
@@ -1039,7 +1058,13 @@ pub extern "C" fn bk_advance(hdl: *mut c_void, is_async: u8) -> i32 {
             running2.store(false, Ordering::SeqCst);
             (engines, rc)
         });
-        st.runner = Some(Runner { join, abort, catch_abort, running, progress });
+        st.runner = Some(Runner {
+            join,
+            abort,
+            catch_abort,
+            running,
+            progress,
+        });
         return BK_SUCCESS;
     }
     let mut rc = BK_SUCCESS;
@@ -1302,10 +1327,7 @@ pub extern "C" fn bk_get_VCD_file_name(hdl: *mut c_void) -> *const c_char {
 /// formats answer in the reference's exact vocabulary.  Waveforms
 /// need the interp tier like every other VCD control.
 #[no_mangle]
-pub extern "C" fn bk_set_waveform_format(
-    hdl: *mut c_void,
-    format: *const c_char,
-) -> i32 {
+pub extern "C" fn bk_set_waveform_format(hdl: *mut c_void, format: *const c_char) -> i32 {
     let st = state(hdl);
     let name = if format.is_null() {
         ""
@@ -1339,8 +1361,7 @@ pub extern "C" fn bk_set_waveform_format(
 #[no_mangle]
 pub extern "C" fn bk_get_waveform_format(hdl: *mut c_void) -> *const c_char {
     let st = state(hdl);
-    let fst = !st.engines.is_empty()
-        && st.primary().wave_format() == trs_interp::WaveFormat::Fst;
+    let fst = !st.engines.is_empty() && st.primary().wave_format() == trs_interp::WaveFormat::Fst;
     if fst {
         b"fst\0".as_ptr() as *const c_char
     } else {

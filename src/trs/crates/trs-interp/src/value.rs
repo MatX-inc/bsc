@@ -105,12 +105,18 @@ fn nlimbs(width: u32) -> usize {
 
 impl Value {
     pub fn zero(width: u32) -> Value {
-        Value { width, limbs: Limbs::filled(nlimbs(width).max(1), 0) }
+        Value {
+            width,
+            limbs: Limbs::filled(nlimbs(width).max(1), 0),
+        }
     }
 
     /// The "undetermined" pattern for -unspecified-to A (0xAAAA...).
     pub fn undet(width: u32) -> Value {
-        let mut v = Value { width, limbs: Limbs::filled(nlimbs(width).max(1), 0xAAAA_AAAA_AAAA_AAAA) };
+        let mut v = Value {
+            width,
+            limbs: Limbs::filled(nlimbs(width).max(1), 0xAAAA_AAAA_AAAA_AAAA),
+        };
         v.mask();
         v
     }
@@ -142,7 +148,10 @@ impl Value {
             let mut l = vec![0u64; n];
             let k = limbs.len().min(n);
             l[..k].copy_from_slice(&limbs[..k]);
-            Value { width, limbs: Limbs::W(l) }
+            Value {
+                width,
+                limbs: Limbs::W(l),
+            }
         };
         v.mask();
         v
@@ -247,9 +256,8 @@ impl Value {
                 if i + j >= n {
                     break;
                 }
-                let cur = r.limbs[i + j] as u128
-                    + (self.limbs[i] as u128) * (o.limbs[j] as u128)
-                    + carry;
+                let cur =
+                    r.limbs[i + j] as u128 + (self.limbs[i] as u128) * (o.limbs[j] as u128) + carry;
                 r.limbs[i + j] = cur as u64;
                 carry = cur >> 64;
             }
@@ -367,7 +375,11 @@ impl Value {
         }
         for i in 0..w {
             let src = i as u64 + sh;
-            let b = if src < self.width as u64 { self.bit(src as u32) } else { s };
+            let b = if src < self.width as u64 {
+                self.bit(src as u32)
+            } else {
+                s
+            };
             if b {
                 r.limbs[(i as usize) / 64] |= 1 << (i % 64);
             }
@@ -380,7 +392,10 @@ impl Value {
     fn zip(&self, o: &Value, w: u32, f: impl Fn(u64, u64) -> u64) -> Value {
         let mut r = Value::zero(w);
         for i in 0..r.limbs.len() {
-            r.limbs[i] = f(*self.limbs.get(i).unwrap_or(&0), *o.limbs.get(i).unwrap_or(&0));
+            r.limbs[i] = f(
+                *self.limbs.get(i).unwrap_or(&0),
+                *o.limbs.get(i).unwrap_or(&0),
+            );
         }
         r.mask();
         r
@@ -489,7 +504,10 @@ impl Value {
     /// instead of bits.  Only valid as a task argument; the marker width
     /// keeps it inert through muxes and def stores.
     pub fn str_ref(id: u32) -> Value {
-        Value { width: STR_MARKER, limbs: Limbs::S([id as u64]) }
+        Value {
+            width: STR_MARKER,
+            limbs: Limbs::S([id as u64]),
+        }
     }
 
     pub fn as_str_id(&self) -> Option<u32> {
@@ -507,7 +525,11 @@ impl Value {
         let mut out = Vec::with_capacity(n);
         for k in 0..n {
             let limb = self.limbs.get(k / 2).copied().unwrap_or(0);
-            out.push(if k % 2 == 0 { limb as u32 } else { (limb >> 32) as u32 });
+            out.push(if k % 2 == 0 {
+                limb as u32
+            } else {
+                (limb >> 32) as u32
+            });
         }
         out
     }
@@ -529,7 +551,10 @@ impl Value {
     /// it stays inert through muxes and def stores (only ever consumed as
     /// a task argument or module parameter).
     pub fn real(v: f64) -> Value {
-        Value { width: REAL_MARKER, limbs: Limbs::S([v.to_bits()]) }
+        Value {
+            width: REAL_MARKER,
+            limbs: Limbs::S([v.to_bits()]),
+        }
     }
 
     pub fn as_real(&self) -> Option<f64> {
@@ -600,7 +625,10 @@ impl Value {
 
     pub fn to_bin_string(&self) -> String {
         let n = self.width.max(1);
-        (0..n).rev().map(|i| if self.bit(i) { '1' } else { '0' }).collect()
+        (0..n)
+            .rev()
+            .map(|i| if self.bit(i) { '1' } else { '0' })
+            .collect()
     }
 
     pub fn to_oct_string(&self) -> String {
@@ -637,7 +665,10 @@ mod tests {
     #[test]
     fn wide_roundtrip_and_dec() {
         let v = Value::from_limbs32(96, &[0xFFFF_FFFF, 0xFFFF_FFFF, 0xF]);
-        assert_eq!(v.to_hex_string(), format!("{}{}", "0".repeat(7), "f".repeat(17)));
+        assert_eq!(
+            v.to_hex_string(),
+            format!("{}{}", "0".repeat(7), "f".repeat(17))
+        );
         let small = Value::from_limbs32(70, &[10, 0, 0]);
         assert_eq!(small.to_dec_string(), "10");
     }

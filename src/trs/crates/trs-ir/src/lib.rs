@@ -12,12 +12,12 @@
 //! - This models what the *backend* needs, not everything bsc knows.
 
 pub mod expr;
+pub mod fold;
 pub mod link;
 pub mod merge;
 mod psq;
 pub mod schedule;
 pub mod sym;
-pub mod fold;
 pub mod verify;
 
 use std::collections::{HashMap, HashSet};
@@ -25,9 +25,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 pub use expr::{Action, Expr, PrimOp, Stmt};
-pub use schedule::{
-    Composition, ModuleSchedule, QualRule, SchedAlt, SchedNode, Schedule, Segment,
-};
+pub use schedule::{Composition, ModuleSchedule, QualRule, SchedAlt, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
@@ -114,7 +112,10 @@ pub struct Lazy<T> {
 
 impl<T> Lazy<T> {
     pub fn new(v: T) -> Self {
-        Lazy { cell: std::sync::OnceLock::from(v), pending: None }
+        Lazy {
+            cell: std::sync::OnceLock::from(v),
+            pending: None,
+        }
     }
 }
 
@@ -122,8 +123,10 @@ impl<T: serde::de::DeserializeOwned> std::ops::Deref for Lazy<T> {
     type Target = T;
     fn deref(&self) -> &T {
         self.cell.get_or_init(|| {
-            let (blob, off, len) =
-                self.pending.as_ref().expect("Lazy with neither value nor blob");
+            let (blob, off, len) = self
+                .pending
+                .as_ref()
+                .expect("Lazy with neither value nor blob");
             // the blob rode the same gated (and, for sidecars,
             // checksummed) snap payload as the eager half, under the
             // same layout rev; a decode failure here is the corruption
@@ -139,7 +142,10 @@ impl<T: Clone> Clone for Lazy<T> {
         match self.cell.get() {
             Some(v) => Lazy::new(v.clone()),
             // un-forced: share the blob, stay pending
-            None => Lazy { cell: std::sync::OnceLock::new(), pending: self.pending.clone() },
+            None => Lazy {
+                cell: std::sync::OnceLock::new(),
+                pending: self.pending.clone(),
+            },
         }
     }
 }
@@ -157,8 +163,7 @@ impl<T: Serialize + serde::de::DeserializeOwned> Serialize for Lazy<T> {
             match &mut *side {
                 Some(blob) => {
                     let off = blob.len() as u32;
-                    bincode::serialize_into(&mut *blob, &**self)
-                        .map_err(|e| e.to_string())?;
+                    bincode::serialize_into(&mut *blob, &**self).map_err(|e| e.to_string())?;
                     let len = blob.len() as u32 - off;
                     Ok::<Option<(u32, u32)>, String>(Some((off, len)))
                 }
@@ -323,9 +328,7 @@ pub struct Design {
 /// wrong module by accident.
 ///
 /// Serializes as the bare integer it wraps.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RuleRef(pub u32);
 
@@ -358,9 +361,7 @@ pub struct Extern {
 /// A position in a module's `externs` list.
 ///
 /// Serializes as the bare integer it wraps.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ExternRef(pub u32);
 
@@ -381,8 +382,7 @@ impl std::fmt::Display for ExternRef {
 ///
 /// Serializes as the bare integer it wraps.
 #[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
-    Deserialize,
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(transparent)]
 pub struct MethodRef(pub u32);
@@ -403,9 +403,7 @@ impl std::fmt::Display for MethodRef {
 /// What a schedule orders.  bsc ranks a module's rules and its interface
 /// methods in one order, so a node in the schedule graph -- and an entry
 /// in the Esposito conflict list -- is either.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SchedEntity {
     Rule(RuleRef),
     Method(MethodRef),
@@ -591,9 +589,7 @@ pub struct ClockArg {
 }
 
 /// The edges on which a clock ticks its instance.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Ticks {
     /// the port does not tick this instance
     Never,
@@ -656,23 +652,62 @@ pub enum InstanceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Primitive {
     /// Reg / RegU / RegA — inlined to a plain state field.
-    Reg { width: u32, reset: RegReset },
+    Reg {
+        width: u32,
+        reset: RegReset,
+    },
     /// ConfigReg: reads see begin-of-cycle value regardless of order.
-    ConfigReg { width: u32, reset: RegReset },
+    ConfigReg {
+        width: u32,
+        reset: RegReset,
+    },
     /// CReg with `ports` sequential read/write ports.
-    CReg { width: u32, ports: u8, reset: RegReset },
+    CReg {
+        width: u32,
+        ports: u8,
+        reset: RegReset,
+    },
     /// RWire / Wire / PulseWire (width 0 = PulseWire).
-    Wire { width: u32 },
-    Fifo { width: u32, depth: u32, guarded: bool, loopy: bool, bypass: bool },
-    RegFile { width: u32, addr_width: u32, binary_init: Option<StrId> },
-    Bram { width: u32, addr_width: u32, ports: u8, byte_enables: u32 },
-    ClockGen { params: Vec<u64> },
+    Wire {
+        width: u32,
+    },
+    Fifo {
+        width: u32,
+        depth: u32,
+        guarded: bool,
+        loopy: bool,
+        bypass: bool,
+    },
+    RegFile {
+        width: u32,
+        addr_width: u32,
+        binary_init: Option<StrId>,
+    },
+    Bram {
+        width: u32,
+        addr_width: u32,
+        ports: u8,
+        byte_enables: u32,
+    },
+    ClockGen {
+        params: Vec<u64>,
+    },
     GatedClock,
-    ClockDivider { divisor: u32 },
-    SyncReg { width: u32, stages: u8 },
-    SyncFifo { width: u32, depth: u32 },
+    ClockDivider {
+        divisor: u32,
+    },
+    SyncReg {
+        width: u32,
+        stages: u8,
+    },
+    SyncFifo {
+        width: u32,
+        depth: u32,
+    },
     /// Escape hatch during bring-up: named primitive handled by trs-rt.
-    Other { name: StrId },
+    Other {
+        name: StrId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -818,7 +853,10 @@ pub enum ForeignType {
 #[derive(Debug)]
 pub enum DecodeError {
     Cbor(String),
-    VersionMismatch { found: u32, expected: u32 },
+    VersionMismatch {
+        found: u32,
+        expected: u32,
+    },
     Invalid(verify::VerifyError),
     /// the design's fragments do not compose into a schedule
     Unschedulable(String),
@@ -976,11 +1014,7 @@ impl Design {
         Self::snap_decode_inner(bytes, bir_hash, false)
     }
 
-    fn snap_decode_inner(
-        bytes: &[u8],
-        bir_hash: u64,
-        checksum: bool,
-    ) -> Option<Design> {
+    fn snap_decode_inner(bytes: &[u8], bir_hash: u64, checksum: bool) -> Option<Design> {
         if bytes.len() < SNAP_HEADER || &bytes[..8] != SNAP_MAGIC {
             return None;
         }
@@ -994,21 +1028,17 @@ impl Design {
             return None;
         }
         let payload = &bytes[SNAP_HEADER..];
-        if checksum
-            && u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload)
-        {
+        if checksum && u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload) {
             return None;
         }
         // section split: [blob_len u64][side blob][design]; the blob is
         // COPIED into an Arc so pending Lazy fields outlive the caller's
         // byte buffer (an mmapped artifact may be a shorter-lived view)
-        let blob_len =
-            u64::from_le_bytes(payload.get(..8)?.try_into().ok()?) as usize;
+        let blob_len = u64::from_le_bytes(payload.get(..8)?.try_into().ok()?) as usize;
         let blob = payload.get(8..8 + blob_len)?;
         let design = payload.get(8 + blob_len..)?;
         let _g = SnapCtxGuard;
-        SNAP_BLOB
-            .with(|b| *b.borrow_mut() = Some(std::sync::Arc::new(blob.to_vec())));
+        SNAP_BLOB.with(|b| *b.borrow_mut() = Some(std::sync::Arc::new(blob.to_vec())));
         // caller's thread on purpose — see snap_encode's NOTE
         let mut d: Design = bincode::deserialize(design).ok()?;
         drop(_g);
@@ -1041,8 +1071,7 @@ impl Design {
         let mut bytes = Vec::with_capacity(BIR_HEADER);
         bytes.extend_from_slice(BIR_MAGIC);
         bytes.extend_from_slice(&BIR_VERSION.to_le_bytes());
-        ciborium::into_writer(&out, &mut bytes)
-            .expect("CBOR encoding cannot fail");
+        ciborium::into_writer(&out, &mut bytes).expect("CBOR encoding cannot fail");
         bytes
     }
 }
@@ -1066,11 +1095,9 @@ impl Bir {
         ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
             .map_err(|e| DecodeError::Cbor(e.to_string()))
     }
-
 }
 
 impl Design {
-
     /// Everything a design needs that its file does not carry: the
     /// structural check and the merged schedule.  Shared by the
     /// whole-design decode and by `link::assemble`.
@@ -1091,9 +1118,8 @@ impl Design {
         // about rather than hiding.
         let inp = merge::Inputs::of(design);
         if inp.is_some() {
-            design.compositions =
-                merge::compositions(inp.as_ref().expect("just checked"))
-                    .map_err(DecodeError::Unschedulable)?;
+            design.compositions = merge::compositions(inp.as_ref().expect("just checked"))
+                .map_err(DecodeError::Unschedulable)?;
         }
 
         // Which defs a debug session can name.  Derived rather than
@@ -1121,10 +1147,18 @@ impl Design {
             .map(|(i, s)| (s.clone(), i as StrId))
             .collect();
         for m in &mut self.modules {
-            m.def_ix =
-                m.defs.iter().enumerate().map(|(k, d)| (d.name, k)).collect();
-            m.method_ix =
-                m.methods.iter().enumerate().map(|(k, x)| (x.name, k)).collect();
+            m.def_ix = m
+                .defs
+                .iter()
+                .enumerate()
+                .map(|(k, d)| (d.name, k))
+                .collect();
+            m.method_ix = m
+                .methods
+                .iter()
+                .enumerate()
+                .map(|(k, x)| (x.name, k))
+                .collect();
         }
     }
 

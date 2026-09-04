@@ -47,7 +47,8 @@ fn main() {
     b.position_at_end(entry);
     let arena = f.get_nth_param(0).unwrap().into_pointer_value();
     let a0p = unsafe {
-        b.build_gep(i64t, arena, &[i64t.const_int(0, false)], "a0p").unwrap()
+        b.build_gep(i64t, arena, &[i64t.const_int(0, false)], "a0p")
+            .unwrap()
     };
     let a0 = b.build_load(i64t, a0p, "a0").unwrap().into_int_value();
     let cbp = b
@@ -55,14 +56,19 @@ fn main() {
         .unwrap()
         .into_pointer_value();
     let cbty = i64t.fn_type(&[i64t.into()], false);
-    let call = b.build_indirect_call(cbty, cbp, &[a0.into()], "cb").unwrap();
+    let call = b
+        .build_indirect_call(cbty, cbp, &[a0.into()], "cb")
+        .unwrap();
     let inkwell::values::ValueKind::Basic(rv) = call.try_as_basic_value() else {
         panic!("callback call has no return value");
     };
     let rv = rv.into_int_value();
-    let inc = b.build_int_add(rv, i64t.const_int(1, false), "inc").unwrap();
+    let inc = b
+        .build_int_add(rv, i64t.const_int(1, false), "inc")
+        .unwrap();
     let a1p = unsafe {
-        b.build_gep(i64t, arena, &[i64t.const_int(1, false)], "a1p").unwrap()
+        b.build_gep(i64t, arena, &[i64t.const_int(1, false)], "a1p")
+            .unwrap()
     };
     b.build_store(a1p, inc).unwrap();
     b.build_return(Some(&inc)).unwrap();
@@ -105,8 +111,7 @@ fn main() {
         let fname = CString::new("sched_spike").unwrap();
         let sym = libc::dlsym(h, fname.as_ptr());
         assert!(!sym.is_null(), "dlsym fn failed");
-        let sched: unsafe extern "C" fn(*mut u64) -> i64 =
-            std::mem::transmute(sym);
+        let sched: unsafe extern "C" fn(*mut u64) -> i64 = std::mem::transmute(sym);
         let mut arena = [7u64, 0u64];
         let r = sched(arena.as_mut_ptr());
         assert_eq!(r, 71, "return value");

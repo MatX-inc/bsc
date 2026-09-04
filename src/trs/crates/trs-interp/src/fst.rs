@@ -64,7 +64,9 @@ impl Fst {
     /// fstWriterCreate + LZ4 pack type; reports errors like the
     /// reference's open() (perror-style on stderr).
     pub fn create(name: &str) -> Result<Fst, ()> {
-        let Ok(cname) = CString::new(name) else { return Err(()) };
+        let Ok(cname) = CString::new(name) else {
+            return Err(());
+        };
         let ctx = unsafe { fstWriterCreate(cname.as_ptr(), 1) };
         if ctx.is_null() {
             eprintln!("{name}: cannot create FST file");
@@ -119,7 +121,9 @@ impl Fst {
             self.handles.resize(n + 1, 0);
             self.widths.resize(n + 1, 0);
         }
-        let Ok(cname) = CString::new(name) else { return };
+        let Ok(cname) = CString::new(name) else {
+            return;
+        };
         if self.handles[n] != 0 {
             // an additional definition of the same id is an alias
             unsafe {
@@ -235,9 +239,7 @@ impl Fst {
                     sig = i as u32 + 1;
                 }
             }
-            unsafe {
-                fstWriterEmitValueChange(self.ctx, h, buf.as_ptr() as *const c_void)
-            };
+            unsafe { fstWriterEmitValueChange(self.ctx, h, buf.as_ptr() as *const c_void) };
             self.count_change(w, sig);
         }
     }

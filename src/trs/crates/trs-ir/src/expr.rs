@@ -29,12 +29,20 @@ pub enum Expr {
     },
     /// The returned value of an ActionValue method; the action side carries
     /// the arguments (split as in `AMethValue`, `ASyntax.hs`).
-    MethValue { width: u32, instance: StrId, method: StrId },
+    MethValue {
+        width: u32,
+        instance: StrId,
+        method: StrId,
+    },
     /// Value of an ActionValue foreign task, correlated by cookie
     /// (`ATaskValue`).
     TaskValue { width: u32, cookie: u32 },
     /// Foreign (BDPI) value function call.
-    ForeignCall { width: u32, func: StrId, args: Vec<Expr> },
+    ForeignCall {
+        width: u32,
+        func: StrId,
+        args: Vec<Expr>,
+    },
     /// String literal (`ASStr`) — `$display` format strings and the like.
     Str(StrId),
     /// An abstract clock value (`ASClock`) — appears in instantiation
@@ -52,9 +60,18 @@ pub enum Expr {
     /// clock re-exports.  The submodule is named directly rather than
     /// spliced into a port name for the reader to take apart again.
     ClockOut { instance: StrId, clock: StrId },
-    Prim { op: PrimOp, width: u32, args: Vec<Expr> },
+    Prim {
+        op: PrimOp,
+        width: u32,
+        args: Vec<Expr>,
+    },
     /// if-then-else / mux.
-    If { width: u32, cond: Box<Expr>, then_: Box<Expr>, else_: Box<Expr> },
+    If {
+        width: u32,
+        cond: Box<Expr>,
+        then_: Box<Expr>,
+        else_: Box<Expr>,
+    },
     /// Case with dense or sparse arms (post `SimPackageOpt.insertCase`).
     Case {
         width: u32,
@@ -129,14 +146,24 @@ pub enum Stmt {
     /// tsortActionsAndDefs -- it may differ from the def table's entry
     /// (ActionValue references are substituted with their latched temps,
     /// and inlining can re-embed calls the table still shows).
-    Def { name: StrId, expr: Expr },
+    Def {
+        name: StrId,
+        expr: Expr,
+    },
     Action(Action),
     /// ActionValue call whose result is latched into `def`
     /// (`SFSAssignAction`).
-    AvAction { def: StrId, action: Action },
+    AvAction {
+        def: StrId,
+        action: Action,
+    },
     /// Conditional statement group (`SFSCond`) — e.g. system tasks gated
     /// on the reset wire so `$display` stays quiet during reset.
-    Cond { cond: Expr, then_: Vec<Stmt>, else_: Vec<Stmt> },
+    Cond {
+        cond: Expr,
+        then_: Vec<Stmt>,
+        else_: Vec<Stmt>,
+    },
 }
 
 /// An action within a rule or method body (the `AAction` analogue).

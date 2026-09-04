@@ -23,13 +23,13 @@
 
 use crate::expr::{Action, Expr, Stmt};
 use crate::schedule::{
-    Composition, CompositionEntry, DynSched, ModuleSchedule, QualRule,
-    QualifiedTick, SchedAlt, Schedule, Segment, SubMethod, TickCall,
+    Composition, CompositionEntry, DynSched, ModuleSchedule, QualRule, QualifiedTick, SchedAlt,
+    Schedule, Segment, SubMethod, TickCall,
 };
 use crate::{
-    Bir, BirBody, ClockArg, ClockDomain, DecodeError, Def, DefProps, Design,
-    Extern, ForeignFunc, InputClock, Instance, InstanceKind, Lazy, Method,
-    MethodRef, Module, Port, PrimClocks, Primitive, Reset, Rule, StrId,
+    Bir, BirBody, ClockArg, ClockDomain, DecodeError, Def, DefProps, Design, Extern, ForeignFunc,
+    InputClock, Instance, InstanceKind, Lazy, Method, MethodRef, Module, Port, PrimClocks,
+    Primitive, Reset, Rule, StrId,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -50,22 +50,37 @@ impl Remap {
 fn expr(r: &Remap, e: &mut Expr) {
     match e {
         Expr::Const { width: _, limbs: _ } => {}
-        Expr::Def(id) | Expr::Port(id) | Expr::Param(id) | Expr::Str(id) => {
-            r.s(id)
-        }
-        Expr::MethCall { width: _, instance, method, port: _, args } => {
+        Expr::Def(id) | Expr::Port(id) | Expr::Param(id) | Expr::Str(id) => r.s(id),
+        Expr::MethCall {
+            width: _,
+            instance,
+            method,
+            port: _,
+            args,
+        } => {
             r.s(instance);
             r.s(method);
             for a in args {
                 expr(r, a);
             }
         }
-        Expr::MethValue { width: _, instance, method } => {
+        Expr::MethValue {
+            width: _,
+            instance,
+            method,
+        } => {
             r.s(instance);
             r.s(method);
         }
-        Expr::TaskValue { width: _, cookie: _ } => {}
-        Expr::ForeignCall { width: _, func, args } => {
+        Expr::TaskValue {
+            width: _,
+            cookie: _,
+        } => {}
+        Expr::ForeignCall {
+            width: _,
+            func,
+            args,
+        } => {
             r.s(func);
             for a in args {
                 expr(r, a);
@@ -81,17 +96,31 @@ fn expr(r: &Remap, e: &mut Expr) {
             r.s(instance);
             r.s(clock);
         }
-        Expr::Prim { op: _, width: _, args } => {
+        Expr::Prim {
+            op: _,
+            width: _,
+            args,
+        } => {
             for a in args {
                 expr(r, a);
             }
         }
-        Expr::If { width: _, cond, then_, else_ } => {
+        Expr::If {
+            width: _,
+            cond,
+            then_,
+            else_,
+        } => {
             expr(r, cond);
             expr(r, then_);
             expr(r, else_);
         }
-        Expr::Case { width: _, scrutinee, arms, default } => {
+        Expr::Case {
+            width: _,
+            scrutinee,
+            arms,
+            default,
+        } => {
             expr(r, scrutinee);
             for (_, a) in arms {
                 expr(r, a);
@@ -103,7 +132,13 @@ fn expr(r: &Remap, e: &mut Expr) {
 
 fn action(r: &Remap, a: &mut Action) {
     match a {
-        Action::MethCall { instance, method, port: _, cond, args } => {
+        Action::MethCall {
+            instance,
+            method,
+            port: _,
+            cond,
+            args,
+        } => {
             r.s(instance);
             r.s(method);
             expr(r, cond);
@@ -111,7 +146,13 @@ fn action(r: &Remap, a: &mut Action) {
                 expr(r, x);
             }
         }
-        Action::Foreign { func, cond, args, signed: _, assumption: _ } => {
+        Action::Foreign {
+            func,
+            cond,
+            args,
+            signed: _,
+            assumption: _,
+        } => {
             r.s(func);
             expr(r, cond);
             for x in args {
@@ -160,7 +201,12 @@ fn stmts(r: &Remap, v: &mut Vec<Stmt>) {
 }
 
 fn port(r: &Remap, p: &mut Port) {
-    let Port { name, width: _, kind: _, base } = p;
+    let Port {
+        name,
+        width: _,
+        kind: _,
+        base,
+    } = p;
     r.s(name);
     r.opt(base);
 }
@@ -181,7 +227,11 @@ fn clock_domain(r: &Remap, d: &mut ClockDomain) {
 }
 
 fn prim_clocks(r: &Remap, p: &mut PrimClocks) {
-    let PrimClocks { inputs, domains, outputs } = p;
+    let PrimClocks {
+        inputs,
+        domains,
+        outputs,
+    } = p;
     for c in inputs {
         input_clock(r, c);
     }
@@ -198,7 +248,11 @@ fn primitive(r: &Remap, p: &mut Primitive) {
     match p {
         Primitive::Reg { width: _, reset: _ }
         | Primitive::ConfigReg { width: _, reset: _ }
-        | Primitive::CReg { width: _, ports: _, reset: _ }
+        | Primitive::CReg {
+            width: _,
+            ports: _,
+            reset: _,
+        }
         | Primitive::Wire { width: _ }
         | Primitive::Fifo {
             width: _,
@@ -216,11 +270,16 @@ fn primitive(r: &Remap, p: &mut Primitive) {
         | Primitive::ClockGen { params: _ }
         | Primitive::GatedClock
         | Primitive::ClockDivider { divisor: _ }
-        | Primitive::SyncReg { width: _, stages: _ }
-        | Primitive::SyncFifo { width: _, depth: _ } => {}
-        Primitive::RegFile { width: _, addr_width: _, binary_init } => {
-            r.opt(binary_init)
+        | Primitive::SyncReg {
+            width: _,
+            stages: _,
         }
+        | Primitive::SyncFifo { width: _, depth: _ } => {}
+        Primitive::RegFile {
+            width: _,
+            addr_width: _,
+            binary_init,
+        } => r.opt(binary_init),
         Primitive::Other { name } => r.s(name),
     }
 }
@@ -244,7 +303,12 @@ fn instance(r: &Remap, i: &mut Instance) {
         InstanceKind::Prim(p) => primitive(r, p),
     }
     for c in clock_args {
-        let ClockArg { name, arg: _, has_reset: _, ticks: _ } = c;
+        let ClockArg {
+            name,
+            arg: _,
+            has_reset: _,
+            ticks: _,
+        } = c;
         r.s(name);
     }
     if let Some(p) = pc {
@@ -263,9 +327,19 @@ fn instance(r: &Remap, i: &mut Instance) {
 }
 
 fn def(r: &Remap, d: &mut Def) {
-    let Def { name, width: _, expr: e, props } = d;
-    let DefProps { can_fire: _, will_fire: _, signed: _, sym: _, nameable: _ } =
-        props;
+    let Def {
+        name,
+        width: _,
+        expr: e,
+        props,
+    } = d;
+    let DefProps {
+        can_fire: _,
+        will_fire: _,
+        signed: _,
+        sym: _,
+        nameable: _,
+    } = props;
     r.s(name);
     let mut body = (**e).clone();
     expr(r, &mut body);
@@ -334,7 +408,12 @@ fn schedule(r: &Remap, s: &mut Schedule) {
         dyn_scheds,
     } = s;
     for d in domains {
-        let ModuleSchedule { domain: _, posedge: _, segments, ticks } = d;
+        let ModuleSchedule {
+            domain: _,
+            posedge: _,
+            segments,
+            ticks,
+        } = d;
         for g in segments {
             let Segment { nodes: _, cut } = g;
             for c in cut {
@@ -461,7 +540,11 @@ fn module(r: &Remap, m: &mut Module) {
 }
 
 fn sub_method(r: &Remap, m: &mut SubMethod) {
-    let SubMethod { instance: _, name, method: _ } = m;
+    let SubMethod {
+        instance: _,
+        name,
+        method: _,
+    } = m;
     r.s(name);
 }
 
@@ -472,7 +555,11 @@ fn qual_rule(r: &Remap, q: &mut QualRule) {
 
 fn entries(r: &Remap, es: &mut Vec<CompositionEntry>) {
     for e in es {
-        let CompositionEntry { instance, domain: _, segment: _ } = e;
+        let CompositionEntry {
+            instance,
+            domain: _,
+            segment: _,
+        } = e;
         r.s(instance);
     }
 }
@@ -501,7 +588,13 @@ fn composition(r: &Remap, c: &mut Composition) {
     r.s(clock);
     entries(r, es);
     for t in ticks {
-        let QualifiedTick { instance, prim, port, reset: _, gate } = t;
+        let QualifiedTick {
+            instance,
+            prim,
+            port,
+            reset: _,
+            gate,
+        } = t;
         r.s(instance);
         r.s(prim);
         r.s(port);
@@ -514,7 +607,12 @@ fn composition(r: &Remap, c: &mut Composition) {
     }
     inhibits(r, cross_inhibits);
     for a in alts {
-        let SchedAlt { guard_inst, guard, entries: es, cross_inhibits } = a;
+        let SchedAlt {
+            guard_inst,
+            guard,
+            entries: es,
+            cross_inhibits,
+        } = a;
         r.s(guard_inst);
         expr(r, guard);
         entries(r, es);
@@ -523,7 +621,12 @@ fn composition(r: &Remap, c: &mut Composition) {
 }
 
 fn foreign_func(r: &Remap, f: &mut ForeignFunc) {
-    let ForeignFunc { name, c_name, ret: _, args: _ } = f;
+    let ForeignFunc {
+        name,
+        c_name,
+        ret: _,
+        args: _,
+    } = f;
     r.s(name);
     r.s(c_name);
 }
@@ -535,8 +638,12 @@ fn foreign_func(r: &Remap, f: &mut ForeignFunc) {
 /// records the name.  Here the child is present, so the name resolves,
 /// and everything downstream sees the position it expects.
 pub(crate) fn resolve_sub_methods(design: &mut Design) -> Result<(), DecodeError> {
-    let by_name: HashMap<StrId, usize> =
-        design.modules.iter().enumerate().map(|(i, m)| (m.name, i)).collect();
+    let by_name: HashMap<StrId, usize> = design
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.name, i))
+        .collect();
 
     // (module, instance, method name) -> position, worked out against
     // the immutable design before anything is written back
@@ -544,9 +651,7 @@ pub(crate) fn resolve_sub_methods(design: &mut Design) -> Result<(), DecodeError
     for (mi, m) in design.modules.iter().enumerate() {
         for (di, d) in m.schedule.dyn_scheds.iter().enumerate() {
             let subs: Vec<&SubMethod> = match d {
-                DynSched::Pair { meths, .. } => {
-                    meths.iter().flat_map(|(a, b)| [a, b]).collect()
-                }
+                DynSched::Pair { meths, .. } => meths.iter().flat_map(|(a, b)| [a, b]).collect(),
                 DynSched::SelfCall { early, late, .. } => vec![early, late],
             };
             for (si, sub) in subs.iter().enumerate() {
@@ -574,16 +679,14 @@ pub(crate) fn resolve_sub_methods(design: &mut Design) -> Result<(), DecodeError
                         design.name(m.name)
                     ))
                 })?;
-                let k = design.modules[*child]
-                    .method_idx(sub.name)
-                    .ok_or_else(|| {
-                        DecodeError::Link(format!(
-                            "`{}' has no method `{}', which `{}' calls",
-                            design.name(child_name),
-                            design.name(sub.name),
-                            design.name(m.name)
-                        ))
-                    })?;
+                let k = design.modules[*child].method_idx(sub.name).ok_or_else(|| {
+                    DecodeError::Link(format!(
+                        "`{}' has no method `{}', which `{}' calls",
+                        design.name(child_name),
+                        design.name(sub.name),
+                        design.name(m.name)
+                    ))
+                })?;
                 fixups.push((mi, di, si, MethodRef(k as u32)));
             }
         }
@@ -591,9 +694,7 @@ pub(crate) fn resolve_sub_methods(design: &mut Design) -> Result<(), DecodeError
     for (mi, di, si, k) in fixups {
         let d = &mut design.modules[mi].schedule.dyn_scheds[di];
         let subs: Vec<&mut SubMethod> = match d {
-            DynSched::Pair { meths, .. } => {
-                meths.iter_mut().flat_map(|(a, b)| [a, b]).collect()
-            }
+            DynSched::Pair { meths, .. } => meths.iter_mut().flat_map(|(a, b)| [a, b]).collect(),
             DynSched::SelfCall { early, late, .. } => vec![early, late],
         };
         if let Some(sub) = subs.into_iter().nth(si) {
@@ -628,11 +729,9 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
         .filter(|b| matches!(b.body, BirBody::Design(_)))
         .count();
     if linked > 0 && birs.len() > 1 {
-        return Err(err(
-            "one of these files is a linked design already; link \
+        return Err(err("one of these files is a linked design already; link \
              fragments, or that file on its own"
-                .to_string(),
-        ));
+            .to_string()));
     }
 
     // the combined table, grown through Design::intern as each file's
@@ -653,8 +752,7 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
     let mut stated_top: Option<StrId> = None;
 
     for bir in birs {
-        let r =
-            Remap(bir.strings.iter().map(|s| design.intern(s)).collect());
+        let r = Remap(bir.strings.iter().map(|s| design.intern(s)).collect());
         design.uses_wave_tasks |= bir.uses_wave_tasks;
         let mut take_ffunc = |design: &mut Design, mut f: ForeignFunc| {
             foreign_func(&r, &mut f);
@@ -742,15 +840,12 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
     let top = match roots.as_slice() {
         [t] => *t,
         [] => {
-            return Err(err(
-                "no top module: every one of these is instantiated by \
+            return Err(err("no top module: every one of these is instantiated by \
                  another"
-                    .to_string(),
-            ))
+                .to_string()))
         }
         many => {
-            let names: Vec<&str> =
-                many.iter().map(|n| design.name(*n)).collect();
+            let names: Vec<&str> = many.iter().map(|n| design.name(*n)).collect();
             return Err(err(format!(
                 "more than one top module: {} -- link the fragments of \
                  one design",
@@ -788,16 +883,19 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
 mod tests {
     use super::*;
     use crate::expr::Expr;
-    use crate::schedule::{ModuleSchedule, Schedule, Segment, TickCall};
-    use crate::{
-        ClockArg, ClockDomain, DefProps, ForeignType, MethodKind, PortKind,
-        Primitive, RuleRef, Ticks,
-    };
     use crate::schedule::SchedNode;
+    use crate::schedule::{ModuleSchedule, Schedule, Segment, TickCall};
     use crate::SchedEntity;
+    use crate::{
+        ClockArg, ClockDomain, DefProps, ForeignType, MethodKind, PortKind, Primitive, RuleRef,
+        Ticks,
+    };
 
     fn one() -> Expr {
-        Expr::Const { width: 1, limbs: vec![1] }
+        Expr::Const {
+            width: 1,
+            limbs: vec![1],
+        }
     }
 
     /// A two-module design with a distinct string in every field the
@@ -806,32 +904,37 @@ mod tests {
     fn parent_and_child() -> Design {
         let mut d = crate::tests::tiny_design();
         d.strings = [
-            "mkTop",    // 0  module name
-            "mkKid",    // 1  submodule name (also the extern)
-            "kid",      // 2  instance name
-            "CLK",      // 3  clock port
-            "clk_in",   // 4  input clock name
-            "GATE",     // 5  clock gate port
-            "a_def",    // 6  def
-            "a_rule",   // 7  rule
-            "CAN_a",    // 8  rule can-fire
-            "WILL_a",   // 9  rule will-fire
-            "get",      // 10 method
-            "RDY_get",  // 11 method ready signal
-            "arg0",     // 12 method argument port
-            "cut_sig",  // 13 a segment cut
-            "TICK",     // 14 tick port
-            "ffunc",    // 15 foreign function
-            "c_ffunc",  // 16 its C name
-            "memfile",  // 17 a RegFile init file
-            "reg",      // 18 the regfile instance
-            "",         // 19 the top's own path
+            "mkTop",   // 0  module name
+            "mkKid",   // 1  submodule name (also the extern)
+            "kid",     // 2  instance name
+            "CLK",     // 3  clock port
+            "clk_in",  // 4  input clock name
+            "GATE",    // 5  clock gate port
+            "a_def",   // 6  def
+            "a_rule",  // 7  rule
+            "CAN_a",   // 8  rule can-fire
+            "WILL_a",  // 9  rule will-fire
+            "get",     // 10 method
+            "RDY_get", // 11 method ready signal
+            "arg0",    // 12 method argument port
+            "cut_sig", // 13 a segment cut
+            "TICK",    // 14 tick port
+            "ffunc",   // 15 foreign function
+            "c_ffunc", // 16 its C name
+            "memfile", // 17 a RegFile init file
+            "reg",     // 18 the regfile instance
+            "",        // 19 the top's own path
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect();
 
-        let port = |name, kind| crate::Port { name, width: 1, kind, base: None };
+        let port = |name, kind| crate::Port {
+            name,
+            width: 1,
+            kind,
+            base: None,
+        };
         let kid = crate::Module {
             name: 1,
             externs: vec![],
@@ -972,19 +1075,18 @@ mod tests {
                     posedge: true,
                     segments: vec![
                         Segment {
-                            nodes: vec![SchedNode::Sched(SchedEntity::Rule(
-                                RuleRef(0),
-                            ))],
+                            nodes: vec![SchedNode::Sched(SchedEntity::Rule(RuleRef(0)))],
                             cut: vec![13],
                         },
                         Segment {
-                            nodes: vec![SchedNode::Exec(SchedEntity::Rule(
-                                RuleRef(0),
-                            ))],
+                            nodes: vec![SchedNode::Exec(SchedEntity::Rule(RuleRef(0)))],
                             cut: vec![],
                         },
                     ],
-                    ticks: vec![TickCall { instance: 2, port: 14 }],
+                    ticks: vec![TickCall {
+                        instance: 2,
+                        port: 14,
+                    }],
                 }],
                 ..Schedule::default()
             },
@@ -1014,11 +1116,8 @@ mod tests {
         let n = d.strings.len();
         // a table rotated by `shift`, and the remap back out of it
         let rot = |shift: usize| {
-            let strings: Vec<String> =
-                (0..n).map(|i| d.strings[(i + shift) % n].clone()).collect();
-            let back = Remap(
-                (0..n).map(|i| ((i + n - shift) % n) as StrId).collect(),
-            );
+            let strings: Vec<String> = (0..n).map(|i| d.strings[(i + shift) % n].clone()).collect();
+            let back = Remap((0..n).map(|i| ((i + n - shift) % n) as StrId).collect());
             (strings, back)
         };
         // one file per foreign signature, as an export writes them
@@ -1070,58 +1169,113 @@ mod tests {
         let kid = out.modules.iter().find(|m| n(m.name) == "mkKid").unwrap();
         let top = out.modules.iter().find(|m| n(m.name) == "mkTop").unwrap();
 
-        assert_eq!(n(out.top), "mkTop", "the top is the module nothing instantiates");
+        assert_eq!(
+            n(out.top),
+            "mkTop",
+            "the top is the module nothing instantiates"
+        );
         assert_eq!(n(top.externs[0].module), "mkKid", "extern");
-        assert_eq!(out.default_clock.map(n), Some("CLK".to_string()), "default clock");
+        assert_eq!(
+            out.default_clock.map(n),
+            Some("CLK".to_string()),
+            "default clock"
+        );
 
         let i = &top.instances[0];
         assert_eq!(n(i.name), "kid", "instance name");
         assert_eq!(n(i.clock_args[0].name), "clk_in", "clock argument");
-        assert_eq!(i.method_order.iter().map(|(a, b)| (n(*a), n(*b))).collect::<Vec<_>>(),
-                   vec![("get".to_string(), "get".to_string())], "method order");
+        assert_eq!(
+            i.method_order
+                .iter()
+                .map(|(a, b)| (n(*a), n(*b)))
+                .collect::<Vec<_>>(),
+            vec![("get".to_string(), "get".to_string())],
+            "method order"
+        );
         assert_eq!(n(i.port_counts[0].0), "arg0", "port counts");
 
         assert_eq!(n(top.inputs[0].name), "CLK", "port");
         assert_eq!(n(top.input_clocks[0].name), "clk_in", "input clock");
-        assert_eq!(kid.input_clocks[0].gate.map(n), Some("GATE".to_string()), "clock gate");
-        assert_eq!(kid.clock_domains[0].clocks[0].0, Expr::Port(top.inputs[0].name), "domain osc");
+        assert_eq!(
+            kid.input_clocks[0].gate.map(n),
+            Some("GATE".to_string()),
+            "clock gate"
+        );
+        assert_eq!(
+            kid.clock_domains[0].clocks[0].0,
+            Expr::Port(top.inputs[0].name),
+            "domain osc"
+        );
 
         assert_eq!(n(kid.defs[0].name), "a_def", "def");
-        assert_eq!(*kid.defs[0].expr, Expr::Port(kid.inputs[1].name), "def body");
+        assert_eq!(
+            *kid.defs[0].expr,
+            Expr::Port(kid.inputs[1].name),
+            "def body"
+        );
         assert_eq!(n(kid.methods[0].name), "get", "method");
-        assert_eq!(kid.methods[0].rdy.map(n), Some("RDY_get".to_string()), "method ready");
+        assert_eq!(
+            kid.methods[0].rdy.map(n),
+            Some("RDY_get".to_string()),
+            "method ready"
+        );
         assert_eq!(n(kid.methods[0].args[0].name), "arg0", "method argument");
 
         let r = &top.rules[0];
-        assert_eq!((n(r.name), n(r.can_fire), n(r.will_fire)),
-                   ("a_rule".into(), "CAN_a".into(), "WILL_a".into()), "rule");
+        assert_eq!(
+            (n(r.name), n(r.can_fire), n(r.will_fire)),
+            ("a_rule".into(), "CAN_a".into(), "WILL_a".into()),
+            "rule"
+        );
         let Stmt::Action(Action::Foreign { func, args, .. }) = &r.body[0] else {
             panic!("the rule's body is a foreign call")
         };
         assert_eq!(n(*func), "ffunc", "foreign call in a rule body");
-        assert_eq!(top.foreign_calls.iter().map(|c| n(*c)).collect::<Vec<_>>(),
-                   vec!["ffunc".to_string()], "declared foreign call");
-        let Expr::MethCall { instance, method, .. } = &args[0] else {
+        assert_eq!(
+            top.foreign_calls.iter().map(|c| n(*c)).collect::<Vec<_>>(),
+            vec!["ffunc".to_string()],
+            "declared foreign call"
+        );
+        let Expr::MethCall {
+            instance, method, ..
+        } = &args[0]
+        else {
             panic!("its argument is a method call")
         };
-        assert_eq!((n(*instance), n(*method)), ("kid".into(), "get".into()), "nested call");
+        assert_eq!(
+            (n(*instance), n(*method)),
+            ("kid".into(), "get".into()),
+            "nested call"
+        );
 
         let sd = &top.schedule.domains[0];
         assert_eq!(n(sd.segments[0].cut[0]), "cut_sig", "segment cut");
-        assert_eq!((n(sd.ticks[0].instance), n(sd.ticks[0].port)),
-                   ("kid".into(), "TICK".into()), "tick call");
+        assert_eq!(
+            (n(sd.ticks[0].instance), n(sd.ticks[0].port)),
+            ("kid".into(), "TICK".into()),
+            "tick call"
+        );
 
-        let InstanceKind::Prim(Primitive::RegFile { binary_init, .. }) =
-            &kid.instances[0].kind
+        let InstanceKind::Prim(Primitive::RegFile { binary_init, .. }) = &kid.instances[0].kind
         else {
             panic!("the child holds a regfile")
         };
-        assert_eq!(binary_init.map(n), Some("memfile".to_string()), "primitive string");
+        assert_eq!(
+            binary_init.map(n),
+            Some("memfile".to_string()),
+            "primitive string"
+        );
 
-        assert_eq!((n(out.foreign_funcs[0].name), n(out.foreign_funcs[0].c_name)),
-                   ("ffunc".into(), "c_ffunc".into()), "foreign function");
-        assert_eq!(out.foreign_funcs.len(), 1,
-                   "a foreign function every fragment carries is linked once");
+        assert_eq!(
+            (n(out.foreign_funcs[0].name), n(out.foreign_funcs[0].c_name)),
+            ("ffunc".into(), "c_ffunc".into()),
+            "foreign function"
+        );
+        assert_eq!(
+            out.foreign_funcs.len(),
+            1,
+            "a foreign function every fragment carries is linked once"
+        );
     }
 
     /// The design-level facts no fragment carries.
@@ -1129,7 +1283,10 @@ mod tests {
     fn a_link_derives_what_a_fragment_leaves_out() {
         let d = parent_and_child();
         let out = assemble(scatter(&d)).expect("links");
-        assert!(!out.compositions.is_empty(), "the schedule is merged, not read");
+        assert!(
+            !out.compositions.is_empty(),
+            "the schedule is merged, not read"
+        );
         assert_eq!(
             out.name(out.compositions[0].clock),
             "CLK",
@@ -1151,8 +1308,13 @@ mod tests {
         let strings = d.strings.len() as StrId;
         d.strings.push("CLK_OUT".to_string());
         d.modules[1].ifc_clocks = vec![(strings, Expr::Port(3))];
-        d.modules[0].clock_domains[0].clocks =
-            vec![(Expr::ClockOut { instance: 2, clock: strings }, one())];
+        d.modules[0].clock_domains[0].clocks = vec![(
+            Expr::ClockOut {
+                instance: 2,
+                clock: strings,
+            },
+            one(),
+        )];
         d.index_strings();
 
         let out = assemble(scatter(&d)).expect("links");
@@ -1178,20 +1340,22 @@ mod tests {
         assert!(err.contains("no .bir files"), "{err}");
 
         // the top alone: the module it instantiates is absent
-        let err =
-            assemble(with(vec![frags[1].clone()])).unwrap_err().to_string();
+        let err = assemble(with(vec![frags[1].clone()]))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no fragment for `mkKid'"), "{err}");
 
         // two unrelated tops
         let mut other = frags[1].clone();
         let id = other.strings.len() as StrId;
         other.strings.push("mkOther".to_string());
-        let BirBody::Fragment(m) = &mut other.body else { panic!("a fragment") };
+        let BirBody::Fragment(m) = &mut other.body else {
+            panic!("a fragment")
+        };
         m.name = id;
-        let err =
-            assemble(with(vec![frags[0].clone(), frags[1].clone(), other]))
-                .unwrap_err()
-                .to_string();
+        let err = assemble(with(vec![frags[0].clone(), frags[1].clone(), other]))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("more than one top module"), "{err}");
 
         // no file for an import a module says it calls

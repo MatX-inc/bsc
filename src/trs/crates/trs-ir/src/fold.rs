@@ -282,9 +282,7 @@ pub fn fold_body(body: &mut Vec<Stmt>, table: &HashMap<StrId, u32>) -> FoldStats
     }
     let before = body.len();
     body.retain(|s| match s {
-        Stmt::Def { name, .. } => {
-            !(cand.contains_key(name) && !*live.get(name).unwrap_or(&false))
-        }
+        Stmt::Def { name, .. } => !(cand.contains_key(name) && !*live.get(name).unwrap_or(&false)),
         _ => true,
     });
     st.dropped = before - body.len();
@@ -338,22 +336,26 @@ fn fields_of(args: &[Expr], w: &HashMap<StrId, u32>) -> Option<Vec<Field>> {
             continue;
         }
         let lo = hi - u64::from(wa);
-        out.push(Field { lo, hi: hi - 1, idx });
+        out.push(Field {
+            lo,
+            hi: hi - 1,
+            idx,
+        });
         hi = lo;
     }
     Some(out)
 }
 
-fn collect_concats(
-    body: &[Stmt],
-    w: &HashMap<StrId, u32>,
-    out: &mut Cands,
-    st: &mut FoldStats,
-) {
+fn collect_concats(body: &[Stmt], w: &HashMap<StrId, u32>, out: &mut Cands, st: &mut FoldStats) {
     for s in body {
         match s {
             Stmt::Def { name, expr } => {
-                if let Expr::Prim { op: PrimOp::Concat, args, .. } = expr {
+                if let Expr::Prim {
+                    op: PrimOp::Concat,
+                    args,
+                    ..
+                } = expr
+                {
                     if let Some(f) = fields_of(args, w) {
                         let total: u64 = f.iter().map(|x| x.hi - x.lo + 1).sum();
                         match total {
@@ -379,19 +381,30 @@ fn extract_bounds(args: &[Expr]) -> Option<(u64, u64)> {
     if args.len() != 3 {
         return None;
     }
-    let (Expr::Const { limbs: hl, .. }, Expr::Const { limbs: ll, .. }) =
-        (&args[1], &args[2])
+    let (Expr::Const { limbs: hl, .. }, Expr::Const { limbs: ll, .. }) = (&args[1], &args[2])
     else {
         return None;
     };
-    Some((u64::from(*hl.first().unwrap_or(&0)), u64::from(*ll.first().unwrap_or(&0))))
+    Some((
+        u64::from(*hl.first().unwrap_or(&0)),
+        u64::from(*ll.first().unwrap_or(&0)),
+    ))
 }
 
 /// If `e` is `Extract(Def(n), hi, lo)` on a candidate with the range exactly
 /// covering one operand, return that operand's index.
 fn aligned_pick(e: &Expr, cand: &Cands) -> Option<(StrId, usize)> {
-    let Expr::Prim { op: PrimOp::Extract, args, width } = e else { return None };
-    let Expr::Def(n) = args.first()? else { return None };
+    let Expr::Prim {
+        op: PrimOp::Extract,
+        args,
+        width,
+    } = e
+    else {
+        return None;
+    };
+    let Expr::Def(n) = args.first()? else {
+        return None;
+    };
     let (_, fields) = cand.get(n)?;
     let (hi, lo) = extract_bounds(args)?;
     let f = fields.iter().find(|f| f.lo == lo && f.hi == hi)?;
@@ -411,7 +424,12 @@ fn census_expr(e: &Expr, cand: &Cands, cen: &mut Census, st: &mut FoldStats, ctx
         cen.bad.entry(n).or_insert(false);
         return;
     }
-    if let Expr::Prim { op: PrimOp::Extract, args, .. } = e {
+    if let Expr::Prim {
+        op: PrimOp::Extract,
+        args,
+        ..
+    } = e
+    {
         if let Some(Expr::Def(n)) = args.first() {
             if cand.contains_key(n) {
                 if let Some((hi, lo)) = extract_bounds(args) {
@@ -439,7 +457,9 @@ fn census_expr(e: &Expr, cand: &Cands, cen: &mut Census, st: &mut FoldStats, ctx
         return;
     }
     let kid = match e {
-        Expr::Prim { op: PrimOp::Concat, .. } => Ctx::NestedConcat,
+        Expr::Prim {
+            op: PrimOp::Concat, ..
+        } => Ctx::NestedConcat,
         Expr::Prim { .. } => Ctx::Prim,
         Expr::If { .. } | Expr::Case { .. } => Ctx::IfCase,
         _ => ctx,
@@ -467,7 +487,12 @@ fn census_stmt(s: &Stmt, cand: &Cands, cen: &mut Census, st: &mut FoldStats) {
         Stmt::Def { name, expr } => {
             // a concat's own definition is not a use of itself
             if cand.contains_key(name) {
-                if let Expr::Prim { op: PrimOp::Concat, args, .. } = expr {
+                if let Expr::Prim {
+                    op: PrimOp::Concat,
+                    args,
+                    ..
+                } = expr
+                {
                     for a in args {
                         census_expr(a, cand, cen, st, Ctx::DefRhs);
                     }
@@ -575,11 +600,18 @@ fn rewrite_stmt(s: &mut Stmt, cand: &Cands, n: &mut usize) {
 
 fn children(e: &Expr) -> Vec<&Expr> {
     match e {
-        Expr::Prim { args, .. }
-        | Expr::ForeignCall { args, .. }
-        | Expr::MethCall { args, .. } => args.iter().collect(),
-        Expr::If { cond, then_, else_, .. } => vec![cond, then_, else_],
-        Expr::Case { scrutinee, arms, default, .. } => {
+        Expr::Prim { args, .. } | Expr::ForeignCall { args, .. } | Expr::MethCall { args, .. } => {
+            args.iter().collect()
+        }
+        Expr::If {
+            cond, then_, else_, ..
+        } => vec![cond, then_, else_],
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
             let mut v = vec![&**scrutinee];
             v.extend(arms.iter().map(|(_, e)| e));
             v.push(default);
@@ -593,11 +625,18 @@ fn children(e: &Expr) -> Vec<&Expr> {
 
 fn children_mut(e: &mut Expr) -> Vec<&mut Expr> {
     match e {
-        Expr::Prim { args, .. }
-        | Expr::ForeignCall { args, .. }
-        | Expr::MethCall { args, .. } => args.iter_mut().collect(),
-        Expr::If { cond, then_, else_, .. } => vec![cond, then_, else_],
-        Expr::Case { scrutinee, arms, default, .. } => {
+        Expr::Prim { args, .. } | Expr::ForeignCall { args, .. } | Expr::MethCall { args, .. } => {
+            args.iter_mut().collect()
+        }
+        Expr::If {
+            cond, then_, else_, ..
+        } => vec![cond, then_, else_],
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
             let mut v = vec![&mut **scrutinee];
             v.extend(arms.iter_mut().map(|(_, e)| e));
             v.push(default);

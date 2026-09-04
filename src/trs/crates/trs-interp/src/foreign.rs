@@ -239,8 +239,8 @@ impl ForeignEnv {
             return true;
         }
         match name {
-            "$fdisplay" | "$fwrite" | "$fdisplayh" | "$fwriteh"
-            | "$fdisplayb" | "$fwriteb" | "$fdisplayo" | "$fwriteo" => {
+            "$fdisplay" | "$fwrite" | "$fdisplayh" | "$fwriteh" | "$fdisplayb" | "$fwriteb"
+            | "$fdisplayo" | "$fwriteo" => {
                 let base = match name.chars().last() {
                     Some('h') => 16,
                     Some('b') => 2,
@@ -543,9 +543,7 @@ impl ForeignEnv {
                     _ => 10,
                 };
                 let mut errs = Vec::new();
-                let text = format::format_sformat(
-                    args, base, loc, name == "$sformatAV", &mut errs,
-                );
+                let text = format::format_sformat(args, base, loc, name == "$sformatAV", &mut errs);
                 emit_output_errors(&errs);
                 let packed = format::str_value(&text);
                 if packed.width >= w {

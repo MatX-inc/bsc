@@ -40,7 +40,12 @@ pub enum LTree {
 #[derive(Clone)]
 pub enum Psq {
     Void,
-    Winner { k: Key, p: Prio, t: Rc<LTree>, m: Key },
+    Winner {
+        k: Key,
+        p: Prio,
+        t: Rc<LTree>,
+        m: Key,
+    },
 }
 
 fn size(t: &LTree) -> u32 {
@@ -66,7 +71,15 @@ fn right(t: &LTree) -> &LTree {
 
 fn loser(left_wins: bool, k: Key, p: Prio, l: Rc<LTree>, m: Key, r: Rc<LTree>) -> Rc<LTree> {
     let size = 1 + size(&l) + size(&r);
-    Rc::new(LTree::Loser { left_wins, size, k, p, l, m, r })
+    Rc::new(LTree::Loser {
+        left_wins,
+        size,
+        k,
+        p,
+        l,
+        m,
+        r,
+    })
 }
 
 fn lloser(k: Key, p: Prio, l: Rc<LTree>, m: Key, r: Rc<LTree>) -> Rc<LTree> {
@@ -80,14 +93,7 @@ fn rloser(k: Key, p: Prio, l: Rc<LTree>, m: Key, r: Rc<LTree>) -> Rc<LTree> {
 /// Adams's balance factor.
 const OMEGA: u32 = 2;
 
-fn balance(
-    lose_left: bool,
-    k: Key,
-    p: Prio,
-    l: Rc<LTree>,
-    m: Key,
-    r: Rc<LTree>,
-) -> Rc<LTree> {
+fn balance(lose_left: bool, k: Key, p: Prio, l: Rc<LTree>, m: Key, r: Rc<LTree>) -> Rc<LTree> {
     let (sl, sr) = (size(&l), size(&r));
     let mk = if lose_left { lloser } else { rloser };
     if sl + sr < 2 {
@@ -101,14 +107,7 @@ fn balance(
     }
 }
 
-fn balance_left(
-    lose_left: bool,
-    k: Key,
-    p: Prio,
-    l: Rc<LTree>,
-    m: Key,
-    r: Rc<LTree>,
-) -> Rc<LTree> {
+fn balance_left(lose_left: bool, k: Key, p: Prio, l: Rc<LTree>, m: Key, r: Rc<LTree>) -> Rc<LTree> {
     if size(left(&r)) < size(right(&r)) {
         single_left(lose_left, k, p, l, m, r)
     } else {
@@ -136,9 +135,15 @@ fn balance_right(
 fn parts(t: &LTree) -> (bool, Key, Prio, Rc<LTree>, Key, Rc<LTree>) {
     match t {
         LTree::Start => panic!("rotation through an empty loser tree"),
-        LTree::Loser { left_wins, k, p, l, m, r, .. } => {
-            (*left_wins, *k, *p, l.clone(), *m, r.clone())
-        }
+        LTree::Loser {
+            left_wins,
+            k,
+            p,
+            l,
+            m,
+            r,
+            ..
+        } => (*left_wins, *k, *p, l.clone(), *m, r.clone()),
     }
 }
 
@@ -201,7 +206,14 @@ fn double_left(
     r: Rc<LTree>,
 ) -> Rc<LTree> {
     let (r_left, k2, p2, t2, m2, t3) = parts(&r);
-    single_left(lose_left, k1, p1, t1, m1, single_right(r_left, k2, p2, t2, m2, t3))
+    single_left(
+        lose_left,
+        k1,
+        p1,
+        t1,
+        m1,
+        single_right(r_left, k2, p2, t2, m2, t3),
+    )
 }
 
 fn double_right(
@@ -213,7 +225,14 @@ fn double_right(
     t3: Rc<LTree>,
 ) -> Rc<LTree> {
     let (l_left, k2, p2, t1, m1, t2) = parts(&l);
-    single_right(lose_left, k1, p1, single_left(l_left, k2, p2, t1, m1, t2), m2, t3)
+    single_right(
+        lose_left,
+        k1,
+        p1,
+        single_left(l_left, k2, p2, t1, m1, t2),
+        m2,
+        t3,
+    )
 }
 
 /// One match: the lower priority wins, and a tie goes to the left --
@@ -225,19 +244,39 @@ fn play(a: Psq, b: Psq) -> Psq {
         (t, Psq::Void) => t,
         (
             Psq::Winner { k, p, t, m },
-            Psq::Winner { k: k2, p: p2, t: t2, m: m2 },
+            Psq::Winner {
+                k: k2,
+                p: p2,
+                t: t2,
+                m: m2,
+            },
         ) => {
             if p <= p2 {
-                Psq::Winner { k, p, t: balance(false, k2, p2, t, m, t2), m: m2 }
+                Psq::Winner {
+                    k,
+                    p,
+                    t: balance(false, k2, p2, t, m, t2),
+                    m: m2,
+                }
             } else {
-                Psq::Winner { k: k2, p: p2, t: balance(true, k, p, t, m, t2), m: m2 }
+                Psq::Winner {
+                    k: k2,
+                    p: p2,
+                    t: balance(true, k, p, t, m, t2),
+                    m: m2,
+                }
             }
         }
     }
 }
 
 fn single(k: Key, p: Prio) -> Psq {
-    Psq::Winner { k, p, t: Rc::new(LTree::Start), m: k }
+    Psq::Winner {
+        k,
+        p,
+        t: Rc::new(LTree::Start),
+        m: k,
+    }
 }
 
 fn max_key(q: &Psq) -> Key {
@@ -258,16 +297,44 @@ fn tour_view(q: &Psq) -> Tour {
         Psq::Void => Tour::Null,
         Psq::Winner { k, p, t, m } => match &**t {
             LTree::Start => Tour::Single(*k, *p),
-            LTree::Loser { left_wins, k: k2, p: p2, l, m: m2, r, .. } => {
+            LTree::Loser {
+                left_wins,
+                k: k2,
+                p: p2,
+                l,
+                m: m2,
+                r,
+                ..
+            } => {
                 let (a, b) = if *left_wins {
                     (
-                        Psq::Winner { k: *k2, p: *p2, t: l.clone(), m: *m2 },
-                        Psq::Winner { k: *k, p: *p, t: r.clone(), m: *m },
+                        Psq::Winner {
+                            k: *k2,
+                            p: *p2,
+                            t: l.clone(),
+                            m: *m2,
+                        },
+                        Psq::Winner {
+                            k: *k,
+                            p: *p,
+                            t: r.clone(),
+                            m: *m,
+                        },
                     )
                 } else {
                     (
-                        Psq::Winner { k: *k, p: *p, t: l.clone(), m: *m2 },
-                        Psq::Winner { k: *k2, p: *p2, t: r.clone(), m: *m },
+                        Psq::Winner {
+                            k: *k,
+                            p: *p,
+                            t: l.clone(),
+                            m: *m2,
+                        },
+                        Psq::Winner {
+                            k: *k2,
+                            p: *p2,
+                            t: r.clone(),
+                            m: *m,
+                        },
                     )
                 };
                 Tour::Play(a, b)
@@ -296,16 +363,34 @@ pub fn from_ord_list(bindings: &[(Key, Prio)]) -> Psq {
 fn second_best(t: &LTree, m: Key) -> Psq {
     match t {
         LTree::Start => Psq::Void,
-        LTree::Loser { left_wins, k, p, l, m: m2, r, .. } => {
+        LTree::Loser {
+            left_wins,
+            k,
+            p,
+            l,
+            m: m2,
+            r,
+            ..
+        } => {
             if *left_wins {
                 play(
-                    Psq::Winner { k: *k, p: *p, t: l.clone(), m: *m2 },
+                    Psq::Winner {
+                        k: *k,
+                        p: *p,
+                        t: l.clone(),
+                        m: *m2,
+                    },
                     second_best(r, m),
                 )
             } else {
                 play(
                     second_best(l, *m2),
-                    Psq::Winner { k: *k, p: *p, t: r.clone(), m },
+                    Psq::Winner {
+                        k: *k,
+                        p: *p,
+                        t: r.clone(),
+                        m,
+                    },
                 )
             }
         }
@@ -354,8 +439,9 @@ mod tests {
         for v in &mut after {
             v.sort_unstable_by(|a, b| b.cmp(a));
         }
-        let bindings: Vec<(Key, Prio)> =
-            (0..n).map(|i| (i, priors[i as usize].len() as u32)).collect();
+        let bindings: Vec<(Key, Prio)> = (0..n)
+            .map(|i| (i, priors[i as usize].len() as u32))
+            .collect();
         let mut q = from_ord_list(&bindings);
         let mut out = Vec::new();
         while let Some(((i, p), rest)) = min_view(&q) {
@@ -404,8 +490,8 @@ mod tests {
             (
                 ";;;;;1;;5;;;;3;;5;;;;;;;;;;",
                 &[
-                    0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 11, 10, 12, 14, 13, 15, 17, 16, 18,
-                    19, 20, 21, 23, 22,
+                    0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 11, 10, 12, 14, 13, 15, 17, 16, 18, 19, 20, 21,
+                    23, 22,
                 ],
             ),
             (
@@ -413,16 +499,16 @@ mod tests {
                  0,4,6;4,6,10,11,15,16;2,4,5,7;2,4,16;6,7,17;11,16,18,19;\
                  4,8,14,16;9,17,19,21",
                 &[
-                    0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18,
-                    19, 20, 21, 22, 23,
+                    0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+                    22, 23,
                 ],
             ),
             (
                 ";0;;;1,2;4;;0,1,4;5;2;;5,8;7;6;0;7;0,6,10,13;3,4,10;\
                  1,10,11,15,16;1,6,8,9,18;6,8,12,17;11,12,13,14;1,6,7,12;3,7,19,20",
                 &[
-                    0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 10, 11, 12, 14, 13, 15, 16, 17, 18,
-                    19, 20, 21, 22, 23,
+                    0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 10, 11, 12, 14, 13, 15, 16, 17, 18, 19, 20, 21,
+                    22, 23,
                 ],
             ),
         ];
@@ -439,7 +525,9 @@ mod tests {
         // balancing shows up as more than a reordering
         let mut state = 12345u64;
         let mut next = || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             state >> 33
         };
         for _ in 0..200 {

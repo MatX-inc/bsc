@@ -29,20 +29,15 @@
 
 use std::collections::HashMap;
 
-use trs_ir::{Action, Design, Expr, PrimOp, Stmt, StrId};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{FunctionType, IntType};
 use inkwell::values::{FunctionValue, GlobalValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
+use trs_ir::{Action, Design, Expr, PrimOp, Stmt, StrId};
 
 pub use crate::abi::*;
-
-
-
-
-
 
 fn nope<T>(why: impl Into<String>) -> Result<T, Ineligible> {
     Err(Ineligible(why.into()))
@@ -95,7 +90,6 @@ pub fn llvm_init_once() {
         let _ = m.create_jit_execution_engine(OptimizationLevel::None);
     });
 }
-
 
 /// Eligibility check: run the full lowering into a throwaway context
 /// (no engine, no LLVM codegen — ~ms per rule) so ineligibility is
@@ -164,17 +158,15 @@ fn make_module<'ctx>(
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
-    let cb_ty =
-        i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
+    let cb_ty = i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
     let fpe_ty = ctx.void_type().fn_type(&[], false);
     let prim_ty = ctx
         .void_type()
         .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
     let (cb, fpe, prim) = match baked {
         Some((f, s, p)) => {
-            let addr = |a: usize| {
-                CbAddr::Baked(i64t.const_int(a as u64, false).const_to_pointer(ptrt))
-            };
+            let addr =
+                |a: usize| CbAddr::Baked(i64t.const_int(a as u64, false).const_to_pointer(ptrt));
             (addr(f as usize), addr(s as usize), addr(p as usize))
         }
         None => {
@@ -188,7 +180,17 @@ fn make_module<'ctx>(
             )
         }
     };
-    (module, Callbacks { cb_ty, fpe_ty, prim_ty, cb, fpe, prim })
+    (
+        module,
+        Callbacks {
+            cb_ty,
+            fpe_ty,
+            prim_ty,
+            cb,
+            fpe,
+            prim,
+        },
+    )
 }
 
 /// Widest integer type the default middle-end pipeline accepts; wider
@@ -287,7 +289,6 @@ impl IrTally {
     }
 }
 
-
 /// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
 /// asks for optimization.  The engine/object paths only apply BACKEND
 /// codegen opts; without this the IR pass pipeline (GVN, instcombine,
@@ -351,7 +352,8 @@ const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
 /// passes loudly and falls back, so a stale string cannot silently
 /// miscompile — it silently deoptimizes, which the version rung's
 /// A/B catches).
-const AOT_DEMOTED_PIPELINE: &str = "annotation2metadata,forceattrs,inferattrs,coro-early,function<eager-\
+const AOT_DEMOTED_PIPELINE: &str =
+    "annotation2metadata,forceattrs,inferattrs,coro-early,function<eager-\
     inv>(lower-expect,simplifycfg<bonus-inst-threshold=1;no-forward-swit\
     ch-cond;no-switch-range-to-icmp;no-switch-to-lookup;keep-loops;no-ho\
     ist-common-insts;no-sink-common-insts;speculate-blocks;simplify-cond\
@@ -404,10 +406,7 @@ const AOT_DEMOTED_PIPELINE: &str = "annotation2metadata,forceattrs,inferattrs,co
     ate-blocks;simplify-cond-branch>),globaldce,constmerge,cg-profile,re\
     l-lookup-table-converter,function(annotation-remarks)";
 
-fn run_ir_passes(
-    module: &Module,
-    tracked: Option<&IrTally>,
-) -> Result<(), Ineligible> {
+fn run_ir_passes(module: &Module, tracked: Option<&IrTally>) -> Result<(), Ineligible> {
     // TRS_JIT_OPT forces a generic level (A/B tool); the AOT default
     // is the bespoke pipeline; the JIT engine path runs none (its
     // backend codegen opts suffice for warm-up-bound sessions)
@@ -436,11 +435,10 @@ fn run_ir_passes(
             // O0 2.74s, and the lever-1 ccg A/B guards the swap away
             // from default<O1>).  TRS_JIT_FN_INSN_BUDGET overrides
             // the threshold; 0 disables the tier.
-            let fn_budget: u64 =
-                std::env::var("TRS_JIT_FN_INSN_BUDGET")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(2_000_000);
+            let fn_budget: u64 = std::env::var("TRS_JIT_FN_INSN_BUDGET")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2_000_000);
             let max_fn = if fn_budget > 0 {
                 module_max_fn_insns(module)
             } else {
@@ -479,9 +477,7 @@ fn run_ir_passes(
     // the unsafe flag parse against the chunked path's parallel
     // workers).  Built as a one-shot CLI diagnostic; per-action scoped
     // instrumentation belongs to the persistent-worker rung.
-    if std::env::var_os("TRS_JIT_TIME_PASSES")
-        .is_some_and(|v| !v.is_empty() && v != "0")
-    {
+    if std::env::var_os("TRS_JIT_TIME_PASSES").is_some_and(|v| !v.is_empty() && v != "0") {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             let args = [c"trs".as_ptr(), c"-time-passes".as_ptr()];
@@ -496,8 +492,7 @@ fn run_ir_passes(
     }
     // debugging escape: run an arbitrary pipeline string instead
     // (miscompile bisection — e.g. "default<O1>,gvn")
-    let pipeline =
-        std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
+    let pipeline = std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
     module.run_passes(&pipeline, &tm, opts).map_err(|e| {
         // LOUD on stderr, not just the Ineligible fallback chain: a
         // rejected pipeline string (an LLVM upgrade renaming a pass in
@@ -640,8 +635,6 @@ fn opt_level() -> OptimizationLevel {
     }
 }
 
-
-
 /// A gate expression a compiled read may re-expand: static cones only
 /// (constants, parameters, and pure combinationals over them).  Defs
 /// are excluded because the interp's gate eval prefers their LATCHED
@@ -651,10 +644,15 @@ fn gate_static(e: &Expr) -> bool {
     match e {
         Expr::Const { .. } | Expr::Param(_) => true,
         Expr::Prim { args, .. } => args.iter().all(gate_static),
-        Expr::If { cond, then_, else_, .. } => {
-            gate_static(cond) && gate_static(then_) && gate_static(else_)
-        }
-        Expr::Case { scrutinee, arms, default, .. } => {
+        Expr::If {
+            cond, then_, else_, ..
+        } => gate_static(cond) && gate_static(then_) && gate_static(else_),
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
             gate_static(scrutinee)
                 && arms.iter().all(|(_, a)| gate_static(a))
                 && gate_static(default)
@@ -662,7 +660,6 @@ fn gate_static(e: &Expr) -> bool {
         _ => false,
     }
 }
-
 
 /// The portable tuning baseline for the architecture this runs on.
 ///
@@ -684,8 +681,8 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
     llvm_init_once();
     let triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&triple)
-        .map_err(|e| Ineligible(format!("LLVM target: {e}")))?;
+    let target =
+        Target::from_triple(&triple).map_err(|e| Ineligible(format!("LLVM target: {e}")))?;
     // Artifact code generation targets a PORTABLE baseline by default:
     // artifacts are cached and shipped (.so, trs link --exe), and the
     // load gates check design identity, not CPU features — a
@@ -863,7 +860,6 @@ pub fn compile_meta_object(
     Ok(buf.as_slice().to_vec())
 }
 
-
 /// Lower a batch of helper functions into one module.  Same-batch
 /// helpers call each other by symbol (module-local); the HelperMap may
 /// also carry cross-references.  Returns nothing extra: callers either
@@ -893,9 +889,8 @@ fn lower_helpers<'ctx>(
             prim_calls: Vec::new(),
             edge: None,
         };
-        lc.lower_helper(hs).map_err(|e| {
-            Ineligible(format!("{} (def {}): {e}", hs.sym, hs.def))
-        })?;
+        lc.lower_helper(hs)
+            .map_err(|e| Ineligible(format!("{} (def {}): {e}", hs.sym, hs.def)))?;
         if !lc.foreign_stmts.is_empty() || !lc.prim_calls.is_empty() {
             return Err(Ineligible(format!(
                 "helper piece has callback sites (analysis bug): {}",
@@ -980,9 +975,7 @@ fn lower_boundary_fns<'ctx>(
             edge: None,
         };
         match lc.lower_boundary_fn(rq, external) {
-            Ok(ret_w)
-                if lc.foreign_stmts.is_empty() && lc.prim_calls.is_empty() =>
-            {
+            Ok(ret_w) if lc.foreign_stmts.is_empty() && lc.prim_calls.is_empty() => {
                 map.insert(
                     (rq.mir, rq.method, rq.kind),
                     (rq.sym.clone(), ret_w, rq.args.clone()),
@@ -1068,8 +1061,7 @@ pub fn compile_design_object(
                 helper_specs.len()
             );
         }
-        let bmap =
-            lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, false);
+        let bmap = lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, false);
         eprintln!(
             "trs boundary: {} of {} method fns emitted",
             bmap.len(),
@@ -1181,10 +1173,7 @@ pub fn compile_design_object(
             }
         }
         if max_insns > edge_insn_budget {
-            return Ok(DesignObject::EdgeOverBudget(
-                section_sizes,
-                max_insns,
-            ));
+            return Ok(DesignObject::EdgeOverBudget(section_sizes, max_insns));
         }
     }
     // ordinal-indexed fn tables: without them the loader dlsyms ~one
@@ -1209,8 +1198,9 @@ pub fn compile_design_object(
             .iter()
             .map(|sp| fnptr(format!("exec_{}", sp.label)))
             .collect();
-        let edges: Vec<_> =
-            (0..fused.len()).map(|k| fnptr(format!("edge_c{k}"))).collect();
+        let edges: Vec<_> = (0..fused.len())
+            .map(|k| fnptr(format!("edge_c{k}")))
+            .collect();
         for (name, vals) in [
             ("trs_sched_tab", scheds),
             ("trs_exec_tab", execs),
@@ -1265,8 +1255,11 @@ pub fn compile_design_object(
             .collect();
         eprintln!("trs aot: ir census {}", census.join(" "));
         top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-        let tops: Vec<String> =
-            top.iter().take(5).map(|(i, n)| format!("{n}={i}")).collect();
+        let tops: Vec<String> = top
+            .iter()
+            .take(5)
+            .map(|(i, n)| format!("{n}={i}"))
+            .collect();
         eprintln!("trs aot: ir top {}", tops.join(" "));
     }
     let t0 = std::time::Instant::now();
@@ -1323,8 +1316,7 @@ fn compile_type_module(
             .map_err(|e| Ineligible(format!("shard mir {mir} helpers: {e}")))?;
     }
     if !reqs.is_empty() {
-        let local =
-            lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, true);
+        let local = lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, true);
         // the phase-1 trial decided the map every other module lowered
         // against; a divergence here would mean call sites elsewhere
         // declared a type this module never defined — fail loudly
@@ -1510,10 +1502,7 @@ pub fn compile_design_objects_split(
         let ptrt = ctx.ptr_type(AddressSpace::default());
         let i64t = ctx.i64_type();
         let i32t = ctx.i32_type();
-        let exec_ty = i32t.fn_type(
-            &[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()],
-            false,
-        );
+        let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
         for &o in rep_ords {
             let name = format!("exec_{}", specs[o].label);
             if module.get_function(&name).is_none() {
@@ -1534,8 +1523,9 @@ pub fn compile_design_objects_split(
             .iter()
             .map(|sp| fnptr(format!("exec_{}", sp.label)))
             .collect();
-        let edges: Vec<_> =
-            (0..fused.len()).map(|k| fnptr(format!("edge_c{k}"))).collect();
+        let edges: Vec<_> = (0..fused.len())
+            .map(|k| fnptr(format!("edge_c{k}")))
+            .collect();
         for (name, vals) in [
             ("trs_sched_tab", scheds),
             ("trs_exec_tab", execs),
@@ -1599,10 +1589,7 @@ pub fn compile_design_objects_split(
                 for (mir, (hs, rqs, reps)) in group {
                     out.push((
                         *mir,
-                        compile_type_module(
-                            &wenv, hs, rqs, reps, refs, pseudo, full_map,
-                            *mir,
-                        ),
+                        compile_type_module(&wenv, hs, rqs, reps, refs, pseudo, full_map, *mir),
                     ));
                 }
                 out
@@ -1612,13 +1599,8 @@ pub fn compile_design_objects_split(
             run_ir_passes(&module, Some(&tally))?;
             let tm = aot_target_machine()?;
             let buf = tm
-                .write_to_memory_buffer(
-                    &module,
-                    inkwell::targets::FileType::Object,
-                )
-                .map_err(|e| {
-                    Ineligible(format!("shard design object emit: {e}"))
-                })?;
+                .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+                .map_err(|e| Ineligible(format!("shard design object emit: {e}")))?;
             Ok(buf.as_slice().to_vec())
         })();
         let mut typed: Vec<(usize, Result<Vec<u8>, Ineligible>)> = Vec::new();
@@ -1689,7 +1671,6 @@ pub fn compile_helpers_object(
     Ok(buf.as_slice().to_vec())
 }
 
-
 fn lower_fused<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
@@ -1699,8 +1680,7 @@ fn lower_fused<'ctx>(
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
     let sched_ty = ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
-    let exec_ty = i32t
-        .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+    let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
     let b = ctx.create_builder();
     let mut syms = Vec::with_capacity(comps.len());
     for (k, comp) in comps.iter().enumerate() {
@@ -1724,9 +1704,7 @@ fn lower_fused<'ctx>(
         let callee = |r: &HelperRef, ty: inkwell::types::FunctionType<'ctx>| match r {
             HelperRef::Addr(a) => (
                 None,
-                Some(
-                    i64t.const_int(*a as u64, false).const_to_pointer(ptrt),
-                ),
+                Some(i64t.const_int(*a as u64, false).const_to_pointer(ptrt)),
                 ty,
             ),
             HelperRef::Sym(name) => (
@@ -1746,17 +1724,11 @@ fn lower_fused<'ctx>(
                     let (f_, p_, ty) = callee(r, sched_ty);
                     match (f_, p_) {
                         (Some(f_), _) => {
-                            b.build_call(f_, &[arena.into(), envp.into()], "s")
-                                .unwrap();
+                            b.build_call(f_, &[arena.into(), envp.into()], "s").unwrap();
                         }
                         (_, Some(p_)) => {
-                            b.build_indirect_call(
-                                ty,
-                                p_,
-                                &[arena.into(), envp.into()],
-                                "s",
-                            )
-                            .unwrap();
+                            b.build_indirect_call(ty, p_, &[arena.into(), envp.into()], "s")
+                                .unwrap();
                         }
                         _ => unreachable!(),
                     }
@@ -1771,13 +1743,10 @@ fn lower_fused<'ctx>(
                     ];
                     let cs = match (f_, p_) {
                         (Some(f_), _) => b.build_call(f_, &args, "e").unwrap(),
-                        (_, Some(p_)) => {
-                            b.build_indirect_call(ty, p_, &args, "e").unwrap()
-                        }
+                        (_, Some(p_)) => b.build_indirect_call(ty, p_, &args, "e").unwrap(),
                         _ => unreachable!(),
                     };
-                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value()
-                    else {
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
                         unreachable!()
                     };
                     let stop = b
@@ -1878,9 +1847,7 @@ fn lower_edge_ssa<'ctx>(
         insns
     };
     // instructions in blocks[from..]: the blocks a section appended
-    let count_new = |func: inkwell::values::FunctionValue,
-                     from_block: usize|
-     -> (usize, u64) {
+    let count_new = |func: inkwell::values::FunctionValue, from_block: usize| -> (usize, u64) {
         let bbs = func.get_basic_blocks();
         let mut insns = 0u64;
         for bb in &bbs[from_block.min(bbs.len())..] {
@@ -1934,9 +1901,7 @@ fn lower_edge_ssa<'ctx>(
         // NEXT from WF | last-WF per rule.
         if let Some(g) = &plan.gate {
             for i in 0..g.words {
-                let n = b
-                    .build_load(i64t, gep(g.next_base + i), "gn")
-                    .unwrap();
+                let n = b.build_load(i64t, gep(g.next_base + i), "gn").unwrap();
                 b.build_store(gep(g.cur_base + i), n).unwrap();
                 b.build_store(gep(g.next_base + i), i64t.const_zero())
                     .unwrap();
@@ -1953,21 +1918,18 @@ fn lower_edge_ssa<'ctx>(
         // and branch to the first match's body; none matching walks
         // the base row.  Interp parity: Value::as_bool is "nonzero",
         // so the taken test is a plain != 0 on the guard value.
-        let alt_refs: &[crate::abi::AltRow] =
-            plan.alt_rows.get(k).map(|v| &v[..]).unwrap_or(&[]);
+        let alt_refs: &[crate::abi::AltRow] = plan.alt_rows.get(k).map(|v| &v[..]).unwrap_or(&[]);
         let mut bodies = Vec::new();
         if alt_refs.is_empty() {
             bodies.push((k, entry));
         } else {
-            let gspec = specs.first().ok_or_else(|| {
-                Ineligible("alts plan without specs".into())
-            })?;
+            let gspec = specs
+                .first()
+                .ok_or_else(|| Ineligible("alts plan without specs".into()))?;
             let mut chk = entry;
             for (vi, ar) in alt_refs.iter().enumerate() {
-                let body_bb =
-                    ctx.append_basic_block(func, &format!("alt{vi}"));
-                let next_bb =
-                    ctx.append_basic_block(func, &format!("chk{vi}"));
+                let body_bb = ctx.append_basic_block(func, &format!("alt{vi}"));
+                let next_bb = ctx.append_basic_block(func, &format!("chk{vi}"));
                 // the guard Lower never reaches spec-derived state
                 // (pure cone, no tokens/foreign) — any spec anchors it
                 let mut lcg = Lower {
@@ -2013,21 +1975,14 @@ fn lower_edge_ssa<'ctx>(
                 // and const reads only).  A callback emitted here
                 // would carry gspec's tokens — wrong rule, wrong
                 // proto — so refuse LOUDLY instead of miswiring.
-                if !lcg.foreign_stmts.is_empty() || !lcg.prim_calls.is_empty()
-                {
+                if !lcg.foreign_stmts.is_empty() || !lcg.prim_calls.is_empty() {
                     return Err(Ineligible(
-                        "alts guard cone is not pure (callback emitted)"
-                            .into(),
+                        "alts guard cone is not pure (callback emitted)".into(),
                     ));
                 }
                 let nz = lcg
                     .builder
-                    .build_int_compare(
-                        IntPredicate::NE,
-                        gv,
-                        gv.get_type().const_zero(),
-                        "g",
-                    )
+                    .build_int_compare(IntPredicate::NE, gv, gv.get_type().const_zero(), "g")
                     .unwrap();
                 lcg.builder
                     .build_conditional_branch(nz, body_bb, next_bb)
@@ -2086,11 +2041,8 @@ fn lower_edge_ssa<'ctx>(
                     }
                 }
             }
-            if std::env::var_os("TRS_JIT_TRACE").is_some()
-                && !run_end.is_empty()
-            {
-                let members: usize =
-                    run_end.iter().map(|(&s0, &e)| e - s0 + 1).sum();
+            if std::env::var_os("TRS_JIT_TRACE").is_some() && !run_end.is_empty() {
+                let members: usize = run_end.iter().map(|(&s0, &e)| e - s0 + 1).sum();
                 let gated_total = plan.nodes[row]
                     .iter()
                     .filter(|&&(ie, oo)| {
@@ -2107,21 +2059,14 @@ fn lower_edge_ssa<'ctx>(
                     run_end.len()
                 );
             }
-            let mut run_close: Option<(
-                usize,
-                inkwell::basic_block::BasicBlock<'ctx>,
-            )> = None;
+            let mut run_close: Option<(usize, inkwell::basic_block::BasicBlock<'ctx>)> = None;
             for (s, &(is_exec, o)) in plan.nodes[row].iter().enumerate() {
                 let base_spec = &specs[o];
                 // order-derived sched overrides (variant rows only):
                 // ME inhibitors and owned-earlier share claims follow
                 // the selected interleaving, not the base order
                 let spec_owned: RuleSpec;
-                let spec: &RuleSpec = match plan
-                    .sched_over
-                    .get(row)
-                    .and_then(|m| m.get(&o))
-                {
+                let spec: &RuleSpec = match plan.sched_over.get(row).and_then(|m| m.get(&o)) {
                     Some(ov) if !is_exec => {
                         spec_owned = RuleSpec {
                             inhibit_slots: ov.inhibit_slots.clone(),
@@ -2163,7 +2108,7 @@ fn lower_edge_ssa<'ctx>(
                         expanding: Vec::new(),
                         thunks: HashMap::new(),
                         av_widths: HashMap::new(),
-                dead_defs: Default::default(),
+                        dead_defs: Default::default(),
                         tasks: HashMap::new(),
                         av_slots: HashMap::new(),
                         av_args: HashMap::new(),
@@ -2184,7 +2129,7 @@ fn lower_edge_ssa<'ctx>(
                     expanding: Vec::new(),
                     thunks: HashMap::new(),
                     av_widths: HashMap::new(),
-                dead_defs: Default::default(),
+                    dead_defs: Default::default(),
                     tasks: HashMap::new(),
                     av_slots: HashMap::new(),
                     av_args: HashMap::new(),
@@ -2217,21 +2162,14 @@ fn lower_edge_ssa<'ctx>(
                             &fused[k].nodes[s]
                         } else {
                             plan.ord_fnodes.get(&o).ok_or_else(|| {
-                                Ineligible(
-                                    "variant outlined exec without ord node"
-                                        .into(),
-                                )
+                                Ineligible("variant outlined exec without ord node".into())
                             })?
                         };
                         let FusedNode::Exec(href, base, tok) = fnode else {
-                            return Err(Ineligible(
-                                "outlined exec node mismatch".into(),
-                            ));
+                            return Err(Ineligible("outlined exec node mismatch".into()));
                         };
-                        let exec_ty = i32t.fn_type(
-                            &[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()],
-                            false,
-                        );
+                        let exec_ty = i32t
+                            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
                         let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                             arena.into(),
                             envp.into(),
@@ -2240,22 +2178,19 @@ fn lower_edge_ssa<'ctx>(
                         ];
                         let cs = match href {
                             HelperRef::Sym(name) => {
-                                let cf = module.get_function(name).unwrap_or_else(|| {
-                                    module.add_function(name, exec_ty, None)
-                                });
+                                let cf = module
+                                    .get_function(name)
+                                    .unwrap_or_else(|| module.add_function(name, exec_ty, None));
                                 lc.builder.build_call(cf, &args, "oe").unwrap()
                             }
                             HelperRef::Addr(a) => {
-                                let fp = i64t
-                                    .const_int(*a as u64, false)
-                                    .const_to_pointer(ptrt);
+                                let fp = i64t.const_int(*a as u64, false).const_to_pointer(ptrt);
                                 lc.builder
                                     .build_indirect_call(exec_ty, fp, &args, "oe")
                                     .unwrap()
                             }
                         };
-                        let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value()
-                        else {
+                        let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
                             return Err(Ineligible("outlined exec returned void".into()));
                         };
                         let stop = lc
@@ -2290,21 +2225,15 @@ fn lower_edge_ssa<'ctx>(
                         let mut union: Vec<(u32, u64)> = Vec::new();
                         for si in s..=re {
                             let (_, oo) = plan.nodes[row][si];
-                            for &(w, m) in
-                                plan.gate_masks[oo].as_ref().unwrap()
-                            {
-                                match union
-                                    .iter_mut()
-                                    .find(|(uw, _)| *uw == w)
-                                {
+                            for &(w, m) in plan.gate_masks[oo].as_ref().unwrap() {
+                                match union.iter_mut().find(|(uw, _)| *uw == w) {
                                     Some((_, um)) => *um |= m,
                                     None => union.push((w, m)),
                                 }
                             }
                         }
                         union.sort_unstable_by_key(|&(w, _)| w);
-                        let dirty =
-                            gate_test(&lc.builder, i64t, arena, g, &union);
+                        let dirty = gate_test(&lc.builder, i64t, arena, g, &union);
                         let orun = ctx.append_basic_block(func, "orun");
                         let ocont = ctx.append_basic_block(func, "ocont");
                         lc.builder
@@ -2340,19 +2269,13 @@ fn lower_edge_ssa<'ctx>(
                         // relies on (def()'s existing lattice, the one
                         // standalone sched fns lower with).
                         let gname = format!("gsec{k}_r{row}_s{s}");
-                        let gty = ctx
-                            .void_type()
-                            .fn_type(&[ptrt.into(), ptrt.into()], false);
+                        let gty = ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
                         let gfunc = module.add_function(&gname, gty, None);
-                        gfunc.set_linkage(
-                            inkwell::module::Linkage::Internal,
-                        );
+                        gfunc.set_linkage(inkwell::module::Linkage::Internal);
                         gfunc.add_attribute(
                             inkwell::attributes::AttributeLoc::Function,
                             ctx.create_enum_attribute(
-                                inkwell::attributes::Attribute::get_named_enum_kind_id(
-                                    "noinline",
-                                ),
+                                inkwell::attributes::Attribute::get_named_enum_kind_id("noinline"),
                                 0,
                             ),
                         );
@@ -2376,20 +2299,11 @@ fn lower_edge_ssa<'ctx>(
                                     ..Default::default()
                                 }),
                             };
-                            let gentry =
-                                ctx.append_basic_block(gfunc, "entry");
+                            let gentry = ctx.append_basic_block(gfunc, "entry");
                             lo.builder.position_at_end(gentry);
                             let mut gf = Frame {
-                                arena: gfunc
-                                    .get_nth_param(0)
-                                    .unwrap()
-                                    .into_pointer_value(),
-                                envp: Some(
-                                    gfunc
-                                        .get_nth_param(1)
-                                        .unwrap()
-                                        .into_pointer_value(),
-                                ),
+                                arena: gfunc.get_nth_param(0).unwrap().into_pointer_value(),
+                                envp: Some(gfunc.get_nth_param(1).unwrap().into_pointer_value()),
                                 inst: spec.inst,
                                 method_idx: None,
                                 args: HashMap::new(),
@@ -2408,71 +2322,41 @@ fn lower_edge_ssa<'ctx>(
                             lo.sched_section(&mut gf)?;
                             lo.builder.build_return(None).unwrap();
                         }
-                        let cargs: [inkwell::values::BasicMetadataValueEnum;
-                            2] = [arena.into(), envp.into()];
+                        let cargs: [inkwell::values::BasicMetadataValueEnum; 2] =
+                            [arena.into(), envp.into()];
                         match gm {
                             Some(mask) => {
                                 let g = plan.gate.as_ref().unwrap();
-                                let dirty = gate_test(
-                                    &lc.builder,
-                                    i64t,
-                                    arena,
-                                    g,
-                                    mask,
-                                );
-                                let run_bb =
-                                    ctx.append_basic_block(func, "grun");
-                                let cont_bb =
-                                    ctx.append_basic_block(func, "gcont");
+                                let dirty = gate_test(&lc.builder, i64t, arena, g, mask);
+                                let run_bb = ctx.append_basic_block(func, "grun");
+                                let cont_bb = ctx.append_basic_block(func, "gcont");
                                 lc.builder
-                                    .build_conditional_branch(
-                                        dirty, run_bb, cont_bb,
-                                    )
+                                    .build_conditional_branch(dirty, run_bb, cont_bb)
                                     .unwrap();
                                 lc.builder.position_at_end(run_bb);
-                                lc.builder
-                                    .build_call(gfunc, &cargs, "")
-                                    .unwrap();
-                                lc.builder
-                                    .build_unconditional_branch(cont_bb)
-                                    .unwrap();
+                                lc.builder.build_call(gfunc, &cargs, "").unwrap();
+                                lc.builder.build_unconditional_branch(cont_bb).unwrap();
                                 lc.builder.position_at_end(cont_bb);
                             }
                             None => {
-                                lc.builder
-                                    .build_call(gfunc, &cargs, "")
-                                    .unwrap();
+                                lc.builder.build_call(gfunc, &cargs, "").unwrap();
                             }
                         }
                     } else {
                         match gm {
                             Some(mask) => {
                                 let g = plan.gate.as_ref().unwrap();
-                                let dirty = gate_test(
-                                    &lc.builder,
-                                    i64t,
-                                    arena,
-                                    g,
-                                    mask,
-                                );
-                                let run_bb =
-                                    ctx.append_basic_block(func, "grun");
-                                let cont_bb =
-                                    ctx.append_basic_block(func, "gcont");
+                                let dirty = gate_test(&lc.builder, i64t, arena, g, mask);
+                                let run_bb = ctx.append_basic_block(func, "grun");
+                                let cont_bb = ctx.append_basic_block(func, "gcont");
                                 lc.builder
-                                    .build_conditional_branch(
-                                        dirty, run_bb, cont_bb,
-                                    )
+                                    .build_conditional_branch(dirty, run_bb, cont_bb)
                                     .unwrap();
                                 lc.builder.position_at_end(run_bb);
-                                lc.edge.as_mut().unwrap().gate_no_latch =
-                                    true;
+                                lc.edge.as_mut().unwrap().gate_no_latch = true;
                                 lc.sched_section(&mut f)?;
-                                lc.edge.as_mut().unwrap().gate_no_latch =
-                                    false;
-                                lc.builder
-                                    .build_unconditional_branch(cont_bb)
-                                    .unwrap();
+                                lc.edge.as_mut().unwrap().gate_no_latch = false;
+                                lc.builder.build_unconditional_branch(cont_bb).unwrap();
                                 lc.builder.position_at_end(cont_bb);
                             }
                             None => lc.sched_section(&mut f)?,
@@ -2490,16 +2374,10 @@ fn lower_edge_ssa<'ctx>(
                     let g = plan.gate.as_ref().unwrap();
                     let gp = |slot: u32| unsafe {
                         lc.builder
-                            .build_gep(
-                                i64t,
-                                arena,
-                                &[i64t.const_int(slot as u64, false)],
-                                "gs",
-                            )
+                            .build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "gs")
                             .unwrap()
                     };
-                    let sync =
-                        plan.dirty_sync.get(o).map(|v| &v[..]).unwrap_or(&[]);
+                    let sync = plan.dirty_sync.get(o).map(|v| &v[..]).unwrap_or(&[]);
                     if !sync.is_empty() {
                         let s = lc
                             .builder
@@ -2508,12 +2386,7 @@ fn lower_edge_ssa<'ctx>(
                             .into_int_value();
                         let nz = lc
                             .builder
-                            .build_int_compare(
-                                IntPredicate::NE,
-                                s,
-                                i64t.const_zero(),
-                                "gsn",
-                            )
+                            .build_int_compare(IntPredicate::NE, s, i64t.const_zero(), "gsn")
                             .unwrap();
                         let do_bb = ctx.append_basic_block(func, "gdo");
                         let done_bb = ctx.append_basic_block(func, "gdn");
@@ -2544,18 +2417,12 @@ fn lower_edge_ssa<'ctx>(
                                     .into_int_value();
                                 let nv = lc
                                     .builder
-                                    .build_or(
-                                        old,
-                                        i64t.const_int(m, false),
-                                        "gcn",
-                                    )
+                                    .build_or(old, i64t.const_int(m, false), "gcn")
                                     .unwrap();
                                 lc.builder.build_store(p, nv).unwrap();
                             }
                         }
-                        lc.builder
-                            .build_unconditional_branch(done_bb)
-                            .unwrap();
+                        lc.builder.build_unconditional_branch(done_bb).unwrap();
                         lc.builder.position_at_end(done_bb);
                         lc.builder
                             .build_store(gp(g.scratch), i64t.const_zero())
@@ -2566,9 +2433,7 @@ fn lower_edge_ssa<'ctx>(
                 // the dirty path rejoins the skip path's continuation
                 if let Some((re, ocont)) = run_close {
                     if re == s {
-                        lc.builder
-                            .build_unconditional_branch(ocont)
-                            .unwrap();
+                        lc.builder.build_unconditional_branch(ocont).unwrap();
                         lc.builder.position_at_end(ocont);
                         run_close = None;
                     }
@@ -2591,13 +2456,8 @@ fn lower_edge_ssa<'ctx>(
             if let Some(clears) = plan.wire_clears.get(row) {
                 for &slot in clears {
                     let gepw = unsafe {
-                        bend.build_gep(
-                            i64t,
-                            arena,
-                            &[i64t.const_int(slot as u64, false)],
-                            "wc",
-                        )
-                        .unwrap()
+                        bend.build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "wc")
+                            .unwrap()
                     };
                     bend.build_store(gepw, i64t.const_zero()).unwrap();
                 }
@@ -2621,8 +2481,7 @@ fn lower_edge_ssa<'ctx>(
                             bend.build_gep(
                                 i64t,
                                 arena,
-                                &[i64t
-                                    .const_int((base + words + i) as u64, false)],
+                                &[i64t.const_int((base + words + i) as u64, false)],
                                 "cd",
                             )
                             .unwrap()
@@ -2641,15 +2500,12 @@ fn lower_edge_ssa<'ctx>(
                     // definition (loader fills it after dlopen)
                     let cbg = module
                         .get_global("trs_bram_tick_cb")
-                        .unwrap_or_else(|| {
-                            module.add_global(i64t, None, "trs_bram_tick_cb")
-                        });
+                        .unwrap_or_else(|| module.add_global(i64t, None, "trs_bram_tick_cb"));
                     let fp64 = bend
                         .build_load(i64t, cbg.as_pointer_value(), "btc")
                         .unwrap()
                         .into_int_value();
-                    let fp =
-                        bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
+                    let fp = bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
                     let tick_ty = ctx.void_type().fn_type(
                         &[
                             ptrt.into(),
@@ -2688,9 +2544,7 @@ fn lower_edge_ssa<'ctx>(
 
 /// JIT: compile fused edge functions (baked callee addresses) into
 /// one engine; returns per-comp fn addresses.
-pub fn compile_fused(
-    comps: &[FusedComp],
-) -> Result<Vec<usize>, Ineligible> {
+pub fn compile_fused(comps: &[FusedComp]) -> Result<Vec<usize>, Ineligible> {
     llvm_init_once();
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
     let module = ctx.create_module("trs_fused");
@@ -2994,10 +2848,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             | Expr::Prim { width, .. }
             | Expr::If { width, .. }
             | Expr::Case { width, .. } => Ok(*width), // 0 = empty bit-vector
-            _ => nope(format!(
-                "expression kind not compilable: {}",
-                expr_kind(e)
-            )),
+            _ => nope(format!("expression kind not compilable: {}", expr_kind(e))),
         }
     }
 
@@ -3012,12 +2863,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         match from.cmp(&to) {
             Equal => v,
-            Greater => self.builder.build_int_truncate(v, self.ity(to), "tr").unwrap(),
+            Greater => self
+                .builder
+                .build_int_truncate(v, self.ity(to), "tr")
+                .unwrap(),
             Less => {
                 if signed {
-                    self.builder.build_int_s_extend(v, self.ity(to), "sx").unwrap()
+                    self.builder
+                        .build_int_s_extend(v, self.ity(to), "sx")
+                        .unwrap()
                 } else {
-                    self.builder.build_int_z_extend(v, self.ity(to), "zx").unwrap()
+                    self.builder
+                        .build_int_z_extend(v, self.ity(to), "zx")
+                        .unwrap()
                 }
             }
         }
@@ -3049,11 +2907,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             if slot >= r0 && slot < r1 {
                 return self
                     .builder
-                    .build_int_add(
-                        base,
-                        i64t.const_int((slot - r0) as u64, false),
-                        "rsl",
-                    )
+                    .build_int_add(base, i64t.const_int((slot - r0) as u64, false), "rsl")
                     .unwrap();
             }
         }
@@ -3127,10 +2981,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let off = self.builder.build_int_add(scaled, bidx, "foff").unwrap();
         if w <= 64 {
             let p = unsafe {
-                self.builder.build_gep(i64t, f.arena, &[off], "fdp").unwrap()
+                self.builder
+                    .build_gep(i64t, f.arena, &[off], "fdp")
+                    .unwrap()
             };
-            let word =
-                self.builder.build_load(i64t, p, "fdl").unwrap().into_int_value();
+            let word = self
+                .builder
+                .build_load(i64t, p, "fdl")
+                .unwrap()
+                .into_int_value();
             return self.to_w(word, 64, w, false);
         }
         let t = self.ity(w);
@@ -3140,11 +2999,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .builder
                 .build_int_add(off, i64t.const_int(k as u64, false), "fok")
                 .unwrap();
-            let p = unsafe {
-                self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap()
-            };
-            let word =
-                self.builder.build_load(i64t, p, "fdl").unwrap().into_int_value();
+            let p = unsafe { self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap() };
+            let word = self
+                .builder
+                .build_load(i64t, p, "fdl")
+                .unwrap()
+                .into_int_value();
             let wide = self.builder.build_int_z_extend(word, t, "wz").unwrap();
             let sh = t.const_int((64 * k) as u64, false);
             let pos = self.builder.build_left_shift(wide, sh, "wsh").unwrap();
@@ -3178,15 +3038,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .builder
                 .build_int_add(off, i64t.const_int(k as u64, false), "fok")
                 .unwrap();
-            let p = unsafe {
-                self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap()
-            };
+            let p = unsafe { self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap() };
             let word = if w <= 64 {
                 self.to_w(v, w, 64, false)
             } else {
                 let sh = t.const_int((64 * k) as u64, false);
-                let shifted =
-                    self.builder.build_right_shift(v, sh, false, "fsh").unwrap();
+                let shifted = self.builder.build_right_shift(v, sh, false, "fsh").unwrap();
                 self.builder
                     .build_int_truncate(shifted, i64t, "ftr")
                     .unwrap()
@@ -3221,8 +3078,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         for k in 0..words_for(w) {
             let sh = t.const_int((64 * k) as u64, false);
             let piece = self.builder.build_right_shift(v, sh, false, "psh").unwrap();
-            let word =
-                self.builder.build_int_truncate(piece, self.ctx.i64_type(), "ptr").unwrap();
+            let word = self
+                .builder
+                .build_int_truncate(piece, self.ctx.i64_type(), "ptr")
+                .unwrap();
             self.store_word(f, base + k, word);
         }
     }
@@ -3270,7 +3129,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             // in the word's own type keeps the amount in range
             let (part, k) = if src_lo < lo {
                 let sh = self.ity(wkw).const_int(u64::from(lo - src_lo), false);
-                (self.builder.build_right_shift(words[wk as usize], sh, false, "wx").unwrap(), 0)
+                (
+                    self.builder
+                        .build_right_shift(words[wk as usize], sh, false, "wx")
+                        .unwrap(),
+                    0,
+                )
             } else {
                 (words[wk as usize], src_lo - lo)
             };
@@ -3339,14 +3203,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 return Ok(Val::Wide(ws.clone()));
             }
         }
-        if let Expr::Prim { op: PrimOp::Concat, args, width } = e {
+        if let Expr::Prim {
+            op: PrimOp::Concat,
+            args,
+            width,
+        } = e
+        {
             if *width > word {
                 if let Some(ws) = self.concat_words(f, args, *width)? {
                     return Ok(Val::Wide(ws));
                 }
             }
         }
-        if let Expr::If { width, cond, then_, else_ } = e {
+        if let Expr::If {
+            width,
+            cond,
+            then_,
+            else_,
+        } = e
+        {
             if *width > word {
                 let cw = self.expr_width(f, cond)?;
                 let c0 = self.expr_scalar(f, cond)?;
@@ -3359,7 +3234,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // A wide register read is already word-shaped in the arena: take
         // the loads as the decomposition rather than packing them only
         // for a consumer to slice them apart again.
-        if let Expr::MethCall { width, instance, method, args, .. } = e {
+        if let Expr::MethCall {
+            width,
+            instance,
+            method,
+            args,
+            ..
+        } = e
+        {
             if *width > word && args.is_empty() {
                 let mname = self.env.d.strings[*method as usize].clone();
                 if matches!(mname.as_str(), "read" | "get" | "_read") {
@@ -3512,9 +3394,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // reads on both engines, and a Port link recurses
                     // through this same checked resolution in the owner
                     // (terminating at a const, a further chase, or nope)
-                    if !gate_static(g)
-                        && !matches!(g, Expr::Gate { .. } | Expr::Port(_))
-                    {
+                    if !gate_static(g) && !matches!(g, Expr::Gate { .. } | Expr::Port(_)) {
                         return nope("dynamic input gate (latch semantics)");
                     }
                     let (owner, g) = (*owner, g.clone());
@@ -3534,9 +3414,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 match ie.port_consts.get(p) {
                     Some(&(0, _)) => Ok(self.ity(0).const_zero()),
-                    Some(&(w, v)) => {
-                        Ok(self.cval(w, &[v as u32, (v >> 32) as u32]))
-                    }
+                    Some(&(w, v)) => Ok(self.cval(w, &[v as u32, (v >> 32) as u32])),
                     None => nope("parameter not constant-lowerable"),
                 }
             }
@@ -3571,12 +3449,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // input gates, except a direct child prim
                             // gate chase (Expr::Gate) is a LIVE read on
                             // both engines and stays eligible
-                            if !gate_static(&e)
-                                && !matches!(e, Expr::Gate { .. })
-                            {
-                                return nope(
-                                    "dynamic ifc gate (latch semantics)",
-                                );
+                            if !gate_static(&e) && !matches!(e, Expr::Gate { .. }) {
+                                return nope("dynamic ifc gate (latch semantics)");
                             }
                             let mut cf = self.child_frame(f, child, None)?;
                             self.expr_scalar(&mut cf, &e)
@@ -3584,29 +3458,34 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         None => Ok(self.ity(1).const_int(1, false)),
                     };
                 }
-                match self.emit_prim_call(
-                    f,
-                    child,
-                    GATE_OUT_METHOD,
-                    0,
-                    &[],
-                    1,
-                    false,
-                )? {
+                match self.emit_prim_call(f, child, GATE_OUT_METHOD, 0, &[], 1, false)? {
                     Some(v) => Ok(v),
                     None => nope("gate_out returned no value"),
                 }
             }
-            Expr::MethCall { width, instance, method, port, args } => {
-                self.value_call(f, *width, *instance, *method, *port, args)
-            }
-            Expr::MethValue { width, instance, method } => {
+            Expr::MethCall {
+                width,
+                instance,
+                method,
+                port,
+                args,
+            } => self.value_call(f, *width, *instance, *method, *port, args),
+            Expr::MethValue {
+                width,
+                instance,
+                method,
+            } => {
                 // the returned value of an ActionValue method: the
                 // interp calls call_value with no args — identical to a
                 // no-arg value method read (port 0)
                 self.value_call(f, *width, *instance, *method, 0, &[])
             }
-            Expr::If { width, cond, then_, else_ } => {
+            Expr::If {
+                width,
+                cond,
+                then_,
+                else_,
+            } => {
                 let wc = self.expr_width(f, cond)?;
                 let c = self.expr_scalar(f, cond)?;
                 let cz = self.nonzero(c, wc);
@@ -3639,7 +3518,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 self.lazy_mux(f, *width, cz, then_, else_)
             }
-            Expr::Case { width, scrutinee, arms, default } => {
+            Expr::Case {
+                width,
+                scrutinee,
+                arms,
+                default,
+            } => {
                 // one LLVM switch (backend lowers dense arms to a jump
                 // table — the compare ladder was O(arms) per eval and
                 // dominated the big decision-tree bodies); arms keep
@@ -3659,23 +3543,24 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Ok(self.to_w(dv, wd, w, false));
                 }
                 let sv = self.expr_scalar(f, scrutinee)?;
-                let func =
-                    self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let func = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
                 let def_bb = self.ctx.append_basic_block(func, "cd");
                 let merge_bb = self.ctx.append_basic_block(func, "cj");
                 let arm_bbs: Vec<_> = arms
                     .iter()
                     .map(|_| self.ctx.append_basic_block(func, "ca"))
                     .collect();
-                let representable =
-                    |k: u64| ws >= 64 || k < (1u64 << ws);
+                let representable = |k: u64| ws >= 64 || k < (1u64 << ws);
                 let cases: Vec<_> = arms
                     .iter()
                     .zip(&arm_bbs)
                     .filter(|((k, _), _)| representable(*k))
-                    .map(|((k, _), &bb)| {
-                        (self.ity(ws).const_int_arbitrary_precision(&[*k]), bb)
-                    })
+                    .map(|((k, _), &bb)| (self.ity(ws).const_int_arbitrary_precision(&[*k]), bb))
                     .collect();
                 self.builder.build_switch(sv, def_bb, &cases).unwrap();
                 let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
@@ -3724,10 +3609,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             Expr::ForeignCall { width, func, args } => {
                 self.bdpi_value_call(f, (*width).max(1), *func, args)
             }
-            _ => nope(format!(
-                "expression kind not compilable: {}",
-                expr_kind(e)
-            )),
+            _ => nope(format!("expression kind not compilable: {}", expr_kind(e))),
         }
     }
 
@@ -3762,15 +3644,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Every FT::CString parameter is bound to a literal Expr::Str —
     /// the precondition for the direct bdpi_emit fast path.
     fn bdpi_lits_ok(ff: &trs_ir::ForeignFunc, args: &[Expr]) -> bool {
-        ff.args.iter().zip(args).all(|(t, a)| {
-            !matches!(t, trs_ir::ForeignType::CString) || matches!(a, Expr::Str(_))
-        })
+        ff.args
+            .iter()
+            .zip(args)
+            .all(|(t, a)| !matches!(t, trs_ir::ForeignType::CString) || matches!(a, Expr::Str(_)))
     }
 
     /// The design's BDPI import for `func`, if any (system tasks and
     /// unknown names return None).
     fn bdpi_import(&self, func: StrId) -> Option<trs_ir::ForeignFunc> {
-        self.env.d.foreign_funcs.iter().find(|ff| ff.name == func).cloned()
+        self.env
+            .d
+            .foreign_funcs
+            .iter()
+            .find(|ff| ff.name == func)
+            .cloned()
     }
 
     /// Direct BDPI call at the current insertion point (no condition
@@ -3844,9 +3732,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
                 g
             });
-            let tg = self.module.get_global("trs_cb_bdpi_missing").unwrap_or_else(
-                || self.module.add_global(ptrt, None, "trs_cb_bdpi_missing"),
-            );
+            let tg = self
+                .module
+                .get_global("trs_cb_bdpi_missing")
+                .unwrap_or_else(|| self.module.add_global(ptrt, None, "trs_cb_bdpi_missing"));
             let tcb = self
                 .builder
                 .build_load(ptrt, tg.as_pointer_value(), "bdt")
@@ -3854,12 +3743,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .into_pointer_value();
             let trap_ty = self.ctx.void_type().fn_type(&[ptrt.into()], false);
             self.builder
-                .build_indirect_call(
-                    trap_ty,
-                    tcb,
-                    &[ng.as_pointer_value().into()],
-                    "bdmiss",
-                )
+                .build_indirect_call(trap_ty, tcb, &[ng.as_pointer_value().into()], "bdmiss")
                 .unwrap();
             self.builder.build_unreachable().unwrap();
             self.builder.position_at_end(ok_bb);
@@ -3975,9 +3859,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         // string table, and the pointer is only
                         // passed by value
                         g.set_linkage(inkwell::module::Linkage::Private);
-                        g.set_unnamed_address(
-                            inkwell::values::UnnamedAddress::Global,
-                        );
+                        g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
                         g
                     });
                     ptys.push(ptrt.into());
@@ -4019,14 +3901,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         .build_load(i32t, ip, "brl")
                         .unwrap()
                         .into_int_value();
-                    w32.as_instruction()
-                        .unwrap()
-                        .set_volatile(true)
-                        .unwrap();
+                    w32.as_instruction().unwrap().set_volatile(true).unwrap();
                     let ext = self.to_w(w32, 32, width, false);
                     let sh = self.ity(width).const_int(32 * k, false);
-                    let shifted =
-                        self.builder.build_left_shift(ext, sh, "brs").unwrap();
+                    let shifted = self.builder.build_left_shift(ext, sh, "brs").unwrap();
                     acc = self.builder.build_or(acc, shifted, "bro").unwrap();
                 }
                 Ok(acc)
@@ -4074,9 +3952,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let one = self.ctx.i64_type().const_int(1, false);
                     Ok(self.to_w(one, 64, 1, false))
                 }
-                "wget" | "read" if ww >= 1 && ww == width => {
-                    Ok(self.load_val(f, base, ww))
-                }
+                "wget" | "read" if ww >= 1 && ww == width => Ok(self.load_val(f, base, ww)),
                 _ => nope("bypass wire read mismatch"),
             };
         }
@@ -4133,18 +4009,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             };
             let cmp_w1 = |lc: &Self, pred, a: IntValue<'ctx>, b: IntValue<'ctx>| {
                 let c = lc.builder.build_int_compare(pred, a, b, "fc").unwrap();
-                lc.builder
-                    .build_int_z_extend(c, lc.ity(1), "fb")
-                    .unwrap()
+                lc.builder.build_int_z_extend(c, lc.ity(1), "fb").unwrap()
             };
             return match mname.as_str() {
                 "first" if fw == width => {
                     let fst = load(2);
                     Ok(self.load_val_dyn(f, base + 7, fst, fw))
                 }
-                "notFull" if width == 1 => {
-                    Ok(cmp_w1(self, IntPredicate::ULT, load(0), i64t.const_int(_size as u64, false)))
-                }
+                "notFull" if width == 1 => Ok(cmp_w1(
+                    self,
+                    IntPredicate::ULT,
+                    load(0),
+                    i64t.const_int(_size as u64, false),
+                )),
                 "notEmpty" if width == 1 => {
                     Ok(cmp_w1(self, IntPredicate::NE, load(0), i64t.const_zero()))
                 }
@@ -4153,7 +4030,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     // reopens the fifo (the interp drops the
                     // begin-of-instant select for FifoType::Loopy)
                     let e = if loopy { load(0) } else { inst_elems(self) };
-                    Ok(cmp_w1(self, IntPredicate::ULT, e, i64t.const_int(_size as u64, false)))
+                    Ok(cmp_w1(
+                        self,
+                        IntPredicate::ULT,
+                        e,
+                        i64t.const_int(_size as u64, false),
+                    ))
                 }
                 "i_notEmpty" if width == 1 => {
                     let e = if loopy { load(0) } else { inst_elems(self) };
@@ -4189,12 +4071,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .build_int_compare(IntPredicate::ULE, a, i64t.const_int(hi, false), "rfhi")
                 .unwrap();
             let inb = self.builder.build_and(inlo, inhi, "rfin").unwrap();
-            let func =
-                self.builder.get_insert_block().unwrap().get_parent().unwrap();
+            let func = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
             let fast_bb = self.ctx.append_basic_block(func, "rff");
             let slow_bb = self.ctx.append_basic_block(func, "rfs");
             let join_bb = self.ctx.append_basic_block(func, "rfj");
-            self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+            self.builder
+                .build_conditional_branch(inb, fast_bb, slow_bb)
+                .unwrap();
 
             self.builder.position_at_end(fast_bb);
             let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
@@ -4239,9 +4127,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             phi.add_incoming(&[(&fv, f_end), (&sv, s_end)]);
             return Ok(phi.as_basic_value().into_int_value());
         }
-        if let Some(&(base, bw, _sz, _cs, nw, _dual, pipelined)) =
-            ie.bram_slot.get(&instance)
-        {
+        if let Some(&(base, bw, _sz, _cs, nw, _dual, pipelined)) = ie.bram_slot.get(&instance) {
             // BRAM reads return REGISTERED state (out, or out2 when
             // pipelined) — a plain load, no bounds or bypass logic
             // (addressing happened at put/tick)
@@ -4256,11 +4142,8 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             let w = bw.max(1).div_ceil(64);
             let wenw = nw.max(1).div_ceil(64);
             let pw = 3 + wenw + 4 * w;
-            let off = base
-                + if port_b { pw } else { 0 }
-                + 3
-                + wenw
-                + (if pipelined { 3 } else { 2 }) * w;
+            let off =
+                base + if port_b { pw } else { 0 } + 3 + wenw + (if pipelined { 3 } else { 2 }) * w;
             return Ok(self.load_val(f, off, bw));
         }
         if let Some(&(base, cw)) = ie.creg5_slot.get(&instance) {
@@ -4366,7 +4249,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // carries an env pointer, and every declared arg is bound (an
         // unbound port must keep nope-ing exactly like the inline path
         // — dispatch may not drift with the flag)
-        let bkind = if m.kind == trs_ir::MethodKind::ActionValue { 3 } else { 0 };
+        let bkind = if m.kind == trs_ir::MethodKind::ActionValue {
+            3
+        } else {
+            0
+        };
         if let Some((sym, brw, bargs)) = self.boundary_hit(cie.mir, method, bkind) {
             if let Some(envp) = f.envp {
                 if bargs.iter().all(|(p, _)| cf.args.contains_key(p)) {
@@ -4385,13 +4272,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let (v, vw) = cf.args[pn];
                         bargv.push(self.to_w(v, vw, *pw, false).into());
                     }
-                    let bf = self.module.get_function(&sym).unwrap_or_else(|| {
-                        self.module.add_function(&sym, bty, None)
-                    });
+                    let bf = self
+                        .module
+                        .get_function(&sym)
+                        .unwrap_or_else(|| self.module.add_function(&sym, bty, None));
                     let cs = self.builder.build_call(bf, &bargv, "bnd").unwrap();
-                    let inkwell::values::ValueKind::Basic(rv) =
-                        cs.try_as_basic_value()
-                    else {
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
                         return nope("boundary fn returned void");
                     };
                     let out = self.to_w(rv.into_int_value(), brw, width, false);
@@ -4452,10 +4338,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Some(1);
                 }
                 let ie = self.ie(f.inst).ok()?;
-                (ie.reset_slot.contains_key(p) || ie.en_slot.contains_key(p))
-                    .then_some(1)
+                (ie.reset_slot.contains_key(p) || ie.en_slot.contains_key(p)).then_some(1)
             }
-            E::MethCall { instance, method, args, .. } => {
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => {
                 if !args.is_empty() {
                     // dynamic-arg reads (RegFile.sub etc.) may warn
                     return None;
@@ -4490,12 +4380,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 Some(total)
             }
-            E::If { cond, then_, else_, .. } => {
+            E::If {
+                cond, then_, else_, ..
+            } => {
                 let cc = self.pure_size(f, cond, cap - 1)?;
                 let rest = sub2(then_, else_)?;
                 (cc + rest <= cap).then_some(cc + rest)
             }
-            E::Case { scrutinee, arms, default, .. } => {
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
                 let mut total = 1 + self.pure_size(f, scrutinee, cap - 1)?;
                 for (_, a) in arms {
                     total += self.pure_size(f, a, cap.checked_sub(total)?)?;
@@ -4523,11 +4420,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         if !chunking_enabled() || width <= self.word_bits() {
             return Ok(None);
         }
-        let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
         let then_bb = self.ctx.append_basic_block(func, "wmt");
         let else_bb = self.ctx.append_basic_block(func, "wme");
         let join_bb = self.ctx.append_basic_block(func, "wmj");
-        self.builder.build_conditional_branch(cz, then_bb, else_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cz, then_bb, else_bb)
+            .unwrap();
 
         let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
         let saved_c = f.chunks.clone();
@@ -4604,11 +4508,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             &mut Frame<'ctx>,
         ) -> Result<IntValue<'ctx>, Ineligible>,
     ) -> Result<IntValue<'ctx>, Ineligible> {
-        let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
         let then_bb = self.ctx.append_basic_block(func, "mt");
         let else_bb = self.ctx.append_basic_block(func, "me");
         let join_bb = self.ctx.append_basic_block(func, "mj");
-        self.builder.build_conditional_branch(cz, then_bb, else_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cz, then_bb, else_bb)
+            .unwrap();
 
         self.builder.position_at_end(then_bb);
         let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
@@ -4659,8 +4570,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // callback decode exactly — a zero-width argument occupies one
         // stored zero word (review finding: a 0-word argument
         // desynchronized the buffer walk into an out-of-bounds read)
-        let total_words: u32 =
-            arg_widths.iter().map(|&w| words_for(w.max(1))).sum::<u32>().max(1);
+        let total_words: u32 = arg_widths
+            .iter()
+            .map(|&w| words_for(w.max(1)))
+            .sum::<u32>()
+            .max(1);
         let out_words = words_for(ret_width.max(1));
         let i64t = self.ctx.i64_type();
         let abuf = self
@@ -4683,15 +4597,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 };
                 let word = self.to_w(piece, wa, 64, false);
                 let idx = i64t.const_int((off + k) as u64, false);
-                let p = unsafe {
-                    self.builder.build_gep(i64t, abuf, &[idx], "pap").unwrap()
-                };
+                let p = unsafe { self.builder.build_gep(i64t, abuf, &[idx], "pap").unwrap() };
                 self.builder.build_store(p, word).unwrap();
             }
             off += words;
         }
-        let token_const =
-            self.token_kind | self.prim_calls.len() as u64;
+        let token_const = self.token_kind | self.prim_calls.len() as u64;
         if self.prim_calls.len() >= 1 << 16 {
             return nope("prim call-site count exceeds the 16-bit token field");
         }
@@ -4828,7 +4739,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 m.def(*n)
                     .is_some_and(|d| self.effectful_expr(inst, &d.expr, seen))
             }
-            E::MethCall { instance, method, args, .. } => {
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => {
                 if args.iter().any(|a| self.effectful_expr(inst, a, seen)) {
                     return true;
                 }
@@ -4866,11 +4782,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     };
                     let full = (1..=64).contains(&aw)
                         && lo == 0
-                        && hi >= if aw == 64 {
-                            u64::MAX
-                        } else {
-                            (1u64 << aw) - 1
-                        };
+                        && hi >= if aw == 64 { u64::MAX } else { (1u64 << aw) - 1 };
                     return !full;
                 }
                 true
@@ -4882,22 +4794,26 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             // BDPI value calls: nominally pure, but observable when the
             // C side prints or keeps state — the planner already
             // poisons ForeignCall cones; match it (review fleet)
-            E::ForeignCall { args, .. } => {
-                true || args.is_empty()
-            }
-            E::If { cond, then_, else_, .. } => {
+            E::ForeignCall { args, .. } => true || args.is_empty(),
+            E::If {
+                cond, then_, else_, ..
+            } => {
                 self.effectful_expr(inst, cond, seen)
                     || self.effectful_expr(inst, then_, seen)
                     || self.effectful_expr(inst, else_, seen)
             }
-            E::Case { scrutinee, arms, default, .. } => {
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
                 self.effectful_expr(inst, scrutinee, seen)
                     || arms.iter().any(|(_, a)| self.effectful_expr(inst, a, seen))
                     || self.effectful_expr(inst, default, seen)
             }
             E::Clock { osc, gate } => {
-                self.effectful_expr(inst, osc, seen)
-                    || self.effectful_expr(inst, gate, seen)
+                self.effectful_expr(inst, osc, seen) || self.effectful_expr(inst, gate, seen)
             }
             E::Reset { wire } => self.effectful_expr(inst, wire, seen),
             _ => false,
@@ -4982,11 +4898,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // first — and only — evaluation
         if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
             if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
-                if self
-                    .edge
-                    .as_ref()
-                    .is_none_or(|e| e.exports.contains(&base))
-                {
+                if self.edge.as_ref().is_none_or(|e| e.exports.contains(&base)) {
                     edge_ssa_count(3, 0);
                     self.store_val(f, base, w, v);
                 }
@@ -5014,7 +4926,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// untraced artifacts — zero cost).
     fn rec_def(&mut self, f: &Frame<'ctx>, n: StrId, v: IntValue<'ctx>) {
         let Ok(ie) = self.ie(f.inst) else { return };
-        let Some(&(base, w)) = ie.rec_defs.get(&n) else { return };
+        let Some(&(base, w)) = ie.rec_defs.get(&n) else {
+            return;
+        };
         let vw = v.get_type().get_bit_width();
         let vv = self.to_w(v, vw, w.max(1), false);
         self.store_val(f, base, w.max(1), vv);
@@ -5173,12 +5087,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // fn is what computes those slots
         // auto-fire pseudo-specs have no rule (synthetic rule_idx) and
         // no own CF/WF — every fire signal reads its computed slot
-        let own = f.inst == self.spec.inst
-            && self.spec.autofire.is_none()
-            && {
-                let r = self.rule();
-                n == r.can_fire || n == r.will_fire
-            };
+        let own = f.inst == self.spec.inst && self.spec.autofire.is_none() && {
+            let r = self.rule();
+            n == r.can_fire || n == r.will_fire
+        };
         if !own {
             if let Some(&slot) = ie.cfwf_slot.get(&n) {
                 edge_ssa_count(0, 1);
@@ -5199,10 +5111,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             if let Some(&(base, w)) = ie.eager_slot.get(&n) {
                 let own_eager = self.spec.eager.contains(&n);
                 if f.is_exec || (!own_eager && self.spec.shared.contains(&n)) {
-                    edge_ssa_count(
-                        if f.is_exec { 1 } else { 2 },
-                        w.div_ceil(64) as usize,
-                    );
+                    edge_ssa_count(if f.is_exec { 1 } else { 2 }, w.div_ceil(64) as usize);
                     return Ok(self.load_val(f, base, w));
                 }
             }
@@ -5221,47 +5130,47 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if !bound {
                     // fall through to inline expansion below
                 } else {
-                let w = *w;
-                let i64t = self.ctx.i64_type();
-                let ptrt = self.ctx.ptr_type(AddressSpace::default());
-                let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                    vec![ptrt.into(), ptrt.into(), i64t.into()];
-                for (_, pw) in hports {
-                    ptys.push(self.ity(*pw).into());
-                }
-                let hty = self.ity(w).fn_type(&ptys, false);
-                let callee_base = self.slot_index(self.ie(f.inst)?.region.0);
-                let envp = f.envp.ok_or_else(|| Ineligible("helper needs env".into()))?;
-                let mut hargs: Vec<inkwell::values::BasicMetadataValueEnum> =
-                    vec![f.arena.into(), envp.into(), callee_base.into()];
-                for (pn, pw) in hports {
-                    let (v, vw) = f.args[pn];
-                    hargs.push(self.to_w(v, vw, *pw, false).into());
-                }
-                let cs = match href {
-                    HelperRef::Addr(a) => {
-                        let fp = i64t
-                            .const_int(*a as u64, false)
-                            .const_to_pointer(ptrt);
-                        self.builder
-                            .build_indirect_call(hty, fp, &hargs, "hlp")
-                            .unwrap()
+                    let w = *w;
+                    let i64t = self.ctx.i64_type();
+                    let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                    let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                        vec![ptrt.into(), ptrt.into(), i64t.into()];
+                    for (_, pw) in hports {
+                        ptys.push(self.ity(*pw).into());
                     }
-                    HelperRef::Sym(name) => {
-                        let hf = self
-                            .module
-                            .get_function(name)
-                            .unwrap_or_else(|| self.module.add_function(name, hty, None));
-                        self.builder.build_call(hf, &hargs, "hlp").unwrap()
+                    let hty = self.ity(w).fn_type(&ptys, false);
+                    let callee_base = self.slot_index(self.ie(f.inst)?.region.0);
+                    let envp = f
+                        .envp
+                        .ok_or_else(|| Ineligible("helper needs env".into()))?;
+                    let mut hargs: Vec<inkwell::values::BasicMetadataValueEnum> =
+                        vec![f.arena.into(), envp.into(), callee_base.into()];
+                    for (pn, pw) in hports {
+                        let (v, vw) = f.args[pn];
+                        hargs.push(self.to_w(v, vw, *pw, false).into());
                     }
-                };
-                let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
-                    return nope("helper returned void");
-                };
-                let v = rv.into_int_value();
-                f.ssa.insert(n, v);
-                self.rec_def(f, n, v);
-                return Ok(v);
+                    let cs = match href {
+                        HelperRef::Addr(a) => {
+                            let fp = i64t.const_int(*a as u64, false).const_to_pointer(ptrt);
+                            self.builder
+                                .build_indirect_call(hty, fp, &hargs, "hlp")
+                                .unwrap()
+                        }
+                        HelperRef::Sym(name) => {
+                            let hf = self
+                                .module
+                                .get_function(name)
+                                .unwrap_or_else(|| self.module.add_function(name, hty, None));
+                            self.builder.build_call(hf, &hargs, "hlp").unwrap()
+                        }
+                    };
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                        return nope("helper returned void");
+                    };
+                    let v = rv.into_int_value();
+                    f.ssa.insert(n, v);
+                    self.rec_def(f, n, v);
+                    return Ok(v);
                 }
             }
         }
@@ -5301,11 +5210,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // frame writing call-time values would corrupt them)
         if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
             if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
-                if self
-                    .edge
-                    .as_ref()
-                    .is_none_or(|e| e.exports.contains(&base))
-                {
+                if self.edge.as_ref().is_none_or(|e| e.exports.contains(&base)) {
                     edge_ssa_count(3, 0);
                     self.store_val(f, base, w, v);
                 }
@@ -5333,10 +5238,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // string equality: the interp compares marker limbs, i.e. the
         // ids — an i64 id compare is the exact mirror (both engines
         // treat distinct ids as unequal regardless of text)
-        if op == PrimOp::Eq
-            && args.len() == 2
-            && self.expr_is_str(f, &args[0])
-        {
+        if op == PrimOp::Eq && args.len() == 2 && self.expr_is_str(f, &args[0]) {
             let a = self.str_expr(f, &args[0], None)?;
             let b = self.str_expr(f, &args[1], None)?;
             return Ok(self
@@ -5402,7 +5304,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let y0 = self.expr_scalar(f, &args[1])?;
                 let x = self.to_w(x0, wx, wm, true);
                 let y = self.to_w(y0, wy, wm, true);
-                let p = if op == PrimOp::Slt { IntPredicate::SLT } else { IntPredicate::SLE };
+                let p = if op == PrimOp::Slt {
+                    IntPredicate::SLT
+                } else {
+                    IntPredicate::SLE
+                };
                 Ok(self.builder.build_int_compare(p, x, y, "sc").unwrap())
             }
             PrimOp::Shl | PrimOp::Lshr | PrimOp::Ashr => {
@@ -5432,7 +5338,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let r = if op == PrimOp::Shl {
                             self.builder.build_left_shift(x, samt, "shl").unwrap()
                         } else {
-                            self.builder.build_right_shift(x, samt, false, "lshr").unwrap()
+                            self.builder
+                                .build_right_shift(x, samt, false, "lshr")
+                                .unwrap()
                         };
                         let zero = self.ity(width).const_zero();
                         Ok(self
@@ -5451,7 +5359,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             .unwrap()
                             .into_int_value();
                         let samt = self.to_w(samt64, 64, width, false);
-                        Ok(self.builder.build_right_shift(x, samt, true, "ashr").unwrap())
+                        Ok(self
+                            .builder
+                            .build_right_shift(x, samt, true, "ashr")
+                            .unwrap())
                     }
                 }
             }
@@ -5463,8 +5374,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if let (Expr::Const { limbs: hi, .. }, Expr::Const { limbs: lo, .. }) =
                     (&args[1], &args[2])
                 {
-                    let (hi, lo) =
-                        (*hi.first().unwrap_or(&0) as u64, *lo.first().unwrap_or(&0) as u64);
+                    let (hi, lo) = (
+                        *hi.first().unwrap_or(&0) as u64,
+                        *lo.first().unwrap_or(&0) as u64,
+                    );
                     if hi < lo || hi - lo + 1 != width as u64 {
                         return nope("extract bounds/width mismatch");
                     }
@@ -5508,7 +5421,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .unwrap()
                     .into_int_value();
                 let samt = self.to_w(samt64, 64, ws, false);
-                let sh = self.builder.build_right_shift(x, samt, false, "exd").unwrap();
+                let sh = self
+                    .builder
+                    .build_right_shift(x, samt, false, "exd")
+                    .unwrap();
                 let zerows = self.ity(ws).const_zero();
                 let sh = self
                     .builder
@@ -5531,13 +5447,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::UGE, n, wc, "exbn")
                     .unwrap();
-                let count = self.builder.build_select(bign, wc, n, "exc").unwrap().into_int_value();
+                let count = self
+                    .builder
+                    .build_select(bign, wc, n, "exc")
+                    .unwrap()
+                    .into_int_value();
                 // mask = allones >> (width - count); count >= 1 here
                 // (hi >= lo), so the shift amount is < width
                 let msh64 = self.builder.build_int_sub(wc, count, "exms").unwrap();
                 let msh = self.to_w(msh64, 64, width, false);
                 let allones = self.ity(width).const_all_ones();
-                let mask = self.builder.build_right_shift(allones, msh, false, "exmk").unwrap();
+                let mask = self
+                    .builder
+                    .build_right_shift(allones, msh, false, "exmk")
+                    .unwrap();
                 let r = self.builder.build_and(shifted, mask, "exr").unwrap();
                 let zerow = self.ity(width).const_zero();
                 Ok(self
@@ -5571,10 +5494,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         Some(prev) => {
                             // prev holds >= 1 bit, so wa <= width - 1
                             let sh = t.const_int(wa as u64, false);
-                            let shifted = self
-                                .builder
-                                .build_left_shift(prev, sh, "cc")
-                                .unwrap();
+                            let shifted = self.builder.build_left_shift(prev, sh, "cc").unwrap();
                             self.builder.build_or(shifted, v, "co").unwrap()
                         }
                     });
@@ -5608,10 +5528,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::EQ, y, self.ity(wm).const_zero(), "dz")
                     .unwrap();
-                let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let func = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
                 let trap_bb = self.ctx.append_basic_block(func, "divz");
                 let ok_bb = self.ctx.append_basic_block(func, "divok");
-                self.builder.build_conditional_branch(z, trap_bb, ok_bb).unwrap();
+                self.builder
+                    .build_conditional_branch(z, trap_bb, ok_bb)
+                    .unwrap();
                 self.builder.position_at_end(trap_bb);
                 let fpe_callee = self.cb_callee(self.cbs.fpe);
                 self.builder
@@ -5633,8 +5560,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// sched_<label>(arena): cone eval, inhibitors, CF/WF + eager stores.
     fn lower_sched(&mut self) -> Result<(), Ineligible> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
-        let fnty = self.ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
-        let func = self.module.add_function(&format!("sched_{}", self.spec.label), fnty, None);
+        let fnty = self
+            .ctx
+            .void_type()
+            .fn_type(&[ptrt.into(), ptrt.into()], false);
+        let func = self
+            .module
+            .add_function(&format!("sched_{}", self.spec.label), fnty, None);
         let bb = self.ctx.append_basic_block(func, "entry");
         self.builder.position_at_end(bb);
         let mut f = Frame {
@@ -5698,11 +5630,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             let other = self.load_word(f, slot);
             let nz = self.nonzero(other, 64);
             let zero = self.ctx.bool_type().const_zero();
-            cf = self.builder.build_select(nz, zero, cf, "inh").unwrap().into_int_value();
+            cf = self
+                .builder
+                .build_select(nz, zero, cf, "inh")
+                .unwrap()
+                .into_int_value();
         }
-        let keep = |e: &Option<EdgeCtx>, slot: u32| {
-            e.as_ref().is_none_or(|e| e.exports.contains(&slot))
-        };
+        let keep =
+            |e: &Option<EdgeCtx>, slot: u32| e.as_ref().is_none_or(|e| e.exports.contains(&slot));
         if keep(&self.edge, self.spec.cf_slot) {
             let cf64 = self.to_w(cf, 1, 64, false);
             self.store_word(f, self.spec.cf_slot, cf64);
@@ -5746,9 +5681,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // all in-region state addresses relative to base and call-site
         // tokens OR the runtime token base, so ONE compiled body serves
         // every instance of the module type (per-module-type dedup)
-        let fnty = i32t
-            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
-        let func = self.module.add_function(&format!("exec_{}", self.spec.label), fnty, None);
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+        let func = self
+            .module
+            .add_function(&format!("exec_{}", self.spec.label), fnty, None);
         let entry = self.ctx.append_basic_block(func, "entry");
         let stop_bb = self.ctx.append_basic_block(func, "stop");
 
@@ -5779,9 +5715,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             depth: 0,
         };
         self.exec_section(&mut f, func, stop_bb)?;
-        self.builder.build_return(Some(&i32t.const_int(0, false))).unwrap();
+        self.builder
+            .build_return(Some(&i32t.const_int(0, false)))
+            .unwrap();
         self.builder.position_at_end(stop_bb);
-        self.builder.build_return(Some(&i32t.const_int(1, false))).unwrap();
+        self.builder
+            .build_return(Some(&i32t.const_int(1, false)))
+            .unwrap();
         Ok(())
     }
 
@@ -5819,7 +5759,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.nonzero(wf, 64)
                 }
             };
-            self.builder.build_conditional_branch(fire, body_bb, cont_bb).unwrap();
+            self.builder
+                .build_conditional_branch(fire, body_bb, cont_bb)
+                .unwrap();
         }
 
         self.builder.position_at_end(body_bb);
@@ -5851,8 +5793,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         if !m.always_enabled || m.args.len() != af.argv.len() {
             return nope("auto-fire spec out of step with the method");
         }
-        let (margs, body, mname, men) =
-            (m.args.clone(), m.body.clone(), m.name, m.en);
+        let (margs, body, mname, men) = (m.args.clone(), m.body.clone(), m.name, m.en);
         // sibling RDY lookup — same rule as the interp's always_en_rdy
         // and the parent-call inline: no RDY method exported = constant
         // ready
@@ -5979,7 +5920,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .builder
                 .build_int_compare(IntPredicate::EQ, stamp, now, "mhit")
                 .unwrap();
-            self.builder.build_conditional_branch(eq, hit, miss).unwrap();
+            self.builder
+                .build_conditional_branch(eq, hit, miss)
+                .unwrap();
             self.builder.position_at_end(hit);
             let cached = self.load_val(&f, ms + 1, w);
             self.builder.build_return(Some(&cached)).unwrap();
@@ -6020,11 +5963,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// fired (the caller branches to its stop block).  internal +
     /// noinline: the boundary must survive the pipeline for the tax to
     /// be measurable.  Returns the result width recorded in the map.
-    fn lower_boundary_fn(
-        &mut self,
-        rq: &BoundaryReq,
-        external: bool,
-    ) -> Result<u32, Ineligible> {
+    fn lower_boundary_fn(&mut self, rq: &BoundaryReq, external: bool) -> Result<u32, Ineligible> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i32t = self.ctx.i32_type();
         let i64t = self.ctx.i64_type();
@@ -6152,20 +6091,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let rw = self.expr_width(&f, res)?;
                 let v = self.expr_scalar(&mut f, res)?;
                 let vv = self.to_w(v, rw, ret_w, false);
-                let outp =
-                    func.get_nth_param(3).unwrap().into_pointer_value();
+                let outp = func.get_nth_param(3).unwrap().into_pointer_value();
                 for k in 0..words_for(ret_w) {
                     let piece = if k == 0 {
                         vv
                     } else {
                         let sh = self.ity(ret_w).const_int((64 * k) as u64, false);
-                        self.builder.build_right_shift(vv, sh, false, "bws").unwrap()
+                        self.builder
+                            .build_right_shift(vv, sh, false, "bws")
+                            .unwrap()
                     };
                     let word = self.to_w(piece, ret_w, 64, false);
                     let idx = i64t.const_int(k as u64, false);
-                    let p = unsafe {
-                        self.builder.build_gep(i64t, outp, &[idx], "bwp").unwrap()
-                    };
+                    let p = unsafe { self.builder.build_gep(i64t, outp, &[idx], "bwp").unwrap() };
                     self.builder.build_store(p, word).unwrap();
                 }
                 self.builder
@@ -6192,12 +6130,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.expr_is_real_in(f, e, &mut Vec::new())
     }
 
-    fn expr_is_real_in(
-        &self,
-        f: &Frame<'ctx>,
-        e: &Expr,
-        seen: &mut Vec<StrId>,
-    ) -> bool {
+    fn expr_is_real_in(&self, f: &Frame<'ctx>, e: &Expr, seen: &mut Vec<StrId>) -> bool {
         match e {
             Expr::Real(_) => true,
             Expr::Param(p) | Expr::Port(p) => self
@@ -6205,8 +6138,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .map(|ie| ie.real_consts.contains_key(p))
                 .unwrap_or(false),
             Expr::If { then_, else_, .. } => {
-                self.expr_is_real_in(f, then_, seen)
-                    || self.expr_is_real_in(f, else_, seen)
+                self.expr_is_real_in(f, then_, seen) || self.expr_is_real_in(f, else_, seen)
             }
             Expr::Case { arms, default, .. } => {
                 arms.iter().any(|(_, a)| self.expr_is_real_in(f, a, seen))
@@ -6216,7 +6148,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if seen.contains(n) {
                     return false; // cycle guard
                 }
-                let Ok(ie) = self.ie(f.inst) else { return false };
+                let Ok(ie) = self.ie(f.inst) else {
+                    return false;
+                };
                 let m = &self.env.d.modules[ie.mir];
                 let Some(d) = m.def(*n) else {
                     return false;
@@ -6238,12 +6172,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.expr_is_str_in(f, e, &mut Vec::new())
     }
 
-    fn expr_is_str_in(
-        &self,
-        f: &Frame<'ctx>,
-        e: &Expr,
-        seen: &mut Vec<StrId>,
-    ) -> bool {
+    fn expr_is_str_in(&self, f: &Frame<'ctx>, e: &Expr, seen: &mut Vec<StrId>) -> bool {
         match e {
             Expr::Str(_) => true,
             Expr::Param(p) | Expr::Port(p) => self
@@ -6251,8 +6180,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .map(|ie| ie.str_consts.contains_key(p))
                 .unwrap_or(false),
             Expr::If { then_, else_, .. } => {
-                self.expr_is_str_in(f, then_, seen)
-                    || self.expr_is_str_in(f, else_, seen)
+                self.expr_is_str_in(f, then_, seen) || self.expr_is_str_in(f, else_, seen)
             }
             Expr::Case { arms, default, .. } => {
                 arms.iter().any(|(_, a)| self.expr_is_str_in(f, a, seen))
@@ -6262,7 +6190,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if seen.contains(n) {
                     return false; // cycle guard
                 }
-                let Ok(ie) = self.ie(f.inst) else { return false };
+                let Ok(ie) = self.ie(f.inst) else {
+                    return false;
+                };
                 let m = &self.env.d.modules[ie.mir];
                 let Some(d) = m.def(*n) else {
                     return false;
@@ -6272,11 +6202,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 seen.pop();
                 r
             }
-            Expr::Prim { op: PrimOp::StringConcat, .. } => true,
-            Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
-                args.first()
-                    .is_some_and(|a| self.expr_is_str_in(f, a, seen))
-            }
+            Expr::Prim {
+                op: PrimOp::StringConcat,
+                ..
+            } => true,
+            Expr::Prim {
+                op: PrimOp::ZeroExt | PrimOp::SignExt,
+                args,
+                ..
+            } => args
+                .first()
+                .is_some_and(|a| self.expr_is_str_in(f, a, seen)),
             _ => false,
         }
     }
@@ -6288,23 +6224,26 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.contains_concat_in(f, e, &mut Vec::new())
     }
 
-    fn contains_concat_in(
-        &self,
-        f: &Frame<'ctx>,
-        e: &Expr,
-        seen: &mut Vec<StrId>,
-    ) -> bool {
+    fn contains_concat_in(&self, f: &Frame<'ctx>, e: &Expr, seen: &mut Vec<StrId>) -> bool {
         match e {
-            Expr::Prim { op: PrimOp::StringConcat, .. } => true,
-            Expr::Prim { args, .. } => {
-                args.iter().any(|a| self.contains_concat_in(f, a, seen))
-            }
-            Expr::If { cond, then_, else_, .. } => {
+            Expr::Prim {
+                op: PrimOp::StringConcat,
+                ..
+            } => true,
+            Expr::Prim { args, .. } => args.iter().any(|a| self.contains_concat_in(f, a, seen)),
+            Expr::If {
+                cond, then_, else_, ..
+            } => {
                 self.contains_concat_in(f, cond, seen)
                     || self.contains_concat_in(f, then_, seen)
                     || self.contains_concat_in(f, else_, seen)
             }
-            Expr::Case { scrutinee, arms, default, .. } => {
+            Expr::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
                 self.contains_concat_in(f, scrutinee, seen)
                     || arms
                         .iter()
@@ -6320,7 +6259,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if seen.contains(n) {
                     return false; // cycle guard
                 }
-                let Ok(ie) = self.ie(f.inst) else { return false };
+                let Ok(ie) = self.ie(f.inst) else {
+                    return false;
+                };
                 let m = &self.env.d.modules[ie.mir];
                 let Some(d) = m.def(*n) else {
                     return false;
@@ -6345,13 +6286,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let i64t = self.ctx.i64_type();
         match e {
             Expr::Str(sid) => Ok(i64t.const_int(*sid as u64, false)),
-            Expr::Param(p) | Expr::Port(p) => {
-                match self.ie(f.inst)?.str_consts.get(p) {
-                    Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
-                    None => nope("non-string port in string context"),
-                }
-            }
-            Expr::If { cond, then_, else_, .. } => {
+            Expr::Param(p) | Expr::Port(p) => match self.ie(f.inst)?.str_consts.get(p) {
+                Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
+                None => nope("non-string port in string context"),
+            },
+            Expr::If {
+                cond, then_, else_, ..
+            } => {
                 // arms evaluate eagerly (select), which is only sound
                 // for PURE ids — a StringConcat in an arm would intern
                 // on the unselected path too, diverging from the
@@ -6372,7 +6313,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .unwrap()
                     .into_int_value())
             }
-            Expr::Case { scrutinee, arms, default, .. } => {
+            Expr::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
                 if arms.iter().any(|(_, a)| self.contains_concat(f, a))
                     || self.contains_concat(f, default)
                 {
@@ -6439,24 +6385,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 f.ssa.insert(*n, v);
                 Ok(v)
             }
-            Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
+            Expr::Prim {
+                op: PrimOp::ZeroExt | PrimOp::SignExt,
+                args,
+                ..
+            } => {
                 // marker passthrough: width adjustments of string
                 // values are identity in the interp
                 self.str_expr(f, &args[0], stop_bb)
             }
-            Expr::Prim { op: PrimOp::StringConcat, args, .. } => {
+            Expr::Prim {
+                op: PrimOp::StringConcat,
+                args,
+                ..
+            } => {
                 // per-evaluation intern through the callback, exactly
                 // the interp's intern_dyn; pure value cones (e.g.
                 // string Eq) have no stop block, and the concat
                 // callback never requests a stop
-                match self.emit_foreign(
-                    f,
-                    STRING_CONCAT_FUNC,
-                    args,
-                    &[],
-                    64,
-                    stop_bb,
-                )? {
+                match self.emit_foreign(f, STRING_CONCAT_FUNC, args, &[], 64, stop_bb)? {
                     Some(v) => Ok(v),
                     None => nope("string concat returned no value"),
                 }
@@ -6513,8 +6460,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         // zero-width arg still occupies ONE (zero) word in the buffer —
         // its spec width stays 0 so the formatter sees the interp's
         // width-0 Value
-        let total_words: u32 =
-            vals.iter().map(|&(_, w)| words_for(w.max(1))).sum::<u32>().max(1);
+        let total_words: u32 = vals
+            .iter()
+            .map(|&(_, w)| words_for(w.max(1)))
+            .sum::<u32>()
+            .max(1);
         let out_words = words_for(ret_width.max(1));
         let abuf = self
             .builder
@@ -6535,14 +6485,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 };
                 let word = self.to_w(piece, wa, 64, false);
                 let idx = i64t.const_int((off + k) as u64, false);
-                let p =
-                    unsafe { self.builder.build_gep(i64t, abuf, &[idx], "fap").unwrap() };
+                let p = unsafe { self.builder.build_gep(i64t, abuf, &[idx], "fap").unwrap() };
                 self.builder.build_store(p, word).unwrap();
             }
             off += words_for(wa.max(1));
         }
-        let token =
-            self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
+        let token = self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
         if self.foreign_stmts.len() >= 1 << 16 {
             return nope("foreign call-site count exceeds the 16-bit token field");
         }
@@ -6586,10 +6534,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     "fst",
                 )
                 .unwrap();
-            let func =
-                self.builder.get_insert_block().unwrap().get_parent().unwrap();
+            let func = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
             let cont_bb = self.ctx.append_basic_block(func, "fcont");
-            self.builder.build_conditional_branch(stop, sb, cont_bb).unwrap();
+            self.builder
+                .build_conditional_branch(stop, sb, cont_bb)
+                .unwrap();
             self.builder.position_at_end(cont_bb);
         }
         if ret_width == 0 {
@@ -6600,7 +6554,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         for k in 0..words_for(ret_width) {
             let idx = i64t.const_int(k as u64, false);
             let p = unsafe { self.builder.build_gep(i64t, obuf, &[idx], "fop").unwrap() };
-            let word = self.builder.build_load(i64t, p, "fol").unwrap().into_int_value();
+            let word = self
+                .builder
+                .build_load(i64t, p, "fol")
+                .unwrap()
+                .into_int_value();
             if ret_width <= 64 {
                 acc = self.to_w(word, 64, ret_width, false);
             } else {
@@ -6641,10 +6599,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 Stmt::Action(a) => self.action(f, func, a, stop_bb)?,
                 Stmt::AvAction { def, action } => match action {
-                    Action::Task { func: tf, cookie, temp, width, cond, args, signed, .. } => {
+                    Action::Task {
+                        func: tf,
+                        cookie,
+                        temp,
+                        width,
+                        cond,
+                        args,
+                        signed,
+                        ..
+                    } => {
                         let v = self.task_call(
-                            f, func, *tf, *cookie, *temp, *width, cond, args, signed,
-                            stop_bb,
+                            f, func, *tf, *cookie, *temp, *width, cond, args, signed, stop_bb,
                         )?;
                         f.av_widths.insert(*def, (*width).max(1));
                         f.dead_defs.remove(def);
@@ -6654,15 +6620,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let dp = self.av_slot(f, *def, (*width).max(1));
                         self.builder.build_store(dp, v).unwrap();
                     }
-                    Action::MethCall { instance, method, port, cond, args } => {
+                    Action::MethCall {
+                        instance,
+                        method,
+                        port,
+                        cond,
+                        args,
+                    } => {
                         // ActionValue method on a prim child (trampoline)
                         // or a user-module child (inline)
                         let ie = self.ie(f.inst)?;
                         let Some(&child) = ie.children.get(instance) else {
                             return nope("avaction on unknown child");
                         };
-                        if ie.reg_slot.contains_key(instance)
-                            || ie.wire_slot.contains_key(instance)
+                        if ie.reg_slot.contains_key(instance) || ie.wire_slot.contains_key(instance)
                         {
                             return nope("avaction on reg/wire instance");
                         }
@@ -6703,8 +6674,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             };
                             let margs = m.args.clone();
                             let body = m.body.clone();
-                            let en_slot =
-                                m.en.and_then(|id| cie.en_slot.get(&id).copied());
+                            let en_slot = m.en.and_then(|id| cie.en_slot.get(&id).copied());
                             let mut cf = self.child_frame(f, child, Some(mi))?;
                             let wc = self.expr_width(f, cond)?;
                             let c = self.expr_scalar(f, cond)?;
@@ -6725,13 +6695,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                     .build_select(cz, v, z, "avarg")
                                     .unwrap()
                                     .into_int_value();
-                                f.av_args
-                                    .insert((*instance, pa.name), (lv, pa.width));
+                                f.av_args.insert((*instance, pa.name), (lv, pa.width));
                             }
                             let go_bb = self.ctx.append_basic_block(func, "avmgo");
                             let sk_bb = self.ctx.append_basic_block(func, "avmsk");
                             let jn_bb = self.ctx.append_basic_block(func, "avmjn");
-                            self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                            self.builder
+                                .build_conditional_branch(cz, go_bb, sk_bb)
+                                .unwrap();
                             self.builder.position_at_end(go_bb);
                             if let Some(slot) = en_slot {
                                 let one = self.ctx.i64_type().const_int(1, false);
@@ -6748,38 +6719,22 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // routes $finish paths to stop_bb.  AE
                             // methods never enter the map, so the rdy
                             // gate never coexists with a hit.
-                            let bhit = self
-                                .boundary_hit(cie.mir, *method, 2)
-                                .filter(|(_, _, ba)| {
+                            let bhit =
+                                self.boundary_hit(cie.mir, *method, 2).filter(|(_, _, ba)| {
                                     rdy_id.is_none()
                                         && f.envp.is_some()
-                                        && ba
-                                            .iter()
-                                            .all(|(p, _)| cf.args.contains_key(p))
+                                        && ba.iter().all(|(p, _)| cf.args.contains_key(p))
                                 });
                             let mut brv: Option<IntValue<'ctx>> = None;
                             if let Some((sym, brw, bargs)) = bhit {
                                 let envp = f.envp.unwrap();
                                 let i64t = self.ctx.i64_type();
                                 let i32t = self.ctx.i32_type();
-                                let ptrt =
-                                    self.ctx.ptr_type(AddressSpace::default());
-                                let obuf = self.entry_alloca(
-                                    i64t,
-                                    words_for(brw) as u64,
-                                    "avbo",
-                                );
-                                let mut ptys: Vec<
-                                    inkwell::types::BasicMetadataTypeEnum,
-                                > = vec![
-                                    ptrt.into(),
-                                    ptrt.into(),
-                                    i64t.into(),
-                                    ptrt.into(),
-                                ];
-                                let mut bargv: Vec<
-                                    inkwell::values::BasicMetadataValueEnum,
-                                > = vec![
+                                let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                                let obuf = self.entry_alloca(i64t, words_for(brw) as u64, "avbo");
+                                let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                                    vec![ptrt.into(), ptrt.into(), i64t.into(), ptrt.into()];
+                                let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                                     f.arena.into(),
                                     envp.into(),
                                     self.slot_index(cie.region.0).into(),
@@ -6794,15 +6749,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 let bf = self
                                     .module
                                     .get_function(&sym)
-                                    .unwrap_or_else(|| {
-                                        self.module.add_function(&sym, bty, None)
-                                    });
-                                let cs = self
-                                    .builder
-                                    .build_call(bf, &bargv, "bndav")
-                                    .unwrap();
-                                let inkwell::values::ValueKind::Basic(st) =
-                                    cs.try_as_basic_value()
+                                    .unwrap_or_else(|| self.module.add_function(&sym, bty, None));
+                                let cs = self.builder.build_call(bf, &bargv, "bndav").unwrap();
+                                let inkwell::values::ValueKind::Basic(st) = cs.try_as_basic_value()
                                 else {
                                     return nope("boundary av fn returned void");
                                 };
@@ -6815,8 +6764,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                         "avbok",
                                     )
                                     .unwrap();
-                                let ok_bb =
-                                    self.ctx.append_basic_block(func, "avbokb");
+                                let ok_bb = self.ctx.append_basic_block(func, "avbokb");
                                 self.builder
                                     .build_conditional_branch(ok, ok_bb, stop_bb)
                                     .unwrap();
@@ -6826,9 +6774,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 for k in 0..words_for(brw) {
                                     let idx = i64t.const_int(k as u64, false);
                                     let p = unsafe {
-                                        self.builder
-                                            .build_gep(i64t, obuf, &[idx], "avbp")
-                                            .unwrap()
+                                        self.builder.build_gep(i64t, obuf, &[idx], "avbp").unwrap()
                                     };
                                     let word = self
                                         .builder
@@ -6842,16 +6788,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                             .builder
                                             .build_int_z_extend(word, t, "avbz")
                                             .unwrap();
-                                        let sh =
-                                            t.const_int((64 * k) as u64, false);
+                                        let sh = t.const_int((64 * k) as u64, false);
                                         let pos = self
                                             .builder
                                             .build_left_shift(wide, sh, "avbs")
                                             .unwrap();
-                                        acc = self
-                                            .builder
-                                            .build_or(acc, pos, "avbor")
-                                            .unwrap();
+                                        acc = self.builder.build_or(acc, pos, "avbor").unwrap();
                                     }
                                 }
                                 brv = Some(acc);
@@ -6864,13 +6806,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 // result re-expands or reads undet-init
                                 // AV slots, the interp's skip semantics
                                 let saved_ssa = cf.ssa.clone();
-                                let r =
-                                    self.value_call(f, 1, *instance, rid, 0, &[])?;
+                                let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
                                 let rz = self.nonzero(r, 1);
-                                let bd_bb =
-                                    self.ctx.append_basic_block(func, "avmrdy");
-                                let rs_bb =
-                                    self.ctx.append_basic_block(func, "avmres");
+                                let bd_bb = self.ctx.append_basic_block(func, "avmrdy");
+                                let rs_bb = self.ctx.append_basic_block(func, "avmres");
                                 self.builder
                                     .build_conditional_branch(rz, bd_bb, rs_bb)
                                     .unwrap();
@@ -6896,9 +6835,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                     self.builder.build_store(p, v).unwrap();
                                     cf.dead_defs.insert(k);
                                 }
-                                self.builder
-                                    .build_unconditional_branch(rs_bb)
-                                    .unwrap();
+                                self.builder.build_unconditional_branch(rs_bb).unwrap();
                                 self.builder.position_at_end(rs_bb);
                                 cf.ssa = saved_ssa;
                             } else {
@@ -6929,8 +6866,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             let s_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(jn_bb).unwrap();
                             self.builder.position_at_end(jn_bb);
-                            let phi =
-                                self.builder.build_phi(self.ity(wd), "avmphi").unwrap();
+                            let phi = self.builder.build_phi(self.ity(wd), "avmphi").unwrap();
                             phi.add_incoming(&[(&rv, g_end), (&undet, s_end)]);
                             f.av_widths.insert(*def, wd);
                             f.dead_defs.remove(def);
@@ -6951,7 +6887,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let go_bb = self.ctx.append_basic_block(func, "avgo");
                         let sk_bb = self.ctx.append_basic_block(func, "avsk");
                         let jn_bb = self.ctx.append_basic_block(func, "avjn");
-                        self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, sk_bb)
+                            .unwrap();
                         self.builder.position_at_end(go_bb);
                         // the trampoline routes is_action to call_action,
                         // which never writes the out buffer, and no prim
@@ -6975,7 +6913,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, phi.as_basic_value().into_int_value());
                     }
-                    Action::Foreign { func: ffn, cond, args, .. } => {
+                    Action::Foreign {
+                        func: ffn,
+                        cond,
+                        args,
+                        ..
+                    } => {
                         // BDPI ActionValue import: direct call under
                         // the condition, result phi-bound to the def
                         let Some(imp) = self.bdpi_import(*ffn) else {
@@ -7000,8 +6943,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let s_end = self.builder.get_insert_block().unwrap();
                         self.builder.build_unconditional_branch(jn_bb).unwrap();
                         self.builder.position_at_end(jn_bb);
-                        let phi =
-                            self.builder.build_phi(self.ity(wd), "bvphi").unwrap();
+                        let phi = self.builder.build_phi(self.ity(wd), "bvphi").unwrap();
                         phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
                         f.av_widths.insert(*def, wd);
                         f.dead_defs.remove(def);
@@ -7042,7 +6984,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let then_bb = self.ctx.append_basic_block(func, "then");
                     let else_bb = self.ctx.append_basic_block(func, "else");
                     let join_bb = self.ctx.append_basic_block(func, "join");
-                    self.builder.build_conditional_branch(cz, then_bb, else_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(cz, then_bb, else_bb)
+                        .unwrap();
                     self.builder.position_at_end(then_bb);
                     let st_t = self.cond_arm_run(f, func, &then_run, stop_bb)?;
                     self.builder.build_unconditional_branch(join_bb).unwrap();
@@ -7052,7 +6996,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.position_at_end(join_bb);
                     // idempotent-task arm bindings: re-materialize at
                     // the join (dominates all later uses)
-                    let truth = Expr::Const { width: 1, limbs: vec![1] };
+                    let truth = Expr::Const {
+                        width: 1,
+                        limbs: vec![1],
+                    };
                     for (d, a) in st_t.into_iter().chain(st_e) {
                         let Action::Task {
                             func: tf5,
@@ -7073,8 +7020,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         } else {
                             // run-constant, side-effect-free: re-call
                             self.task_call(
-                                f, func, tf5, cookie, temp, width, &truth,
-                                &args, &signed, stop_bb,
+                                f, func, tf5, cookie, temp, width, &truth, &args, &signed, stop_bb,
                             )?
                         };
                         if let Some(t) = temp {
@@ -7121,7 +7067,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let go_bb = self.ctx.append_basic_block(func, "tgo");
         let sk_bb = self.ctx.append_basic_block(func, "tsk");
         let jn_bb = self.ctx.append_basic_block(func, "tjn");
-        self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cz, go_bb, sk_bb)
+            .unwrap();
         self.builder.position_at_end(go_bb);
         let v = self
             .emit_foreign(f, tf, args, signed, w, Some(stop_bb))?
@@ -7156,9 +7104,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         match e {
             Expr::Const { .. } | Expr::Port(_) => true,
             Expr::Prim { args, .. } => args.iter().all(Self::port_pure),
-            Expr::If { cond, then_, else_, .. } => {
-                Self::port_pure(cond) && Self::port_pure(then_) && Self::port_pure(else_)
-            }
+            Expr::If {
+                cond, then_, else_, ..
+            } => Self::port_pure(cond) && Self::port_pure(then_) && Self::port_pure(else_),
             _ => false,
         }
     }
@@ -7173,8 +7121,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         lists: &[&[Stmt]],
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<Vec<(StrId, Action)>, Ineligible> {
-        let merged: Vec<Stmt> =
-            lists.iter().flat_map(|l| l.iter().cloned()).collect();
+        let merged: Vec<Stmt> = lists.iter().flat_map(|l| l.iter().cloned()).collect();
         self.cond_arm(f, func, &merged, stop_bb)
     }
 
@@ -7273,7 +7220,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<(), Ineligible> {
         match a {
-            Action::MethCall { instance, method, port, cond, args } => {
+            Action::MethCall {
+                instance,
+                method,
+                port,
+                cond,
+                args,
+            } => {
                 let ie = self.ie(f.inst)?;
                 let mname = self.env.d.strings[*method as usize].clone();
                 let wc = self.expr_width(f, cond)?;
@@ -7363,7 +7316,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let v = self.to_w(v0, wv, rw, false);
                     let wr_bb = self.ctx.append_basic_block(func, "cwr");
                     let sk_bb = self.ctx.append_basic_block(func, "csk");
-                    self.builder.build_conditional_branch(cz, wr_bb, sk_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(cz, wr_bb, sk_bb)
+                        .unwrap();
                     self.builder.position_at_end(wr_bb);
                     let cur = self.load_val(f, base + words, rw);
                     let wat = self.load_word(f, base + 2 * words);
@@ -7415,29 +7370,23 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let fast_bb = self.ctx.append_basic_block(func, "rfwf");
                     let slow_bb = self.ctx.append_basic_block(func, "rfws");
                     let done_bb = self.ctx.append_basic_block(func, "rfwd");
-                    self.builder.build_conditional_branch(cz, wr_bb, done_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(cz, wr_bb, done_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(wr_bb);
                     let inlo = self
                         .builder
-                        .build_int_compare(
-                            IntPredicate::UGE,
-                            a,
-                            i64t.const_int(lo, false),
-                            "rfwlo",
-                        )
+                        .build_int_compare(IntPredicate::UGE, a, i64t.const_int(lo, false), "rfwlo")
                         .unwrap();
                     let inhi = self
                         .builder
-                        .build_int_compare(
-                            IntPredicate::ULE,
-                            a,
-                            i64t.const_int(hi, false),
-                            "rfwhi",
-                        )
+                        .build_int_compare(IntPredicate::ULE, a, i64t.const_int(hi, false), "rfwhi")
                         .unwrap();
                     let inb = self.builder.build_and(inlo, inhi, "rfwin").unwrap();
-                    self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(inb, fast_bb, slow_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(fast_bb);
                     // one-deep bypass bookkeeping, branchless within the
@@ -7482,9 +7431,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.position_at_end(done_bb);
                     return Ok(());
                 }
-                if let Some(&(base, bw, sz, _cs, nw, dual, _pl)) =
-                    ie.bram_slot.get(instance)
-                {
+                if let Some(&(base, bw, sz, _cs, nw, dual, _pl)) = ie.bram_slot.get(instance) {
                     // put latches the pending update into the port
                     // header (the tick applies it); in-range is pure
                     // stores, out-of-range bounces to the boxed prim
@@ -7518,19 +7465,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let fast_bb = self.ctx.append_basic_block(func, "bpf");
                     let slow_bb = self.ctx.append_basic_block(func, "bps");
                     let done_bb = self.ctx.append_basic_block(func, "bpd");
-                    self.builder.build_conditional_branch(cz, go_bb, done_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(cz, go_bb, done_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(go_bb);
                     let inb = self
                         .builder
-                        .build_int_compare(
-                            IntPredicate::ULT,
-                            a,
-                            i64t.const_int(sz, false),
-                            "bpin",
-                        )
+                        .build_int_compare(IntPredicate::ULT, a, i64t.const_int(sz, false), "bpin")
                         .unwrap();
-                    self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(inb, fast_bb, slow_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(fast_bb);
                     let now = self.load_word(f, self.env.now_slot);
@@ -7590,7 +7536,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let warn_bb = self.ctx.append_basic_block(func, "fwr");
                         let fast_bb = self.ctx.append_basic_block(func, "fft");
                         let sk_bb = self.ctx.append_basic_block(func, "fsk");
-                        self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, sk_bb)
+                            .unwrap();
                         self.builder.position_at_end(go_bb);
                         // gating: an executed enq/deq moves fifo state
                         // (level, elements, bypass headers) — mark taken
@@ -7600,17 +7548,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         }
                         let elems = self.load_word(f, base);
                         let saved = self.load_word(f, base + 1);
-                        let other_at =
-                            self.load_word(f, base + if is_enq { 4 } else { 3 });
+                        let other_at = self.load_word(f, base + if is_enq { 4 } else { 3 });
                         let now = self.load_word(f, self.env.now_slot);
                         let szc = i64t.const_int(size as u64, false);
                         let zero = i64t.const_zero();
-                        let (lim, slim) =
-                            if is_enq { (szc, szc) } else { (zero, zero) };
-                        let bad =
-                            self.builder
-                                .build_int_compare(IntPredicate::EQ, elems, lim, "fb")
-                                .unwrap();
+                        let (lim, slim) = if is_enq { (szc, szc) } else { (zero, zero) };
+                        let bad = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, elems, lim, "fb")
+                            .unwrap();
                         // loopy enq drops the begin-of-instant
                         // disqualifier: enq-when-begin-full succeeds
                         // if a same-instant deq freed a slot (deq
@@ -7648,13 +7594,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             .unwrap();
                         // slow path: boxed prim (bookkeeping + println)
                         self.builder.position_at_end(warn_bb);
-                        let targs: Vec<Expr> =
-                            if v.is_some() { vec![args[0].clone()] } else { vec![] };
+                        let targs: Vec<Expr> = if v.is_some() {
+                            vec![args[0].clone()]
+                        } else {
+                            vec![]
+                        };
                         let _ = self.emit_prim_call(
                             f,
-                            *ie.children.get(instance).ok_or_else(|| {
-                                Ineligible("fifo child missing".into())
-                            })?,
+                            *ie.children
+                                .get(instance)
+                                .ok_or_else(|| Ineligible("fifo child missing".into()))?,
                             *method,
                             *port,
                             &targs,
@@ -7677,8 +7626,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         self.store_word(f, base + if is_enq { 3 } else { 4 }, now);
                         let fst = self.load_word(f, base + 2);
                         if is_enq {
-                            let idx0 =
-                                self.builder.build_int_add(fst, elems, "fi").unwrap();
+                            let idx0 = self.builder.build_int_add(fst, elems, "fi").unwrap();
                             let idx = if size.is_power_of_two() {
                                 self.builder
                                     .build_and(
@@ -7709,16 +7657,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 .unwrap();
                             let f2 = if size.is_power_of_two() {
                                 self.builder
-                                    .build_and(
-                                        f1,
-                                        i64t.const_int((size - 1) as u64, false),
-                                        "ffm",
-                                    )
+                                    .build_and(f1, i64t.const_int((size - 1) as u64, false), "ffm")
                                     .unwrap()
                             } else {
-                                self.builder
-                                    .build_int_unsigned_rem(f1, szc, "ffm")
-                                    .unwrap()
+                                self.builder.build_int_unsigned_rem(f1, szc, "ffm").unwrap()
                             };
                             self.store_word(f, base + 2, f2);
                             let e2 = self
@@ -7756,7 +7698,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let fast_bb = self.ctx.append_basic_block(func, "cnf");
                         let slow_bb = self.ctx.append_basic_block(func, "cnsl");
                         let done_bb = self.ctx.append_basic_block(func, "cnd");
-                        self.builder.build_conditional_branch(cz, go_bb, done_bb).unwrap();
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, done_bb)
+                            .unwrap();
 
                         self.builder.position_at_end(go_bb);
                         let sup = self
@@ -7801,8 +7745,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         };
                         self.store_val(f, voff, cw.max(1), vv);
                         self.store_word(f, toff, now);
-                        let sum =
-                            self.builder.build_int_add(val, vv, "cnad").unwrap();
+                        let sum = self.builder.build_int_add(val, vv, "cnad").unwrap();
                         self.store_val(f, base, cw.max(1), sum);
                         self.builder.build_unconditional_branch(done_bb).unwrap();
 
@@ -7880,7 +7823,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if !self.env.insts.contains_key(&child) {
                     let go_bb = self.ctx.append_basic_block(func, "pgo");
                     let sk_bb = self.ctx.append_basic_block(func, "psk");
-                    self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(cz, go_bb, sk_bb)
+                        .unwrap();
                     self.builder.position_at_end(go_bb);
                     // gating: a trampolined action on a prim whose
                     // VALUE reads are arena-inline (a watched class —
@@ -7948,7 +7893,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 let go_bb = self.ctx.append_basic_block(func, "mgo");
                 let sk_bb = self.ctx.append_basic_block(func, "msk");
-                self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                self.builder
+                    .build_conditional_branch(cz, go_bb, sk_bb)
+                    .unwrap();
                 self.builder.position_at_end(go_bb);
                 if let Some(slot) = en_slot {
                     let one = self.ctx.i64_type().const_int(1, false);
@@ -7964,7 +7911,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
                     let rz = self.nonzero(r, 1);
                     let bd_bb = self.ctx.append_basic_block(func, "mrdy");
-                    self.builder.build_conditional_branch(rz, bd_bb, sk_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(rz, bd_bb, sk_bb)
+                        .unwrap();
                     self.builder.position_at_end(bd_bb);
                 }
                 // boundary-tax experiment: the body becomes a real call
@@ -7982,8 +7931,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let bhit = self
                     .boundary_hit(cie.mir, *method, bkind)
                     .filter(|(_, _, ba)| {
-                        f.envp.is_some()
-                            && ba.iter().all(|(p, _)| cf.args.contains_key(p))
+                        f.envp.is_some() && ba.iter().all(|(p, _)| cf.args.contains_key(p))
                     });
                 match bhit {
                     Some((sym, brw, bargs)) => {
@@ -7993,19 +7941,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let ptrt = self.ctx.ptr_type(AddressSpace::default());
                         let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
                             vec![ptrt.into(), ptrt.into(), i64t.into()];
-                        let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> =
-                            vec![
-                                f.arena.into(),
-                                envp.into(),
-                                self.slot_index(cie.region.0).into(),
-                            ];
+                        let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                            f.arena.into(),
+                            envp.into(),
+                            self.slot_index(cie.region.0).into(),
+                        ];
                         if bkind == 2 {
                             ptys.push(ptrt.into());
-                            let obuf = self.entry_alloca(
-                                i64t,
-                                words_for(brw.max(1)) as u64,
-                                "bo",
-                            );
+                            let obuf = self.entry_alloca(i64t, words_for(brw.max(1)) as u64, "bo");
                             bargv.push(obuf.into());
                         }
                         for (pn, pw) in &bargs {
@@ -8014,15 +7957,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             bargv.push(self.to_w(v, vw, *pw, false).into());
                         }
                         let bty = i32t.fn_type(&ptys, false);
-                        let bf =
-                            self.module.get_function(&sym).unwrap_or_else(|| {
-                                self.module.add_function(&sym, bty, None)
-                            });
-                        let cs =
-                            self.builder.build_call(bf, &bargv, "bnda").unwrap();
-                        let inkwell::values::ValueKind::Basic(rv) =
-                            cs.try_as_basic_value()
-                        else {
+                        let bf = self
+                            .module
+                            .get_function(&sym)
+                            .unwrap_or_else(|| self.module.add_function(&sym, bty, None));
+                        let cs = self.builder.build_call(bf, &bargv, "bnda").unwrap();
+                        let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
                             return nope("boundary action fn returned void");
                         };
                         let ok = self
@@ -8050,13 +7990,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.builder.position_at_end(sk_bb);
                 Ok(())
             }
-            Action::Foreign { func: ff, cond, args, signed, .. } => {
+            Action::Foreign {
+                func: ff,
+                cond,
+                args,
+                signed,
+                ..
+            } => {
                 let wc = self.expr_width(f, cond)?;
                 let c = self.expr_scalar(f, cond)?;
                 let cz = self.nonzero(c, wc);
                 let go_bb = self.ctx.append_basic_block(func, "fgo");
                 let sk_bb = self.ctx.append_basic_block(func, "fsk");
-                self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
+                self.builder
+                    .build_conditional_branch(cz, go_bb, sk_bb)
+                    .unwrap();
                 self.builder.position_at_end(go_bb);
                 match self.bdpi_import(*ff) {
                     // user BDPI action: direct call (task #22); dynamic
@@ -8072,7 +8020,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 self.builder.position_at_end(sk_bb);
                 Ok(())
             }
-            Action::Task { func: tf, cookie, temp, width, cond, args, signed, .. } => {
+            Action::Task {
+                func: tf,
+                cookie,
+                temp,
+                width,
+                cond,
+                args,
+                signed,
+                ..
+            } => {
                 self.task_call(
                     f, func, *tf, *cookie, *temp, *width, cond, args, signed, stop_bb,
                 )?;
@@ -8081,7 +8038,6 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             _ => nope("action kind not compilable"),
         }
     }
-
 }
 
 /// Smoke-level check that LLVM is usable: build `i64 add(i64,i64)`, JIT it,
@@ -8097,8 +8053,12 @@ pub fn llvm_smoke_test() -> Result<u64, String> {
     builder.position_at_end(bb);
     let a = f.get_nth_param(0).unwrap().into_int_value();
     let b = f.get_nth_param(1).unwrap().into_int_value();
-    let sum = builder.build_int_add(a, b, "sum").map_err(|e| e.to_string())?;
-    builder.build_return(Some(&sum)).map_err(|e| e.to_string())?;
+    let sum = builder
+        .build_int_add(a, b, "sum")
+        .map_err(|e| e.to_string())?;
+    builder
+        .build_return(Some(&sum))
+        .map_err(|e| e.to_string())?;
     let ee = module
         .create_jit_execution_engine(OptimizationLevel::Aggressive)
         .map_err(|e| e.to_string())?;
@@ -8124,8 +8084,14 @@ mod tests {
                 ret_width: 64,
                 args: vec![
                     FArgSpec::Str(11),
-                    FArgSpec::Num { width: 0, signed: false },
-                    FArgSpec::Num { width: 65, signed: true },
+                    FArgSpec::Num {
+                        width: 0,
+                        signed: false,
+                    },
+                    FArgSpec::Num {
+                        width: 65,
+                        signed: true,
+                    },
                     FArgSpec::Real,
                     FArgSpec::StrDyn,
                 ],
@@ -8139,8 +8105,20 @@ mod tests {
         assert_eq!(back.len(), 1);
         let args = &back[0].sched_foreign[0].args;
         assert!(matches!(args[0], FArgSpec::Str(11)));
-        assert!(matches!(args[1], FArgSpec::Num { width: 0, signed: false }));
-        assert!(matches!(args[2], FArgSpec::Num { width: 65, signed: true }));
+        assert!(matches!(
+            args[1],
+            FArgSpec::Num {
+                width: 0,
+                signed: false
+            }
+        ));
+        assert!(matches!(
+            args[2],
+            FArgSpec::Num {
+                width: 65,
+                signed: true
+            }
+        ));
         assert!(matches!(args[3], FArgSpec::Real));
         assert!(matches!(args[4], FArgSpec::StrDyn));
         // an unknown tag is a corrupted or future-format artifact:

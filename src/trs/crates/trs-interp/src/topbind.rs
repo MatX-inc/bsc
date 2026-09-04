@@ -126,13 +126,14 @@ fn resolve_const(m: &ir::Module, e: &ir::Expr, depth: u32) -> Option<u64> {
 /// Parse an unsigned integer of arbitrary width: decimal, 0x hex, or
 /// 0b binary, with optional `_` separators.  Returns LE 64-bit limbs.
 fn parse_uint(text: &str) -> Result<Vec<u64>, String> {
-    let (digits, radix) = if let Some(h) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        (h, 16u32)
-    } else if let Some(b) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
-        (b, 2u32)
-    } else {
-        (text, 10u32)
-    };
+    let (digits, radix) =
+        if let Some(h) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (h, 16u32)
+        } else if let Some(b) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+            (b, 2u32)
+        } else {
+            (text, 10u32)
+        };
     if digits.is_empty() {
         return Err("empty value".into());
     }
@@ -141,9 +142,9 @@ fn parse_uint(text: &str) -> Result<Vec<u64>, String> {
         if c == '_' {
             continue;
         }
-        let dv = c.to_digit(radix).ok_or_else(|| {
-            format!("invalid digit `{c}' for base {radix}")
-        })?;
+        let dv = c
+            .to_digit(radix)
+            .ok_or_else(|| format!("invalid digit `{c}' for base {radix}"))?;
         // limbs = limbs * radix + dv
         let mut carry = dv as u128;
         for l in limbs.iter_mut() {
@@ -190,10 +191,7 @@ fn bind_salt(bound: &[(String, Vec<u64>)]) -> u64 {
     h
 }
 
-pub(crate) fn resolve(
-    d: &ir::Design,
-    binds: &[TopBind],
-) -> Result<ResolvedBinds, String> {
+pub(crate) fn resolve(d: &ir::Design, binds: &[TopBind]) -> Result<ResolvedBinds, String> {
     let top = d
         .modules
         .iter()
@@ -210,8 +208,7 @@ pub(crate) fn resolve(
         .map(|p| (p.name, p.width))
         .collect();
     // always_enabled methods (arm even with no bindings on the CLI)
-    let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> =
-        Vec::new();
+    let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> = Vec::new();
     for m in &top.methods {
         if !m.always_enabled {
             continue;
@@ -299,7 +296,11 @@ pub(crate) fn resolve(
                     "top-level module arguments bind to constants; \
                      additional input {}s are not supported \
                      (found: {})",
-                    if kind == ir::PortKind::Clock { "clock" } else { "reset" },
+                    if kind == ir::PortKind::Clock {
+                        "clock"
+                    } else {
+                        "reset"
+                    },
                     ins.join(", ")
                 ));
             }
@@ -339,8 +340,7 @@ pub(crate) fn resolve(
             .map(|t| (t.1, t.2))
         else {
             if b.explicit {
-                let names: Vec<&str> =
-                    surface.iter().map(|(n, _, _)| n.as_str()).collect();
+                let names: Vec<&str> = surface.iter().map(|(n, _, _)| n.as_str()).collect();
                 return Err(format!(
                     "unknown top-level binding `{}' (bindable: {})",
                     b.name,
@@ -349,9 +349,8 @@ pub(crate) fn resolve(
             }
             continue; // run-time `+`: stays a plusarg
         };
-        let limbs = parse_uint(&b.value).map_err(|e| {
-            format!("binding `{}={}': {e}", b.name, b.value)
-        })?;
+        let limbs =
+            parse_uint(&b.value).map_err(|e| format!("binding `{}={}': {e}", b.name, b.value))?;
         if bit_len(&limbs) > width {
             return Err(format!(
                 "binding `{}={}' does not fit in the declared width \
@@ -394,8 +393,11 @@ pub(crate) fn resolve(
     // EN_<m> reads constant 1 for auto-fired methods (tied high)
     let mut af: Vec<(ir::StrId, Vec<Value>)> = Vec::new();
     for (mname, args) in &autofire {
-        if let Some(en) =
-            top.methods.iter().find(|m| m.name == *mname).and_then(|m| m.en)
+        if let Some(en) = top
+            .methods
+            .iter()
+            .find(|m| m.name == *mname)
+            .and_then(|m| m.en)
         {
             params.push((en, Value::from_u64(1, 1)));
         }
@@ -423,10 +425,8 @@ pub(crate) fn resolve(
     };
 
     // ---- auto-fire schedule positions (see ResolvedBinds docs) ----
-    let mut autofire_at: std::collections::HashMap<(usize, usize), Vec<usize>> =
-        Default::default();
-    let mut autofire_pre: std::collections::HashMap<usize, Vec<usize>> =
-        Default::default();
+    let mut autofire_at: std::collections::HashMap<(usize, usize), Vec<usize>> = Default::default();
+    let mut autofire_pre: std::collections::HashMap<usize, Vec<usize>> = Default::default();
     if !af.is_empty() {
         // v1 safety: an auto-fired body may touch primitives only.  A
         // call into a USER submodule's method would need the fused
@@ -478,9 +478,7 @@ pub(crate) fn resolve(
                     .domains
                     .iter()
                     .find(|ms| ms.domain == dm && ms.posedge == comp.posedge)
-                    .or_else(|| {
-                        top.schedule.domains.iter().find(|ms| ms.domain == dm)
-                    })
+                    .or_else(|| top.schedule.domains.iter().find(|ms| ms.domain == dm))
                 else {
                     continue;
                 };
@@ -489,12 +487,8 @@ pub(crate) fn resolve(
                     continue;
                 }
                 // the method's Exec position: LAST cut naming it
-                let Some((k_last, cut_pos)) = ms
-                    .segments
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(k, seg)| {
+                let Some((k_last, cut_pos)) =
+                    ms.segments.iter().enumerate().rev().find_map(|(k, seg)| {
                         seg.cut
                             .iter()
                             .position(|c| c == mname)
@@ -516,10 +510,7 @@ pub(crate) fn resolve(
             placed.sort_by_key(|&(_, k, p, _)| (k, p));
             for (anchor, _, _, mi) in placed {
                 match anchor {
-                    Some(ei) => autofire_at
-                        .entry((rci, ei))
-                        .or_default()
-                        .push(mi),
+                    Some(ei) => autofire_at.entry((rci, ei)).or_default().push(mi),
                     None => autofire_pre.entry(rci).or_default().push(mi),
                 }
             }
@@ -548,11 +539,7 @@ pub(crate) fn resolve(
 /// value MethCall/MethValue whose instance is a Module child)?  Def
 /// references chase into the module def table — hoisted child value
 /// reads hide there and evaluate on demand at fire time.
-fn body_calls_user_child(
-    m: &ir::Module,
-    body: &[ir::Stmt],
-    kids: &[ir::StrId],
-) -> bool {
+fn body_calls_user_child(m: &ir::Module, body: &[ir::Stmt], kids: &[ir::StrId]) -> bool {
     struct Scan<'a> {
         m: &'a ir::Module,
         kids: &'a [ir::StrId],
@@ -562,12 +549,9 @@ fn body_calls_user_child(
         fn expr(&mut self, e: &ir::Expr) -> bool {
             match e {
                 ir::Expr::MethCall { instance, args, .. } => {
-                    self.kids.contains(instance)
-                        || args.iter().any(|a| self.expr(a))
+                    self.kids.contains(instance) || args.iter().any(|a| self.expr(a))
                 }
-                ir::Expr::MethValue { instance, .. } => {
-                    self.kids.contains(instance)
-                }
+                ir::Expr::MethValue { instance, .. } => self.kids.contains(instance),
                 ir::Expr::Def(n) => {
                     if !self.seen.insert(*n) {
                         return false;
@@ -580,18 +564,20 @@ fn body_calls_user_child(
                         None => false,
                     }
                 }
-                ir::Expr::ForeignCall { args, .. }
-                | ir::Expr::Prim { args, .. } => {
+                ir::Expr::ForeignCall { args, .. } | ir::Expr::Prim { args, .. } => {
                     args.iter().any(|a| self.expr(a))
                 }
-                ir::Expr::Clock { osc, gate } => {
-                    self.expr(osc) || self.expr(gate)
-                }
+                ir::Expr::Clock { osc, gate } => self.expr(osc) || self.expr(gate),
                 ir::Expr::Reset { wire } => self.expr(wire),
-                ir::Expr::If { cond, then_, else_, .. } => {
-                    self.expr(cond) || self.expr(then_) || self.expr(else_)
-                }
-                ir::Expr::Case { scrutinee, arms, default, .. } => {
+                ir::Expr::If {
+                    cond, then_, else_, ..
+                } => self.expr(cond) || self.expr(then_) || self.expr(else_),
+                ir::Expr::Case {
+                    scrutinee,
+                    arms,
+                    default,
+                    ..
+                } => {
                     self.expr(scrutinee)
                         || arms.iter().any(|(_, a)| self.expr(a))
                         || self.expr(default)
@@ -603,18 +589,22 @@ fn body_calls_user_child(
                 | ir::Expr::Str(_)
                 | ir::Expr::Real(_)
                 | ir::Expr::Gate { .. }
-            | ir::Expr::ClockOut { .. } => false,
+                | ir::Expr::ClockOut { .. } => false,
             }
         }
         fn act(&mut self, a: &ir::Action) -> bool {
             match a {
-                ir::Action::MethCall { instance, cond, args, .. } => {
+                ir::Action::MethCall {
+                    instance,
+                    cond,
+                    args,
+                    ..
+                } => {
                     self.kids.contains(instance)
                         || self.expr(cond)
                         || args.iter().any(|e| self.expr(e))
                 }
-                ir::Action::Foreign { cond, args, .. }
-                | ir::Action::Task { cond, args, .. } => {
+                ir::Action::Foreign { cond, args, .. } | ir::Action::Task { cond, args, .. } => {
                     self.expr(cond) || args.iter().any(|e| self.expr(e))
                 }
             }
@@ -632,6 +622,10 @@ fn body_calls_user_child(
             }
         }
     }
-    let mut sc = Scan { m, kids, seen: Default::default() };
+    let mut sc = Scan {
+        m,
+        kids,
+        seen: Default::default(),
+    };
     body.iter().any(|st| sc.stmt(st))
 }

@@ -6,10 +6,9 @@
 // interp's FST wave sink produces the reference byte-stream through
 // the SAME library.  Requires zlib, like the reference kernel.
 fn main() {
-    let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../vendor/libfst/src");
-    let cfg = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../libfst_config");
+    let vendor =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../vendor/libfst/src");
+    let cfg = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../libfst_config");
     let vendor = vendor.canonicalize().expect(
         "libfst submodule missing — run `git submodule update --init \
          src/vendor/libfst`",
