@@ -33,19 +33,17 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
 
 def export_fragments(trsbir, top, wk, run_one):
-    """Export a .bir for every synthesized module of the design.
+    """Export a .bir for every .ba of the design except the top's.
 
-    bsc writes a .ba per module and trs-bir writes one .bir per .ba, so
-    a design is a set of files.  The link follows the instantiations out
-    of the top, finding each by module name beside it.  A .ba that is
-    not a module -- the one an `import "BDPI"` produces -- is skipped by
-    trying the export and keeping what succeeds.
+    bsc writes a .ba per synthesized module and per `import "BDPI"', and
+    trs-bir writes one .bir per .ba whichever kind it is, so a design is
+    a set of files.  The link follows the instantiations and the imports
+    out of the top, finding each by name beside it.
     """
     import glob as _glob
     for ba in _glob.glob(os.path.join(wk, "*.ba")):
-        m = os.path.basename(ba)[:-3]
-        if m != top:
-            run_one(m)
+        if os.path.basename(ba)[:-3] != top:
+            run_one(os.path.basename(ba))
 
 TRSBIR = os.path.join(REPO, "inst", "bin", "trs-bir")
 # the release build keeps heavyweight tests (SHA512, GlibcRandom) well
@@ -59,7 +57,15 @@ if not TRS:
     TRS = os.path.join(REPO, "src", "trs", "target", "release", "trs")
     if not os.path.exists(TRS):
         TRS = os.path.join(REPO, "src", "trs", "target", "debug", "trs")
-ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
+# BLUESPECDIR: bsc's wrapper sets it for bsc alone, and the trs binary
+# here is the cargo one, which has no install tree above it to derive
+# it from -- but it needs it to find the .bir of a BDPI import the
+# libraries declare (Randomizable's rand32/srand).
+ENV = dict(
+    os.environ,
+    PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"],
+    BLUESPECDIR=os.path.join(REPO, "inst", "lib"),
+)
 
 MAX_CYCLES = "4000"
 # reference runs, compiles, and normal trs runs.  Env-able for the
@@ -368,12 +374,14 @@ def one_test(job):
             _gold_terminal(gdir, cls, first_error(msg))
         return (rel, top, cls, first_error(msg))
 
+    # the user's C files go to the LINK, as they do for bsc: the export
+    # knows nothing about them
     bdpi = [a for c in cfiles for a in ("--bdpi", c)]
-    # the design is a set of files now: every synthesized module, with
-    # the link following instantiations out of the top
+    # the design is a set of files now: one .bir per .ba, with the link
+    # following instantiations and imports out of the top
     export_fragments(TRSBIR, top, wk,
-                     lambda m: run([TRSBIR, m], cwd=wk, timeout=build_limit))
-    rb = run([TRSBIR] + bdpi + [top], cwd=wk, timeout=build_limit)
+                     lambda f: run([TRSBIR, f], cwd=wk, timeout=build_limit))
+    rb = run([TRSBIR, top + ".ba"], cwd=wk, timeout=build_limit)
     bir = os.path.join(wk, top + ".bir")
     if rb is None or rb.returncode != 0 or not os.path.exists(bir):
         msg = "" if rb is None else (rb.stderr + rb.stdout)
@@ -390,7 +398,7 @@ def one_test(job):
 
     _gold_save(gdir, wk, top, ref, ref_secs, ref_build_secs)
     return _trs_side(rel, top, wk, testdir, bir, ref, ref_secs,
-                     ref_build_secs)
+                     ref_build_secs, bdpi)
 
 
 def _trsonly_test(rel, top, wk, testdir, src, trsonly):
@@ -457,8 +465,8 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
     # a trs-only design has no reference build, so the exporter is the
     # whole of it; only the .bir's existence gates here
     export_fragments(TRSBIR, top, wk,
-                     lambda m: run([TRSBIR, m], cwd=wk, timeout=420))
-    run([TRSBIR, top], cwd=wk, timeout=420)
+                     lambda f: run([TRSBIR, f], cwd=wk, timeout=420))
+    run([TRSBIR, top + ".ba"], cwd=wk, timeout=420)
     bir = os.path.join(wk, top + ".bir")
     if not os.path.exists(bir):
         return (rel, top, "EXPORT_FAIL", "no .bir produced")
@@ -512,7 +520,8 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
     return (rel, top, "PASS", timing)
 
 
-def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs):
+def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs,
+              bdpi=()):
     """The trs half of one_test: link, run, byte-compare against the
     reference result (live or golden-replayed)."""
     import time as _time
@@ -533,7 +542,8 @@ def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs):
         link_env = dict(ENV)
         link_env["TRS_JIT_TRACE"] = "1"
         tl0 = _time.monotonic()
-        lk = run([TRS, "link", bir, "-o", cexe], cwd=wk, timeout=300, env=link_env)
+        lk = run([TRS, "link", bir] + list(bdpi) + ["-o", cexe], cwd=wk,
+                 timeout=300, env=link_env)
         trs_link_secs = _time.monotonic() - tl0
         if lk is None or lk.returncode != 0:
             msg = "" if lk is None else (lk.stderr + lk.stdout)

@@ -52,7 +52,16 @@ pub enum SchedNode {
 pub struct SubMethod {
     /// the submodule instance, in this module's instance list
     pub instance: u32,
-    /// the method, in that submodule's method list
+    /// the method's name in that submodule.
+    ///
+    /// Named rather than positioned, because a position would be one
+    /// in the CHILD's method list and a module is exported without
+    /// reading its children.  The link resolves it, where the child is
+    /// present.
+    pub name: StrId,
+    /// the method, in that submodule's method list.  Resolved from
+    /// `name` by the link; not carried by the file.
+    #[serde(skip)]
     pub method: MethodRef,
 }
 

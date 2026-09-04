@@ -267,7 +267,7 @@ def bench_one(d, legs, runs, work):
                 for ba in glob.glob(os.path.join(wk, "*.ba")):
                     m = os.path.basename(ba)[:-3]
                     if m != top:
-                        sh([TRSBIR, m], wk)
+                        sh([TRSBIR, m + ".ba"], wk)
                 rb, tb = sh([TRSBIR] + bdpi + [top], wk)
                 t += tb
                 bir = os.path.join(wk, top + ".bir")

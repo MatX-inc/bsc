@@ -31,7 +31,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 12;
+pub const BIR_VERSION: u32 = 14;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -206,16 +206,13 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
 /// the hierarchy.  This format follows that, one reduction further
 /// along.
 ///
-/// The fields out here are the ones both bodies need.  `strings` is
+/// The fields out here are the ones every body needs.  `strings` is
 /// file-wide: every `StrId` under `body` indexes it, whichever body it
-/// is.  `foreign_funcs` is the same kind of thing, a table the content
-/// references by position.  `uses_wave_tasks` is a fact about the
-/// content as a whole, which a link takes the union of.
+/// is.  `uses_wave_tasks` is a fact about the content as a whole,
+/// which a link takes the union of.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bir {
     pub strings: Vec<String>,
-    /// Foreign (BDPI) function signatures the content calls.
-    pub foreign_funcs: Vec<ForeignFunc>,
     /// Whether the content calls a wave-recording task ($dumpvars and
     /// family).  Recorded by the exporter, where rule bodies are plain
     /// data: the runtime sees them deferred behind `Lazy`, and the
@@ -225,14 +222,23 @@ pub struct Bir {
     pub body: BirBody,
 }
 
-/// Exactly the two things a .bir can hold.
+/// Exactly the three things a .bir can hold.
+///
+/// The first two are what an export writes, one per .ba, the flavor
+/// following the .ba's: bsc writes one for each synthesized module and
+/// one for each `import "BDPI"` declaration.  The third is what a link
+/// writes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BirBody {
-    /// One synthesized module: one `(* synthesize *)`, one .ba.  What
-    /// bsc writes.  It names no top and carries no schedule, because
-    /// those describe a design and this is not one.
+    /// One synthesized module: one `(* synthesize *)`, one .ba.  It
+    /// names no top and carries no schedule, because those describe a
+    /// design and this is not one.
     Fragment(Module),
-    /// A linked design.  What a link writes.
+    /// One foreign function's signature: one `import "BDPI"`, one .ba.
+    /// The modules that call it name it and carry nothing else about
+    /// it, so it is declared once however many of them there are.
+    Foreign(ForeignFunc),
+    /// A linked design.
     Design(BirDesign),
 }
 
@@ -241,6 +247,10 @@ pub enum BirBody {
 pub struct BirDesign {
     pub modules: Vec<Module>,
     pub top: StrId,
+    /// Every foreign signature the design's modules call, gathered by
+    /// the link from the `Foreign` files.
+    #[serde(default)]
+    pub foreign_funcs: Vec<ForeignFunc>,
     /// Per-(clock, edge) interleavings of instance segments -- the
     /// design schedule, exported hierarchically (see `schedule` module
     /// docs).
@@ -252,7 +262,6 @@ pub struct BirDesign {
 #[derive(Serialize)]
 struct BirOut<'a> {
     strings: &'a Vec<String>,
-    foreign_funcs: &'a Vec<ForeignFunc>,
     uses_wave_tasks: bool,
     body: BirBodyOut<'a>,
 }
@@ -269,6 +278,7 @@ enum BirBodyOut<'a> {
 struct BirDesignOut<'a> {
     modules: &'a Vec<Module>,
     top: StrId,
+    foreign_funcs: &'a Vec<ForeignFunc>,
     compositions: &'a Vec<Composition>,
 }
 
@@ -371,7 +381,8 @@ impl std::fmt::Display for ExternRef {
 ///
 /// Serializes as the bare integer it wraps.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
+    Deserialize,
 )]
 #[serde(transparent)]
 pub struct MethodRef(pub u32);
@@ -424,6 +435,12 @@ pub struct Module {
     /// rather than repeating a module name at every use.
     #[serde(default)]
     pub externs: Vec<Extern>,
+    /// The BDPI functions this module calls, by name.  Their signatures
+    /// live in .bir files of their own, which a link finds by these
+    /// names the way it finds a submodule's.  A system task is not one
+    /// of these: it is served by the runtime, not imported.
+    #[serde(default)]
+    pub foreign_calls: Vec<StrId>,
     /// name -> index over `defs` and `methods`, so a reference resolves
     /// without a scan.  Read them through `def`/`def_idx`/`method_idx`.
     /// Derived, not serialized: the decode paths build them.
@@ -832,6 +849,7 @@ impl Bir {
     pub fn module_names(&self) -> Vec<&str> {
         match &self.body {
             BirBody::Fragment(m) => vec![&self.strings[m.name as usize]],
+            BirBody::Foreign(_) => Vec::new(),
             BirBody::Design(d) => d
                 .modules
                 .iter()
@@ -840,12 +858,46 @@ impl Bir {
         }
     }
 
+    /// The foreign functions this file defines.
+    pub fn foreign_names(&self) -> Vec<&str> {
+        match &self.body {
+            BirBody::Foreign(f) => vec![&self.strings[f.name as usize]],
+            BirBody::Fragment(_) => Vec::new(),
+            BirBody::Design(d) => d
+                .foreign_funcs
+                .iter()
+                .map(|f| self.strings[f.name as usize].as_str())
+                .collect(),
+        }
+    }
+
+    /// The foreign functions this file calls but does not define.
+    pub fn foreign_call_names(&self) -> Vec<&str> {
+        let mine: HashSet<&str> = self.foreign_names().into_iter().collect();
+        let mut out = Vec::new();
+        for m in self.modules() {
+            for &c in &m.foreign_calls {
+                let n = self.strings[c as usize].as_str();
+                if !mine.contains(n) && !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    }
+
+    /// The modules this file holds, whichever body it is.
+    fn modules(&self) -> &[Module] {
+        match &self.body {
+            BirBody::Fragment(m) => std::slice::from_ref(m),
+            BirBody::Foreign(_) => &[],
+            BirBody::Design(d) => &d.modules,
+        }
+    }
+
     /// The modules this file instantiates but does not define.
     pub fn extern_names(&self) -> Vec<&str> {
-        let ms: &[Module] = match &self.body {
-            BirBody::Fragment(m) => std::slice::from_ref(m),
-            BirBody::Design(d) => &d.modules,
-        };
+        let ms: &[Module] = self.modules();
         let mine: HashSet<StrId> = ms.iter().map(|m| m.name).collect();
         let mut out = Vec::new();
         for m in ms {
@@ -978,11 +1030,11 @@ impl Design {
     pub fn encode(&self) -> Vec<u8> {
         let out = BirOut {
             strings: &self.strings,
-            foreign_funcs: &self.foreign_funcs,
             uses_wave_tasks: self.uses_wave_tasks,
             body: BirBodyOut::Design(BirDesignOut {
                 modules: &self.modules,
                 top: self.top,
+                foreign_funcs: &self.foreign_funcs,
                 compositions: &self.compositions,
             }),
         };
@@ -1025,6 +1077,9 @@ impl Design {
     pub(crate) fn finish(&mut self) -> Result<(), DecodeError> {
         let design = self;
         verify::verify(design).map_err(DecodeError::Invalid)?;
+        // a flagged submodule call names its method; the merge wants
+        // the position, and the child is here to give it
+        link::resolve_sub_methods(design)?;
         // the merge reaches for a composition's instance paths and
         // clock names through the string table, so they have to be in
         // there before it runs
@@ -1108,6 +1163,7 @@ mod tests {
             modules: vec![Module {
                 name: 0,
                 externs: vec![],
+                foreign_calls: vec![],
                 def_ix: HashMap::new(),
                 method_ix: HashMap::new(),
                 content_hash: [0; 32],

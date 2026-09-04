@@ -24,12 +24,12 @@
 use crate::expr::{Action, Expr, Stmt};
 use crate::schedule::{
     Composition, CompositionEntry, DynSched, ModuleSchedule, QualRule,
-    QualifiedTick, SchedAlt, Schedule, Segment, TickCall,
+    QualifiedTick, SchedAlt, Schedule, Segment, SubMethod, TickCall,
 };
 use crate::{
     Bir, BirBody, ClockArg, ClockDomain, DecodeError, Def, DefProps, Design,
     Extern, ForeignFunc, InputClock, Instance, InstanceKind, Lazy, Method,
-    Module, Port, PrimClocks, Primitive, Reset, Rule, StrId,
+    MethodRef, Module, Port, PrimClocks, Primitive, Reset, Rule, StrId,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -354,9 +354,13 @@ fn schedule(r: &Remap, s: &mut Schedule) {
                 guard_e,
                 rule_l: _,
                 guard_l,
-                meths: _,
+                meths,
                 between,
             } => {
+                for (a, b) in meths {
+                    sub_method(r, a);
+                    sub_method(r, b);
+                }
                 expr(r, guard_e);
                 if let Some(g) = guard_l {
                     expr(r, g);
@@ -368,10 +372,12 @@ fn schedule(r: &Remap, s: &mut Schedule) {
             DynSched::SelfCall {
                 rule: _,
                 guard,
-                early: _,
-                late: _,
+                early,
+                late,
                 between,
             } => {
+                sub_method(r, early);
+                sub_method(r, late);
                 expr(r, guard);
                 for b in between {
                     r.s(b);
@@ -385,6 +391,7 @@ fn module(r: &Remap, m: &mut Module) {
     let Module {
         name,
         externs,
+        foreign_calls,
         def_ix,
         method_ix,
         content_hash: _,
@@ -408,6 +415,9 @@ fn module(r: &Remap, m: &mut Module) {
     for e in externs {
         let Extern { module } = e;
         r.s(module);
+    }
+    for c in foreign_calls {
+        r.s(c);
     }
     // derived indices, rebuilt wholesale once the table is final
     def_ix.clear();
@@ -448,6 +458,11 @@ fn module(r: &Remap, m: &mut Module) {
         method(r, x);
     }
     schedule(r, sched);
+}
+
+fn sub_method(r: &Remap, m: &mut SubMethod) {
+    let SubMethod { instance: _, name, method: _ } = m;
+    r.s(name);
 }
 
 fn qual_rule(r: &Remap, q: &mut QualRule) {
@@ -513,6 +528,81 @@ fn foreign_func(r: &Remap, f: &mut ForeignFunc) {
     r.s(c_name);
 }
 
+/// Turn each flagged submodule call's method NAME into its position.
+///
+/// A module is exported without reading the modules it instantiates,
+/// so it cannot know where a method sits in a child's list -- it
+/// records the name.  Here the child is present, so the name resolves,
+/// and everything downstream sees the position it expects.
+pub(crate) fn resolve_sub_methods(design: &mut Design) -> Result<(), DecodeError> {
+    let by_name: HashMap<StrId, usize> =
+        design.modules.iter().enumerate().map(|(i, m)| (m.name, i)).collect();
+
+    // (module, instance, method name) -> position, worked out against
+    // the immutable design before anything is written back
+    let mut fixups: Vec<(usize, usize, usize, MethodRef)> = Vec::new();
+    for (mi, m) in design.modules.iter().enumerate() {
+        for (di, d) in m.schedule.dyn_scheds.iter().enumerate() {
+            let subs: Vec<&SubMethod> = match d {
+                DynSched::Pair { meths, .. } => {
+                    meths.iter().flat_map(|(a, b)| [a, b]).collect()
+                }
+                DynSched::SelfCall { early, late, .. } => vec![early, late],
+            };
+            for (si, sub) in subs.iter().enumerate() {
+                let inst = m.instances.get(sub.instance as usize).ok_or_else(|| {
+                    DecodeError::Link(format!(
+                        "{}: a flagged call names instance {}, which it does \
+                         not have",
+                        design.name(m.name),
+                        sub.instance
+                    ))
+                })?;
+                let InstanceKind::Module(x) = inst.kind else {
+                    return Err(DecodeError::Link(format!(
+                        "{}: a flagged call is on `{}', which is not a \
+                         synthesized module",
+                        design.name(m.name),
+                        design.name(inst.name)
+                    )));
+                };
+                let child_name = m.externs[x.idx()].module;
+                let child = by_name.get(&child_name).ok_or_else(|| {
+                    DecodeError::Link(format!(
+                        "no fragment for `{}', instantiated by `{}'",
+                        design.name(child_name),
+                        design.name(m.name)
+                    ))
+                })?;
+                let k = design.modules[*child]
+                    .method_idx(sub.name)
+                    .ok_or_else(|| {
+                        DecodeError::Link(format!(
+                            "`{}' has no method `{}', which `{}' calls",
+                            design.name(child_name),
+                            design.name(sub.name),
+                            design.name(m.name)
+                        ))
+                    })?;
+                fixups.push((mi, di, si, MethodRef(k as u32)));
+            }
+        }
+    }
+    for (mi, di, si, k) in fixups {
+        let d = &mut design.modules[mi].schedule.dyn_scheds[di];
+        let subs: Vec<&mut SubMethod> = match d {
+            DynSched::Pair { meths, .. } => {
+                meths.iter_mut().flat_map(|(a, b)| [a, b]).collect()
+            }
+            DynSched::SelfCall { early, late, .. } => vec![early, late],
+        };
+        if let Some(sub) = subs.into_iter().nth(si) {
+            sub.method = k;
+        }
+    }
+    Ok(())
+}
+
 /// Combine the contents of a set of .bir files into one design.
 ///
 /// Each file contributes its modules and its own string table; the
@@ -539,7 +629,8 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
         .count();
     if linked > 0 && birs.len() > 1 {
         return Err(err(
-            "one of these files is a linked design already; link              fragments, or that file on its own"
+            "one of these files is a linked design already; link \
+             fragments, or that file on its own"
                 .to_string(),
         ));
     }
@@ -565,19 +656,25 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
         let r =
             Remap(bir.strings.iter().map(|s| design.intern(s)).collect());
         design.uses_wave_tasks |= bir.uses_wave_tasks;
-        for mut f in bir.foreign_funcs {
+        let mut take_ffunc = |design: &mut Design, mut f: ForeignFunc| {
             foreign_func(&r, &mut f);
             if seen_ffunc.insert(f.name) {
                 design.foreign_funcs.push(f);
             }
-        }
+        };
         match bir.body {
             BirBody::Fragment(mut m) => {
                 module(&r, &mut m);
                 modules.push(m);
             }
+            BirBody::Foreign(f) => {
+                take_ffunc(&mut design, f);
+            }
             BirBody::Design(d) => {
                 stated_top = Some(r.0[d.top as usize]);
+                for f in d.foreign_funcs {
+                    take_ffunc(&mut design, f);
+                }
                 for mut m in d.modules {
                     module(&r, &mut m);
                     modules.push(m);
@@ -615,6 +712,28 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
             referenced.insert(e.module);
         }
     }
+    // A called import with no signature is a missing file, not a
+    // missing implementation: the implementation is supplied to the
+    // link (--bdpi) and its absence traps by name at run time, but
+    // without the signature there is nothing to marshal a call into.
+    for m in &modules {
+        for c in &m.foreign_calls {
+            if !seen_ffunc.contains(c) {
+                return Err(err(format!(
+                    "no .bir for the BDPI import `{}', called by `{}'",
+                    design.name(*c),
+                    design.name(m.name)
+                )));
+            }
+        }
+    }
+    if modules.is_empty() {
+        return Err(err(
+            "no module in any of these files: a design needs at least the \
+             one it is topped by"
+                .to_string(),
+        ));
+    }
     let roots: Vec<StrId> = modules
         .iter()
         .map(|m| m.name)
@@ -624,7 +743,8 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
         [t] => *t,
         [] => {
             return Err(err(
-                "no top module: every one of these is instantiated by                  another"
+                "no top module: every one of these is instantiated by \
+                 another"
                     .to_string(),
             ))
         }
@@ -715,6 +835,7 @@ mod tests {
         let kid = crate::Module {
             name: 1,
             externs: vec![],
+            foreign_calls: vec![],
             def_ix: HashMap::new(),
             method_ix: HashMap::new(),
             content_hash: [0; 32],
@@ -786,6 +907,7 @@ mod tests {
         let top = crate::Module {
             name: 0,
             externs: vec![Extern { module: 1 }],
+            foreign_calls: vec![15],
             def_ix: HashMap::new(),
             method_ix: HashMap::new(),
             content_hash: [0; 32],
@@ -889,37 +1011,52 @@ mod tests {
     /// translate comes out holding the wrong name rather than the
     /// right one by luck.
     fn scatter(d: &Design) -> Vec<Bir> {
-        d.modules
+        let n = d.strings.len();
+        // a table rotated by `shift`, and the remap back out of it
+        let rot = |shift: usize| {
+            let strings: Vec<String> =
+                (0..n).map(|i| d.strings[(i + shift) % n].clone()).collect();
+            let back = Remap(
+                (0..n).map(|i| ((i + n - shift) % n) as StrId).collect(),
+            );
+            (strings, back)
+        };
+        // one file per foreign signature, as an export writes them
+        let mut out: Vec<Bir> = d
+            .foreign_funcs
             .iter()
-            .map(|m| {
-                let n = d.strings.len();
-                // this fragment's id i means d's string (i + shift) mod n
-                let shift = (m.name as usize % (n - 1)) + 1;
-                let strings: Vec<String> =
-                    (0..n).map(|i| d.strings[(i + shift) % n].clone()).collect();
-                let back = Remap(
-                    (0..n).map(|i| ((i + n - shift) % n) as StrId).collect(),
-                );
-                let mut m = m.clone();
-                module(&back, &mut m);
+            .enumerate()
+            .map(|(k, f)| {
+                let (strings, back) = rot((k % (n - 1)) + 1);
+                let mut f = f.clone();
+                foreign_func(&back, &mut f);
                 Bir {
                     strings,
-                    foreign_funcs: d
-                        .foreign_funcs
-                        .iter()
-                        .map(|x| {
-                            let mut x = x.clone();
-                            foreign_func(&back, &mut x);
-                            x
-                        })
-                        .collect(),
-                    uses_wave_tasks: d.uses_wave_tasks,
-                    body: BirBody::Fragment(m),
+                    uses_wave_tasks: false,
+                    body: BirBody::Foreign(f),
                 }
             })
-            // the top goes last, as a link expects
-            .rev()
-            .collect()
+            .collect();
+        // one per module, the top last as a link expects
+        out.extend(d.modules.iter().rev().map(|m| {
+            let (strings, back) = rot((m.name as usize % (n - 1)) + 1);
+            let mut m = m.clone();
+            module(&back, &mut m);
+            Bir {
+                strings,
+                uses_wave_tasks: d.uses_wave_tasks,
+                body: BirBody::Fragment(m),
+            }
+        }));
+        out
+    }
+
+    /// A scatter split into its foreign files and its module fragments,
+    /// the latter in the order a link is given them, top last.
+    fn scatter_parts(d: &Design) -> (Vec<Bir>, Vec<Bir>) {
+        scatter(d)
+            .into_iter()
+            .partition(|b| matches!(b.body, BirBody::Foreign(_)))
     }
 
     /// Every string a module reaches through the table survives the
@@ -962,6 +1099,8 @@ mod tests {
             panic!("the rule's body is a foreign call")
         };
         assert_eq!(n(*func), "ffunc", "foreign call in a rule body");
+        assert_eq!(top.foreign_calls.iter().map(|c| n(*c)).collect::<Vec<_>>(),
+                   vec!["ffunc".to_string()], "declared foreign call");
         let Expr::MethCall { instance, method, .. } = &args[0] else {
             panic!("its argument is a method call")
         };
@@ -1027,13 +1166,20 @@ mod tests {
     #[test]
     fn a_link_needs_one_top() {
         let d = parent_and_child();
-        let frags = scatter(&d);
+        let (ffs, frags) = scatter_parts(&d);
+        // the signatures are always there; what varies is the modules
+        let with = |bs: Vec<Bir>| -> Vec<Bir> {
+            let mut v = ffs.clone();
+            v.extend(bs);
+            v
+        };
 
         let err = assemble(vec![]).unwrap_err().to_string();
         assert!(err.contains("no .bir files"), "{err}");
 
         // the top alone: the module it instantiates is absent
-        let err = assemble(vec![frags[1].clone()]).unwrap_err().to_string();
+        let err =
+            assemble(with(vec![frags[1].clone()])).unwrap_err().to_string();
         assert!(err.contains("no fragment for `mkKid'"), "{err}");
 
         // two unrelated tops
@@ -1042,25 +1188,37 @@ mod tests {
         other.strings.push("mkOther".to_string());
         let BirBody::Fragment(m) = &mut other.body else { panic!("a fragment") };
         m.name = id;
-        let err = assemble(vec![frags[0].clone(), frags[1].clone(), other])
-            .unwrap_err()
-            .to_string();
+        let err =
+            assemble(with(vec![frags[0].clone(), frags[1].clone(), other]))
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("more than one top module"), "{err}");
+
+        // no file for an import a module says it calls
+        let err = assemble(frags.clone()).unwrap_err().to_string();
+        assert!(err.contains("no .bir for the BDPI import `ffunc'"), "{err}");
     }
 
     #[test]
     fn a_link_rejects_an_inconsistent_set() {
         let d = parent_and_child();
-        let frags = scatter(&d);
+        let (ffs, frags) = scatter_parts(&d);
 
-        let dup = vec![frags[0].clone(), frags[1].clone(), frags[1].clone()];
+        let mut dup = ffs;
+        dup.extend([frags[0].clone(), frags[1].clone(), frags[1].clone()]);
         let err = assemble(dup).unwrap_err().to_string();
         assert!(err.contains("more than one file"), "{err}");
 
         // fragments built with different -keep-fires settings link
         // fine: each boundary keeps the signals it was asked to
         let mut mixed = scatter(&d);
-        let BirBody::Fragment(m) = &mut mixed[0].body else { panic!("a fragment") };
+        let m = mixed
+            .iter_mut()
+            .find_map(|b| match &mut b.body {
+                BirBody::Fragment(m) => Some(m),
+                _ => None,
+            })
+            .expect("a fragment");
         m.keep_fires = true;
         let out = assemble(mixed).expect("links");
         assert_eq!(

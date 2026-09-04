@@ -19,10 +19,11 @@ fn usage() -> ExitCode {
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [+NAME=value...]");
     eprintln!();
-    eprintln!("bsc writes one .bir per synthesized module.  A link given");
-    eprintln!("one follows its instantiations, finding each by module name");
-    eprintln!("beside it; --multi-fragments names the set explicitly instead,");
-    eprintln!("top last, and the artifact is named after that one.");
+    eprintln!("bsc writes one .bir per synthesized module and one per");
+    eprintln!("`import \"BDPI\"'.  A link given the top follows its");
+    eprintln!("instantiations and its imports, finding each by name beside");
+    eprintln!("it; --multi-fragments names the set explicitly instead, top");
+    eprintln!("last, and the artifact is named after that one.");
     eprintln!();
     eprintln!("Top-level bindings: a top module compiled with -trs may take");
     eprintln!("Bit-typed arguments/parameters; bind them with +NAME=value or");

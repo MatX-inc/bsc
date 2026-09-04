@@ -1,13 +1,21 @@
--- trs-bir: export a Bluespec design's post-schedule IR as BIR.
+-- trs-bir: export one .ba's post-schedule IR as BIR.
 --
--- bsc already reaches this exact point when it links a Bluesim design:
--- read the .ba hierarchy, expand it into a SimSystem, optimize the
--- packages, and serialize the result.  This tool is that path and
--- nothing else, built from the compiler's own modules so that the
--- semantics come from reuse rather than from a second implementation.
+-- bsc reaches this exact point when it links a Bluesim design: read a
+-- .ba, expand it into a SimPackage, optimize it, and serialize the
+-- result.  This tool is that path and nothing else, built from the
+-- compiler's own modules so that the semantics come from reuse rather
+-- than from a second implementation.
 --
---     trs-bir sysTop
---     trs-bir -p build -o top.bir sysTop
+-- The read stops where elaboration stopped.  bsc builds a .ba out of
+-- .bo files alone: it inlines up to a synthesis boundary and goes no
+-- further, so a .ba stands on its own and exporting it needs no other.
+-- bsc writes one per synthesized module and one per `import "BDPI"';
+-- this writes a .bir per .ba, its flavor following the .ba's, and a
+-- design is the set of them that `trs link --multi-fragments' puts
+-- back together.
+--
+--     trs-bir sysTop.ba
+--     trs-bir -o build/top.bir build/sysTop.ba
 --
 -- The command line is this program's own.  bsc's flag surface is a
 -- compiler's -- source paths, code generators, optimizer dials, warning
@@ -18,38 +26,29 @@
 module Main(main) where
 
 import Control.Monad(when)
-import Data.List(nub, partition, isSuffixOf)
 import Data.Maybe(fromMaybe)
 import qualified Data.Map as M
-import qualified Data.Set as S
 import System.Console.GetOpt
-import System.Directory(getCurrentDirectory)
 import System.Environment(getArgs, getProgName)
-import System.Exit(exitFailure, exitSuccess, ExitCode(..))
-import System.FilePath(takeExtension, takeFileName, replaceExtension)
-import System.Info(os)
-import System.Process(rawSystem)
+import System.Exit(exitFailure, exitSuccess)
 import System.IO(hSetBuffering, hSetEncoding, stdout, stderr, hPutStr,
                  hPutStrLn, BufferMode(..), utf8)
 
-import ABin(abemi_flags)
-import ABinUtil(readAndCheckABin, getABIHierarchy)
+import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..))
+import ABinUtil(readAndCheckABin, getABIName)
 import Backend(Backend(..))
-import SimCCBlock(sb_name, primBlocks)
-import ForeignFunctions(ForeignFunction(..))
 import Id(getIdString)
-import ASyntax(apkg_state_instances, avi_vname)
-import ABin(abmi_apkg)
-import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK,
-             convExceptTToIO)
+import ASyntax(apkg_name, apkg_state_instances, avi_vname)
+import ASyntaxUtil(getForeignCallNames)
+import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK)
 import Exceptions(bsCatch)
-import FileNameUtil(baseName, dirName, createEncodedFullFilePath)
-import Flags(Flags(..), Verbosity(..), verbose)
+import FileNameUtil(baseName)
+import Flags(Flags(..))
 import FlagsDecode(defaultFlags)
 import IOUtil(getEnvDef)
-import SimExpand(simExpandWith)
-import SimExportIR(writeBirFile)
-import SimPackage(SimSystem(..))
+import SimExpand(simExpandABin, simTopClockReset)
+import SimExportIR(writeModuleBir, writeForeignBir)
+import SimPackage(SimSystem(..), SimPackage(..))
 import SimPackageOpt(simPackageOpt)
 import TopUtils(dfltBluespecDir)
 import Version(bscVersionStr)
@@ -60,8 +59,6 @@ import Version(bscVersionStr)
 
 data Options = Options
     { optOut       :: Maybe FilePath
-    , optPath      :: [FilePath]
-    , optVerbose   :: Bool
     , optVersion   :: Bool
     , optHelp      :: Bool
     }
@@ -69,8 +66,6 @@ data Options = Options
 defaultOptions :: Options
 defaultOptions = Options
     { optOut       = Nothing
-    , optPath      = []
-    , optVerbose   = False
     , optVersion   = False
     , optHelp      = False
     }
@@ -79,13 +74,7 @@ options :: [OptDescr (Options -> Options)]
 options =
     [ Option ['o'] ["output"]
         (ReqArg (\d o -> o { optOut = Just d }) "FILE")
-        "write the BIR here (default <top>.bir)"
-    , Option ['p'] ["path"]
-        (ReqArg (\d o -> o { optPath = optPath o ++ [d] }) "DIR")
-        "search DIR for .ba files (repeatable)"
-    , Option ['v'] ["verbose"]
-        (NoArg (\o -> o { optVerbose = True }))
-        "report progress while reading the hierarchy"
+        "write the BIR here (default ./<name>.bir)"
     , Option []    ["version"]
         (NoArg (\o -> o { optVersion = True }))
         "print the compiler build this program exports for"
@@ -98,25 +87,32 @@ usage :: String -> String
 usage prog = usageInfo header options ++ trailer
   where
     header = unlines
-        [ "Usage: " ++ prog ++ " [OPTION]... <top> [FILE.ba]..."
+        [ "Usage: " ++ prog ++ " [OPTION]... FILE.ba"
         , ""
-        , "Export the design rooted at the module <top> as BIR."
+        , "Export FILE.ba as BIR: one .ba in, one .bir out.  The .ba"
+        , "holds a synthesized module or a foreign function, and the"
+        , ".bir flavor follows whichever it is."
         , ""
-        , "Any .ba files named on the command line are read directly;"
-        , "the rest of the hierarchy is found on the search path."
+        , "No other file is read.  bsc builds a .ba from .bo files"
+        , "alone -- elaboration stops at a synthesis boundary and never"
+        , "reads a child\'s .ba -- so a .ba stands on its own."
         , ""
         , "Options:"
         ]
     trailer = unlines
         [ ""
-        , "The search path ends with the working directory and the"
-        , "libraries under $BLUESPECDIR, in that order."
+        , "By default the .bir goes to the working directory under the"
+        , "name of the module or function the .ba holds, because that"
+        , "is the name a link looks it up by.  -o is taken as given:"
+        , "a fragment written under any other name is one a link will"
+        , "not find on its own."
         , ""
-        , "The file holds <top> and nothing else: neither the synthesized"
-        , "modules it instantiates nor anything design-level.  Export one"
-        , "per synthesized module -- the same set bsc wrote a .ba for --"
-        , "and hand them to `trs link --multi-fragments', which derives"
-        , "what the individual files leave out."
+        , "The file holds that one thing and nothing else: for a module,"
+        , "neither the boundaries it instantiates, nor the signatures of"
+        , "the imports it calls, nor anything design-level.  Export one"
+        , "per .ba -- the set bsc wrote -- and hand them to `trs link"
+        , "--multi-fragments\', which derives what the individual files"
+        , "leave out."
         ]
 
 -- ========================================================================
@@ -147,17 +143,17 @@ hmain argv = do
         putStrLn (bscVersionStr True)
         exitSuccess
 
-    (toplevel, abinFiles) <- case partition (".ba" `isSuffixOf`) rest of
-        (bas, [top]) -> return (top, bas)
-        (_, [])      -> die prog "no top-level module named\n"
-        (_, tops)    -> die prog ("more than one top-level module named: "
-                                  ++ unwords tops ++ "\n")
+    abinFile <- case rest of
+        [f] -> return f
+        []  -> die prog "no .ba file named\n"
+        fs  -> die prog ("more than one .ba file named: "
+                         ++ unwords fs ++ "\n")
 
     cdir <- getEnvDef "BLUESPECDIR" dfltBluespecDir
-    let flags = birFlags cdir opts
+    let flags = birFlags cdir
     errh <- initErrorHandle
     setErrorHandleFlags errh flags
-    exportBir errh flags opts toplevel abinFiles
+    exportBir errh flags opts abinFile
     exitOK errh
 
 die :: String -> String -> IO a
@@ -166,69 +162,80 @@ die prog msg = do
     hPutStr stderr (usage prog)
     exitFailure
 
+-- | Give up on the export itself, as opposed to on the command line:
+-- no usage text, because the command was well formed.
+abort :: String -> IO a
+abort msg = do
+    prog <- getProgName
+    hPutStrLn stderr (prog ++ ": " ++ msg)
+    exitFailure
+
 -- | The compiler settings the export actually reads.
 --
 -- Everything else keeps bsc's default.
-birFlags :: String -> Options -> Flags
-birFlags bluespecdir opts = (defaultFlags bluespecdir)
-    { backend   = Just Bluesim
-    , ifcPath   = optPath opts ++ [".", bluespecdir ++ "/Libraries"]
-    , verbosity = if optVerbose opts then Verbose else Normal
-    }
+birFlags :: String -> Flags
+birFlags bluespecdir = (defaultFlags bluespecdir) { backend = Just Bluesim }
 
--- | The BIR export, following bsc's genModuleC through the point where
--- it writes the .bir.
---
--- Two steps of that function have no counterpart here.  bsc refuses a
--- dynamically scheduled design unless the trs backend was asked for --
--- a check with nothing to decide when the trs exporter *is* the program
--- being run.  And it analyzes which generated C++ objects a previous
--- link left reusable, which feeds the C++ code generator further down
--- and never reaches the exported IR.
-exportBir :: ErrorHandle -> Flags -> Options -> String -> [String] -> IO ()
-exportBir errh flags opts toplevel afilenames = do
-    pwd <- getCurrentDirectory
-    let prefix = dirName (createEncodedFullFilePath "placeholder" pwd) ++ "/"
-        birfile = fromMaybe (prefix ++ toplevel ++ ".bir") (optOut opts)
+-- | The BIR export: one .ba in, one .bir out.
+exportBir :: ErrorHandle -> Flags -> Options -> FilePath -> IO ()
+exportBir errh flags opts abinFile = do
+    -- Exactly the file named, and no other.  bsc built it from .bo
+    -- files alone -- elaboration stops at a synthesis boundary and
+    -- never reads a child's .ba -- and this reads it the same way.
+    -- What a module instantiates and which imports it calls are
+    -- recorded in its own APackage as names; putting the pieces
+    -- together is the link's job.
+    (_, abin) <- readAndCheckABin errh (Just Bluesim) abinFile
 
-    -- the same file twice on the command line is not an error; two .ba
-    -- for one module is, and simExpand is what catches it
-    abis <- mapM (readAndCheckABin errh (Just Bluesim)) (nub afilenames)
+    -- Named for what the file holds, not for what the file is called:
+    -- a link looks a fragment up by the name of the thing inside it.
+    let name = getIdString (getABIName abin)
+        birfile = fromMaybe (name ++ ".bir") (optOut opts)
 
-    -- The hierarchy, read before anything is derived from it: the
-    -- .ba files carry the flags each module was elaborated with, and
-    -- -keep-fires is one of them.
-    (_, _, _, _, _, _, emis) <- convExceptTToIO errh $
-        getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
-                        (map sb_name primBlocks) toplevel abis
+    -- One .ba, one .bir, the flavor of the second following the first.
+    case abin of
+      ABinForeignFunc ffi _ ->
+          writeForeignBir birfile name (abffi_foreign_func ffi)
+      ABinMod modinfo ver -> do
+        -- Whether a module's fire signals were kept is that module's
+        -- own setting, asked for when it was elaborated.
+        let keep = keepFires (abmi_flags modinfo)
+            flags' = flags { keepFires = keep }
+            apkg = abmi_apkg modinfo
 
-    -- Whether a module's fire signals were kept is that module's own
-    -- setting, asked for when it was elaborated, and it is written on
-    -- the module.
-    --
-    -- The passes below take one Flags for the whole run, and this run
-    -- writes one module, so that module decides.  Nothing leaks in
-    -- from the subtree walked around it.
-    let keepMap = M.fromList [ (nm, keepFires (abemi_flags emi))
-                             | (nm, (emi, _)) <- emis ]
-        flags' = flags
-                   { keepFires =
-                       M.findWithDefault False toplevel keepMap }
+        simpkg <- simExpandABin errh flags' (modinfo, ver)
 
-    -- No top-level check here.  This export writes one synthesis
-    -- boundary, and whether a module can be the top of a running
-    -- design is a question about the design -- `trs link` asks it of
-    -- the one that turns out to be top (trs_interp::topbind).  A
-    -- boundary bsc was willing to elaborate is one this will export.
-    sim_system <- simExpandWith errh flags' (\_ -> return ()) toplevel abis
-    sim_system_opt <- simPackageOpt errh flags' sim_system
+        -- The default clock and reset are this module's own pragmas.
+        -- bsc derives them for whichever module an export is rooted at,
+        -- which for a fragment is always this one; the link reads them
+        -- off whichever fragment the assembled design is topped by.
+        let (top_clk, top_rst) = simTopClockReset (abmi_pps modinfo)
 
-    -- The order each module elaborated its instances in.  A SimPackage
-    -- keys its instances by name and so loses it, but the primitives'
-    -- ticks accumulate in this order, so it is read back off the
-    -- APackages the .ba files carry.
-    let elabs = M.fromList
-                  [ (nm, map avi_vname (apkg_state_instances (abmi_apkg mi)))
-                  | (nm, (Right mi, _)) <- emis ]
+        -- ssys_schedules, ssys_instmap and ssys_filemap all describe a
+        -- whole hierarchy, which a fragment does not have and the
+        -- exported IR does not carry.  ssys_ffuncmap would hold the
+        -- signatures of the imports this module calls, which are files
+        -- of their own.  simPackageOpt rewrites only the packages.
+        let ssys = SimSystem
+                     { ssys_packages    = M.singleton (sp_name simpkg) simpkg
+                     , ssys_schedules   = []
+                     , ssys_top         = apkg_name apkg
+                     , ssys_instmap     = M.empty
+                     , ssys_ffuncmap    = M.empty
+                     , ssys_filemap     = M.empty
+                     , ssys_default_clk = top_clk
+                     , ssys_default_rst = top_rst
+                     }
+        sim_system_opt <- simPackageOpt errh flags' ssys
 
-    writeBirFile birfile keepMap elabs toplevel sim_system_opt
+        -- The order this module elaborated its instances in.  A
+        -- SimPackage keys its instances by name and so loses it, but
+        -- the primitives' ticks accumulate in this order, so it is read
+        -- back off the APackage the .ba carries.
+        let elabs = map avi_vname (apkg_state_instances apkg)
+
+        writeModuleBir birfile keep elabs (getForeignCallNames apkg)
+                       name sim_system_opt
+      ABinModSchedErr _ _ ->
+          abort (abinFile ++ ": `" ++ name ++ "' failed to schedule when \
+                 \it was compiled; bsc reports why")

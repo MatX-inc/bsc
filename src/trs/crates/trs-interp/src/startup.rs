@@ -167,32 +167,75 @@ pub fn load_fragments_fresh(
 /// way to name a set explicitly.
 #[cold]
 #[inline(never)]
+/// Where the compiler's own .bir files live.
+///
+/// bsc ships a .ba for each `import "BDPI"' its libraries declare
+/// (Randomizable's rand32 and srand), and the install exports one .bir
+/// each beside them.  A design that calls one names it in its fragment
+/// and has no copy of it to offer, so the search that used to happen
+/// when the signature was read at export time happens here instead.
+fn library_dir() -> Option<std::path::PathBuf> {
+    if let Some(d) = std::env::var_os("BLUESPECDIR") {
+        return Some(std::path::PathBuf::from(d).join("Libraries"));
+    }
+    // <prefix>/bin/trs -> <prefix>/lib/Libraries, as bsc's wrapper
+    // derives BLUESPECDIR when nothing in the environment has
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.parent()?.join("lib").join("Libraries"))
+}
+
 fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
     let first = trs_ir::Bir::decode(bytes).map_err(|e| format!("{path}: {e}"))?;
     let dir = std::path::Path::new(path).parent().unwrap_or(std::path::Path::new("."));
 
-    let mut have: std::collections::HashSet<String> =
-        first.module_names().into_iter().map(|s| s.to_string()).collect();
-    let mut want: Vec<String> =
-        first.extern_names().into_iter().map(|s| s.to_string()).collect();
+    // Modules and BDPI imports are chased the same way -- each is a
+    // name the file references and a .bir beside it -- but they are
+    // separate namespaces, so a module never satisfies an import.
+    let strs = |v: Vec<&str>| -> Vec<String> {
+        v.into_iter().map(|s| s.to_string()).collect()
+    };
+    let mut have: std::collections::HashSet<(bool, String)> =
+        std::collections::HashSet::new();
+    let mut want: Vec<(bool, String)> = Vec::new();
+    let mut note = |bir: &trs_ir::Bir,
+                    have: &mut std::collections::HashSet<(bool, String)>,
+                    want: &mut Vec<(bool, String)>| {
+        have.extend(strs(bir.module_names()).into_iter().map(|n| (false, n)));
+        have.extend(strs(bir.foreign_names()).into_iter().map(|n| (true, n)));
+        want.extend(strs(bir.extern_names()).into_iter().map(|n| (false, n)));
+        want.extend(
+            strs(bir.foreign_call_names()).into_iter().map(|n| (true, n)),
+        );
+    };
+    note(&first, &mut have, &mut want);
     let mut birs = vec![first];
 
-    while let Some(name) = want.pop() {
-        if have.contains(&name) {
+    while let Some((is_ff, name)) = want.pop() {
+        if have.contains(&(is_ff, name.clone())) {
             continue;
         }
         let p = dir.join(format!("{name}.bir"));
-        let b = std::fs::read(&p).map_err(|e| {
-            format!(
-                "{}: instantiates `{name}', and {} could not be read: {e}",
-                path,
-                p.display()
-            )
-        })?;
+        // beside the file that names it, then among the compiler's own
+        let (p, b) = match std::fs::read(&p) {
+            Ok(b) => (p, b),
+            Err(e) => {
+                let lib = library_dir().map(|d| d.join(format!("{name}.bir")));
+                match lib.as_ref().and_then(|l| std::fs::read(l).ok()) {
+                    Some(b) => (lib.expect("read implies a path"), b),
+                    None => {
+                        return Err(format!(
+                            "{}: {} `{name}', and {} could not be read: {e}",
+                            path,
+                            if is_ff { "imports" } else { "instantiates" },
+                            p.display()
+                        ))
+                    }
+                }
+            }
+        };
         let bir = trs_ir::Bir::decode(&b)
             .map_err(|e| format!("{}: {e}", p.display()))?;
-        have.extend(bir.module_names().into_iter().map(|s| s.to_string()));
-        want.extend(bir.extern_names().into_iter().map(|s| s.to_string()));
+        note(&bir, &mut have, &mut want);
         birs.push(bir);
     }
 

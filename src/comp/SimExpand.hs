@@ -1,6 +1,6 @@
 {-# LANGUAGE CPP #-}
-module SimExpand ( simExpand, simExpandWith, simCheckBluesimTop,
-                   simExpandSched, simCheckPackage ) where
+module SimExpand ( simExpand, simExpandWith, simExpandABin, simTopClockReset,
+                   simCheckBluesimTop, simExpandSched, simCheckPackage ) where
 
 import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList)
 import Data.List (partition, union, nub, sort, sortBy, delete, intercalate)
@@ -95,20 +95,7 @@ simExpandWith errh flags checkTop topname fabis = do
     let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
 
     -- record default clock and reset for top module
-    let def_clk = msum $ [ lookup idDefaultClock xs
-                         | (PPclock_osc xs) <- (abmi_pps topModInfo)
-                         ] ++
-                         [Just "CLK"]
-        top_clk = do x <- def_clk
-                     guard (not (null x))
-                     return x
-        def_rst = msum $ [ lookup idDefaultReset xs
-                         | (PPreset_port xs) <- (abmi_pps topModInfo)
-                         ] ++
-                         [Just "RSTN"]
-        top_rst = do x <- def_rst
-                     guard (not (null x))
-                     return x
+    let (top_clk, top_rst) = simTopClockReset (abmi_pps topModInfo)
 
     simscheds <- simExpandSched modinfos_used_by_name hiermap instmap topname
 
@@ -121,6 +108,30 @@ simExpandWith errh flags checkTop topname fabis = do
                        , ssys_default_clk = top_clk
                        , ssys_default_rst = top_rst
                        }
+
+-- ===============
+
+-- | The default clock and reset ports of a module used as a design's top.
+--
+-- The module's rename pragmas name them; failing those they are CLK and
+-- RSTN.  A port renamed to the empty string is no port at all.
+simTopClockReset :: [PProp] -> (Maybe String, Maybe String)
+simTopClockReset top_pps = (top_clk, top_rst)
+  where
+    def_clk = msum $ [ lookup idDefaultClock xs
+                     | (PPclock_osc xs) <- top_pps
+                     ] ++
+                     [Just "CLK"]
+    top_clk = do x <- def_clk
+                 guard (not (null x))
+                 return x
+    def_rst = msum $ [ lookup idDefaultReset xs
+                     | (PPreset_port xs) <- top_pps
+                     ] ++
+                     [Just "RSTN"]
+    top_rst = do x <- def_rst
+                 guard (not (null x))
+                 return x
 
 -- ===============
 

@@ -74,7 +74,7 @@ build() { # src top [flags and/or C link files]...
     # BDPI implementations go to the LINK, as they do for bsc
     bdpi=""
     for c in $cfiles; do bdpi="$bdpi --bdpi $c"; done
-    { frags_sub "$top"; $TRSBIR "$top"; } >> "$top.bsc.log" 2>&1 \
+    { frags_sub "$top"; $TRSBIR "$top.ba"; } >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (trs-bir)"; fail=1; return 1; }
     # which waveform writers a model carries is a link-time contract on
     # both sides, so the trs link is told what the reference was told

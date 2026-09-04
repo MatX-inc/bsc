@@ -90,7 +90,7 @@ build:
 	$(CARGO) build --release --locked -p trs-capi $(CAPI_FLAGS)
 
 .PHONY: install
-install: build install-bir
+install: build install-bir install-lib-bir
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 target/release/trs $(BINDIR)/trs
 	# the slim runner fast wrappers exec (falls back to trs when
@@ -119,6 +119,21 @@ install: build install-bir
 .PHONY: install-bir
 install-bir:
 	$(MAKE) -C $(BIRDIR) PREFIX=$(PREFIX) install
+
+# The .ba that ship with the compiler: the `import "BDPI"' declarations
+# in the Bluespec libraries (Randomizable's rand32 and srand).  A design
+# that calls one names it in its own fragment and carries nothing else
+# about it, so the signature has to be a .bir the link can find -- which
+# means exporting it here, beside the .ba, the way bsc ships the .ba
+# itself.  Ordered after the compiler's own install, which is what puts
+# those .ba there.
+.PHONY: install-lib-bir
+install-lib-bir: install-bir
+	@for ba in $(PREFIX)/lib/Libraries/*.ba; do \
+	    [ -e "$$ba" ] || continue; \
+	    echo "$(BINDIR)/trs-bir -o $${ba%.ba}.bir $$ba"; \
+	    $(BINDIR)/trs-bir -o "$${ba%.ba}.bir" "$$ba" || exit 1; \
+	done
 
 .PHONY: clean full_clean
 clean full_clean:

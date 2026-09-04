@@ -1,6 +1,7 @@
 module ABinUtil (
                  HierMap, InstModMap, ABinMap,
                  getABIHierarchy, assertNoSchedErr,
+                 getABIName,
                  readAndCheckABin,
                  readAndCheckABinPath,
                  readAndCheckABinPathCatch,

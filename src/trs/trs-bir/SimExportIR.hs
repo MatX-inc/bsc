@@ -18,13 +18,12 @@
 -- bodies — clock domains, resets, inputs, instances (with method-order
 -- pairs), defs, rules, and interface methods, with full expression and
 -- action trees.  Not yet exported: segmented schedules, compositions,
--- ME inhibitors, foreign-function signatures, content hashes.  Unhandled
--- IR constructs fail loudly ('internalError') rather than exporting
--- wrong data.
+-- ME inhibitors, content hashes.  Unhandled IR constructs fail loudly
+-- ('internalError') rather than exporting wrong data.
 module SimExportIR
     ( birVersion
-    , simSystemToBir
-    , writeBirFile
+    , writeModuleBir
+    , writeForeignBir
     ) where
 
 import qualified Data.ByteString.Lazy as L
@@ -72,7 +71,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 12
+birVersion = 14
 
 -- ===============
 -- String interning
@@ -167,46 +166,59 @@ birHeader = L.pack (magic ++ leWord32 birVersion)
     leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
                  | k <- [0, 8, 16, 24] ]
 
-simSystemToBir :: M.Map String Bool -> M.Map String [AId] -> String
-               -> SimSystem -> L.ByteString
-simSystemToBir keepF elabs modName ssys =
-    birHeader <> CW.toLazyByteString (encDesign keepF elabs modName ssys)
+-- | A .bir: the 12-byte header, then a CBOR struct whose string table
+-- is whatever the body interned while it was being encoded.
+birFile :: EncM [(String, C.Encoding)] -> L.ByteString
+birFile action = birHeader <> CW.toLazyByteString (encStruct fields')
+  where
+    (fields, finalTbl) = runState action emptyState
+    fields' = [ (k, if k == "strings"
+                    then encList (map encStr (tableStrings finalTbl))
+                    else v)
+              | (k, v) <- fields ]
 
--- | Write one module's .bir file.
+-- | Write one synthesized module's .bir file.
 --
 -- The unit is the synthesis boundary, because that is the unit bsc
 -- already has: one @(* synthesize *)@, one .ba, one module in the BIR.
--- A BSV module that is not a boundary is not a candidate -- elaboration
+-- A non-boundary module is not here to write: elaboration already
 -- inlined it into the boundary that instantiated it long before this
 -- point, leaving its primitives behind under prefixed names.
 --
 -- The file holds that one boundary and nothing else: not the
--- boundaries it instantiates, and nothing design-level.  Those
--- describe a design, and one module is not one -- `trs link` derives
--- them from the set of files it is given.
-writeBirFile :: FilePath -> M.Map String Bool -> M.Map String [AId]
-             -> String -> SimSystem -> IO ()
-writeBirFile path keepF elabs modName ssys =
-    L.writeFile path (simSystemToBir keepF elabs modName ssys)
+-- boundaries it instantiates, not the signatures of the imports it
+-- calls, and nothing design-level.  Those describe a design, and one
+-- module is not one -- `trs link` derives them from the set of files
+-- it is given.
+writeModuleBir :: FilePath -> Bool -> [AId] -> [String] -> String
+               -> SimSystem -> IO ()
+writeModuleBir path keepF elabs ffcalls modName ssys =
+    L.writeFile path $ birFile $
+        encModuleFields keepF elabs ffcalls modName ssys
 
+-- | Write one foreign function's .bir file.
+--
+-- bsc writes a .ba per @import "BDPI"@ declaration just as it writes
+-- one per synthesized module, and this is the same reduction applied
+-- to it: the signature, declared once, however many modules call it.
+writeForeignBir :: FilePath -> String -> ForeignFunction -> IO ()
+writeForeignBir path linkname ff = L.writeFile path $ birFile $ do
+    ffEnc <- encForeignFunc (linkname, ff)
+    return
+      [ ("strings", mempty)   -- placeholder, replaced by birFile
+      , ("uses_wave_tasks", encBool False)
+      , ("body", encStruct [("Foreign", ffEnc)])
+      ]
 
-encDesignFields :: M.Map String Bool -> M.Map String [AId] -> String
-                -> SimSystem -> [(String, C.Encoding)]
-encDesignFields keepF elabs modName ssys =
-    let -- the one boundary this export writes.  What counts as a
-        -- submodule rather than a primitive, and every submodule's
-        -- schedule analysis, are facts about the walked hierarchy and
-        -- stay whole.
-        allPkgs = M.elems (ssys_packages ssys)
+encModuleFields :: Bool -> [AId] -> [String] -> String
+                -> SimSystem -> EncM [(String, C.Encoding)]
+encModuleFields keepF elabs ffcalls modName ssys = do
+    -- the one boundary this export writes
+    let allPkgs = M.elems (ssys_packages ssys)
         pkg = case [ p | p <- allPkgs
                        , getIdBaseString (sp_name p) == modName ] of
                 [p] -> p
                 _   -> internalError ("no such module to export: " ++ modName)
-        pkgNames = S.fromList (map (getIdBaseString . sp_name) allPkgs)
-        -- per-module schedule analysis (segments, exec order, disjointness)
-        msis = M.fromList [ (getIdBaseString (sp_name p),
-                             analyzeModule p)
-                          | p <- allPkgs ]
 
         -- bsc derives a default clock and reset for the module an
         -- export was rooted at, and this is always that module: they
@@ -214,40 +226,13 @@ encDesignFields keepF elabs modName ssys =
         -- out to be the design's top.
         defaults = (ssys_default_clk ssys, ssys_default_rst ssys)
 
-        encOne p = encModule pkgNames msis
-                     (msis M.! getIdBaseString (sp_name p))
-                     (M.findWithDefault []
-                        (getIdBaseString (sp_name p)) elabs)
-                     (M.findWithDefault False
-                        (getIdBaseString (sp_name p)) keepF)
-                     defaults
-                     p
-
-        action :: EncM [(String, C.Encoding)]
-        action = do
-          -- a body is one of exactly two things, and bsc only ever
-          -- writes the first: one module.  A linked design is what a
-          -- link writes.  Externally tagged, as serde writes an enum.
-          modEnc <- encOne pkg
-          ffEnc <- mapM encForeignFunc (M.toList (ssys_ffuncmap ssys))
-          return
-            [ ("strings", mempty)   -- placeholder, replaced below
-            , ("foreign_funcs", encList ffEnc)
-            , ("uses_wave_tasks", encBool (designUsesWaveTasks [pkg]))
-            , ("body", encStruct [("Fragment", modEnc)])
-            ]
-
-        (fields, finalTbl) = runState action emptyState
-        strsEnc = encList (map encStr (tableStrings finalTbl))
-        fields' = [ (k, if k == "strings" then strsEnc else v)
-                  | (k, v) <- fields ]
-    in  fields'
-
--- | One module's file.
-encDesign :: M.Map String Bool -> M.Map String [AId] -> String
-          -> SimSystem -> C.Encoding
-encDesign keepF elabs modName ssys =
-    encStruct (encDesignFields keepF elabs modName ssys)
+    -- Externally tagged, as serde writes an enum.
+    modEnc <- encModule (analyzeModule pkg) elabs keepF ffcalls defaults pkg
+    return
+      [ ("strings", mempty)   -- placeholder, replaced by birFile
+      , ("uses_wave_tasks", encBool (designUsesWaveTasks [pkg]))
+      , ("body", encStruct [("Fragment", modEnc)])
+      ]
 
 -- ===============
 -- Module-local schedule analysis (BIR.md section 4)
@@ -414,15 +399,19 @@ analyzeModule pkg =
 -- ===============
 -- Modules
 
-encModule :: S.Set String -> M.Map String ModSchedInfo -> ModSchedInfo
-          -> [AId] -> Bool -> (Maybe String, Maybe String)
+encModule :: ModSchedInfo
+          -> [AId] -> Bool -> [String] -> (Maybe String, Maybe String)
           -> SimPackage -> EncM C.Encoding
-encModule pkgNames msis msi elab_ids keepF (defClk, defRst) pkg = do
+encModule msi elab_ids keepF ffcalls (defClk, defRst) pkg = do
     nameId <- idE (sp_name pkg)
     -- the modules this fragment reaches across its boundary
-    let externNames = externsOf pkgNames pkg
+    let externNames = externsOf pkg
         externIx = M.fromList (zip externNames [0 ..])
     externIds <- mapM str externNames
+    -- the imports this module calls, named rather than described: the
+    -- signature is in a file of its own and the link brings the two
+    -- together
+    ffcallIds <- mapM str ffcalls
     setOutClockOscs (M.elems (sp_state_instances pkg))
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
@@ -446,7 +435,7 @@ encModule pkgNames msis msi elab_ids keepF (defClk, defRst) pkg = do
     let elab = M.fromList (zip elab_ids [0 :: Int ..])
         avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                       (M.elems (sp_state_instances pkg))
-    instsEnc0 <- mapM (encInstance pkgNames externIx elab
+    instsEnc0 <- mapM (encInstance externIx elab
                                    (sp_method_order_map pkg)) avis
     -- noinline functions instantiate as argument-less modules whose one
     -- value method computes the function
@@ -478,7 +467,7 @@ encModule pkgNames msis msi elab_ids keepF (defClk, defRst) pkg = do
                                       (M.elems (sp_local_defs pkg) ++ av_defs))
           }
     methodsEnc <- concat <$> mapM (encMethod sibs pkg) (sp_interface pkg)
-    schedEnc <- encSchedule msis msi pkg
+    schedEnc <- encSchedule msi pkg
     -- interface output clocks: external port name -> the internal osc
     -- wire being re-exported (constant = noClock, never ticks)
     -- the clocks this module takes in, and the ports they arrive on.
@@ -538,6 +527,7 @@ encModule pkgNames msis msi elab_ids keepF (defClk, defRst) pkg = do
       [ ("name", nameId)
       , ("externs", encList [ encStruct [("module", encW32 i)]
                             | i <- externIds ])
+      , ("foreign_calls", encList (map encW32 ffcallIds))
       , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
       , ("keep_fires", encBool keepF)
       , ("default_clock", encMaybe encW32 defClkId)
@@ -556,9 +546,9 @@ encModule pkgNames msis msi elab_ids keepF (defClk, defRst) pkg = do
       , ("schedule", schedEnc)
       ]
 
-encSchedule :: M.Map String ModSchedInfo -> ModSchedInfo -> SimPackage
+encSchedule :: ModSchedInfo -> SimPackage
             -> EncM C.Encoding
-encSchedule msis msi pkg = do
+encSchedule msi pkg = do
     domsEnc <- mapM (encModSched msi) (msi_domains msi)
     let esposito = case asch_scheduler (asi_schedule (sp_schedule pkg)) of
                      [ASchedEsposito pairs] -> pairs
@@ -598,48 +588,50 @@ encSchedule msis msi pkg = do
         ffuncEnc = [ encPair (encSchedEntity msi a) (encSchedEntity msi b)
                    | ((a, b), i) <- M.toList rrmap, isFFuncOnly i ]
     -- a flagged call names a local instance and a method of whatever
-    -- module that instance is of; `between` stays a name because bsc
-    -- leaves it unqualified (see DynSched::between)
+    -- `between` stays a name because bsc leaves it unqualified
+    -- (see DynSched::between)
     let avis' = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                        (M.elems (sp_state_instances pkg))
-        instMod = M.fromList
-          [ (getIdBaseString (avi_vname avi),
-             getVNameString (vName (avi_vmi avi)))
-          | avi <- avis' ]
         instIx = M.fromList
           (zip (map (getIdBaseString . avi_vname) avis') [0 :: Int ..])
-        encSubMeth (MethodId obj meth) =
+        -- The method is named, not positioned: a position would be one
+        -- in the CHILD's method list, and this module is exported
+        -- without reading its children.  The link resolves it.
+        encSubMeth (MethodId obj meth) = do
           let o = getIdBaseString obj
-              mn = getIdBaseString meth
-          in  case (M.lookup o instIx, M.lookup o instMod >>= (`M.lookup` msis)) of
-                (Just i, Just cmsi)
-                  | Just k <- M.lookup mn (msi_methIx cmsi) ->
-                      encStruct [ ("instance", encW32 (fromIntegral i))
-                                , ("method", encW32 (fromIntegral k)) ]
-                _ -> internalError
-                       ("SimExportIR: flagged call " ++ o ++ "." ++ mn
-                        ++ " names no method of an instantiated module")
+          mn <- strE (getIdBaseString meth)
+          case M.lookup o instIx of
+            Just i -> return $ encStruct
+                        [ ("instance", encW32 (fromIntegral i))
+                        , ("name", mn) ]
+            Nothing -> internalError
+                         ("SimExportIR: flagged call on " ++ o
+                          ++ ", which is not an instance of this module")
     let encDyn d@(ADynSched {}) = do
           gE <- encExpr (ads_guardE d)
           gLE <- traverse encExpr (ads_guardL d)
           btw <- mapM (strE . getIdBaseString) (ads_between d)
+          methsEnc <- mapM (\(a, b) -> encPair <$> encSubMeth a
+                                               <*> encSubMeth b)
+                           (ads_meths d)
           return $ encVariant "Pair" $ encStruct
             [ ("rule_e", encRuleRefName msi (getIdBaseString (ads_ruleE d)))
             , ("guard_e", gE)
             , ("rule_l", encRuleRefName msi (getIdBaseString (ads_ruleL d)))
             , ("guard_l", encMaybe id gLE)
-            , ("meths", encList [ encPair (encSubMeth a) (encSubMeth b)
-                                | (a, b) <- ads_meths d ])
+            , ("meths", encList methsEnc)
             , ("between", encList btw)
             ]
         encDyn d@(ADynSchedSelf {}) = do
           gE <- encExpr (adss_guard d)
           btw <- mapM (strE . getIdBaseString) (adss_between d)
+          earlyEnc <- encSubMeth (adss_early d)
+          lateEnc <- encSubMeth (adss_late d)
           return $ encVariant "SelfCall" $ encStruct
             [ ("rule", encRuleRefName msi (getIdBaseString (adss_rule d)))
             , ("guard", gE)
-            , ("early", encSubMeth (adss_early d))
-            , ("late", encSubMeth (adss_late d))
+            , ("early", earlyEnc)
+            , ("late", lateEnc)
             , ("between", encList btw)
             ]
     dynEnc <- mapM encDyn (asi_dyn_scheds asi)
@@ -847,15 +839,15 @@ encPortRawBase nameEnc w kind baseEnc =
 -- | The synthesized modules a fragment instantiates, in first-use
 -- order.  A cross-boundary reference names a position in this list, so
 -- the module name is written once however many times it is used.
-externsOf :: S.Set String -> SimPackage -> [String]
-externsOf pkgNames pkg =
-    stableOrdNub [ m | avi <- M.elems (sp_state_instances pkg)
-                 , let m = getVNameString (vName (avi_vmi avi))
-                 , m `S.member` pkgNames ]
+externsOf :: SimPackage -> [String]
+externsOf pkg =
+    stableOrdNub [ getVNameString (vName (avi_vmi avi))
+                 | avi <- M.elems (sp_state_instances pkg)
+                 , not (avi_user_import avi) ]
 
-encInstance :: S.Set String -> M.Map String Int -> M.Map AId Int
+encInstance :: M.Map String Int -> M.Map AId Int
             -> MethodOrderMap -> AVInst -> EncM C.Encoding
-encInstance pkgNames externIx elab mom avi = do
+encInstance externIx elab mom avi = do
     nameId <- idE (avi_vname avi)
     -- the instance's clock wiring, as VArgInfo describes it: which
     -- argument carries which named clock, and whether that clock has an
@@ -888,19 +880,26 @@ encInstance pkgNames externIx elab mom avi = do
                                encUnitVariant (ticksFor (getIdBaseString argId)))
                             ])
                        clkArgs
+    -- What kind of thing this instantiates is recorded by elaboration,
+    -- not inferred here: `avi_user_import` is the flag bsc's own
+    -- hierarchy walk partitions on to decide which instances have a
+    -- .ba to go find (ABinUtil.getABIHierarchy).  A foreign module is
+    -- a `module verilog` -- bsc's primitives are written that way in
+    -- the standard library too, so the two are one kind at source and
+    -- the name is what tells them apart to whoever implements them.
     let modName = getVNameString (vName (avi_vmi avi))
     kindEnc <-
-      if modName `S.member` pkgNames
-        then case M.lookup modName externIx of
+      if avi_user_import avi
+        -- P0 TODO: map primitives to their structured kinds (Reg, Fifo,
+        -- ...) instead of Other; the structured mapping lands with codegen.
+        then do mEnc <- strE modName
+                return $ encVariant "Prim"
+                           (encVariant "Other" (encStruct [("name", mEnc)]))
+        else case M.lookup modName externIx of
                Just k -> return (encVariant "Module" (encW32 (fromIntegral k)))
                Nothing -> internalError
                             ("SimExportIR: " ++ show modName
                              ++ " instantiated but not in the externs list")
-        -- P0 TODO: map primitives to their structured kinds (Reg, Fifo,
-        -- ...) instead of Other; the structured mapping lands with codegen.
-        else do mEnc <- strE modName
-                return $ encVariant "Prim"
-                           (encVariant "Other" (encStruct [("name", mEnc)]))
     argsEnc <- mapM encExpr (avi_iargs avi)
     -- name-sorted: the set is (AId, AId) pairs and AId's Ord follows
     -- run/context-dependent interned-FString order — the encoded list

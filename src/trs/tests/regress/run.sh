@@ -25,7 +25,7 @@ ref_link() { # top outexe [cfile]
     # writes one .ba each and trs-bir one .bir each, and the link
     # follows the instantiations from the top
     frags_sub "$rl_top"
-    $TRSBIR "$rl_top"
+    $TRSBIR "$rl_top.ba"
 }
 
 # BDPI implementations go to the LINK, as they do for bsc: the export
@@ -198,7 +198,7 @@ check_topparam() {
     fi
     grep -q "(G0099)" tp_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
     # the .bir every check below consumes
-    { frags_sub "$top"; $TRSBIR "$top"; } >tp_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    { frags_sub "$top"; $TRSBIR "$top.ba"; } >tp_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
     # a link with no bindings must fail with the loud missing-binding error
     if TRS="$TRS" "$TRS" link $BDPI "$top.bir" -o tp.exe >tp_err2.out 2>&1; then
         echo "FAIL $name (link without bindings unexpectedly succeeded)"; fail=1; return
@@ -239,7 +239,7 @@ check_topae() {
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "(G0062)" ae_err1.out || { echo "FAIL $name (expected G0062)"; fail=1; return; }
-    { frags_sub "$top"; $TRSBIR "$top"; } >ae_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    { frags_sub "$top"; $TRSBIR "$top.ba"; } >ae_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
     if TRS="$TRS" "$TRS" link $BDPI "$top.bir" -o ae.exe >ae_err2.out 2>&1; then
         echo "FAIL $name (link without bindings unexpectedly succeeded)"; fail=1; return
     fi
@@ -276,7 +276,7 @@ check_topclk() {
     fi
     grep -q "(G0099)" ck_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
     frags_sub "$top"
-    $TRSBIR "$top" >ck_err2.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    $TRSBIR "$top.ba" >ck_err2.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
     if "$TRS" link "$top.bir" -o ck.exe >ck_err3.out 2>&1; then
         echo "FAIL $name (link unexpectedly succeeded)"; fail=1; return
     fi
@@ -303,7 +303,7 @@ check_dyn() { # name top errtag
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "dynamic scheduling" dyn_err2.out || { echo "FAIL $name (expected dynamic-scheduling refusal)"; fail=1; return; }
-    { frags_sub "$top"; $TRSBIR "$top"; } >dyn_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    { frags_sub "$top"; $TRSBIR "$top.ba"; } >dyn_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
     "$TRS" link $BDPI "$top.bir" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
@@ -320,6 +320,11 @@ check_dyn() { # name top errtag
 # pass reads post-edge (gate detectors break as steady-0 otherwise)
 check MakeClkCross sysMakeClkCross
 check DeepTiles sysDeepTiles
+# a BDPI import the COMPILER ships (Randomizable's rand32/srand): the
+# fragment names it and carries no signature, so the link must find
+# rand32.bir among the compiler's own files rather than beside the
+# design.  Nothing in the design's directory supplies it.
+check LibBdpi sysLibBdpi
 check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
     # with no partner .c/.so must die LOUDLY naming the import on both
     # trs tiers (the old compiled path called through a NULL global =
@@ -332,7 +337,7 @@ check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
     # no reference leg: the import has no implementation, so a Bluesim
     # link would fail on the undefined symbol.  The export does not care
     # -- only the .bir is needed here
-    frags_sub "$top"; $TRSBIR "$top" >/dev/null 2>&1
+    frags_sub "$top"; $TRSBIR "$top.ba" >/dev/null 2>&1
     [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
     # the trap may fire during link (the window bake / reset protocol
     # executes early cycles — the field repro died exactly there) or,
@@ -385,7 +390,7 @@ check_chunked_missing() {
     set_bdpi ""
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    frags_sub "$top"; $TRSBIR "$top" >/dev/null 2>&1
+    frags_sub "$top"; $TRSBIR "$top.ba" >/dev/null 2>&1
     [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
     TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 "$TRS" link $BDPI "$top.bir" -o bcm >bcm_link.out 2>&1; lrc=$?
     if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi

@@ -23,10 +23,11 @@ semantics.
   externally-tagged convention).  The Rust `Design::decode` is the
   conformance checker: it validates the schema version and reference
   integrity before any use.
-- One `.bir` file per link (design-level), containing per-module bodies.
-  A per-module export for `-c`-style point codegen reuses the same
-  `Module` encoding standalone; module `content_hash` is the
-  content-addressed cache key.
+- One `.bir` file per `.ba`.  A file's `body` is one of three things,
+  and which one it is follows the `.ba` it was exported from:
+  `Fragment` (one synthesized module), `Foreign` (one `import "BDPI"`
+  signature), or `Design` (a whole linked design, which only a link
+  writes).  Module `content_hash` is the content-addressed cache key.
 - All identifiers are interned: `StrId` indexes `Design::strings`.
   Conventions: rules are `RL_*` names as in the `.ba`; instance paths are
   dotted (`"a.b.c"`, `""` = top); qualified rule paths are
@@ -54,6 +55,14 @@ Mirrors the post-`simPackageOpt` `SimPackage` (`SimPackage.hs:83-108`):
 | `rules` | `sp_rules` | body **pre-linearized** by bsc (`tsortActionsAndDefs` order), plus `me_inhibits` (intra-module, see §4) |
 | `methods` | `sp_interface` | value/action/actionvalue, ready expr, linearized body |
 | `schedule` | derived (§4) | segmented per (domain, edge) |
+| `externs` | `sp_state_instances` | the synthesized modules it instantiates, by name |
+| `foreign_calls` | `getForeignCallNames` | the BDPI imports it calls, by name |
+
+A fragment names its dependencies and carries nothing else about them:
+the exporter reads one `.ba` and never a second, so a submodule's
+methods and an import's signature are both resolved by the link, out of
+the files those were exported to.
+
 
 Expressions/actions mirror `AExpr`/`AAction` (`ASyntax.hs:936-1148`)
 post-`simPackageOpt`: dynamic selects expanded, cases inserted, `ASAny`
@@ -64,8 +73,8 @@ constraints, foreign-call ordering) is bsc's job, not the backend's.
 ### Per link (`Design`)
 
 - `modules`, `instance_map`, `top`, `default_clock`/`default_reset`,
-  `foreign_funcs` (BDPI signatures; the C ABI itself is unchanged from
-  today's conventions).
+  `foreign_funcs` (the BDPI signatures gathered from the `Foreign`
+  files; the C ABI itself is unchanged from today's conventions).
 - `keep_fires`: bsc was invoked with -keep-fires — CAN_FIRE/WILL_FIRE
   defs and method ports are pinned as VCD members (they are never
   demoted to stack locals in the reference backend's SimCOpt pass).
