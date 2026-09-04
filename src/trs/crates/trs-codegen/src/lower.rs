@@ -3125,18 +3125,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 continue;
             }
             let src_lo = wk * w;
+            let word = words[wk as usize];
             // the first word carries the field from `off`; shifting
             // in the word's own type keeps the amount in range
             let (part, k) = if src_lo < lo {
                 let sh = self.ity(wkw).const_int(u64::from(lo - src_lo), false);
-                (
-                    self.builder
-                        .build_right_shift(words[wk as usize], sh, false, "wx")
-                        .unwrap(),
-                    0,
-                )
+                let got = self.builder.build_right_shift(word, sh, false, "wx");
+                (got.unwrap(), 0)
             } else {
-                (words[wk as usize], src_lo - lo)
+                (word, src_lo - lo)
             };
             if k >= width {
                 continue;
