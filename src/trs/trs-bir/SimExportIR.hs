@@ -62,7 +62,7 @@ import AScheduleInfo (AScheduleInfo(..), ADynSched(..), Conflicts(..), RuleRelat
                       RuleRelationInfo(..))
 import ASyntax (getInstArgs)
 import ASyntaxUtil (aVars, tupleElemRange, argInputPorts)
-import SimCCBlock (SimCCFnStmt(..))
+import SimCCBlock (SimCCFnStmt(..), isOkId)
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg,
                             getPrimDomainInfo)
@@ -74,7 +74,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 11
+birVersion = 12
 
 -- ===============
 -- String interning
@@ -178,24 +178,24 @@ schedHeader = L.pack (magic ++ leWord32 birVersion)
     leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
                  | k <- [0, 8, 16, 24] ]
 
-simSystemToBir :: M.Map String Bool -> M.Map String (S.Set AId)
-               -> M.Map String [AId] -> Scope -> SimSystem -> L.ByteString
-simSystemToBir keepF symMap elabs scope ssys =
-    birHeader <> CW.toLazyByteString (encDesign keepF symMap elabs scope ssys)
+simSystemToBir :: M.Map String Bool -> M.Map String [AId] -> Scope
+               -> SimSystem -> L.ByteString
+simSystemToBir keepF elabs scope ssys =
+    birHeader <> CW.toLazyByteString (encDesign keepF elabs scope ssys)
 
 -- | Write the design's .bir file.
-writeBirFile :: FilePath -> M.Map String Bool -> M.Map String (S.Set AId)
-             -> M.Map String [AId] -> Scope -> SimSystem -> IO ()
-writeBirFile path keepF symMap elabs scope ssys =
-    L.writeFile path (simSystemToBir keepF symMap elabs scope ssys)
+writeBirFile :: FilePath -> M.Map String Bool -> M.Map String [AId]
+             -> Scope -> SimSystem -> IO ()
+writeBirFile path keepF elabs scope ssys =
+    L.writeFile path (simSystemToBir keepF elabs scope ssys)
 
 -- | Write the merged design schedule beside it, for inspection and for
 -- comparison against a schedule computed some other way.
-writeSchedFile :: FilePath -> M.Map String Bool -> M.Map String (S.Set AId)
+writeSchedFile :: FilePath -> M.Map String Bool
                -> M.Map String [AId] -> SimSystem -> IO ()
-writeSchedFile path keepF symMap elabs ssys =
+writeSchedFile path keepF elabs ssys =
     L.writeFile path (schedHeader
-                      <> CW.toLazyByteString (encSched keepF symMap elabs ssys))
+                      <> CW.toLazyByteString (encSched keepF elabs ssys))
 
 -- | Which of a design's modules to write, and whether to write the
 -- design-level data alongside them.
@@ -223,10 +223,9 @@ writeSchedFile path keepF symMap elabs ssys =
 -- reads the clock and reset off that one's fragment.
 data Scope = WholeDesign | Fragment String
 
-encDesignFields :: M.Map String Bool -> M.Map String (S.Set AId)
-                -> M.Map String [AId] -> Scope -> SimSystem
-                -> [(String, C.Encoding)]
-encDesignFields keepF symMap elabs scope ssys =
+encDesignFields :: M.Map String Bool -> M.Map String [AId] -> Scope
+                -> SimSystem -> [(String, C.Encoding)]
+encDesignFields keepF elabs scope ssys =
     let pkgs = case scope of
                  WholeDesign -> M.elems (ssys_packages ssys)
                  Fragment m ->
@@ -262,8 +261,6 @@ encDesignFields keepF symMap elabs scope ssys =
 
         encOne p = encModule pkgNames msis
                      (msis M.! getIdBaseString (sp_name p))
-                     (M.findWithDefault S.empty
-                        (getIdBaseString (sp_name p)) symMap)
                      (M.findWithDefault []
                         (getIdBaseString (sp_name p)) elabs)
                      (M.findWithDefault False
@@ -309,19 +306,19 @@ encDesignFields keepF symMap elabs scope ssys =
     in  fields'
 
 -- | The whole design.
-encDesign :: M.Map String Bool -> M.Map String (S.Set AId)
-          -> M.Map String [AId] -> Scope -> SimSystem -> C.Encoding
-encDesign keepF symMap elabs scope ssys =
-    encStruct (encDesignFields keepF symMap elabs scope ssys)
+encDesign :: M.Map String Bool -> M.Map String [AId] -> Scope
+          -> SimSystem -> C.Encoding
+encDesign keepF elabs scope ssys =
+    encStruct (encDesignFields keepF elabs scope ssys)
 
 -- | The design schedule alone, with the table its ids index.  Same
 -- derivation and same encoding as the .bir carries -- a separate one
 -- could drift from what bsc actually computes, and this exists to be
 -- compared against.
-encSched :: M.Map String Bool -> M.Map String (S.Set AId)
-         -> M.Map String [AId] -> SimSystem -> C.Encoding
-encSched keepF symMap elabs ssys =
-    encStruct [ f | f@(k, _) <- encDesignFields keepF symMap elabs WholeDesign ssys
+encSched :: M.Map String Bool -> M.Map String [AId] -> SimSystem
+         -> C.Encoding
+encSched keepF elabs ssys =
+    encStruct [ f | f@(k, _) <- encDesignFields keepF elabs WholeDesign ssys
               , k `elem` ["strings", "compositions"] ]
 
 -- ===============
@@ -886,9 +883,9 @@ oscName clk = case aclock_osc clk of
 -- Modules
 
 encModule :: S.Set String -> M.Map String ModSchedInfo -> ModSchedInfo
-          -> S.Set AId -> [AId] -> Bool -> (Maybe String, Maybe String)
+          -> [AId] -> Bool -> (Maybe String, Maybe String)
           -> SimPackage -> EncM C.Encoding
-encModule pkgNames msis msi symSet elab_ids keepF (defClk, defRst) pkg = do
+encModule pkgNames msis msi elab_ids keepF (defClk, defRst) pkg = do
     nameId <- idE (sp_name pkg)
     -- the modules this fragment reaches across its boundary
     let externNames = externsOf pkgNames pkg
@@ -937,7 +934,7 @@ encModule pkgNames msis msi symSet elab_ids keepF (defClk, defRst) pkg = do
     -- Def-reference results resolve on the backend side
     let av_defs = [ d | AIActionValue { aif_value = d } <- sp_interface pkg
                   , not (M.member (adef_objid d) (sp_local_defs pkg)) ]
-    defsEnc <- mapM (encDef symSet) (M.elems (sp_local_defs pkg) ++ av_defs)
+    defsEnc <- mapM encDef (M.elems (sp_local_defs pkg) ++ av_defs)
     rulesEnc <- mapM (encRule msi pkg) (sp_rules pkg)
     -- a method's sibling RDY method and WILL_FIRE def are relations the
     -- module's own tables settle; naming them here spares the runtime
@@ -1435,8 +1432,8 @@ substAV (AMethCall ty obj meth es) = AMethCall ty obj meth (map substAV es)
 substAV (AFunCall ty i f isC es) = AFunCall ty i f isC (map substAV es)
 substAV e = e
 
-encDef :: S.Set AId -> ADef -> EncM C.Encoding
-encDef symSet (ADef i t e0 _props) = do
+encDef :: ADef -> EncM C.Encoding
+encDef (ADef i t e0 _props) = do
     let e = substAV e0
     nameId <- idE i
     exprEnc <- encExpr e
@@ -1451,10 +1448,12 @@ encDef symSet (ADef i t e0 _props) = do
           [ ("can_fire", encBool isCF)
           , ("will_fire", encBool isWF)
           , ("signed", encBool False)   -- P0 TODO: from id props
-          -- the def survives as a C++ MEMBER in the reference
-          -- (post-SimCOpt sb_publicDefs, isOkId-filtered): the
-          -- debug-tier symbol set (bk symbol tree, sim ls)
-          , ("sym", encBool (i `S.member` symSet))
+          -- Whether bsc will show this name at all: three Id
+          -- properties the front end sets, so nothing downstream can
+          -- work it out from the name.  Which defs a debug session can
+          -- actually name is decided over the linked design, from this
+          -- and an analysis of the module (trs_ir::sym).
+          , ("nameable", encBool (isOkId i))
           ])
       ]
 

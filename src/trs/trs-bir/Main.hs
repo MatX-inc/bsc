@@ -35,7 +35,7 @@ import System.IO(hSetBuffering, hSetEncoding, stdout, stderr, hPutStr,
 import ABin(abemi_flags)
 import ABinUtil(readAndCheckABin, getABIHierarchy)
 import Backend(Backend(..))
-import SimCCBlock(SimCCBlock(..), primBlocks)
+import SimCCBlock(sb_name, primBlocks)
 import ForeignFunctions(ForeignFunction(..))
 import Id(getIdString)
 import ASyntax(apkg_state_instances, avi_vname)
@@ -47,11 +47,8 @@ import FileNameUtil(baseName, dirName, createEncodedFullFilePath)
 import Flags(Flags(..), Verbosity(..), verbose)
 import FlagsDecode(defaultFlags)
 import IOUtil(getEnvDef)
-import SimCCBlock
-import SimCOpt(simCOpt)
 import SimExpand(simExpandWith)
 import SimExportIR(writeBirFile, writeSchedFile, Scope(..))
-import SimMakeCBlocks(simMakeCBlocks)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
 import TopUtils(dfltBluespecDir)
@@ -257,19 +254,6 @@ exportBir errh flags opts toplevel afilenames = do
     sim_system <- simExpandWith errh flags' (checkTrsTop errh) toplevel abis
     sim_system_opt <- simPackageOpt errh flags' sim_system
 
-    -- The debug-tier symbol set: the defs that survive as C++ members,
-    -- which is what names a signal in an interactive session.  Deriving
-    -- it means running the C++ block construction, but only for its
-    -- answer -- the blocks themselves are discarded.
-    let (sbs, sscheds, scgs, sgis, _sbtop) = simMakeCBlocks flags' sim_system_opt
-        (sbs_opt, _, _, _) =
-            simCOpt flags' (ssys_instmap sim_system_opt)
-                    (sbs, sscheds, scgs, sgis)
-        symMap = M.fromListWith S.union
-                     [ (sb_name sb,
-                        S.fromList [ i | (_, i) <- sb_publicDefs sb, isOkId i ])
-                     | sb <- sbs_opt ]
-
     -- The order each module elaborated its instances in.  A SimPackage
     -- keys its instances by name and so loses it, but the primitives'
     -- ticks accumulate in this order, so it is read back off the
@@ -278,10 +262,10 @@ exportBir errh flags opts toplevel afilenames = do
                   [ (nm, map avi_vname (apkg_state_instances (abmi_apkg mi)))
                   | (nm, (Right mi, _)) <- emis ]
 
-    writeBirFile birfile keepMap symMap elabs scope sim_system_opt
+    writeBirFile birfile keepMap elabs scope sim_system_opt
     case optDumpSched opts of
       Nothing -> return ()
-      Just p  -> writeSchedFile p keepMap symMap elabs sim_system_opt
+      Just p  -> writeSchedFile p keepMap elabs sim_system_opt
     writeBdpiSo opts toplevel prefix sim_system_opt
 
 -- | The companion the trs runtime dlopens for BDPI imports.

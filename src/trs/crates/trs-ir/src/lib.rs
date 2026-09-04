@@ -16,6 +16,7 @@ pub mod link;
 pub mod merge;
 mod psq;
 pub mod schedule;
+pub mod sym;
 pub mod fold;
 pub mod verify;
 
@@ -30,7 +31,7 @@ pub use schedule::{
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 11;
+pub const BIR_VERSION: u32 = 12;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -679,11 +680,20 @@ pub struct DefProps {
     pub will_fire: bool,
     /// Signed display preference (from removed sign casts).
     pub signed: bool,
-    /// Survives as a C++ member in the reference (post-SimCOpt
-    /// public defs): the debug-tier symbol set (bk symbol tree).
-    /// Absent in pre-flag BIRs -> false (no def symbols).
-    #[serde(default)]
+    /// Whether a debug session can name this def: the reference keeps
+    /// it as a C++ member rather than sinking it into the one function
+    /// that reads it.  Derived by `sym::derive` over the linked
+    /// design, not carried by the file -- the answer depends on more
+    /// than the module it lives in.
+    #[serde(skip)]
     pub sym: bool,
+    /// Whether bsc considers the name fit to show at all: three Id
+    /// properties its front end sets (internal, bad name, from a
+    /// right-hand side), which nothing downstream can work out from
+    /// the name.  The rest of the symbol decision is an analysis of
+    /// the module, and `sym::derive` does that part.
+    #[serde(default)]
+    pub nameable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -994,6 +1004,16 @@ impl Design {
         // it.  That recording is the coverage that outlives the export.
         if let Some(p) = std::env::var_os("TRS_MERGE_DUMP") {
             let _ = std::fs::write(&p, merge::render(design));
+        }
+        // Which defs a debug session can name.  Derived here rather
+        // than exported: it depends on the whole design (see `sym`),
+        // and deriving it is what lets the exporter stay out of bsc's
+        // C++ backend.
+        let derived = sym::derive(design);
+        for (m, syms) in design.modules.iter_mut().zip(derived) {
+            for d in m.defs.iter_mut() {
+                d.props.sym = syms.contains(&d.name);
+            }
         }
         if let Some(p) = std::env::var_os("TRS_MERGE_CHECK") {
             use std::io::Write;

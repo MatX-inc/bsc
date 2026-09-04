@@ -264,7 +264,8 @@ fn instance(r: &Remap, i: &mut Instance) {
 
 fn def(r: &Remap, d: &mut Def) {
     let Def { name, width: _, expr: e, props } = d;
-    let DefProps { can_fire: _, will_fire: _, signed: _, sym: _ } = props;
+    let DefProps { can_fire: _, will_fire: _, signed: _, sym: _, nameable: _ } =
+        props;
     r.s(name);
     let mut body = (**e).clone();
     expr(r, &mut body);
@@ -762,6 +763,7 @@ mod tests {
                     will_fire: false,
                     signed: false,
                     sym: false,
+                    nameable: true,
                 },
             }],
             rules: vec![],
