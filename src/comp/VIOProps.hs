@@ -18,6 +18,7 @@ import VModInfo(VModInfo, vArgs, vFields, vClk, VName(..), VeriPortProp(..),
                 VClockInfo(..),
                 getOutputClockPortTable, getOutputResetPortTable,
                 lookupInputClockWires, lookupInputResetWire,
+                lookupOutputClockPorts, lookupOutputResetPort,
                 mkNamedEnable, mkNamedOutputs, mkNamedInout, vName_to_id)
 import Prim
 import ASyntax
@@ -1102,12 +1103,32 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- reference: the special outputs (clocks, resets, inouts) of
         -- the state instances, and the module's own inputs (which, as
         -- in getIOProps' wireMap_out, provide no properties)
-        wireMapA_out :: M.Map AId [VeriPortProp]
+        -- Keyed by String and not AId, so that building this map does
+        -- not change when the special output and port names are
+        -- interned.
+        wireMapA_out :: M.Map String [VeriPortProp]
         wireMapA_out =
-            let submod_pairs = [ (i, ps) |
-                                     v <- vs,
-                                     (i, _, (_, ps)) <- getSpecialOutputs v ]
-                input_pairs = [ (i, []) |
+            let wireKey v (VName s) =
+                    getIdBaseString (unQualId (avi_vname v)) ++ "$" ++ s
+                clockPairs v =
+                    concat [ case lookupOutputClockPorts i (avi_vmi v) of
+                               (osc, Nothing) ->
+                                   [(wireKey v osc, [VPclock])]
+                               (osc, Just (gate, gps)) ->
+                                   [(wireKey v osc, [VPclock]),
+                                    (wireKey v gate, VPclockgate : gps)]
+                           | (Clock i) <- vFields (avi_vmi v) ]
+                resetPairs v =
+                    [ (wireKey v (lookupOutputResetPort i (avi_vmi v)),
+                       [VPreset])
+                    | (Reset i) <- vFields (avi_vmi v) ]
+                inoutPairs v =
+                    [ (wireKey v vn, [VPinout])
+                    | (Inout _ vn _ _) <- vFields (avi_vmi v) ]
+                submod_pairs =
+                    concat [ clockPairs v ++ resetPairs v ++ inoutPairs v
+                           | v <- vs ]
+                input_pairs = [ (getIdString i, []) |
                                     (i, _, _) <- arg_ins ++ meth_arg_ins ]
             in  M.union (M.fromList submod_pairs) (M.fromList input_pairs)
 
@@ -1144,7 +1165,8 @@ getIOPropsA _flags pps mschedinfo apkg =
               all (\ e -> VPconst `elem` getOutPropsA e) es = [VPconst]
         -- either a special output of a state instance
         -- or an input of this module
-        getOutPropsA (ASPort _ i) = M.findWithDefault [] i wireMapA_out
+        getOutPropsA (ASPort _ i) =
+            M.findWithDefault [] (getIdString i) wireMapA_out
         -- follow defs (memoized)
         getOutPropsA (ASDef _ i) =
             M.findWithDefault [] i outDefPropsMemo

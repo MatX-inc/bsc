@@ -209,6 +209,11 @@ compare_file APkgProps_Arb.bsv.bsc-vcomp-out
 compile_verilog_pass APkgProps_SubClock.bsv {} {-dAPackageIOproperties -dIOproperties}
 compare_file APkgProps_SubClock.bsv.bsc-vcomp-out
 
+# the same, for a special output the design never references, so no
+# "<inst>$<port>" wire id exists for the deduction to key on
+compile_verilog_pass APkgProps_UnusedSubClock.bsv {} {-dAPackageIOproperties -dIOproperties}
+compare_file APkgProps_UnusedSubClock.bsv.bsc-vcomp-out
+
 # "unused" propagates backwards through dead logic (a documented
 # difference: getIOProps only traces direct connections)
 compile_verilog_pass APkgProps_DeadLogic.bsv {} {-dAPackageIOproperties -dIOproperties}
