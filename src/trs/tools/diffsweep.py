@@ -31,6 +31,22 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
+
+def export_fragments(trsbir, top, wk, run_one):
+    """Export a .bir for every synthesized module of the design.
+
+    bsc writes a .ba per module and trs-bir writes one .bir per .ba, so
+    a design is a set of files.  The link follows the instantiations out
+    of the top, finding each by module name beside it.  A .ba that is
+    not a module -- the one an `import "BDPI"` produces -- is skipped by
+    trying the export and keeping what succeeds.
+    """
+    import glob as _glob
+    for ba in _glob.glob(os.path.join(wk, "*.ba")):
+        m = os.path.basename(ba)[:-3]
+        if m != top:
+            run_one(m)
+
 TRSBIR = os.path.join(REPO, "inst", "bin", "trs-bir")
 # the release build keeps heavyweight tests (SHA512, GlibcRandom) well
 # under the timeout; fall back to debug if it hasn't been built.
@@ -353,6 +369,10 @@ def one_test(job):
         return (rel, top, cls, first_error(msg))
 
     bdpi = [a for c in cfiles for a in ("--bdpi", c)]
+    # the design is a set of files now: every synthesized module, with
+    # the link following instantiations out of the top
+    export_fragments(TRSBIR, top, wk,
+                     lambda m: run([TRSBIR, m], cwd=wk, timeout=build_limit))
     rb = run([TRSBIR] + bdpi + [top], cwd=wk, timeout=build_limit)
     bir = os.path.join(wk, top + ".bir")
     if rb is None or rb.returncode != 0 or not os.path.exists(bir):
@@ -436,6 +456,8 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
 
     # a trs-only design has no reference build, so the exporter is the
     # whole of it; only the .bir's existence gates here
+    export_fragments(TRSBIR, top, wk,
+                     lambda m: run([TRSBIR, m], cwd=wk, timeout=420))
     run([TRSBIR, top], cwd=wk, timeout=420)
     bir = os.path.join(wk, top + ".bir")
     if not os.path.exists(bir):

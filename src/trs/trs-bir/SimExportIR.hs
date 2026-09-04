@@ -23,9 +23,7 @@
 -- wrong data.
 module SimExportIR
     ( birVersion
-    , Scope(..)
     , simSystemToBir
-    , writeSchedFile
     , writeBirFile
     ) where
 
@@ -169,95 +167,52 @@ birHeader = L.pack (magic ++ leWord32 birVersion)
     leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
                  | k <- [0, 8, 16, 24] ]
 
--- | The schedule sidecar's own magic, so it cannot be mistaken for a
--- .bir; it tracks the same version, since it is the same encoding.
-schedHeader :: L.ByteString
-schedHeader = L.pack (magic ++ leWord32 birVersion)
-  where
-    magic = [0x54, 0x52, 0x53, 0x53, 0x43, 0x48, 0x00, 0x01]  -- "TRSSCH\0\1"
-    leWord32 w = [ fromIntegral ((w `shiftR` k) .&. 0xff)
-                 | k <- [0, 8, 16, 24] ]
-
-simSystemToBir :: M.Map String Bool -> M.Map String [AId] -> Scope
+simSystemToBir :: M.Map String Bool -> M.Map String [AId] -> String
                -> SimSystem -> L.ByteString
-simSystemToBir keepF elabs scope ssys =
-    birHeader <> CW.toLazyByteString (encDesign keepF elabs scope ssys)
+simSystemToBir keepF elabs modName ssys =
+    birHeader <> CW.toLazyByteString (encDesign keepF elabs modName ssys)
 
--- | Write the design's .bir file.
-writeBirFile :: FilePath -> M.Map String Bool -> M.Map String [AId]
-             -> Scope -> SimSystem -> IO ()
-writeBirFile path keepF elabs scope ssys =
-    L.writeFile path (simSystemToBir keepF elabs scope ssys)
-
--- | Write the merged design schedule beside it, for inspection and for
--- comparison against a schedule computed some other way.
-writeSchedFile :: FilePath -> M.Map String Bool
-               -> M.Map String [AId] -> SimSystem -> IO ()
-writeSchedFile path keepF elabs ssys =
-    L.writeFile path (schedHeader
-                      <> CW.toLazyByteString (encSched keepF elabs ssys))
-
--- | Which of a design's modules to write, and whether to write the
--- design-level data alongside them.
+-- | Write one module's .bir file.
 --
 -- The unit is the synthesis boundary, because that is the unit bsc
 -- already has: one @(* synthesize *)@, one .ba, one module in the BIR.
 -- A BSV module that is not a boundary is not a candidate -- elaboration
 -- inlined it into the boundary that instantiated it long before this
--- point, leaving its primitives behind under prefixed names.  So a
--- fragment is one boundary, and how a design divides into fragments
--- follows from where @(* synthesize *)@ was written.
+-- point, leaving its primitives behind under prefixed names.
 --
--- A fragment holds that one boundary and nothing else: not the
--- boundaries it instantiates, and no instance map or compositions.
--- Those describe a design, and a fragment is not one -- the link step
--- derives them from the set of fragments it is given.
---
--- What a fragment does still carry is a top, a default clock and a
--- default reset, all naming itself.  It has to: an export roots its
--- hierarchy walk at the boundary it is asked for, so within that run
--- that boundary IS the top.  A default reset is in any case a legacy
--- name matching no port, so nothing could recover it from module
--- content, and a fragment naming no top would not decode as a design
--- at all.  The link finds the set's real top among the modules and
--- reads the clock and reset off that one's fragment.
-data Scope = WholeDesign | Fragment String
+-- The file holds that one boundary and nothing else: not the
+-- boundaries it instantiates, and nothing design-level.  Those
+-- describe a design, and one module is not one -- `trs link` derives
+-- them from the set of files it is given.
+writeBirFile :: FilePath -> M.Map String Bool -> M.Map String [AId]
+             -> String -> SimSystem -> IO ()
+writeBirFile path keepF elabs modName ssys =
+    L.writeFile path (simSystemToBir keepF elabs modName ssys)
 
-encDesignFields :: M.Map String Bool -> M.Map String [AId] -> Scope
+
+encDesignFields :: M.Map String Bool -> M.Map String [AId] -> String
                 -> SimSystem -> [(String, C.Encoding)]
-encDesignFields keepF elabs scope ssys =
-    let pkgs = case scope of
-                 WholeDesign -> M.elems (ssys_packages ssys)
-                 Fragment m ->
-                   [ p | p <- M.elems (ssys_packages ssys)
-                       , getIdBaseString (sp_name p) == m ]
-        -- which boundaries to WRITE is what a scope narrows; what
-        -- counts as a submodule rather than a primitive, and every
-        -- submodule's schedule analysis, are facts about the walked
-        -- hierarchy and stay whole
+encDesignFields keepF elabs modName ssys =
+    let -- the one boundary this export writes.  What counts as a
+        -- submodule rather than a primitive, and every submodule's
+        -- schedule analysis, are facts about the walked hierarchy and
+        -- stay whole.
         allPkgs = M.elems (ssys_packages ssys)
+        pkg = case [ p | p <- allPkgs
+                       , getIdBaseString (sp_name p) == modName ] of
+                [p] -> p
+                _   -> internalError ("no such module to export: " ++ modName)
         pkgNames = S.fromList (map (getIdBaseString . sp_name) allPkgs)
         -- per-module schedule analysis (segments, exec order, disjointness)
         msis = M.fromList [ (getIdBaseString (sp_name p),
                              analyzeModule p)
                           | p <- allPkgs ]
-        instToMod = ssys_instmap ssys
-
-        -- gates of top-level input clocks are always on in simulation
-        -- (mkScheduleStmts top_gates)
-        top_pkg = findPkg (ssys_packages ssys) (ssys_top ssys)
-        topGates = [ gate | (AAI_Clock _ (Just gate)) <- sp_inputs top_pkg ]
-
-        topName = getIdBaseString (ssys_top ssys)
 
         -- bsc derives a default clock and reset for the module an
-        -- export was rooted at, and only for that one.  It is that
-        -- module's own fact (its pragmas), so it is written on the
-        -- module; a link reads whichever module turns out to be top.
-        defaultsOf p
-          | getIdBaseString (sp_name p) == topName =
-              (ssys_default_clk ssys, ssys_default_rst ssys)
-          | otherwise = (Nothing, Nothing)
+        -- export was rooted at, and this is always that module: they
+        -- are its own pragmas.  A link reads whichever module turns
+        -- out to be the design's top.
+        defaults = (ssys_default_clk ssys, ssys_default_rst ssys)
 
         encOne p = encModule pkgNames msis
                      (msis M.! getIdBaseString (sp_name p))
@@ -265,38 +220,21 @@ encDesignFields keepF elabs scope ssys =
                         (getIdBaseString (sp_name p)) elabs)
                      (M.findWithDefault False
                         (getIdBaseString (sp_name p)) keepF)
-                     (defaultsOf p)
+                     defaults
                      p
-
-        -- a body is one of exactly two things: one module, or a linked
-        -- design.  Externally tagged, as serde writes an enum.
-        encBody :: EncM C.Encoding
-        encBody = case scope of
-          Fragment m -> case pkgs of
-            [p] -> do modEnc <- encOne p
-                      return (encStruct [("Fragment", modEnc)])
-            _   -> internalError ("no such module to export: " ++ m)
-          WholeDesign -> do
-            modsEnc <- mapM encOne pkgs
-            topId <- str topName
-            compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
-                                        (ssys_schedules ssys)
-            return $ encStruct
-              [ ("Design", encStruct
-                  [ ("modules", encList modsEnc)
-                  , ("top", encW32 topId)
-                  , ("compositions", encList compsEnc)
-                  ]) ]
 
         action :: EncM [(String, C.Encoding)]
         action = do
-          bodyEnc <- encBody
+          -- a body is one of exactly two things, and bsc only ever
+          -- writes the first: one module.  A linked design is what a
+          -- link writes.  Externally tagged, as serde writes an enum.
+          modEnc <- encOne pkg
           ffEnc <- mapM encForeignFunc (M.toList (ssys_ffuncmap ssys))
           return
             [ ("strings", mempty)   -- placeholder, replaced below
             , ("foreign_funcs", encList ffEnc)
-            , ("uses_wave_tasks", encBool (designUsesWaveTasks pkgs))
-            , ("body", bodyEnc)
+            , ("uses_wave_tasks", encBool (designUsesWaveTasks [pkg]))
+            , ("body", encStruct [("Fragment", modEnc)])
             ]
 
         (fields, finalTbl) = runState action emptyState
@@ -305,21 +243,11 @@ encDesignFields keepF elabs scope ssys =
                   | (k, v) <- fields ]
     in  fields'
 
--- | The whole design.
-encDesign :: M.Map String Bool -> M.Map String [AId] -> Scope
+-- | One module's file.
+encDesign :: M.Map String Bool -> M.Map String [AId] -> String
           -> SimSystem -> C.Encoding
-encDesign keepF elabs scope ssys =
-    encStruct (encDesignFields keepF elabs scope ssys)
-
--- | The design schedule alone, with the table its ids index.  Same
--- derivation and same encoding as the .bir carries -- a separate one
--- could drift from what bsc actually computes, and this exists to be
--- compared against.
-encSched :: M.Map String Bool -> M.Map String [AId] -> SimSystem
-         -> C.Encoding
-encSched keepF elabs ssys =
-    encStruct [ f | f@(k, _) <- encDesignFields keepF elabs WholeDesign ssys
-              , k `elem` ["strings", "compositions"] ]
+encDesign keepF elabs modName ssys =
+    encStruct (encDesignFields keepF elabs modName ssys)
 
 -- ===============
 -- Module-local schedule analysis (BIR.md section 4)
@@ -482,402 +410,6 @@ analyzeModule pkg =
                      , msi_finishRules = finishRules
                      , msi_ruleIx = ruleIx
                      , msi_methIx = methIx }
-
--- ===============
--- Compositions
-
--- Qualified rule path: "inst.path.RL_rule" (the merge stores the instance
--- path in the Id qualifier, qualifyChildId).
-qualPath :: Id -> String
-qualPath i = case getIdQualString i of
-               ""  -> getIdBaseString i
-               q   -> q ++ "." ++ getIdBaseString i
-
-encComposition :: M.Map String String
-               -> M.Map String ModSchedInfo
-               -> [AId] -> SimSchedule -> EncM [C.Encoding]
-encComposition instToMod msis topGates ss = do
-    let segmaps = M.map msi_segIdx msis
-
-        -- resolve a merged node to (instance path, segment index) plus
-        -- the node's position inside the segment; top-module method nodes
-        -- resolve to Nothing and are skipped
-        resolveFull node =
-            let i = getSchedNodeId node
-                inst = getIdQualString i
-                key = case node of
-                        Sched _ -> "S:" ++ getIdBaseString i
-                        Exec _ -> "E:" ++ getIdBaseString i
-                modName = case M.lookup inst instToMod of
-                            Just m -> m
-                            Nothing -> internalError
-                              ("SimExportIR: unknown instance " ++ show inst)
-                segmap = M.findWithDefault M.empty modName segmaps
-            in  (\(ds, j) -> ((inst, ds), j)) <$> M.lookup key segmap
-        resolve node = fst <$> resolveFull node
-
-        instMsi i = M.lookup (M.findWithDefault "" i instToMod) msis
-        qp i b = if null i then b else i ++ "." ++ b
-        segNodes inst (dom, seg) =
-            let modName = M.findWithDefault "" inst instToMod
-                segs = case M.lookup modName msis of
-                         Just msi -> case lookup dom (msi_domains msi) of
-                                       Just s -> s
-                                       Nothing -> []
-                         Nothing -> []
-            in  if seg < length segs then seg_nodes (segs !! seg) else []
-        -- The disjointness map holds both orientations of every pair
-        -- (`combineSchedDRDB`: "the disjoint map should be the same in
-        -- both directions"), so one pass over it sees each ordered pair
-        -- exactly once.
-        mePairs = [ (r, d)
-                  | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                  , d <- S.toList ds ]
-        disjQ = M.fromListWith S.union
-                  ([ (qualPath r, S.map qualPath ds)
-                   | (r, ds) <- M.toList (ss_disjoint_rules_db ss) ]
-                   ++ [ (qualPath d, S.singleton (qualPath r))
-                      | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                      , d <- S.toList ds ])
-
-        -- Derive the composed (instance, segment) entries and the
-        -- order-dependent ME inhibitor pairs for one flattening of the
-        -- merged graph: the base flattening, or a dynamic-scheduling
-        -- alternative (same units, different interleaving).
-        deriveComp order graph =
-          let
-            -- The flat merged order freely interleaves Sched and Exec
-            -- nodes of different instances, so it cannot be collapsed
-            -- into segment runs directly.  Instead, project the merged
-            -- constraint graph onto (instance, segment) units and
-            -- topologically sort those; the BIR.md section 4 argument
-            -- (cross-instance constraints only attach at method cut
-            -- points) makes this projection acyclic.
-            units = stableOrdNub (mapMaybe resolve order)
-            firstPos = M.fromList
-                (reverse [ (u, p)
-                         | (p, Just u) <- zip [(0 :: Int) ..] (map resolve order) ])
-
-            graphEdges = S.fromList
-                [ (pu, nu)
-                | (n, preds) <- graph
-                , Just nu <- [resolve n]
-                , p <- preds
-                , Just pu <- [resolve p]
-                , pu /= nu ]
-
-            -- ME (disjoint) rule pairs have no graph edge, but bsc's flat
-            -- order still fixes which state snapshot each guard observes:
-            -- if Sched r precedes Exec d there, r's guard must not see
-            -- d's writes.  Restore that as a unit edge (analyzeModule
-            -- gives ME rules singleton per-node segments so the endpoints
-            -- are independently placeable).  A same-unit pair is only
-            -- legal if the segment's internal order already agrees.
-            -- Keyed by Id: comparison is an interned-index compare, where
-            -- a qualified-path String would be rebuilt and compared
-            -- character by character on every probe.  Probed only, never
-            -- traversed, so the interning-order traversal never reaches
-            -- the output.
-            schedPosQ = M.fromList [ (i, p)
-                                   | (Sched i, p) <- zip order [(0 :: Int) ..] ]
-            execPosI  = M.fromList [ (i, p)
-                                   | (Exec i, p) <- zip order [(0 :: Int) ..] ]
-            -- `resolveFull` is a pure function of the node and there are
-            -- |order| nodes against O(rules^2) disjoint pairs, so resolve
-            -- each node once here and probe by Id below.
-            resolvedS = M.fromList [ (i, v)
-                                   | n@(Sched i) <- order, Just v <- [resolveFull n] ]
-            resolvedE = M.fromList [ (i, v)
-                                   | n@(Exec i) <- order, Just v <- [resolveFull n] ]
-            meEdges = S.fromList
-                [ (su, eu)
-                | (r, d) <- mePairs
-                , Just ps <- [M.lookup r schedPosQ]
-                , Just pe <- [M.lookup d execPosI]
-                , ps < pe
-                , Just (su, sj) <- [M.lookup r resolvedS]
-                , Just (eu, ej) <- [M.lookup d resolvedE]
-                , if su == eu
-                  then if sj < ej
-                       then False  -- ordered inside the segment already
-                       else internalError
-                         ("SimExportIR: ME pair straddles a segment against "
-                          ++ "its flat order: " ++ qualPath r ++ " / "
-                          ++ qualPath d)
-                  else True ]
-
-            -- $finish/$fatal end output for the rest of the instant, so
-            -- the Exec order between a finish-calling rule and ANY
-            -- task-bearing rule is observable even with no graph edge;
-            -- pin those pairs to bsc's flat order (finish rules have
-            -- singleton segments)
-            execUnit = M.fromList [ (qualPath n, u)
-                                  | e@(Exec n) <- order
-                                  , Just u <- [resolve e] ]
-            qualsOf sel = [ q
-                          | i <- nub [ i' | (i', _) <- units ]
-                          , Just msi <- [instMsi i]
-                          , b <- S.toList (sel msi)
-                          , let q = qp i b
-                          , M.member q execPos ]
-            finishQs = qualsOf msi_finishRules
-            taskQs = qualsOf msi_taskRules
-            finishEdges = S.fromList
-                [ (ue, ul)
-                | f <- finishQs
-                , t <- taskQs
-                , f /= t
-                , let (e_, l_) = if execPos M.! f < execPos M.! t
-                                 then (f, t)
-                                 else (t, f)
-                , Just ue <- [M.lookup e_ execUnit]
-                , Just ul <- [M.lookup l_ execUnit]
-                , ue /= ul ]
-
-            unitEdges = graphEdges `S.union` meEdges `S.union` finishEdges
-
-            -- Kahn's algorithm; ties broken by first appearance in the
-            -- flat order so the output tracks bsc's own choice.
-            -- Successors indexed once: Kahn's asks for them per node, and
-            -- the edge set grows with both instance count and hierarchy
-            -- depth.
-            succMap = M.fromListWith (++) [ (a, [b]) | (a, b) <- S.toList unitEdges ]
-            succsOf u = M.findWithDefault [] u succMap
-            indeg0 = M.fromListWith (+)
-                       ([ (u, 0 :: Int) | u <- units ]
-                        ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
-            -- The ready set is carried, not rediscovered.  Scanning the
-            -- indegree map for its zeroes at every step costs a pass over
-            -- everything still unplaced, which is quadratic in the unit
-            -- count; a large design reaches tens of thousands of units
-            -- and that scan becomes the whole export.  Keying the set by
-            -- (first appearance, unit) puts the tie-break in the ordering,
-            -- so the minimum is the head rather than a search, and a unit
-            -- moves out of `indeg` exactly when its last predecessor is
-            -- placed.
-            readyKey u = (M.findWithDefault maxBound u firstPos, u)
-            (zeroes, blocked) = M.partition (== 0) indeg0
-            ready0 = S.fromList (map readyKey (M.keys zeroes))
-            release (m, rs) v = case M.lookup v m of
-                Just 1 -> (M.delete v m, S.insert (readyKey v) rs)
-                Just d -> (M.insert v (d - 1) m, rs)
-                Nothing -> (m, rs)
-            kahn indeg ready done = case S.minView ready of
-                Just ((_, u), ready') ->
-                    let (indeg', ready'') =
-                          foldl' release (indeg, ready') (succsOf u)
-                    in  kahn indeg' ready'' (u : done)
-                Nothing
-                    | M.null indeg -> reverse done
-                    | otherwise -> internalError
-                        ("SimExportIR: cyclic segment graph; a module boundary is "
-                         ++ "interleaved below method granularity (or ME ordering "
-                         ++ "constraints interlock two multi-node segments): "
-                         ++ show (M.keys indeg))
-            entries = kahn blocked ready0 []
-
-            dups = length entries /= S.size (S.fromList entries)
-
-            execPos = M.fromList [ (qualPath i, p)
-                                 | (Exec i, p) <- zip order [(0 :: Int) ..] ]
-
-            -- ME inhibitors, mkMERuleInhibits semantics against the node
-            -- order the backend actually executes (the composed entries
-            -- expanded to their segment nodes): rule r is inhibited by
-            -- disjoint rule d iff Exec(d) runs before Sched(r).  All
-            -- pairs (same- or cross-instance) export at composition
-            -- level; the per-rule me_inhibits list is empty now that the
-            -- composed order is instance-specific.
-            composedNodes =
-                [ (i, node) | (i, ds) <- entries, node <- segNodes i ds ]
-            -- `seen` keys on the joined path because that is how the
-            -- disjointness map is keyed, and carries the (instance,
-            -- rule) split the pairs are emitted as
-            stepME (seen, acc) (i, Exec n) =
-                (M.insert (qp i (getIdBaseString n)) (i, getIdBaseString n) seen,
-                 acc)
-            stepME (seen, acc) (i, Sched n) =
-                let base = getIdBaseString n
-                    q = qp i base
-                    inh = M.restrictKeys seen
-                            (M.findWithDefault S.empty q disjQ)
-                -- Chunk-accumulate and concat once, so the fold stays
-                -- linear in the number of emitted pairs.
-                in  (seen, [ (d, (i, base)) | d <- M.elems inh ] : acc)
-            crossPairs = concat (reverse (snd (foldl' stepME (M.empty, []) composedNodes)))
-          in
-            if dups
-            then internalError
-                   ("SimExportIR: non-contiguous segment interleaving; "
-                    ++ "composition needs graph-based derivation")
-            else (entries, crossPairs)
-
-        (entries, crossPairs) =
-            deriveComp (ss_sched_order ss) (ss_sched_graph ss)
-
-        -- dynamic-scheduling alternatives: same segment space, each
-        -- alternative's entries and inhibitors derived from its own
-        -- flattening
-        altComps = [ (ssa_guard_path a, ssa_guard a,
-                      deriveComp (ssa_sched_order a) (ssa_sched_graph a))
-                   | a <- ss_alts ss ]
-
-        -- direction-filter the primitive ticks against the primMap tick
-        -- specs (doTickCall): a posedge schedule also produces a
-        -- negedge tick function for Neg/Both ports (SyncBit05/15,
-        -- ClockInverter, GatedClock)
-        tickFor wantPos (prim, (port, clk)) =
-            let pname = M.findWithDefault "" (getIdQualString prim
-                                              ++ (if null (getIdQualString prim)
-                                                  then "" else ".")
-                                              ++ getIdBaseString prim)
-                                             instToMod
-                tick_specs = case [ l | (n, _, _, l) <- primMap, n == pname ] of
-                               (l : _) -> l
-                               [] -> []
-                dir_ok = if wantPos then tickIsPos else tickIsNeg
-            in  if any (\td -> tickElem td == getIdBaseString port && dir_ok td)
-                       tick_specs
-                then Just (getIdQualString prim, getIdBaseString prim,
-                           getIdBaseString port, aclock_gate clk)
-                else Nothing
-        -- gate-dependency tick order (SimMakeCBlocks.sortTickCalls): a
-        -- group whose ticked prim drives another group's clock GATE runs
-        -- first, so tick gate arguments read post-update values
-        -- (GatedClock chains: bsc.mcd/Gating)
-        all_prims0 = [ p | di <- M.elems (ss_domain_info_map ss)
-                         , p <- di_prims di ]
-        primPathOf i = qp (getIdQualString i) (getIdBaseString i)
-        gateSrcPath (AMGate _ o _) = Just (primPathOf o)
-        gateSrcPath (ASPort _ i)
-            | not (null (getIdQualString i)) = Just (getIdQualString i)
-        gateSrcPath _ = Nothing
-        tickGroups = M.fromListWith (++)
-                       [ (clk, [pr]) | pr@(_, (_, clk)) <- all_prims0 ]
-        -- gate-producing instance path -> the clocks its gate feeds
-        gateClockMap = M.fromListWith (++)
-                         [ (src, [clk])
-                         | clk <- M.keys tickGroups
-                         , Just src <- [gateSrcPath (aclock_gate clk)] ]
-        tickOrderEdges =
-            [ (clk, concat [ M.findWithDefault [] (primPathOf p) gateClockMap
-                           | (p, _) <- prs ])
-            | (clk, prs) <- M.toList tickGroups ]
-        all_prims =
-            case tsort tickOrderEdges of
-              Left is -> internalError
-                ("SimExportIR: cyclic tick gate dependencies: "
-                 ++ ppReadable is)
-              -- within a clock group, KEEP the fromListWith (++)
-              -- ordering (reversed di_prims): SimMakeCBlocks'
-              -- sortTickCalls emits its grouped list exactly so, and
-              -- dual-port BRAM write-write semantics depend on it
-              -- (the model calls clkA before clkB; an extra reverse
-              -- here ticked clkB first and flipped last-writer-wins)
-              Right cs -> concat [ M.findWithDefault [] c tickGroups
-                                 | c <- reverse cs ]
-        -- conditional reset ticks (mkResetTickStmt; posedge only), after
-        -- the regular ticks; each carries the prim's clock gate
-        -- (addGateInfo), with top-level input gates as constant true
-        inst_clk_map = M.fromList [ ((i, c), ac)
-                                  | di <- M.elems (ss_domain_info_map ss)
-                                  , (i, (c, ac)) <- di_prims di ]
-        rstGate prim clkarg =
-            case M.lookup (prim, clkarg) inst_clk_map of
-              Just ac -> case aclock_gate ac of
-                           (ASPort _ portId) | portId `elem` topGates -> aTrue
-                           g -> g
-              Nothing -> internalError
-                ("SimExportIR: no primitive info for " ++ ppReadable prim
-                 ++ " with clock " ++ ppReadable clkarg)
-        rst_ticks = [ (getIdQualString prim, getIdBaseString prim,
-                       getIdBaseString clkarg, rstGate prim clkarg)
-                    | di <- M.elems (ss_domain_info_map ss)
-                    , (prim, clkarg) <- di_prim_resets di ]
-        ticks = [ (i, p, o, False, g)
-                | (i, p, o, g) <- mapMaybe (tickFor True) all_prims ]
-                ++ [ (i, p, o, True, g) | (i, p, o, g) <- rst_ticks ]
-        neg_ticks = [ (i, p, o, False, g)
-                    | (i, p, o, g) <- mapMaybe (tickFor False) all_prims ]
-
-    do
-        clkId <- str (oscName (ss_clock ss))
-        let encEntry (inst, (dom, seg)) = do
-              instE <- strE inst
-              return $ encStruct
-                [ ("instance", instE)
-                , ("domain", encW32 (fromIntegral dom))
-                , ("segment", encW32 (fromIntegral seg))
-                ]
-            -- the rule belongs to the module at ipath, so it travels as
-            -- a position in that module's rule list
-            encQualRule (ipath, rname) = do
-              iE <- strE ipath
-              let rE = case instMsi ipath of
-                         Just m -> encRuleRefName m rname
-                         Nothing -> internalError
-                           ("SimExportIR: no module at instance path "
-                            ++ show ipath ++ " for rule " ++ show rname)
-              return $ encStruct [ ("instance", iE), ("rule", rE) ]
-            encCrossPair (a, b) = encPair <$> encQualRule a <*> encQualRule b
-        entriesEnc <- mapM encEntry entries
-        let encTick (inst, prim, port, rst, gate) = do
-              iE <- strE inst
-              pE <- strE prim
-              oE <- strE port
-              -- constant-true gates encode as None
-              gateE <- case gate of
-                         ASInt _ _ il | ilValue il == 1 -> return C.encodeNull
-                         g -> encGate g
-              return $ encStruct
-                [ ("instance", iE), ("prim", pE), ("port", oE)
-                , ("reset", encBool rst), ("gate", gateE) ]
-        ticksEnc <- mapM encTick ticks
-        negTicksEnc <- mapM encTick neg_ticks
-        earlyEnc <- mapM (\i -> encQualRule (getIdQualString i, getIdBaseString i))
-                         (ss_early_rules ss)
-        crossEnc <- mapM encCrossPair crossPairs
-        altsEnc <- mapM (\(gpath, g, (aentries, across)) -> do
-                           giE <- strE gpath
-                           gE <- encExpr g
-                           aEntriesEnc <- mapM encEntry aentries
-                           aCrossEnc <- mapM encCrossPair across
-                           return $ encStruct
-                             [ ("guard_inst", giE)
-                             , ("guard", gE)
-                             , ("entries", encList aEntriesEnc)
-                             , ("cross_inhibits", encList aCrossEnc)
-                             ])
-                        altComps
-        let posComp = encStruct
-              [ ("clock", encW32 clkId)
-              , ("posedge", encBool (ss_posedge ss))
-              , ("entries", encList entriesEnc)
-              , ("ticks", encList ticksEnc)
-              , ("early", encList earlyEnc)
-              , ("cross_inhibits", encList crossEnc)
-              , ("alts", encList altsEnc)
-              ]
-            -- a posedge schedule also owns the opposite edge's tick
-            -- function (SimMakeCBlocks builds pos and neg tick stmts
-            -- from the same schedule); export the Neg/Both ticks as a
-            -- rule-less negedge composition
-            negComp = encStruct
-              [ ("clock", encW32 clkId)
-              , ("posedge", encBool (not (ss_posedge ss)))
-              , ("entries", encList [])
-              , ("ticks", encList negTicksEnc)
-              , ("early", encList [])
-              , ("cross_inhibits", encList [])
-              , ("alts", encList [])
-              ]
-        return $ if null neg_ticks then [posComp] else [posComp, negComp]
-
-oscName :: AClock -> String
-oscName clk = case aclock_osc clk of
-                ASPort _ i -> getIdBaseString i
-                ASDef _ i -> getIdBaseString i
-                e -> ppReadable e
 
 -- ===============
 -- Modules

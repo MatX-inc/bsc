@@ -34,6 +34,7 @@ else
     echo "note: no timeout command; runs are unbounded"
 fi
 SRC=$(cd "$(dirname "$0")" && pwd)
+. "$SRC/../../tools/fragments.sh"
 TSRC=$(cd "$SRC/../../../../testsuite/bsc.bluesim/interactive" && pwd)
 case "$BSC" in
     */*) PATH="$(cd "$(dirname "$BSC")" && pwd):$PATH"; export PATH;;
@@ -70,9 +71,10 @@ build() { # src top [flags and/or C link files]...
     $BSC -sim $flags -e "$top" -o "ref_$top" $cfiles >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (bsc link)"; fail=1; return 1; }
     # the exporter reads the .ba files; the BDPI sources go one at a time
+    # BDPI implementations go to the LINK, as they do for bsc
     bdpi=""
     for c in $cfiles; do bdpi="$bdpi --bdpi $c"; done
-    $TRSBIR $bdpi "$top" >> "$top.bsc.log" 2>&1 \
+    { frags_sub "$top"; $TRSBIR "$top"; } >> "$top.bsc.log" 2>&1 \
         || { echo "FAIL $top (trs-bir)"; fail=1; return 1; }
     # which waveform writers a model carries is a link-time contract on
     # both sides, so the trs link is told what the reference was told
@@ -82,7 +84,7 @@ build() { # src top [flags and/or C link files]...
         [ "$prev" = "-dump-formats" ] && trsfmt="--dump-formats $a"
         prev=$a
     done
-    "$TRS" link "$top.bir" --interactive $trsfmt -o "trs_$top" \
+    "$TRS" link $bdpi "$top.bir" --interactive $trsfmt -o "trs_$top" \
         > "$top.trs.log" 2>&1 \
         || { echo "FAIL $top (trs link --interactive)"; fail=1; return 1; }
 }

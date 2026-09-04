@@ -48,11 +48,10 @@ import Flags(Flags(..), Verbosity(..), verbose)
 import FlagsDecode(defaultFlags)
 import IOUtil(getEnvDef)
 import SimExpand(simExpandWith)
-import SimExportIR(writeBirFile, writeSchedFile, Scope(..))
+import SimExportIR(writeBirFile)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
 import TopUtils(dfltBluespecDir)
-import TrsTopLevel(checkTrsTop)
 import Version(bscVersionStr)
 
 -- ========================================================================
@@ -62,11 +61,6 @@ import Version(bscVersionStr)
 data Options = Options
     { optOut       :: Maybe FilePath
     , optPath      :: [FilePath]
-    , optBdpi      :: [FilePath]
-    , optLibPath   :: [String]
-    , optLibs      :: [String]
-    , optDumpSched :: Maybe FilePath
-    , optFragment  :: Bool
     , optVerbose   :: Bool
     , optVersion   :: Bool
     , optHelp      :: Bool
@@ -76,11 +70,6 @@ defaultOptions :: Options
 defaultOptions = Options
     { optOut       = Nothing
     , optPath      = []
-    , optBdpi      = []
-    , optLibPath   = []
-    , optLibs      = []
-    , optDumpSched = Nothing
-    , optFragment  = False
     , optVerbose   = False
     , optVersion   = False
     , optHelp      = False
@@ -94,21 +83,6 @@ options =
     , Option ['p'] ["path"]
         (ReqArg (\d o -> o { optPath = optPath o ++ [d] }) "DIR")
         "search DIR for .ba files (repeatable)"
-    , Option []    ["bdpi"]
-        (ReqArg (\d o -> o { optBdpi = optBdpi o ++ [d] }) "FILE")
-        "a BDPI implementation: .c/.cxx compiled here, .o/.a taken as is"
-    , Option ['L'] []
-        (ReqArg (\d o -> o { optLibPath = optLibPath o ++ [d] }) "DIR")
-        "search DIR for BDPI libraries (repeatable)"
-    , Option ['l'] []
-        (ReqArg (\d o -> o { optLibs = optLibs o ++ [d] }) "LIB")
-        "link LIB into the BDPI companion (repeatable)"
-    , Option []    ["single-fragment"]
-        (NoArg (\o -> o { optFragment = True }))
-        "write <top> alone: no submodules, no design-level data"
-    , Option []    ["dump-schedule"]
-        (ReqArg (\d o -> o { optDumpSched = Just d }) "FILE")
-        "also write the merged design schedule here, for inspection"
     , Option ['v'] ["verbose"]
         (NoArg (\o -> o { optVerbose = True }))
         "report progress while reading the hierarchy"
@@ -138,14 +112,11 @@ usage prog = usageInfo header options ++ trailer
         , "The search path ends with the working directory and the"
         , "libraries under $BLUESPECDIR, in that order."
         , ""
-        , "Given --bdpi or -l, a <top>.bdpi.so companion is written beside"
-        , "the BIR for the runtime to load.  CC and CXX name the compilers."
-        , ""
-        , "With --single-fragment the file holds <top> and nothing else:"
-        , "neither the synthesized modules it instantiates nor the"
-        , "design-level data.  Export one per synthesized module -- the"
-        , "same set bsc wrote a .ba for -- and hand them to `trs link"
-        , "--multi-fragments', which derives what the fragments leave out."
+        , "The file holds <top> and nothing else: neither the synthesized"
+        , "modules it instantiates nor anything design-level.  Export one"
+        , "per synthesized module -- the same set bsc wrote a .ba for --"
+        , "and hand them to `trs link --multi-fragments', which derives"
+        , "what the individual files leave out."
         ]
 
 -- ========================================================================
@@ -235,23 +206,21 @@ exportBir errh flags opts toplevel afilenames = do
     -- setting, asked for when it was elaborated, and it is written on
     -- the module.
     --
-    -- The passes below take one Flags for the whole run, so only the
-    -- modules this export WRITES get a say.  A fragment writes one, so
-    -- that one decides and nothing leaks in from the subtree walked
-    -- around it.  A whole-design export writes them all and one Flags
-    -- cannot say different things about different modules, so it keeps
-    -- whatever any of them asked for; a module that did not ask still
-    -- carries its own answer in the BIR, so nothing gives it waveforms
-    -- it did not want.
+    -- The passes below take one Flags for the whole run, and this run
+    -- writes one module, so that module decides.  Nothing leaks in
+    -- from the subtree walked around it.
     let keepMap = M.fromList [ (nm, keepFires (abemi_flags emi))
                              | (nm, (emi, _)) <- emis ]
-        scope = if optFragment opts then Fragment toplevel else WholeDesign
         flags' = flags
-                   { keepFires = case scope of
-                       Fragment m  -> M.findWithDefault False m keepMap
-                       WholeDesign -> or (M.elems keepMap) }
+                   { keepFires =
+                       M.findWithDefault False toplevel keepMap }
 
-    sim_system <- simExpandWith errh flags' (checkTrsTop errh) toplevel abis
+    -- No top-level check here.  This export writes one synthesis
+    -- boundary, and whether a module can be the top of a running
+    -- design is a question about the design -- `trs link` asks it of
+    -- the one that turns out to be top (trs_interp::topbind).  A
+    -- boundary bsc was willing to elaborate is one this will export.
+    sim_system <- simExpandWith errh flags' (\_ -> return ()) toplevel abis
     sim_system_opt <- simPackageOpt errh flags' sim_system
 
     -- The order each module elaborated its instances in.  A SimPackage
@@ -262,64 +231,4 @@ exportBir errh flags opts toplevel afilenames = do
                   [ (nm, map avi_vname (apkg_state_instances (abmi_apkg mi)))
                   | (nm, (Right mi, _)) <- emis ]
 
-    writeBirFile birfile keepMap elabs scope sim_system_opt
-    case optDumpSched opts of
-      Nothing -> return ()
-      Just p  -> writeSchedFile p keepMap elabs sim_system_opt
-    writeBdpiSo opts toplevel prefix sim_system_opt
-
--- | The companion the trs runtime dlopens for BDPI imports.
---
--- The runtime resolves each import out of <top>.bdpi.so beside the .bir,
--- so the implementations go into a shared object of their own rather
--- than into an executable.  Nothing inside that object references them.
--- An object file contributes its symbols anyway; an archive contributes
--- only the members something asks for, so when one is on the line every
--- foreign function the design calls is named with -u to hold it in.  The
--- hierarchy's own foreign-function map is the authority on which those
--- are.
-writeBdpiSo :: Options -> String -> FilePath -> SimSystem -> IO ()
-writeBdpiSo opts toplevel prefix ssys
-    | null (optBdpi opts) && null (optLibs opts) = return ()
-    | otherwise = do
-        cxx <- getEnvDef "CXX" "c++"
-        objs <- mapM (compileBdpi opts) (optBdpi opts)
-        let so = prefix ++ toplevel ++ ".bdpi.so"
-            undef | null (optLibs opts) = []
-                  | otherwise =
-                      [ "-Wl,-u," ++ asmName (getIdString (ff_name ff))
-                      | ff <- M.elems (ssys_ffuncmap ssys) ]
-        tool opts cxx $ ["-shared", "-fPIC"]
-                        ++ map ("-L" ++) (optLibPath opts)
-                        ++ undef ++ ["-o", so]
-                        ++ objs ++ map ("-l" ++) (optLibs opts)
-
--- | A BDPI source becomes an object here; an object or archive is taken
--- as given.  The object lands in the working directory, beside the rest
--- of the output, rather than next to the source.
-compileBdpi :: Options -> FilePath -> IO FilePath
-compileBdpi opts f
-    | ext `elem` [".o", ".a"] = return f
-    | otherwise = do
-        cc <- getEnvDef (if ext == ".c" then "CC" else "CXX")
-                        (if ext == ".c" then "cc" else "c++")
-        let o = replaceExtension (takeFileName f) ".bdpi.o"
-        tool opts cc ["-fPIC", "-c", "-o", o, f]
-        return o
-  where ext = takeExtension f
-
--- | A C function's name as the linker spells it.  Mach-O prefixes an
--- underscore to every C symbol; ELF does not.  -u names a symbol for
--- the linker to demand, so it has to be the linker's spelling.
-asmName :: String -> String
-asmName n = if os == "darwin" then '_' : n else n
-
-tool :: Options -> String -> [String] -> IO ()
-tool opts prog args = do
-    when (optVerbose opts) $ hPutStrLn stderr (unwords (prog : args))
-    rc <- rawSystem prog args
-    case rc of
-        ExitSuccess -> return ()
-        ExitFailure n -> do
-            hPutStrLn stderr (prog ++ " exited " ++ show n)
-            exitFailure
+    writeBirFile birfile keepMap elabs toplevel sim_system_opt

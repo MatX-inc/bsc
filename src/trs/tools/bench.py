@@ -28,6 +28,7 @@ Usage:
 
 import argparse
 import json
+import glob
 import os
 import re
 import shutil
@@ -261,6 +262,12 @@ def bench_one(d, legs, runs, work):
                 r, t = sh([BSC, "-sim", "-e", top, "-o", "simr"] + common + cfiles, wk)
                 # the export is part of what this leg costs
                 bdpi = [a for c in cfiles for a in ("--bdpi", c)]
+                # every synthesized module: the link follows the
+                # instantiations out of the top to find them
+                for ba in glob.glob(os.path.join(wk, "*.ba")):
+                    m = os.path.basename(ba)[:-3]
+                    if m != top:
+                        sh([TRSBIR, m], wk)
                 rb, tb = sh([TRSBIR] + bdpi + [top], wk)
                 t += tb
                 bir = os.path.join(wk, top + ".bir")

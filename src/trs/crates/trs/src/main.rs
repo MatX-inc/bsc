@@ -19,11 +19,10 @@ fn usage() -> ExitCode {
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [+NAME=value...]");
     eprintln!();
-    eprintln!("--multi-fragments takes one design's fragments -- one per");
-    eprintln!("synthesized module, written by bsc's `trs-bir");
-    eprintln!("--single-fragment' -- in place of one whole-design .bir, and");
-    eprintln!("derives what no fragment carries.  Name the top module's");
-    eprintln!("fragment last: the artifact is named after it.");
+    eprintln!("bsc writes one .bir per synthesized module.  A link given");
+    eprintln!("one follows its instantiations, finding each by module name");
+    eprintln!("beside it; --multi-fragments names the set explicitly instead,");
+    eprintln!("top last, and the artifact is named after that one.");
     eprintln!();
     eprintln!("Top-level bindings: a top module compiled with -trs may take");
     eprintln!("Bit-typed arguments/parameters; bind them with +NAME=value or");
@@ -264,14 +263,19 @@ fn main() -> ExitCode {
         ["link", rest @ ..] if !rest.is_empty() => {
             let mut out: Option<String> = None;
             // --multi-fragments: the positional arguments are one
-            // design's fragments -- one per synthesized module, from
-            // trs-bir --single-fragment -- rather than one
-            // whole-design .bir.  The link derives what no fragment
-            // carries.  Read
+            // design's fragments, one per synthesized module, named
+            // explicitly rather than found beside the first.  Read
             // before the loop, so it governs the positionals whatever
             // order they were written in.
             let multi = rest.contains(&"--multi-fragments");
             let mut frags: Vec<&str> = Vec::new();
+            // BDPI implementations.  bsc takes these at ITS link too
+            // (`bsc -sim -e top foo.c`): a foreign function belongs to
+            // a design, not to any one of its modules, so the export
+            // has no business compiling them.
+            let mut bdpi: Vec<&str> = Vec::new();
+            let mut bdpi_libs: Vec<&str> = Vec::new();
+            let mut bdpi_paths: Vec<&str> = Vec::new();
             let mut interactive = false;
             let mut exe = false;
             // -dump-formats plumbing from bsc: which waveform writers
@@ -308,6 +312,17 @@ fn main() -> ExitCode {
                         }
                     }
                     "--multi-fragments" => {}
+                    "--bdpi" | "-l" | "-L" => {
+                        let Some(v) = it.next() else {
+                            eprintln!("Error: {a} requires a value");
+                            return ExitCode::from(2);
+                        };
+                        match *a {
+                            "--bdpi" => bdpi.push(v),
+                            "-l" => bdpi_libs.push(v),
+                            _ => bdpi_paths.push(v),
+                        }
+                    }
                     "--interactive" => interactive = true,
                     "--exe" => exe = true,
                     "--dump-formats" => {
@@ -431,20 +446,41 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            // A fragment link has no single input file that stands for
-            // the design, so the assembled one is written now: the
-            // artifact's sidecar, the interactive shim's baked path
-            // and the bake's reload all name it from here on.
+            // What the artifact carries is the design that was linked,
+            // not the file the link was pointed at -- those differ
+            // whenever the design arrived as fragments, whether named
+            // with --multi-fragments or found beside the one given.
+            // The sidecar, the interactive shim's baked path and the
+            // bake's reload all name it from here on.
             let bir_dst = format!("{base}.bir");
-            let path = if multi {
-                if let Err(e) = interp.write_bir(&bir_dst) {
+            if let Err(e) = interp.write_bir(&bir_dst) {
+                eprintln!("trs link: {e}");
+                return ExitCode::FAILURE;
+            }
+            // `path` still names the file the link was pointed at: a
+            // BDPI companion sits beside THAT, not beside the design
+            // written out here.
+            let design_bir = bir_dst.as_str();
+            // The companion the runtime dlopens, built before anything
+            // in the design runs: priming executes early cycles, and
+            // those can call an import.
+            if !bdpi.is_empty() || !bdpi_libs.is_empty() {
+                let so = format!("{base}.bdpi.so");
+                if let Err(e) = build_bdpi(
+                    &bdpi,
+                    &bdpi_libs,
+                    &bdpi_paths,
+                    &interp.foreign_c_names(),
+                    &so,
+                ) {
                     eprintln!("trs link: {e}");
                     return ExitCode::FAILURE;
                 }
-                bir_dst.as_str()
-            } else {
-                path
-            };
+                if let Err(e) = interp.load_bdpi(&so) {
+                    eprintln!("trs link: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
             let fmt_vcd = fmt_arg.split(',').any(|t| t == "vcd");
             let fmt_fst = fmt_arg.split(',').any(|t| t == "fst");
             // `none` turns recording off: the artifact is the pure
@@ -483,7 +519,7 @@ fn main() -> ExitCode {
                     }
                 }
                 return link_interactive(
-                    path, &base, interp.top_name(), &fmt_arg,
+                    design_bir, &base, interp.top_name(), &fmt_arg,
                 );
             }
             if exe {
@@ -543,17 +579,9 @@ fn main() -> ExitCode {
                     false
                 }
             };
-            // .bir sibling: the script runs <base>.bir next to the .so
-            // (already written, and so already `path`, for a fragment
-            // link)
-            if std::path::Path::new(path).canonicalize().ok()
-                != std::path::Path::new(&bir_dst).canonicalize().ok()
-            {
-                if let Err(e) = std::fs::copy(path, &bir_dst) {
-                    eprintln!("trs link: copy {path} -> {bir_dst}: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
+            // the .bir sibling the script runs is already written
+            // above: it is the design, not whichever of its files the
+            // link was pointed at
             // decoded-design snapshot: run startup skips the CBOR parse
             // when its fingerprint gate matches (a cache, never a source
             // of truth; stale/missing -> normal decode)
@@ -734,7 +762,7 @@ fn main() -> ExitCode {
                 let sidecar = format!("{base}.arena");
                 let bake = (|| -> Result<bool, String> {
                     let mut b1 =
-                        load(&[], false)?;
+                        trs_interp::startup::load_file(design_bir, &[], &[], None)?;
                     b1.aot_request_code(format!("{base}.so").into());
                     if !b1.runcore_has_loads() {
                         let Some(cap) = b1.runcore_bake_capture(None) else {
@@ -752,7 +780,7 @@ fn main() -> ExitCode {
                         return Ok(false);
                     };
                     let mut b2 =
-                        load(&[], false)?;
+                        trs_interp::startup::load_file(design_bir, &[], &[], None)?;
                     b2.aot_request_code(format!("{base}.so").into());
                     let Some(b) =
                         b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
@@ -1593,6 +1621,69 @@ exec $BLUESPECDIR/tcllib/bluespec/bluesim.tcl $0.so {top} --script_name `basenam
     }
     println!("trs link: interactive model written: {so}");
     ExitCode::SUCCESS
+}
+
+/// Build the BDPI companion the runtime dlopens beside the .bir.
+///
+/// A .c or .cxx is compiled here; a .o or .a is taken as given.  An
+/// object contributes its symbols whatever else happens, but an archive
+/// contributes only the members something asks for -- and nothing
+/// inside this object references the imports, since the design calls
+/// them through the runtime.  So when a library is on the line, every
+/// foreign function the design calls is named with -u to hold it in.
+fn build_bdpi(
+    srcs: &[&str],
+    libs: &[&str],
+    paths: &[&str],
+    c_names: &[String],
+    out: &str,
+) -> Result<(), String> {
+    let cc = trs_interp::cc_tool();
+    let mut objs: Vec<String> = Vec::new();
+    for src in srcs {
+        if src.ends_with(".o") || src.ends_with(".a") {
+            objs.push((*src).to_string());
+            continue;
+        }
+        let stem = std::path::Path::new(src)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "bdpi".to_string());
+        let obj = format!("{stem}.bdpi.o");
+        let st = std::process::Command::new(&cc)
+            .args(["-fPIC", "-c", "-o", &obj, src])
+            .status()
+            .map_err(|e| format!("{cc}: {e}"))?;
+        if !st.success() {
+            return Err(format!("compiling {src} failed"));
+        }
+        objs.push(obj);
+    }
+    let mut cmd = std::process::Command::new(&cc);
+    cmd.args(["-shared", "-fPIC"]);
+    for p in paths {
+        cmd.arg(format!("-L{p}"));
+    }
+    if !libs.is_empty() {
+        // -u wants the LINKER's spelling: Mach-O prefixes an
+        // underscore to every C symbol, ELF does not
+        let under = cfg!(target_os = "macos");
+        for n in c_names {
+            cmd.arg(format!("-Wl,-u,{}{n}", if under { "_" } else { "" }));
+        }
+    }
+    cmd.arg("-o").arg(out);
+    for o in &objs {
+        cmd.arg(o);
+    }
+    for l in libs {
+        cmd.arg(format!("-l{l}"));
+    }
+    let st = cmd.status().map_err(|e| format!("{cc}: {e}"))?;
+    if !st.success() {
+        return Err(format!("linking {out} failed"));
+    }
+    Ok(())
 }
 
 fn run_script(

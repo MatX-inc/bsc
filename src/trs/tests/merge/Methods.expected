@@ -1,7 +1,0 @@
-clock CLK posedge
-  run "" domain 0 segment 3
-  run "" domain 0 segment 1
-  run "" domain 0 segment 2
-  run "" domain 0 segment 4
-  tick "" x port _clk__1 reset
-  tick "" y port _clk__1 reset

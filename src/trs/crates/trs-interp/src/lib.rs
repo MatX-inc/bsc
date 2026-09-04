@@ -5695,6 +5695,20 @@ impl Interp {
         }
     }
 
+    /// The C names of every foreign function the design calls.
+    ///
+    /// An archive contributes only the members something asks for, so
+    /// a BDPI companion linked against one has to name them all with
+    /// -u to hold them in.  The linked design is the authority on
+    /// which those are.
+    pub fn foreign_c_names(&self) -> Vec<String> {
+        self.d
+            .foreign_funcs
+            .iter()
+            .map(|f| self.s(f.c_name).to_string())
+            .collect()
+    }
+
     /// Construct from in-memory BIR bytes (the capi's embedded-BIR
     /// path — no file I/O at `sim load` time).
     pub fn from_bir_bytes(bytes: &[u8]) -> Result<Interp, String> {

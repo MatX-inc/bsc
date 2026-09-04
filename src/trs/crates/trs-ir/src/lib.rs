@@ -20,7 +20,7 @@ pub mod sym;
 pub mod fold;
 pub mod verify;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -199,7 +199,7 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
 ///
 /// A .bir holds either one synthesized module or a whole linked
 /// design, and nothing else -- those are the two things anything
-/// produces.  bsc writes the first (`trs-bir --single-fragment`); a
+/// produces.  bsc writes the first, one per module; a
 /// link writes the second, as the .bir an artifact carries beside it.
 /// bsc has no whole-design format of its own: its .ba set *is* the
 /// design, and everything design-level is derived by whatever walks
@@ -827,6 +827,41 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
+impl Bir {
+    /// The modules this file defines.
+    pub fn module_names(&self) -> Vec<&str> {
+        match &self.body {
+            BirBody::Fragment(m) => vec![&self.strings[m.name as usize]],
+            BirBody::Design(d) => d
+                .modules
+                .iter()
+                .map(|m| self.strings[m.name as usize].as_str())
+                .collect(),
+        }
+    }
+
+    /// The modules this file instantiates but does not define.
+    pub fn extern_names(&self) -> Vec<&str> {
+        let ms: &[Module] = match &self.body {
+            BirBody::Fragment(m) => std::slice::from_ref(m),
+            BirBody::Design(d) => &d.modules,
+        };
+        let mine: HashSet<StrId> = ms.iter().map(|m| m.name).collect();
+        let mut out = Vec::new();
+        for m in ms {
+            for e in &m.externs {
+                if !mine.contains(&e.module) {
+                    let n = self.strings[e.module as usize].as_str();
+                    if !out.contains(&n) {
+                        out.push(n);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 impl Design {
     /// Decoded-design snapshot sidecar (`<base>.birsnap`): the
     /// `SNAP_HEADER` fields, then a bincode image of the decoded
@@ -994,64 +1029,27 @@ impl Design {
         // clock names through the string table, so they have to be in
         // there before it runs
         merge::intern_names(design);
-        // TRS_MERGE_CHECK=<file>: while the exporter still writes the
-        // design schedule, it is the oracle for the merge being ported
-        // here.  Appends to the named file rather than a stream the
-        // tests compare, so measuring does not perturb what it
-        // measures.  Scaffolding -- it goes when the export does.
-        // TRS_MERGE_DUMP=<file>: what the merge computes, written out
-        // so it can be frozen while the oracle above still vouches for
-        // it.  That recording is the coverage that outlives the export.
-        if let Some(p) = std::env::var_os("TRS_MERGE_DUMP") {
-            let _ = std::fs::write(&p, merge::render(design));
-        }
-        // Which defs a debug session can name.  Derived here rather
-        // than exported: it depends on the whole design (see `sym`),
-        // and deriving it is what lets the exporter stay out of bsc's
-        // C++ backend.
-        let derived = sym::derive(design);
-        for (m, syms) in design.modules.iter_mut().zip(derived) {
-            for d in m.defs.iter_mut() {
-                d.props.sym = syms.contains(&d.name);
-            }
-        }
-        if let Some(p) = std::env::var_os("TRS_MERGE_CHECK") {
-            use std::io::Write;
-            let lines = merge::diff(design);
-            if let Ok(mut f) =
-                std::fs::OpenOptions::new().create(true).append(true).open(&p)
-            {
-                for line in &lines {
-                    let _ = writeln!(f, "{line}");
-                }
-                if lines.is_empty() {
-                    // a design with no compositions matches whatever the
-                    // merge does, including nothing: say so, or a run of
-                    // such designs reads as evidence it is not
-                    let n = design.compositions.len();
-                    let _ = writeln!(
-                        f,
-                        "{}",
-                        if n == 0 { "ok vacuous".to_string() } else { format!("ok {n}") }
-                    );
-                }
-            }
-        }
-
-        // The schedule the design runs on is the one derived here, not
-        // the one the exporter wrote.  Both are still in the file and
-        // the check above compares them -- which is why it has to run
-        // first, or it would be comparing the merge against itself.
-        //
-        // A design the merge cannot schedule does not fall back to the
-        // exported answer.  Falling back would hide exactly the case
-        // worth knowing about, and the design would be running on a
-        // schedule nothing in trs derived.
+        // The schedule the design runs on, merged from the modules'
+        // own.  A design the merge cannot schedule fails to load:
+        // there is nothing to fall back to, and a design running on a
+        // schedule nothing here derived is the case worth hearing
+        // about rather than hiding.
         let inp = merge::Inputs::of(design);
         if inp.is_some() {
             design.compositions =
                 merge::compositions(inp.as_ref().expect("just checked"))
                     .map_err(DecodeError::Unschedulable)?;
+        }
+
+        // Which defs a debug session can name.  Derived rather than
+        // exported: the answer depends on more than the module it
+        // lives in, and deriving it is what keeps the exporter out of
+        // bsc's C++ backend.
+        let derived = sym::derive(design);
+        for (m, syms) in design.modules.iter_mut().zip(derived) {
+            for d in m.defs.iter_mut() {
+                d.props.sym = syms.contains(&d.name);
+            }
         }
 
         Ok(())

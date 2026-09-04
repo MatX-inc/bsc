@@ -8,6 +8,7 @@ BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
 TRSBIR=${TRSBIR:-trs-bir}
 SRC=$(cd "$(dirname "$0")" && pwd)
+. "$SRC/../../tools/fragments.sh"
 # the reference executable is a script that needs bluetcl on PATH
 case "$BSC" in
     */*) PATH="$(cd "$(dirname "$BSC")" && pwd):$PATH"; export PATH;;
@@ -30,7 +31,7 @@ check() { # name top args...
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1
     $BSC -sim -e "$top" -o "$top.exe" >/dev/null 2>&1
-    $TRSBIR "$top" >/dev/null 2>&1
+    frags_sub "$top"; $TRSBIR "$top" >/dev/null 2>&1
     ./"$top.exe" -V ref.vcd "$@" > ref.out 2>/dev/null
     for f in test1.vcd test2.vcd; do [ -f "$f" ] && mv "$f" "ref.$f"; done
     $TRS run "$top.bir" -V mine.vcd "$@" > mine.out 2>&1

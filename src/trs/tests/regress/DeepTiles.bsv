@@ -1,11 +1,10 @@
-// A shape bsc's own testsuite does not have: the same module
-// instantiated repeatedly, several levels down, with calls crossing
-// every boundary and a second clock domain reaching the bottom.
+// A generated clock inside a hierarchy: the other clock designs here
+// are each a single module, and the hierarchies have no clocks, so this
+// is the one that puts a second domain several levels down.
 //
-// The merge is a fold over the instance tree, and everything it reads
-// is per module type -- so a design with many instances of few types is
-// the one that tells you whether the fold and the reading agree.  It is
-// also the shape a real design has.
+// The same module type is instantiated repeatedly at two levels, with
+// calls crossing every boundary, so a domain has to be followed through
+// a method and a rule of a module the reader meets more than once.
 import Clocks::*;
 
 interface Leaf;

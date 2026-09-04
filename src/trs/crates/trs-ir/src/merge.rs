@@ -2651,18 +2651,12 @@ pub fn domain_anomalies(inp: &Inputs) -> Vec<String> {
     out
 }
 
-/// Where the computed compositions differ from the exported ones.
-///
-/// The comparison is over the whole structure's `Debug` rendering
-/// rather than a hand-written field-by-field check.  That is
-/// deliberate: a hand-written comparison silently stops covering a
-/// field the day someone adds one, and this harness is the only thing
-/// standing behind the port.  Exhaustive by construction beats
-/// exhaustive by inspection.
-/// How one computed composition differs from the exported one, or
-/// `None` if they agree.  Reports the first difference with its
-/// position, so a regression names a place rather than a volume of
+/// Test helper: the merge's answer against a recorded one.
+/// How one computed composition differs from the one a test expects,
+/// or `None` if they agree.  Reports the first difference with its
+/// position, so a failure names a place rather than a volume of
 /// output.
+#[cfg(test)]
 fn composition_diff(
     inp: &Inputs,
     i: usize,
@@ -2671,7 +2665,7 @@ fn composition_diff(
 ) -> Option<String> {
     if got.clock != want.clock {
         return Some(format!(
-            "comp {i} clock: computed {:?}, exported {:?}",
+            "comp {i} clock: computed {:?}, expected {:?}",
             inp.name(got.clock),
             inp.name(want.clock)
         ));
@@ -2684,20 +2678,20 @@ fn composition_diff(
     };
     if shown_early(got) != shown_early(want) {
         return Some(format!(
-            "comp {i} early rules: computed {:?}, exported {:?}",
+            "comp {i} early rules: computed {:?}, expected {:?}",
             shown_early(got),
             shown_early(want)
         ));
     }
     if got.posedge != want.posedge {
         return Some(format!(
-            "comp {i} edge: computed {}, exported {}",
+            "comp {i} edge: computed {}, expected {}",
             got.posedge, want.posedge
         ));
     }
     if got.alts.len() != want.alts.len() {
         return Some(format!(
-            "comp {i} alternatives: computed {}, exported {}",
+            "comp {i} alternatives: computed {}, expected {}",
             got.alts.len(),
             want.alts.len()
         ));
@@ -2723,19 +2717,19 @@ fn composition_diff(
         let (ga, gb) = (shown(a), shown(b));
         if ga.0 != gb.0 || ga.1 != gb.1 {
             return Some(format!(
-                "comp {i} alternative {k} guard: computed {:?} in {:?}, exported {:?} in {:?}",
+                "comp {i} alternative {k} guard: computed {:?} in {:?}, expected {:?} in {:?}",
                 ga.1, ga.0, gb.1, gb.0
             ));
         }
         if ga.2 != gb.2 {
             return Some(format!(
-                "comp {i} alternative {k} entries: computed {:?}, exported {:?}",
+                "comp {i} alternative {k} entries: computed {:?}, expected {:?}",
                 ga.2, gb.2
             ));
         }
         if ga.3 != gb.3 {
             return Some(format!(
-                "comp {i} alternative {k} inhibitors: computed {:?}, exported {:?}",
+                "comp {i} alternative {k} inhibitors: computed {:?}, expected {:?}",
                 ga.3, gb.3
             ));
         }
@@ -2758,11 +2752,11 @@ fn composition_diff(
         let at = g.iter().zip(w.iter()).position(|(a, b)| a != b);
         return Some(match at {
             Some(k) => format!(
-                "comp {i} inhibitor {k}: computed {:?}, exported {:?}",
+                "comp {i} inhibitor {k}: computed {:?}, expected {:?}",
                 g[k], w[k]
             ),
             None => format!(
-                "comp {i} inhibitors: computed {} of them, exported {}",
+                "comp {i} inhibitors: computed {} of them, expected {}",
                 g.len(),
                 w.len()
             ),
@@ -2787,11 +2781,11 @@ fn composition_diff(
         let at = g.iter().zip(w.iter()).position(|(a, b)| a != b);
         return Some(match at {
             Some(k) => format!(
-                "comp {i} tick {k}: computed {:?}, exported {:?}",
+                "comp {i} tick {k}: computed {:?}, expected {:?}",
                 g[k], w[k]
             ),
             None => format!(
-                "comp {i} ticks: computed {} of them, exported {}",
+                "comp {i} ticks: computed {} of them, expected {}",
                 g.len(),
                 w.len()
             ),
@@ -2800,7 +2794,7 @@ fn composition_diff(
     let (got, want) = (&got.entries, &want.entries);
     if got.len() != want.len() {
         return Some(format!(
-            "comp {i}: computed {} entries, exported {}",
+            "comp {i}: computed {} entries, expected {}",
             got.len(),
             want.len()
         ));
@@ -2809,216 +2803,9 @@ fn composition_diff(
         |e: &CompositionEntry| (inp.name(e.instance).to_string(), e.domain, e.segment);
     got.iter().zip(want.iter()).enumerate().find_map(|(k, (a, b))| {
         (shown(a) != shown(b)).then(|| {
-            format!("comp {i} entry {k}: computed {:?}, exported {:?}", shown(a), shown(b))
+            format!("comp {i} entry {k}: computed {:?}, expected {:?}", shown(a), shown(b))
         })
     })
-}
-
-/// An expression with its names in place of its string ids.
-///
-/// The recorded schedules have to survive the exporter interning
-/// strings in a different order, so nothing in them may be an id.
-fn show(design: &Design, e: &Expr) -> String {
-    let n = |s: StrId| design.name(s).to_string();
-    let list = |es: &[Expr]| {
-        es.iter().map(|x| show(design, x)).collect::<Vec<_>>().join(", ")
-    };
-    match e {
-        Expr::Const { width, limbs } => {
-            let v = limbs.first().copied().unwrap_or(0);
-            if limbs.iter().skip(1).all(|&w| w == 0) {
-                format!("{width}'d{v}")
-            } else {
-                format!("{width}'{limbs:?}")
-            }
-        }
-        Expr::Def(x) => n(*x),
-        Expr::Port(x) => n(*x),
-        Expr::Param(x) => format!("param {}", n(*x)),
-        Expr::Str(x) => format!("{:?}", design.name(*x)),
-        Expr::Real(v) => format!("{v}"),
-        Expr::MethCall { instance, method, port, args, .. } => {
-            format!("{}.{}#{port}({})", n(*instance), n(*method), list(args))
-        }
-        Expr::MethValue { instance, method, .. } => {
-            format!("{}.{} value", n(*instance), n(*method))
-        }
-        Expr::TaskValue { cookie, .. } => format!("task value {cookie}"),
-        Expr::ForeignCall { func, args, .. } => format!("{}({})", n(*func), list(args)),
-        Expr::Clock { osc, gate } => {
-            format!("clock {} gated {}", show(design, osc), show(design, gate))
-        }
-        Expr::Reset { wire } => format!("reset {}", show(design, wire)),
-        Expr::Gate { instance, clock } => format!("{}.{} gate", n(*instance), n(*clock)),
-        Expr::ClockOut { instance, clock } => format!("{}.{} out", n(*instance), n(*clock)),
-        Expr::Prim { op, args, .. } => format!("{op:?}({})", list(args)),
-        Expr::If { cond, then_, else_, .. } => format!(
-            "if {} then {} else {}",
-            show(design, cond),
-            show(design, then_),
-            show(design, else_)
-        ),
-        Expr::Case { scrutinee, arms, default, .. } => format!(
-            "case {} of [{}] else {}",
-            show(design, scrutinee),
-            arms.iter()
-                .map(|(k, v)| format!("{k:?} => {}", show(design, v)))
-                .collect::<Vec<_>>()
-                .join(", "),
-            show(design, default)
-        ),
-    }
-}
-
-/// What the merge computes, rendered so it can be checked in and
-/// compared later.
-///
-/// The differential check against the exporter is scaffolding and goes
-/// when the export does; recording its answer while it is still
-/// vouched for is what keeps the evidence afterwards.  A frozen answer
-/// only catches *change*, not error -- its authority is entirely that
-/// it agreed with bsc on the day it was written.
-///
-/// Names rather than ids throughout, so a change to the string table
-/// does not read as a change to the schedule.
-pub fn render(design: &Design) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let Some(inp) = Inputs::of(design) else {
-        return "no top module\n".to_string();
-    };
-    let comps = match compositions(&inp) {
-        Ok(c) => c,
-        Err(why) => return format!("{why}\n"),
-    };
-    let rule = |r: &crate::schedule::QualRule| {
-        let path = design.name(r.instance);
-        let m = &design.modules[inp.hier.insts[
-            inp.hier.insts.iter().position(|(p, _)| p == path).unwrap_or(0)
-        ].1];
-        let name = m.rules.get(r.rule.idx()).map(|x| design.name(x.name)).unwrap_or("?");
-        if path.is_empty() { name.to_string() } else { format!("{path}.{name}") }
-    };
-    for c in &comps {
-        let _ = writeln!(
-            out,
-            "clock {} {}",
-            design.name(c.clock),
-            if c.posedge { "posedge" } else { "negedge" }
-        );
-        for e in &c.entries {
-            let _ = writeln!(
-                out,
-                "  run {:?} domain {} segment {}",
-                design.name(e.instance),
-                e.domain,
-                e.segment
-            );
-        }
-        for t in &c.ticks {
-            let _ = writeln!(
-                out,
-                "  tick {:?} {} port {}{}{}",
-                design.name(t.instance),
-                design.name(t.prim),
-                design.name(t.port),
-                if t.reset { " reset" } else { "" },
-                match &t.gate {
-                    Some(g) => format!(" gated {}", show(design, g)),
-                    None => String::new(),
-                }
-            );
-        }
-        for e in &c.early {
-            let _ = writeln!(out, "  early {}", rule(e));
-        }
-        for (a, b) in &c.cross_inhibits {
-            let _ = writeln!(out, "  inhibit {} -> {}", rule(a), rule(b));
-        }
-        for a in &c.alts {
-            let _ = writeln!(
-                out,
-                "  alternative in {:?} when {}",
-                design.name(a.guard_inst),
-                show(design, &a.guard)
-            );
-            for e in &a.entries {
-                let _ = writeln!(
-                    out,
-                    "    run {:?} domain {} segment {}",
-                    design.name(e.instance),
-                    e.domain,
-                    e.segment
-                );
-            }
-            for (x, y) in &a.cross_inhibits {
-                let _ = writeln!(out, "    inhibit {} -> {}", rule(x), rule(y));
-            }
-        }
-    }
-    out
-}
-
-pub fn diff(design: &Design) -> Vec<String> {
-    let Some(inp) = Inputs::of(design) else {
-        return vec!["no top module".to_string()];
-    };
-    // a misread of the per-module domains makes everything downstream
-    // meaningless, so it is reported alone rather than alongside
-    let mut anomalies = domain_anomalies(&inp);
-    anomalies.extend(graph_anomalies(&inp));
-    if !anomalies.is_empty() {
-        return anomalies;
-    }
-
-    let want: Vec<&Composition> = design.compositions.iter().collect();
-    let mut out = Vec::new();
-    match compositions(&inp) {
-        Err(why) => out.push(why),
-        Ok(got) if got.len() != want.len() => out.push(format!(
-            "composition count: computed {}, exported {}",
-            got.len(),
-            want.len()
-        )),
-        Ok(got) => {
-            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
-                out.extend(composition_diff(&inp, i, g, w));
-            }
-        }
-    }
-    if out.is_empty() {
-        // say how much agreed, so a design with nothing to compare is
-        // not recorded the same as one that matched
-        out.push(if want.is_empty() {
-            "ok vacuous".to_string()
-        } else {
-            format!("ok {}", want.len())
-        });
-        return out;
-    }
-
-    // The composed entries are a projection of the flat merged order,
-    // so a disagreement is almost always an order that came out wrong
-    // several steps earlier.  bsc prints its own order under
-    // `-trace-mergesched`; printing ours beside the disagreement makes
-    // the two directly comparable.
-    {
-        let (g, facts) = merged_graph(&inp);
-        let up = unified_domains(&inp);
-        if let Ok(orders) = domain_orders(&inp, &up, &facts, &g) {
-            for d in orders {
-                out.push(format!("  order {:?}:", d.domain));
-                for n in d.order {
-                    let kind = match n.node {
-                        SchedNode::Sched(_) => "Sched",
-                        SchedNode::Exec(_) => "Exec",
-                    };
-                    out.push(format!("    {kind} {}", qname(&inp, n)));
-                }
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

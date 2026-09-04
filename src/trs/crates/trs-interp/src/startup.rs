@@ -157,6 +157,48 @@ pub fn load_fragments_fresh(
     finish_load(design, hash, sl, path, plusargs, binds, vcd_file)
 }
 
+/// Read one .bir and everything it needs, then link.
+///
+/// A .bir bsc writes holds one synthesized module and names the ones it
+/// instantiates.  Those are looked for by module name beside the file
+/// given, which is what bsc's own linker does with .ba -- see
+/// `getABIHierarchy`, which searches its path for a child's file rather
+/// than being handed the set.  `trs link --multi-fragments` remains the
+/// way to name a set explicitly.
+#[cold]
+#[inline(never)]
+fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
+    let first = trs_ir::Bir::decode(bytes).map_err(|e| format!("{path}: {e}"))?;
+    let dir = std::path::Path::new(path).parent().unwrap_or(std::path::Path::new("."));
+
+    let mut have: std::collections::HashSet<String> =
+        first.module_names().into_iter().map(|s| s.to_string()).collect();
+    let mut want: Vec<String> =
+        first.extern_names().into_iter().map(|s| s.to_string()).collect();
+    let mut birs = vec![first];
+
+    while let Some(name) = want.pop() {
+        if have.contains(&name) {
+            continue;
+        }
+        let p = dir.join(format!("{name}.bir"));
+        let b = std::fs::read(&p).map_err(|e| {
+            format!(
+                "{}: instantiates `{name}', and {} could not be read: {e}",
+                path,
+                p.display()
+            )
+        })?;
+        let bir = trs_ir::Bir::decode(&b)
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+        have.extend(bir.module_names().into_iter().map(|s| s.to_string()));
+        want.extend(bir.extern_names().into_iter().map(|s| s.to_string()));
+        birs.push(bir);
+    }
+
+    trs_ir::link::assemble(birs).map_err(|e| e.to_string())
+}
+
 #[cold]
 #[inline(never)]
 fn load_file_inner(
@@ -178,6 +220,11 @@ fn load_file_inner(
     // even one short-lived thread permanently drops glibc malloc's
     // single-threaded fast path, which cost interp-fallback designs
     // (dft64) ~50% wall (2026-07-10 fence flags).
+    // A run's .bir is the design (a link wrote it), so its own bytes
+    // identify it.  A LINK may have been handed one fragment of a
+    // design and pulled the rest in beside it, so what identifies the
+    // artifact is the design that came out, not the file that started
+    // it -- and that is the .bir the artifact carries.
     let hash = bir_fingerprint(&bytes);
     let snapped = if use_snap {
         std::fs::read(&snap)
@@ -193,11 +240,12 @@ fn load_file_inner(
             d
         }
         None => {
-            let d = Design::decode(&bytes).map_err(|e| e.to_string())?;
+            let d = decode_with_siblings(path, &bytes)?;
             sl.lap("design load (cbor)");
             d
         }
     };
+    let hash = if use_snap { hash } else { bir_fingerprint(&design.encode()) };
     // BIR-level Extract-of-Concat folding (TRS_BIR_FOLD).  Off by
     // default: it fires on a small minority of concats and shows no
     // wall-clock win yet -- see trs_ir::fold.  TRS_FOLD_STATS prints the

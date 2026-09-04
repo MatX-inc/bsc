@@ -7,6 +7,7 @@ BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
 TRSBIR=${TRSBIR:-trs-bir}
 SRC=$(cd "$(dirname "$0")" && pwd)
+. "$SRC/../../tools/fragments.sh"
 case "$BSC" in
     */*) PATH="$(cd "$(dirname "$BSC")" && pwd):$PATH"; export PATH;;
 esac
@@ -20,20 +21,26 @@ fail=0
 ref_link() { # top outexe [cfile]
     rl_top=$1; rl_exe=$2; rl_c=$3
     $BSC -sim -e "$rl_top" -o "$rl_exe" $rl_c || return 1
-    if [ -n "$rl_c" ]; then
-        $TRSBIR --bdpi "$rl_c" "$rl_top"
-    else
-        $TRSBIR "$rl_top"
-    fi
+    # every synthesized module of the design, not just the top: bsc
+    # writes one .ba each and trs-bir one .bir each, and the link
+    # follows the instantiations from the top
+    frags_sub "$rl_top"
+    $TRSBIR "$rl_top"
 }
+
+# BDPI implementations go to the LINK, as they do for bsc: the export
+# knows nothing about them.  Callers put $BDPI on every trs link line.
+BDPI=""
+set_bdpi() { BDPI=""; [ -z "$1" ] || BDPI="--bdpi $1"; }
 check() { # name top [cfile]
     name=$1; top=$2; cfile=$3
     cp "$SRC/$name.bsv" .
     [ -n "$cfile" ] && cp "$SRC/$cfile" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    set_bdpi "$cfile"
     ref_link "$top" ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
-    "$TRS" link "$top.bir" -o art >link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" -o art >link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     # byte parity cannot distinguish engines (that is the oracle
     # contract), so the compiled contract is asserted explicitly: a
     # fallback-to-interp artifact fails the battery
@@ -87,7 +94,7 @@ check_memload() {
     rm -f "$name.mem"
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     ref_link "$top" ref.exe > reflink.out 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
-    "$TRS" link "$top.bir" -o art > link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" -o art > link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     # neither link may so much as name the file (a missing load file is
     # only a diagnostic, so silence -- not exit status -- is the contract)
     if grep -q "$name.mem" reflink.out; then echo "FAIL $name (ref link opened the .mem)"; fail=1; return; fi
@@ -117,9 +124,10 @@ check_compiled() { # name top [cfile]
     [ -n "$cfile" ] && cp "$SRC/$cfile" .
     rm -f art.so
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    set_bdpi "$cfile"
     ref_link "$top" ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
-    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     [ -f art.so ] || { echo "FAIL $name (fell back to interpreted)"; fail=1; return; }
     TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
     if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
@@ -149,13 +157,14 @@ check CollideEq sysCollideEq
 # files; inline FIFO enq bypassed the boxed D_IN bookkeeping)
 check_vcd() { # name top
     name=$1; top=$2
+    set_bdpi ""
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     ref_link "$top" ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     rm -f dump.vcd
     ./ref.exe > ref.out 2>&1; refrc=$?
     sed '/^\$date/,/^\$end/d' dump.vcd > ref.vcd 2>/dev/null
-    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     rm -f dump.vcd
     TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
     sed '/^\$date/,/^\$end/d' dump.vcd > got.vcd 2>/dev/null
@@ -189,14 +198,14 @@ check_topparam() {
     fi
     grep -q "(G0099)" tp_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
     # the .bir every check below consumes
-    $TRSBIR "$top" >tp_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    { frags_sub "$top"; $TRSBIR "$top"; } >tp_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
     # a link with no bindings must fail with the loud missing-binding error
-    if TRS="$TRS" "$TRS" link "$top.bir" -o tp.exe >tp_err2.out 2>&1; then
+    if TRS="$TRS" "$TRS" link $BDPI "$top.bir" -o tp.exe >tp_err2.out 2>&1; then
         echo "FAIL $name (link without bindings unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "requires bindings for" tp_err2.out || { echo "FAIL $name (expected missing-binding error)"; fail=1; return; }
     [ -f "$top.bir" ] || { echo "FAIL $name (no .bir exported)"; fail=1; return; }
-    "$TRS" link "$top.bir" +big=1 +inc=1 +typo=9 -o tpbad >tp_err3.out 2>&1 && { echo "FAIL $name (unknown binding accepted)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" +big=1 +inc=1 +typo=9 -o tpbad >tp_err3.out 2>&1 && { echo "FAIL $name (unknown binding accepted)"; fail=1; return; }
     grep -q "unknown top-level binding" tp_err3.out || { echo "FAIL $name (expected unknown-binding error)"; fail=1; return; }
     "$TRS" run "$top.bir" +big=1 +inc=999 >tp_err4.out 2>&1 && { echo "FAIL $name (oversized binding accepted)"; fail=1; return; }
     grep -q "does not fit in the declared width" tp_err4.out || { echo "FAIL $name (expected oversized-binding error)"; fail=1; return; }
@@ -204,7 +213,7 @@ check_topparam() {
     if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" got.out; then
         echo "FAIL $name (run stdout, rc=$gotrc)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return
     fi
-    "$TRS" link "$top.bir" +big=$bigv +inc=3 -o tpart >tplink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" +big=$bigv +inc=3 -o tpart >tplink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     if grep -q "run interpreted" tplink.out; then
         echo "FAIL $name (not compiled: $(head -1 tplink.out))"; fail=1; return
     fi
@@ -230,8 +239,8 @@ check_topae() {
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "(G0062)" ae_err1.out || { echo "FAIL $name (expected G0062)"; fail=1; return; }
-    $TRSBIR "$top" >ae_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
-    if TRS="$TRS" "$TRS" link "$top.bir" -o ae.exe >ae_err2.out 2>&1; then
+    { frags_sub "$top"; $TRSBIR "$top"; } >ae_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    if TRS="$TRS" "$TRS" link $BDPI "$top.bir" -o ae.exe >ae_err2.out 2>&1; then
         echo "FAIL $name (link without bindings unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "requires bindings for" ae_err2.out || { echo "FAIL $name (expected missing-binding error)"; fail=1; return; }
@@ -242,7 +251,7 @@ check_topae() {
     # compiled auto-fire: the artifact's edge fns carry the method
     # bodies at their cut anchors, so the link must COMPILE —
     # TRS_REQUIRE_AOT trips (rc 86) if the engine silently falls back
-    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" +setStep.v=2 -o aeart >aelink.out 2>&1 || { echo "FAIL $name (trs link, compiled)"; fail=1; return; }
+    TRS_REQUIRE_AOT=1 "$TRS" link $BDPI "$top.bir" +setStep.v=2 -o aeart >aelink.out 2>&1 || { echo "FAIL $name (trs link, compiled)"; fail=1; return; }
     TRS="$TRS" ./aeart > gota.out 2>&1; gotrc=$?
     if [ "$gotrc" != 0 ] || ! cmp -s "$SRC/$name.expected" gota.out; then
         echo "FAIL $name (artifact stdout, rc=$gotrc)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return
@@ -252,19 +261,26 @@ check_topae() {
 check_topae
 # NEGATIVE: bindable arguments plus an additional input clock — a
 # binding supplies a constant, never a waveform, so the trs link
-# refuses loudly (and classic keeps G0099 via the Bit# argument)
+# refuses loudly (and classic keeps G0099 via the Bit# argument).
+#
+# The EXPORT takes it: it writes one synthesis boundary, and whether a
+# module can be a running design's top is a question about the design.
+# The link is what asks.
 check_topclk() {
     name=TopClkArg; top=sysTopClkArg
+    set_bdpi ""
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     if $BSC -sim -e "$top" -o ck_ref.exe >ck_err1.out 2>&1; then
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "(G0099)" ck_err1.out || { echo "FAIL $name (expected G0099)"; fail=1; return; }
-    if $TRSBIR "$top" >ck_err2.out 2>&1; then
-        echo "FAIL $name (export unexpectedly succeeded)"; fail=1; return
+    frags_sub "$top"
+    $TRSBIR "$top" >ck_err2.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    if "$TRS" link "$top.bir" -o ck.exe >ck_err3.out 2>&1; then
+        echo "FAIL $name (link unexpectedly succeeded)"; fail=1; return
     fi
-    grep -q "does not support additional input" ck_err2.out || { echo "FAIL $name (expected input-clock refusal)"; fail=1; return; }
+    grep -q "additional input clocks are not supported" ck_err3.out || { echo "FAIL $name (expected input-clock refusal)"; head -2 ck_err3.out; fail=1; return; }
     echo "PASS $name"
 }
 check_topclk
@@ -276,6 +292,7 @@ check_topclk
 # errors at link.
 check_dyn() { # name top errtag
     name=$1; top=$2; tag=$3
+    set_bdpi ""
     cp "$SRC/$name.bsv" .
     if $BSC -sim -u -g "$top" "$name.bsv" >dyn_err1.out 2>&1; then
         echo "FAIL $name (static compile unexpectedly succeeded)"; fail=1; return
@@ -286,14 +303,14 @@ check_dyn() { # name top errtag
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
     fi
     grep -q "dynamic scheduling" dyn_err2.out || { echo "FAIL $name (expected dynamic-scheduling refusal)"; fail=1; return; }
-    $TRSBIR "$top" >dyn_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
-    "$TRS" link "$top.bir" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    { frags_sub "$top"; $TRSBIR "$top"; } >dyn_bir.out 2>&1 || { echo "FAIL $name (trs-bir)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
     "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
     # compiled alts: the artifact's edge fns carry the per-edge guard
     # dispatch, so the link must COMPILE — TRS_REQUIRE_AOT trips (rc 86)
     # if the engine silently falls back to interp again
-    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o dynart >dynlink.out 2>&1 || { echo "FAIL $name (trs link, compiled)"; fail=1; return; }
+    TRS_REQUIRE_AOT=1 "$TRS" link $BDPI "$top.bir" -o dynart >dynlink.out 2>&1 || { echo "FAIL $name (trs link, compiled)"; fail=1; return; }
     TRS="$TRS" ./dynart > gota.out 2>&1 || { echo "FAIL $name (art run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
     echo "PASS $name"
@@ -302,24 +319,26 @@ check_dyn() { # name top errtag
 # destination-domain logic backdates to pre-edge, the after-edge combo
 # pass reads post-edge (gate detectors break as steady-0 otherwise)
 check MakeClkCross sysMakeClkCross
+check DeepTiles sysDeepTiles
 check_bdpi_missing() { # name top — task #58: an EXECUTED BDPI import
     # with no partner .c/.so must die LOUDLY naming the import on both
     # trs tiers (the old compiled path called through a NULL global =
     # segfault).  Bluesim cannot even link this shape (undefined C
     # symbol), so there is no reference leg.
     name=$1; top=$2
+    set_bdpi ""
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     # no reference leg: the import has no implementation, so a Bluesim
     # link would fail on the undefined symbol.  The export does not care
     # -- only the .bir is needed here
-    $TRSBIR "$top" >/dev/null 2>&1
+    frags_sub "$top"; $TRSBIR "$top" >/dev/null 2>&1
     [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
     # the trap may fire during link (the window bake / reset protocol
     # executes early cycles — the field repro died exactly there) or,
     # if link-time execution never reaches the call, at run time.
     # Either way: loud, named, never a segfault.
-    "$TRS" link "$top.bir" -o bdm >bdm-link.out 2>&1; lrc=$?
+    "$TRS" link $BDPI "$top.bir" -o bdm >bdm-link.out 2>&1; lrc=$?
     if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
     if [ "$lrc" -ne 0 ]; then
         grep -q "BDPI import 'bdpi_mystery'" bdm-link.out || { echo "FAIL $name (link failed without naming the import)"; head -2 bdm-link.out; fail=1; return; }
@@ -344,13 +363,14 @@ check BdpiDead sysBdpiDead
 # artifact runs compiled.
 check_chunked() { # name top cfile
     name=$1; top=$2; cfile=$3
+    set_bdpi "$cfile"
     cp "$SRC/$name.bsv" .
     [ -n "$cfile" ] && cp "$SRC/$cfile" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     ref_link "$top" bc_ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./bc_ref.exe > bc_ref.out 2>&1; refrc=$?
     rm -f bcart.so
-    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o bcart >bc_link.out 2>&1 || { echo "FAIL $name (chunked link)"; tail -2 bc_link.out; fail=1; return; }
+    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 TRS_REQUIRE_AOT=1 "$TRS" link $BDPI "$top.bir" -o bcart >bc_link.out 2>&1 || { echo "FAIL $name (chunked link)"; tail -2 bc_link.out; fail=1; return; }
     [ -f bcart.so ] || { echo "FAIL $name (no chunked artifact)"; fail=1; return; }
     TRS="$TRS" ./bcart > bc_got.out 2>&1; gotrc=$?
     if [ "$refrc" != "$gotrc" ] || ! cmp -s bc_ref.out bc_got.out; then echo "FAIL $name (parity)"; diff bc_ref.out bc_got.out | head -3; fail=1; return; fi
@@ -362,11 +382,12 @@ check_chunked BdpiChunk sysBdpiChunk ops.c
 # loudly naming the import — never a segfault
 check_chunked_missing() {
     name=BdpiChunkMissing; top=sysBdpiChunkMissing
+    set_bdpi ""
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    $TRSBIR "$top" >/dev/null 2>&1
+    frags_sub "$top"; $TRSBIR "$top" >/dev/null 2>&1
     [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
-    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 "$TRS" link "$top.bir" -o bcm >bcm_link.out 2>&1; lrc=$?
+    TRS_AOT_ONE_MODULE=0 TRS_JIT_THREADS=4 "$TRS" link $BDPI "$top.bir" -o bcm >bcm_link.out 2>&1; lrc=$?
     if [ "$lrc" -eq 139 ]; then echo "FAIL $name (segfault at link)"; fail=1; return; fi
     if [ "$lrc" -ne 0 ]; then
         grep -q "BDPI import 'bdpi_mystery'" bcm_link.out || { echo "FAIL $name (link failed without naming the import)"; head -2 bcm_link.out; fail=1; return; }
@@ -390,6 +411,7 @@ check_dyn DynSchedLoop sysDynSchedLoop G0116
 # trap fires
 check_en() { # name top
     name=$1; top=$2
+    set_bdpi ""
     cp "$SRC/$name.bsv" .
     $BSC -sim -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     ref_link "$top" en_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
@@ -398,7 +420,7 @@ check_en() { # name top
     if [ "$irc" != "$refrc" ] || ! cmp -s en_ref.out en_i.out; then echo "FAIL $name (interp)"; diff en_ref.out en_i.out | head -3; fail=1; return; fi
     TRS_JIT=1 "$TRS" run "$top.bir" > en_j.out 2>&1; jrc=$?
     if [ "$jrc" != "$refrc" ] || ! cmp -s en_ref.out en_j.out; then echo "FAIL $name (jit)"; diff en_ref.out en_j.out | head -3; fail=1; return; fi
-    TRS_REQUIRE_AOT=1 "$TRS" link "$top.bir" -o en_art >en_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    TRS_REQUIRE_AOT=1 "$TRS" link $BDPI "$top.bir" -o en_art >en_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
     TRS="$TRS" ./en_art > en_a.out 2>&1; arc=$?
     if [ "$arc" != "$refrc" ] || ! cmp -s en_ref.out en_a.out; then echo "FAIL $name (aot)"; diff en_ref.out en_a.out | head -3; fail=1; return; fi
     echo "PASS $name"
@@ -416,7 +438,7 @@ check_en MethValueEn sysMethValueEn
 # census must say so instead of hiding the row
 census_pin() { # name top pattern
     name=$1; top=$2; pat=$3
-    TRS_LAYOUT_CENSUS="cens_$name.txt" "$TRS" link "$top.bir" -o "censart_$name" >/dev/null 2>&1
+    TRS_LAYOUT_CENSUS="cens_$name.txt" "$TRS" link $BDPI "$top.bir" -o "censart_$name" >/dev/null 2>&1
     grep -Eq "$pat" "cens_$name.txt" || { echo "FAIL $name (census pin: $pat)"; grep "^EN " "cens_$name.txt" | head -3; fail=1; return; }
     echo "PASS $name"
 }
@@ -447,7 +469,7 @@ check_revcompat() {
     ref_link "$top" rev_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./rev_ref.exe > rev_ref.out 2>&1; refrc=$?
     # control: a matched-rev artifact loads with no refusal note
-    "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    "$TRS" link $BDPI "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
     TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
     if grep -q "layout revision" revgot.err; then echo "FAIL $name (control run refused)"; fail=1; return; fi
     if [ "$refrc" != "$gotrc" ] || ! cmp -s rev_ref.out revgot.out; then echo "FAIL $name (control)"; fail=1; return; fi
@@ -455,7 +477,7 @@ check_revcompat() {
     # and prints the same fallback note into revlink.out — expected;
     # only the RUN's stderr is asserted
     for rev in 26 28; do
-        TRS_TEST_LAYOUT_REV=$rev "$TRS" link "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link rev $rev)"; fail=1; return; }
+        TRS_TEST_LAYOUT_REV=$rev "$TRS" link $BDPI "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link rev $rev)"; fail=1; return; }
         TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
         if [ "$gotrc" = 139 ]; then echo "FAIL $name (rev $rev segfault)"; fail=1; return; fi
         grep -q "layout revision $rev" revgot.err || { echo "FAIL $name (rev $rev: no refusal note)"; sed -n 1,3p revgot.err; fail=1; return; }
@@ -476,7 +498,7 @@ check_demoted() {
     $BSC -sim -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     ref_link "$top" dt_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./dt_ref.exe < /dev/null > dt_ref.out 2>&1; refrc=$?
-    TRS_JIT_FN_INSN_BUDGET=10 TRS_JIT_TRACE=1 "$TRS" link "$top.bir" -o dtart >dt_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
+    TRS_JIT_FN_INSN_BUDGET=10 TRS_JIT_TRACE=1 "$TRS" link $BDPI "$top.bir" -o dtart >dt_link.out 2>&1 || { echo "FAIL $name (link)"; fail=1; return; }
     grep -q "demoted size tier" dt_link.out || { echo "FAIL $name (tier did not engage)"; fail=1; return; }
     grep -q "IR pass pipeline rejected" dt_link.out && { echo "FAIL $name (pinned pipeline rejected)"; fail=1; return; }
     TRS="$TRS" ./dtart < /dev/null > dt_got.out 2>&1; gotrc=$?

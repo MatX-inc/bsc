@@ -1,7 +1,7 @@
 //! Assembling a whole design out of the fragments of its modules.
 //!
-//! A fragment (`trs-bir --single-fragment`) is one module carrying its
-//! own string table and no cross-module data.
+//! A fragment is one module carrying its own string table and no
+//! cross-module data -- what `trs-bir` writes, one per module.
 //!
 //! "Module" here is bsc's synthesis boundary: one `(* synthesize *)`,
 //! one `.ba`, one `Module` in the IR.  A BSV module that is not a
