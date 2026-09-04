@@ -1561,7 +1561,26 @@ pub fn compile_design_objects_split(
     // this thread (its Context cannot move), all overlapped
     let jobs: Vec<(usize, (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>))> =
         per_type.into_iter().collect();
-    let pseudo = specs[0].clone();
+    // Placeholder spec for helper lowering.  It is never read: a helper
+    // that emits a callback site is rejected in lower_helpers, so nothing
+    // reaches spec-derived state (the same reasoning the dynamic-schedule
+    // guard Lower records).  It is built rather than taken from specs,
+    // which is empty for a design with no rules -- and such a design is
+    // still worth sharding, since boundary requests come from a module's
+    // METHODS, not its rules.
+    let pseudo = RuleSpec {
+        inst: usize::MAX,
+        rule_idx: usize::MAX,
+        inhibit_slots: Vec::new(),
+        cf_slot: 0,
+        wf_slot: 0,
+        always_fire: false,
+        eager: Vec::new(),
+        shared: Vec::new(),
+        label: "split-placeholder".to_string(),
+        token_base: 0,
+        autofire: None,
+    };
     let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
     let t0 = std::time::Instant::now();
     let (design_obj, type_objs) = std::thread::scope(|sc| {
