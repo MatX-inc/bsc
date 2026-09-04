@@ -65,6 +65,7 @@ import IntegerUtil(integerFormat)
 import Position
 import PPrint
 import Classic(isClassic)
+import Bloogle(bloogleTypeMatches, bloogleNameMatches)
 import qualified Flags as F
 
 -- error handling
@@ -146,6 +147,10 @@ data ErrorState = ErrorState
           -- number of warnings that were suppressed
           suppressedCount :: Integer,
 
+          -- the bloogle database for diagnostic suggestions, if one
+          -- was supplied with -bloogle-db
+          bloogleDbPath :: Maybe String,
+
           -- we also store state that needs handling on exit:
 
           -- set of open handles, that need to be flushed/closed on exit
@@ -177,6 +182,7 @@ initErrorHandle = do
                      demotionSet = SomeMsgs S.empty,
                      suppressionSet = SomeMsgs S.empty,
                      suppressedCount = 0,
+                     bloogleDbPath = Nothing,
                      openHandles = []
                    }
   ref <- newIORef init_state
@@ -188,7 +194,8 @@ setErrorHandleFlags ref flags = do
   let new_state = state {
                     promotionSet = toMsgSet (F.promoteWarnings flags),
                     demotionSet = toMsgSet (F.demoteErrors flags),
-                    suppressionSet = toMsgSet (F.suppressWarnings flags)
+                    suppressionSet = toMsgSet (F.suppressWarnings flags),
+                    bloogleDbPath = F.bloogleDb flags
                   }
   writeErrorState ref new_state
 
@@ -226,8 +233,13 @@ bsWarningsAndErrorsWithContext :: ErrorHandle -> MsgContext ->
                                   [EMsg] -> [EMsg] -> [EMsg] -> IO ()
 bsWarningsAndErrorsWithContext ref ctx [] [] [] = do
     internalError ("bsWarningsAndErrors called with null list")
-bsWarningsAndErrorsWithContext ref ctx ws ds es = do
+bsWarningsAndErrorsWithContext ref ctx ws0 ds0 es0 = do
   state0 <- readErrorState ref
+  -- decorate diagnostics with bloogle suggestions (see -bloogle-db)
+  let annotate = mapM (bloogleAnnotateMsg (bloogleDbPath state0))
+  ws <- annotate ws0
+  ds <- annotate ds0
+  es <- annotate es0
   -- warn if the user requested to demote non-demotable errors
   let isDemoted t = memberMsgSet t (demotionSet state0)
       bad_tags = filter isDemoted (map (getErrMsgTag . snd) es)
@@ -1210,6 +1222,10 @@ data ErrMsg =
         -- XXX these should contain the type of the constructor
         | EConMismatchNumArgs  String{-String-}      Integer Integer
         | EPartialConMismatchNumArgs  String String{-String-}Integer Integer Integer
+
+        -- | a diagnostic decorated with bloogle exact-name matches
+        --   (see -bloogle-db); keeps the wrapped message's tag
+        | EBloogleMatches ErrMsg [String]
         deriving (Eq,Show)
 
 instance PPrint ErrMsg where
@@ -3022,6 +3038,10 @@ getErrorText (WTypedHole t ms) =
      nest 2 (text t) $$
      bloogleMatchesDoc "approximate" ms)
 
+getErrorText (EBloogleMatches e ms) =
+    let (tag, ctx, d) = getErrorText e
+    in  (tag, ctx, d $$ bloogleMatchesDoc "exact name" ms)
+
 -- Generation Errors
 
 getErrorText (EGenerate num s) =
@@ -4544,6 +4564,31 @@ bloogleMatchesDoc _ [] = empty
 bloogleMatchesDoc kind ms =
     s2par ("bloogle found these " ++ kind ++ " matches:") $$
     nest 2 (vcat (map text ms))
+
+-- Decorate a diagnostic with bloogle suggestions, when a database was
+-- supplied with -bloogle-db: typed holes get the approximate matches
+-- of a type search, and unbound names of any kind get the exact
+-- matches of a name search.  Unbound type variables, exports, and
+-- system tasks are not looked up, since a library search cannot
+-- supply those.
+bloogleAnnotateMsg :: Maybe String -> EMsg -> IO EMsg
+bloogleAnnotateMsg Nothing msg = return msg
+bloogleAnnotateMsg (Just db) msg@(pos, emsg) =
+    let nameMatches n = do ms <- bloogleNameMatches db n
+                           return (pos, if null ms
+                                        then emsg
+                                        else EBloogleMatches emsg ms)
+    in  case emsg of
+          WTypedHole t [] -> do ms <- bloogleTypeMatches db t
+                                return (pos, WTypedHole t ms)
+          EUnboundVar v [] -> do ms <- bloogleNameMatches db v
+                                 return (pos, EUnboundVar v ms)
+          EUnboundCon c _   -> nameMatches c
+          EUnboundField f   -> nameMatches f
+          EUnboundClCon c   -> nameMatches c
+          EUnboundTyCon t   -> nameMatches t
+          EUnboundPackage p -> nameMatches p
+          _ -> return msg
 
 -- -----
 

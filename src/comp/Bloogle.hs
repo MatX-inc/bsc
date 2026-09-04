@@ -1,4 +1,4 @@
-module Bloogle(bloogleAnnotate) where
+module Bloogle(bloogleTypeMatches, bloogleNameMatches) where
 
 import Control.Exception(SomeException, try)
 import Data.Char(isSpace)
@@ -6,35 +6,34 @@ import Data.List(isPrefixOf, isSuffixOf)
 import System.Exit(ExitCode(..))
 import System.Process(readProcessWithExitCode)
 
-import Error(EMsg, ErrMsg(..))
-import Flags(Flags(..))
-
--- Decorate diagnostics with suggestions from bloogle, a Hoogle-like
--- search over the Bluespec libraries.  This only happens when the user
--- has supplied a database with -bloogle-db, and a missing or failing
--- bloogle executable just leaves the diagnostic without suggestions.
+-- Queries against bloogle, a Hoogle-like search over the Bluespec
+-- libraries, used to decorate diagnostics with suggestions when the
+-- user has supplied a database with -bloogle-db.  A missing or failing
+-- bloogle executable just yields no suggestions, never an error.
 --
 -- The queries use the "bloogle search <db> <query>" CLI: a bare word is
 -- a name search and a query starting with "::" is a type search, with
 -- one plain-text result per output line.
+--
+-- This module deliberately does not import Error or Flags, so that the
+-- error-reporting code in Error.hs can call it without an import cycle.
 
 -- cap on the number of suggestions appended to one diagnostic
 maxMatches :: Int
 maxMatches = 5
 
-bloogleAnnotate :: Flags -> EMsg -> IO EMsg
-bloogleAnnotate flags msg@(pos, emsg) =
-    case (bloogleDb flags, emsg) of
-      (Just db, WTypedHole t []) -> do
-          -- a type search already returns approximate matches
-          ls <- bloogleSearch db (":: " ++ t)
-          return (pos, WTypedHole t (take maxMatches ls))
-      (Just db, EUnboundVar v []) -> do
-          -- a name search is a substring match, so keep only the
-          -- results whose identifier is exactly the unbound name
-          ls <- bloogleSearch db v
-          return (pos, EUnboundVar v (take maxMatches (filter (isNamed v) ls)))
-      _ -> return msg
+-- approximate matches from a type search on the given type
+bloogleTypeMatches :: String -> String -> IO [String]
+bloogleTypeMatches db t = do
+    ls <- bloogleSearch db (":: " ++ t)
+    return (take maxMatches ls)
+
+-- results of a name search (a substring match), filtered down to the
+-- lines whose identifier is exactly the given name
+bloogleNameMatches :: String -> String -> IO [String]
+bloogleNameMatches db v = do
+    ls <- bloogleSearch db v
+    return (take maxMatches (filter (isNamed v) ls))
 
 -- run "bloogle search <db> <query>" and return the result lines
 bloogleSearch :: String -> String -> IO [String]
@@ -55,7 +54,7 @@ isResultLine l =
 
 -- whether a result line is for an identifier named exactly "v",
 -- accepting both the "Module name :: type" and "Module.name :: type"
--- output shapes
+-- output shapes (and "Module data Name a b" style lines for types)
 isNamed :: String -> String -> Bool
 isNamed v l = any matches (words (takeWhile (/= ':') l))
   where matches w = (w == v) || (('.':v) `isSuffixOf` w)

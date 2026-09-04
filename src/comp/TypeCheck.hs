@@ -14,7 +14,6 @@ import PFPrint
 import Id
 import Error(internalError, EMsg, WMsg, ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsErrorUnsafe, bsWarning)
-import Bloogle(bloogleAnnotate)
 import ContextErrors
 import Flags(Flags, enablePoisonPills, allowIncoherentMatches)
 import CSyntax
@@ -55,8 +54,8 @@ tiDefns errh s flags ds = do
                           (Left emsgs)  -> Left emsgs
                           (Right cdefn) -> rmFreeTypeVars cdefn
   let (checks, wss, pkgss) = unzip3 (map checkDef ds)
-  let (errors0, ds') = apFst concat $ separate checks
-  let have_errors = not (null errors0)
+  let (errors, ds') = apFst concat $ separate checks
+  let have_errors = not (null errors)
   let mkErrorDef (Left _)  (CValueSign (CDef i t _)) = Just (mkPoisonedCDefn i t)
       mkErrorDef (Left _)  (Cclass {}) = Nothing
       mkErrorDef (Left _)  (CValue {}) = Nothing -- Can't recover from missing signature error.
@@ -67,15 +66,11 @@ tiDefns errh s flags ds = do
           apFst concat $ separate $ map fst3 (map checkDef error_defs)
   -- Accumulate all used packages (only from the first round, poison pills don't use new symbols)
   let allUsedPkgs = S.unions pkgss
-  -- decorate typed-hole and unbound-variable diagnostics with bloogle
-  -- suggestions (see -bloogle-db)
-  errors <- mapM (bloogleAnnotate flags) errors0
-  warns <- mapM (bloogleAnnotate flags) (concat wss)
   -- XXX: we give up - some type signatures are bogus
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
-  return (ds' ++ error_defs', warns, allUsedPkgs, have_errors)
+  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors)
 
 nullAssump :: [Assump]
 nullAssump = []
