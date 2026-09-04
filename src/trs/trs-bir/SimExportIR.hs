@@ -441,7 +441,16 @@ encModule msi elab_ids keepF ffcalls (defClk, defRst) pkg = do
     -- value method computes the function
     niEnc <- mapM (\(iname, mname) -> do
                      nmEnc <- strE iname
-                     kEnc <- encVariant "Module" <$> strE mname
+                     -- a position in the externs list, as every other
+                     -- Module reference is; the name itself lives there
+                     kEnc <- case M.lookup mname externIx of
+                               Just k -> return (encVariant "Module"
+                                                   (encW32 (fromIntegral k)))
+                               Nothing -> internalError
+                                            ("SimExportIR: noinline "
+                                             ++ show mname
+                                             ++ " instantiated but not in"
+                                             ++ " the externs list")
                      return $ encStruct
                        [ ("name", nmEnc)
                        , ("kind", kEnc)
@@ -839,11 +848,14 @@ encPortRawBase nameEnc w kind baseEnc =
 -- | The synthesized modules a fragment instantiates, in first-use
 -- order.  A cross-boundary reference names a position in this list, so
 -- the module name is written once however many times it is used.
+-- A noinline function is a synthesized module like any other; it
+-- reaches the package by its own list rather than as a state instance.
 externsOf :: SimPackage -> [String]
 externsOf pkg =
-    stableOrdNub [ getVNameString (vName (avi_vmi avi))
-                 | avi <- M.elems (sp_state_instances pkg)
-                 , not (avi_user_import avi) ]
+    stableOrdNub ([ getVNameString (vName (avi_vmi avi))
+                  | avi <- M.elems (sp_state_instances pkg)
+                  , not (avi_user_import avi) ]
+                  ++ map snd (sp_noinline_instances pkg))
 
 encInstance :: M.Map String Int -> M.Map AId Int
             -> MethodOrderMap -> AVInst -> EncM C.Encoding
