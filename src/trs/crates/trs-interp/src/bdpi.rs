@@ -33,6 +33,19 @@ impl Bdpi {
         path: &std::path::Path,
         funcs: &[(String, String)], // (name, c_name)
     ) -> Result<Bdpi, String> {
+        // dlopen reads a name with no directory component as one to
+        // look for along the loader's search path, where the companion
+        // never is: it is written beside the artifact, and the artifact
+        // is wherever -o put it.  Callers name it by joining a suffix
+        // onto that output path, so "art.bdpi.so" is a real relative
+        // path and has to be spelled as one.
+        let here;
+        let path = if path.parent().map_or(true, |d| d.as_os_str().is_empty()) {
+            here = std::path::Path::new(".").join(path);
+            here.as_path()
+        } else {
+            path
+        };
         let lib = unsafe { libloading::Library::new(path) }
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let mut syms = std::collections::HashMap::new();
