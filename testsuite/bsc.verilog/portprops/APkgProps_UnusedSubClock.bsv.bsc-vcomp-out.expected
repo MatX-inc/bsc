@@ -24,4 +24,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_UnusedSubClock.v
+Elaborated module file created: sysAPkgProps_UnusedSubClock.ba
 All packages are up to date.
