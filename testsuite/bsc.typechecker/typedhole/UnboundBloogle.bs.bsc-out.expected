@@ -1,0 +1,7 @@
+checking package dependencies
+compiling UnboundBloogle.bs
+Error: "UnboundBloogle.bs", line 4, column 17: (T0004)
+  Unbound variable `mep'
+  bloogle found these exact name matches:
+    FakeVector mep :: Fake n a -> a
+    Fake.Qualified.mep :: Fake n a -> a

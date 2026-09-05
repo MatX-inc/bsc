@@ -1,0 +1,24 @@
+#!/bin/sh
+# Stub bloogle for testing -bloogle-db: answers canned results so the
+# tests don't depend on a real bloogle installation or database.
+# Usage (matching the real CLI): bloogle search <db> <query>
+
+if [ "$1" != "search" ] ; then
+    echo "stub bloogle: unexpected arguments: $*" 1>&2
+    exit 1
+fi
+
+case "$3" in
+  ::*)
+    # a type search: approximate matches
+    echo "FakeVector fakeFold :: (a -> b -> b) -> b -> Fake n a -> b"
+    echo "FakeVector fakeHead :: Fake n a -> a"
+    ;;
+  *)
+    # a name search: substring matches, of which only "mep" is exact
+    echo "FakeVector mep :: Fake n a -> a"
+    echo "FakeVector mepmep :: Fake n a -> Fake n a"
+    echo "Fake.Qualified.mep :: Fake n a -> a"
+    echo "-- plus more results not shown"
+    ;;
+esac
