@@ -5,6 +5,10 @@ the "Bluesim 3" proposal (since renamed to "TRS"); historical source
 references are retained where they explain the semantic contract, while §0
 and the revised phasing govern the current hierarchy-first implementation.
 
+The operational assignment for the feasibility gate is
+[P0-HANDOFF.md](P0-HANDOFF.md): pinned inputs, prototype scope, oracle policy,
+measurable acceptance checks, deliverables, and review/stop conditions.
+
 ## 0. Binding architecture rules
 
 This section is normative.  It is an architecture reset after the first TRS
@@ -15,8 +19,9 @@ or the current implementation, this section wins until the other material is
 updated.
 
 1. **Correctness is non-negotiable.**  TRS must preserve BSC's scheduled TRS
-   semantics and the observable Bluesim contract.  A scale or throughput win
-   never excuses a semantic difference.
+   semantics and the applicable observable Bluesim contract.  Dynamic
+   scheduling uses the Verilog-backend reference specified in rule 5.
+   A scale or throughput win never excuses a semantic difference.
 2. **Hierarchy is the canonical representation and execution model.**  A
    synthesized module is the unit of export, verification, interpretation,
    compilation, and reuse.  A design is an instance graph that binds those
@@ -46,6 +51,9 @@ updated.
    pre-edge state and obeys the exported contracts; it does not rerun BSC's
    conflict/SAT reasoning.  Independent choices stay local to their instances,
    never a Cartesian product of whole-design alternative schedules.
+   **The required dynamic-scheduling capability is parity with BSC's Verilog
+   backend at the pinned reference revision**, within the stated TRS scope.
+   Supporting every theoretically possible dynamic schedule is not a goal.
 6. **`import "BVI"` is a first-class boundary implementation.**  A BVI module
    participates through the same scheduling, clock, reset, method, and path
    contract as a synthesized BSV module, while its body is opaque and may be
@@ -85,7 +93,7 @@ The permanent scale gates are:
 ### 0.1 Hierarchical feasibility gate
 
 Before production migration begins, P0 must demonstrate that the proposed
-boundary model can express the complete TRS semantic surface.  Verilog is
+boundary model can express the complete required semantic surface.  Verilog is
 evidence that hierarchical hardware descriptions can execute, but it is not
 this proof: elaboration, static event scheduling, and simulator-specific
 flattening do not demonstrate a reusable interpreter/compiler ABI, guarded
@@ -141,7 +149,7 @@ representative application.  The initial proof matrix is:
 | --- | --- |
 | Static scheduling | Nested action, value, and action-value calls with RDY/EN, conflicts, urgency, and pre-edge reads; child work between two parent interactions without collecting descendant segments |
 | Combinational behavior | Cross-boundary value dependencies and declared combinational paths, including rejection of illegal cycles |
-| Dynamic scheduling | Guarded alternatives across parent/child or sibling boundaries and many independently choosing instances, without any global order or Cartesian product |
+| Dynamic scheduling | Verilog-backend-supported guarded behavior across parent/child or sibling boundaries and many independently choosing instances, without any global order or Cartesian product |
 | State and effects | One-rule-at-a-time visibility, timestamp/shadow behavior, cross-boundary ME inhibition, primitives, BDPI, system tasks, and deterministic effect/stop ordering through local contracts |
 | Time | Multiple, derived, and gated clocks; reset sequencing; crossing rules; coincident edges; and event tie-breaking |
 | Foreign modules | BSV above and below BVI, with RDY/EN, combinational paths, same-cycle observation, clock/reset delivery, and batched Verilator commit |
@@ -159,7 +167,10 @@ P0 passes only when all of the following hold:
 
 1. the spike matches the applicable Bluesim or Verilog oracle for the proof
    matrix and focused differential corpus, with an explicit semantic
-   specification for cases neither oracle supports;
+   specification for cases neither oracle supports.  Dynamic scheduling uses
+   BSC-generated Verilog as the primary reference: its supported behavior is
+   the target, not a more general scheduler.  An independent specification
+   must not expand that dynamic-scheduling scope beyond the Verilog backend;
 2. a compositional argument explains why the protocol preserves each
    interaction under child substitution and arbitrary nesting, backed by
    executable witnesses; passing examples alone is not a completeness proof;
@@ -194,8 +205,10 @@ may be consumed by the hierarchical engine or used as its preparation step.
 
 1. **Same semantics, no global schedule.**  Execute bsc's module-local
    scheduling decisions and interface contracts, including guarded dynamic
-   alternatives, and preserve TRS (one-rule-at-a-time) semantics and the
-   observable Bluesim contract, validated against the existing testsuite.
+   behavior at parity with its Verilog backend, and preserve TRS
+   (one-rule-at-a-time) semantics and the applicable observable Bluesim
+   contract, validated against the existing testsuite and the designated
+   Verilog reference for dynamic scheduling.
 2. **Hierarchical scaling with design size.**  Module-local work scales with
    unique module specializations; design-level work scales with instance
    boundaries, not replicated internal rules.  This applies to the
@@ -407,7 +420,8 @@ break on every datatype change.  Instead, the TRS exporter emits **BIR**
 `.ba` already drops information Bluesim must recompute (e.g. `UseCond`s are
 not round-tripped, `GenABin.hs:404-408`), so `.ba` was never a complete
 interface either; BIR makes the actual contract explicit and testable.  The
-full format is specified in [BIR.md](BIR.md).
+legacy format is described in [BIR.md](BIR.md); P0 must justify and document
+the replacement boundary protocol and schema before freezing them.
 
 The unit of export is one synthesized module, matching one `.ba`.  Exporting
 that module must not read a child's executable body.  A fragment contains:
@@ -477,8 +491,10 @@ recursive module protocol, not instructions to retain Bluesim's algorithms:
    contract must be revised before migration proceeds.
 
 These are encoded in a *semantics test kit* first (see §10): the hierarchical
-interpreter is tested against today's Bluesim; compiled and BVI module
+interpreter is tested against Bluesim where applicable, with BSC-generated
+Verilog primary for dynamic-scheduling parity.  Compiled and BVI module
 executors are tested against the interpreter and the relevant Verilog oracle.
+Do not require a broader dynamic scheduler than the reference Verilog backend.
 
 ## 5. Module execution and code generation
 
@@ -800,8 +816,9 @@ current Bluesim and Verilator (`--threads 1` and best-N) on the same RTL.
   Load one fragment per module, share prepared module artifacts, allocate
   per-instance state, and execute through recursive parent/child protocols.  Guarded
   alternatives select locally; there is no whole-domain alternative order.
-  Deliverable: static and dynamic-schedule suites pass against Bluesim, while
-  repeated-instance module-local preparation work stays constant.
+  Deliverable: static suites pass against Bluesim and dynamic-schedule suites
+  match the supported Verilog-backend behavior, while repeated-instance
+  module-local preparation work stays constant.
 - **P2 — Complete interpreter surface and mixed BVI.**  MCD, derived/gated
   clocks, resets, crossing rules, primitives, BDPI, system tasks, interactive
   API, waveforms, and the Verilator-backed BVI executor all run through the
@@ -833,9 +850,10 @@ does not authorize reintroducing a global rule or segment schedule.
 
 - **Semantics drift** (ME inhibitors, timestamp shadows, `$display`
   ordering, event tie-breaking): mitigated by the interpreter-first plan and
-  bit-identical stdout/VCD differential testing.  The hierarchical scheduler
-  must demonstrate equivalence to the legal bsc order, including guarded
-  alternatives; it does not invent ordering policy.
+  the comparator policy in P0-HANDOFF.md: Bluesim parity where applicable and
+  Verilog-backend parity for dynamic scheduling.  The hierarchical scheduler
+  must preserve the designated reference behavior; it does not invent a
+  more general scheduling policy or rely only on final-state agreement.
 - **Architecture regression hidden by parity**: a monolithic implementation
   can be semantically perfect and still violate the product requirement.
   A body-free segment composition can violate it too.  Structural route

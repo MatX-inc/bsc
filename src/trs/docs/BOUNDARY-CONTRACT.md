@@ -1,5 +1,12 @@
 # Boundary contract: measured requirements for the interface refactor
 
+Scope clarification, 2026-09-05: this is a compilation-isolation audit, not
+a proof that the existing interface contract suffices for hierarchical TRS
+execution.  [P0-HANDOFF.md](../P0-HANDOFF.md) defines the feasibility task
+and separates generic TRS artifact isolation from production `.bo`/`.ba`
+refactoring.  The latter's acceptance gates below remain requirements;
+a successful prototype does not claim they have passed.
+
 Self-contained handoff (2026-07-12) from the Bazel-friendliness audit
 to the bsc interface-contract refactor.  Everything here is measured
 on this tree (bsc f2967c80-era installed binary) and reproducible with
