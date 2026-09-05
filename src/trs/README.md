@@ -4,7 +4,10 @@ A Rust/LLVM simulation backend for BSC — a modern replacement for the
 C++-generating Bluesim backend.  See [DESIGN.md](DESIGN.md) for the full
 architecture, rationale, and phasing.
 
-Status: **design + scaffolding** (phase P0 of DESIGN.md §10).
+Status: a legacy simulator implementation is present; the hierarchy-first
+replacement has an **unpassed P0 feasibility gate**.  Start new work with
+[P0-HANDOFF.md](P0-HANDOFF.md).  Existing build/test commands below exercise
+the current tree, not a completed P0 spike or proof of hierarchical scaling.
 
 ## Layout
 
