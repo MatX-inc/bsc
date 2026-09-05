@@ -71,6 +71,72 @@ The permanent scale gates are:
   dynamic alternatives, per-module lowering count, emitted code bytes, and
   every cross-boundary specialization.
 
+### 0.1 Hierarchical feasibility gate
+
+Before production migration begins, P0 must demonstrate that the proposed
+boundary model can express the complete TRS semantic surface.  Verilog is
+evidence that hierarchical hardware descriptions can execute, but it is not
+this proof: elaboration, static event scheduling, and simulator-specific
+flattening do not demonstrate a reusable interpreter/compiler ABI, guarded
+dynamic scheduling, mixed executors, or the required scale bounds.
+
+For this gate, **fully hierarchical** has a precise meaning:
+
+- every separately synthesized BSV module and every BVI module is an opaque
+  executable boundary; non-synthesized source structure may be elaborated
+  inside its owning artifact;
+- a parent artifact may depend on a child's versioned interface and schedule
+  contract, but may not inspect, embed, or copy the child's rules, defs,
+  schedule nodes, state layout, or executable IR;
+- the design-level kernel may know the instance graph, clocks, resets,
+  events, and declared boundary-ordering facts, but never module-local rule
+  bodies; and
+- module execution may suspend and resume at declared boundary interactions,
+  but the runtime may not obtain correctness by assembling those suspended
+  bodies into an instance-expanded global schedule.
+
+P0 builds a deliberately unoptimized hierarchical interpreter spike using
+the proposed module-executor ABI.  It must include a minimized executable
+witness for every distinct cross-boundary semantic interaction, not merely a
+representative application.  The initial proof matrix is:
+
+| Semantic obligation | Required hierarchical witness |
+| --- | --- |
+| Static scheduling | Nested action, value, and action-value calls with RDY/EN, conflicts, urgency, and pre-edge reads |
+| Combinational behavior | Cross-boundary value dependencies and declared combinational paths, including rejection of illegal cycles |
+| Dynamic scheduling | Guarded alternatives that change order within one instance and across parent/child or sibling boundaries, without a whole-design Cartesian product |
+| State and effects | One-rule-at-a-time visibility, timestamp/shadow behavior, primitives, BDPI, system tasks, and deterministic effect ordering |
+| Time | Multiple, derived, and gated clocks; reset sequencing; crossing rules; coincident edges; and event tie-breaking |
+| Foreign modules | BSV above and below BVI, with RDY/EN, combinational paths, same-cycle observation, clock/reset delivery, and batched Verilator commit |
+| Observability | Interactive reads/writes and VCD/FST event ordering without a second backing model or body flattening |
+
+The matrix is closed against the BIR schema, runtime primitive catalog, and
+supported BVI contract: every operation must be classified as module-local,
+expressible in the boundary contract, or owned by the global time/event
+kernel.  An unclassified operation is a failed architecture proof, not
+permission to peek through the boundary.  Constructs that reduce to an
+already witnessed interaction need a documented reduction and a regression
+test; genuinely new interactions need another executable witness.
+
+P0 passes only when all of the following hold:
+
+1. the spike matches Bluesim's observable trace for the proof matrix and a
+   focused differential corpus;
+2. instrumentation proves that no executed path constructs a design-wide
+   graph containing module-local rules, defs, or schedule nodes;
+3. repeated-instance ladders keep prepared bodies and body-sized work
+   constant per unique specialization;
+4. a child can be replaced between interpreter, test-double, and BVI
+   executors without changing its generic parent artifact;
+5. a child-body-only edit does not rebuild that generic parent; and
+6. unsupported cases fail closed with a boundary-capability diagnostic and
+   never fall back to flattening.
+
+The spike may be slow and disposable; its boundary semantics and evidence
+are not.  If the gate fails, revise BIR or the executor/boundary contract and
+repeat P0.  Do not begin the production interpreter or any LLVM work while a
+known semantic class still requires whole-design expansion.
+
 ## 1. Goals
 
 1. **Same semantics.**  Execute the schedule computed by bsc, including
@@ -615,12 +681,15 @@ current Bluesim and Verilator (`--threads 1` and best-N) on the same RTL.
 
 ## 10. Phasing
 
-- **P0 — Freeze contracts and expose scale counters.**  Bring DESIGN.md,
-  BIR.md, and the boundary/BVI contracts into agreement; add plan diagnostics
-  and repeated-instance/leaf-edit gates.  Keep the existing whole-design
-  engine only as a differential reference.  Deliverable: the current engine
-  has measured scale curves and every forbidden whole-design structure has
-  an identified replacement seam.
+- **P0 — Prove hierarchical completeness, then freeze contracts.**  Inventory
+  the BIR schema, runtime primitives, and BVI contract; build the unoptimized
+  executor-ABI spike and close every row of the §0.1 proof matrix.  Add route
+  assertions, plan diagnostics, and repeated-instance/leaf-edit gates.  Keep
+  the existing whole-design engine only as a differential reference; it is
+  not an allowed implementation fallback.  Deliverable: executable evidence
+  that every supported semantic interaction has a hierarchical home,
+  measured scale curves, and synchronized DESIGN.md, BIR.md, executor, and
+  BVI contracts.  P1 is blocked until this gate passes.
 - **P1 — Hierarchical interpreter and dynamic boundary scheduler.**  Load one
   fragment per module, share prepared module artifacts, allocate per-instance
   state, and execute local segments through compact boundary bindings.
