@@ -1,0 +1,35 @@
+{
+  "observed_date": "2026-09-05",
+  "execution_root": "repository root",
+  "evidence_scope": "First P0a checkpoint only; no compiler/RTL/Verilator execution or P0 acceptance.",
+  "commands": [
+    {
+      "command": "python3 -m unittest discover -s src/trs/spike/p0-hierarchy/tests -v",
+      "exit_code": 0,
+      "output": "unit-tests.txt"
+    },
+    {
+      "command": "sh src/trs/spike/p0-hierarchy/run.sh source",
+      "exit_code": 0,
+      "output": "all.json#/checks/source",
+      "note": "Standalone mode also run; combined output retains the same check evidence."
+    },
+    {
+      "command": "sh src/trs/spike/p0-hierarchy/run.sh model",
+      "exit_code": 0,
+      "output": "all.json#/checks/model",
+      "note": "Standalone mode also run; combined output retains the same check evidence."
+    },
+    {
+      "command": "sh src/trs/spike/p0-hierarchy/run.sh environment",
+      "exit_code": 2,
+      "output": "all.json#/checks/environment",
+      "note": "Standalone mode also run; combined output retains the same check evidence."
+    },
+    {
+      "command": "sh src/trs/spike/p0-hierarchy/run.sh all",
+      "exit_code": 2,
+      "output": "all.json"
+    }
+  ]
+}
