@@ -1,0 +1,3127 @@
+{
+  "schema_version": 1,
+  "verdict": "blocked/inconclusive",
+  "phase": "P0a design-owner review; no substantial P0b implementation",
+  "pins": {
+    "assignment": "054ba3f6400bfed18c20c1552981212e8cc956bd",
+    "compiler": "a9462e0e28102f07a89b3f3c478b33c806d62a3e",
+    "bvi": "d4a72767c63e6dbdf569cac4c61aeb8afc597c04"
+  },
+  "status_vocabulary": {
+    "researched": "Source audited or candidate reduction recorded; not tested and not a pass",
+    "untested": "Obligation identified; no adequate witness execution",
+    "disproved": "Only the specifically named shortcut candidate is contradicted by an explicit toy model",
+    "blocked": "Missing derivation/proof/tool/bridge prevents applicable claim"
+  },
+  "classification_policy": "Provisional refusal classifications marked review_required cannot be counted as accepted expected rejections. All valid Verilog-backend dynamic behavior within the stated two-state/BVI scope remains required.",
+  "inventory": [
+    {
+      "id": "S01",
+      "category": "static",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/SchedInfo.hs",
+          "symbol": "SchedInfo; MethodConflictInfo"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/AScheduleInfo.hs",
+          "symbol": "AScheduleInfo; ADynSched"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimPackage.hs",
+          "symbol": "MethodOrderMap"
+        }
+      ],
+      "required_interaction": "Action/value/action-value admission, RDY/EN, method multiplicity, CF/SB/SBR/C plus P/ME/EXT",
+      "owner": "module and direct-child public methods",
+      "witness_ids": [
+        "W_STATIC",
+        "W_BUG898"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "S02",
+      "category": "static",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/AScheduleInfo.hs",
+          "symbol": "AScheduleInfo; ADynSched"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimMakeCBlocks.hs",
+          "symbol": "mkMERuleInhibits"
+        }
+      ],
+      "required_interaction": "Own Esposito urgency/conflicts, conditional uses, stable fired decisions and hierarchical private contenders",
+      "owner": "module",
+      "witness_ids": [
+        "W_ME"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "No public admission/ME proof replaces order-derived global inhibitors"
+    },
+    {
+      "id": "S03",
+      "category": "static",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/SchedInfo.hs",
+          "symbol": "SchedInfo; MethodConflictInfo"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "findRuleBetweenAndBeforeMethods; makeRuleBetweenEdges"
+        }
+      ],
+      "required_interaction": "A child performs private work between two public interactions without exporting private rule IDs",
+      "owner": "module/direct child",
+      "witness_ids": [
+        "W_BUG898",
+        "W_TOY"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Current SchedInfo stores private rule paths; toy observation rendezvous works only for supplied contract"
+    },
+    {
+      "id": "S04",
+      "category": "static",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/SchedInfo.hs",
+          "symbol": "SchedInfo; MethodConflictInfo"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/trs-bir/SimExportIR.hs",
+          "symbol": "encSchedule"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/schedule.rs",
+          "symbol": "DynSched::between; Schedule"
+        }
+      ],
+      "required_interaction": "Public before/between extraction using only owner-local facts and immediate-child public constraints",
+      "owner": "compiler-local exporter",
+      "witness_ids": [
+        "W_EXTRACT"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Existing named child paths and merged schedule cannot be used as extraction step"
+    },
+    {
+      "id": "D01",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/AScheduleInfo.hs",
+          "symbol": "AScheduleInfo; ADynSched"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/AIntraCycleStability.hs",
+          "symbol": "aInlineStableCone"
+        }
+      ],
+      "required_interaction": "Single-direction stable guarded pair and pre-edge guard capture",
+      "owner": "module",
+      "witness_ids": [
+        "W_DYN_PAIR"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "D02",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/AScheduleInfo.hs",
+          "symbol": "AScheduleInfo; ADynSched"
+        }
+      ],
+      "required_interaction": "Both-direction disjoint guarded pairs, including neither rule active",
+      "owner": "module",
+      "witness_ids": [
+        "W_DYN_BOTH"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "D03",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/AScheduleInfo.hs",
+          "symbol": "AScheduleInfo; ADynSched"
+        }
+      ],
+      "required_interaction": "Conditional self-call, retaining only actual early/late use constraints",
+      "owner": "module",
+      "witness_ids": [
+        "W_DYN_SELF"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "D04",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        }
+      ],
+      "required_interaction": "Cycles of optional implied edges (G0116) that Verilog accepts",
+      "owner": "module",
+      "witness_ids": [
+        "W_DYN_LOOP"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "D05",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        },
+        {
+          "pin": "compiler",
+          "path": "testsuite/bsc.scheduler/sched-conditions/SchedCondsDynamicSchedule.bsv",
+          "symbol": "sysSchedCondsDynamicSchedule"
+        },
+        {
+          "pin": "compiler",
+          "path": "testsuite/bsc.scheduler/sched-conditions/sched-conditions.exp",
+          "symbol": "compile_verilog_pass_warning G0100 with -sched-conditions; G0010 flag-off control"
+        }
+      ],
+      "required_interaction": "Both CAN_FIREs true with opposite conditional method calls; primary coverage discriminator",
+      "owner": "module/direct child",
+      "witness_ids": [
+        "W_DYN_CONDITIONAL"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Compiler source warns/taints Verilog-only for unresolved cases; pinned regression expects original Verilog compile success with G0100 under -sched-conditions. New initialized fixture uncompiled; original test not rerun here.",
+      "blocker": "ADynSched-only extraction misses this accepted-target source class"
+    },
+    {
+      "id": "D06",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        }
+      ],
+      "required_interaction": "Dynamic cases with interface methods as callers, WILL_FIRE exclusivity, and conditional uses beyond disjoint CAN_FIRE",
+      "owner": "module/direct-child public channels",
+      "witness_ids": [
+        "W_DYN_METHOD",
+        "W_DYN_WILL_FIRE"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "mkDynSched/mkDynSelf exclude method callers; complete Verilog extraction not supplied"
+    },
+    {
+      "id": "D07",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/AIntraCycleStability.hs",
+          "symbol": "aInlineStableCone"
+        }
+      ],
+      "required_interaction": "Verilog-supported guards/conditions containing wire/port/opaque method cones or exceeding stable-inlining budget",
+      "owner": "module and declared public observations",
+      "witness_ids": [
+        "W_DYN_UNSTABLE"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Stable register-only optional export subset is not an exclusion criterion",
+      "scope_note": "Each proposed case must first compile through pinned Verilog backend; this does not require arbitrary unsupported dynamic scheduling"
+    },
+    {
+      "id": "D08",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/AScheduleInfo.hs",
+          "symbol": "AScheduleInfo; ADynSched"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimExpand.hs",
+          "symbol": "simExpandSched"
+        }
+      ],
+      "required_interaction": "Independent binary choices across instances, parent/child and siblings without whole-design product",
+      "owner": "each module instance",
+      "witness_ids": [
+        "W_SCALE",
+        "W_TOY"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "untested",
+      "evidence": "Toy evaluates K local choices per edge; no real BSC-derived instances",
+      "forbidden_legacy_restrictions": [
+        "single owning dynamic module",
+        "16 combinations",
+        "whole-design alternative enumeration"
+      ]
+    },
+    {
+      "id": "D09",
+      "category": "dynamic",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "verifyStaticScheduleOneRule; verifyStaticScheduleTwoRules"
+        },
+        {
+          "pin": "assignment",
+          "path": "src/trs/P0-HANDOFF.md",
+          "symbol": "sections 1 and 3"
+        }
+      ],
+      "required_interaction": "Only the pinned Verilog backend's accepted behavior is required, not every mathematical TRS schedule",
+      "owner": "compiler oracle boundary",
+      "witness_ids": [
+        "W_DYN_CONDITIONAL"
+      ],
+      "oracle": "BSC-generated RTL at compiler pin, independent Icarus simulator",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "classification": "outside_defined_dynamic_scope",
+      "classification_condition": "Only after compiler/reference evidence demonstrates a proposed scheme is outside pinned Verilog capability; missing tools or an executor refusal are insufficient"
+    },
+    {
+      "id": "C01",
+      "category": "combinational",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/VModInfo.hs",
+          "symbol": "VPathInfo"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        }
+      ],
+      "required_interaction": "Cross-boundary value/RDY dependencies and declared paths; reject actual illegal cycles",
+      "owner": "module and direct children",
+      "witness_ids": [
+        "W_COMB"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "C02",
+      "category": "combinational",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "testsuite/bsc.bugs/bluespec_inc/b898/Bug898.bsv",
+          "symbol": "mkBug898"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Live PulseWire/RWire readiness after early calls, not blanket pre-edge CAN_FIRE freezing",
+      "owner": "module",
+      "witness_ids": [
+        "W_BUG898",
+        "W_TOY"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "C03",
+      "category": "combinational",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/AIntraCycleStability.hs",
+          "symbol": "aWarnDynamicInstArgs"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        }
+      ],
+      "required_interaction": "Dynamic module Port arguments have Verilog settled continuous-wire semantics, separate from static-schedule guard selection",
+      "owner": "module and declared public port",
+      "witness_ids": [
+        "W_DYNAMIC_PORT"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Bluesim constant-argument restriction cannot silently narrow Verilog/BVI target; exact inclusion and comparison rule require review"
+    },
+    {
+      "id": "E01",
+      "category": "bir",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        }
+      ],
+      "required_interaction": "Local values, width arithmetic, pure conditional selection and local DAG caching",
+      "owner": "module",
+      "witness_ids": [
+        "W_EXPR"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Owner-local evaluation once at compiler statement position; still needs wide/zero-width/string/real/conditional regression tests",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "operations": [
+        "Const",
+        "Def",
+        "Port",
+        "Param",
+        "Str",
+        "Real",
+        "Prim",
+        "If",
+        "Case"
+      ]
+    },
+    {
+      "id": "E02",
+      "category": "bir",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        }
+      ],
+      "required_interaction": "Value calls and action-value latches remain correctly correlated across suspend/resume",
+      "owner": "module/direct child",
+      "witness_ids": [
+        "W_STATIC",
+        "W_BVI_AV"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "operations": [
+        "MethCall",
+        "MethValue"
+      ]
+    },
+    {
+      "id": "E03",
+      "category": "bir",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        }
+      ],
+      "required_interaction": "Exactly-once BDPI value/task evaluation with call cookies and side effects",
+      "owner": "module plus effect sink",
+      "witness_ids": [
+        "W_BDPI"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "operations": [
+        "TaskValue",
+        "ForeignCall"
+      ]
+    },
+    {
+      "id": "E04",
+      "category": "bir",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        }
+      ],
+      "required_interaction": "Abstract domain/level values and child output-clock routing",
+      "owner": "module/time kernel",
+      "witness_ids": [
+        "W_CLOCKS"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "operations": [
+        "Clock",
+        "Reset",
+        "Gate",
+        "ClockOut"
+      ]
+    },
+    {
+      "id": "E05",
+      "category": "bir",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimMakeCBlocks.hs",
+          "symbol": "tsortActionsAndDefs; cvtActions"
+        }
+      ],
+      "required_interaction": "Stmt Def/Action/AvAction/Cond preserve compiler tsortActionsAndDefs order and reset gating; assumption checks must not create scheduling edges",
+      "owner": "module",
+      "witness_ids": [
+        "W_EXPR",
+        "W_STATIC",
+        "W_BDPI"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Pure local statement handling except declared method and effect boundaries; no regression evidence",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "operations": [
+        "Stmt::Def",
+        "Stmt::Action",
+        "Stmt::AvAction",
+        "Stmt::Cond",
+        "Action::MethCall",
+        "Action::Foreign",
+        "Action::Task"
+      ]
+    },
+    {
+      "id": "E06",
+      "category": "bir",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        }
+      ],
+      "required_interaction": "All current BIR pure operators, including traps/conditional non-evaluation",
+      "owner": "module",
+      "witness_ids": [
+        "W_EXPR"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Local expression evaluation; arithmetic correctness and effectful operand behavior still need tests",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "operations": [
+        "And",
+        "Or",
+        "Xor",
+        "Not",
+        "Add",
+        "Sub",
+        "Mul",
+        "Quot",
+        "Rem",
+        "Neg",
+        "Eq",
+        "Ult",
+        "Ule",
+        "Slt",
+        "Sle",
+        "Shl",
+        "Lshr",
+        "Ashr",
+        "Extract",
+        "Concat",
+        "ZeroExt",
+        "SignExt",
+        "Select",
+        "StringConcat"
+      ]
+    },
+    {
+      "id": "P01",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Scheduled reads/live writes, initialization and reset semantics",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_REG",
+        "W_ME"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "RegN",
+        "RegA",
+        "RegUN",
+        "RevertReg"
+      ]
+    },
+    {
+      "id": "P02",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Begin-of-cycle timestamp/shadow and ordered multiport register semantics",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_SHADOW",
+        "W_RFILE2"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "ConfigRegN",
+        "ConfigRegA",
+        "ConfigRegUN",
+        "RegTwoN",
+        "RegTwoA",
+        "RegTwoUN",
+        "CRegN5",
+        "CRegA5",
+        "CRegUN5"
+      ]
+    },
+    {
+      "id": "P03",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Within-edge wires, clears, live guard dependencies and crossings",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_BUG898",
+        "W_COMB"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "RWire",
+        "RWire0",
+        "BypassWire",
+        "BypassWire0",
+        "CrossingBypassWire"
+      ]
+    },
+    {
+      "id": "P04",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "FIFO full/empty guards, bypass/loopy ordering, simultaneous calls, i_* shadows and diagnostics",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_FIFO"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "FIFO1",
+        "FIFO2",
+        "FIFO10",
+        "FIFO20",
+        "FIFOL1",
+        "FIFOL2",
+        "FIFOL10",
+        "FIFOL20",
+        "SizedFIFO",
+        "SizedFIFO0",
+        "SizedFIFOL",
+        "SizedFIFOL0"
+      ]
+    },
+    {
+      "id": "P05",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Memory forwarding/read snapshots, initialization files, bounds diagnostics and write effects",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_RFILE2",
+        "W_MEMORY"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "RegFile",
+        "RegFileLoad",
+        "DualPortRam"
+      ]
+    },
+    {
+      "id": "P06",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "One/two-port RAM ticks, latency, byte enables, load files and coincident operations",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_MEMORY"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "BRAM1",
+        "BRAM2",
+        "BRAM1BE",
+        "BRAM2BE",
+        "BRAM1Load",
+        "BRAM2Load",
+        "BRAM1BELoad",
+        "BRAM2BELoad"
+      ]
+    },
+    {
+      "id": "P07",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Cross-domain samples, shifted/both-edge ticks, handshakes and final phases",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_CROSSING"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "CrossingRegN",
+        "CrossingRegA",
+        "CrossingRegUN",
+        "RegAligned",
+        "LatchCrossingReg",
+        "LatchCrossingRegU",
+        "SyncBit",
+        "SyncBit15",
+        "SyncBit05",
+        "SyncBit1",
+        "SyncPulse",
+        "SyncHandshake",
+        "SyncRegister"
+      ]
+    },
+    {
+      "id": "P08",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Two-domain FIFO state, level/clear methods and independent/coincident edges",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_CROSSING",
+        "W_FIFO"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "SyncFIFO",
+        "SyncFIFO0",
+        "SyncFIFO1",
+        "SyncFIFO10",
+        "SyncFIFOLevel",
+        "SyncFIFOLevel0"
+      ]
+    },
+    {
+      "id": "P09",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Derived/gated clock generation, selected domains, phases and output observations",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_CLOCKS"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "ClockGen",
+        "MakeClock",
+        "ClockDiv",
+        "GatedClockDiv",
+        "ClockInverter",
+        "GatedClockInverter",
+        "GatedClock",
+        "ClockMux",
+        "UngatedClockMux",
+        "ClockSelect",
+        "UngatedClockSelect"
+      ]
+    },
+    {
+      "id": "P10",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Sync/async reset assertion/deassertion, reset outputs and bootstrapping",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_RESETS"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "ResetToBool",
+        "ResetMux",
+        "ResetEither",
+        "SyncReset",
+        "SyncResetA",
+        "SyncReset0",
+        "InitialReset",
+        "MakeReset0",
+        "MakeReset",
+        "MakeResetA"
+      ]
+    },
+    {
+      "id": "P11",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Probe/Counter methods, waveform hierarchy/backdating and state access",
+      "owner": "owning module; time kernel delivers public edge/reset events",
+      "witness_ids": [
+        "W_OBSERVE",
+        "W_REG"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": "Family members share an owner-local primitive protocol candidate; every variant/interaction still needs regression; no imported flat primitive planner",
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "primitives": [
+        "Probe",
+        "ProbeWire",
+        "Counter"
+      ]
+    },
+    {
+      "id": "P12",
+      "category": "primitive",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/lib.rs",
+          "symbol": "Primitive::Other"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "Unknown Primitive::Other and future primitive names fail closed, never flatten or silently substitute",
+      "owner": "module",
+      "witness_ids": [
+        "W_PRIMITIVE_CENSUS"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Dispatch census is not a complete BSC library capability census; unrecognized required primitives remain required-but-unimplemented"
+    },
+    {
+      "id": "F01",
+      "category": "effects",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/expr.rs",
+          "symbol": "Expr; PrimOp; Stmt; Action"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/ASchedule.hs",
+          "symbol": "CFFuncArbitraryChoice"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimExpand.hs",
+          "symbol": "flattenCombSchedGraph"
+        }
+      ],
+      "required_interaction": "Preserve observable cross-boundary BDPI/system-task order, conditional calls, signed formatting, plusargs and AV cookies",
+      "owner": "owner-local effect calls; shared output sink only",
+      "witness_ids": [
+        "W_BDPI",
+        "W_EFFECT_ORDER"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "No proof public pair/phase contracts reproduce reference effect order"
+    },
+    {
+      "id": "F02",
+      "category": "effects",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/tests/regress/FinishEdge.bsv",
+          "symbol": "sysFinishEdge"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/tests/interactive/FinishPeek.bsv",
+          "symbol": "sysFinishPeek"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/bluesim/dollar_display.cxx",
+          "symbol": "bk_finished"
+        }
+      ],
+      "required_interaction": "Finish suppresses applicable later displays but current-edge state writes still complete",
+      "owner": "module and kernel finish latch",
+      "witness_ids": [
+        "W_FINISH"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Exact effects plus timed final mark/cycle state and relevant VCD; print-only comparison insufficient",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "F03",
+      "category": "effects",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/tests/interactive/StopRes.bsv",
+          "symbol": "sysStopRes"
+        }
+      ],
+      "required_interaction": "Stop/resume retains exact continuation and state; BDPI/BVI after-stop and after-finish behavior",
+      "owner": "module and kernel",
+      "witness_ids": [
+        "W_STOP"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "untested",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Full stop/BDPI mixed-engine policy not audited"
+    },
+    {
+      "id": "T01",
+      "category": "time",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/bluesim/priority.cxx",
+          "symbol": "make_priority"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/bluesim/priority.h",
+          "symbol": "tPriorityGroup; tPrioritySlot"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimMakeCBlocks.hs",
+          "symbol": "sortTickCalls"
+        }
+      ],
+      "required_interaction": "Time/group/slot/clock tie-breaking, simultaneous clocks and rules-before-tick",
+      "owner": "time kernel delivers to opaque owners",
+      "witness_ids": [
+        "W_CLOCKS"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Match event times/phases, clock numbers, edge counts, state/effect ordering; no within-edge global tick/rule list",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "T02",
+      "category": "time",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimMakeCBlocks.hs",
+          "symbol": "sortTickCalls"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/SimPackage.hs",
+          "symbol": "sp_clock_domains; sp_reset_list"
+        }
+      ],
+      "required_interaction": "Hierarchical producer/consumer tick dependencies, reset transitions, and FINAL crossing rules",
+      "owner": "module/direct children/time kernel",
+      "witness_ids": [
+        "W_CLOCKS",
+        "W_RESETS",
+        "W_CROSSING"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Public phase-projection/progress argument incomplete"
+    },
+    {
+      "id": "B01",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-interp/src/bvi.rs",
+          "symbol": "BviPrim"
+        }
+      ],
+      "required_interaction": "Public method RDY/EN/value/AV, own-argument and explicit paths, same-cycle publish/settle/read frontiers",
+      "owner": "opaque BVI owner",
+      "witness_ids": [
+        "W_BVI_FRONTIER",
+        "W_BVI_AV"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "B02",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-interp/src/bvi.rs",
+          "symbol": "BviPrim"
+        }
+      ],
+      "required_interaction": "Ordered self-SBR replacement and atomic consumption of AV results",
+      "owner": "BVI owner and caller-local schedule",
+      "witness_ids": [
+        "W_BVI_AV"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "B03",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-interp/src/bvi.rs",
+          "symbol": "BviPrim"
+        }
+      ],
+      "required_interaction": "Raw clocks/gates, coincident-edge batching, reset delivery, non-clock settle -> clock eval -> EN clear",
+      "owner": "BVI owner plus public kernel phase delivery",
+      "witness_ids": [
+        "W_BVI_CLOCKS",
+        "W_BVI_RESETS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "B04",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-interp/src/bvi.rs",
+          "symbol": "BviPrim"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "--timing"
+        }
+      ],
+      "required_interaction": "Private delayed events and wakeups between clock edges, no backdated new input publication",
+      "owner": "opaque BVI endpoint/time kernel",
+      "witness_ids": [
+        "W_BVI_TIMING"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Actual source implements --timing and advance_to; no Verilator executable available here"
+    },
+    {
+      "id": "B05",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "timing-outclock refusal"
+        }
+      ],
+      "required_interaction": "Private timed events combined with output clock transitions, preserving every intermediate edge",
+      "owner": "opaque BVI owner/time kernel",
+      "witness_ids": [
+        "W_BVI_TIMED_CLOCK"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "classification": "required_but_unimplemented",
+      "scope_note": "Required under current handoff's combined private timed-event/output-clock surface when annotations are valid and two-state; no claim every arbitrary Verilog construct is required"
+    },
+    {
+      "id": "B06",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        }
+      ],
+      "required_interaction": "Constant and forwarded parameters including bits/signed/string/real, defines, load-only execution and equivalent model substitution",
+      "owner": "BVI artifact builder/binder; parent contract only",
+      "witness_ids": [
+        "W_BVI_WRAP",
+        "W_SWAP"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "B07",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/trs/tests/bvi/PosWrap.bsv",
+          "symbol": "mkWrapper; sysPosWrap"
+        }
+      ],
+      "required_interaction": "BSV above opaque BVI through separately synthesized wrapper",
+      "owner": "module/direct child",
+      "witness_ids": [
+        "W_BVI_WRAP"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "B08",
+      "category": "bvi",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/VModInfo.hs",
+          "symbol": "VArgInfo"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/comp/Error.hs",
+          "symbol": "EInterfaceArg"
+        }
+      ],
+      "required_interaction": "Independently interpreted BSV below opaque RTL wrapper without compiling child RTL into Verilator",
+      "owner": "BVI wrapper-owned direct-child bridge",
+      "witness_ids": [
+        "W_BVI_BELOW"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "PosWrap is BSV-above-BVI only; ported RTL cut is proposed, not built",
+      "blocker": "Current contract/shim has no subordinate executor endpoint; proposed explicit cut-port bridge requires design-owner review"
+    },
+    {
+      "id": "O01",
+      "category": "observability",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-ir/src/sym.rs",
+          "symbol": "symbol schema"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/tests/interactive/run.sh",
+          "symbol": "interactive reference fixtures"
+        }
+      ],
+      "required_interaction": "Interactive hierarchical symbol reads/writes, wide/state/memory visibility and poke invalidation while stopped",
+      "owner": "owner-local symbol access; kernel user event delivery",
+      "witness_ids": [
+        "W_OBSERVE"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Timed/state peeks and writes, no second backing model; observation paths are not execution metadata",
+      "reduction": null,
+      "status": "untested",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "O02",
+      "category": "observability",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/tests/vcd/run.sh",
+          "symbol": "VCD oracle comparison"
+        },
+        {
+          "pin": "compiler",
+          "path": "src/trs/crates/trs-interp/src/prim.rs",
+          "symbol": "make_prim"
+        }
+      ],
+      "required_interaction": "VCD hierarchy, widths/aliases, timestamps/backdating, initial/final events and event ordering",
+      "owner": "owner emits descriptors/values; observation buffer orders only delivered events",
+      "witness_ids": [
+        "W_VCD"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Bluesim VCD byte comparison with date-field normalization only; Verilog cases require declared signal mapping",
+      "reduction": null,
+      "status": "untested",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "O03",
+      "category": "observability",
+      "source": [
+        {
+          "pin": "compiler",
+          "path": "src/trs/tests/vcd/fstcmp.py",
+          "symbol": "decoded comparison"
+        }
+      ],
+      "required_interaction": "FST hierarchy/width/alias/time-value parity",
+      "owner": "owner observation surface",
+      "witness_ids": [
+        "W_FST"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Decode hierarchy, widths, aliases and timed values, retaining observable ordering; not compressed byte equality",
+      "reduction": null,
+      "status": "untested",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "A01",
+      "category": "architecture",
+      "source": [
+        {
+          "pin": "assignment",
+          "path": "src/trs/P0-HANDOFF.md",
+          "symbol": "section 4"
+        }
+      ],
+      "required_interaction": "No global rules/segments/qualified private IDs/body-reading in reachable export/preparation/binding/execution",
+      "owner": "all candidate layers",
+      "witness_ids": [
+        "W_EXTRACT",
+        "W_ROUTE"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Only toy public-route negative check exists; no actual candidate exporter/interpreter to audit"
+    },
+    {
+      "id": "A02",
+      "category": "architecture",
+      "source": [
+        {
+          "pin": "assignment",
+          "path": "src/trs/P0-HANDOFF.md",
+          "symbol": "section 4 scale table"
+        }
+      ],
+      "required_interaction": "Unique-specialization preparation; N/R/D/K ladders; parent artifacts and declared inputs isolate child edits and swaps",
+      "owner": "module artifacts/direct bindings",
+      "witness_ids": [
+        "W_SCALE",
+        "W_SWAP",
+        "W_TOY"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Deterministic analysis/prep/code/binding/protocol bytes, boundary transitions, guard evaluations and revisits; cold-cache runs; separate instance state",
+      "reduction": null,
+      "status": "untested",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction"
+    },
+    {
+      "id": "A03",
+      "category": "architecture",
+      "source": [
+        {
+          "pin": "assignment",
+          "path": "src/trs/docs/BOUNDARY-CONTRACT.md",
+          "symbol": "two mechanisms and acceptance C"
+        }
+      ],
+      "required_interaction": "Production .bo/.ba body traversal/naming and full-content dependency hash invalidation reported separately",
+      "owner": "compiler frontend/build graph",
+      "witness_ids": [
+        "W_FRONTEND"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Known documented gate; not rerun with compiler here and not solved by toy hashes"
+    },
+    {
+      "id": "A04",
+      "category": "architecture",
+      "source": [
+        {
+          "pin": "assignment",
+          "path": "src/trs/P0-HANDOFF.md",
+          "symbol": "sections 2 and 5"
+        }
+      ],
+      "required_interaction": "Compositional safety, contextual substitution and progress for all required interactions",
+      "owner": "module protocol proof",
+      "witness_ids": [
+        "W_PROTOCOL_REVIEW"
+      ],
+      "oracle": "Pinned Bluesim where supported; declared independent model only after review otherwise",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "blocker": "Public projection completeness, cross-boundary ME/effects/phase safety and decreasing progress measure unproved"
+    },
+    {
+      "id": "X01",
+      "category": "candidate_counterexample",
+      "source": [
+        {
+          "pin": "new_p0a_file",
+          "path": "src/trs/spike/p0-hierarchy/experiments/local_protocol.py",
+          "symbol": "check_counterexamples"
+        }
+      ],
+      "required_interaction": "One complete child execution before or after parent cannot satisfy supplied start/relay/done same-edge contract",
+      "owner": "toy module model",
+      "witness_ids": [
+        "W_TOY"
+      ],
+      "oracle": "Explicit hand-authored local pulse model, not BSC/RTL",
+      "comparison": "Expected same-edge done=true; both atomic candidates observe false",
+      "reduction": null,
+      "status": "disproved",
+      "evidence": "Python model executed successfully during P0a; disproves shortcut candidate only",
+      "pin_note": "New file, not present at assignment pin"
+    },
+    {
+      "id": "X02",
+      "category": "candidate_counterexample",
+      "source": [
+        {
+          "pin": "new_p0a_file",
+          "path": "src/trs/spike/p0-hierarchy/experiments/local_protocol.py",
+          "symbol": "check_counterexamples"
+        }
+      ],
+      "required_interaction": "Blanket pre-edge snapshot of all CAN_FIREs misses a guard made true by a correctly ordered boundary action",
+      "owner": "toy module model",
+      "witness_ids": [
+        "W_TOY"
+      ],
+      "oracle": "Explicit hand-authored local pulse model, not BSC/RTL",
+      "comparison": "Blanket-snapshot false vs live observation-frontier true",
+      "reduction": null,
+      "status": "disproved",
+      "evidence": "Python model executed successfully during P0a; does not disprove all hierarchical protocols",
+      "pin_note": "New file, not present at assignment pin"
+    },
+    {
+      "id": "R01",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "malformed ready pseudo-method (no base, wrong result count, arguments or EN)",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "invalid_contract",
+      "classification_evidence": "BVI-generated RDY pseudo-method invariant; source validates shape",
+      "classification_review_required": false
+    },
+    {
+      "id": "R02",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "multi-port argument grouping not expressible in BVI metadata",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "invalid_contract",
+      "classification_evidence": "Source explicitly states not expressible in BVI; validate any proposed real frontend counterexample before treating this as scope exclusion",
+      "classification_review_required": false
+    },
+    {
+      "id": "R03",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "unknown or reversed physical path endpoint",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "invalid_contract",
+      "classification_evidence": "Declared path must reference existing ports and be input-to-output",
+      "classification_review_required": false
+    },
+    {
+      "id": "R04",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "contract/model port name, direction or width mismatch",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "invalid_contract",
+      "classification_evidence": "The loaded model must implement the declared port surface",
+      "classification_review_required": false
+    },
+    {
+      "id": "R05",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "gated or portless output clock; portless output reset",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Gated output is a capability gap; unobservable/metadata-only variants require a reviewed reduction rather than presumed semantic rejection",
+      "classification_review_required": true
+    },
+    {
+      "id": "R06",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "more than one output reset",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Single-output cap is an adapter limit, not a general declared reset non-goal",
+      "classification_review_required": true
+    },
+    {
+      "id": "R07",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "method multiplicity greater than one or multiple result ports",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Adapter single-port limitation; check actual frontend-expressible shape",
+      "classification_review_required": true
+    },
+    {
+      "id": "R08",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "unsupported forwarded parameter type",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Allowed bits/string/real covered separately; prove a concrete rejected type invalid before reclassification",
+      "classification_review_required": true
+    },
+    {
+      "id": "R09",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "dynamic module Port argument",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Legacy Bluesim G0058 does not narrow Verilog; use current-target-valid continuous port case",
+      "classification_review_required": true
+    },
+    {
+      "id": "R10",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "(*reg*) method/module input port",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Arrival-latching vs shadow-vector semantics require a capability, not silent refusal",
+      "classification_review_required": true
+    },
+    {
+      "id": "R11",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "aliased/shared physical ports",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "A well-annotated BVI alias may be valid; current shadow/ownership representation cannot replay it",
+      "classification_review_required": true
+    },
+    {
+      "id": "R12",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "clockless Action/ActionValue",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "No-commit-edge rationale is candidate-specific; establish compiler legality and reviewed two-state semantics before exclusion",
+      "classification_review_required": true
+    },
+    {
+      "id": "R13",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "self-CF Action method with arguments",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Unordered coincident writers need a valid contract/method-multiplicity analysis; do not assume all declarations lie",
+      "classification_review_required": true
+    },
+    {
+      "id": "R14",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "cross-method path without SB/SBR, or reversed scheduling relation",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "invalid_contract",
+      "classification_evidence": "Provisional for fixtures whose declared dependency contradicts scheduling promise; compiler/path evidence required for each proposed input",
+      "classification_review_required": true
+    },
+    {
+      "id": "R15",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "cross-method path sourced by a value-method argument",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Missing input-selection event in current adapter; backend legality must determine scope",
+      "classification_review_required": true
+    },
+    {
+      "id": "R16",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "path from raw clock or to output not owned by a method",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Clock/reset outputs are part of declared surface; path classification needs explicit clock-phase/ownership model",
+      "classification_review_required": true
+    },
+    {
+      "id": "R17",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "self-SBR AV result consumed nonatomically by coactive caller",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Current adapter last-call representation restriction; first establish valid BSV/Verilog observation semantics, do not bless a contradictory contract",
+      "classification_review_required": true
+    },
+    {
+      "id": "R18",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "inout requiring general X/Z resolution",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "explicit_design_non_goal",
+      "classification_evidence": "DESIGN §1 excludes general four-state simulation; narrower deterministic two-state inout is not automatically excluded",
+      "classification_review_required": false
+    },
+    {
+      "id": "R19",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "deterministic two-state inout not requiring general four-state resolution",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "No blanket inout non-goal appears in DESIGN; exact valid witness and requirement interpretation pending",
+      "classification_review_required": true
+    },
+    {
+      "id": "R20",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "arbitrary DPI/event-kernel co-simulation outside declared BVI surface",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "explicit_design_non_goal",
+      "classification_evidence": "DESIGN §1 general-purpose event-kernel co-simulation exclusion; this is not authorization to bypass current DPI refusal for a child bridge",
+      "classification_review_required": false
+    },
+    {
+      "id": "R21",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-ir/src/bvi.rs",
+          "symbol": "BviContract; BviMethod; BviClock"
+        },
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "refusals"
+        }
+      ],
+      "required_interaction": "timing plus output clocks",
+      "owner": "contract checker/BVI owner",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source refusal inventory and provisional disposition, not executed refusal/parity tests",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Current docs require valid declared private timed-event and output-clock behavior; every intermediate edge must be preserved",
+      "classification_review_required": false
+    },
+    {
+      "id": "R22",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/trs/crates/trs-vlt/src/lib.rs",
+          "symbol": "source/build/load errors"
+        }
+      ],
+      "required_interaction": "Missing RTL sources, unsupported Verilator version, cold cache or absent artifacts",
+      "owner": "build/load capability diagnostic",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "blocked",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "classification": "required_but_unimplemented",
+      "classification_evidence": "Environment/build prerequisites are blockers, not semantic expected rejections; provide dependencies and rerun",
+      "environment_not_semantic_refusal": true
+    },
+    {
+      "id": "R23",
+      "category": "refusal",
+      "source": [
+        {
+          "pin": "bvi",
+          "path": "src/comp/SimBvi.hs",
+          "symbol": "deriveBvi; checkBviPackage"
+        }
+      ],
+      "required_interaction": "Malformed method with neither output nor enable",
+      "owner": "contract checker",
+      "witness_ids": [
+        "W_REFUSALS"
+      ],
+      "oracle": "Same BSV/imported RTL through pinned BSC Verilog and independent Icarus",
+      "comparison": "Retain stdout, stderr, exit status, timed architectural state, method and relevant effect observations; no effect sorting or broad startup/finish filters",
+      "reduction": null,
+      "status": "researched",
+      "evidence": "Source audit only; no BSC compile, simulator run, or hierarchical extraction",
+      "classification": "invalid_contract",
+      "classification_evidence": "Cannot encode value, action or action-value under the declared BVI method surface"
+    }
+  ],
+  "witnesses": [
+    {
+      "id": "W_TOY",
+      "status": "implemented_and_run",
+      "path": "src/trs/spike/p0-hierarchy/experiments/local_protocol.py",
+      "pin": "new_p0a_file",
+      "initial_conditions": "Initially false pulse; R relays; c Boolean; state [7,3,0]",
+      "stimuli": "start/done; c=true/false; N/R/D/K ladders",
+      "expected_observations": "Toy assertions only, not semantic parity",
+      "tools_required": [
+        "Python 3"
+      ],
+      "run_bound_seconds": 10,
+      "oracle": "Independent from BSC only in the trivial sense of a supplied hand model; not an acceptance oracle",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_DYN_CONDITIONAL",
+      "status": "authored_untested",
+      "path": "src/trs/spike/p0-hierarchy/fixtures/DynamicConditionalCalls.bsv",
+      "pin": "new_p0a_file",
+      "initial_conditions": "All registers initialized; c=True, child [7,3,0]",
+      "stimuli": "Alternating c, two unconditional parent rules, public sample and finish at cycle 6",
+      "expected_observations": "Compiler/RTL output not yet recorded; verify diagnostic survives added observations",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BUG898",
+      "status": "existing_seed_untested",
+      "path": "testsuite/bsc.bugs/bluespec_inc/b898/Bug898.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Counter=0, pulses cleared",
+      "stimuli": "Repeated start and same-cycle rule_ran",
+      "expected_observations": "Same-cycle progress then visible observations; minimize without changing semantics",
+      "tools_required": [
+        "Pinned BSC",
+        "Bluesim/required observation tools"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned Bluesim where supported",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_RFILE2",
+      "status": "existing_seed_untested",
+      "path": "testsuite/bsc.bugs/bluespec_inc/b1302/RFile2.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Legacy seed has uninitialized memory; deterministic variant needed",
+      "stimuli": "Writes then same-cycle forwarding reads",
+      "expected_observations": "Compare ordered read values, state and effects, no startup filtering",
+      "tools_required": [
+        "Pinned BSC",
+        "Bluesim/required observation tools"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned Bluesim where supported",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_DYN_PAIR",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/regress/DynSched.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Audit fixture before run",
+      "stimuli": "Guarded pair",
+      "expected_observations": "Verilog primary; existing .expected is not fresh evidence",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_DYN_BOTH",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/regress/DynSchedBoth.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Audit fixture before run",
+      "stimuli": "Both guarded directions and idle",
+      "expected_observations": "Verilog primary",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_DYN_SELF",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/regress/DynSchedSelf.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Audit fixture before run",
+      "stimuli": "Exclusive early/late calls within one rule",
+      "expected_observations": "Verilog primary",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_DYN_LOOP",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/regress/DynSchedLoop.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Audit fixture before run",
+      "stimuli": "Guarded implied-edge cycle",
+      "expected_observations": "Verilog primary",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_FINISH",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/regress/FinishEdge.bsv",
+      "pin": "compiler",
+      "initial_conditions": "cyc=0, mark=0",
+      "stimuli": "finish at cyc=8 followed by ordered mark write",
+      "expected_observations": "Final mark=50 expected by fixture contract; exact compiler run pending",
+      "tools_required": [
+        "Pinned BSC",
+        "Bluesim/required observation tools"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned Bluesim where supported",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_STOP",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/interactive/StopRes.bsv",
+      "pin": "compiler",
+      "initial_conditions": "Audit fixture/driver",
+      "stimuli": "Stop then state peeks and resume",
+      "expected_observations": "Exact continuation and state",
+      "tools_required": [
+        "Pinned BSC",
+        "Bluesim/required observation tools"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned Bluesim where supported",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BVI_FRONTIER",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/bvi/PosShadowFixed.bsv",
+      "pin": "bvi",
+      "initial_conditions": "BVI pin; audit initialization",
+      "stimuli": "Methods with same-cycle observation",
+      "expected_observations": "Icarus primary plus real Verilator executor; no handwritten substitute",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus",
+        "Verilator 5.x --timing"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BVI_AV",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/bvi/PosShadowFixed.bsv",
+      "pin": "bvi",
+      "initial_conditions": "BVI pin; audit initialization",
+      "stimuli": "Action-value atomic/shadow cases",
+      "expected_observations": "AV value at its call frontier; replacement correctness",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus",
+        "Verilator 5.x --timing"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BVI_CLOCKS",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/bvi/PosClocks.bsv",
+      "pin": "bvi",
+      "initial_conditions": "BVI pin; deterministic startup to be verified",
+      "stimuli": "Coincident and independent clocks",
+      "expected_observations": "Raw levels, gates, edge counts and batched commit",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus",
+        "Verilator 5.x --timing"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BVI_RESETS",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/bvi/PosRstOut.bsv",
+      "pin": "bvi",
+      "initial_conditions": "BVI pin; audit reset initialization",
+      "stimuli": "Output reset asserts/deasserts",
+      "expected_observations": "Timed transitions and downstream state",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus",
+        "Verilator 5.x --timing"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BVI_TIMING",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/bvi/PosDelay.bsv",
+      "pin": "bvi",
+      "initial_conditions": "BVI pin; audit initialization",
+      "stimuli": "Private #3/#12/#13 delayed events",
+      "expected_observations": "Between-edge state/output and precise times",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus",
+        "Verilator 5.x --timing"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_BVI_WRAP",
+      "status": "existing_seed_untested",
+      "path": "src/trs/tests/bvi/PosWrap.bsv",
+      "pin": "bvi",
+      "initial_conditions": "BVI pin; st=0, parameters 42/77",
+      "stimuli": "Forwarded parameter wrappers",
+      "expected_observations": "BSV above BVI only",
+      "tools_required": [
+        "Pinned BSC",
+        "Icarus",
+        "Verilator 5.x --timing"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned BSC-generated Verilog + Icarus",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_FRONTEND",
+      "status": "existing_audit_untested",
+      "path": "src/trs/tools/ba-stability-audit.sh",
+      "pin": "compiler",
+      "initial_conditions": "Isolated compiler builds",
+      "stimuli": "Edit leaf body constant without public change",
+      "expected_observations": "Report .bo/.ba separately from generic TRS isolation",
+      "tools_required": [
+        "Pinned BSC",
+        "Bluesim/required observation tools"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Pinned Bluesim where supported",
+      "comparison": "See inventory row and fixtures/README.md; preserve raw effects and timed state"
+    },
+    {
+      "id": "W_STATIC",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_ME",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_EXTRACT",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_DYN_METHOD",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_DYN_WILL_FIRE",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_DYN_UNSTABLE",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_SCALE",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_COMB",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_DYNAMIC_PORT",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_EXPR",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_BDPI",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_CLOCKS",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_REG",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_SHADOW",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_FIFO",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_MEMORY",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_CROSSING",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_RESETS",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_OBSERVE",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_PRIMITIVE_CENSUS",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_EFFECT_ORDER",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_BVI_TIMED_CLOCK",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_SWAP",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_BVI_BELOW",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_VCD",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_FST",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_ROUTE",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_PROTOCOL_REVIEW",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    },
+    {
+      "id": "W_REFUSALS",
+      "status": "not_authored",
+      "path": null,
+      "pin": null,
+      "initial_conditions": "Must be deterministic and recorded before running",
+      "stimuli": "Bounded minimized interaction named in linked inventory entries",
+      "expected_observations": "Not specified sufficiently for acceptance yet",
+      "tools_required": [
+        "Pinned BSC and designated reference",
+        "Candidate hierarchical exporter/interpreter where applicable"
+      ],
+      "run_bound_seconds": 120,
+      "oracle": "Must select the applicable handoff oracle before interpreting results",
+      "comparison": "Open witness specification is a completeness blocker"
+    }
+  ],
+  "coverage": {
+    "semantic_matrix_closed": false,
+    "compiler_derived_extraction_demonstrated": false,
+    "real_rtl_oracle_runs": 0,
+    "real_verilator_runs": 0,
+    "p0b_interpreter_implemented": false,
+    "composition_argument_reviewed": false,
+    "scope_note": "Inventory maps the current BIR expression/statement/action enums and make_prim dispatch families, plus mandatory semantic matrix and audited BVI refusals. It does not claim complete compiler construct/library coverage or a closed refusal census of every loader error.",
+    "open_census_gates": [
+      "Actual BSC library primitives beyond make_prim/Primitive::Other",
+      "Compiler Verilog accepted dynamic constructs and combinations",
+      "All BVI frontend-valid forms vs adapter refusals",
+      "Kernel system-task and BDPI effect family details",
+      "Minimal executable witness for every distinct cross-boundary interaction"
+    ],
+    "toy_only_bounds": {
+      "depth": "2*(D+1) public calls, 8 leaf steps",
+      "hidden": "4 public calls, R leaf steps, fixed parent artifact/contract bytes by construction",
+      "repeated": "4*N public calls, 8*N leaf steps, one shared wrapper byte object",
+      "independent_choices": "4*K guard evaluations over four changing vectors"
+    },
+    "no_p0_acceptance_from_model_success": true
+  }
+}

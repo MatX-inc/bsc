@@ -1,0 +1,26 @@
+test_ids_are_unique_and_witness_references_resolve (test_inventory.InventoryTests.test_ids_are_unique_and_witness_references_resolve) ... ok
+test_only_the_hand_model_is_marked_run (test_inventory.InventoryTests.test_only_the_hand_model_is_marked_run) ... ok
+test_pinned_source_paths_exist_and_new_sources_are_marked (test_inventory.InventoryTests.test_pinned_source_paths_exist_and_new_sources_are_marked) ... ok
+test_required_fields_and_statuses_are_explicit (test_inventory.InventoryTests.test_required_fields_and_statuses_are_explicit) ... ok
+test_this_checkpoint_does_not_claim_closed_semantic_coverage (test_inventory.InventoryTests.test_this_checkpoint_does_not_claim_closed_semantic_coverage) ... ok
+test_witness_paths_exist_or_are_explicitly_not_authored (test_inventory.InventoryTests.test_witness_paths_exist_or_are_explicitly_not_authored) ... ok
+test_all_never_claims_p0_pass_even_if_checks_succeed (test_runner.RunnerTests.test_all_never_claims_p0_pass_even_if_checks_succeed) ... ok
+test_all_preserves_check_failure (test_runner.RunnerTests.test_all_preserves_check_failure) ... ok
+test_changed_source_fails (test_runner.RunnerTests.test_changed_source_fails) ... ok
+test_invalid_json_is_failure (test_runner.RunnerTests.test_invalid_json_is_failure) ... ok
+test_missing_bvi_pin_fails (test_runner.RunnerTests.test_missing_bvi_pin_fails) ... ok
+test_missing_model_is_failure (test_runner.RunnerTests.test_missing_model_is_failure) ... ok
+test_missing_reference_fails (test_runner.RunnerTests.test_missing_reference_fails) ... ok
+test_missing_scope_markers_are_failure (test_runner.RunnerTests.test_missing_scope_markers_are_failure) ... ok
+test_missing_tools_are_not_a_pass (test_runner.RunnerTests.test_missing_tools_are_not_a_pass) ... ok
+test_model_success_is_not_p0_success (test_runner.RunnerTests.test_model_success_is_not_p0_success) ... ok
+test_nonzero_model_is_failure_even_with_valid_json (test_runner.RunnerTests.test_nonzero_model_is_failure_even_with_valid_json) ... ok
+test_optimized_model_cannot_report_success (test_runner.RunnerTests.test_optimized_model_cannot_report_success) ... ok
+test_overclaimed_model_evidence_is_failure (test_runner.RunnerTests.test_overclaimed_model_evidence_is_failure) ... ok
+test_timeout_is_failure (test_runner.RunnerTests.test_timeout_is_failure) ... ok
+test_unlisted_production_source_change_fails (test_runner.RunnerTests.test_unlisted_production_source_change_fails) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 1.657s
+
+OK

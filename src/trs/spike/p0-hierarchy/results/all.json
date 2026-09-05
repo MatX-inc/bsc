@@ -1,0 +1,326 @@
+{
+  "checks": {
+    "environment": {
+      "missing_required_tools": [
+        "bsc",
+        "bluetcl",
+        "iverilog",
+        "vvp",
+        "verilator",
+        "rustc",
+        "cargo",
+        "fst2vcd"
+      ],
+      "notes": [
+        "Tool presence does not validate versions or produce semantic evidence.",
+        "GHC/Cabal are build aids; a verified pinned BSC binary can replace a local compiler build.",
+        "No tool installation or compiler/simulator execution is performed by this check."
+      ],
+      "platform": "Linux-6.18.35-x86_64-with-glibc2.39",
+      "python": "3.12.13",
+      "status": "blocked_missing_tools",
+      "tools": {
+        "bluetcl": null,
+        "bsc": null,
+        "cabal": null,
+        "cargo": null,
+        "fst2vcd": null,
+        "g++": "/usr/bin/g++",
+        "ghc": null,
+        "iverilog": null,
+        "make": "/usr/bin/make",
+        "rustc": null,
+        "verilator": null,
+        "vvp": null
+      }
+    },
+    "model": {
+      "evidence": {
+        "compiler_derived": false,
+        "counterexamples": {
+          "atomic_child_after": false,
+          "atomic_child_before": false,
+          "blanket_guard_snapshot": false,
+          "claim_limit": "Supplied toy contracts only; no actual BSC/RTL run",
+          "conditional_false_state": [
+            7,
+            7,
+            3
+          ],
+          "conditional_true_state": [
+            0,
+            7,
+            0
+          ],
+          "disproved_candidates": [
+            "child-run-once",
+            "blanket-guard-snapshot"
+          ],
+          "public_observation_frontier": true,
+          "unclosed_inactive_use": "Pending(early-use-closure)"
+        },
+        "evidence_kind": "P0a hand-authored executable model",
+        "model_checks_passed": true,
+        "p0_pass": false,
+        "route_guard": {
+          "claim_limit": "Toy API check, not reachable-code/dependency audit",
+          "deliberately_forbidden_route_rejected": true
+        },
+        "rtl_oracle_compared": false,
+        "schema_version": 1,
+        "toy_ladders": {
+          "depth": [
+            {
+              "D_wrappers": 1,
+              "boundary_calls": 4,
+              "guards": 0,
+              "local_steps": 8
+            },
+            {
+              "D_wrappers": 2,
+              "boundary_calls": 6,
+              "guards": 0,
+              "local_steps": 8
+            },
+            {
+              "D_wrappers": 4,
+              "boundary_calls": 10,
+              "guards": 0,
+              "local_steps": 8
+            },
+            {
+              "D_wrappers": 8,
+              "boundary_calls": 18,
+              "guards": 0,
+              "local_steps": 8
+            },
+            {
+              "D_wrappers": 16,
+              "boundary_calls": 34,
+              "guards": 0,
+              "local_steps": 8
+            },
+            {
+              "D_wrappers": 32,
+              "boundary_calls": 66,
+              "guards": 0,
+              "local_steps": 8
+            }
+          ],
+          "hidden": [
+            {
+              "R": 8,
+              "boundary_calls": 4,
+              "contract_sha256": "8b0dd3d2ef1e11f305343a5818b48aa09e5ca2203203a0459f454b8161ae6190",
+              "guards": 0,
+              "local_steps": 8,
+              "parent_artifact_sha256": "633fa64b8fc0cd8aadde246fddcb578ccf58da688ee0a0374dedcb391d90d370"
+            },
+            {
+              "R": 32,
+              "boundary_calls": 4,
+              "contract_sha256": "8b0dd3d2ef1e11f305343a5818b48aa09e5ca2203203a0459f454b8161ae6190",
+              "guards": 0,
+              "local_steps": 32,
+              "parent_artifact_sha256": "633fa64b8fc0cd8aadde246fddcb578ccf58da688ee0a0374dedcb391d90d370"
+            },
+            {
+              "R": 128,
+              "boundary_calls": 4,
+              "contract_sha256": "8b0dd3d2ef1e11f305343a5818b48aa09e5ca2203203a0459f454b8161ae6190",
+              "guards": 0,
+              "local_steps": 128,
+              "parent_artifact_sha256": "633fa64b8fc0cd8aadde246fddcb578ccf58da688ee0a0374dedcb391d90d370"
+            },
+            {
+              "R": 512,
+              "boundary_calls": 4,
+              "contract_sha256": "8b0dd3d2ef1e11f305343a5818b48aa09e5ca2203203a0459f454b8161ae6190",
+              "guards": 0,
+              "local_steps": 512,
+              "parent_artifact_sha256": "633fa64b8fc0cd8aadde246fddcb578ccf58da688ee0a0374dedcb391d90d370"
+            }
+          ],
+          "independent_choices": [
+            {
+              "K": 1,
+              "edges": 4,
+              "guard_evaluations": 4
+            },
+            {
+              "K": 2,
+              "edges": 4,
+              "guard_evaluations": 8
+            },
+            {
+              "K": 4,
+              "edges": 4,
+              "guard_evaluations": 16
+            },
+            {
+              "K": 8,
+              "edges": 4,
+              "guard_evaluations": 32
+            },
+            {
+              "K": 16,
+              "edges": 4,
+              "guard_evaluations": 64
+            },
+            {
+              "K": 32,
+              "edges": 4,
+              "guard_evaluations": 128
+            },
+            {
+              "K": 64,
+              "edges": 4,
+              "guard_evaluations": 256
+            }
+          ],
+          "repeated": [
+            {
+              "N": 1,
+              "boundary_calls": 4,
+              "guards": 0,
+              "local_steps": 8,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 2,
+              "boundary_calls": 8,
+              "guards": 0,
+              "local_steps": 16,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 4,
+              "boundary_calls": 16,
+              "guards": 0,
+              "local_steps": 32,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 8,
+              "boundary_calls": 32,
+              "guards": 0,
+              "local_steps": 64,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 16,
+              "boundary_calls": 64,
+              "guards": 0,
+              "local_steps": 128,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 32,
+              "boundary_calls": 128,
+              "guards": 0,
+              "local_steps": 256,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 64,
+              "boundary_calls": 256,
+              "guards": 0,
+              "local_steps": 512,
+              "shared_wrapper_objects": 1
+            },
+            {
+              "N": 128,
+              "boundary_calls": 512,
+              "guards": 0,
+              "local_steps": 1024,
+              "shared_wrapper_objects": 1
+            }
+          ]
+        }
+      },
+      "returncode": 0,
+      "scope": "P0a hand-authored model only; not BSC/RTL parity or a P0 pass.",
+      "status": "model_checks_passed",
+      "stderr": ""
+    },
+    "source": {
+      "bvi_pin": "d4a72767c63e6dbdf569cac4c61aeb8afc597c04",
+      "bvi_reference_available": true,
+      "bvi_reference_error": null,
+      "checks": [
+        {
+          "actual_blob": "a1e088fd186c5797745d09d4c5263d22d70ac7b6",
+          "error": null,
+          "expected_blob": "a1e088fd186c5797745d09d4c5263d22d70ac7b6",
+          "matches_pin": true,
+          "path": "src/comp/ASchedule.hs"
+        },
+        {
+          "actual_blob": "ddf8c57262c897c6cd7a0a53dcb7f795c4a02dcf",
+          "error": null,
+          "expected_blob": "ddf8c57262c897c6cd7a0a53dcb7f795c4a02dcf",
+          "matches_pin": true,
+          "path": "src/comp/AScheduleInfo.hs"
+        },
+        {
+          "actual_blob": "9f3eb6f68efca24b0840ede82b2c830ef5221507",
+          "error": null,
+          "expected_blob": "9f3eb6f68efca24b0840ede82b2c830ef5221507",
+          "matches_pin": true,
+          "path": "src/comp/SimPackage.hs"
+        },
+        {
+          "actual_blob": "af2dbdae7a8d33183931cd3da5fe2feb4b8c34bd",
+          "error": null,
+          "expected_blob": "af2dbdae7a8d33183931cd3da5fe2feb4b8c34bd",
+          "matches_pin": true,
+          "path": "src/comp/SimExpand.hs"
+        },
+        {
+          "actual_blob": "4e313cca293dd6818f6d92f82cc08388b37c28c3",
+          "error": null,
+          "expected_blob": "4e313cca293dd6818f6d92f82cc08388b37c28c3",
+          "matches_pin": true,
+          "path": "src/comp/SimMakeCBlocks.hs"
+        },
+        {
+          "actual_blob": "53727d0f8863e0d95e684f2ad130d580194c14ee",
+          "error": null,
+          "expected_blob": "53727d0f8863e0d95e684f2ad130d580194c14ee",
+          "matches_pin": true,
+          "path": "src/trs/trs-bir/SimExportIR.hs"
+        },
+        {
+          "actual_blob": "e627f2373e56009fbc73562481bf27ab6a1ad1f7",
+          "error": null,
+          "expected_blob": "e627f2373e56009fbc73562481bf27ab6a1ad1f7",
+          "matches_pin": true,
+          "path": "src/trs/crates/trs-ir/src/schedule.rs"
+        },
+        {
+          "actual_blob": "49fe815d664e24d079bdeb38b3a13940381cb6b9",
+          "error": null,
+          "expected_blob": "49fe815d664e24d079bdeb38b3a13940381cb6b9",
+          "matches_pin": true,
+          "path": "src/trs/crates/trs-ir/src/merge.rs"
+        }
+      ],
+      "compiler_pin": "a9462e0e28102f07a89b3f3c478b33c806d62a3e",
+      "compiler_subtree_error": null,
+      "compiler_subtrees_match_pin": true,
+      "handoff_pin": "054ba3f6400bfed18c20c1552981212e8cc956bd",
+      "scope": "Source identity only; no compiler or semantic execution.",
+      "status": "source_pins_verified"
+    }
+  },
+  "exit_code": 2,
+  "mode": "all",
+  "p0_status": "blocked/inconclusive",
+  "remaining_gates": [
+    "P0a protocol and semantic-inventory design-owner review",
+    "actual BSC module-local extraction and Verilog dynamic-parity runs",
+    "real mixed BVI/Verilator and timed-event witnesses",
+    "reviewed compositional safety/progress argument and closed inventory",
+    "P0b structural and scaling evidence from the actual hierarchical engine"
+  ]
+}
