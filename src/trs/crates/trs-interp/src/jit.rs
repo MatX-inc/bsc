@@ -1709,7 +1709,13 @@ pub(crate) fn aot_plan_b(
 }
 
 /// Full-AOT load: the design snapshot embedded in the artifact
-/// (trs_snap + trs_bir_hash), so a --code run never opens the .bir.
+/// (trs_snap + trs_bir_hash), so a --code run does not DECODE the .bir.
+/// Its caller still reads the bytes to fingerprint them, because a .so
+/// is a separately produced artifact and a stale one would otherwise
+/// simulate an older design in full.  That is a read plus an fnv1a, so
+/// it scales with the file; if it ever shows up in startup profiling,
+/// the fix is to stamp the identity into the artifact's .opts at link
+/// and compare that instead.
 /// None = pre-snap artifact, empty snap (encode failed at link), a
 /// missing/unloadable .so, or a snap-gate failure — the caller falls
 /// back to the .bir path and the normal fingerprint cross-check.

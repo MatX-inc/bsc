@@ -41,10 +41,15 @@ DESIGNS=[
 for name,cwd,bir,args in DESIGNS:
     ref=None
     for pname,p in PIPES.items():
-        env=dict(os.environ, TRS_REQUIRE_AOT="1")
+        env=dict(os.environ)
         if p: env["TRS_JIT_PIPELINE"]=p
+        # the pipeline knob is a CODEGEN knob, and codegen is `trs
+        # compile' now -- the link is measured with it, but does none
+        # of the work it names
         t0=time.perf_counter()
         r=subprocess.run([TRS,"link",bir,"-o","px"],cwd=cwd,env=env,capture_output=True)
+        if r.returncode==0:
+            r=subprocess.run([TRS,"compile","px.bir"],cwd=cwd,env=env,capture_output=True)
         lt=time.perf_counter()-t0
         if r.returncode!=0:
             print(f"{name:12s} {pname:10s} LINK-FAIL"); continue

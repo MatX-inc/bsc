@@ -235,5 +235,5 @@ fast `trs link` therefore uses a split product:
   set; the default is the traced-plan jit tier above.
 
 The capi engines are DEBUG tier by definition: bk_init marks them
-set_debug_tier, exempting them from the TRS_REQUIRE_AOT
+set_debug_tier, exempting them from the --only-compiled
 strict-execution refusal that polices the fast artifact.

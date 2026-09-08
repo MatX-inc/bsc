@@ -644,6 +644,11 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
     tl0 = _time.monotonic()
     lk = run([TRS, "link", bir] + binds + ["-o", cexe], cwd=wk, timeout=300,
              env=link_env)
+    # the link no longer compiles, and these designs assert engine=aot:
+    # the .so is a separate product now, so ask for it
+    if lk is not None and lk.returncode == 0:
+        lk = run([TRS, "compile", cexe + ".bir"], cwd=wk, timeout=300,
+                 env=link_env)
     trs_link_secs = _time.monotonic() - tl0
     if lk is None or lk.returncode != 0:
         msg = "" if lk is None else (lk.stderr + lk.stdout)
@@ -749,6 +754,11 @@ def _trs_side(rel, top, wk, testdir, bir, ref, ref_secs, ref_build_secs,
         tl0 = _time.monotonic()
         lk = run([TRS, "link", bir] + list(bdpi) + ["-o", cexe], cwd=wk,
                  timeout=300, env=link_env)
+        # the link no longer compiles; this sweep measures the compiled
+        # engine, so it asks for the .so as its own step
+        if lk is not None and lk.returncode == 0:
+            lk = run([TRS, "compile", cexe + ".bir"], cwd=wk, timeout=300,
+                     env=link_env)
         trs_link_secs = _time.monotonic() - tl0
         if lk is None or lk.returncode != 0:
             msg = "" if lk is None else (lk.stderr + lk.stdout)

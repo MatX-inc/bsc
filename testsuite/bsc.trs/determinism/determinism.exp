@@ -34,9 +34,14 @@ proc trs_det_test { trs name top } {
         return
     }
 
+    # Every run builds under the SAME artifact name and the result is
+    # copied aside afterwards.  The linker stamps a shared object with
+    # its own output path, so artifacts built as art1/art2/art3 would
+    # differ in that stamp alone and the comparison below could never
+    # hold -- the thing under test is the codegen, not the filename.
     for {set i 1} {$i <= $nlinks} {incr i} {
-        if { [catch {exec sh -c "TRS_JIT_DUMP_PRE=1 $trs link $top.bir -o $name.art$i > /dev/null 2> $name.ir$i"}] } {
-            fail "trs determinism link of $name (run `$i')"
+        if { [catch {exec sh -c "$trs link $top.bir -o $name.det > /dev/null 2>&1 && TRS_JIT_DUMP_PRE=1 $trs compile $name.det.bir > /dev/null 2> $name.ir$i && cp $name.det.so $name.so$i"}] } {
+            fail "trs determinism link/compile of $name (run `$i')"
             cd $here
             return
         }
@@ -48,7 +53,7 @@ proc trs_det_test { trs name top } {
             fail "pre-O3 IR identical across links of $name (run `$i' differs)"
             set ok 0
         }
-        if { [catch {exec cmp -s $name.art1.so $name.art$i.so}] } {
+        if { [catch {exec cmp -s $name.so1 $name.so$i}] } {
             fail "artifact .so identical across links of $name (run `$i' differs)"
             set ok 0
         }

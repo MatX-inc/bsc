@@ -60,8 +60,23 @@ pub fn load_file_or_code(
     // the baked code.  Loading from the .bir recomputes the identity
     // from this run's bindings and the stamp check does its job.
     if let Some(so) = code.filter(|_| binds.is_empty()) {
+        // The .so carries its own design, so nothing about it is
+        // checked against the .bir unless we do it here -- and a .so
+        // is now a separately produced artifact (`trs compile'), so
+        // the two CAN disagree: a stale one would quietly simulate an
+        // older design in full.  Read the .bir's bytes and compare
+        // fingerprints.  That is a read and a hash, not a decode, and
+        // on a mismatch we fall through to the .bir, where the
+        // --code path's own gate then rejects the .so and interprets.
+        // No readable .bir means nothing to check against, so the .so
+        // is not taken on trust either -- the fall-through reports the
+        // unreadable file properly.  Read only once there is something
+        // to check: an artifact that carries no snap bails below, and
+        // the fall-through would then read and hash the same file
+        // again.
         if let Some((hash, design)) =
             crate::jit::aot_embedded_design(&crate::jit::ArtifactSource::Path(so.into()))
+                .filter(|(h, _)| std::fs::read(path).ok().map(|b| bir_fingerprint(&b)) == Some(*h))
         {
             sl.lap("design load (artifact-embedded snap)");
             let mut interp = Interp::new_bound(design, binds)?;
@@ -352,8 +367,18 @@ impl Interp {
     /// fragment alone would decode as a design of one module.
     #[cold]
     #[inline(never)]
-    pub fn write_bir(&self, path: &str) -> Result<(), String> {
-        std::fs::write(path, self.d.encode()).map_err(|e| format!("{path}: {e}"))
+    pub fn write_bir(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        std::fs::write(path, bytes).map_err(|e| format!("{path}: {e}"))
+    }
+
+    /// The design encoded as a .bir, for `write_bir` and for a caller
+    /// that must compare it against what is already on disk.  Handed
+    /// out rather than encoded twice: on a large design the encode is
+    /// not free, and the link needs the bytes for both.
+    #[cold]
+    #[inline(never)]
+    pub fn encoded_bir(&self) -> Vec<u8> {
+        self.d.encode()
     }
 
     /// Write the decoded-design snapshot sidecar (`Design::snap_encode`)

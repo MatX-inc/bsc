@@ -17,7 +17,19 @@ fn usage() -> ExitCode {
     eprintln!("       trs ir dump --multi-fragments <module.bir>...");
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
-    eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [+NAME=value...]");
+    eprintln!("       trs compile <design.bir> [-o <model.so>] [--exe] [--dump-formats vcd,fst]");
+    eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [--only-compiled] [+NAME=value...]");
+    eprintln!();
+    eprintln!("A link assembles the fragments into one whole-design .bir and");
+    eprintln!("writes an artifact that runs it interpreted -- no LLVM, so it");
+    eprintln!("is quick even on a large design.  `trs compile' is the optional");
+    eprintln!("post-process that turns that design into the .so the artifact");
+    eprintln!("loads on its next run, with no relink; --exe additionally links");
+    eprintln!("a standalone executable from the same objects.  They are");
+    eprintln!("separate because the compile costs a large design hours and");
+    eprintln!("only pays for itself when the run is long enough to earn it.");
+    eprintln!("`--only-compiled' refuses to run at all without that .so,");
+    eprintln!("for runs whose whole point is to measure the compiled engine.");
     eprintln!();
     eprintln!("bsc writes one .bir per synthesized module and one per");
     eprintln!("`import \"BDPI\"'.  A link given the top follows its");
@@ -252,10 +264,269 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        // trs link: compile the design ahead of time and write the
-        // persistent artifact: <out> (wrapper script with the same CLI
-        // as reference Bluesim), <out>.bir, <out>.so.  Runs never
-        // compile again — same amortization as Verilator/VCS/Bluesim.
+        // trs compile: the LLVM half of what a link used to do, on its
+        // own.  A link writes the design and an artifact that runs it
+        // interpreted; this compiles that design into the .so the
+        // artifact loads on its next run.  Split because the compile
+        // costs hours on a large design and only pays for itself when
+        // the run is long enough -- which is a judgement for whoever
+        // is running it, not for the link.
+        ["compile", rest @ ..] if !rest.is_empty() => {
+            let mut path: Option<&str> = None;
+            let mut out: Option<String> = None;
+            // the link's own default, so a compile that is told nothing
+            // stamps what a link that was told nothing would have
+            let mut fmt_arg: Option<String> = None;
+            let mut want_exe = false;
+            let mut it = rest.iter().copied();
+            while let Some(a) = it.next() {
+                match a {
+                    "-o" | "--output" => match it.next() {
+                        Some(v) => out = Some(v.to_string()),
+                        None => {
+                            eprintln!("trs compile: -o needs a file");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    // the standalone executable: the SAME objects as
+                    // the .so plus a main shim, so it is a second
+                    // output of one codegen, not a step after it
+                    "--exe" => want_exe = true,
+                    // the allowed wave formats fold into the design's
+                    // identity, so a compile must be told whatever the
+                    // link was told
+                    "--dump-formats" => match it.next() {
+                        Some(v) => fmt_arg = Some(v.to_string()),
+                        None => {
+                            eprintln!("trs compile: --dump-formats needs a value");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    _ if a.starts_with('-') => {
+                        eprintln!("trs compile: unknown option `{a}'");
+                        return ExitCode::from(2);
+                    }
+                    _ if path.is_none() => path = Some(a),
+                    _ => {
+                        eprintln!("trs compile: one .bir at a time");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            let Some(path) = path else {
+                eprintln!("trs compile: no .bir named");
+                return ExitCode::from(2);
+            };
+            // The .so is named for the .bir beside it, because that is
+            // where the artifact looks: <base>.bir -> <base>.so.
+            let base = path.strip_suffix(".bir").unwrap_or(path).to_string();
+            let so = out.unwrap_or_else(|| format!("{base}.so"));
+            // Replay the link's own settings from <base>.opts.  Baked
+            // bindings and the allowed wave formats both fold into the
+            // design's identity hash, so a .so compiled without them
+            // carries a stamp the artifact will reject at run time --
+            // it would fall back to interpreting and look, wrongly,
+            // like a design the compiler could not take.
+            let mut binds: Vec<trs_interp::TopBind> = Vec::new();
+            let mut recorded: Option<String> = None;
+            if let Ok(txt) = std::fs::read_to_string(format!("{base}.opts")) {
+                for line in txt.lines() {
+                    if let Some(v) = line.strip_prefix("bind=") {
+                        match trs_interp::parse_bind(v, true) {
+                            Ok(b) => binds.push(b),
+                            Err(e) => {
+                                eprintln!("trs compile: {base}.opts: {e}");
+                                return ExitCode::from(2);
+                            }
+                        }
+                    } else if let Some(v) = line.strip_prefix("formats=") {
+                        recorded = Some(v.to_string());
+                    }
+                }
+            }
+            // an explicit --dump-formats wins over the recorded one,
+            // and the link's own default stands in for neither
+            let fmt = fmt_arg.or(recorded).unwrap_or_else(|| "vcd".to_string());
+            let formats = (
+                fmt.split(',').any(|t| t == "vcd"),
+                fmt.split(',').any(|t| t == "fst"),
+            );
+            let mut interp = match trs_interp::startup::load_file(path, &[], &binds, None) {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("trs compile: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            interp.set_allowed_wave_formats(formats.0, formats.1);
+            if want_exe {
+                // <base> becomes a real PIE (design objects + a main
+                // shim + the slim runtime), replacing whatever the
+                // link left at that name
+                if !binds.is_empty() || interp.has_autofire() {
+                    eprintln!(
+                        "trs compile: --exe does not support designs \
+                         with top-level bindings or always_enabled top \
+                         methods (batch artifacts only)"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                let libdir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .unwrap_or_else(|| ".".into());
+                interp.aot_request_emit_exe(so.clone().into(), base.clone().into(), libdir);
+            } else {
+                interp.aot_request_emit(so.clone().into());
+            }
+            interp.prime();
+            // Producing the .so IS the job here, so anything short of
+            // it is a failure -- unlike a link, which has a perfectly
+            // good interpreted artifact to fall back on.
+            match interp.aot_take_emit_result() {
+                Some(trs_interp::AotEmit::Compiled) => {
+                    // RunCore arena sidecar (validation form): the plan's
+                    // deterministic post-attach arena image, cross-checked by
+                    // loads under TRS_RUNCORE_CHECK=1; None (interp-only or
+                    // traced link) removes any stale sidecar
+                    let arena_written = match interp.take_runcore_image() {
+                        Some(img) => {
+                            let t = format!("{base}.arena.tmp");
+                            let ok = std::fs::write(&t, img)
+                                .and_then(|()| std::fs::rename(&t, format!("{base}.arena")))
+                                .is_ok();
+                            if !ok {
+                                eprintln!("trs compile: note: {base}.arena not written");
+                            }
+                            ok
+                        }
+                        None => {
+                            let _ = std::fs::remove_file(format!("{base}.arena"));
+                            false
+                        }
+                    };
+                    // post-emit window bake (docs/RUNCORE.md): run the reset
+                    // window on the just-written artifact — quiet, on the
+                    // compiled engine, exactly as a run would — and bake the
+                    // post-window state into the sidecar when the window is
+                    // effect-free.  Every non-clean outcome is silent: the
+                    // design simply boots classic.
+                    if arena_written {
+                        // no binds: a binding design's load refuses without
+                        // them, so its bake is a silent no-op and it boots
+                        // classic (run_file gates RunCore off under binds).
+                        // Mem-file designs capture the window TWICE under
+                        // different fill patterns (the two-fill gate): the
+                        // bake is committed only if everything outside the
+                        // load regions agrees — proof the boot's overlay
+                        // replaces the only file-dependent state.
+                        let sidecar = format!("{base}.arena");
+                        let bake = (|| -> Result<bool, String> {
+                            let mut b1 = trs_interp::startup::load_file(path, &[], &[], None)?;
+                            b1.aot_request_code(format!("{base}.so").into());
+                            if !b1.runcore_has_loads() {
+                                let Some(cap) = b1.runcore_bake_capture(None) else {
+                                    return Ok(false);
+                                };
+                                return trs_interp::runcore_bake_commit(
+                                    std::path::Path::new(&sidecar),
+                                    &cap,
+                                    None,
+                                );
+                            }
+                            let Some(a) = b1.runcore_bake_capture(Some(0x5555_5555_5555_5555))
+                            else {
+                                return Ok(false);
+                            };
+                            let mut b2 = trs_interp::startup::load_file(path, &[], &[], None)?;
+                            b2.aot_request_code(format!("{base}.so").into());
+                            let Some(b) = b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
+                            else {
+                                return Ok(false);
+                            };
+                            trs_interp::runcore_bake_commit(
+                                std::path::Path::new(&sidecar),
+                                &a,
+                                Some(&b),
+                            )
+                        })();
+                        if let Err(e) = bake {
+                            eprintln!("trs compile: note: window bake skipped: {e}");
+                        }
+                    }
+                    // A link points the artifact at the full binary,
+                    // because it cannot know a .so will ever exist and
+                    // the slim runner cannot JIT in-process.  One does
+                    // now, so the startup cost of LLVM's constructors
+                    // buys nothing -- re-point at the slim runner.
+                    // Only a symlink: an --exe PIE is the artifact.
+                    if !want_exe {
+                        if let Ok(m) = std::fs::symlink_metadata(&base) {
+                            if m.file_type().is_symlink() {
+                                if let Some(slim) = std::env::current_exe()
+                                    .ok()
+                                    .map(|p| p.with_file_name("trs-run"))
+                                    .filter(|p| p.is_file())
+                                {
+                                    let t = format!("{base}.lnk.tmp");
+                                    let _ = std::fs::remove_file(&t);
+                                    if std::os::unix::fs::symlink(&slim, &t)
+                                        .and_then(|()| std::fs::rename(&t, &base))
+                                        .is_err()
+                                    {
+                                        let _ = std::fs::remove_file(&t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // the capi's aot engine looks for the compiled
+                    // design beside the model it loads
+                    if std::path::Path::new(&format!("{base}.capi.so")).exists() {
+                        let aot = format!("{base}.capi.aot.so");
+                        let _ = std::fs::remove_file(&aot);
+                        if std::os::unix::fs::symlink(
+                            std::path::Path::new(&so)
+                                .file_name()
+                                .unwrap_or(std::ffi::OsStr::new(&so)),
+                            &aot,
+                        )
+                        .is_err()
+                        {
+                            let _ = std::fs::copy(&so, &aot);
+                        }
+                    }
+                    // silent on success, like any other compiler: the
+                    // .so is the output, and stderr here is captured
+                    // beside codegen dumps that must not pick up a
+                    // stray line
+                    ExitCode::SUCCESS
+                }
+                Some(trs_interp::AotEmit::Failed(e)) => {
+                    eprintln!("trs compile: {e}");
+                    ExitCode::FAILURE
+                }
+                Some(trs_interp::AotEmit::Ineligible(e)) => {
+                    eprintln!(
+                        "trs compile: compiled mode is unavailable for \
+                         this design ({e})"
+                    );
+                    ExitCode::from(86)
+                }
+                None => {
+                    eprintln!(
+                        "trs compile: compiled mode is unavailable for \
+                         this design (TRS_JIT_TRACE=1 shows why)"
+                    );
+                    ExitCode::from(86)
+                }
+            }
+        }
+        // trs link: assemble the design and write the persistent
+        // artifact: <out> (wrapper script with the same CLI as
+        // reference Bluesim) and <out>.bir.  The compiled <out>.so is
+        // `trs compile''s to write, and the artifact picks it up on
+        // whichever run comes after it exists.
         ["link", rest @ ..] if !rest.is_empty() => {
             let mut out: Option<String> = None;
             // --multi-fragments: the positional arguments are one
@@ -273,7 +544,6 @@ fn main() -> ExitCode {
             let mut bdpi_libs: Vec<&str> = Vec::new();
             let mut bdpi_paths: Vec<&str> = Vec::new();
             let mut interactive = false;
-            let mut exe = false;
             // -dump-formats plumbing from bsc: which waveform writers
             // the artifact carries (reference default: vcd only)
             let mut fmt_arg = "vcd".to_string();
@@ -318,7 +588,6 @@ fn main() -> ExitCode {
                         }
                     }
                     "--interactive" => interactive = true,
-                    "--exe" => exe = true,
                     "--dump-formats" => {
                         let Some(v) = it.next() else {
                             eprintln!("Error: --dump-formats requires a value");
@@ -417,19 +686,14 @@ fn main() -> ExitCode {
                 }
             };
             // the interactive bk_* surface can neither supply bindings
-            // nor auto-fire always_enabled methods, and a --exe PIE
-            // adopts its embedded identity (no per-run rebind check):
-            // both artifact forms refuse such designs (v1)
-            if (interactive || exe) && (!binds.is_empty() || interp.has_autofire()) {
+            // nor auto-fire always_enabled methods, so it refuses such
+            // designs (v1).  The --exe PIE has the same limit and says
+            // so from `trs compile', which is where it is built now.
+            if interactive && (!binds.is_empty() || interp.has_autofire()) {
                 eprintln!(
-                    "trs link: {} does not support designs with \
-                     top-level bindings or always_enabled top methods \
-                     (batch artifacts only)",
-                    if interactive {
-                        "--interactive"
-                    } else {
-                        "--exe"
-                    }
+                    "trs link: --interactive does not support designs \
+                     with top-level bindings or always_enabled top \
+                     methods (batch artifacts only)"
                 );
                 return ExitCode::FAILURE;
             }
@@ -440,7 +704,22 @@ fn main() -> ExitCode {
             // The sidecar, the interactive shim's baked path and the
             // bake's reload all name it from here on.
             let bir_dst = format!("{base}.bir");
-            if let Err(e) = interp.write_bir(&bir_dst) {
+            // A .so left by an earlier link of this name belongs to
+            // whatever design that was.  If the new .bir is the same
+            // bytes it is still good -- and it may have cost hours --
+            // so it stays; otherwise it can never be loaded again and
+            // leaving it only invites a stale-artifact note on every
+            // run.  Compared before the write, while the old .bir is
+            // still there to compare against.
+            let fresh = interp.encoded_bir();
+            let so_dst = format!("{base}.so");
+            if std::path::Path::new(&so_dst).exists() {
+                let same = std::fs::read(&bir_dst).ok().is_some_and(|old| old == fresh);
+                if !same {
+                    let _ = std::fs::remove_file(&so_dst);
+                }
+            }
+            if let Err(e) = interp.write_bir(&bir_dst, &fresh) {
                 eprintln!("trs link: {e}");
                 return ExitCode::FAILURE;
             }
@@ -480,90 +759,47 @@ fn main() -> ExitCode {
                 // The fast-artifact design .so ships BESIDE the model
                 // as <base>.aot.so: the capi's aot engine loads it
                 // (warm bodies from t=0); designs the compiler cannot
-                // take stay interp/jit with a note, like plain link.
+                // take stay interp/jit with a note.
+                //
+                // This one still compiles at link time, unlike the
+                // fast artifact.  The capi builds its own interp from
+                // the .bir and stamps the companion against THAT, and
+                // a `trs compile' run does not reproduce the stamp --
+                // the identity depends on how the capi constructs its
+                // engine, not on the design alone.  Deferring this the
+                // way the fast artifact defers is a separate piece of
+                // work; until then the debug tier keeps its companion.
+                //
+                // An earlier link's companion is stale the moment this
+                // one runs, and an ineligible design writes none: drop
+                // it so the capi finds nothing rather than something
+                // that will be refused.  <base>.so is not touched --
+                // for this product that name is the MODEL, which
+                // link_interactive writes below.
+                let _ = std::fs::remove_file(format!("{base}.aot.so"));
                 interp.aot_request_emit(format!("{base}.aot.so").into());
                 interp.prime();
                 match interp.aot_take_emit_result() {
-                    Some(trs_interp::AotEmit::Compiled) => {}
+                    Some(trs_interp::AotEmit::Compiled) | None => {}
                     Some(trs_interp::AotEmit::Failed(e)) => {
-                        eprintln!("trs link: {e}");
+                        eprintln!("trs link --interactive: {e}");
                         return ExitCode::FAILURE;
                     }
-                    _ => {
-                        if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
-                            eprintln!(
-                                "trs link: TRS_REQUIRE_AOT is set but the \
-                                 aot engine is unavailable for this \
-                                 design; refusing"
-                            );
-                            return ExitCode::from(86);
-                        }
-                        eprintln!(
-                            "trs link: note: aot engine unavailable for \
-                             this design; the model's aot selection will \
-                             run interpreted"
-                        )
-                    }
+                    Some(trs_interp::AotEmit::Ineligible(e)) => eprintln!(
+                        "trs link --interactive: note: the aot tier is \
+                         unavailable for this design ({e}); its engines \
+                         run interp/jit"
+                    ),
                 }
                 return link_interactive(design_bir, &base, interp.top_name(), &fmt_arg);
             }
-            if exe {
-                // artifact-as-executable: <base> becomes a real PIE
-                // (design objects + main shim + libtrs_capi.so from
-                // the install dir) instead of the wrapper script
-                let libdir = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                    .unwrap_or_else(|| ".".into());
-                interp.aot_request_emit_exe(
-                    format!("{base}.so").into(),
-                    base.clone().into(),
-                    libdir,
-                );
-            } else {
-                interp.aot_request_emit(format!("{base}.so").into());
-            }
+            // No codegen here at all: a link assembles the design and
+            // writes something that runs it interpreted.  Every
+            // compiled product -- the .so, its sidecars, and the
+            // standalone executable -- is `trs compile''s, and the
+            // artifact picks the .so up on whichever run comes after
+            // it exists.
             interp.prime();
-            // ineligible designs still get a valid artifact — it runs
-            // interpreted (reference Bluesim always yields an
-            // executable); only infrastructure failures fail the link
-            let compiled = match interp.aot_take_emit_result() {
-                Some(trs_interp::AotEmit::Compiled) => true,
-                Some(trs_interp::AotEmit::Failed(e)) => {
-                    eprintln!("trs link: {e}");
-                    return ExitCode::FAILURE;
-                }
-                Some(trs_interp::AotEmit::Ineligible(e)) => {
-                    if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
-                        eprintln!(
-                            "trs link: TRS_REQUIRE_AOT is set but compiled \
-                             mode is unavailable ({e}); refusing"
-                        );
-                        return ExitCode::from(86);
-                    }
-                    eprintln!(
-                        "trs link: note: compiled mode unavailable ({e}); \
-                         artifact will run interpreted"
-                    );
-                    false
-                }
-                None => {
-                    if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
-                        eprintln!(
-                            "trs link: TRS_REQUIRE_AOT is set but compiled \
-                             mode is unavailable (TRS_JIT_TRACE=1 shows \
-                             why); refusing"
-                        );
-                        return ExitCode::from(86);
-                    }
-                    eprintln!(
-                        "trs link: note: compiled mode unavailable \
-                         (TRS_JIT_TRACE=1 shows why); artifact will run \
-                         interpreted"
-                    );
-                    false
-                }
-            };
             // the .bir sibling the script runs is already written
             // above: it is the design, not whichever of its files the
             // link was pointed at
@@ -585,23 +821,6 @@ fn main() -> ExitCode {
                     eprintln!("trs link: copy {bdpi_src} -> {bdpi_dst}: {e}");
                     return ExitCode::FAILURE;
                 }
-            }
-            if exe {
-                if !compiled {
-                    // no compiled artifact = no PIE was linked; an
-                    // interpreted wrapper is what plain link is for
-                    eprintln!(
-                        "trs link: --exe requires the compiled artifact \
-                         (this design is not aot-eligible)"
-                    );
-                    return ExitCode::FAILURE;
-                }
-                // --exe: aot_emit already linked the PIE at <base>;
-                // no wrapper script.  The capi/debug companions still
-                // ride beside the .so as usual.
-                let top = interp.top_name().to_string();
-                let _ = write_capi_shim(path, &base, &top, compiled);
-                return ExitCode::SUCCESS;
             }
             // wrapper script (trs must be on PATH, like bluetcl for
             // reference Bluesim executables)
@@ -650,7 +869,8 @@ fn main() -> ExitCode {
             // TRS_CAPI_ENGINES overrides, and the -dump-formats
             // contract travels via TRS_CAPI_FORMATS.
             let top = interp.top_name().to_string();
-            let capi = write_capi_shim(path, &base, &top, compiled);
+            // the compile links its own aot companion when it makes one
+            let capi = write_capi_shim(path, &base, &top, false);
             let dispatch = if capi {
                 format!(
                     "for arg in ${{1+\"$@\"}}\n\
@@ -669,7 +889,11 @@ fn main() -> ExitCode {
             } else {
                 String::new()
             };
-            let script = if compiled {
+            // Always the full binary: a link leaves no .so, and the
+            // slim runner cannot JIT in-process.  `trs compile'
+            // re-points this at the slim runner once the compiled
+            // design exists.
+            let script = if false {
                 let pick = match &slim_exe {
                     Some(slim) => format!(
                         "r=\"{slim}\"\n\
@@ -705,69 +929,6 @@ fn main() -> ExitCode {
                 eprintln!("trs link: {base}.opts: {e}");
                 return ExitCode::FAILURE;
             }
-            // RunCore arena sidecar (validation form): the plan's
-            // deterministic post-attach arena image, cross-checked by
-            // loads under TRS_RUNCORE_CHECK=1; None (interp-only or
-            // traced link) removes any stale sidecar
-            let arena_written = match interp.take_runcore_image() {
-                Some(img) => {
-                    let t = format!("{base}.arena.tmp");
-                    let ok = std::fs::write(&t, img)
-                        .and_then(|()| std::fs::rename(&t, format!("{base}.arena")))
-                        .is_ok();
-                    if !ok {
-                        eprintln!("trs link: note: {base}.arena not written");
-                    }
-                    ok
-                }
-                None => {
-                    let _ = std::fs::remove_file(format!("{base}.arena"));
-                    false
-                }
-            };
-            // post-emit window bake (docs/RUNCORE.md): run the reset
-            // window on the just-written artifact — quiet, on the
-            // compiled engine, exactly as a run would — and bake the
-            // post-window state into the sidecar when the window is
-            // effect-free.  Every non-clean outcome is silent: the
-            // design simply boots classic.
-            if arena_written && compiled {
-                // no binds: a binding design's load refuses without
-                // them, so its bake is a silent no-op and it boots
-                // classic (run_file gates RunCore off under binds).
-                // Mem-file designs capture the window TWICE under
-                // different fill patterns (the two-fill gate): the
-                // bake is committed only if everything outside the
-                // load regions agrees — proof the boot's overlay
-                // replaces the only file-dependent state.
-                let sidecar = format!("{base}.arena");
-                let bake = (|| -> Result<bool, String> {
-                    let mut b1 = trs_interp::startup::load_file(design_bir, &[], &[], None)?;
-                    b1.aot_request_code(format!("{base}.so").into());
-                    if !b1.runcore_has_loads() {
-                        let Some(cap) = b1.runcore_bake_capture(None) else {
-                            return Ok(false);
-                        };
-                        return trs_interp::runcore_bake_commit(
-                            std::path::Path::new(&sidecar),
-                            &cap,
-                            None,
-                        );
-                    }
-                    let Some(a) = b1.runcore_bake_capture(Some(0x5555_5555_5555_5555)) else {
-                        return Ok(false);
-                    };
-                    let mut b2 = trs_interp::startup::load_file(design_bir, &[], &[], None)?;
-                    b2.aot_request_code(format!("{base}.so").into());
-                    let Some(b) = b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA)) else {
-                        return Ok(false);
-                    };
-                    trs_interp::runcore_bake_commit(std::path::Path::new(&sidecar), &a, Some(&b))
-                })();
-                if let Err(e) = bake {
-                    eprintln!("trs link: note: window bake skipped: {e}");
-                }
-            }
             // the artifact itself: a SYMLINK to the runner — main()'s
             // argv[0] dispatch recovers <base>.bir/.so/.opts from the
             // link NAME and runs IN-PROCESS (no sh, no forks, no
@@ -783,11 +944,7 @@ fn main() -> ExitCode {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("");
-                let runner = if compiled {
-                    slim_exe.clone().unwrap_or_else(|| self_exe.clone())
-                } else {
-                    self_exe.clone()
-                };
+                let runner = self_exe.clone();
                 bname != "trs" && bname != "trs-run" && {
                     let tmp = format!("{base}.lnk.tmp");
                     let _ = std::fs::remove_file(&tmp);
@@ -909,6 +1066,7 @@ fn main() -> ExitCode {
             let mut wave: Option<(trs_interp::WaveFormat, Option<String>)> = None;
             let mut vcd_file: Option<String> = None;
             let mut code_so: Option<String> = None;
+            let mut only_compiled = false;
             // (vcd, fst) writers this model carries; None = the
             // reference default (vcd only) applied at load
             let mut formats: Option<(bool, bool)> = None;
@@ -972,6 +1130,10 @@ fn main() -> ExitCode {
                     "--code" => {
                         code_so = it.next().map(|s| s.to_string());
                     }
+                    // strict execution: byte parity cannot tell the
+                    // engines apart, so a run that must be compiled
+                    // has to say so rather than silently degrade
+                    "--only-compiled" => only_compiled = true,
                     "--bind" => match it.next() {
                         Some(v) => match trs_interp::parse_bind(v, true) {
                             Ok(b) => binds.push(b),
@@ -1133,6 +1295,7 @@ fn main() -> ExitCode {
                     wave.clone(),
                     code_so.as_deref(),
                     formats,
+                    only_compiled,
                     &script_cmds,
                 );
             }
@@ -1158,6 +1321,7 @@ fn main() -> ExitCode {
                 code_so.as_deref(),
                 formats,
                 selfcheck,
+                only_compiled,
             ) {
                 Ok(code) => {
                     use std::io::Write;
@@ -1688,6 +1852,7 @@ fn run_script(
     wave: Option<(trs_interp::WaveFormat, Option<String>)>,
     code: Option<&str>,
     formats: Option<(bool, bool)>,
+    only_compiled: bool,
     script: &str,
 ) -> ExitCode {
     // script-tier command responses print through std stdout between
@@ -1707,6 +1872,7 @@ fn run_script(
     if let Some((f, file)) = wave {
         interp.wave_request(f, file);
     }
+    interp.set_require_compiled(only_compiled);
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }

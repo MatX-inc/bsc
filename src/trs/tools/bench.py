@@ -282,11 +282,14 @@ def bench_one(d, legs, runs, work):
                     continue
                 L["backend_s"] = round(t2, 2)
                 L["bir_export_s"] = round(t, 2)
+                # the link no longer compiles: this leg measures the
+                # compiled engine, so it asks for the .so explicitly
+                sh([TRS, "compile", "art.bir"], wk)
                 # self-enforcing engine claim: an interpreted or
                 # hybrid downgrade fails the leg loudly (exit 86)
                 # instead of quietly measuring the wrong engine
-                strict = dict(_ENV, TRS_REQUIRE_AOT="1")
-                m, r = run_measured(["./art"], wk, runs, env=strict)
+                m, r = run_measured(["./art", "--only-compiled"], wk, runs,
+                                    env=_ENV)
                 exe = "./art"
         else:  # verilator
             t_dpi = ["-use-dpi"] if cfiles else []

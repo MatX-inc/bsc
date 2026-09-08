@@ -200,8 +200,13 @@ pub struct Interp {
     /// when -V is given or the design contains a $dump* task)
     vcd_trace: bool,
     /// DEBUG-tier engine (bluetcl capi): exempt from the
-    /// TRS_REQUIRE_AOT strict-execution refusal (see set_debug_tier)
+    /// `--only-compiled` strict-execution refusal (see set_debug_tier)
     debug_tier: bool,
+    /// `--only-compiled`: this run must execute compiled.  A design
+    /// about to run interpreted is then a hard failure rather than a
+    /// silent degrade -- byte parity cannot tell the engines apart, so
+    /// a validation run that cares has to say so.
+    require_compiled: bool,
     /// TRS_TRACE / TRS_TRACE_CLK, read ONCE at construction: the
     /// per-event checks sat on getenv, and glibc getenv is a linear
     /// environ scan under the env lock — sampled at ~70% of
@@ -842,6 +847,7 @@ impl Interp {
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
             debug_tier: false,
+            require_compiled: false,
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
             foreign_argv: Vec::new(),
@@ -4185,18 +4191,15 @@ impl Interp {
             self.runcore_desc_finish(&rcomps, &sources, &clocks, &driver_clock);
         }
 
-        // TRS_REQUIRE_AOT: strict-execution contract for validation
+        // --only-compiled: strict-execution contract for validation
         // runs — a design about to RUN interpreted is a hard failure,
-        // never a silent degrade.  Emit requests are exempt (the link
-        // caller enforces its own strictness on the emit result).
+        // never a silent degrade.  Emit requests are exempt (`trs
+        // compile` judges its own result).
         #[cfg(feature = "aot")]
-        if jit.is_none()
-            && !was_emit
-            && !self.debug_tier
-            && std::env::var_os("TRS_REQUIRE_AOT").is_some()
-        {
+        if jit.is_none() && !was_emit && !self.debug_tier && self.require_compiled {
             eprintln!(
-                "trs: TRS_REQUIRE_AOT is set but this design would run                  interpreted (TRS_JIT_TRACE=1 shows why); refusing"
+                "trs: --only-compiled was given but this design would \
+                 run interpreted (TRS_JIT_TRACE=1 shows why); refusing"
             );
             std::process::exit(86);
         }
@@ -5339,9 +5342,9 @@ impl Interp {
     pub fn aot_request_code(&mut self, _so: std::path::PathBuf) {
         // the strict contract holds even without the aot feature: a
         // run that MUST be compiled cannot silently interpret
-        if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
+        if self.require_compiled {
             eprintln!(
-                "trs: TRS_REQUIRE_AOT is set but this trs was built \
+                "trs: --only-compiled was given but this trs was built \
                  without artifact support (feature `aot`); refusing"
             );
             std::process::exit(86);
@@ -5376,8 +5379,13 @@ impl Interp {
         self.fe.quiet = true;
     }
 
+    /// Refuse to run interpreted (`--only-compiled`).
+    pub fn set_require_compiled(&mut self, yes: bool) {
+        self.require_compiled = yes;
+    }
+
     /// Mark this interp as a DEBUG-tier engine (the bluetcl capi).
-    /// TRS_REQUIRE_AOT polices the fast artifact's execution contract;
+    /// `--only-compiled` polices the fast artifact's execution contract;
     /// the interactive tier runs interp/jit BY DESIGN (introspection
     /// needs the interp engine's recording), so its engines are exempt
     /// from the strict-mode refusal.
@@ -5940,6 +5948,7 @@ pub fn run_file(
     code: Option<&str>,
     formats: Option<(bool, bool)>,
     selfcheck: Option<(u64, bool)>,
+    only_compiled: bool,
 ) -> Result<i32, String> {
     // RunCore boot (TRS_RUNCORE=1, docs/RUNCORE.md): a wave-free,
     // selfcheck-free artifact run whose sidecar carries an eligible
@@ -5963,6 +5972,7 @@ pub fn run_file(
     if let Some((f, file)) = wave {
         interp.wave_request(f, file);
     }
+    interp.set_require_compiled(only_compiled);
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }
@@ -5994,11 +6004,12 @@ pub fn run_file(
     }
     // lockstep selfcheck: quiet shadow engines ride beside the primary
     // — no console/file/VCD output, debug tier (a shadow is an oracle,
-    // not the artifact's execution engine, so TRS_REQUIRE_AOT does not
-    // police it).  The default shadow set covers EVERY other execution
-    // tier in one run: a pure interp always, plus a hybrid-jit shadow
-    // when the primary is the aot artifact — interp, jit, and aot then
-    // cross-check simultaneously, one mode instead of three.
+    // not the artifact's execution engine, so --only-compiled does
+    // not police it).  The default shadow set covers EVERY other
+    // execution tier in one run: a pure interp always, plus a
+    // hybrid-jit shadow when the primary is the aot artifact — interp,
+    // jit, and aot then cross-check simultaneously, one mode instead
+    // of three.
     // TRS_SELFCHECK_ENGINES=interp[,jit] overrides.  Construction runs
     // under the quiet stamp too: elaboration-time prim diagnostics
     // ($readmem gap warnings) print at load, before any advance

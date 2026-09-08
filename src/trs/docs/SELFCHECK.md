@@ -80,7 +80,7 @@ the testsuite (mkTest help.cmd).
 - The shadow's construction runs under the quiet stamp: elaboration
   diagnostics ($readmem gap warnings) would otherwise print twice.
 - The shadow runs interpreted BY DESIGN; it is marked debug-tier and
-  exempt from TRS_REQUIRE_AOT, which polices the primary (the
+  exempt from --only-compiled, which polices the primary (the
   artifact's execution engine) only.
 - Cost: one full interp execution rides along, plus a state walk per
   checkpoint — this is a validation mode, not a fast path.
