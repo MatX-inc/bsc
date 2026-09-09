@@ -269,7 +269,15 @@ impl ModDomains {
 
         // primitives, by the domain of each clock they are wired with
         for (i, inst) in m.instances.iter().enumerate() {
-            if !matches!(inst.kind, crate::InstanceKind::Prim(_)) {
+            // A BVI import is a tick target like a primitive: its model
+            // is clocked at the commit point, and without a tick it
+            // would be driven and read but never advance.  Its clock
+            // args say Both, so it ticks on either edge of whichever
+            // domain it is wired into.
+            if !matches!(
+                inst.kind,
+                crate::InstanceKind::Prim(_) | crate::InstanceKind::Bvi(_)
+            ) {
                 continue;
             }
             for ca in &inst.clock_args {
@@ -2466,10 +2474,18 @@ fn domain_prims(inp: &Inputs, up: &BTreeMap<QDomain, Fate>, d: QDomain) -> Vec<T
         }
 
         let mdom = inp.doms(i as u32);
+        // BVI imports tick alongside primitives: the model advances on
+        // the clock edge like any state element, so it belongs in the
+        // tick order rather than only in the reset pass.
         let mut own: Vec<&crate::Instance> = m
             .instances
             .iter()
-            .filter(|x| matches!(x.kind, crate::InstanceKind::Prim(_)))
+            .filter(|x| {
+                matches!(
+                    x.kind,
+                    crate::InstanceKind::Prim(_) | crate::InstanceKind::Bvi(_)
+                )
+            })
             .collect();
         own.sort_by_key(|x| x.elab_order);
         for x in own {
@@ -2807,7 +2823,15 @@ pub fn domain_anomalies(inp: &Inputs) -> Vec<String> {
             ));
         }
         for inst in &m.instances {
-            if !matches!(inst.kind, crate::InstanceKind::Prim(_)) {
+            // BVI imports too: they are tick targets now (ModDomains::of,
+            // domain_prims), so they are subject to the same two
+            // invariants this checks -- one wired to an oscillator no
+            // domain claims would otherwise produce neither ticks nor
+            // an anomaly.
+            if !matches!(
+                inst.kind,
+                crate::InstanceKind::Prim(_) | crate::InstanceKind::Bvi(_)
+            ) {
                 continue;
             }
             for ca in &inst.clock_args {

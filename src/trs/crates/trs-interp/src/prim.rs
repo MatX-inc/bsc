@@ -229,6 +229,26 @@ pub trait Prim {
     /// internally deferred transitions forward (MakeReset's rst register
     /// reaching its internal SyncReset).
     fn end_of_timeslice(&mut self) {}
+    /// Output-reset initial condition, sampled at run start after the
+    /// t=0 reset cascades (BVI imports with output resets only): the
+    /// settled asserted-state of the generated reset, applied pre-slice-0
+    /// like an InitialReset when true.
+    fn reset_out_bootstrap(&mut self) -> Option<bool> {
+        None
+    }
+    /// Output clock edges observed at the BVI commit point, as
+    /// (out-clock ordinal, new level); the interpreter heaps them at
+    /// the current instant (multi-output form of take_clock_edges).
+    fn take_clock_edges_multi(&mut self) -> Vec<(u32, bool)> {
+        Vec::new()
+    }
+    /// BVI imports only: the batched three-phase edge commit, run once
+    /// per timeslice at the interpreter's commit point (ordered before
+    /// flush_reset_pending / the PG_FINAL pass).  Returns true if the
+    /// model requested $finish.  Every other prim is a no-op.
+    fn bvi_commit(&mut self, _now: u64) -> bool {
+        false
+    }
     /// For clock-generating prims (MakeClock, ClockDiv, ClockInverter):
     /// drain output edges triggered at the current instant
     /// (bk_trigger_clock_edge).  true = posedge.

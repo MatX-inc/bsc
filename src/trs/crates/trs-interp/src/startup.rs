@@ -79,6 +79,11 @@ pub fn load_file_or_code(
                 .filter(|(h, _)| std::fs::read(path).ok().map(|b| bir_fingerprint(&b)) == Some(*h))
         {
             sl.lap("design load (artifact-embedded snap)");
+            // raw +args reach BVI models at construction (their
+            // per-instance VerilatedContext), so they stage before
+            // instantiation -- on THIS path too, which loads the
+            // design from the artifact and never reaches finish_load
+            crate::bvi::stage_plusargs(plusargs);
             let mut interp = Interp::new_bound(design, binds)?;
             sl.lap("interp build (instantiate)");
             interp.bir_hash = hash ^ interp.top_binds_salt();
@@ -193,7 +198,10 @@ fn library_dir() -> Option<std::path::PathBuf> {
     Some(exe.parent()?.parent()?.join("lib").join("Libraries"))
 }
 
-fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
+/// A fragment plus every module it reaches, resolved by name beside
+/// it.  Public because the BVI build step needs the whole design to
+/// find its imports, and a lone fragment cannot resolve a sibling.
+pub fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
     let first = trs_ir::Bir::decode(bytes).map_err(|e| format!("{path}: {e}"))?;
     let dir = std::path::Path::new(path)
         .parent()
@@ -331,6 +339,9 @@ fn finish_load(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
+    // raw +args reach BVI models at construction (their per-instance
+    // VerilatedContext), so they stage before instantiation
+    crate::bvi::stage_plusargs(plusargs);
     let mut interp = Interp::new_bound(design, binds)?;
     sl.lap("interp build (instantiate)");
     // the bind salt differentiates compiled artifacts by their baked

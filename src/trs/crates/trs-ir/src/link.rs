@@ -284,6 +284,73 @@ fn primitive(r: &Remap, p: &mut Primitive) {
     }
 }
 
+fn bvi(r: &Remap, c: &mut crate::bvi::BviContract) {
+    // destructured so a field added to the contract fails to compile
+    // here rather than silently keeping a foreign fragment's string id
+    let crate::bvi::BviContract {
+        verilog_name,
+        ports,
+        methods,
+        clocks,
+        resets,
+        out_resets,
+        out_clocks,
+        params,
+        paths: _,
+        vpath,
+        vfiles,
+        defines,
+        const_args,
+    } = c;
+    r.s(verilog_name);
+    for p in ports {
+        r.s(&mut p.name);
+    }
+    for m in methods {
+        r.s(&mut m.name);
+    }
+    for c in clocks {
+        r.s(&mut c.name);
+        r.s(&mut c.tick_port);
+    }
+    for x in resets {
+        r.s(&mut x.name);
+    }
+    for x in out_resets {
+        r.s(&mut x.name);
+    }
+    for x in out_clocks {
+        r.s(&mut x.name);
+    }
+    for p in params {
+        r.s(&mut p.name);
+        bvi_param_value(r, &mut p.value);
+    }
+    for s in vpath.iter_mut().chain(vfiles.iter_mut()) {
+        r.s(s);
+    }
+    for (k, v) in defines {
+        r.s(k);
+        if let Some(v) = v {
+            r.s(v);
+        }
+    }
+    for (_, v) in const_args {
+        bvi_param_value(r, v);
+    }
+}
+
+fn bvi_param_value(r: &Remap, v: &mut crate::bvi::BviParamValue) {
+    use crate::bvi::BviParamValue as V;
+    match v {
+        V::Bits { hex, .. } => r.s(hex),
+        V::Str(s) => r.s(s),
+        // FromArg holds no string: `arg` indexes the instance's
+        // generic args, which are remapped as exprs below
+        V::IntSigned { .. } | V::Real(_) | V::FromArg { .. } => {}
+    }
+}
+
 fn instance(r: &Remap, i: &mut Instance) {
     let Instance {
         name,
@@ -301,6 +368,7 @@ fn instance(r: &Remap, i: &mut Instance) {
         // moves with it
         InstanceKind::Module(_) => {}
         InstanceKind::Prim(p) => primitive(r, p),
+        InstanceKind::Bvi(c) => bvi(r, c),
     }
     for c in clock_args {
         let ClockArg {

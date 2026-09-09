@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 trs-ir = { path = "../trs-ir" }
+trs-vlt = { path = "../trs-vlt" }
 trs-codegen = { path = "../trs-codegen", optional = true }
 libloading = "0.8"
 libc = "0.2"

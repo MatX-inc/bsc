@@ -11,6 +11,7 @@
 //!   validation, no silent skew against bsc.
 //! - This models what the *backend* needs, not everything bsc knows.
 
+pub mod bvi;
 pub mod expr;
 pub mod fold;
 pub mod link;
@@ -24,12 +25,16 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+pub use bvi::{
+    BviClock, BviContract, BviDir, BviMethod, BviMethodKind, BviParam, BviParamValue, BviPort,
+    BviPortKind, BviReset,
+};
 pub use expr::{Action, Expr, PrimOp, Stmt};
 pub use schedule::{Composition, ModuleSchedule, QualRule, SchedAlt, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 14;
+pub const BIR_VERSION: u32 = 15;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -55,7 +60,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 4;
+const SNAP_LAYOUT_REV: u32 = 5;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -644,6 +649,11 @@ pub enum InstanceKind {
     /// Another synthesized module, named through this fragment's
     /// `externs`.
     Module(ExternRef),
+    /// An imported BVI Verilog module executed by an external engine
+    /// behind the shim ABI.  Appended last so existing designs' variant
+    /// tags are unchanged; the version bump covers the schema change
+    /// regardless.
+    Bvi(Box<bvi::BviContract>),
 }
 
 /// Primitives the backend knows how to lay out or call into trs-rt.
