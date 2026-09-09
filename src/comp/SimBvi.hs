@@ -104,6 +104,9 @@ data BviClockI = BviClockI {
 data BviResetI = BviResetI {
       br_name       :: String,
       br_port       :: Int,
+      -- position of the Reset instantiation argument this reset is
+      -- bound to, in getInstArgs order (= Instance.args order)
+      br_arg        :: Int,
       br_active_low :: Bool
     } deriving (Show)
 
@@ -280,8 +283,21 @@ deriveBvi avi =
         portless_clks = [ i | (i, Nothing) <- input_clocks clkinfo ]
 
         -- ----------
-        -- input resets (portless input resets are legal; nothing to drive)
-        ported_rsts = [ (i, vn) | (i, (Just vn, _)) <- input_resets rstinfo ]
+        -- Input resets, each with the position of the instantiation
+        -- argument that carries it.  A portless input reset is legal --
+        -- it associates methods with a reset the module does not use
+        -- internally -- and has nothing to drive, so it is not in the
+        -- contract.  It IS still a Reset argument, so the contract has
+        -- to say which argument each of its resets is rather than let
+        -- the reader count: the two lists have different lengths.
+        -- (The ResetArg-to-input_resets join is the one
+        -- SimMakeCBlocks.rst_map does.)
+        reset_args = [ (k, rstId)
+                     | (k, (ResetArg rstId, _)) <- zip [0 ..] (getInstArgs avi) ]
+        ported_rsts = [ (k, i, vn)
+                      | (i, (Just vn, _)) <- input_resets rstinfo
+                      , (k, rstId) <- reset_args
+                      , rstId == i ]
 
         -- ----------
         -- params and constant Port args, aligned with avi_iargs (the
@@ -330,7 +346,7 @@ deriveBvi avi =
                      | Right g <- [gate] ]
                    | (_, osc, gate) <- ported_clks ]
         rst_ports = [ (getVNameString vn, 1, BviInput, KReset, 0)
-                    | (_, vn) <- ported_rsts ]
+                    | (_, _, vn) <- ported_rsts ]
         orst_ports = [ (getVNameString vn, 1, BviOutput, KReset, 0)
                      | (_, vn) <- out_rst_list ]
         oclk_ports = [ (getVNameString osc, 1, BviOutput, KClock, 0)
@@ -413,9 +429,9 @@ deriveBvi avi =
             [ (getIdBaseString i, k)
             | ((i, _, _), k) <- zip ported_clks [0 ..] ]
 
-        resets = [ BviResetI (getIdBaseString i) (idxOf (getVNameString vn))
+        resets = [ BviResetI (getIdBaseString i) (idxOf (getVNameString vn)) k
                              True  -- bsc input resets are active-low
-                 | (i, vn) <- ported_rsts ]
+                 | (k, i, vn) <- ported_rsts ]
 
         -- (logical name, port index); the interpreter finds the parent
         -- module's derived-reset node by the "<inst>$<port>" wire name

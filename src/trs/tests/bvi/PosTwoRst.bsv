@@ -36,8 +36,12 @@ module sysPosTwoRst();
 
    rule step;
       n <= n + 1;
-      if (n < 3) dut.put({4'h4, n});
-      if (n == 4) mr.assertReset();
+      // the puts have to land AFTER rst2 deasserts: mkReset(1, True)
+      // starts asserted and holds a cycle past the parent's deassert, so
+      // a put at n<3 is swallowed and b never leaves its reset value --
+      // which makes a wrong second-reset mapping invisible.
+      if (n > 2 && n < 6) dut.put({4'h4, n});
+      if (n == 7) mr.assertReset();
       if (n == 9) $finish(0);
    endrule
 endmodule

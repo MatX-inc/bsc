@@ -159,6 +159,13 @@ pub struct BviClock {
 pub struct BviReset {
     pub name: StrId,
     pub port: u32,
+    /// Which Reset instantiation argument carries this reset, as a
+    /// position in `Instance::args`.  Stated rather than counted: a
+    /// portless input reset is a legal association with nothing to
+    /// drive, so it is a Reset argument that has no entry here, and the
+    /// two lists do not correspond position for position.  Same
+    /// convention as `const_args` and `BviParamValue::FromArg`.
+    pub arg: u32,
     pub active_low: bool,
 }
 
@@ -337,6 +344,7 @@ mod tests {
             resets: vec![BviReset {
                 name: sid("rst"),
                 port: 1,
+                arg: 0,
                 active_low: true,
             }],
             params: vec![],

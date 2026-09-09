@@ -74,7 +74,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 15
+birVersion = 16
 
 -- ===============
 -- String interning
@@ -1075,6 +1075,7 @@ encBviContract (vpath, defs) avi =
                            return $ encStruct
                              [ ("name", nE)
                              , ("port", encIdx (br_port r))
+                             , ("arg", encIdx (br_arg r))
                              , ("active_low", encBool (br_active_low r))
                              ])
                         (bi_resets bi)

@@ -180,9 +180,16 @@ fn verify_bvi(
             pidx(g, "clock gate")?;
         }
     }
+    let mut seen_arg: Vec<u32> = Vec::with_capacity(c.resets.len());
     for r in &c.resets {
         check(r.name)?;
         pidx(r.port, "reset")?;
+        // the arg index is what the runtime matches on, so a duplicate
+        // or a stale one silently drives the wrong reset
+        if seen_arg.contains(&r.arg) {
+            return Err(bad(format!("two resets bound to argument {}", r.arg)));
+        }
+        seen_arg.push(r.arg);
     }
     for r in &c.out_resets {
         check(r.name)?;

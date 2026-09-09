@@ -123,6 +123,7 @@ differ PosParams sysPosParams
 differ PosMix sysPosMix
 differ PosTwins sysPosTwins
 differ PosTwoRst sysPosTwoRst
+differ PosPortlessRst sysPosPortlessRst
 differ PosTime sysPosTime
 RUNARGS="+doit +lvl=7" differ PosPlus sysPosPlus
 differ PosWrap sysPosWrap

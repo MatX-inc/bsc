@@ -1244,17 +1244,20 @@ impl Interp {
                             self.rstgen_out.insert(idx, node);
                         }
                     }
-                    // reset-line subscriptions, ordinal per Reset arg
-                    // (mirrors the Prim arm below)
-                    let mut rst_ord = 0;
-                    for a in &args {
-                        if let Expr::Reset { wire } = a {
-                            if let Expr::Port(p) = wire.as_ref() {
-                                if let Some(&n) = reset_map.get(p) {
-                                    self.rst_subs[n].push((idx, rst_ord));
-                                }
-                            }
-                            rst_ord += 1;
+                    // Reset-line subscriptions.  The ordinal is the
+                    // contract's own position for the argument, not a
+                    // count of Reset args: a portless input reset is a
+                    // Reset argument with no contract entry, so counting
+                    // would shift every reset after it and drive the
+                    // wrong port -- or none.
+                    for (ai, a) in args.iter().enumerate() {
+                        let Expr::Reset { wire } = a else { continue };
+                        let Expr::Port(p) = wire.as_ref() else {
+                            continue;
+                        };
+                        let Some(&n) = reset_map.get(p) else { continue };
+                        if let Some(ord) = c.resets.iter().position(|r| r.arg as usize == ai) {
+                            self.rst_subs[n].push((idx, ord));
                         }
                     }
                     self.bvi_insts.push(idx);
