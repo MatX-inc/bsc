@@ -1,0 +1,26 @@
+{
+  "verilog_name": "BviParams",
+  "clocks": [
+    {"name": "clk", "osc_port": "CLK", "gate_port": null, "tick_port": "clk"}
+  ],
+  "resets": [],
+  "params": {
+    "SINT": {"type": "int_signed", "width": 32, "value": -5},
+    "STR":  {"type": "string", "value": "hello"},
+    "RVAL": {"type": "real", "value": 2.5},
+    "WIDE": {"type": "bits", "width": 96, "value": "0123456789abcdef01234567"}
+  },
+  "ports": [
+    {"name": "CLK",    "dir": "input",  "width": 1,  "kind": "clock"},
+    {"name": "P_SINT", "dir": "output", "width": 32, "kind": "method_result"},
+    {"name": "P_WIDE", "dir": "output", "width": 96, "kind": "method_result"}
+  ],
+  "methods": [
+    {"name": "sint", "kind": "value", "clock": "clk", "args": [],
+     "results": ["P_SINT"], "enable": null, "rdy": null, "shadow_group": null},
+    {"name": "wide", "kind": "value", "clock": "clk", "args": [],
+     "results": ["P_WIDE"], "enable": null, "rdy": null, "shadow_group": null}
+  ],
+  "paths": [],
+  "dag_order": ["sint", "wide"]
+}

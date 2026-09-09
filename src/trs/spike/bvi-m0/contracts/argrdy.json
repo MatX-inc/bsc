@@ -1,0 +1,28 @@
+{
+  "verilog_name": "BviGate2",
+  "clocks": [
+    {"name": "clk", "osc_port": "CLK", "gate_port": null, "tick_port": "clk"}
+  ],
+  "resets": [
+    {"name": "rst", "port": "RST_N", "active_low": true}
+  ],
+  "params": {},
+  "ports": [
+    {"name": "CLK",     "dir": "input",  "width": 1, "kind": "clock"},
+    {"name": "RST_N",   "dir": "input",  "width": 1, "kind": "reset"},
+    {"name": "EN_put",  "dir": "input",  "width": 1, "kind": "enable"},
+    {"name": "put_x",   "dir": "input",  "width": 8, "kind": "method_arg"},
+    {"name": "RDY_put", "dir": "output", "width": 1, "kind": "rdy"},
+    {"name": "STORED",  "dir": "output", "width": 8, "kind": "method_result"}
+  ],
+  "methods": [
+    {"name": "put", "kind": "action", "clock": "clk",
+     "args": ["put_x"], "results": [], "enable": "EN_put", "rdy": "RDY_put",
+     "shadow_group": null},
+    {"name": "peek", "kind": "value", "clock": "clk",
+     "args": [], "results": ["STORED"], "enable": null, "rdy": null,
+     "shadow_group": null}
+  ],
+  "paths": [{"from": "put_x", "to": "RDY_put"}],
+  "dag_order": ["put", "peek"]
+}

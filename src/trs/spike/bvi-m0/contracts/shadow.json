@@ -1,0 +1,28 @@
+{
+  "verilog_name": "BviEcho",
+  "clocks": [
+    {"name": "clk", "osc_port": "CLK", "gate_port": null, "tick_port": "clk"}
+  ],
+  "resets": [
+    {"name": "rst", "port": "RST_N", "active_low": true}
+  ],
+  "params": {},
+  "ports": [
+    {"name": "CLK",   "dir": "input",  "width": 1, "kind": "clock"},
+    {"name": "RST_N", "dir": "input",  "width": 1, "kind": "reset"},
+    {"name": "EN",    "dir": "input",  "width": 1, "kind": "enable"},
+    {"name": "IN",    "dir": "input",  "width": 8, "kind": "method_arg"},
+    {"name": "OUT",   "dir": "output", "width": 8, "kind": "method_result"},
+    {"name": "LAST",  "dir": "output", "width": 8, "kind": "method_result"}
+  ],
+  "methods": [
+    {"name": "m", "kind": "actionvalue", "clock": "clk",
+     "args": ["IN"], "results": ["OUT"], "enable": "EN", "rdy": null,
+     "shadow_group": "m_grp"},
+    {"name": "peek", "kind": "value", "clock": "clk",
+     "args": [], "results": ["LAST"], "enable": null, "rdy": null,
+     "shadow_group": null}
+  ],
+  "paths": [{"from": "IN", "to": "OUT"}, {"from": "EN", "to": "OUT"}],
+  "dag_order": ["m", "peek"]
+}

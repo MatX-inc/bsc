@@ -1,0 +1,22 @@
+{
+  "verilog_name": "BviFatal",
+  "clocks": [
+    {"name": "clk", "osc_port": "CLK", "gate_port": null, "tick_port": "clk"}
+  ],
+  "resets": [{"name": "rst", "port": "RST_N", "active_low": true}],
+  "params": {},
+  "ports": [
+    {"name": "CLK",   "dir": "input",  "width": 1, "kind": "clock"},
+    {"name": "RST_N", "dir": "input",  "width": 1, "kind": "reset"},
+    {"name": "EN_go", "dir": "input",  "width": 1, "kind": "enable"},
+    {"name": "OUT",   "dir": "output", "width": 8, "kind": "method_result"}
+  ],
+  "methods": [
+    {"name": "go", "kind": "action", "clock": "clk", "args": [],
+     "results": [], "enable": "EN_go", "rdy": null, "shadow_group": null},
+    {"name": "look", "kind": "value", "clock": "clk", "args": [],
+     "results": ["OUT"], "enable": null, "rdy": null, "shadow_group": null}
+  ],
+  "paths": [],
+  "dag_order": ["go", "look"]
+}
