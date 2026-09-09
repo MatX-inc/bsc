@@ -46,6 +46,54 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
+/// Output-affecting knobs travel as flags rather than as environment: a
+/// build system keys an action on its argv, so a knob reachable only
+/// through the environment does not take part in the action's identity
+/// and a changed setting silently reuses the previous result.  The env
+/// vars stay as the internal spelling; a flag wins by writing one,
+/// single-threaded, before any planning or workers.
+///
+/// Knobs the LINK's own work depends on.  `--cc' names the C compiler it
+/// drives -- for the BDPI companion, and for the capi link behind
+/// `--interactive'; `--capi-lib' names the staticlib that link needs.
+/// Both are also taken by `trs compile', which drives a C compiler of
+/// its own.
+fn link_knob_env(flag: &str) -> Option<&'static str> {
+    Some(match flag {
+        "--cc" => "TRS_CC",
+        "--capi-lib" => "TRS_CAPI_LIB",
+        _ => return None,
+    })
+}
+
+/// Knobs that steer CODEGEN, and so belong to `trs compile' alone.  The
+/// link took them before the two were split; it runs no LLVM now (not
+/// even for `--interactive', which embeds the BIR and links the capi
+/// rather than compiling), so it rejects them.  A flag that is quietly
+/// accepted and does nothing is worse than one that is refused.
+fn compile_knob_env(flag: &str) -> Option<&'static str> {
+    Some(match flag {
+        "--edge-ssa" => "TRS_EDGE_SSA",
+        "--aot-one-module" => "TRS_AOT_ONE_MODULE",
+        "--jit-split" => "TRS_JIT_SPLIT",
+        "--jit-opt" => "TRS_JIT_OPT",
+        "--jit-pipeline" => "TRS_JIT_PIPELINE",
+        "--jit-threads" => "TRS_JIT_THREADS",
+        "--outline" => "TRS_EDGE_SSA_OUTLINE",
+        "--outline-factor" => "TRS_EDGE_SSA_OUTLINE_FACTOR",
+        _ => return None,
+    })
+}
+
+/// The same, for the codegen knobs that take no value.
+fn compile_knob_switch(flag: &str) -> Option<&'static str> {
+    Some(match flag {
+        "--no-fusion" => "TRS_NO_FUSION",
+        "--jit-novec" => "TRS_JIT_NOVEC",
+        _ => return None,
+    })
+}
+
 /// argv[0] artifact dispatch: `trs link -o art` emits `art` as a
 /// SYMLINK to the runner with `art.bir`/`.so`/`.opts` beside it.
 /// Invoked under a name with a sibling .bir, this binary IS the
@@ -302,6 +350,21 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
+                    // the codegen knobs describe THIS step's work, so
+                    // this is where they have to be reachable as flags
+                    _ if compile_knob_env(a).is_some() || link_knob_env(a).is_some() => {
+                        let key = compile_knob_env(a).or_else(|| link_knob_env(a)).unwrap();
+                        match it.next() {
+                            Some(v) => std::env::set_var(key, v),
+                            None => {
+                                eprintln!("trs compile: {a} requires a value");
+                                return ExitCode::from(2);
+                            }
+                        }
+                    }
+                    _ if compile_knob_switch(a).is_some() => {
+                        std::env::set_var(compile_knob_switch(a).unwrap(), "1")
+                    }
                     _ if a.starts_with('-') => {
                         eprintln!("trs compile: unknown option `{a}'");
                         return ExitCode::from(2);
@@ -604,27 +667,8 @@ fn main() -> ExitCode {
                         }
                         fmt_arg = v.to_string();
                     }
-                    // hermeticity: every output-affecting knob is a
-                    // flag (bsc passes these through; build systems
-                    // key actions on argv, not env).  The env vars
-                    // stay as the internal spelling — a flag wins by
-                    // writing the env here, single-threaded, before
-                    // any planning or workers.
-                    "--cc" | "--edge-ssa" | "--aot-one-module" | "--jit-split" | "--jit-opt"
-                    | "--jit-pipeline" | "--jit-threads" | "--outline" | "--outline-factor"
-                    | "--capi-lib" => {
-                        let key = match *a {
-                            "--cc" => "TRS_CC",
-                            "--edge-ssa" => "TRS_EDGE_SSA",
-                            "--aot-one-module" => "TRS_AOT_ONE_MODULE",
-                            "--jit-split" => "TRS_JIT_SPLIT",
-                            "--jit-opt" => "TRS_JIT_OPT",
-                            "--jit-pipeline" => "TRS_JIT_PIPELINE",
-                            "--jit-threads" => "TRS_JIT_THREADS",
-                            "--outline" => "TRS_EDGE_SSA_OUTLINE",
-                            "--outline-factor" => "TRS_EDGE_SSA_OUTLINE_FACTOR",
-                            _ => "TRS_CAPI_LIB",
-                        };
+                    _ if link_knob_env(a).is_some() => {
+                        let key = link_knob_env(a).unwrap();
                         match it.next() {
                             Some(v) => std::env::set_var(key, v),
                             None => {
@@ -633,8 +677,13 @@ fn main() -> ExitCode {
                             }
                         }
                     }
-                    "--no-fusion" => std::env::set_var("TRS_NO_FUSION", "1"),
-                    "--jit-novec" => std::env::set_var("TRS_JIT_NOVEC", "1"),
+                    _ if compile_knob_env(a).is_some() || compile_knob_switch(a).is_some() => {
+                        eprintln!(
+                            "trs link: `{a}' steers codegen, which is `trs \
+                             compile''s work -- pass it there"
+                        );
+                        return ExitCode::from(2);
+                    }
                     other if !other.starts_with('-') => frags.push(other),
                     other => {
                         eprintln!("Error: invalid link option '{other}'");
