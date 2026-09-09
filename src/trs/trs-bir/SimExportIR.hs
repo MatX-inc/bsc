@@ -63,6 +63,9 @@ import SimCCBlock (SimCCFnStmt(..), isOkId)
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg,
                             getPrimDomainInfo)
+import SimBvi (BviInfo(..), BviPortI(..), BviMethodI(..), BviClockI(..),
+               BviResetI(..), BviParamValueI(..), BviDirI(..), BviKindI(..),
+               BviMethodKindI(..), RefKindI(..), deriveBvi, isBviImport)
 import SimDomainInfo (DomainInfo(..))
 import ForeignFunctions (ForeignFunction(..), ForeignType(..))
 import ASyntax
@@ -71,7 +74,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 14
+birVersion = 15
 
 -- ===============
 -- String interning
@@ -190,11 +193,17 @@ birFile action = birHeader <> CW.toLazyByteString (encStruct fields')
 -- calls, and nothing design-level.  Those describe a design, and one
 -- module is not one -- `trs link` derives them from the set of files
 -- it is given.
-writeModuleBir :: FilePath -> Bool -> [AId] -> [String] -> String
+-- | Compile environment carried into BVI contracts: the Verilog search
+-- path and defines an imported module's sources need.  They reach the
+-- .bir because the verilate step runs off the contract, and the design
+-- is what knows which RTL it imported.
+type BviEnv = ([String], [String])
+
+writeModuleBir :: FilePath -> Bool -> [AId] -> [String] -> BviEnv -> String
                -> SimSystem -> IO ()
-writeModuleBir path keepF elabs ffcalls modName ssys =
+writeModuleBir path keepF elabs ffcalls bviEnv modName ssys =
     L.writeFile path $ birFile $
-        encModuleFields keepF elabs ffcalls modName ssys
+        encModuleFields keepF elabs ffcalls bviEnv modName ssys
 
 -- | Write one foreign function's .bir file.
 --
@@ -210,9 +219,9 @@ writeForeignBir path linkname ff = L.writeFile path $ birFile $ do
       , ("body", encStruct [("Foreign", ffEnc)])
       ]
 
-encModuleFields :: Bool -> [AId] -> [String] -> String
+encModuleFields :: Bool -> [AId] -> [String] -> BviEnv -> String
                 -> SimSystem -> EncM [(String, C.Encoding)]
-encModuleFields keepF elabs ffcalls modName ssys = do
+encModuleFields keepF elabs ffcalls bviEnv modName ssys = do
     -- the one boundary this export writes
     let allPkgs = M.elems (ssys_packages ssys)
         pkg = case [ p | p <- allPkgs
@@ -227,7 +236,7 @@ encModuleFields keepF elabs ffcalls modName ssys = do
         defaults = (ssys_default_clk ssys, ssys_default_rst ssys)
 
     -- Externally tagged, as serde writes an enum.
-    modEnc <- encModule (analyzeModule pkg) elabs keepF ffcalls defaults pkg
+    modEnc <- encModule (analyzeModule pkg) elabs keepF ffcalls bviEnv defaults pkg
     return
       [ ("strings", mempty)   -- placeholder, replaced by birFile
       , ("uses_wave_tasks", encBool (designUsesWaveTasks [pkg]))
@@ -400,9 +409,10 @@ analyzeModule pkg =
 -- Modules
 
 encModule :: ModSchedInfo
-          -> [AId] -> Bool -> [String] -> (Maybe String, Maybe String)
+          -> [AId] -> Bool -> [String] -> BviEnv
+          -> (Maybe String, Maybe String)
           -> SimPackage -> EncM C.Encoding
-encModule msi elab_ids keepF ffcalls (defClk, defRst) pkg = do
+encModule msi elab_ids keepF ffcalls bviEnv (defClk, defRst) pkg = do
     nameId <- idE (sp_name pkg)
     -- the modules this fragment reaches across its boundary
     let externNames = externsOf pkg
@@ -435,7 +445,7 @@ encModule msi elab_ids keepF ffcalls (defClk, defRst) pkg = do
     let elab = M.fromList (zip elab_ids [0 :: Int ..])
         avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                       (M.elems (sp_state_instances pkg))
-    instsEnc0 <- mapM (encInstance externIx elab
+    instsEnc0 <- mapM (encInstance externIx bviEnv elab
                                    (sp_method_order_map pkg)) avis
     -- noinline functions instantiate as argument-less modules whose one
     -- value method computes the function
@@ -857,9 +867,9 @@ externsOf pkg =
                   , not (avi_user_import avi) ]
                   ++ map snd (sp_noinline_instances pkg))
 
-encInstance :: M.Map String Int -> M.Map AId Int
+encInstance :: M.Map String Int -> BviEnv -> M.Map AId Int
             -> MethodOrderMap -> AVInst -> EncM C.Encoding
-encInstance externIx elab mom avi = do
+encInstance externIx bviEnv elab mom avi = do
     nameId <- idE (avi_vname avi)
     -- the instance's clock wiring, as VArgInfo describes it: which
     -- argument carries which named clock, and whether that clock has an
@@ -877,6 +887,14 @@ encInstance externIx elab mom avi = do
         tickSpecs = case [ l | (nm, _, _, l) <- primMap, nm == modName' ] of
                       (l : _) -> l
                       []      -> []
+        -- A BVI import's clock port follows the raw oscillator on BOTH
+        -- edges: the model is evaluated at the commit point and the
+        -- gate rides along as a level to drive, never as a tick
+        -- suppressor.  primMap has no entry for an imported module, so
+        -- without this it would read "Never" and the model would never
+        -- be clocked.
+        ticksFor p
+          | isBviImport avi = "Both"
         ticksFor p = case [ td | td <- tickSpecs, tickElem td == p ] of
                        (td : _) | tickIsPos td && tickIsNeg td -> "Both"
                                 | tickIsPos td -> "Pos"
@@ -901,7 +919,13 @@ encInstance externIx elab mom avi = do
     -- the name is what tells them apart to whoever implements them.
     let modName = getVNameString (vName (avi_vmi avi))
     kindEnc <-
-      if avi_user_import avi
+      -- import-BVI instance: carry the full Verilator-link contract.
+      -- Checked ahead of avi_user_import, which is true for these too:
+      -- a BVI import IS a `module verilog', and the contract is the
+      -- more specific description of one.
+      if isBviImport avi
+        then encVariant "Bvi" <$> encBviContract bviEnv avi
+      else if avi_user_import avi
         -- P0 TODO: map primitives to their structured kinds (Reg, Fifo,
         -- ...) instead of Other; the structured mapping lands with codegen.
         then do mEnc <- strE modName
@@ -964,6 +988,144 @@ encInstance externIx elab mom avi = do
       , ("method_order", encList morderEnc)
       , ("port_counts", encList portsEnc)
       ]
+
+-- BVI contract encoding (InstanceKind::Bvi, trs-ir/src/bvi.rs).  The
+-- derivation and its refusal suite live in SimBvi; refusals are raised
+-- as user errors at export, so failure here is an internal error.
+encBviContract :: BviEnv -> AVInst -> EncM C.Encoding
+encBviContract (vpath, defs) avi =
+    case deriveBvi avi of
+      Left tags ->
+          internalError ("SimExportIR.encBviContract: refusals escaped " ++
+                         "SimExpand.checkBviPackage:\n" ++ unlines tags)
+      Right bi -> do
+        let encIdx :: Int -> C.Encoding
+            encIdx = encW32 . fromIntegral
+            encDir BviInput  = encUnitVariant "Input"
+            encDir BviOutput = encUnitVariant "Output"
+            encKind KClock        = encUnitVariant "Clock"
+            encKind KClockGate    = encUnitVariant "ClockGate"
+            encKind KReset        = encUnitVariant "Reset"
+            encKind KEnable       = encUnitVariant "Enable"
+            encKind KRdy          = encUnitVariant "Rdy"
+            encKind KMethodArg    = encUnitVariant "MethodArg"
+            encKind KMethodResult = encUnitVariant "MethodResult"
+            encKind KConstArg     = encUnitVariant "ConstArg"
+            encMKind MKValue       = encUnitVariant "Value"
+            encMKind MKAction      = encUnitVariant "Action"
+            encMKind MKActionValue = encUnitVariant "ActionValue"
+            encPV (PVIntSigned w v) = return $ encVariant "IntSigned" $
+                encStruct [ ("width", encW32 (fromIntegral w))
+                          , ("value", C.encodeInt64 (fromIntegral v)) ]
+            encPV (PVBits w hex) = do
+                hE <- strE hex
+                return $ encVariant "Bits" $
+                    encStruct [ ("width", encW32 (fromIntegral w))
+                              , ("hex", hE) ]
+            encPV (PVStr s) = encVariant "Str" <$> strE s
+            encPV (PVReal d) = return $ encVariant "Real" (C.encodeDouble d)
+            encPV (PVFromArg i w k) = return $ encVariant "FromArg" $
+                encStruct [ ("arg", encW32 (fromIntegral i))
+                          , ("width", encW32 (fromIntegral w))
+                          , ("kind", encUnitVariant (case k of
+                                                       RKBits -> "Bits"
+                                                       RKReal -> "Real"
+                                                       RKStr -> "Str"))
+                          ]
+            splitDef s = case break (== '=') s of
+                           (k, '=' : v) -> (k, Just v)
+                           (k, _)       -> (k, Nothing)
+        nameE <- strE (bi_verilog_name bi)
+        portsE <- mapM (\p -> do
+                          nE <- strE (bp_name p)
+                          return $ encStruct
+                            [ ("name", nE)
+                            , ("width", encW32 (fromIntegral (bp_width p)))
+                            , ("dir", encDir (bp_dir p))
+                            , ("kind", encKind (bp_kind p))
+                            , ("props", encW32 (fromIntegral (bp_props p)))
+                            ])
+                       (bi_ports bi)
+        methodsE <- mapM (\m -> do
+                            nE <- strE (bm_name m)
+                            return $ encStruct
+                              [ ("name", nE)
+                              , ("kind", encMKind (bm_kind m))
+                              , ("clock", encMaybe encIdx (bm_clock m))
+                              , ("args", encList (map encIdx (bm_args m)))
+                              , ("results",
+                                 encList (map encIdx (bm_results m)))
+                              , ("enable", encMaybe encIdx (bm_enable m))
+                              , ("rdy", encMaybe encIdx (bm_rdy m))
+                              , ("self_sbr", encBool (bm_self_sbr m))
+                              ])
+                         (bi_methods bi)
+        clocksE <- mapM (\c -> do
+                           nE <- strE (bc_name c)
+                           tE <- strE (bc_tick c)
+                           return $ encStruct
+                             [ ("name", nE)
+                             , ("osc_port", encIdx (bc_osc c))
+                             , ("gate_port", encMaybe encIdx (bc_gate c))
+                             , ("tick_port", tE)
+                             ])
+                        (bi_clocks bi)
+        resetsE <- mapM (\r -> do
+                           nE <- strE (br_name r)
+                           return $ encStruct
+                             [ ("name", nE)
+                             , ("port", encIdx (br_port r))
+                             , ("active_low", encBool (br_active_low r))
+                             ])
+                        (bi_resets bi)
+        orstsE <- mapM (\(n, p) -> do
+                          nE <- strE n
+                          return $ encStruct
+                            [ ("name", nE)
+                            , ("port", encIdx p)
+                            ])
+                       (bi_out_resets bi)
+        oclksE <- mapM (\(n, p) -> do
+                          nE <- strE n
+                          return $ encStruct
+                            [ ("name", nE)
+                            , ("port", encIdx p)
+                            ])
+                       (bi_out_clocks bi)
+        paramsE <- mapM (\(n, v) -> do
+                           nE <- strE n
+                           vE <- encPV v
+                           return $ encStruct
+                             [ ("name", nE), ("value", vE) ])
+                        (bi_params bi)
+        cargsE <- mapM (\(i, v) -> encPair (encIdx i) <$> encPV v)
+                       (bi_const_args bi)
+        let pathsE = [ encPair (encIdx a) (encIdx b)
+                     | (a, b) <- bi_paths bi ]
+        vpathE <- mapM strE vpath
+        definesE <- mapM (\d -> do
+                            let (k, mv) = splitDef d
+                            kE <- encW32 <$> str k
+                            vE <- case mv of
+                                    Just v -> encW32 <$> str v
+                                    Nothing -> return C.encodeNull
+                            return (encPair kE vE))
+                         defs
+        return $ encStruct
+          [ ("verilog_name", nameE)
+          , ("ports", encList portsE)
+          , ("methods", encList methodsE)
+          , ("clocks", encList clocksE)
+          , ("resets", encList resetsE)
+          , ("out_resets", encList orstsE)
+          , ("out_clocks", encList oclksE)
+          , ("params", encList paramsE)
+          , ("paths", encList pathsE)
+          , ("vpath", encList vpathE)
+          , ("vfiles", encList [])
+          , ("defines", encList definesE)
+          , ("const_args", encList cargsE)
+          ]
 
 -- ActionValue results are read through the synthetic temp def that the
 -- corresponding AvAction statement latches -- never by re-invoking the

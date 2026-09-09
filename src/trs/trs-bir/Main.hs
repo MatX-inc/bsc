@@ -40,13 +40,15 @@ import Backend(Backend(..))
 import Id(getIdString)
 import ASyntax(apkg_name, apkg_state_instances, avi_vname)
 import ASyntaxUtil(getForeignCallNames)
-import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK)
+import Error(ErrorHandle, initErrorHandle, setErrorHandleFlags, exitOK,
+              bsError)
 import Exceptions(bsCatch)
 import FileNameUtil(baseName)
 import Flags(Flags(..))
 import FlagsDecode(defaultFlags)
 import IOUtil(getEnvDef)
 import SimExpand(simExpandABin, simTopClockReset)
+import SimBvi(checkBviPackage)
 import SimExportIR(writeModuleBir, writeForeignBir)
 import SimPackage(SimSystem(..), SimPackage(..))
 import SimPackageOpt(simPackageOpt)
@@ -61,6 +63,12 @@ data Options = Options
     { optOut       :: Maybe FilePath
     , optVersion   :: Bool
     , optHelp      :: Bool
+    -- | Verilog search path and defines for an imported BVI module's
+    -- sources.  They are the verilate step's inputs, so they belong in
+    -- the contract the .bir carries rather than on the link command:
+    -- the design knows which RTL it imported, the link does not.
+    , optVPath     :: [String]
+    , optVDefine   :: [String]
     }
 
 defaultOptions :: Options
@@ -68,6 +76,8 @@ defaultOptions = Options
     { optOut       = Nothing
     , optVersion   = False
     , optHelp      = False
+    , optVPath     = []
+    , optVDefine   = []
     }
 
 options :: [OptDescr (Options -> Options)]
@@ -78,6 +88,12 @@ options =
     , Option []    ["version"]
         (NoArg (\o -> o { optVersion = True }))
         "print the compiler build this program exports for"
+    , Option ['y'] ["vsearch"]
+        (ReqArg (\d o -> o { optVPath = optVPath o ++ [d] }) "DIR")
+        "directory to find an imported BVI module's Verilog in"
+    , Option ['D'] ["define"]
+        (ReqArg (\d o -> o { optVDefine = optVDefine o ++ [d] }) "NAME[=V]")
+        "Verilog define for the imported sources"
     , Option ['h'] ["help"]
         (NoArg (\o -> o { optHelp = True }))
         "print this message"
@@ -205,6 +221,14 @@ exportBir errh flags opts abinFile = do
 
         simpkg <- simExpandABin errh flags' (modinfo, ver)
 
+        -- BVI-import refusal suite: contract-local checks plus the
+        -- self-SBR ActionValue atomic-read condition.  It runs here
+        -- because this is where a BVI import first becomes a thing the
+        -- export must describe, so a refusal is a user error about
+        -- their design rather than an internal error at encode time.
+        let bvi_msgs = checkBviPackage simpkg
+        when (not (null bvi_msgs)) $ bsError errh bvi_msgs
+
         -- The default clock and reset are this module's own pragmas.
         -- bsc derives them for whichever module an export is rooted at,
         -- which for a fragment is always this one; the link reads them
@@ -234,8 +258,16 @@ exportBir errh flags opts abinFile = do
         -- back off the APackage the .ba carries.
         let elabs = map avi_vname (apkg_state_instances apkg)
 
+        -- bsc's own -vsearch defaults to ".", the Verilog libraries and
+        -- the interface path; the contract's vpath is what the verilate
+        -- step searches, so an export given no -y has to say the same
+        -- thing rather than nothing.
+        let vpath = case optVPath opts of
+                      [] -> let bd = bluespecDir flags
+                            in [".", bd ++ "/Libraries", bd ++ "/Verilog"]
+                      ds -> ds
         writeModuleBir birfile keep elabs (getForeignCallNames apkg)
-                       name sim_system_opt
+                       (vpath, optVDefine opts) name sim_system_opt
       ABinModSchedErr _ _ ->
           abort (abinFile ++ ": `" ++ name ++ "' failed to schedule when \
                  \it was compiled; bsc reports why")
