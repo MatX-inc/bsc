@@ -18,7 +18,8 @@ use trs_ir::{Design, Expr, StrId};
 /// genuine aborts, never $finish/$stop (edge-completion contract).
 pub type ForeignCb = unsafe extern "C" fn(
     env: *mut core::ffi::c_void,
-    token: u64,
+    ordinal: u32,
+    site: u32,
     args: *const u64,
     out: *mut u64,
 ) -> i32;
@@ -29,9 +30,15 @@ pub type SigfpeCb = unsafe extern "C" fn();
 /// Trampoline for prim method calls the arena does not model (FIFOs,
 /// ConfigRegs, RegFiles, ...): the interpreter unmarshals `args` per
 /// the call-site table, invokes the boxed prim, and writes the result
-/// words to `out`.  Token = rule ordinal << 16 | local call index.
-pub type PrimCb =
-    unsafe extern "C" fn(env: *mut core::ffi::c_void, token: u64, args: *const u64, out: *mut u64);
+/// words to `out`.  The site is named by (ordinal, site): one table per
+/// rule, both halves numbered in it.
+pub type PrimCb = unsafe extern "C" fn(
+    env: *mut core::ffi::c_void,
+    ordinal: u32,
+    site: u32,
+    args: *const u64,
+    out: *mut u64,
+);
 
 thread_local! {
     /// Edge-SSA site census (task #24 M1): static counts of the slot
@@ -262,10 +269,20 @@ pub struct RuleSpec {
     pub shared: Vec<StrId>,
     /// unique function-name label (instance path + rule name)
     pub label: String,
-    /// baked into callback tokens: token = base + local foreign-stmt
-    /// index (callers use e.g. global_rule_ordinal << 16 so one shared
-    /// callback can resolve the rule and the statement)
-    pub token_base: u64,
+    /// this spec's index in the spec list — the `ordinal` a callback
+    /// site reports, which the runtime uses to find this rule's
+    /// call-site tables
+    pub ordinal: u32,
+    /// Where this rule's EXEC half begins in its single call-site
+    /// table.  An output of trial_lower, written back before emission:
+    /// a lowering emits one function at a time and numbers from zero,
+    /// so an exec lowering needs telling where its sched half stopped.
+    /// Carried here rather than threaded because every lowering site
+    /// already holds the spec.  Zero until trial_lower has run.
+    #[serde(skip)]
+    pub exec_foreign_origin: u32,
+    #[serde(skip)]
+    pub exec_prim_origin: u32,
     /// Some = auto-fire pseudo-spec: `rule_idx` is a synthetic unique
     /// key (never index rules with it) and the exec section inlines
     /// the method body instead.  serde(skip): PlanB only ever carries
@@ -307,24 +324,15 @@ pub enum FArgSpec {
 /// A compiled rule sched function (kept alive by the leaked engine).
 pub struct CompiledSched {
     pub sched: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
-    /// token -> foreign call-site spec (cones can reach foreign value
-    /// paths only through prim calls today, but keep both tables)
-    pub foreign_stmts: Vec<ForeignSpec>,
-    /// token -> prim call site
-    pub prim_calls: Vec<PrimCallSpec>,
 }
 
-/// A compiled rule body: (arena, env, region base index, token base).
-/// One compiled body serves every instance of its module type.
+/// A compiled rule body: (arena, env, region base index, ordinal).
+/// One compiled body serves every instance of its module type, so the
+/// ordinal that names its call-site tables arrives at run time.
 pub struct CompiledExec {
-    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
-    pub foreign_stmts: Vec<ForeignSpec>,
-    pub prim_calls: Vec<PrimCallSpec>,
+    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32,
 }
 
-/// Which half of a rule a callback token belongs to (bit 16; the rule
-/// ordinal sits at bit 17+, the site index in the low 16 bits).
-pub const TOKEN_KIND_EXEC: u64 = 1 << 16;
 /// Why a rule cannot be compiled; the caller falls back to the
 /// interpreter (this is expected and silent — coverage grows over time).
 #[derive(Debug)]
@@ -335,14 +343,25 @@ impl std::fmt::Display for Ineligible {
         write!(f, "{}", self.0)
     }
 }
-/// Call-site tables a lowering produces for one rule's sched and exec
-/// functions.  Token `local` indices point into these; the AOT load
-/// path rebuilds them by re-running trial_lower (deterministic).
+/// Call-site tables a lowering produces for one rule.  ONE table per
+/// rule, not one per half: the sched fn numbers from zero and the exec
+/// fn continues where it stopped, so a site is named by (ordinal, site)
+/// alone.  A half-indexed pair meant a callee outlined across a
+/// synthesis boundary had to be told which of its caller's two tables
+/// its block sat in, and getting that wrong indexed the other one.
+/// A callback's `site` argument indexes these; the AOT load path
+/// rebuilds them by re-running trial_lower (deterministic).
 pub struct FnProtos {
-    pub sched_foreign: Vec<ForeignSpec>,
-    pub sched_prims: Vec<PrimCallSpec>,
-    pub exec_foreign: Vec<ForeignSpec>,
-    pub exec_prims: Vec<PrimCallSpec>,
+    pub foreign: Vec<ForeignSpec>,
+    pub prims: Vec<PrimCallSpec>,
+    /// where the exec half's sites begin in the tables above.  A
+    /// lowering emits one function at a time and numbers from zero, so
+    /// a path that lowers exec WITHOUT having just lowered sched needs
+    /// telling where to start.  Lowering-time only: the callback ABI
+    /// never sees it, which is the point -- dispatch is (ordinal, site)
+    /// into one table and cannot pick the wrong one.
+    pub exec_foreign_origin: u32,
+    pub exec_prim_origin: u32,
 }
 
 /// Wire format for per-ordinal call-site tables baked into artifacts
@@ -401,10 +420,10 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
     };
     w(&mut o, protos.len() as u32);
     for p in protos {
-        wf(&mut o, &p.sched_foreign);
-        wp(&mut o, &p.sched_prims);
-        wf(&mut o, &p.exec_foreign);
-        wp(&mut o, &p.exec_prims);
+        wf(&mut o, &p.foreign);
+        wp(&mut o, &p.prims);
+        w(&mut o, p.exec_foreign_origin);
+        w(&mut o, p.exec_prim_origin);
     }
     o
 }
@@ -501,10 +520,10 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     let mut out = Vec::with_capacity(n as usize);
     for _ in 0..n {
         out.push(FnProtos {
-            sched_foreign: rf(b, &mut i)?,
-            sched_prims: rp(b, &mut i)?,
-            exec_foreign: rf(b, &mut i)?,
-            exec_prims: rp(b, &mut i)?,
+            foreign: rf(b, &mut i)?,
+            prims: rp(b, &mut i)?,
+            exec_foreign_origin: r(b, &mut i)?,
+            exec_prim_origin: r(b, &mut i)?,
         });
     }
     (i == b.len()).then_some(out)
@@ -538,13 +557,14 @@ pub const GATE_OUT_METHOD: StrId = u32::MAX;
 pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// Boundary-tax experiment (sharding rung, step 1): request one
 /// module TYPE's methods be emitted as standalone functions on the
-/// proposed slot ABI (arena, env, inst_base, token_base, args...) and
-/// CALLED at every cross-module site instead of inlined.  Selected by
-/// TRS_BOUNDARY_MODULE=<module name> at plan time; absent = the
-/// default path, byte-identical to today.  V1 constraints (enforced
-/// at plan + emission): no always_enabled methods, no callback sites
-/// (foreign/task/prim trampolines) in method cones — so caller token
-/// tables stay flag-invariant — and the one-module AOT path only.
+/// proposed slot ABI (arena, env, inst_base, ordinal, prim_site_base,
+/// foreign_site_base, args...) and CALLED at every cross-module site
+/// instead of inlined.  Selected by TRS_BOUNDARY_MODULE=<module name>
+/// at plan time; absent = the default path, byte-identical to today.
+/// Constraints (enforced at plan + emission): no always_enabled
+/// methods, and the one-module AOT path only.  Callback sites in a
+/// method cone ARE supported: the caller reserves them a block in its
+/// own tables (see `prim_sites`).
 #[derive(Clone, Debug)]
 pub struct BoundaryReq {
     /// module type (Design.modules index)
@@ -581,8 +601,8 @@ pub struct BoundaryFn {
     /// the table is per ordinal and its entries name absolute instances
     /// -- so each caller instead reserves a block in its OWN table and
     /// materialises these into it with the callee's absolute instance.
-    /// The caller passes the block's start folded into a token base, and
-    /// a site here adds its own index to that (see `site_token`).
+    /// The caller passes the block's start as a site base, and a site
+    /// here adds its own index to that (see `site_index`).
     pub prim_sites: Vec<PrimCallSpec>,
     pub foreign_sites: Vec<ForeignSpec>,
 }
@@ -590,15 +610,26 @@ pub struct BoundaryFn {
 pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 
 /// AOT layout revision, baked into every artifact: bump whenever slot
-/// allocation, token layout, or callback ABI changes so a stale .so is
-/// refused at load instead of silently misreading the arena.
+/// allocation, call-site addressing, or callback ABI changes so a
+/// stale .so is refused at load instead of silently misreading the
+/// arena.
 // 27: trs_cb_bdpi_missing joined the callback ABI as a REQUIRED symbol
 //     (a rev-26 runtime never fills it, so a rev-26-labeled artifact
 //     carrying BDPI trap blocks would null-call it on a missing
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
-pub const AOT_LAYOUT_REV: u64 = 27;
+// 28: callback sites are named by two separate arguments (ordinal,
+//     site) instead of one bit-packed u64 token, so the trampoline
+//     signatures changed and the 16-bit site field -- which a
+//     boundary-heavy design could exhaust, taking the whole design's
+//     AOT compile with it -- is gone.  Each rule owns ONE call-site
+//     table spanning both its sched and its exec half, so a callee
+//     outlined across a synthesis boundary cannot report into a table
+//     its caller did not reserve its block in.  Rule bodies take
+//     their ordinal where they took a token base, and boundary fns
+//     take a site base in place of each packed token seed.
+pub const AOT_LAYOUT_REV: u64 = 28;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
@@ -704,7 +735,7 @@ pub struct EdgeSsaPlan {
     /// BASE interleaving's values and is correct there.
     pub sched_over: Vec<HashMap<usize, SchedOver>>,
     /// per exec ordinal: the outlined-call node (class-rep symbol +
-    /// region/token bases).  Variant rows have no FusedComp node
+    /// region base and ordinal).  Variant rows have no FusedComp node
     /// stream to index by section, so outlined execs resolve here.
     pub ord_fnodes: HashMap<usize, FusedNode>,
     /// per composition: packed trs_bram_tick argument triples of
@@ -1055,8 +1086,8 @@ pub struct SchedOver {
 pub enum FusedNode {
     /// sched fn: baked address (JIT) or symbol (AOT)
     Sched(HelperRef),
-    /// exec fn + its (region base, token base) args
-    Exec(HelperRef, u64, u64),
+    /// exec fn + its (region base, ordinal) args
+    Exec(HelperRef, u64, u32),
 }
 
 /// A composition's fused edge: EN slots to zero, then the node

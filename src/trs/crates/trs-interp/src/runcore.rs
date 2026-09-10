@@ -33,7 +33,7 @@ use crate::jit::{
 };
 use crate::prim::Prim;
 use crate::value::Value;
-use trs_codegen::abi::{self, FArgSpec, FnProtos, TOKEN_KIND_EXEC};
+use trs_codegen::abi::{self, FArgSpec, FnProtos};
 
 /// Everything a boot needs from the sidecar.  The string and path
 /// tables are (offset, len) RANGES into the sidecar bytes — CFL-class
@@ -382,28 +382,23 @@ impl RunCore {
     }
 }
 
-/// jit_foreign_cb's twin over the baked tables: same token decode,
+/// jit_foreign_cb's twin over the baked tables: same site lookup,
 /// same marshaling, ForeignEnv instead of an Interp.  A declined
 /// task ($dump*, BDPI) reaching here is an eligibility-gate bug —
 /// panic loudly rather than produce a wrong byte.
 unsafe extern "C" fn runcore_foreign_cb(
     env: *mut core::ffi::c_void,
-    token: u64,
+    ord: u32,
+    site: u32,
     args: *const u64,
     out: *mut u64,
 ) -> i32 {
     let rc = &mut *(env as *mut RunCore);
-    let ordinal = (token >> 17) as usize;
-    let is_exec = token & TOKEN_KIND_EXEC != 0;
-    let local = (token & 0xffff) as usize;
+    let (ordinal, local) = (ord as usize, site as usize);
     // take the protos table for the marshal walk (rc.arg_str needs
     // &mut rc) — a Vec move, not a copy; restored before dispatch
     let protos = std::mem::take(&mut rc.protos);
-    let fs = if is_exec {
-        &protos[ordinal].exec_foreign[local]
-    } else {
-        &protos[ordinal].sched_foreign[local]
-    };
+    let fs = &protos[ordinal].foreign[local];
     let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
     // per-boot scratch (jit_foreign_cb's buffer discipline): the argv
     // spine survives across bounces, single-limb Values stay inline
@@ -495,27 +490,22 @@ unsafe extern "C" fn runcore_foreign_cb(
     0
 }
 
-/// jit_prim_cb's twin over the restored prims (rung 3b): same token
-/// decode, same marshaling, same trait methods — the prim is the
+/// jit_prim_cb's twin over the restored prims (rung 3b): same site
+/// lookup, same marshaling, same trait methods — the prim is the
 /// identical prim.rs struct over the identical slots, so a bounce
 /// here is byte-for-byte the classic bounce.  An inst without a
 /// restored prim is an eligibility-gate bug: panic loudly rather
 /// than produce a wrong byte.
 unsafe extern "C" fn runcore_prim_cb(
     env: *mut core::ffi::c_void,
-    token: u64,
+    ord: u32,
+    site: u32,
     args: *const u64,
     out: *mut u64,
 ) {
     let rc = &mut *(env as *mut RunCore);
-    let ordinal = (token >> 17) as usize;
-    let is_exec = token & TOKEN_KIND_EXEC != 0;
-    let local = (token & 0xffff) as usize;
-    let pc = if is_exec {
-        &rc.protos[ordinal].exec_prims[local]
-    } else {
-        &rc.protos[ordinal].sched_prims[local]
-    };
+    let (ordinal, local) = (ord as usize, site as usize);
+    let pc = &rc.protos[ordinal].prims[local];
     // marshal exactly as jit_prim_cb: w.max(1) words per argument on
     // both sides of the ABI, TRUE logical width on the Value
     let mut argv = Vec::with_capacity(pc.arg_widths.len());
@@ -534,7 +524,7 @@ unsafe extern "C" fn runcore_prim_cb(
              (eligibility-gate bug)"
         );
     };
-    crate::prim::FROM_COMPILED.with(|c| c.set(token));
+    crate::prim::FROM_COMPILED.with(|c| c.set(Some((ord, site))));
     if pc.method == trs_codegen::abi::GATE_OUT_METHOD {
         // sentinel first: GATE_OUT is NOT a string id (panel finding —
         // resolving it through the table panics on every gate bounce)
@@ -563,7 +553,7 @@ unsafe extern "C" fn runcore_prim_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
-    crate::prim::FROM_COMPILED.with(|c| c.set(u64::MAX));
+    crate::prim::FROM_COMPILED.with(|c| c.set(None));
 }
 
 /// Attempt a RunCore boot for `so` + its `.arena` sidecar.  Some(rc)
@@ -749,12 +739,10 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
         // rooted with the rest of the sidecar: the window arena IS
         // state, so a crafted sidecar could already alter bytes; the
         // checks here are against corruption and version skew.
-        if protos.iter().any(|pr| {
-            pr.sched_prims
-                .iter()
-                .chain(pr.exec_prims.iter())
-                .any(|pc| !prims.contains_key(&pc.inst))
-        }) {
+        if protos
+            .iter()
+            .any(|pr| pr.prims.iter().any(|pc| !prims.contains_key(&pc.inst)))
+        {
             bail("prim call site without a baked seed");
             return None;
         }

@@ -107,26 +107,28 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: 0,
             outlined: None,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            site_origin: 0,
+            foreign_origin: 0,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
         };
+        // one table per rule: the exec half keeps numbering where the
+        // sched half stopped, so the tables are NOT reset between them
         lc.lower_sched()?;
-        let sched_foreign = std::mem::take(&mut lc.foreign_stmts);
-        let sched_prims = std::mem::take(&mut lc.prim_calls);
-        lc.token_kind = TOKEN_KIND_EXEC;
+        let exec_foreign_origin = lc.foreign_stmts.len() as u32;
+        let exec_prim_origin = lc.prim_calls.len() as u32;
         lc.lower_exec()?;
         protos.push(FnProtos {
-            sched_foreign,
-            sched_prims,
-            exec_foreign: lc.foreign_stmts,
-            exec_prims: lc.prim_calls,
+            foreign: lc.foreign_stmts,
+            prims: lc.prim_calls,
+            exec_foreign_origin,
+            exec_prim_origin,
         });
     }
     Ok(protos)
@@ -160,11 +162,20 @@ fn make_module<'ctx>(
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
-    let cb_ty = i32t.fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
+    // (env, ordinal, site, args, out): a site is named by its rule and
+    // its index in that rule's ONE table, so neither side owns a bit
+    // layout, no field can overflow, and there is no second table for
+    // an outlined callee's block to land in by mistake
+    let site_args = [
+        ptrt.into(),
+        i32t.into(),
+        i32t.into(),
+        ptrt.into(),
+        ptrt.into(),
+    ];
+    let cb_ty = i32t.fn_type(&site_args, false);
     let fpe_ty = ctx.void_type().fn_type(&[], false);
-    let prim_ty = ctx
-        .void_type()
-        .fn_type(&[ptrt.into(), i64t.into(), ptrt.into(), ptrt.into()], false);
+    let prim_ty = ctx.void_type().fn_type(&site_args, false);
     let (cb, fpe, prim) = match baked {
         Some((f, s, p)) => {
             let addr =
@@ -535,7 +546,6 @@ pub fn compile_scheds(
 ) -> Result<Vec<CompiledSched>, Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
     let (module, cbs) = make_module(ctx, Some((foreign_cb, sigfpe_cb, prim_cb)));
-    let mut protos = Vec::new();
     for spec in specs {
         let mut lc = Lower {
             env,
@@ -544,29 +554,29 @@ pub fn compile_scheds(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: 0,
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: None,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
         };
         lc.lower_sched()?;
-        protos.push((lc.foreign_stmts, lc.prim_calls));
     }
     let ee = finish_engine(module)?;
     let mut out = Vec::new();
-    for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
+    // the call-site tables live once per rule in FnProtos; the
+    // trampolines index those, so nothing is kept per function here
+    for spec in specs {
         let addr = ee
             .get_function_address(&format!("sched_{}", spec.label))
             .map_err(|e| Ineligible(format!("sched fn address: {e}")))?;
         out.push(CompiledSched {
             sched: unsafe { std::mem::transmute::<usize, _>(addr as usize) },
-            foreign_stmts,
-            prim_calls,
         });
     }
     std::mem::forget(ee);
@@ -585,7 +595,6 @@ pub fn compile_execs(
 ) -> Result<Vec<CompiledExec>, Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
     let (module, cbs) = make_module(ctx, Some((foreign_cb, sigfpe_cb, prim_cb)));
-    let mut protos = Vec::new();
     for spec in specs {
         let mut lc = Lower {
             env,
@@ -594,29 +603,27 @@ pub fn compile_execs(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: TOKEN_KIND_EXEC,
+            site_origin: spec.exec_prim_origin,
+            foreign_origin: spec.exec_foreign_origin,
             outlined: None,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
         };
         lc.lower_exec()?;
-        protos.push((lc.foreign_stmts, lc.prim_calls));
     }
     let ee = finish_engine(module)?;
     let mut out = Vec::new();
-    for (spec, (foreign_stmts, prim_calls)) in specs.iter().zip(protos) {
+    for spec in specs {
         let addr = ee
             .get_function_address(&format!("exec_{}", spec.label))
             .map_err(|e| Ineligible(format!("exec fn address: {e}")))?;
         out.push(CompiledExec {
             exec: unsafe { std::mem::transmute::<usize, _>(addr as usize) },
-            foreign_stmts,
-            prim_calls,
         });
     }
     std::mem::forget(ee);
@@ -735,12 +742,13 @@ pub fn compile_object_chunk(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: 0,
             outlined: None,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            site_origin: 0,
+            foreign_origin: 0,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -748,11 +756,12 @@ pub fn compile_object_chunk(
         if do_sched {
             lc.lower_sched()?;
         }
-        // reset the call-site tables between the two functions: token
-        // local indices are per-function (must match trial_lower)
-        lc.foreign_stmts = Vec::new();
-        lc.prim_calls = Vec::new();
-        lc.token_kind = TOKEN_KIND_EXEC;
+        // one table per rule: the exec fn numbers on from where the
+        // sched half stopped.  A chunk may carry exec without sched,
+        // so take the origins trial_lower recorded rather than this
+        // lowering's own counts.
+        lc.site_origin = spec.exec_prim_origin;
+        lc.foreign_origin = spec.exec_foreign_origin;
         lc.dedup = None;
         if do_exec {
             lc.lower_exec()?;
@@ -889,12 +898,14 @@ fn lower_helpers<'ctx>(
             builder: ctx.create_builder(),
             cbs,
             spec: pseudo,
-            token_kind: TOKEN_KIND_EXEC,
+            // helpers carry no callback sites (v1)
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: Some(refs),
             helper_self: Some((hs.mir, hs.def)),
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -979,7 +990,9 @@ fn lower_boundary_fns<'ctx>(
         eager: Vec::new(),
         shared: Vec::new(),
         label: "boundary".to_string(),
-        token_base: 0,
+        ordinal: 0,
+        exec_foreign_origin: 0,
+        exec_prim_origin: 0,
         autofire: None,
     };
     let mut map = BoundaryMap::default();
@@ -991,12 +1004,14 @@ fn lower_boundary_fns<'ctx>(
             builder: ctx.create_builder(),
             cbs,
             spec: &bspec,
-            token_kind: TOKEN_KIND_EXEC,
+            // a boundary fn numbers from the base its caller gave it
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: refs,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1156,12 +1171,13 @@ pub fn compile_design_object(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: 0,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            site_origin: 0,
+            foreign_origin: 0,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1180,12 +1196,15 @@ pub fn compile_design_object(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: TOKEN_KIND_EXEC,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            // the sched fns above were lowered by a separate Lower, so
+            // the exec side starts at the origin trial_lower recorded
+            site_origin: spec.exec_prim_origin,
+            foreign_origin: spec.exec_foreign_origin,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1402,12 +1421,13 @@ fn compile_type_module(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: TOKEN_KIND_EXEC,
+            site_origin: spec.exec_prim_origin,
+            foreign_origin: spec.exec_foreign_origin,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1520,12 +1540,13 @@ pub fn compile_design_objects_split(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            token_kind: 0,
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
-            bnd_prim_tok: None,
-            bnd_foreign_tok: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1578,7 +1599,7 @@ pub fn compile_design_objects_split(
         let ptrt = ctx.ptr_type(AddressSpace::default());
         let i64t = ctx.i64_type();
         let i32t = ctx.i32_type();
-        let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+        let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
         for &o in rep_ords {
             let name = format!("exec_{}", specs[o].label);
             if module.get_function(&name).is_none() {
@@ -1644,7 +1665,9 @@ pub fn compile_design_objects_split(
         eager: Vec::new(),
         shared: Vec::new(),
         label: "split-placeholder".to_string(),
-        token_base: 0,
+        ordinal: 0,
+        exec_foreign_origin: 0,
+        exec_prim_origin: 0,
         autofire: None,
     };
     let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
@@ -1756,7 +1779,7 @@ fn lower_fused<'ctx>(
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
     let sched_ty = ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
-    let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+    let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
     let b = ctx.create_builder();
     let mut syms = Vec::with_capacity(comps.len());
     for (k, comp) in comps.iter().enumerate() {
@@ -1809,13 +1832,13 @@ fn lower_fused<'ctx>(
                         _ => unreachable!(),
                     }
                 }
-                FusedNode::Exec(r, base, tok) => {
+                FusedNode::Exec(r, base, ord) => {
                     let (f_, p_, ty) = callee(r, exec_ty);
                     let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                         arena.into(),
                         envp.into(),
                         i64t.const_int(*base, false).into(),
-                        i64t.const_int(*tok, false).into(),
+                        i32t.const_int(*ord as u64, false).into(),
                     ];
                     let cs = match (f_, p_) {
                         (Some(f_), _) => b.build_call(f_, &args, "e").unwrap(),
@@ -2015,7 +2038,8 @@ fn lower_edge_ssa<'ctx>(
                     builder: ctx.create_builder(),
                     cbs,
                     spec: gspec,
-                    token_kind: 0,
+                    site_origin: 0,
+                    foreign_origin: 0,
                     // no helper memoization on the guard path: a
                     // memo filled at this extra pre-edge evaluation
                     // point would serve stale values to the body's
@@ -2023,8 +2047,8 @@ fn lower_edge_ssa<'ctx>(
                     outlined: None,
                     helper_self: None,
                     dedup: None,
-                    bnd_prim_tok: None,
-                    bnd_foreign_tok: None,
+                    bnd_prim_site: None,
+                    bnd_foreign_site: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: None,
@@ -2162,12 +2186,13 @@ fn lower_edge_ssa<'ctx>(
                     builder: ctx.create_builder(),
                     cbs,
                     spec,
-                    token_kind: if is_exec { TOKEN_KIND_EXEC } else { 0 },
+                    site_origin: if is_exec { spec.exec_prim_origin } else { 0 },
+                    foreign_origin: if is_exec { spec.exec_foreign_origin } else { 0 },
                     outlined,
                     helper_self: None,
                     dedup: None,
-                    bnd_prim_tok: None,
-                    bnd_foreign_tok: None,
+                    bnd_prim_site: None,
+                    bnd_foreign_site: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: Some(std::mem::take(&mut edge_ctx)),
@@ -2245,16 +2270,16 @@ fn lower_edge_ssa<'ctx>(
                                 Ineligible("variant outlined exec without ord node".into())
                             })?
                         };
-                        let FusedNode::Exec(href, base, tok) = fnode else {
+                        let FusedNode::Exec(href, base, ord) = fnode else {
                             return Err(Ineligible("outlined exec node mismatch".into()));
                         };
                         let exec_ty = i32t
-                            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+                            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
                         let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                             arena.into(),
                             envp.into(),
                             i64t.const_int(*base, false).into(),
-                            i64t.const_int(*tok, false).into(),
+                            i32t.const_int(*ord as u64, false).into(),
                         ];
                         let cs = match href {
                             HelperRef::Sym(name) => {
@@ -2367,12 +2392,13 @@ fn lower_edge_ssa<'ctx>(
                                 builder: ctx.create_builder(),
                                 cbs,
                                 spec,
-                                token_kind: 0,
+                                site_origin: 0,
+                                foreign_origin: 0,
                                 outlined,
                                 helper_self: None,
                                 dedup: None,
-                                bnd_prim_tok: None,
-                                bnd_foreign_tok: None,
+                                bnd_prim_site: None,
+                                bnd_foreign_site: None,
                                 foreign_stmts: Vec::new(),
                                 prim_calls: Vec::new(),
                                 edge: Some(EdgeCtx {
@@ -2701,8 +2727,12 @@ struct Lower<'a, 'ctx> {
     /// whole-edge SSA cache; None outside edge-function emission.
     /// Owned by the section's Lower and handed back to the driver.
     edge: Option<EdgeCtx<'ctx>>,
-    /// OR'd into callback tokens (TOKEN_KIND_EXEC for body passes)
-    token_kind: u64,
+    /// where this function's sites begin in its RULE's table.  A rule
+    /// has one table and each function numbers from zero, so an exec
+    /// lowering that did not just follow its own sched lowering starts
+    /// at the origin trial_lower recorded.  Zero for a sched fn.
+    site_origin: u32,
+    foreign_origin: u32,
     /// outlined def pieces callable from this lowering (None while the
     /// helper set itself is being compiled bottom-up)
     outlined: Option<&'a HelperMap>,
@@ -2710,17 +2740,17 @@ struct Lower<'a, 'ctx> {
     /// inline, not self-call)
     helper_self: Option<(usize, StrId)>,
     /// exec dedup mode: (subtree region of spec.inst, base param,
-    /// token-base param).  In-region slots address as base + (slot -
-    /// region.0); call-site tokens OR the runtime token base.  None =
+    /// ordinal param).  In-region slots address as base + (slot -
+    /// region.0); callback sites report the runtime ordinal.  None =
     /// baked absolute addressing (sched fns, trial).
     dedup: Option<(u32, u32, IntValue<'ctx>, IntValue<'ctx>)>,
-    /// While lowering a shared boundary fn: the token seeds its caller
-    /// passed, one per call-site table (the two have independent local
-    /// index spaces).  Each is `caller_token_base + the first index of
-    /// the block the caller reserved`, so a site adds its own index.
-    /// None in a rule body, which indexes its own table from zero.
-    bnd_prim_tok: Option<IntValue<'ctx>>,
-    bnd_foreign_tok: Option<IntValue<'ctx>>,
+    /// While lowering a shared boundary fn: the site bases its caller
+    /// passed, one per call-site table (the two have independent index
+    /// spaces).  Each is the first index of the block the caller
+    /// reserved, so a site adds its own index.  None in a rule body,
+    /// which indexes its own table from zero.
+    bnd_prim_site: Option<IntValue<'ctx>>,
+    bnd_foreign_site: Option<IntValue<'ctx>>,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -2982,33 +3012,33 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .unwrap()
     }
 
-    /// The runtime token for call site `local` in this function.  The
-    /// local index is ADDED to the base rather than OR'd: a rule body's
-    /// base is `ordinal << 17`, whose low bits are zero, so the two
-    /// agree there -- but a base that already carries a local offset
-    /// (a boundary fn, whose caller reserved it a block in its own
-    /// table) needs the add.  The kind bit sits above the 16-bit local
-    /// field and stays an OR.
-    fn site_token(&self, base: IntValue<'ctx>, local: u64, seeded: bool) -> IntValue<'ctx> {
-        let i64t = self.ctx.i64_type();
-        if !seeded {
-            // a rule body's base is `ordinal << 17`: the local field is
-            // zero, so one OR places the index and the kind bit
-            let k = self.token_kind | local;
-            return self
-                .builder
-                .build_or(base, i64t.const_int(k, false), "tok")
-                .unwrap();
+    /// The rule ordinal a callback site in this function reports.  A
+    /// shared body (an exec fn deduped across a module type, a
+    /// boundary fn) serves many ordinals and takes one at run time;
+    /// anything else names its own.
+    fn site_ordinal(&self) -> IntValue<'ctx> {
+        match self.dedup {
+            Some((_, _, _, ord)) => ord,
+            None => self
+                .ctx
+                .i32_type()
+                .const_int(self.spec.ordinal as u64, false),
         }
-        // a boundary fn's base already carries the block its caller
-        // reserved in its own table, so the index has to be added
-        let off = self
-            .builder
-            .build_int_add(base, i64t.const_int(local, false), "tokl")
-            .unwrap();
-        self.builder
-            .build_or(off, i64t.const_int(self.token_kind, false), "tok")
-            .unwrap()
+    }
+
+    /// Where call site `local` sits in the table it reports into.  A
+    /// boundary fn's sites land in the block its caller reserved, so
+    /// the caller's base is added; every other function indexes its
+    /// own table from zero.
+    fn site_index(&self, base: Option<IntValue<'ctx>>, origin: u32, local: u32) -> IntValue<'ctx> {
+        let idx = self
+            .ctx
+            .i32_type()
+            .const_int((origin + local) as u64, false);
+        match base {
+            Some(b) => self.builder.build_int_add(b, idx, "site").unwrap(),
+            None => idx,
+        }
     }
 
     fn slot_ptr(&self, f: &Frame<'ctx>, slot: u32) -> PointerValue<'ctx> {
@@ -4374,26 +4404,29 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             if let Some(envp) = f.envp {
                 if bargs.iter().all(|(p, _)| cf.args.contains_key(p)) {
                     let i64t = self.ctx.i64_type();
+                    let i32t = self.ctx.i32_type();
                     let ptrt = self.ctx.ptr_type(AddressSpace::default());
                     let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
                         ptrt.into(),
                         ptrt.into(),
                         i64t.into(),
-                        i64t.into(),
-                        i64t.into(),
+                        i32t.into(),
+                        i32t.into(),
+                        i32t.into(),
                     ];
                     for (_, pw) in &bargs {
                         ptys.push(self.ity(*pw).into());
                     }
                     let bty = self.ity(brw).fn_type(&ptys, false);
                     let base = self.slot_index(cie.region.0);
-                    let (ptok, ftok) = self.boundary_tok_bases(&bnd, child)?;
+                    let (psite, fsite) = self.boundary_site_bases(&bnd, child)?;
                     let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                         f.arena.into(),
                         envp.into(),
                         base.into(),
-                        ptok.into(),
-                        ftok.into(),
+                        self.site_ordinal().into(),
+                        psite.into(),
+                        fsite.into(),
                     ];
                     for (pn, pw) in &bargs {
                         let (v, vw) = cf.args[pn];
@@ -4729,12 +4762,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             off += words;
         }
-        let local = self.prim_calls.len() as u64;
-        let token_const = self.token_kind | local;
-        if self.prim_calls.len() >= 1 << 16 {
-            return nope("prim call-site count exceeds the 16-bit token field");
-        }
-        let token = self.spec.token_base | token_const;
+        let Ok(local) = u32::try_from(self.prim_calls.len()) else {
+            return nope("prim call-site count exceeds the 32-bit site field");
+        };
         self.prim_calls.push(PrimCallSpec {
             inst: prim_inst,
             method,
@@ -4743,17 +4773,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ret_width: if is_action { 0 } else { ret_width },
             is_action,
         });
-        let tokv = match (self.bnd_prim_tok, self.dedup) {
-            (Some(seed), _) => self.site_token(seed, local, true),
-            (None, Some((_, _, _, tb))) => self.site_token(tb, local, false),
-            (None, None) => i64t.const_int(token, false),
-        };
+        let ordv = self.site_ordinal();
+        let sitev = self.site_index(self.bnd_prim_site, self.site_origin, local);
         let prim_callee = self.cb_callee(self.cbs.prim);
         self.builder
             .build_indirect_call(
                 self.cbs.prim_ty,
                 prim_callee,
-                &[envp.into(), tokv.into(), abuf.into(), obuf.into()],
+                &[
+                    envp.into(),
+                    ordv.into(),
+                    sitev.into(),
+                    abuf.into(),
+                    obuf.into(),
+                ],
                 "pc",
             )
             .unwrap();
@@ -5803,11 +5836,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i32t = self.ctx.i32_type();
         let i64t = self.ctx.i64_type();
-        // exec fns take (arena, env, region base index, token base):
-        // all in-region state addresses relative to base and call-site
-        // tokens OR the runtime token base, so ONE compiled body serves
+        // exec fns take (arena, env, region base index, ordinal): all
+        // in-region state addresses are relative to base and callback
+        // sites report the runtime ordinal, so ONE compiled body serves
         // every instance of the module type (per-module-type dedup)
-        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i64t.into()], false);
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
         let func = self
             .module
             .add_function(&format!("exec_{}", self.spec.label), fnty, None);
@@ -6000,8 +6033,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             region.0,
             region.1,
             func.get_nth_param(2).unwrap().into_int_value(),
-            // helpers carry no callback sites (v1): token base unused
-            i64t.const_zero(),
+            // helpers carry no callback sites (v1), so no site ever
+            // reads this ordinal -- but keep it the ABI's type
+            self.ctx.i32_type().const_zero(),
         ));
         let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
         for (k, (pn, pw)) in hs.ports.iter().enumerate() {
@@ -6069,22 +6103,22 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Reserve a block in each of this function's call-site tables for
     /// a boundary call on `child`, materialising the callee's templates
     /// into them with that child's absolute instances, and return the
-    /// (prim, foreign) token bases to hand the callee.  Each is this
+    /// (prim, foreign) site bases to hand the callee.  Each is this
     /// function's own base offset to the block just reserved, so a site
     /// inside the callee adds its index and lands in OUR table.
-    fn boundary_tok_bases(
+    fn boundary_site_bases(
         &mut self,
         bf: &BoundaryFn,
         child: usize,
     ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), Ineligible> {
-        let i64t = self.ctx.i64_type();
-        let pbase = self.prim_calls.len() as u64;
-        let fbase = self.foreign_stmts.len() as u64;
-        if pbase + bf.prim_sites.len() as u64 >= 1 << 16
-            || fbase + bf.foreign_sites.len() as u64 >= 1 << 16
+        let fits = |base: usize, n: usize| u32::try_from(base + n).is_ok();
+        if !fits(self.prim_calls.len(), bf.prim_sites.len())
+            || !fits(self.foreign_stmts.len(), bf.foreign_sites.len())
         {
-            return nope("boundary block exceeds the 16-bit token field");
+            return nope("boundary block exceeds the 32-bit site field");
         }
+        let pbase = self.prim_calls.len() as u32;
+        let fbase = self.foreign_stmts.len() as u32;
         for p in &bf.prim_sites {
             self.prim_calls.push(PrimCallSpec {
                 inst: child + p.inst,
@@ -6097,21 +6131,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 ..f.clone()
             });
         }
-        let own = |me: &Self, seeded: Option<IntValue<'ctx>>| match seeded {
-            Some(v) => v,
-            None => match me.dedup {
-                Some((_, _, _, tb)) => tb,
-                None => i64t.const_int(me.spec.token_base, false),
-            },
-        };
-        let p0 = own(self, self.bnd_prim_tok);
-        let f0 = own(self, self.bnd_foreign_tok);
-        let add = |b: IntValue<'ctx>, off: u64| {
-            self.builder
-                .build_int_add(b, i64t.const_int(off, false), "btok")
-                .unwrap()
-        };
-        Ok((add(p0, pbase), add(f0, fbase)))
+        // our own base in each table (zero unless we are ourselves a
+        // boundary fn writing into a caller's block) plus the offset of
+        // the block just reserved
+        Ok((
+            self.site_index(self.bnd_prim_site, self.site_origin, pbase),
+            self.site_index(self.bnd_foreign_site, self.foreign_origin, fbase),
+        ))
     }
 
     fn boundary_hit(&self, mir: usize, method: StrId, kind: u8) -> Option<BoundaryFn> {
@@ -6122,14 +6148,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         })
     }
 
-    /// One boundary method function.  ABI, with `t` = the pair
-    /// (prim_tok_base, foreign_tok_base) -- this call's token base, the
-    /// caller's own offset to the block it reserved in each of its two
-    /// call-site tables (see `BoundaryFn::prim_sites`):
-    ///   kind 0: iN  sym(arena, env, base, t, args...)       value result
-    ///   kind 3: iN  sym(arena, env, base, t, args...)       AV result cone
-    ///   kind 1: i32 sym(arena, env, base, t, args...)       action body
-    ///   kind 2: i32 sym(arena, env, base, t, out, args...)  AV body+result
+    /// One boundary method function.  ABI, with `s` = the triple
+    /// (ordinal, prim_site_base, foreign_site_base) -- the rule whose
+    /// call-site tables a site here reports into, and the caller's own
+    /// offset to the block it reserved in each of its two tables (see
+    /// `BoundaryFn::prim_sites`):
+    ///   kind 0: iN  sym(arena, env, base, s, args...)       value result
+    ///   kind 3: iN  sym(arena, env, base, s, args...)       AV result cone
+    ///   kind 1: i32 sym(arena, env, base, s, args...)       action body
+    ///   kind 2: i32 sym(arena, env, base, s, out, args...)  AV body+result
     /// Base-relative addressing throughout (one fn serves every
     /// instance of the type); the i32 status is 1 when a $finish path
     /// fired (the caller branches to its stop block).  internal +
@@ -6179,8 +6206,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             ptrt.into(),
             ptrt.into(),
             i64t.into(),
-            i64t.into(),
-            i64t.into(),
+            i32t.into(),
+            i32t.into(),
+            i32t.into(),
         ];
         if rq.kind == 2 {
             ptys.push(ptrt.into());
@@ -6207,18 +6235,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             region.0,
             region.1,
             func.get_nth_param(2).unwrap().into_int_value(),
-            // unused: a site here takes its base from bnd_*_tok
-            i64t.const_zero(),
+            func.get_nth_param(3).unwrap().into_int_value(),
         ));
-        self.bnd_prim_tok = Some(func.get_nth_param(3).unwrap().into_int_value());
-        self.bnd_foreign_tok = Some(func.get_nth_param(4).unwrap().into_int_value());
-        // Parameter layout: 0 arena, 1 env, 2 region base, 3 prim token
-        // base, 4 foreign token base, then (kind 2 only) the out
-        // pointer at BND_OUT, then the method's arguments.  Both the
-        // out read and the argument offset come from the one constant:
-        // a kind 2 whose two disagree is a type panic deep in the
-        // lowering rather than anything the caller can see.
-        const BND_OUT: u32 = 5;
+        self.bnd_prim_site = Some(func.get_nth_param(4).unwrap().into_int_value());
+        self.bnd_foreign_site = Some(func.get_nth_param(5).unwrap().into_int_value());
+        // Parameter layout: 0 arena, 1 env, 2 region base, 3 ordinal,
+        // 4 prim site base, 5 foreign site base, then (kind 2 only) the
+        // out pointer at BND_OUT, then the method's arguments.  Both
+        // the out read and the argument offset come from the one
+        // constant: a kind 2 whose two disagree is a type panic deep in
+        // the lowering rather than anything the caller can see.
+        const BND_OUT: u32 = 6;
         let nfix: u32 = if rq.kind == 2 { BND_OUT + 1 } else { BND_OUT };
         let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
         for (k, (pn, pw)) in rq.args.iter().enumerate() {
@@ -6675,29 +6702,30 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             off += words_for(wa.max(1));
         }
-        let token = self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
-        if self.foreign_stmts.len() >= 1 << 16 {
-            return nope("foreign call-site count exceeds the 16-bit token field");
-        }
-        let local = self.foreign_stmts.len() as u64;
+        let Ok(local) = u32::try_from(self.foreign_stmts.len()) else {
+            return nope("foreign call-site count exceeds the 32-bit site field");
+        };
         self.foreign_stmts.push(ForeignSpec {
             inst: f.inst,
             func: func_id,
             ret_width,
             args: spec_args,
         });
-        let tokv = match (self.bnd_foreign_tok, self.dedup) {
-            (Some(seed), _) => self.site_token(seed, local, true),
-            (None, Some((_, _, _, tb))) => self.site_token(tb, local, false),
-            (None, None) => i64t.const_int(token, false),
-        };
+        let ordv = self.site_ordinal();
+        let sitev = self.site_index(self.bnd_foreign_site, self.foreign_origin, local);
         let cb_callee = self.cb_callee(self.cbs.cb);
         let call = self
             .builder
             .build_indirect_call(
                 self.cbs.cb_ty,
                 cb_callee,
-                &[envp.into(), tokv.into(), abuf.into(), obuf.into()],
+                &[
+                    envp.into(),
+                    ordv.into(),
+                    sitev.into(),
+                    abuf.into(),
+                    obuf.into(),
+                ],
                 "fcb",
             )
             .unwrap();
@@ -6920,18 +6948,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                     ptrt.into(),
                                     ptrt.into(),
                                     i64t.into(),
-                                    i64t.into(),
-                                    i64t.into(),
+                                    i32t.into(),
+                                    i32t.into(),
+                                    i32t.into(),
                                     ptrt.into(),
                                 ];
                                 let base = self.slot_index(cie.region.0);
-                                let (ptok, ftok) = self.boundary_tok_bases(&bnd, child)?;
+                                let (psite, fsite) = self.boundary_site_bases(&bnd, child)?;
                                 let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                                     f.arena.into(),
                                     envp.into(),
                                     base.into(),
-                                    ptok.into(),
-                                    ftok.into(),
+                                    self.site_ordinal().into(),
+                                    psite.into(),
+                                    fsite.into(),
                                     obuf.into(),
                                 ];
                                 for (pn, pw) in &bargs {
@@ -8136,17 +8166,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             ptrt.into(),
                             ptrt.into(),
                             i64t.into(),
-                            i64t.into(),
-                            i64t.into(),
+                            i32t.into(),
+                            i32t.into(),
+                            i32t.into(),
                         ];
                         let base = self.slot_index(cie.region.0);
-                        let (ptok, ftok) = self.boundary_tok_bases(&bnd, child)?;
+                        let (psite, fsite) = self.boundary_site_bases(&bnd, child)?;
                         let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                             f.arena.into(),
                             envp.into(),
                             base.into(),
-                            ptok.into(),
-                            ftok.into(),
+                            self.site_ordinal().into(),
+                            psite.into(),
+                            fsite.into(),
                         ];
                         if bkind == 2 {
                             ptys.push(ptrt.into());
@@ -8280,7 +8312,7 @@ mod tests {
     fn proto_tags_round_trip_and_fail_closed() {
         use super::{decode_protos, encode_protos, FArgSpec, FnProtos, ForeignSpec};
         let protos = vec![FnProtos {
-            sched_foreign: vec![ForeignSpec {
+            foreign: vec![ForeignSpec {
                 inst: 3,
                 func: 7,
                 ret_width: 64,
@@ -8298,14 +8330,18 @@ mod tests {
                     FArgSpec::StrDyn,
                 ],
             }],
-            sched_prims: vec![],
-            exec_foreign: vec![],
-            exec_prims: vec![],
+            prims: vec![],
+            // one table per rule: the exec half starts after the one
+            // foreign site the sched half took
+            exec_foreign_origin: 1,
+            exec_prim_origin: 0,
         }];
         let bytes = encode_protos(&protos);
         let back = decode_protos(&bytes).expect("round trip");
         assert_eq!(back.len(), 1);
-        let args = &back[0].sched_foreign[0].args;
+        assert_eq!(back[0].exec_foreign_origin, 1);
+        assert_eq!(back[0].exec_prim_origin, 0);
+        let args = &back[0].foreign[0].args;
         assert!(matches!(args[0], FArgSpec::Str(11)));
         assert!(matches!(
             args[1],

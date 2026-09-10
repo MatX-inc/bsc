@@ -19,7 +19,7 @@ use prim::ArenaKind;
 use trs_codegen::abi::{
     decode_protos, encode_protos, CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb,
     FusedComp, FusedNode, HelperMap, HelperRef, HelperSpec, InstEnv, PlanEnv, PrimCb, RecMeth,
-    RuleSpec, SigfpeCb, AOT_LAYOUT_REV, TOKEN_KIND_EXEC,
+    RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
 };
 #[cfg(feature = "jit")]
 use trs_codegen::lower::{
@@ -106,28 +106,21 @@ pub(crate) unsafe extern "C" fn jit_sigfpe_cb() {
 /// the boxed prim through the interpreter, marshal the result back.
 pub(crate) unsafe extern "C" fn jit_prim_cb(
     env: *mut core::ffi::c_void,
-    token: u64,
+    ord: u32,
+    site: u32,
     args: *const u64,
     out: *mut u64,
 ) {
     let _t0 = prof::on().then(std::time::Instant::now);
     let interp = &mut *(env as *mut Interp);
-    let ordinal = (token >> 17) as usize;
-    let is_exec = token & TOKEN_KIND_EXEC != 0;
-    let local = (token & 0xffff) as usize;
+    let (ordinal, local) = (ord as usize, site as usize);
     let lz = interp
         .jit_shared
         .as_ref()
         .expect("jit prim cb without plan")
         .clone();
-    let pc = if is_exec {
-        &lz.cells[ordinal]
-            .get()
-            .expect("prim cb from uncompiled body")
-            .prim_calls[local]
-    } else {
-        &lz.scheds[ordinal].prim_calls[local]
-    };
+    // one table per rule, both halves numbered in it
+    let pc = &lz.protos[ordinal].prims[local];
     let (inst, method, port, ret_width, is_action) =
         (pc.inst, pc.method, pc.port, pc.ret_width, pc.is_action);
     // pc borrows the OWNED Arc clone, so it outlives every interp use
@@ -151,7 +144,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         ));
         off += words;
     }
-    crate::prim::FROM_COMPILED.with(|c| c.set(token));
+    crate::prim::FROM_COMPILED.with(|c| c.set(Some((ord, site))));
     if method == trs_codegen::abi::GATE_OUT_METHOD {
         // compiled Expr::Gate on a prim child: not a method — answer
         // gate_out(), the interp's exact read
@@ -170,7 +163,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
-    crate::prim::FROM_COMPILED.with(|c| c.set(u64::MAX));
+    crate::prim::FROM_COMPILED.with(|c| c.set(None));
     if let Some(t0) = _t0 {
         prof::add(&prof::PRIM_NS, t0);
         prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -270,7 +263,7 @@ pub(crate) struct LazyJit {
     now_slot: u32,
     /// per-ordinal exec args: (region base index, token base) — the
     /// compiled body is shared across instances of a module type
-    pub(crate) exec_args: Vec<(u64, u64)>,
+    pub(crate) exec_args: Vec<(u64, u32)>,
     /// per-ordinal call-site tables (from trial_lower; per-ordinal even
     /// when the compiled body is shared, because prim targets differ)
     protos: Vec<FnProtos>,
@@ -350,11 +343,7 @@ impl LazyJit {
             });
             for (c, cr) in (lo..hi).zip(compiled) {
                 for &m in &self.classes[c].1 {
-                    let _ = self.cells[m].set(CompiledExec {
-                        exec: cr.exec,
-                        foreign_stmts: self.protos[m].exec_foreign.clone(),
-                        prim_calls: self.protos[m].exec_prims.clone(),
-                    });
+                    let _ = self.cells[m].set(CompiledExec { exec: cr.exec });
                 }
             }
             self.cold.fetch_sub(hi - lo, Ordering::AcqRel);
@@ -515,28 +504,21 @@ impl JitPlans {
 /// aborts, never $finish/$stop.
 pub(crate) unsafe extern "C" fn jit_foreign_cb(
     env: *mut core::ffi::c_void,
-    token: u64,
+    ord: u32,
+    site: u32,
     args: *const u64,
     out: *mut u64,
 ) -> i32 {
     let _t0 = prof::on().then(std::time::Instant::now);
     let interp = &mut *(env as *mut Interp);
-    let ordinal = (token >> 17) as usize;
-    let is_exec = token & TOKEN_KIND_EXEC != 0;
-    let local = (token & 0xffff) as usize;
+    let (ordinal, local) = (ord as usize, site as usize);
     let lz = interp
         .jit_shared
         .as_ref()
         .expect("jit foreign cb without plan")
         .clone();
-    let fs = if is_exec {
-        &lz.cells[ordinal]
-            .get()
-            .expect("foreign cb from uncompiled body")
-            .foreign_stmts[local]
-    } else {
-        &lz.scheds[ordinal].foreign_stmts[local]
-    };
+    // one table per rule, both halves numbered in it
+    let fs = &lz.protos[ordinal].foreign[local];
     let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
     // per-Interp scratch: the argv spine survives across calls (its
     // element drops still run — Value buffers go with A3)
@@ -1156,7 +1138,7 @@ fn aot_emit(
                                             specs[rep_of[o as usize]].label
                                         )),
                                         inst_envs[&sp.inst].region.0 as u64,
-                                        sp.token_base,
+                                        sp.ordinal,
                                     )
                                 }
                             })
@@ -1544,7 +1526,7 @@ fn aot_emit(
                                             specs[rep_of[o as usize]].label
                                         )),
                                         inst_envs[&sp.inst].region.0 as u64,
-                                        sp.token_base,
+                                        sp.ordinal,
                                     )
                                 }
                             })
@@ -1860,7 +1842,7 @@ fn aot_load(
             _: *mut u64,
             _: *mut core::ffi::c_void,
             _: u64,
-            _: u64,
+            _: u32,
         ) -> i32 {
             panic!("trs: exec symbol elided by edge-SSA artifact was called");
         }
@@ -1891,11 +1873,7 @@ fn aot_load(
                     .map(|f| *f)
                     .unwrap_or(missing_sched),
             };
-            scheds.push(CompiledSched {
-                sched: sf,
-                foreign_stmts: proto.sched_foreign.clone(),
-                prim_calls: proto.sched_prims.clone(),
-            });
+            scheds.push(CompiledSched { sched: sf });
         }
         // exec bodies: one symbol per dedup class, shared by members
         let mut execs: Vec<Option<CompiledExec>> = (0..specs.len()).map(|_| None).collect();
@@ -1903,22 +1881,18 @@ fn aot_load(
             let ef = match exec_tab {
                 Some(t) if t[*rep] != 0 => std::mem::transmute::<
                     usize,
-                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32,
+                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32,
                 >(t[*rep]),
                 Some(_) => missing_exec,
                 None => lib
-                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u64) -> i32>(
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32>(
                         format!("exec_{}\0", specs[*rep].label).as_bytes(),
                     )
                     .map(|f| *f)
                     .unwrap_or(missing_exec),
             };
             for &m in members {
-                execs[m] = Some(CompiledExec {
-                    exec: ef,
-                    foreign_stmts: protos[m].exec_foreign.clone(),
-                    prim_calls: protos[m].exec_prims.clone(),
-                });
+                execs[m] = Some(CompiledExec { exec: ef });
             }
         }
         let execs: Vec<CompiledExec> = execs
@@ -2636,7 +2610,7 @@ impl Interp {
                     };
                     let mut want_insts: std::collections::BTreeSet<usize> = Default::default();
                     for pr in lz.protos.iter() {
-                        for pc in pr.sched_prims.iter().chain(pr.exec_prims.iter()) {
+                        for pc in pr.prims.iter() {
                             want_insts.insert(pc.inst);
                         }
                     }
@@ -5387,7 +5361,9 @@ impl Interp {
                 eager: ri.eager.clone(),
                 shared: ri.shared.clone(),
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
-                token_base: (ri.ordinal as u64) << 17,
+                ordinal: ri.ordinal as u32,
+                exec_foreign_origin: 0,
+                exec_prim_origin: 0,
                 autofire: None,
             });
         }
@@ -5436,7 +5412,9 @@ impl Interp {
                     eager: Vec::new(),
                     shared: Vec::new(),
                     label: format!("af{afi}_{o}"),
-                    token_base: (o as u64) << 17,
+                    ordinal: o as u32,
+                    exec_foreign_origin: 0,
+                    exec_prim_origin: 0,
                     autofire: Some(trs_codegen::abi::AfSpec {
                         method_idx: mi,
                         method: *mname,
@@ -5917,6 +5895,18 @@ impl Interp {
             },
         };
 
+        // Where each rule's exec half begins in its ONE call-site table
+        // is an output of the lowering, not of the plan, so it is copied
+        // onto the specs here -- the single point both proto sources
+        // (artifact-loaded and trial-lowered) pass through.  Every exec
+        // lowering reads it from its spec; if two paths disagreed the
+        // sites would collide silently rather than fail, so there is
+        // exactly one writer and it is this one.
+        for (sp, pr) in specs.iter_mut().zip(&protos) {
+            sp.exec_prim_origin = pr.exec_prim_origin;
+            sp.exec_foreign_origin = pr.exec_foreign_origin;
+        }
+
         // A boundary fn's call sites live in its CALLER's table, at a
         // block whose offset is baked into the one shared body -- so
         // every member of a dedup class must lay its tables out
@@ -5932,20 +5922,23 @@ impl Interp {
             let r = &protos[*rep];
             for &m in members {
                 let p = &protos[m];
-                let shaped = p.exec_prims.len() == r.exec_prims.len()
-                    && p.exec_foreign.len() == r.exec_foreign.len()
-                    && p.exec_prims.iter().zip(&r.exec_prims).all(|(a, b)| {
+                // one table per rule, so the whole table must match --
+                // and so must the exec origin, because a shared body
+                // bakes indices that start where ITS sched half stopped
+                let shaped = p.exec_prim_origin == r.exec_prim_origin
+                    && p.exec_foreign_origin == r.exec_foreign_origin
+                    && p.prims.len() == r.prims.len()
+                    && p.foreign.len() == r.foreign.len()
+                    && p.prims.iter().zip(&r.prims).all(|(a, b)| {
                         a.method == b.method
                             && a.port == b.port
                             && a.arg_widths == b.arg_widths
                             && a.ret_width == b.ret_width
                             && a.is_action == b.is_action
                     })
-                    && p.exec_foreign.iter().zip(&r.exec_foreign).all(|(a, b)| {
+                    && p.foreign.iter().zip(&r.foreign).all(|(a, b)| {
                         a.func == b.func && a.ret_width == b.ret_width && a.args == b.args
-                    })
-                    && p.sched_prims.len() == r.sched_prims.len()
-                    && p.sched_foreign.len() == r.sched_foreign.len();
+                    });
                 assert!(
                     shaped,
                     "trs: dedup class rep ordinal {rep} and member {m} \
@@ -5956,10 +5949,10 @@ impl Interp {
                      everything the lowering reads.",
                     specs[*rep].inst,
                     specs[m].inst,
-                    r.exec_prims.len(),
-                    p.exec_prims.len(),
-                    r.exec_foreign.len(),
-                    p.exec_foreign.len(),
+                    r.prims.len(),
+                    p.prims.len(),
+                    r.foreign.len(),
+                    p.foreign.len(),
                 );
             }
         }
@@ -6149,7 +6142,7 @@ impl Interp {
                                         specs[rep_of[o]].label
                                     )),
                                     inst_envs[&sp.inst].region.0 as u64,
-                                    sp.token_base,
+                                    sp.ordinal,
                                 ),
                             );
                         }
@@ -6356,7 +6349,7 @@ impl Interp {
                         attach.iter().map(|&(ci, slot)| (ci, slot as u64)).collect();
                     let mut sites: std::collections::BTreeSet<usize> = Default::default();
                     for p in &protos {
-                        for pc in p.sched_prims.iter().chain(p.exec_prims.iter()) {
+                        for pc in p.prims.iter() {
                             sites.insert(pc.inst);
                         }
                     }
@@ -6494,11 +6487,11 @@ impl Interp {
             )
         };
 
-        let exec_args: Vec<(u64, u64)> = specs
+        let exec_args: Vec<(u64, u32)> = specs
             .iter()
             .map(|sp| {
                 let r0 = inst_envs[&sp.inst].region.0 as u64;
-                (r0, sp.token_base)
+                (r0, sp.ordinal)
             })
             .collect();
         let nclasses = classes.len();

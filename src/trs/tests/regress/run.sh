@@ -489,6 +489,14 @@ census_pin DynSchedEnCensus sysDynSchedEn '^EN [0-9]+ [0-9]+ read=1 live=1 stay1
 # (never rc 139 — the null-call regression this test pins).
 check_revcompat() {
     name=RevCompat; top=sysEdgeSelfKill
+    # the skew revs are derived, not typed: bumping AOT_LAYOUT_REV used
+    # to leave a hardcoded REV+1 arm sitting on the NEW current rev,
+    # where it asserts a refusal that correctly never comes
+    abi=$SRC/../../crates/trs-codegen/src/abi.rs
+    cur=$(sed -n 's/^pub const AOT_LAYOUT_REV: u64 = \([0-9]*\);.*/\1/p' "$abi")
+    case $cur in
+        '' | *[!0-9]*) echo "FAIL $name (no AOT_LAYOUT_REV in $abi)"; fail=1; return ;;
+    esac
     cp "$SRC/EdgeSelfKill.bsv" .
     $BSC -sim -u -g "$top" EdgeSelfKill.bsv >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     ref_link "$top" rev_ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
@@ -502,7 +510,7 @@ check_revcompat() {
     # the link's own window bake loads the just-baked mismatched .so
     # and prints the same fallback note into revlink.out — expected;
     # only the RUN's stderr is asserted
-    for rev in 26 28; do
+    for rev in $((cur - 1)) $((cur + 1)); do
         "$TRS" link $BDPI "$top.bir" -o revart >revlink.out 2>&1 || { echo "FAIL $name (link rev $rev)"; fail=1; return; }
         TRS_TEST_LAYOUT_REV=$rev "$TRS" compile revart.bir >>revlink.out 2>&1 || { echo "FAIL $name (compile rev $rev)"; fail=1; return; }
         TRS="$TRS" ./revart > revgot.out 2>revgot.err; gotrc=$?
