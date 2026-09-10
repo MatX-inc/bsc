@@ -559,12 +559,11 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// module TYPE's methods be emitted as standalone functions on the
 /// proposed slot ABI (arena, env, inst_base, ordinal, prim_site_base,
 /// foreign_site_base, args...) and CALLED at every cross-module site
-/// instead of inlined.  Selected by TRS_BOUNDARY_MODULE=<module name>
-/// at plan time; absent = the default path, byte-identical to today.
-/// Constraints (enforced at plan + emission): no always_enabled
-/// methods, and the one-module AOT path only.  Callback sites in a
-/// method cone ARE supported: the caller reserves them a block in its
-/// own tables (see `prim_sites`).
+/// instead of inlined.  Requested for every instantiated module type
+/// on every compile: this is how designs are emitted, not a mode.
+/// The one constraint left is that always_enabled methods stay
+/// inline; callback sites in a method cone ARE supported, the caller
+/// reserving them a block in its own tables (see `prim_sites`).
 #[derive(Clone, Debug)]
 pub struct BoundaryReq {
     /// module type (Design.modules index)
@@ -619,6 +618,12 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 29: one emission strategy.  The monolithic and rule-group-chunked
+//     paths are gone; every design is emitted as a design module plus
+//     one per module type, with boundary fns across every synthesis
+//     boundary.  Generated code differs for every design, and the
+//     TRS_AOT_ONE_MODULE / TRS_JIT_SHARD / TRS_BOUNDARY_MODULE
+//     fingerprint salts are gone with the flags.
 // 28: callback sites are named by two separate arguments (ordinal,
 //     site) instead of one bit-packed u64 token, so the trampoline
 //     signatures changed and the 16-bit site field -- which a
@@ -629,7 +634,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 28;
+pub const AOT_LAYOUT_REV: u64 = 29;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV

@@ -74,7 +74,6 @@ fn link_knob_env(flag: &str) -> Option<&'static str> {
 fn compile_knob_env(flag: &str) -> Option<&'static str> {
     Some(match flag {
         "--edge-ssa" => "TRS_EDGE_SSA",
-        "--aot-one-module" => "TRS_AOT_ONE_MODULE",
         "--jit-split" => "TRS_JIT_SPLIT",
         "--jit-opt" => "TRS_JIT_OPT",
         "--jit-pipeline" => "TRS_JIT_PIPELINE",

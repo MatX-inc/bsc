@@ -723,61 +723,6 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
         .ok_or_else(|| Ineligible("LLVM target machine creation failed".into()))
 }
 
-/// AOT: lower a batch (sched + exec per rule, callbacks through
-/// pointer-globals) and emit one PIC object file for the artifact .so.
-pub fn compile_object_chunk(
-    env: &PlanEnv,
-    specs: &[RuleSpec],
-    outlined: Option<&HelperMap>,
-    do_sched: bool,
-    do_exec: bool,
-) -> Result<Vec<u8>, Ineligible> {
-    let ctx = Context::create();
-    let (module, cbs) = make_module(&ctx, None);
-    for spec in specs {
-        let mut lc = Lower {
-            env,
-            ctx: &ctx,
-            module: &module,
-            builder: ctx.create_builder(),
-            cbs,
-            spec,
-            outlined: None,
-            helper_self: None,
-            dedup: None,
-            bnd_prim_site: None,
-            bnd_foreign_site: None,
-            site_origin: 0,
-            foreign_origin: 0,
-            foreign_stmts: Vec::new(),
-            prim_calls: Vec::new(),
-            edge: None,
-        };
-        if do_sched {
-            lc.lower_sched()?;
-        }
-        // one table per rule: the exec fn numbers on from where the
-        // sched half stopped.  A chunk may carry exec without sched,
-        // so take the origins trial_lower recorded rather than this
-        // lowering's own counts.
-        lc.site_origin = spec.exec_prim_origin;
-        lc.foreign_origin = spec.exec_foreign_origin;
-        lc.dedup = None;
-        if do_exec {
-            lc.lower_exec()?;
-        }
-    }
-    if std::env::var_os("TRS_JIT_DUMP").is_some() {
-        eprintln!("{}", module.print_to_string().to_string());
-    }
-    run_ir_passes(&module, None)?;
-    let tm = aot_target_machine()?;
-    let buf = tm
-        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
-        .map_err(|e| Ineligible(format!("object emit: {e}")))?;
-    Ok(buf.as_slice().to_vec())
-}
-
 /// AOT: the fingerprint object.  The loader checks these globals before
 /// trusting the artifact's baked slot numbers.
 pub fn compile_meta_object(
@@ -923,17 +868,15 @@ fn lower_helpers<'ctx>(
 }
 
 thread_local! {
-    /// Realized boundary map for the CURRENT compile_design_object
-    /// invocation (boundary-tax experiment, TRS_BOUNDARY_MODULE — see
+    /// Realized boundary map for the current emission (see
     /// abi::BoundaryReq); consulted by the three cross-module call-site
-    /// arms.  None (the default and the flag-off state) makes every
-    /// lookup miss before any IR is emitted, so the default path stays
-    /// byte-identical.
+    /// arms.  None makes every lookup miss before any IR is emitted,
+    /// which is the state while the map itself is being realized.
     static BOUNDARY: std::cell::RefCell<Option<BoundaryMap>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Clears the boundary map on every compile_design_object exit path
+/// Clears the boundary map on every design-emission exit path
 /// (including ?-returns), so a stale map never leaks into a later
 /// helper/trial/JIT compile on this thread.
 struct BoundaryGuard;
@@ -1070,14 +1013,7 @@ fn lower_boundary_fns<'ctx>(
     map
 }
 
-/// AOT single-module emission (whole-edge inlining): lower the whole
-/// design — helpers, scheds, exec class reps, fused edges — into ONE
-/// module and run the pipeline, so the inliner can flatten cheap
-/// calls into the fused edge (what g++'s single TU gives the C++
-/// backend).  Larger bodies stay as calls by the inliner's own cost
-/// model.
-#[allow(clippy::too_many_arguments)]
-/// compile_design_object's outcome: the object, or the measured
+/// The emission's outcome: the object, or the measured
 /// per-comp inlined-section sizes when an edge fn exceeded the
 /// caller's instruction budget (the caller extends the plan's
 /// outlined set from the MEASURED sizes and re-lowers — lowering is
@@ -1085,285 +1021,14 @@ fn lower_boundary_fns<'ctx>(
 /// on an over-budget module).
 pub enum DesignObject {
     Object(Vec<u8>),
-    /// sharded emission (TRS_JIT_SHARD): design object first, then one
-    /// object per module type in ascending mir order — the caller
-    /// appends meta.o and links them exactly like the one-module pair
+    /// design object first, then one object per module type in
+    /// ascending mir order — the caller appends meta.o and links them
     Objects(Vec<Vec<u8>>),
     /// (per-comp inlined section sizes, largest measured edge-fn size
     /// in IR instructions) — the caller replans on the sizes and uses
     /// the edge measurement to decide between accepting the inline
     /// monolith and outlining the sched sections (see outline_sched)
     EdgeOverBudget(Vec<Vec<(usize, u64)>>, u64),
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn compile_design_object(
-    env: &PlanEnv,
-    specs: &[RuleSpec],
-    rep_ords: &[usize],
-    helper_specs: &[HelperSpec],
-    refs: &HelperMap,
-    fused: &[FusedComp],
-    edge_plan: Option<&EdgeSsaPlan>,
-    // largest tolerated edge-fn size in instructions (0 = unbounded)
-    edge_insn_budget: u64,
-    // boundary-tax experiment: per-method fns to emit and divert to
-    boundary_reqs: Option<&[BoundaryReq]>,
-) -> Result<DesignObject, Ineligible> {
-    let t_low = std::time::Instant::now();
-    let _bguard = BoundaryGuard;
-    let ctx = Context::create();
-    let (module, cbs) = make_module(&ctx, None);
-    // construction-time IR census: every function tallied once as it
-    // completes (helpers here, scheds/execs below, edge fns via the
-    // final add_all) — the pipeline tier reads it instead of
-    // re-walking the module, and TRS_JIT_TIME prints from it
-    let mut tally = IrTally::default();
-    if !helper_specs.is_empty() {
-        lower_helpers(env, &ctx, &module, cbs, helper_specs, refs, &specs[0])?;
-        tally.add_all(&module);
-    }
-    let refs_opt = (!refs.is_empty()).then_some(refs);
-    // boundary fns lower after helpers (which never divert — outlined
-    // pieces predate the map) and before every rule/edge lowering, so
-    // the map is complete when the first call site consults it
-    if let Some(reqs) = boundary_reqs.filter(|r| !r.is_empty()) {
-        if !helper_specs.is_empty() {
-            eprintln!(
-                "trs boundary: note: {} outlined helper pieces lower \
-                 without diversion",
-                helper_specs.len()
-            );
-        }
-        let bmap = lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, false);
-        eprintln!(
-            "trs boundary: {} of {} method fns emitted",
-            bmap.len(),
-            reqs.len()
-        );
-        tally.add_all(&module);
-        BOUNDARY.with(|b| *b.borrow_mut() = Some(bmap));
-    }
-    // rules covered by an SSA edge function need no standalone
-    // sched/exec symbols (the loader stubs them): emitting them only
-    // duplicated every body and doubled the LLVM mass
-    // sched coverage: a rule whose SCHED node lowers inline in an edge
-    // fn needs no standalone sched symbol (outlining is exec-only —
-    // outlined rules' scheds still inline)
-    let covered: std::collections::HashSet<usize> = edge_plan
-        .map(|p| {
-            p.nodes
-                .iter()
-                .flatten()
-                .filter(|&&(is_exec, _)| !is_exec)
-                .map(|&(_, o)| o)
-                .collect()
-        })
-        .unwrap_or_default();
-    for (o, spec) in specs.iter().enumerate() {
-        if covered.contains(&o) {
-            continue;
-        }
-        let mut lc = Lower {
-            env,
-            ctx: &ctx,
-            module: &module,
-            builder: ctx.create_builder(),
-            cbs,
-            spec,
-            outlined: refs_opt,
-            helper_self: None,
-            dedup: None,
-            bnd_prim_site: None,
-            bnd_foreign_site: None,
-            site_origin: 0,
-            foreign_origin: 0,
-            foreign_stmts: Vec::new(),
-            prim_calls: Vec::new(),
-            edge: None,
-        };
-        lc.lower_sched()?;
-    }
-    // rep_ords arrives pre-filtered: a class rep is emitted iff some
-    // member's composition is NOT edge-SSA covered (the caller owns
-    // class membership; `covered` above only filters sched fns)
-    for &o in rep_ords {
-        let spec = &specs[o];
-        let mut lc = Lower {
-            env,
-            ctx: &ctx,
-            module: &module,
-            builder: ctx.create_builder(),
-            cbs,
-            spec,
-            outlined: refs_opt,
-            helper_self: None,
-            dedup: None,
-            bnd_prim_site: None,
-            bnd_foreign_site: None,
-            // the sched fns above were lowered by a separate Lower, so
-            // the exec side starts at the origin trial_lower recorded
-            site_origin: spec.exec_prim_origin,
-            foreign_origin: spec.exec_foreign_origin,
-            foreign_stmts: Vec::new(),
-            prim_calls: Vec::new(),
-            edge: None,
-        };
-        lc.lower_exec()?;
-    }
-    let mut section_sizes: Vec<Vec<(usize, u64)>> = Vec::new();
-    match edge_plan {
-        Some(p) => lower_edge_ssa(
-            env,
-            &ctx,
-            &module,
-            cbs,
-            specs,
-            refs_opt,
-            p,
-            fused,
-            &mut section_sizes,
-        )?,
-        None => {
-            let _ = lower_fused(&ctx, &module, fused);
-        }
-    }
-    // measured edge budget: hand the per-section sizes back for a
-    // replan instead of feeding a giant function to the pass pipeline.
-    // The judgement is the FULL edge-fn size (sched sections and call
-    // preludes included); the max measurement rides along so the
-    // caller can decide between accepting the inline remainder (the
-    // common CPU-core shape — cross-section SSA sharing is worth 1.4x
-    // wall on Flute) and outlining the sched sections (the
-    // Toooba-scale link fix).
-    if edge_insn_budget > 0 {
-        let mut max_insns = 0u64;
-        for k in 0..fused.len() {
-            if let Some(f) = module.get_function(&format!("edge_c{k}")) {
-                let mut insns = 0u64;
-                for bb in f.get_basic_blocks() {
-                    let mut ins = bb.get_first_instruction();
-                    while let Some(i) = ins {
-                        insns += 1;
-                        ins = i.get_next_instruction();
-                    }
-                }
-                if std::env::var_os("TRS_JIT_TRACE").is_some() {
-                    eprintln!("trs jit: edge_c{k} measured {insns} insns");
-                }
-                max_insns = max_insns.max(insns);
-            }
-        }
-        if max_insns > edge_insn_budget {
-            return Ok(DesignObject::EdgeOverBudget(section_sizes, max_insns));
-        }
-    }
-    // ordinal-indexed fn tables: without them the loader dlsyms ~one
-    // symbol per rule (ms-scale on rule-heavy designs).  Null entry =
-    // symbol elided (edge-SSA covered scheds, non-rep exec members) —
-    // the loader stubs or skips those.  Chunked artifacts carry no
-    // tables (functions span objects) and keep the per-symbol path.
-    {
-        let ptrt = ctx.ptr_type(AddressSpace::default());
-        let i64t = ctx.i64_type();
-        let fnptr = |name: String| {
-            module
-                .get_function(&name)
-                .map(|f| f.as_global_value().as_pointer_value())
-                .unwrap_or_else(|| ptrt.const_null())
-        };
-        let scheds: Vec<_> = specs
-            .iter()
-            .map(|sp| fnptr(format!("sched_{}", sp.label)))
-            .collect();
-        let execs: Vec<_> = specs
-            .iter()
-            .map(|sp| fnptr(format!("exec_{}", sp.label)))
-            .collect();
-        let edges: Vec<_> = (0..fused.len())
-            .map(|k| fnptr(format!("edge_c{k}")))
-            .collect();
-        for (name, vals) in [
-            ("trs_sched_tab", scheds),
-            ("trs_exec_tab", execs),
-            ("trs_edge_tab", edges),
-        ] {
-            let arr = ptrt.const_array(&vals);
-            let g = module.add_global(arr.get_type(), None, name);
-            g.set_initializer(&arr);
-            let l = module.add_global(i64t, None, &format!("{name}_len"));
-            l.set_initializer(&i64t.const_int(vals.len() as u64, false));
-        }
-    }
-    // complete the construction-time census (scheds/execs/edge fns —
-    // everything not tallied incrementally above)
-    tally.add_all(&module);
-    let timing = std::env::var_os("TRS_JIT_TIME").is_some();
-    if timing {
-        eprintln!("trs aot: lowering {:?}", t_low.elapsed());
-        // per-function-group IR census from the tally: emitted size is
-        // the load-immune proxy that predicts O3 cost; the exec/hlp vs
-        // edge split is the per-type-precompilation ceiling
-        let mut groups: [(&str, u64, u64); 5] = [
-            ("edge", 0, 0),
-            ("exec", 0, 0),
-            ("hlp", 0, 0),
-            ("sched", 0, 0),
-            ("other", 0, 0),
-        ];
-        let mut top: Vec<(u64, &str)> = Vec::new();
-        for (name, insts, blocks) in &tally.per_fn {
-            let gi = if name.starts_with("edge_") {
-                0
-            } else if name.starts_with("exec_") {
-                1
-            } else if name.starts_with("hlp_") {
-                2
-            } else if name.starts_with("sched_") {
-                3
-            } else {
-                4
-            };
-            groups[gi].1 += blocks;
-            groups[gi].2 += insts;
-            if *insts > 0 {
-                top.push((*insts, name.as_str()));
-            }
-        }
-        let census: Vec<String> = groups
-            .iter()
-            .filter(|g| g.2 > 0)
-            .map(|(n, b, i)| format!("{n}={i}insn/{b}bb"))
-            .collect();
-        eprintln!("trs aot: ir census {}", census.join(" "));
-        top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-        let tops: Vec<String> = top
-            .iter()
-            .take(5)
-            .map(|(i, n)| format!("{n}={i}"))
-            .collect();
-        eprintln!("trs aot: ir top {}", tops.join(" "));
-    }
-    let t0 = std::time::Instant::now();
-    if std::env::var_os("TRS_JIT_DUMP_PRE").is_some() {
-        eprintln!("{}", module.print_to_string().to_string());
-    }
-    run_ir_passes(&module, Some(&tally))?;
-    if std::env::var_os("TRS_JIT_DUMP_POST").is_some() {
-        eprintln!("{}", module.print_to_string().to_string());
-    }
-    let t1 = std::time::Instant::now();
-    if timing {
-        eprintln!("trs aot: ir passes {:?}", t1 - t0);
-    }
-    let tm = aot_target_machine()?;
-    let buf = tm
-        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
-        .map_err(|e| Ineligible(format!("design object emit: {e}")))?;
-    if timing {
-        eprintln!("trs aot: backend emit {:?}", t1.elapsed());
-    }
-    Ok(DesignObject::Object(buf.as_slice().to_vec()))
 }
 
 /// One per-type module of the sharded emission: the type's outlined
@@ -1443,8 +1108,8 @@ fn compile_type_module(
     Ok(buf.as_slice().to_vec())
 }
 
-/// Sharded AOT emission (TRS_JIT_SHARD=1 — sharding rung step 2): the
-/// one-module design splits into a DESIGN module (sched fns, fused
+/// AOT emission, and the only strategy: the design splits into a
+/// DESIGN module (sched fns, fused
 /// edge fns, fn tables, gate geometry) plus one module per module
 /// TYPE (see compile_type_module), pass pipelines running in parallel
 /// (per-type workers + the design module on this thread), linked by
@@ -1513,7 +1178,7 @@ pub fn compile_design_objects_split(
     }
     // phase 2a: the design module — sched fns + fused edge fns, with
     // the full map installed (their method-call sites divert), NO
-    // helpers/boundary/reps.  Mirrors compile_design_object.
+    // helpers/boundary/reps.
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     let mut tally = IrTally::default();
@@ -3868,9 +3533,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 g.set_initializer(&arr);
                 g.set_constant(true);
                 // private: this diagnostic string is per-module local —
-                // with default External linkage every chunk object under
-                // TRS_AOT_ONE_MODULE=0 exported a strong definition and
-                // the cc -shared link died on the duplicates (external
+                // a design emits many objects, and with default External
+                // linkage each exported a strong definition and the
+                // cc -shared link died on the duplicates (external
                 // review); nothing looks the symbol up, the pointer is
                 // only passed by value to the trap callback
                 g.set_linkage(inkwell::module::Linkage::Private);

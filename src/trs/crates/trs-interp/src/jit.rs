@@ -23,8 +23,7 @@ use trs_codegen::abi::{
 };
 #[cfg(feature = "jit")]
 use trs_codegen::lower::{
-    compile_design_object, compile_execs, compile_fused, compile_helpers, compile_helpers_object,
-    compile_scheds, trial_lower,
+    compile_execs, compile_fused, compile_helpers, compile_scheds, trial_lower,
 };
 
 /// TRS_PROF=1: cheap wall-time accounting of where a JIT/AOT run
@@ -1073,19 +1072,16 @@ fn aot_emit(
     // victims for the caller's replan (one_module + edge-SSA only)
     edge_insn_budget: u64,
 ) -> Result<(), EmitFail> {
-    use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
+    use trs_codegen::lower::compile_meta_object;
     trs_codegen::lower::llvm_init_once();
     let t0 = std::time::Instant::now();
     let nworkers = jit_workers(specs.len());
-    let chunk = specs.len().div_ceil(nworkers).max(1);
-    // sched functions per ordinal; exec bodies once per dedup class
-    let reps: Vec<RuleSpec> = classes.iter().map(|(rep, _)| specs[*rep].clone()).collect();
-    let rchunk = reps.len().div_ceil(nworkers).max(1);
-    // whole-edge inlining (task #18): one module, one pipeline run —
-    // the inliner flattens cheap scheds/helpers into the fused edges.
-    // TRS_AOT_ONE_MODULE=0 restores parallel chunked emission.
-    let one_module = std::env::var("TRS_AOT_ONE_MODULE").as_deref() != Ok("0");
-    if one_module {
+    // One emission strategy: the design module plus one per module
+    // type, boundary fns across every synthesis boundary, pipelines in
+    // parallel.  The monolithic and rule-group-chunked strategies this
+    // replaces are gone, and with them the flags that chose between
+    // them.
+    {
         let mut rep_of: Vec<usize> = vec![0; specs.len()];
         for (rep, members) in classes {
             for &m in members {
@@ -1156,8 +1152,8 @@ fn aot_emit(
         // boundary method fns (sharding rung).  V1 excludes
         // always_enabled methods (their rdy-gated call protocol
         // differs); callback-carrying methods drop out at emission and
-        // stay inline.  quiet=true suppresses the per-method notes for
-        // the all-types sweep (TRS_JIT_SHARD).
+        // stay inline.  quiet=true suppresses the per-method notes,
+        // which the all-types sweep would otherwise emit per method.
         let reqs_for_mir = |mir: usize, quiet: bool| -> Vec<trs_codegen::abi::BoundaryReq> {
             let Some(exemplar) = env
                 .insts
@@ -1203,81 +1199,32 @@ fn aot_emit(
             }
             reqs
         };
-        // sharded emission: TRS_JIT_SHARD=1 (note: TRS_JIT_SPLIT is
-        // the unrelated memo-split threshold)
-        let shard = std::env::var("TRS_JIT_SHARD").as_deref() == Ok("1");
-        // boundary-tax experiment (TRS_BOUNDARY_MODULE=<module name or
-        // mir index>): per-method boundary fns for ONE module type
-        let boundary_reqs: Option<Vec<trs_codegen::abi::BoundaryReq>> = if shard {
-            // every instantiated module type
+        // Every instantiated module type gets per-method boundary fns.
+        // Not a mode: inlining across a synthesis boundary is what put
+        // 66.8M instructions into a single function on a
+        // controller-scale design, where outlining leaves 2.1M as the
+        // largest and a third fewer instructions overall.
+        let boundary_reqs: Vec<trs_codegen::abi::BoundaryReq> = {
             let mirs: std::collections::BTreeSet<usize> =
                 env.insts.values().map(|ie| ie.mir).collect();
-            Some(
-                mirs.into_iter()
-                    .flat_map(|m| reqs_for_mir(m, true))
-                    .collect(),
-            )
-        } else {
-            std::env::var("TRS_BOUNDARY_MODULE")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(|sel| {
-                    let mir = sel
-                        .parse::<usize>()
-                        .ok()
-                        .filter(|&i| i < env.d.modules.len())
-                        .or_else(|| {
-                            env.d
-                                .modules
-                                .iter()
-                                .position(|m| env.d.strings[m.name as usize] == sel)
-                        });
-                    let Some(mir) = mir else {
-                        eprintln!("trs boundary: module '{sel}' not found; flag ignored");
-                        return Vec::new();
-                    };
-                    let reqs = reqs_for_mir(mir, false);
-                    if reqs.is_empty() {
-                        eprintln!("trs boundary: no instance of mir {mir}; flag ignored");
-                    } else {
-                        eprintln!(
-                            "trs boundary: module {} (mir {mir}), {} method fns \
-                             requested",
-                            env.d.strings[env.d.modules[mir].name as usize],
-                            reqs.len()
-                        );
-                    }
-                    reqs
-                })
+            mirs.into_iter()
+                .flat_map(|m| reqs_for_mir(m, true))
+                .collect()
         };
         let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
-        let raw = if shard {
-            trs_codegen::lower::compile_design_objects_split(
-                &env,
-                specs,
-                &rep_ords,
-                helper_specs,
-                refs_sym,
-                &comps,
-                edge_plan,
-                edge_insn_budget,
-                boundary_reqs.as_deref().unwrap_or(&[]),
-                nworkers,
-            )
-        } else {
-            compile_design_object(
-                &env,
-                specs,
-                &rep_ords,
-                helper_specs,
-                refs_sym,
-                &comps,
-                edge_plan,
-                edge_insn_budget,
-                boundary_reqs.as_deref(),
-            )
-        }
+        let raw = trs_codegen::lower::compile_design_objects_split(
+            &env,
+            specs,
+            &rep_ords,
+            helper_specs,
+            refs_sym,
+            &comps,
+            edge_plan,
+            edge_insn_budget,
+            &boundary_reqs,
+            nworkers,
+        )
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
         let objs: Vec<Vec<u8>> = match raw {
             trs_codegen::lower::DesignObject::Object(o) => vec![o],
@@ -1423,160 +1370,6 @@ fn aot_emit(
         }
         return Ok(());
     }
-    if exe.is_some() {
-        return Err(EmitFail::Infra(
-            "--exe requires the one-module AOT path (TRS_AOT_ONE_MODULE=0 unsupported)".into(),
-        ));
-    }
-    // helpers are best-effort in AOT exactly as in JIT: if their
-    // object fails to compile, drop them and link the design unsplit
-    // rather than failing the artifact
-    let mut helpers_on = !helper_specs.is_empty();
-    let mut helper_obj: Option<Vec<u8>> = None;
-    if helpers_on {
-        let _g = trs_codegen::abi::AotModeGuard::set();
-        let env = PlanEnv {
-            d,
-            insts: inst_envs,
-            now_slot,
-            gate_scratch: None,
-        };
-        let pseudo = specs[0].clone();
-        match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
-            Ok(o) => helper_obj = Some(o),
-            Err(e) => {
-                eprintln!("trs link: note: split helpers disabled for this design ({e})");
-                helpers_on = false;
-            }
-        }
-    }
-    let objs: Vec<Result<Vec<u8>, _>> = std::thread::scope(|sc| {
-        let mut handles = Vec::new();
-        for c in specs.chunks(chunk) {
-            handles.push(sc.spawn(move || {
-                let _g = trs_codegen::abi::AotModeGuard::set();
-                let env = PlanEnv {
-                    d,
-                    insts: inst_envs,
-                    now_slot,
-                    gate_scratch: None,
-                };
-                compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
-            }));
-        }
-        for c in reps.chunks(rchunk) {
-            handles.push(sc.spawn(move || {
-                let _g = trs_codegen::abi::AotModeGuard::set();
-                let env = PlanEnv {
-                    d,
-                    insts: inst_envs,
-                    now_slot,
-                    gate_scratch: None,
-                };
-                compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
-            }));
-        }
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("aot compile thread"))
-            .collect()
-    });
-    let helper_obj = helpers_on.then_some(helper_obj).flatten();
-    let tmp = std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| EmitFail::Infra(e.to_string()))?;
-    let mut files = Vec::new();
-    for (i, o) in objs.into_iter().enumerate() {
-        let bytes = o.map_err(|e| EmitFail::Ineligible(format!("object compile: {e}")))?;
-        let f = tmp.join(format!("chunk{i}.o"));
-        std::fs::write(&f, bytes).map_err(|e| EmitFail::Infra(e.to_string()))?;
-        files.push(f);
-    }
-    if let Some(o) = helper_obj {
-        let f = tmp.join("helpers.o");
-        std::fs::write(&f, o).map_err(|e| EmitFail::Infra(e.to_string()))?;
-        files.push(f);
-    }
-    // fused per-composition edge fns (task #17): symbol callees, ld
-    // resolves inside the .so; exec callees use the dedup class rep
-    {
-        let mut rep_of: Vec<usize> = vec![0; specs.len()];
-        for (rep, members) in classes {
-            for &m in members {
-                rep_of[m] = *rep;
-            }
-        }
-        let comps: Vec<trs_codegen::lower::FusedComp> = comp_nodes
-            .iter()
-            .map(|nodes| trs_codegen::lower::FusedComp {
-                en_slots: en_slots.to_vec(),
-                now_slot,
-                nodes: nodes
-                    .as_ref()
-                    .map(|ns| {
-                        ns.iter()
-                            .map(|n| match *n {
-                                JitNode::Sched(o) => trs_codegen::lower::FusedNode::Sched(
-                                    HelperRef::Sym(format!("sched_{}", specs[o as usize].label)),
-                                ),
-                                JitNode::Exec(o) => {
-                                    let sp = &specs[o as usize];
-                                    trs_codegen::lower::FusedNode::Exec(
-                                        HelperRef::Sym(format!(
-                                            "exec_{}",
-                                            specs[rep_of[o as usize]].label
-                                        )),
-                                        inst_envs[&sp.inst].region.0 as u64,
-                                        sp.ordinal,
-                                    )
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            })
-            .collect();
-        let o = trs_codegen::lower::compile_fused_object(&comps)
-            .map_err(|e| EmitFail::Ineligible(format!("fused object: {e}")))?;
-        let f = tmp.join("fused.o");
-        std::fs::write(&f, o).map_err(|e| EmitFail::Infra(e.to_string()))?;
-        files.push(f);
-    }
-    let meta = compile_meta_object(
-        bir_hash,
-        bir_hash_raw,
-        split_thresh as u64,
-        &encode_protos(protos),
-        0, // chunked path never carries edge-SSA compiled ticks
-        bdpi_names,
-        &d.snap_encode(bir_hash).unwrap_or_default(),
-        plan_a,
-        plan_b,
-    )
-    .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
-    let mf = tmp.join("meta.o");
-    std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
-    files.push(mf);
-    // temp+rename, same discipline as the single-object emit; local
-    // function binding for the same reason (see hostlink::local_binding)
-    let so_tmp = so.with_extension("so.tmp");
-    let st = std::process::Command::new(cc_tool())
-        .arg("-shared")
-        .args(crate::hostlink::local_binding())
-        .arg("-o")
-        .arg(&so_tmp)
-        .args(&files)
-        .status()
-        .map_err(|e| EmitFail::Infra(format!("{}: {e}", cc_tool())))?;
-    std::fs::remove_dir_all(&tmp).ok();
-    if !st.success() {
-        std::fs::remove_file(&so_tmp).ok();
-        return Err(EmitFail::Infra(format!("{} -shared failed", cc_tool())));
-    }
-    std::fs::rename(&so_tmp, so).map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
-    if std::env::var_os("TRS_JIT_TIME").is_some() {
-        eprintln!("trs aot: emit + link {:?}", t0.elapsed());
-    }
-    Ok(())
 }
 
 /// Baked PlanA from the artifact (trs_plan_a): gated on the baked
