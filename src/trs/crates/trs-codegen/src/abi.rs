@@ -112,6 +112,18 @@ pub struct InstEnv {
     /// body bakes those parameters -- so anything emitted once and
     /// shared between instances must be keyed by this, not by `mir`.
     pub class_id: usize,
+    /// This instance's PARAMETER bindings, name and value, in the
+    /// spelling `trs link` takes after `+` -- hex, so any width round
+    /// trips.  Only the values a parent actually supplied: the
+    /// unbound-port constants that also land in `port_consts` are
+    /// fallthrough readings, not parameters, and feeding them back as
+    /// bindings would be wrong.
+    ///
+    /// This is what lets a fragment be built on its own.  A class is
+    /// (module, valuation), the valuation comes from whoever
+    /// instantiated it, and a build graph that wants one target per
+    /// class has to be able to say which valuation it means.
+    pub param_binds: Vec<(StrId, String)>,
     /// The signature behind `class_id`.  The id is a dense index over
     /// THIS design's instances and so means nothing outside it; the
     /// signature describes the class itself.  Anything EMITTED that

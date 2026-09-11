@@ -297,6 +297,13 @@ pub struct Interp {
     pub(crate) jit_request: JitRequestT,
     /// outcome of an Emit request (trs link reads this after prime)
     pub(crate) jit_emit_result: Option<AotEmit>,
+    /// `trs classes`: where to write the class manifest and in which
+    /// rendering.  A property of the command line, so it travels as
+    /// one -- an environment variable would put a presentation choice
+    /// in the same channel the codegen knobs use, and those are hashed
+    /// into every object's name.  It was, briefly, and asking for the
+    /// text rendering renamed every object.
+    pub(crate) classes_req: Option<(std::path::PathBuf, bool)>,
     /// FNV-1a fingerprint of the loaded .bir bytes (artifact check)
     pub(crate) bir_hash: u64,
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
@@ -894,6 +901,7 @@ impl Interp {
             jit_eager_slots: HashMap::new(),
             jit_request: Default::default(),
             jit_emit_result: None,
+            classes_req: None,
             bir_hash: 0,
             jit_arena_ptr: std::ptr::null_mut(),
             jit_arena_len: 0,
@@ -5538,6 +5546,12 @@ impl Interp {
         self.jit_request = jit::JitRequest::Emit { so, exe: None };
     }
 
+    /// `trs classes`: write the manifest to `path` (`-` for stdout),
+    /// as text when `text`, and compile nothing.
+    pub fn aot_request_classes(&mut self, path: std::path::PathBuf, text: bool) {
+        self.classes_req = Some((path, text));
+    }
+
     /// trs link --exe: after the artifact .so, also link a
     /// self-contained executable (design objects + a main shim,
     /// --export-dynamic, against libtrs_capi.so in `libdir`).
@@ -5583,6 +5597,7 @@ impl Interp {
 #[cfg(not(feature = "aot"))]
 impl Interp {
     pub fn aot_request_emit(&mut self, _so: std::path::PathBuf) {}
+    pub fn aot_request_classes(&mut self, _path: std::path::PathBuf, _text: bool) {}
     pub fn aot_request_emit_exe(
         &mut self,
         _so: std::path::PathBuf,

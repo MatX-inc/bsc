@@ -1206,7 +1206,6 @@ const REPORTING_ONLY: &[&str] = &[
     "TRS_JIT_SPLIT_WHY",
     "TRS_EDGE_SSA_STATS",
     "TRS_SIG_TRACE",
-    "TRS_SIG_DUMP",
     "TRS_TYPE_OBJ_DIR",
     "TRS_LAYOUT_CENSUS",
     "TRS_GATE_MASK_CENSUS",
@@ -1314,6 +1313,12 @@ pub fn compile_design_objects_split(
     edge_insn_budget: u64,
     boundary_reqs: &[BoundaryReq],
     nworkers: usize,
+    // `trs classes`: write the manifest here (`-` = stdout), as
+    // text when the flag is set, and compile nothing.  A parameter and
+    // not an environment variable: it is a command-line property, and
+    // the environment is where the CODEGEN knobs live -- every one of
+    // which is hashed into the object names.
+    classes: Option<(&std::path::Path, bool)>,
 ) -> Result<DesignObject, Ineligible> {
     let t_low = std::time::Instant::now();
     let refs_opt = (!refs.is_empty()).then_some(refs);
@@ -1454,7 +1459,7 @@ pub fn compile_design_objects_split(
             .2
             .push(specs[o].clone());
     }
-    if let Some(mpath) = std::env::var_os("TRS_SIG_DUMP") {
+    if let Some((mpath, as_text)) = classes {
         let salt = class_obj_salt();
         let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
         let mut knobs: Vec<(String, String)> = std::env::vars()
@@ -1477,6 +1482,8 @@ pub fn compile_design_objects_split(
             ));
         }
         out.push_str("},\n  \"classes\": [\n");
+        let mut rows: Vec<(String, u64, String, Vec<(String, String)>, usize, usize, usize)> =
+            Vec::new();
         let n = per_class.len();
         for (i, (_cid, (hs, rqs, reps, mir, sig))) in per_class.iter().enumerate() {
             let nm = env
@@ -1485,11 +1492,48 @@ pub fn compile_design_objects_split(
                 .get(env.d.modules[*mir].name as usize)
                 .cloned()
                 .unwrap_or_else(|| format!("mir{mir}"));
+            // the valuation this class IS, in the spelling that
+            // rebuilds it alone: `trs link <fragment> +k=0x3`.  Any
+            // instance of the class carries it -- that is what a
+            // class means.
+            let binds = env
+                .insts
+                .values()
+                .find(|ie| ie.class_id == *_cid)
+                .map(|ie| ie.param_binds.clone())
+                .unwrap_or_default();
+            let mut ps = String::new();
+            for (k, (pn, pv)) in binds.iter().enumerate() {
+                ps.push_str(&format!(
+                    "{}\"{}\": \"{}\"",
+                    if k > 0 { ", " } else { "" },
+                    esc(env.d.strings.get(*pn as usize).map_or("", |v| v)),
+                    esc(pv)
+                ));
+            }
+            rows.push((
+                nm.clone(),
+                *sig,
+                format!("{nm}_{sig:016x}_{salt}.o"),
+                binds
+                    .iter()
+                    .map(|(pn, pv)| {
+                        (
+                            env.d.strings.get(*pn as usize).cloned().unwrap_or_default(),
+                            pv.clone(),
+                        )
+                    })
+                    .collect(),
+                reps.len(),
+                rqs.len(),
+                hs.len(),
+            ));
             out.push_str(&format!(
                 "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
                  \"object\": \"{}_{sig:016x}_{salt}.o\", \
-                 \"fragment\": \"{}.bir\", \"exec_fns\": {}, \
-                 \"boundary_fns\": {}, \"helper_fns\": {}}}{}\n",
+                 \"fragment\": \"{}.bir\", \"params\": {{{ps}}}, \
+                 \"exec_fns\": {}, \"boundary_fns\": {}, \
+                 \"helper_fns\": {}}}{}\n",
                 esc(&nm),
                 esc(&nm),
                 esc(&nm),
@@ -1500,8 +1544,53 @@ pub fn compile_design_objects_split(
             ));
         }
         out.push_str("  ]\n}\n");
-        if let Err(e) = std::fs::write(&std::path::PathBuf::from(&mpath), out) {
-            return Err(Ineligible(format!("{}: {e}", mpath.to_string_lossy())));
+        // Two renderings of one set of facts.  JSON is the contract a
+        // build integration reads; text is for a person at a terminal
+        // asking what a design is made of.  Neither is derived from
+        // the other -- they are two views of `rows`, so the text can
+        // be readable without the JSON having to be.
+        if as_text {
+            let top = env.d.strings[env.d.modules[env.d.top as usize].name as usize].clone();
+            let mut t = format!(
+                "{top}: {} classes  (layout rev {}, salt {salt})\n",
+                rows.len(),
+                crate::abi::baked_layout_rev()
+            );
+            if !knobs.is_empty() {
+                t.push_str("codegen flags: ");
+                for (i, (k, v)) in knobs.iter().enumerate() {
+                    t.push_str(&format!("{}{k}={v}", if i > 0 { " " } else { "" }));
+                }
+                t.push('\n');
+            }
+            let w = rows.iter().map(|r| r.0.len()).max().unwrap_or(6).max(6);
+            t.push_str(&format!(
+                "\n{:<w$}  {:<16}  {:>4} {:>4} {:>4}  {}\n",
+                "module", "signature", "exec", "bnd", "hlp", "parameters"
+            ));
+            for (nm, sig, _obj, ps, ex, bn, hl) in &rows {
+                let pt = if ps.is_empty() {
+                    "-".to_string()
+                } else {
+                    ps.iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                t.push_str(&format!(
+                    "{nm:<w$}  {sig:016x}  {ex:>4} {bn:>4} {hl:>4}  {pt}\n"
+                ));
+            }
+            t.push_str("\nobjects:\n");
+            for (_, _, obj, ..) in &rows {
+                t.push_str(&format!("  {obj}\n"));
+            }
+            out = t;
+        }
+        if mpath == std::path::Path::new("-") {
+            print!("{out}");
+        } else if let Err(e) = std::fs::write(mpath, out) {
+            return Err(Ineligible(format!("{}: {e}", mpath.display())));
         }
         return Ok(DesignObject::Manifest);
     }

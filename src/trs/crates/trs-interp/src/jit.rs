@@ -1113,6 +1113,9 @@ fn aot_emit(
     // exceeding it returns EmitFail::EdgeOverBudget with measured
     // victims for the caller's replan (one_module + edge-SSA only)
     edge_insn_budget: u64,
+    // `trs classes`: manifest destination and rendering, carried from
+    // the command line rather than through the environment
+    classes_req: Option<(std::path::PathBuf, bool)>,
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::compile_meta_object;
     trs_codegen::lower::llvm_init_once();
@@ -1274,6 +1277,7 @@ fn aot_emit(
             edge_insn_budget,
             &boundary_reqs,
             nworkers,
+            classes_req.as_ref().map(|(p, t)| (p.as_path(), *t)),
         )
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
         let objs: Vec<Vec<u8>> = match raw {
@@ -4866,7 +4870,41 @@ impl Interp {
             let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
             let mut real_consts: HashMap<StrId, u64> = HashMap::new();
             let mut wide_consts: HashMap<StrId, (u32, Vec<u32>)> = HashMap::new();
+            // the bindings a parent supplied, rendered the way the
+            // link takes them back (`+NAME=value`).  Captured HERE and
+            // not from port_consts, which also collects the
+            // unbound-port fallthrough readings below -- those are not
+            // parameters and must not come back as bindings.
+            let mut param_binds: Vec<(StrId, String)> = Vec::new();
             for (&pn, pv) in params {
+                param_binds.push((
+                    pn,
+                    if let Some(r) = pv.as_real() {
+                        // a real is not `+NAME=value` material; carried
+                        // so a generator can see it and refuse rather
+                        // than emit a binding that will not parse
+                        format!("{r:?}")
+                    } else {
+                        let mut h = String::from("0x");
+                        let limbs = pv.limbs64();
+                        let mut lead = true;
+                        for l in limbs.iter().rev() {
+                            if lead && *l == 0 && limbs.len() > 1 {
+                                continue;
+                            }
+                            if lead {
+                                h.push_str(&format!("{l:x}"));
+                                lead = false;
+                            } else {
+                                h.push_str(&format!("{l:016x}"));
+                            }
+                        }
+                        if lead {
+                            h.push('0');
+                        }
+                        h
+                    },
+                ));
                 if pv.width >= 1 && pv.width <= 64 {
                     port_consts.insert(pn, (pv.width, pv.as_u64()));
                 } else if let Some(r) = pv.as_real() {
@@ -4923,6 +4961,7 @@ impl Interp {
                     bram_slot,
                     creg5_slot,
                     counter_slot,
+                    param_binds,
                     reset_slot,
                     reset_ord,
                     reset_tbl,
@@ -5290,15 +5329,6 @@ impl Interp {
                 (isig, lsig).hash(&mut h);
                 sigs.insert(i, h.finish());
             }
-            // TRS_SIG_DUMP=<path>: one line per instance,
-            //   <module>\t<input sig>\t<layout sig>
-            // The input sig is the object's identity -- what a
-            // per-fragment build would key on -- so counting distinct
-            // inputs per module name says how far a type specializes,
-            // and comparing across designs says how much two targets
-            // could share.  A measurement mode: planning is seconds
-            // where lowering is hours, so it DECLINES below rather
-            // than going on to emit.
             sigs
         } else {
             HashMap::new()
@@ -6319,6 +6349,7 @@ impl Interp {
                     edge_plan.as_ref(),
                     &bdpi_names,
                     budget_now,
+                    self.classes_req.clone(),
                 ) {
                     Err(EmitFail::EdgeOverBudget(victims, edge_insns)) => {
                         if std::env::var_os("TRS_JIT_TRACE").is_some() {

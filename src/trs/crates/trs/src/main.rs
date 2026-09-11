@@ -37,7 +37,9 @@ fn usage() -> ExitCode {
     eprintln!("parameter valuation -- plus the design's own.  A class object");
     eprintln!("does not depend on the design it was compiled in, so designs");
     eprintln!("that share a fragment share its object:");
-    eprintln!("  trs classes          write the class manifest (JSON) and stop.");
+    eprintln!("  trs classes          write the class manifest and stop; JSON by");
+    eprintln!("                       default, --format text for a person, and");
+    eprintln!("                       stdout unless -o names a file.");
     eprintln!("                       Planning only -- seconds where a compile is");
     eprintln!("                       hours.  Names each object and the .bir it");
     eprintln!("                       comes from, so a build graph can declare");
@@ -266,6 +268,7 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         let mut fmt_arg: Option<String> = None;
         let mut want_exe = false;
         let mut manifest = false;
+        let mut as_text = false;
         let mut it = rest.iter().copied();
         while let Some(a) = it.next() {
             match a {
@@ -291,6 +294,22 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 // which is why it takes no value and is absent from the
                 // usage text
                 "--manifest-mode" => manifest = true,
+                // JSON is what a build integration reads; text is for
+                // a person asking what a design is made of.  JSON is
+                // the default because an integration that silently
+                // started receiving prose would break, and a person
+                // can ask for the other.
+                "--format" => match it.next() {
+                    Some(v @ ("json" | "text")) => as_text = v == "text",
+                    Some(v) => {
+                        eprintln!("trs classes: --format takes json or text, not `{v}'");
+                        return ExitCode::from(2);
+                    }
+                    None => {
+                        eprintln!("trs classes: --format needs json or text");
+                        return ExitCode::from(2);
+                    }
+                },
                 // the allowed wave formats fold into the design's
                 // identity, so a compile must be told whatever the
                 // link was told
@@ -334,15 +353,13 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         // The .so is named for the .bir beside it, because that is
         // where the artifact looks: <base>.bir -> <base>.so.
         let base = path.strip_suffix(".bir").unwrap_or(path).to_string();
-        if manifest {
-            // planning writes it; -o names the manifest here rather
-            // than an object, because an object is not what this
-            // action produces
-            std::env::set_var(
-                "TRS_SIG_DUMP",
-                out.clone().unwrap_or_else(|| format!("{base}.classes.json")),
-            );
-        }
+        // -o names the manifest rather than an object, because an
+        // object is not what this action produces, and `-` or no -o
+        // means stdout -- in EITHER format.  A build rule always
+        // passes -o, because it has to declare the file it produces;
+        // everyone else is at a terminal or on the left of a pipe,
+        // and `trs classes d.bir | jq` should need no flags.
+        let classes_path = manifest.then(|| out.clone().unwrap_or_else(|| "-".to_string()));
         let so = out.unwrap_or_else(|| format!("{base}.so"));
         // Replay the link's own settings from <base>.opts.  Baked
         // bindings and the allowed wave formats both fold into the
@@ -407,6 +424,9 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
             interp.aot_request_emit_exe(so.clone().into(), base.clone().into(), libdir);
         } else {
             interp.aot_request_emit(so.clone().into());
+        }
+        if let Some(cp) = &classes_path {
+            interp.aot_request_classes(cp.into(), as_text);
         }
         interp.prime();
         // Producing the .so IS the job here, so anything short of
@@ -538,7 +558,10 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
             Some(trs_interp::AotEmit::Manifest) => {
                 eprintln!(
                     "trs classes: wrote {}",
-                    std::env::var("TRS_SIG_DUMP").unwrap_or_default()
+                    match classes_path.as_deref() {
+                        Some("-") | None => "(stdout)",
+                        Some(p) => p,
+                    }
                 );
                 ExitCode::SUCCESS
             }
