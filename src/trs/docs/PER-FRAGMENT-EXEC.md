@@ -318,13 +318,14 @@ Whether that is a good trade is the run-rate question in section 7, now
 asked about a specific 98 types rather than in general.  For the other 109
 the question does not arise.
 
-What this sample cannot say is the absolute rate.  Six designs cap reuse at
-6x, and these six are controller variants -- closely related, so both more
-likely to share fragments and more likely to differ in the parameters they
-share them at.  The 6.6x quoted earlier is the `.bir` layer over 355
-designs and is not comparable; the same type-level measure over these six
-is the 1.84x above.  Re-run `TRS_SIG_DUMP` over a wider, less related set
-before trusting any absolute number.
+That pooled figure turned out to be the wrong way to ask.  Averaging over
+six designs mixes pairs that share almost everything with pairs that can
+share nothing, and answers neither question.  Measured WITHIN a family
+(section 6a), specialization costs nothing -- 96.1% of classes shared
+against 94.3% of types, so the sharper identity matches MORE often, not
+less.  Measured across families it is irrelevant, because TA and RE
+instantiate different module types and would not share generically
+either.  Overlap is a property of a family, and pooling destroyed it.
 
 Whichever way the trade goes, the generic path is real work: those
 constants are folded today (`port_consts` is "the compiled mirror of the
@@ -395,6 +396,65 @@ each, which took a minute and is worth repeating whenever the sig grows a
 consumer.  The lesson is not about that field: a stated invariant with no
 check is a comment, and this one now has both a check (hurdle 5) and an
 audit that can be re-run.
+
+## 6a. What caching would actually buy, measured
+
+The case for this work rested on two unmeasured numbers: how much of a
+compile is cacheable, and how much two designs overlap.  Both are now
+measured, on the designs that cost real time.
+
+**Where the time goes.**  `TRS_JIT_TIME` over the expensive controller
+units (each 1:52 to 2:25):
+
+| design | trial lower | design module | class modules | class share |
+| --- | --: | --: | --: | --: |
+| TAControllerCsrLatencyReport | 331s | 37.5s | 5,988s | 88.9% |
+| TAControllerBurnTest | 338s | 42.7s | 5,966s | 88.5% |
+| TAControllerUserSpecialsScriptedTest | 396s | 36.0s | 5,962s | 83.1% |
+| TAControllerUserSpecialsFrontDoorScriptedTest | 388s | 34.9s | 5,999s | 87.6% |
+| REControllerCsrLatencyReport | 331s | 31.4s | 6,971s | 80.1% |
+| REControllerUserSpecials{,FrontDoor}ScriptedTest | 388s | 31.7s | 6,980s | 89.2% |
+| TABroadcastCsrLatencyReport | 6s | 266.3s | 104s | 7.3% |
+| REBroadcastCsrLatencyReport | 3s | 83.0s | 42s | 7.5% |
+
+**80-89% of an expensive compile is the per-class half.**  The design
+module -- the part that can never be cached -- is 31 to 43 SECONDS, under
+1%.  The two Broadcast designs inverse that completely, at 7%: they are
+the cheap ones, and reasoning about the expensive units from them would
+have been badly wrong.
+
+**How much two designs overlap.**  Class overlap within a family, as a
+percentage of the smaller design:
+
+|  | BurnTest | CsrLat | USFrontDoor | USScripted | Broadcast |
+| --- | --: | --: | --: | --: | --: |
+| TA family | -- | 96% | 96% | 96% | 1% |
+| front door vs back door | | | 98% | | |
+
+Four of the expensive TA units are 96-98% the same design.  Broadcast
+shares 1% with its own family despite the name.  TA against RE is 37% at
+best and 0% for Broadcast, because they largely instantiate different
+module types -- that ceiling is not specialization, and going generic
+would not lift it.
+
+**So, for the TA controller family of four:**
+
+| | |
+| --- | --: |
+| today, compiled independently | 7.64 h |
+| first unit, cold | 1.87 h |
+| each subsequent, at 96% hits | 17 min |
+| family total | 2.86 h |
+| | **2.7x** |
+
+Two things that estimate depends on, both worth stating.  The 96% is a
+COUNT of classes, not a weighting by compile cost; if the few unshared
+classes are the expensive ones the saving shrinks, and settling that
+wants per-class emit timings, which nothing records yet.  And after
+caching, `trial_lower` becomes the largest remaining cost -- 338s of a
+1,011s residual, a third of it -- so the design-wide eligibility pass
+would be the next thing to attack, not for its failure behaviour (which
+never fires) but for its time.
 
 ## 7. The one number still missing
 
