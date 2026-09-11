@@ -4448,7 +4448,25 @@ impl Interp {
         // function of design + comps) and type-uniform (keys are
         // (module type, name)), so baked artifact slot numbers and
         // twin-instance dedup stay sound.
-        let (touch_rank, live_en) = self.layout_touch_ranks(rcomps);
+        //
+        // TRS_LAYOUT_AFFINITY=0 turns the ordering off, and the reason
+        // is the sentence above: a pure function of DESIGN + comps.
+        // Slot offsets inside a fragment then depend on the order the
+        // enclosing design first touches its rules, so the same
+        // fragment at the same parameters lays out differently in two
+        // designs and their compiled objects cannot be shared.
+        // Measured across the TA controller family: inputs agree on
+        // 96-98% of classes and layouts on 16-60%, so this ordering is
+        // what the sharing is lost to.  Off, every group falls back to
+        // name order, which is type-local and identical everywhere.
+        let (touch_rank, live_en) = {
+            let (tr, le) = self.layout_touch_ranks(rcomps);
+            if std::env::var("TRS_LAYOUT_AFFINITY").as_deref() == Ok("0") {
+                (HashMap::new(), le)
+            } else {
+                (tr, le)
+            }
+        };
         // rung 40 (keep-fires tier split): fast plans allocate EN slots
         // only for enables some runtime reader actually loads — the
         // walk above covers every tier's readers (rule CF/WF cones and
@@ -5280,21 +5298,77 @@ impl Interp {
             // where lowering is hours, so it DECLINES below rather
             // than going on to emit.
             if let Ok(path) = std::env::var("TRS_SIG_DUMP") {
-                let mut out = String::new();
-                let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
-                iis.sort_unstable();
-                for i in iis {
-                    let e = &inst_envs[&i];
+                // The class manifest, as JSON, for a script that turns
+                // it into .bzl or Makefile rules.  It has to carry
+                // everything such a script needs and nothing it would
+                // have to guess:
+                //
+                //   object    the file a compile writes under
+                //             --class-obj-out and looks for under
+                //             --class-obj-in.  Join these across
+                //             designs and the sharing is the answer.
+                //   fragment  the .bir this class's module came from,
+                //             so the rule can declare it as an input.
+                //   knobs     the codegen flags this manifest was
+                //             produced under.  They are in the object
+                //             name's salt, so a compile run with
+                //             different ones looks for different
+                //             files; a generator must emit the same
+                //             flags it saw here.
+                let salt = trs_codegen::lower::class_obj_salt();
+                let mut by_class: std::collections::BTreeMap<(String, u64), (usize, u64, u64)> =
+                    std::collections::BTreeMap::new();
+                for (i, e) in inst_envs.iter() {
                     let nm = sig_strings
                         .get(self.d.modules[e.mir].name as usize)
                         .map(String::as_str)
                         .unwrap_or("");
-                    let (is_, ls) = (
-                        input_sigs.get(&i).copied().unwrap_or(0),
-                        layout_sigs.get(&i).copied().unwrap_or(0),
-                    );
-                    out.push_str(&format!("{nm}\t{is_:016x}\t{ls:016x}\n"));
+                    // the COMBINED signature: what class_sig carries
+                    // and what the object is named for.  input and
+                    // layout are reported beside it because when two
+                    // designs fail to share a class, which half
+                    // differs is the whole diagnosis.
+                    let e2 = by_class
+                        .entry((nm.to_string(), sigs.get(i).copied().unwrap_or(0)))
+                        .or_insert((0, 0, 0));
+                    e2.0 += 1;
+                    e2.1 = input_sigs.get(i).copied().unwrap_or(0);
+                    e2.2 = layout_sigs.get(i).copied().unwrap_or(0);
                 }
+                let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
+                let mut knobs: Vec<(String, String)> = std::env::vars()
+                    .filter(|(k, _)| k.starts_with("TRS_") && trs_codegen::lower::salted_knob(k))
+                    .collect();
+                knobs.sort();
+                let mut out = String::from("{\n");
+                out.push_str(&format!(
+                    "  \"top\": \"{}\",\n  \"layout_rev\": {},\n  \"salt\": \"{salt}\",\n",
+                    esc(self.d.name(self.d.modules[self.d.top as usize].name)),
+                    trs_codegen::abi::baked_layout_rev()
+                ));
+                out.push_str("  \"knobs\": {");
+                for (n, (k, v)) in knobs.iter().enumerate() {
+                    out.push_str(&format!(
+                        "{}\"{}\": \"{}\"",
+                        if n > 0 { ", " } else { "" },
+                        esc(k),
+                        esc(v)
+                    ));
+                }
+                out.push_str("},\n  \"classes\": [\n");
+                for (n, ((nm, sig), (insts, isig, lsig))) in by_class.iter().enumerate() {
+                    out.push_str(&format!(
+                        "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
+                         \"object\": \"{}_{sig:016x}_{salt}.o\", \
+                         \"fragment\": \"{}.bir\", \"instances\": {insts}, \
+                         \"input_sig\": \"{isig:016x}\", \"layout_sig\": \"{lsig:016x}\"}}{}\n",
+                        esc(nm),
+                        esc(nm),
+                        esc(nm),
+                        if n + 1 < by_class.len() { "," } else { "" }
+                    ));
+                }
+                out.push_str("  ]\n}\n");
                 if let Err(e) = std::fs::write(&path, out) {
                     eprintln!("trs: {path}: {e}");
                 }

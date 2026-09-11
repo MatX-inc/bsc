@@ -1178,23 +1178,55 @@ fn compile_class_module(
 /// signature says what the fragment IS; this says what this trs would
 /// make of it.  Both are in the cache key, so a rev bump or a changed
 /// knob misses rather than serving an object built under the old one.
-fn class_obj_salt() -> String {
+/// TRS_* variables that say what HAPPENED rather than change what is
+/// emitted, and so are not part of an object's identity.
+///
+/// A deny-list on purpose.  An allow-list has to be extended whenever
+/// a knob is added, and forgetting means two different codegens share
+/// an object NAME -- a wrong object, the one failure this must not
+/// have.  Getting the deny-list wrong costs a spurious miss instead,
+/// which is only a rebuild.  (Not hypothetical: the first version
+/// matched TRS_JIT/TRS_EDGE/TRS_CHUNK prefixes and silently missed
+/// TRS_NO_FUSION, which changes what is emitted.)
+const REPORTING_ONLY: &[&str] = &[
+    "TRS_JIT_TIME",
+    "TRS_JIT_TIME_PASSES",
+    "TRS_JIT_DUMP",
+    "TRS_JIT_TRACE",
+    "TRS_JIT_SHARE_STATS",
+    "TRS_JIT_SPLIT_WHY",
+    "TRS_EDGE_SSA_STATS",
+    "TRS_SIG_TRACE",
+    "TRS_SIG_DUMP",
+    "TRS_TYPE_OBJ_DIR",
+    "TRS_LAYOUT_CENSUS",
+    "TRS_GATE_MASK_CENSUS",
+    "TRS_PROF",
+    "TRS_STARTUP_TIME",
+    "TRS_RUNCORE_CHECK",
+    // worker count: changes how long, not what
+    "TRS_JIT_THREADS",
+    // paths, and the reuse directories themselves -- an object cannot
+    // be keyed on where it was found
+    "TRS_CLASS_OBJ_IN",
+    "TRS_CLASS_OBJ_OUT",
+    "TRS_VLT_CACHE",
+    "TRS_VLT_BUILD",
+    "TRS_CC",
+    "TRS_CAPI_SO",
+];
+
+/// Whether this variable is part of an object's identity.  Exposed so
+/// the class manifest can report the same set a compile would salt
+/// with -- a generator has to emit the flags it saw, or the compile
+/// looks for files the manifest never named.
+pub fn salted_knob(k: &str) -> bool {
+    k.starts_with("TRS_") && !REPORTING_ONLY.contains(&k)
+}
+
+pub fn class_obj_salt() -> String {
     let mut knobs: Vec<(String, String)> = std::env::vars()
-        .filter(|(k, _)| {
-            (k.starts_with("TRS_JIT") || k.starts_with("TRS_EDGE") || k.starts_with("TRS_CHUNK"))
-                // these change what is REPORTED, not what is emitted
-                && !matches!(
-                    k.as_str(),
-                    "TRS_JIT_TIME"
-                        | "TRS_JIT_TIME_PASSES"
-                        | "TRS_JIT_DUMP"
-                        | "TRS_JIT_TRACE"
-                        | "TRS_JIT_THREADS"
-                        | "TRS_JIT_SHARE_STATS"
-                        | "TRS_JIT_SPLIT_WHY"
-                        | "TRS_EDGE_SSA_STATS"
-                )
-        })
+        .filter(|(k, _)| salted_knob(k))
         .collect();
     knobs.sort();
     let mut src = format!("rev={}\n", crate::abi::baked_layout_rev());

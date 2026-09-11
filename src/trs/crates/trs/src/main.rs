@@ -81,6 +81,20 @@ fn compile_knob_env(flag: &str) -> Option<&'static str> {
         "--jit-threads" => "TRS_JIT_THREADS",
         "--outline" => "TRS_EDGE_SSA_OUTLINE",
         "--outline-factor" => "TRS_EDGE_SSA_OUTLINE_FACTOR",
+        // Per-class object reuse.  Flags rather than environment
+        // because a build system keys an action on its argv: the
+        // directories a compile reads are its declared INPUTS and the
+        // one it writes is its declared OUTPUT, and both belong where
+        // the action can see them.  --class-obj-in is `:`-separated
+        // and read-only; --class-obj-out is written and never read.
+        "--class-obj-in" => "TRS_CLASS_OBJ_IN",
+        "--class-obj-out" => "TRS_CLASS_OBJ_OUT",
+        // Write the class manifest and stop: what classes this design
+        // needs, and the object file name each would be reused from.
+        // Planning only, no LLVM -- seconds where a compile is hours,
+        // which is what lets a build graph name its inputs before
+        // paying for any of them.
+        "--classes" => "TRS_SIG_DUMP",
         _ => return None,
     })
 }
