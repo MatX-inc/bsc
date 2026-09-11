@@ -1,5 +1,8 @@
-// R2 negative: an Action method clocked by no_clock -- there is no
-// edge to commit its effects; refused.
+// R2 negative: an Action method clocked by no_clock -- no clock at all,
+// as opposed to a PORTLESS one (see PosCombPortlessClk, which is
+// accepted).  bsc itself calls these unusable (P0172) and drops the
+// rules that call them; there is no edge to commit the effects, so the
+// export refuses.
 interface Ifc;
    method Action poke(Bit#(8) x);
 endinterface

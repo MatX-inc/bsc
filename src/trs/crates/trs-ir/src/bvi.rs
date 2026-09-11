@@ -115,8 +115,11 @@ pub enum BviPortKind {
 pub struct BviMethod {
     pub name: StrId,
     pub kind: BviMethodKind,
-    /// Index into `clocks`; None = clockless (legal for value methods
-    /// only — clockless Action/AV is refused at export).
+    /// Index into `clocks`, which holds the PORTED input clocks only.
+    /// None therefore covers two cases the contract cannot tell apart:
+    /// no clock at all, and a portless clock (a domain association with
+    /// no wire).  The exporter refuses the first for an Action or
+    /// ActionValue; nothing at runtime reads this.
     pub clock: Option<u32>,
     /// Port indices, in argument order.
     pub args: Vec<u32>,
@@ -434,15 +437,25 @@ mod tests {
         assert!(err.contains("aliased"), "unexpected error: {err}");
     }
 
+    /// `clock: None` is NOT rejected here: it also covers a method on a
+    /// portless clock, which `clocks` cannot name and which is legal.
+    /// Telling the two apart needs the source, so refusing a method with
+    /// no clock at all is the exporter's job (r2's NegClocklessAction).
+    /// What the verifier still owes is that a clock it DOES name exists.
     #[test]
-    fn bvi_verify_rejects_clockless_action() {
+    fn bvi_verify_allows_clockless_action_but_not_a_bad_index() {
         let mut d = design_with_counter();
         if let InstanceKind::Bvi(c) = &mut d.modules[0].instances[0].kind {
             c.methods[0].clock = None;
         }
-        let bytes = d.encode();
-        let err = Design::decode(&bytes).unwrap_err().to_string();
-        assert!(err.contains("clockless"), "unexpected error: {err}");
+        Design::decode(&d.encode()).expect("a portless-clock Action is legal");
+
+        let mut d = design_with_counter();
+        if let InstanceKind::Bvi(c) = &mut d.modules[0].instances[0].kind {
+            c.methods[0].clock = Some(7);
+        }
+        let err = Design::decode(&d.encode()).unwrap_err().to_string();
+        assert!(err.contains("out of range"), "unexpected error: {err}");
     }
 
     #[test]

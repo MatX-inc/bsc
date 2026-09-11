@@ -487,15 +487,24 @@ deriveBvi avi =
               "' returns through " ++ show (length outs) ++
               " output ports (multi-port results are not supported yet)"
             | (f, _, _, outs) <- meth_port_details, length outs > 1 ] ++
+            -- A PORTLESS clock is not the absence of one: it puts the
+            -- method in a clock domain without wiring a port, which is
+            -- how combinational IP states that its methods belong to
+            -- the caller's domain (BSV ref guide, input_clock).  Such a
+            -- module has no clock input, so it has no clocked state to
+            -- commit, and the effects are levels the commit point
+            -- publishes in its non-clock phase.  A method with NO clock
+            -- is a different thing -- bsc itself calls those unusable
+            -- (P0172) and drops the rules that call them.
             [ "Action/ActionValue method '" ++
-              getIdBaseString (vf_name f) ++ "' is clockless " ++
+              getIdBaseString (vf_name f) ++ "' has no clock " ++
               "(no edge exists to commit its effects)"
             | (f, _, Just _, _) <- meth_port_details
             , case vf_clock f of
                 Nothing -> True
                 Just c  -> let cn = getIdBaseString c
-                           in  cn `elem` map getIdBaseString portless_clks
-                               || not (M.member cn clock_idx) ] ++
+                           in  not (M.member cn clock_idx)
+                               && cn `notElem` map getIdBaseString portless_clks ] ++
             [ "self-CF Action method '" ++ getIdBaseString (vf_name f) ++
               "' with arguments (unordered coincident writers " ++
               "are not replayable)"

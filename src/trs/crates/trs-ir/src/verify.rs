@@ -136,14 +136,17 @@ fn verify_bvi(
         };
     for meth in &c.methods {
         check(meth.name)?;
+        // None does NOT mean the method has no clock: `clocks` holds
+        // only the PORTED input clocks, so a method on a portless clock
+        // -- a domain association with no wire, which is how
+        // combinational IP places its methods -- cannot name one here.
+        // The two are indistinguishable at this point and the runtime
+        // reads this field nowhere, so the genuinely-clockless case is
+        // the exporter's to refuse, which it does.
         if let Some(ci) = meth.clock {
             if ci as usize >= c.clocks.len() {
                 return Err(bad(format!("method clock index {ci} out of range")));
             }
-        } else if meth.kind != BviMethodKind::Value {
-            return Err(bad(
-                "clockless Action/ActionValue method (exporter must refuse)".into(),
-            ));
         }
         for &a in &meth.args {
             pidx(a, "arg")?;
