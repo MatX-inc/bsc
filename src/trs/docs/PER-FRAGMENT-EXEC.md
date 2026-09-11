@@ -1,8 +1,9 @@
 # Per-fragment execution: scaling, and linking external Verilog
 
 Status: the leaf seam is done -- external Verilog runs as a prim.  The
-fragment seam has its substitution point, and its per-type object no longer
-depends on the design it was compiled in.  What it still lacks is an
+fragment seam has its substitution point, and a compiled object is now one
+CLASS -- a module type at one parameter valuation -- and no longer depends
+on the design it was compiled in.  What it still lacks is an
 execution contract (section 4) and a key to cache that object by (section
 5).
 
@@ -56,7 +57,7 @@ So none of this is new architecture.  It is closing the gap between DESIGN.md
 | Split the LLVM compile out of the link | **done**; codegen knobs are argv, so a build system can key on them |
 | BVI contract + `VPathInfo` carried into BIR | **done**, as `InstanceKind::Bvi` / `BviContract::paths` |
 | A prim backed by a Verilated model | **done**; `INTERP_PANIC` 33 -> 1, PASS +8, no regressions over 2291 designs |
-| A per-type object that does not depend on its design | **done**; byte-identical across two enclosing designs (section 5) |
+| A per-class object that does not depend on its design | **done**; byte-identical across enclosing designs (section 5) |
 
 Outlining shares cones that inlining duplicated at every call site, which is
 why the total instruction count went DOWN.  Correctness is settled: the
@@ -155,9 +156,31 @@ version, output the `.o` -- not a cache `trs` consults.  A local cache still
 earns its place for direct command-line use, placed by the caller the way
 `TRS_VLT_CACHE` already is.
 
+### The unit is the class, not the type
+
+Emission grouped a type's classes into one object.  Each BODY in it was
+design-independent, but the object was not: it depended on the SET of
+valuations this design happened to use, so two designs sharing one
+valuation emitted the same symbols and the same code into objects that
+differed, and neither could be reused for the other.
+
+Measured on two designs, one using a type at k=3 and the other at k=3 and
+k=7: the shared body was byte-identical and the object was not.  Splitting
+emission per class makes the shared one shareable --
+
+    mkP_4d920a930e1e57e3.o   IDENTICAL across both designs
+    mkP_4d6ff54c38a6df17.o   only in the design that uses k=7
+
+Helpers are declared per module type, but only for a type whose instances
+all share one signature, so a helper's type has exactly one class and lands
+in it unambiguously.  The cost is more, smaller objects -- roughly 3.4x as
+many across the six measured designs, since 207 types resolve to 707
+classes -- traded for each one being independently reusable, and for finer
+parallelism in the emit pipeline.
+
 ### Why this is possible at all
 
-Most of the mechanism is already there.  Emission is per module type; the
+Most of the mechanism is already there.  Emission is per class; the
 compile is a separate argv-keyed action; cross-boundary inlining is gone.
 And the enabling invariant holds: exec fns take `(arena, env, region base
 index, ordinal)` and address in-region state as `base + (slot - region.0)`
@@ -284,9 +307,9 @@ width or a mode selector buys.
 Compile one type into two different enclosing designs and diff the objects.
 It needs no key and no caching, and it either confirms the addressing is
 design-independent or names what is not.  `TRS_TYPE_OBJ_DIR=<dir>` writes
-each per-type module out as `.o` and `.ll`, keyed by module NAME -- a mir is
-a position in one design's module list, so the same type numbers differently
-elsewhere and the two would not line up.
+each class module out as `.o` and `.ll`, named `<module>_<class signature>`
+-- a mir is a position in one design's module list and a class id an index
+over its instances, so neither would line up in the next design.
 
 **It passes**: a leaf that reads its reset and is wired to a different reset
 node in each design, and a nested fragment calling across a synthesis

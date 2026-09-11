@@ -1055,7 +1055,7 @@ pub enum DesignObject {
 /// marks are consumed by the design module's edge spine, so the
 /// legacy chunked arm's gate_scratch:None would silently break gating.
 #[allow(clippy::too_many_arguments)]
-fn compile_type_module(
+fn compile_class_module(
     env: &PlanEnv,
     helpers: &[HelperSpec],
     reqs: &[BoundaryReq],
@@ -1064,6 +1064,7 @@ fn compile_type_module(
     pseudo: &RuleSpec,
     full_map: &BoundaryMap,
     mir: usize,
+    class_sig: u64,
 ) -> Result<Vec<u8>, Ineligible> {
     let _am = crate::abi::AotModeGuard::set();
     let ctx = Context::create();
@@ -1128,12 +1129,20 @@ fn compile_type_module(
     // not depend on which design it was compiled in.
     if let Some(dir) = std::env::var_os("TRS_TYPE_OBJ_DIR") {
         let dir = std::path::PathBuf::from(dir);
-        let name = env
-            .d
-            .strings
-            .get(env.d.modules[mir].name as usize)
-            .cloned()
-            .unwrap_or_else(|| format!("mir{mir}"));
+        // named for the CLASS: the module it belongs to plus the
+        // signature that separates one valuation from another.  A mir
+        // is a position in this design's module list, and a class id
+        // an index over its instances; neither means anything in the
+        // next design, and this file name is the key the object would
+        // be cached under.
+        let name = format!(
+            "{}_{class_sig:016x}",
+            env.d
+                .strings
+                .get(env.d.modules[mir].name as usize)
+                .cloned()
+                .unwrap_or_else(|| format!("mir{mir}"))
+        );
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!("trs shard: {}: {e}", dir.display());
         } else {
@@ -1162,8 +1171,8 @@ fn compile_type_module(
 /// (step-1 measured: +0.32% Ir, wall neutral-or-better on the
 /// specimen; the Toooba control +0.031%).  EdgeOverBudget is measured
 /// BEFORE any pass pipeline runs and propagates for the caller's
-/// replan unchanged.  Byte-determinism: types in ascending mir order,
-/// jobs chunked contiguously, output order [design, mir asc].
+/// replan unchanged.  Byte-determinism: classes in ascending class
+/// order, jobs chunked contiguously, output order [design, class asc].
 #[allow(clippy::too_many_arguments)]
 pub fn compile_design_objects_split(
     env: &PlanEnv,
@@ -1203,22 +1212,73 @@ pub fn compile_design_objects_split(
         boundary_reqs.len()
     );
     // partition by module type (ascending mir = deterministic)
-    let mut per_type: std::collections::BTreeMap<
-        usize,
-        (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>),
-    > = std::collections::BTreeMap::new();
+    // Partition by CLASS, not by module type.
+    //
+    // A type's classes are its parameter valuations, and two designs
+    // instantiate a type at overlapping but rarely identical sets of
+    // them.  Grouping every class of a type into one object makes that
+    // object depend on the SET this design happened to use, even
+    // though each body in it is design-independent: two designs
+    // sharing a valuation emit the same symbols and the same code in
+    // objects that differ, and neither can be reused for the other.
+    // The class is the unit that is the same in both, so it is the
+    // unit emitted.
+    //
+    // Helpers are declared per module type, but only ever for a type
+    // whose instances all share one signature (helper symbols are
+    // sig-keyed, jit.rs), so a helper's type has exactly one class and
+    // lands in it unambiguously.
+    let mut class_of_mir: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+    for ie in env.insts.values() {
+        class_of_mir.entry(ie.mir).or_insert(ie.class_id);
+    }
+    // (helpers, boundary fns, exec reps, mir, class signature)
+    type ClassJob = (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>, usize, u64);
+    let mut per_class: std::collections::BTreeMap<usize, ClassJob> =
+        std::collections::BTreeMap::new();
+    let mut slot = |m: &mut std::collections::BTreeMap<usize, ClassJob>,
+                    c: usize,
+                    mir: usize,
+                    sig: u64| {
+        let e = m
+            .entry(c)
+            .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new(), mir, sig));
+        e.3 = mir;
+        e.4 = sig;
+    };
     for hs in helper_specs {
-        per_type.entry(hs.mir).or_default().0.push(hs.clone());
+        let Some(&c) = class_of_mir.get(&hs.mir) else {
+            return Err(Ineligible(format!("shard: helper mir {} unknown", hs.mir)));
+        };
+        let sig = env
+            .insts
+            .values()
+            .find(|ie| ie.class_id == c)
+            .map(|ie| ie.class_sig)
+            .unwrap_or(0);
+        slot(&mut per_class, c, hs.mir, sig);
+        per_class.get_mut(&c).expect("just inserted").0.push(hs.clone());
     }
     for rq in boundary_reqs {
-        per_type.entry(rq.mir).or_default().1.push(rq.clone());
+        slot(&mut per_class, rq.class_id, rq.mir, rq.class_sig);
+        per_class
+            .get_mut(&rq.class_id)
+            .expect("just inserted")
+            .1
+            .push(rq.clone());
     }
     for &o in rep_ords {
         let inst = specs[o].inst;
         let Some(ie) = env.insts.get(&inst) else {
             return Err(Ineligible(format!("shard: rep inst {inst} unknown")));
         };
-        per_type.entry(ie.mir).or_default().2.push(specs[o].clone());
+        slot(&mut per_class, ie.class_id, ie.mir, ie.class_sig);
+        per_class
+            .get_mut(&ie.class_id)
+            .expect("just inserted")
+            .2
+            .push(specs[o].clone());
     }
     // phase 2a: the design module — sched fns + fused edge fns, with
     // the full map installed (their method-call sites divert), NO
@@ -1362,15 +1422,14 @@ pub fn compile_design_objects_split(
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
     if timing {
         eprintln!(
-            "trs shard: design lowering {:?} ({} type modules)",
+            "trs shard: design lowering {:?} ({} class modules)",
             t_low.elapsed(),
-            per_type.len()
+            per_class.len()
         );
     }
-    // phase 2b: per-type pipelines on workers, the design pipeline on
+    // phase 2b: per-class pipelines on workers, the design pipeline on
     // this thread (its Context cannot move), all overlapped
-    let jobs: Vec<(usize, (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>))> =
-        per_type.into_iter().collect();
+    let jobs: Vec<(usize, ClassJob)> = per_class.into_iter().collect();
     // Placeholder spec for helper lowering.  It is never read: a helper
     // that emits a callback site is rejected in lower_helpers, so nothing
     // reaches spec-derived state (the same reasoning the dynamic-schedule
@@ -1397,7 +1456,7 @@ pub fn compile_design_objects_split(
     };
     let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
     let t0 = std::time::Instant::now();
-    let (design_obj, type_objs) = std::thread::scope(|sc| {
+    let (design_obj, class_objs) = std::thread::scope(|sc| {
         let mut handles = Vec::new();
         for group in jobs.chunks(chunk) {
             let pseudo = &pseudo;
@@ -1410,10 +1469,12 @@ pub fn compile_design_objects_split(
                     gate_scratch: env.gate_scratch,
                 };
                 let mut out = Vec::new();
-                for (mir, (hs, rqs, reps)) in group {
+                for (cid, (hs, rqs, reps, mir, sig)) in group {
                     out.push((
-                        *mir,
-                        compile_type_module(&wenv, hs, rqs, reps, refs, pseudo, full_map, *mir),
+                        *cid,
+                        compile_class_module(
+                            &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir, *sig,
+                        ),
                     ));
                 }
                 out
@@ -1435,10 +1496,10 @@ pub fn compile_design_objects_split(
     });
     let mut objs = vec![design_obj?];
     let mut typed: Vec<(usize, Vec<u8>)> = Vec::new();
-    for (mir, r) in type_objs {
-        typed.push((mir, r?));
+    for (cid, r) in class_objs {
+        typed.push((cid, r?));
     }
-    typed.sort_by_key(|(mir, _)| *mir);
+    typed.sort_by_key(|(cid, _)| *cid);
     objs.extend(typed.into_iter().map(|(_, o)| o));
     if timing {
         eprintln!(
