@@ -114,7 +114,13 @@ judge o name = do
   r <- CE.try $ do
     text <- readInput (if name == "<stdin>" then "-" else name)
     let lflags = LFlags { lf_is_stdlib = False, lf_allow_sv_kws = optAllowSvKws o }
-    CE.evaluate (check (optMode o) (lexStart lflags (mkFString name) text))
+    v <- CE.evaluate (check (optMode o) (lexStart lflags (mkFString name) text))
+    -- The message may still hold lazy lexer thunks (a `\x` escape with no
+    -- digits makes bsc's lexer call foldl1 on an empty list, for instance),
+    -- so force it here, where a crash is still caught and reported as one.
+    case v of
+      Left e -> CE.evaluate (length (showErrorList [e])) >> return v
+      Right () -> return v
   return $ case r of
     Right (Right ()) -> Accept
     Right (Left e) -> Reject e
