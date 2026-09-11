@@ -285,6 +285,45 @@ pub(crate) struct LazyJit {
     cells: Vec<OnceLock<CompiledExec>>,
 }
 
+/// The symbol an exec CLASS is emitted under: module type, rule, and
+/// the subtree signature that decides which instances share a body.
+///
+/// None of the three is a position in this design.  A design-wide
+/// instance index or schedule ordinal would name the same code
+/// differently in every design that instantiates the type, which is
+/// precisely what stops a per-type object from being reused -- the
+/// signature already distinguishes instances that must NOT share
+/// (different parameters, different layouts), so it is the right
+/// discriminator and the only one needed.
+///
+/// Empty when no signature was derived.  That happens only on the
+/// artifact LOAD path, which takes its dedup classes from the artifact
+/// and skips the hashing -- and which reads exec fns out of the
+/// ordinal table rather than by name.  Naming nothing is better than
+/// naming a class the emitter never called that.
+fn exec_class_label(
+    d: &trs_ir::Design,
+    mir: usize,
+    rule_idx: usize,
+    sig: Option<u64>,
+) -> String {
+    let Some(sig) = sig else {
+        return String::new();
+    };
+    let name = |id: u32| d.strings.get(id as usize).map(String::as_str).unwrap_or("");
+    let m = &d.modules[mir];
+    let r = m.rules.get(rule_idx).map(|r| name(r.name)).unwrap_or("");
+    // LLVM takes most bytes in a symbol, but the artifact's symbols are
+    // also read by tools and by a human diffing two objects; keep them
+    // to the identifier characters bsc itself uses
+    let ok = |s: &str| -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '.' })
+            .collect()
+    };
+    format!("{}_{}_{sig:016x}", ok(name(m.name)), ok(r))
+}
+
 impl LazyJit {
     pub(crate) fn exec(&self, ord: usize) -> Option<&CompiledExec> {
         self.cells[ord].get()
@@ -1131,7 +1170,7 @@ fn aot_emit(
                                     FusedNode::Exec(
                                         HelperRef::Sym(format!(
                                             "exec_{}",
-                                            specs[rep_of[o as usize]].label
+                                            specs[rep_of[o as usize]].exec_label
                                         )),
                                         inst_envs[&sp.inst].region.0 as u64,
                                         sp.ordinal,
@@ -1683,9 +1722,14 @@ fn aot_load(
                     unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32,
                 >(t[*rep]),
                 Some(_) => missing_exec,
+                // no table: the per-symbol fallback, which needs the
+                // class name the emitter used.  A load that took its
+                // classes from the artifact never derived one, and an
+                // artifact this trs emits always carries the table.
+                None if specs[*rep].exec_label.is_empty() => missing_exec,
                 None => lib
                     .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32>(
-                        format!("exec_{}\0", specs[*rep].label).as_bytes(),
+                        format!("exec_{}\0", specs[*rep].exec_label).as_bytes(),
                     )
                     .map(|f| *f)
                     .unwrap_or(missing_exec),
@@ -4910,62 +4954,103 @@ impl Interp {
         // ---- per-instance subtree signatures (exec dedup classes) ----
         // Two instances share compiled exec bodies iff their signatures
         // match.  The sig must cover EVERY input the exec lowering
-        // reads: module IR id, region-relative slot layout (all maps),
-        // absolute reset-node slots, and the user children recursively.
+        // reads: module type, region-relative slot layout (all maps),
+        // reset-table indices, and the user children recursively.
+        //
+        // Everything in it is named the way the TYPE sees it, never the
+        // way this design happens to number things -- the module by
+        // name rather than by its position in the module list, slots
+        // relative to the region, resets by table index.  That is what
+        // lets the signature name an emitted symbol: two designs
+        // instantiating one type at one valuation agree on it.
         // (Stage-2a made twin IR raw-identical; the sweep + twin test
         // referee this invariant.)  Consumed by the class derivation
         // (skipped when classes are baked) and by helper symbol names
         // (only when outlining selected pieces).
+        let sig_strings = self.d.strings.clone();
+        // TRS_SIG_TRACE=<module>: dump the running signature after each
+        // component for that type's instances.  Two designs that should
+        // agree on a type and do not are diffed by finding the first
+        // component that differs -- which is how the StrId keys were
+        // caught.  Off by default: it is 24 extra finishes an instance.
+        let sig_trace = std::env::var("TRS_SIG_TRACE").ok();
+        let tracing = sig_trace.is_some();
         let inst_sig: HashMap<usize, u64> = if baked_classes.is_none() || !outlined_sel.is_empty() {
             use std::hash::{Hash, Hasher};
             let mut sigs: HashMap<usize, u64> = HashMap::new();
             for &i in dfs_order.iter().rev() {
                 let e = &inst_envs[&i];
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                e.mir.hash(&mut h);
+                let mut snap: Vec<u64> = Vec::new();
+                // every key in this signature is a StrId -- a position
+                // in THIS design's string table -- so hash the name it
+                // stands for.  Two designs number their strings
+                // differently, and a signature that hashed the number
+                // would describe the design rather than the type.
+                let sname = |id: u32| {
+                    sig_strings
+                        .get(id as usize)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                };
+                self.d
+                    .strings
+                    .get(self.d.modules[e.mir].name as usize)
+                    .map(String::as_str)
+                    .unwrap_or("")
+                    .hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 (e.region.1 - e.region.0).hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let r0 = e.region.0;
                 let mut m1: Vec<_> = e
                     .reg_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m1.sort_unstable();
                 m1.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m2: Vec<_> = e
                     .wire_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m2.sort_unstable();
                 m2.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m3: Vec<_> = e
                     .creg_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m3.sort_unstable();
                 m3.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m4: Vec<_> = e
                     .fifo_slot
                     .iter()
-                    .map(|(&k, &(b, w, sz, g, lp))| (k, b - r0, w, sz, g, lp))
+                    .map(|(&k, &(b, w, sz, g, lp))| (sname(k), b - r0, w, sz, g, lp))
                     .collect();
                 m4.sort_unstable();
                 m4.hash(&mut h);
-                let mut m5: Vec<_> = e.en_slot.iter().map(|(&k, &b)| (k, b - r0)).collect();
+                if tracing { snap.push(h.finish()) }
+                let mut m5: Vec<_> = e.en_slot.iter().map(|(&k, &b)| (sname(k), b - r0)).collect();
                 m5.sort_unstable();
                 m5.hash(&mut h);
-                let mut m6: Vec<_> = e.cfwf_slot.iter().map(|(&k, &b)| (k, b - r0)).collect();
+                if tracing { snap.push(h.finish()) }
+                let mut m6: Vec<_> = e.cfwf_slot.iter().map(|(&k, &b)| (sname(k), b - r0)).collect();
                 m6.sort_unstable();
                 m6.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m7: Vec<_> = e
                     .eager_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m7.sort_unstable();
                 m7.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 // reset nodes are design-global, but compiled code
                 // reaches them through the region-relative reset table,
                 // so what the body depends on is the port's INDEX in
@@ -4973,94 +5058,107 @@ impl Interp {
                 // Hashing the index rather than the slot is what lets
                 // two designs share one body for a type whose reset
                 // comes from different nodes in each.
-                let mut m8: Vec<_> = e.reset_ord.iter().map(|(&k, &i)| (k, i)).collect();
+                let mut m8: Vec<_> = e.reset_ord.iter().map(|(&k, &i)| (sname(k), i)).collect();
                 m8.sort_unstable();
                 m8.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 (e.reset_tbl - r0).hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m9: Vec<_> = e
                     .memo_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m9.sort_unstable();
                 m9.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 // params/const-ports are baked into compiled bodies:
                 // instances of one module type with different param
                 // values must not share exec code
                 let mut m11: Vec<_> = e
                     .port_consts
                     .iter()
-                    .map(|(&k, &(w, v))| (k, w, v))
+                    .map(|(&k, &(w, v))| (sname(k), w, v))
                     .collect();
                 m11.sort_unstable();
                 m11.hash(&mut h);
-                let mut m12: Vec<_> = e.real_consts.iter().map(|(&k, &v)| (k, v)).collect();
+                if tracing { snap.push(h.finish()) }
+                let mut m12: Vec<_> = e.real_consts.iter().map(|(&k, &v)| (sname(k), v)).collect();
                 m12.sort_unstable();
                 m12.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 // gate wiring pins the sig: owner slots are ABSOLUTE in
                 // deduped bodies, so instances gated differently (other
                 // owner, other expr) must never share exec code
                 let mut m13: Vec<_> = e
                     .gates
                     .iter()
-                    .map(|(&k, (o, g))| (k, *o, format!("{g:?}")))
+                    .map(|(&k, (o, g))| (sname(k), *o, format!("{g:?}")))
                     .collect();
                 m13.sort_unstable();
                 m13.hash(&mut h);
-                let mut m14: Vec<_> = e.str_consts.iter().map(|(&k, &v)| (k, v)).collect();
+                if tracing { snap.push(h.finish()) }
+                let mut m14: Vec<_> = e.str_consts.iter().map(|(&k, &v)| (sname(k), sname(v))).collect();
                 m14.sort_unstable();
                 m14.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m15: Vec<_> = e
                     .wide_consts
                     .iter()
-                    .map(|(&k, (w, l))| (k, *w, l.clone()))
+                    .map(|(&k, (w, l))| (sname(k), *w, l.clone()))
                     .collect();
                 m15.sort_unstable();
                 m15.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e
                     .regfile_slot
                     .iter()
-                    .map(|(&k, &(b, w, lo, hi))| (k, b - r0, w, lo, hi))
+                    .map(|(&k, &(b, w, lo, hi))| (sname(k), b - r0, w, lo, hi))
                     .collect();
                 m10.sort_unstable();
                 m10.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m19: Vec<_> = e
                     .creg5_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m19.sort_unstable();
                 m19.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m20: Vec<_> = e
                     .counter_slot
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m20.sort_unstable();
                 m20.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m18: Vec<_> = e
                     .bram_slot
                     .iter()
-                    .map(|(&k, &(b, w, sz, cs, nw, du, pl))| (k, b - r0, w, sz, cs, nw, du, pl))
+                    .map(|(&k, &(b, w, sz, cs, nw, du, pl))| (sname(k), b - r0, w, sz, cs, nw, du, pl))
                     .collect();
                 m18.sort_unstable();
                 m18.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 // traced artifacts: recording layout is an exec input
                 let mut m16: Vec<_> = e
                     .rec_defs
                     .iter()
-                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m16.sort_unstable();
                 m16.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut m17: Vec<_> = e
                     .rec_meths
                     .iter()
                     .map(|(&k, rm)| {
                         (
-                            k,
+                            sname(k),
                             rm.t - r0,
                             rm.args
                                 .iter()
@@ -5072,13 +5170,24 @@ impl Interp {
                     .collect();
                 m17.sort_unstable();
                 m17.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 let mut kids: Vec<_> = e
                     .children
                     .iter()
-                    .filter_map(|(&n, &c)| sigs.get(&c).map(|&sg| (n, sg)))
+                    .filter_map(|(&n, &c)| sigs.get(&c).map(|&sg| (sname(n), sg)))
                     .collect();
                 kids.sort_unstable();
                 kids.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
+                if let Some(want) = &sig_trace {
+                    let nm = sig_strings
+                        .get(self.d.modules[e.mir].name as usize)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    if nm == want {
+                        eprintln!("sig {nm} inst {i}: {snap:016x?}");
+                    }
+                }
                 sigs.insert(i, h.finish());
             }
             sigs
@@ -5225,6 +5334,12 @@ impl Interp {
                 eager: ri.eager.clone(),
                 shared: ri.shared.clone(),
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
+                exec_label: exec_class_label(
+                    &self.d,
+                    self.mods[self.module_of(ri.inst)].ir,
+                    ri.rule_idx,
+                    inst_sig.get(&ri.inst).copied(),
+                ),
                 ordinal: ri.ordinal as u32,
                 exec_foreign_origin: 0,
                 exec_prim_origin: 0,
@@ -5276,6 +5391,10 @@ impl Interp {
                     eager: Vec::new(),
                     shared: Vec::new(),
                     label: format!("af{afi}_{o}"),
+                    // an auto-fired top method belongs to the DESIGN's
+                    // top module, so there is no cross-design class to
+                    // name; the spec label is already the right scope
+                    exec_label: format!("af{afi}_{o}"),
                     ordinal: o as u32,
                     exec_foreign_origin: 0,
                     exec_prim_origin: 0,

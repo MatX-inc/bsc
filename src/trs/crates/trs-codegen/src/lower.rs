@@ -113,6 +113,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: None,
             site_origin: 0,
             foreign_origin: 0,
             foreign_stmts: Vec::new(),
@@ -563,6 +564,7 @@ pub fn compile_scheds(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -613,6 +615,7 @@ pub fn compile_execs(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -855,6 +858,7 @@ fn lower_helpers<'ctx>(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -930,6 +934,8 @@ fn lower_boundary_fns<'ctx>(
     let bspec = RuleSpec {
         inst: usize::MAX,
         rule_idx: usize::MAX,
+        // a sentinel spec: never emitted as an exec class
+        exec_label: String::new(),
         inhibit_slots: Vec::new(),
         cf_slot: 0,
         wf_slot: 0,
@@ -960,6 +966,7 @@ fn lower_boundary_fns<'ctx>(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1099,6 +1106,7 @@ fn compile_type_module(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: Some(spec.exec_label.clone()),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1249,6 +1257,7 @@ pub fn compile_design_objects_split(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
+            exec_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1303,11 +1312,12 @@ pub fn compile_design_objects_split(
         let i32t = ctx.i32_type();
         let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
         for &o in rep_ords {
-            let name = format!("exec_{}", specs[o].label);
+            let name = format!("exec_{}", specs[o].exec_label);
             if module.get_function(&name).is_none() {
                 module.add_function(&name, exec_ty, None);
             }
         }
+        let is_rep: std::collections::HashSet<usize> = rep_ords.iter().copied().collect();
         let fnptr = |name: String| {
             module
                 .get_function(&name)
@@ -1318,9 +1328,20 @@ pub fn compile_design_objects_split(
             .iter()
             .map(|sp| fnptr(format!("sched_{}", sp.label)))
             .collect();
+        // Only rep ordinals are read from this table, and a non-rep
+        // must stay null: its CLASS symbol resolves (its rep defined
+        // it), so looking up by name alone would quietly fill entries
+        // that used to be elided.
         let execs: Vec<_> = specs
             .iter()
-            .map(|sp| fnptr(format!("exec_{}", sp.label)))
+            .enumerate()
+            .map(|(o, sp)| {
+                if is_rep.contains(&o) {
+                    fnptr(format!("exec_{}", sp.exec_label))
+                } else {
+                    ptrt.const_null()
+                }
+            })
             .collect();
         let edges: Vec<_> = (0..fused.len())
             .map(|k| fnptr(format!("edge_c{k}")))
@@ -1360,6 +1381,8 @@ pub fn compile_design_objects_split(
     let pseudo = RuleSpec {
         inst: usize::MAX,
         rule_idx: usize::MAX,
+        // a sentinel spec: never emitted as an exec class
+        exec_label: String::new(),
         inhibit_slots: Vec::new(),
         cf_slot: 0,
         wf_slot: 0,
@@ -1752,6 +1775,7 @@ fn lower_edge_ssa<'ctx>(
                     bnd_prim_site: None,
                     bnd_foreign_site: None,
                     reset_ptrs: HashMap::new(),
+                    exec_sym: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: None,
@@ -1897,6 +1921,7 @@ fn lower_edge_ssa<'ctx>(
                     bnd_prim_site: None,
                     bnd_foreign_site: None,
                     reset_ptrs: HashMap::new(),
+                    exec_sym: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: Some(std::mem::take(&mut edge_ctx)),
@@ -2104,6 +2129,7 @@ fn lower_edge_ssa<'ctx>(
                                 bnd_prim_site: None,
                                 bnd_foreign_site: None,
                                 reset_ptrs: HashMap::new(),
+                                exec_sym: None,
                                 foreign_stmts: Vec::new(),
                                 prim_calls: Vec::new(),
                                 edge: Some(EdgeCtx {
@@ -2464,6 +2490,12 @@ struct Lower<'a, 'ctx> {
     /// read a hundred times costs one load: the table entry is a
     /// function of the base parameter alone, which does not change.
     reset_ptrs: HashMap<(usize, StrId), PointerValue<'ctx>>,
+    /// AOT: emit the exec fn under the CLASS symbol instead of the
+    /// spec's own.  The in-process JIT lowers every spec separately
+    /// into one module, so it must keep per-spec names; a per-type
+    /// object holds one body per class and names it for the class, so
+    /// that two designs emit the same symbol for the same code.
+    exec_sym: Option<String>,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -5613,7 +5645,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
         let func = self
             .module
-            .add_function(&format!("exec_{}", self.spec.label), fnty, None);
+            .add_function(
+                &format!(
+                    "exec_{}",
+                    self.exec_sym.as_deref().unwrap_or(&self.spec.label)
+                ),
+                fnty,
+                None,
+            );
         let entry = self.ctx.append_basic_block(func, "entry");
         let stop_bb = self.ctx.append_basic_block(func, "stop");
 

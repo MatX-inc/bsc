@@ -292,8 +292,19 @@ pub struct RuleSpec {
     /// load their slots instead of re-expanding the cone (the owner has
     /// already stored them this edge)
     pub shared: Vec<StrId>,
-    /// unique function-name label (instance path + rule name)
+    /// unique function-name label (instance path + rule name).  Names
+    /// this SPEC: its sched fn, and its exec fn on the in-process JIT
+    /// path, where every spec is lowered separately.
     pub label: String,
+    /// names the exec CLASS this spec belongs to, for AOT emission:
+    /// module type, rule, and the subtree signature that decides which
+    /// instances share a body.  Unlike `label` it holds no design-wide
+    /// instance index or schedule ordinal, so the same type compiled
+    /// into two designs produces the same symbol -- which is what makes
+    /// a per-type object comparable, and cacheable, across designs.
+    /// Only rep ordinals are ever emitted or looked up under it.
+    #[serde(default)]
+    pub exec_label: String,
     /// this spec's index in the spec list — the `ordinal` a callback
     /// site reports, which the runtime uses to find this rule's
     /// call-site tables
