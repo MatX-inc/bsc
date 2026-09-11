@@ -1,0 +1,107 @@
+cabal-version: 3.0
+
+name: bsc-classic-parse
+version: 2026.1
+synopsis: bsc's Bluespec Classic parser as a standalone accept/reject oracle
+description:
+  Builds bsc's Classic (Bluespec Haskell) lexer and parser -- src/comp/Lex.hs
+  and src/comp/Parser/Classic/CParser.hs, plus the modules they pull in,
+  compiled unmodified straight out of ../src/comp -- into a small executable
+  that reports whether a .bs file parses.  It is meant as the reference side
+  of differential tests against other BH parsers.  Nothing here needs the
+  compiler's C/C++ parts (yices, stp, tcl) or its Setup hooks, so it builds
+  with plain cabal in a couple of minutes.
+license: BSD-3-Clause
+author: Bluespec, Inc.
+build-type: Simple
+
+executable bsc-classic-parse
+  main-is: Main.hs
+  -- '.' comes first so that the BuildVersion stand-in in this directory
+  -- shadows a generated src/comp/BuildVersion.hs if one is lying around.
+  hs-source-dirs:
+    .,
+    ../src/comp,
+    ../src/comp/Libs,
+  -- The transitive import closure of Parser.Classic and Lex.
+  other-modules:
+    Backend
+    BinParse
+    Bloogle
+    BuildVersion
+    CFreeVars
+    CSyntax
+    CSyntaxUtil
+    CType
+    Classic
+    Error
+    ErrorUtil
+    Eval
+    FStringCompat
+    FileNameUtil
+    Fixity
+    Flags
+    GHCPretty
+    IOMutVar
+    IOUtil
+    Id
+    IdPrint
+    IntLit
+    IntegerUtil
+    Lex
+    Literal
+    Log2
+    PFPrint
+    PPrint
+    PVPrint
+    Parse
+    Parser.Classic
+    Parser.Classic.CParser
+    Parser.Classic.Warnings
+    Position
+    Pragma
+    PreIds
+    PreStrings
+    Pretty
+    SchedInfo
+    Sort
+    SpeedyString
+    SystemVerilogKeywords
+    Type
+    TypeOps
+    Undefined
+    Util
+    VModInfo
+    Version
+  -- Same set as the bsc library, so the same cabal store entries are reused.
+  build-depends:
+    array        ^>=0.5.8.0,
+    base         ^>=4.18.3.0,
+    bytestring   ^>=0.11.5.4,
+    containers   ^>=0.6.7,
+    deepseq      ^>=1.4.8.1,
+    directory    ^>=1.3.8.5,
+    filepath     ^>=1.4.301.0,
+    integer-gmp  ^>=1.1,
+    mtl          ^>=2.3.1,
+    old-locale   ^>=1.0.0.7,
+    old-time     ^>=1.1.1.0,
+    process      ^>=1.6.28.0,
+    regex-compat ^>=0.95.2.2,
+    split        ^>=0.2.5,
+    strict-concurrency ^>=0.2.4.3,
+    syb          ^>=0.7.2,
+    text         ^>=2.0.2,
+    time         ^>=1.12.2,
+    unix         ^>=2.8.6.0,
+  default-language: GHC2021
+  default-extensions:
+    BangPatterns,
+    FlexibleContexts,
+    FlexibleInstances,
+    TypeSynonymInstances,
+  -- Warnings as for the bsc library; RTS options as for the bsc executables
+  -- (in particular the same -K10m stack limit, so deep inputs overflow where
+  -- bsc's would).
+  ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
+               -rtsopts "-with-rtsopts=-H256m -K10m -i1"
