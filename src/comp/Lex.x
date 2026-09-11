@@ -94,15 +94,15 @@ tokens :-
 "."          { fixTok L_dot }
 
 -- character and string literals (escape forms per lexLitChar' below)
-\' ([^\\\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig*) \'        { charTok }
-\" ([^\\\"\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig*)* \"     { stringTok }
+\' ([^\\\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig+) \'        { charTok }
+\" ([^\\\"\n] | \\ [ntrvf\'\"\\] | \\ x $hexdig+)* \"     { stringTok }
 
 -- unbased unsized bit literals '0 / '1 with no closing quote (the quoted
 -- forms '0' / '1' are char literals: the rule above is a longer match).
 -- The hand lexer went through lexLitChar' here, so a hex escape decoding to '0'
 -- or '1' (e.g. '\x30) also counts; anything else is LexBadCharLit.
 \' [01]           { uubTok }
-\' \\ x $hexdig*  { uubTok }
+\' \\ x $hexdig+  { uubTok }
 
 -- integer and real literals (hand lexer's lInteger, lReal);
 -- underscores are digit separators everywhere except in float/exponent
@@ -426,12 +426,15 @@ readN radix s =
      foldl1 (\n d -> n * radix + d)
             (map (toInteger . digitToInt) s)
 
--- exact copy of the hand lexer's lexLitChar' (note: n undercounts simple escapes by
--- one, which is why the hand lexer's columns drift on them; we replicate it)
+-- copy of the hand lexer's lexLitChar' (note: n undercounts simple escapes by
+-- one, which is why the hand lexer's columns drift on them; we replicate it),
+-- plus a guard rejecting `\x` with no hex digits (readN would foldl1 [])
 lexLitChar' :: String -> Maybe (Char, Int, String)
 lexLitChar' ('\\':s)     = lexEsc s
         where
-        lexEsc ('x':s)  = let (n,s') = span isHexDigit s in Just (chr (fromInteger (readN 16 n)), 2+length n, s')
+        lexEsc ('x':s)  = case span isHexDigit s of
+                            ([], _) -> Nothing
+                            (n, s') -> Just (chr (fromInteger (readN 16 n)), 2+length n, s')
         lexEsc ('n':s)  = Just ('\n', 1, s)
         lexEsc ('t':s)  = Just ('\t', 1, s)
         lexEsc ('r':s)  = Just ('\r', 1, s)
