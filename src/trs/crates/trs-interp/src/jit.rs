@@ -4462,6 +4462,30 @@ impl Interp {
         let (touch_rank, live_en) = {
             let (tr, le) = self.layout_touch_ranks(rcomps);
             if std::env::var("TRS_LAYOUT_AFFINITY").as_deref() == Ok("0") {
+                // Every group falls back to name order, which is
+                // type-local: the same fragment lays out identically
+                // in every design, and their objects are shareable.
+                //
+                // Measured on the TA controller family -- class
+                // overlap 28.6% with the ordering on, 93.8% off, so
+                // 398 class builds become 279 or 116.  And measured
+                // against what the ordering is FOR, on
+                // TAControllerBurnTest: 19,136 distinct 64B lines per
+                // edge with it, 19,128 without.  Eight lines in
+                // nineteen thousand.
+                //
+                // Rung 38's own census (12,862 -> 8,642) is Toooba, a
+                // different design, so this is not a claim that the
+                // ordering never pays -- only that on the designs
+                // that cost two hours it does not, and it is what
+                // their sharing is lost to.
+                //
+                // A type-local affinity is still open and unbuilt: the
+                // ranks would have to come from a per-module cone
+                // walk, since ranking only CF/WF by the module's rule
+                // order reproduces canonical order exactly and changes
+                // no layout at all (measured -- byte-identical
+                // censuses).
                 (HashMap::new(), le)
             } else {
                 (tr, le)
