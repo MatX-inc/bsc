@@ -181,18 +181,33 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    different symbol in every design.  It is now named for its class: module
    type, rule, and subtree signature.  Fixing that exposed the signature
    itself describing the design rather than the type, twice -- see section 6.
-3. **The key does not exist.**  `Module::content_hash` is 32 zero bytes from
-   the exporter (`SimExportIR.hs:550`, `P0 TODO`), ignored by the link
-   (`link.rs:544`).  `inst_sig` is the right CONTENT but is computed
-   post-link and never persisted.  An export-time equivalent must cover
-   children's signatures recursively, the parameter valuation, the codegen
-   knobs and the LLVM version.
+3. ~~**The key does not exist.**~~  **Done**, and not at export.  The
+   exporter cannot build one: it reads one `.ba` and by design never reads
+   a child's, so it knows neither the children's hashes nor the parameter
+   valuation -- and a file cannot carry its own digest.  The LINK can, and
+   it is the last place that can, since an assembled design has only
+   modules.  So a decode records the SHA-256 of the file it read and
+   assembly copies it into `Module::content_hash`, where the compile finds
+   it.  `inst_sig` folds it in, which is what makes the key cover what a
+   module SAYS and not only its name and shape.
+   The other half of the old wording -- codegen knobs and the LLVM version
+   -- is not ours.  Those are the ACTION's identity, not the fragment's,
+   and the compile already takes its knobs on argv for exactly that reason.
+   A key that tried to carry them would be describing the toolchain in a
+   field that describes the design.
 4. **Parameter specialization multiplies the unit** -- measured at 3.04x,
    and the distribution is what decides the design.  See below.
-5. **Layout comes from a whole-design walk** -- "subtree extents (known only
-   after the whole subtree walked)" (`jit.rs:4916`).  The composability this
-   depends on holds today, but is DERIVED rather than contracted.  It needs
-   to become a stated and checked property.
+5. ~~**Layout comes from a whole-design walk**~~ -- "subtree extents (known
+   only after the whole subtree walked)" (`jit.rs:4916`) -- **now stated and
+   checked**.  The signature splits in two.  INPUT is what a fragment IS:
+   its type, what it says, the parameters and bound gates it was
+   instantiated with, and its children's inputs; these legitimately differ
+   between instances of one type.  LAYOUT is where everything sits,
+   region-relative.  The contract is that **layout is a function of input**
+   -- a fragment laid out differently because of where it sits could not be
+   compiled once and reused -- and a violation is reported by name.  Clean
+   over 700 designs.  What remains derived is the guarantee itself: the
+   check catches a break, it does not prevent one.
 6. **Two design-wide pre-passes.**  `compile_design_objects_split`
    (`lower.rs:1168`) realizes the boundary map on a throwaway module first,
    and eligibility is all-or-nothing -- `trial_lower` (`lower.rs:98`) returns
@@ -270,7 +285,7 @@ read a reset, which 73.6% of real fragments do, because bsc gates a
 `$display` on the reset wire.  Any regression test for this has to contain
 a fragment that reads one.
 
-## 6. Three lessons that keep recurring
+## 6. Four lessons that keep recurring
 
 **Portless is not absent.**  A portless clock or reset is an association --
 it places a module's methods in a domain without wiring a port, which is how
@@ -301,6 +316,18 @@ thing survives being carried to another design: if it does not, hash or emit
 the NAME.  `TRS_SIG_TRACE=<module>` exists for this -- it dumps the running
 signature per component, so two designs that should agree can be diffed to
 the first component that does not.
+
+**A contract nothing enforces is a guess.**  `inst_sig`'s own comment says
+it "must cover EVERY input the exec lowering reads".  It did not:
+`bypass_slot` is read by the lowering and was never hashed.  Nothing had
+gone wrong, because a type's BypassWire children and their allocation order
+come from the module, so the slots agreed whenever the rest did -- the
+omission was latent, waiting for the first thing that made it not agree.
+It was found by enumerating `InstEnv`'s fields and grepping the consumer for
+each, which took a minute and is worth repeating whenever the sig grows a
+consumer.  The lesson is not about that field: a stated invariant with no
+check is a comment, and this one now has both a check (hurdle 5) and an
+audit that can be re-run.
 
 ## 7. The one number still missing
 

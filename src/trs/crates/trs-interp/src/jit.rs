@@ -4978,9 +4978,32 @@ impl Interp {
         let inst_sig: HashMap<usize, u64> = if baked_classes.is_none() || !outlined_sel.is_empty() {
             use std::hash::{Hash, Hasher};
             let mut sigs: HashMap<usize, u64> = HashMap::new();
+            let mut input_sigs: HashMap<usize, u64> = HashMap::new();
+            // input -> (layout, the instance that set it): equal inputs
+            // must agree on layout
+            let mut layout_of: HashMap<u64, (u64, usize)> = HashMap::new();
+            // one report per input, not per instance: a violation on a
+            // widely instantiated type would otherwise bury itself
+            let mut layout_reported: HashSet<u64> = HashSet::new();
             for &i in dfs_order.iter().rev() {
                 let e = &inst_envs[&i];
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                // The signature splits in two, and the split is the
+                // contract per-fragment compilation rests on.
+                //
+                // INPUT is what the fragment IS: its type, what it
+                // says, the parameters and bound gates it was
+                // instantiated with, and its children's inputs.  These
+                // legitimately differ between two instances of one
+                // type.
+                //
+                // LAYOUT is where everything sits, region-relative.
+                // This must be a FUNCTION of the input: a fragment laid
+                // out differently because of where it sits in the
+                // design could not be compiled once and reused.  The
+                // whole-design walk gives us that today by construction
+                // rather than by contract, so it is checked below.
+                let mut hi = std::collections::hash_map::DefaultHasher::new();
+                let mut hl = std::collections::hash_map::DefaultHasher::new();
                 let mut snap: Vec<u64> = Vec::new();
                 // every key in this signature is a StrId -- a position
                 // in THIS design's string table -- so hash the name it
@@ -4998,18 +5021,18 @@ impl Interp {
                     .get(self.d.modules[e.mir].name as usize)
                     .map(String::as_str)
                     .unwrap_or("")
-                    .hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                    .hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // and what the module SAYS, not only what it is called.
                 // Within one design a name identifies one module, so
                 // intra-design dedup never needed this; a symbol named
                 // for the signature outlives the design, and two
                 // revisions of a module share a name.  Zero for a
                 // module that reached here without a file behind it.
-                self.d.modules[e.mir].content_hash.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
-                (e.region.1 - e.region.0).hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                self.d.modules[e.mir].content_hash.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                (e.region.1 - e.region.0).hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let r0 = e.region.0;
                 let mut m1: Vec<_> = e
                     .reg_slot
@@ -5017,48 +5040,65 @@ impl Interp {
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m1.sort_unstable();
-                m1.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m1.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m2: Vec<_> = e
                     .wire_slot
                     .iter()
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m2.sort_unstable();
-                m2.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m2.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // BypassWire: read by the exec lowering (lower.rs
+                // reaches for the base and width), so the sig's own
+                // contract -- cover EVERY input the lowering reads --
+                // requires it.  It was absent: the omission was latent
+                // rather than live, because a type's bypass children
+                // and their allocation order come from the module, so
+                // the slots agreed whenever everything else did.  That
+                // is the derived-not-contracted hazard again, and it
+                // also meant the layout check below could not see them.
+                let mut m21: Vec<_> = e
+                    .bypass_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m21.sort_unstable();
+                m21.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m3: Vec<_> = e
                     .creg_slot
                     .iter()
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m3.sort_unstable();
-                m3.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m3.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m4: Vec<_> = e
                     .fifo_slot
                     .iter()
                     .map(|(&k, &(b, w, sz, g, lp))| (sname(k), b - r0, w, sz, g, lp))
                     .collect();
                 m4.sort_unstable();
-                m4.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m4.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m5: Vec<_> = e.en_slot.iter().map(|(&k, &b)| (sname(k), b - r0)).collect();
                 m5.sort_unstable();
-                m5.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m5.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m6: Vec<_> = e.cfwf_slot.iter().map(|(&k, &b)| (sname(k), b - r0)).collect();
                 m6.sort_unstable();
-                m6.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m6.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m7: Vec<_> = e
                     .eager_slot
                     .iter()
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m7.sort_unstable();
-                m7.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m7.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // reset nodes are design-global, but compiled code
                 // reaches them through the region-relative reset table,
                 // so what the body depends on is the port's INDEX in
@@ -5068,18 +5108,18 @@ impl Interp {
                 // comes from different nodes in each.
                 let mut m8: Vec<_> = e.reset_ord.iter().map(|(&k, &i)| (sname(k), i)).collect();
                 m8.sort_unstable();
-                m8.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
-                (e.reset_tbl - r0).hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m8.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                (e.reset_tbl - r0).hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m9: Vec<_> = e
                     .memo_slot
                     .iter()
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m9.sort_unstable();
-                m9.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m9.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // params/const-ports are baked into compiled bodies:
                 // instances of one module type with different param
                 // values must not share exec code
@@ -5089,12 +5129,12 @@ impl Interp {
                     .map(|(&k, &(w, v))| (sname(k), w, v))
                     .collect();
                 m11.sort_unstable();
-                m11.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m11.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m12: Vec<_> = e.real_consts.iter().map(|(&k, &v)| (sname(k), v)).collect();
                 m12.sort_unstable();
-                m12.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m12.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // gate wiring pins the sig: owner slots are ABSOLUTE in
                 // deduped bodies, so instances gated differently (other
                 // owner, other expr) must never share exec code
@@ -5104,20 +5144,20 @@ impl Interp {
                     .map(|(&k, (o, g))| (sname(k), *o, format!("{g:?}")))
                     .collect();
                 m13.sort_unstable();
-                m13.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m13.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m14: Vec<_> = e.str_consts.iter().map(|(&k, &v)| (sname(k), sname(v))).collect();
                 m14.sort_unstable();
-                m14.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m14.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m15: Vec<_> = e
                     .wide_consts
                     .iter()
                     .map(|(&k, (w, l))| (sname(k), *w, l.clone()))
                     .collect();
                 m15.sort_unstable();
-                m15.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m15.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e
@@ -5126,32 +5166,32 @@ impl Interp {
                     .map(|(&k, &(b, w, lo, hi))| (sname(k), b - r0, w, lo, hi))
                     .collect();
                 m10.sort_unstable();
-                m10.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m10.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m19: Vec<_> = e
                     .creg5_slot
                     .iter()
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m19.sort_unstable();
-                m19.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m19.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m20: Vec<_> = e
                     .counter_slot
                     .iter()
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m20.sort_unstable();
-                m20.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m20.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m18: Vec<_> = e
                     .bram_slot
                     .iter()
                     .map(|(&k, &(b, w, sz, cs, nw, du, pl))| (sname(k), b - r0, w, sz, cs, nw, du, pl))
                     .collect();
                 m18.sort_unstable();
-                m18.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m18.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // traced artifacts: recording layout is an exec input
                 let mut m16: Vec<_> = e
                     .rec_defs
@@ -5159,8 +5199,8 @@ impl Interp {
                     .map(|(&k, &(b, w))| (sname(k), b - r0, w))
                     .collect();
                 m16.sort_unstable();
-                m16.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m16.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m17: Vec<_> = e
                     .rec_meths
                     .iter()
@@ -5177,16 +5217,16 @@ impl Interp {
                     })
                     .collect();
                 m17.sort_unstable();
-                m17.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                m17.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut kids: Vec<_> = e
                     .children
                     .iter()
-                    .filter_map(|(&n, &c)| sigs.get(&c).map(|&sg| (sname(n), sg)))
+                    .filter_map(|(&n, &c)| input_sigs.get(&c).map(|&sg| (sname(n), sg)))
                     .collect();
                 kids.sort_unstable();
-                kids.hash(&mut h);
-                if tracing { snap.push(h.finish()) }
+                kids.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 if let Some(want) = &sig_trace {
                     let nm = sig_strings
                         .get(self.d.modules[e.mir].name as usize)
@@ -5196,6 +5236,33 @@ impl Interp {
                         eprintln!("sig {nm} inst {i}: {snap:016x?}");
                     }
                 }
+                let (isig, lsig) = (hi.finish(), hl.finish());
+                match layout_of.get(&isig) {
+                    Some(&(prev, other)) if prev != lsig && layout_reported.insert(isig) => {
+                        // Position-dependent layout: the same fragment,
+                        // at the same parameters, laid out two ways.
+                        // Per-type code is addressed off one region
+                        // base, so one of the two bodies would be
+                        // reading the other's slots -- and a per-
+                        // fragment object built from either would be
+                        // wrong for the other design.  A compiler bug,
+                        // not a configuration.
+                        eprintln!(
+                            "trs: layout is not a function of the fragment: \
+                             instances {other} and {i} of `{}' share inputs \
+                             but lay out differently ({prev:016x} vs \
+                             {lsig:016x})",
+                            self.d.name(self.d.modules[e.mir].name)
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        layout_of.insert(isig, (lsig, i));
+                    }
+                }
+                input_sigs.insert(i, isig);
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (isig, lsig).hash(&mut h);
                 sigs.insert(i, h.finish());
             }
             sigs
