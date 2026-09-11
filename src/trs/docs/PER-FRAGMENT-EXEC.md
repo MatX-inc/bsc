@@ -119,45 +119,130 @@ optimized and codegen'd once per target.  Move the unit of compilation to the
 fragment: `.ba` -> `.bir` + `.o`, the link aggregating objects it did not
 build.
 
-Most of the mechanism is there.  Emission is already per module type; the
-compile is already a separate argv-keyed action; cross-boundary inlining is
-gone.  And the enabling invariant already holds -- exec fns take `(arena,
-env, region base index, ordinal)` and address in-region state as
-`base + (slot - region.0)` (`lower.rs:5504`, `lower.rs:2407`), so per-type
-code is position-independent.  `inst_sig` (`jit.rs:4882`) is a cache key in
-all but name.
+### Measured: the reuse is real, and the `.bir` layer already takes it
 
-Five hurdles:
+One build tree, 355 designs: **7,271 (design, fragment) pairs over 1,099
+distinct fragments -- 6.6x sharing**, and 86% by bytes (5.12 GB staged, 0.71
+GB distinct).  Two fragments appear in 143 designs each.
+
+But the export layer already exploits that.  A `.bir` is built once per `.ba`
+and attached to the library rather than to the design -- a fragment's export
+reads no other file, because bsc's elaboration stops at a synthesis boundary
+and never reads a child's `.ba` -- and the link stages symlinks to those
+shared files by name.
+
+**The whole 6.6x is unclaimed at the object layer and only there.**  The
+compile action takes the ASSEMBLED whole-design `.bir` as its input, so its
+key is per-design and every design recompiles every fragment it contains.
+The structural precedent for fixing that already exists one layer up, in the
+export.
+
+### It should be an action, not a cache
+
+Under a build system that keys actions on their inputs, a content-addressed
+side cache is the same mechanism one level down, and the outer one decides
+whether the inner one is consulted at all.  Worse, a side cache is either
+invisible to the sandbox (so the work is redone anyway) or reachable as an
+undeclared input, where a stale entry yields a wrong object filed under a
+key that looks right.
+
+So `content_hash` should be a key the build system can compute -- inputs the
+fragment's `.bir` plus its children's, argv the codegen knobs and the LLVM
+version, output the `.o` -- not a cache `trs` consults.  A local cache still
+earns its place for direct command-line use, placed by the caller the way
+`TRS_VLT_CACHE` already is.
+
+### Why this is possible at all
+
+Most of the mechanism is already there.  Emission is per module type; the
+compile is a separate argv-keyed action; cross-boundary inlining is gone.
+And the enabling invariant holds: exec fns take `(arena, env, region base
+index, ordinal)` and address in-region state as `base + (slot - region.0)`
+(`lower.rs:5504`, `lower.rs:2407`), so per-type code is already
+position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
+(`jit.rs:4882`) is the key in all but name; what it is not is persisted.
+
+### Hurdles
 
 1. **Reset slots are the one absolute address.**  Every map in `inst_sig` is
    hashed region-relative (`b - r0`) except `reset_slot`.  A fragment
    compiled standalone would bake the wrong node.  Small, and the concrete
    blocker to position-independence.
-2. **The cache key does not exist.**  `Module::content_hash` is 32 zero bytes
-   from the exporter (`SimExportIR.hs:550`, `P0 TODO`), ignored by the link
+2. **The key does not exist.**  `Module::content_hash` is 32 zero bytes from
+   the exporter (`SimExportIR.hs:550`, `P0 TODO`), ignored by the link
    (`link.rs:544`).  `inst_sig` is the right CONTENT but is computed
    post-link and never persisted.  An export-time equivalent must cover
    children's signatures recursively, the parameter valuation, the codegen
    knobs and the LLVM version.
-3. **Parameter specialization multiplies the unit.**  `port_consts` and
-   friends are per-instance and hashed into the signature, so the cacheable
-   unit is (module type, parameter valuation).  `trs-vlt`'s `run_identity` is
-   the in-tree precedent.
+3. **Parameter specialization multiplies the unit** -- measured at 3.04x,
+   and the distribution is what decides the design.  See below.
 4. **Layout comes from a whole-design walk** -- "subtree extents (known only
-   after the whole subtree walked)" (`jit.rs:4851`).  The composability a
-   cache depends on holds today, but is DERIVED rather than contracted.  It
-   needs to become a stated and checked property.
+   after the whole subtree walked)" (`jit.rs:4851`).  The composability this
+   depends on holds today, but is DERIVED rather than contracted.  It needs
+   to become a stated and checked property.
 5. **Two design-wide pre-passes.**  `compile_design_objects_split`
    (`lower.rs:1124`) realizes the boundary map on a throwaway module first,
    and eligibility is all-or-nothing -- `trial_lower` (`lower.rs:98`) returns
    one Result for the whole spec list, so one ineligible rule turns AOT off
    design-wide.
+6. **The valuation is not known when the graph is built.**  A build system
+   needs its outputs declared before any action runs, and a fragment's
+   parameter valuation comes from its parent's elaboration, not from its own
+   `.ba`.  Discovering valuations inside an action forces the whole design
+   into that action's inputs, which destroys the 6.6x -- the discovering
+   action is a design-wide action wearing a per-fragment name.  So the
+   valuations have to be settled before the graph is, which is what makes
+   hurdle 3's distribution the load-bearing measurement.
 
-**First measurement, needing no caching**: compile a type into two different
-enclosing designs and check the objects are byte-identical.  That tests
-hurdles 1, 3 and 4 at once.  Then the number that decides whether the
-contract work in 4 is worth it: what fraction of a real `trs compile` goes to
-types that recur across targets.
+### Specialize by default; go generic for the tail
+
+320 child types resolve to 974 distinct (type, valuation) pairs, but the
+multiplicity is concentrated:
+
+| valuations per type | types | cumulative |
+| ---: | ---: | ---: |
+| 1 | 182 | 56.9% |
+| 2 | 83 | 82.8% |
+| <=4 | -- | 91.6% |
+
+The top ten types hold 40% of the objects; one holds 102 valuations by
+itself.  **For 57% of types the question is moot** -- one valuation means
+generic and specialized are the same object, needing no valuation key at
+all.
+
+That sets the policy, and it is the opposite of the obvious one.  Do not
+compile generically and specialize a listed few; **specialize by default and
+fall back to generic for the high-multiplicity tail**, which is a few dozen
+types.
+
+| policy | static objects | types left generic |
+| --- | ---: | ---: |
+| all generic | 320 | 320 |
+| specialize <=2 valuations | 403 | 55 |
+| specialize <=4 valuations | 476 | 27 |
+| all specialized | 974 | 0 |
+
+Specializing everything up to two valuations costs 26% more objects than
+compiling everything generically, covers 83% of types, and leaves a
+statically enumerable graph.  Only the 55 remaining types need a
+parameter-generic lowering, which is real work: those constants are folded
+today (`port_consts` is "the compiled mirror of the interpreter's Port/Param
+fallthrough", `jit.rs:4762`), so unbaking them turns folds into loads and
+gives up the downstream branch elimination a width or a mode selector buys.
+Confining that work to the tail is the point.
+
+Caveats on the numbers: they come from one build tree at one point in time,
+and `Instance::args` is a proxy for the valuation -- `inst_sig` also folds
+gates, resets and unbound-port constants into `port_consts`, so the true
+multiplicity is a bound from below.  Re-measure against `inst_sig` itself
+before committing to a threshold.
+
+### First implementation step
+
+Make reset addressing region-relative (hurdle 1), then compile one type into
+two different enclosing designs and check the objects are byte-identical.
+That tests hurdles 1 and 4 together, needs no key and no caching, and either
+confirms reset slots as the last absolute address or names the next one.
 
 ## 6. Two lessons that keep recurring
 
