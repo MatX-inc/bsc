@@ -1188,15 +1188,51 @@ pub fn compile_design_objects_split(
 ) -> Result<DesignObject, Ineligible> {
     let t_low = std::time::Instant::now();
     let refs_opt = (!refs.is_empty()).then_some(refs);
-    // phase 1: realize the boundary map on a throwaway module — the
-    // eligibility/width decisions every module lowers against.  The
-    // per-type modules re-lower the same fns (ms-scale) and verify.
-    let full_map = {
-        let ctx = Context::create();
-        let (module, cbs) = make_module(&ctx, None);
-        let _bg = BoundaryGuard;
-        lower_boundary_fns(env, &ctx, &module, cbs, boundary_reqs, refs_opt, false)
-    };
+    // phase 1: realize the boundary map -- the eligibility/width
+    // decisions every module lowers against.  The class modules
+    // re-lower the same fns (ms-scale) and verify.
+    //
+    // This was one throwaway module over every request in the design,
+    // and reads like a design-wide pre-pass that per-fragment
+    // compilation would have to unpick.  It is not one in substance: a
+    // request is realized with the boundary map UNSET, so its cones
+    // inline their callees rather than diverting, and nothing it
+    // produces depends on any other request's outcome.  The batching
+    // was convenience.
+    //
+    // So realize per CLASS, which is what a fragment compiled on its
+    // own would do with the classes beneath it -- and, since the
+    // pieces are independent, on the workers rather than serially
+    // ahead of them.
+    let mut by_class: std::collections::BTreeMap<usize, Vec<BoundaryReq>> =
+        std::collections::BTreeMap::new();
+    for rq in boundary_reqs {
+        by_class.entry(rq.class_id).or_default().push(rq.clone());
+    }
+    let realize_jobs: Vec<Vec<BoundaryReq>> = by_class.into_values().collect();
+    let rchunk = realize_jobs.len().div_ceil(nworkers.max(1)).max(1);
+    let full_map: BoundaryMap = std::thread::scope(|sc| {
+        let mut hs = Vec::new();
+        for group in realize_jobs.chunks(rchunk) {
+            hs.push(sc.spawn(move || {
+                let ctx = Context::create();
+                let (module, cbs) = make_module(&ctx, None);
+                let _bg = BoundaryGuard;
+                let mut out = BoundaryMap::new();
+                for reqs in group {
+                    out.extend(lower_boundary_fns(
+                        env, &ctx, &module, cbs, reqs, refs_opt, false,
+                    ));
+                }
+                out
+            }));
+        }
+        let mut merged = BoundaryMap::new();
+        for h in hs {
+            merged.extend(h.join().expect("boundary realization thread"));
+        }
+        merged
+    });
     let with_sites = full_map
         .values()
         .filter(|b| !b.prim_sites.is_empty() || !b.foreign_sites.is_empty())

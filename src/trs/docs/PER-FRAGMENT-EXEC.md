@@ -1,11 +1,14 @@
 # Per-fragment execution: scaling, and linking external Verilog
 
 Status: the leaf seam is done -- external Verilog runs as a prim.  The
-fragment seam has its substitution point, and a compiled object is now one
-CLASS -- a module type at one parameter valuation -- and no longer depends
-on the design it was compiled in.  What it still lacks is an
-execution contract (section 4) and a key to cache that object by (section
-5).
+compilation unit is done: a compiled object is one CLASS -- a module type
+at one parameter valuation -- it carries a content key, and it does not
+depend on the design it was compiled in.  Two things remain.  A fragment
+still has no EXECUTION contract, so a Verilated model cannot yet stand
+where a Bluespec fragment does (section 4).  And a build graph cannot yet
+name these objects, because a fragment's valuation is not known until its
+parent elaborates (section 5, hurdle 7) -- which is where this meets the
+build rules rather than the compiler.
 
 *Fragment* here means a synthesis boundary: a synthesized module plus every
 instance beneath it that is not itself a synthesis boundary.  In BIR that is
@@ -232,20 +235,23 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    compiled once and reused -- and a violation is reported by name.  Clean
    over 700 designs.  What remains derived is the guarantee itself: the
    check catches a break, it does not prevent one.
-6. **A design-wide pre-pass.**  `compile_design_objects_split`
-   (`lower.rs:1168`) realizes the boundary map on a throwaway module first,
-   to fix "the eligibility/width decisions every module lowers against".
-   Per-fragment compilation needs each fragment to reach those same
-   decisions without seeing the design, which is the structural half of
-   this and is not started.
+6. ~~**A design-wide pre-pass.**~~  **Done**, and it was not design-wide in
+   substance.  The boundary map -- "the eligibility/width decisions every
+   module lowers against" -- was realized on one throwaway module over
+   every request in the design.  But a request is realized with the map
+   UNSET, so its cones inline their callees rather than diverting, and
+   nothing it produces depends on any other request's outcome.  The
+   batching was convenience.  Realization is now per CLASS, which is what
+   a fragment compiled on its own would do with the classes beneath it,
+   and runs on the workers rather than serially ahead of them.  Proof that
+   nothing was lost: the emitted objects are byte-identical to the
+   design-wide realization's.
    The other half -- all-or-nothing eligibility, where `trial_lower`
    (`lower.rs:98`) returns one Result for the whole spec list, so one
    ineligible rule turns AOT off design-wide -- was listed here as an equal
    concern and is **measured at zero**: 502 of 502 corpus designs that
    linked produced an object.  Small designs have fewer chances to contain
-   an exotic rule, so this is a floor rather than a verdict; but nothing
-   observed justifies making eligibility per-fragment ahead of the boundary
-   map.
+   an exotic rule, so this is a floor rather than a verdict.
 7. **The valuation is not known when the graph is built.**  A build system
    needs its outputs declared before any action runs, and a fragment's
    parameter valuation comes from its parent's elaboration, not from its own
