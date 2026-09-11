@@ -4748,14 +4748,33 @@ impl Interp {
                 .iter()
                 .map(|(port, node)| (*port, reset_node_slot[*node]))
                 .collect();
-            // index the ports in the instance's own order, and publish
-            // that order into the table reserved at the region start
-            let reset_ord: HashMap<StrId, u32> = resets
+            // Index the ports BY NAME, and publish that order into
+            // the table reserved at the region start.  `resets` is a
+            // HashMap, so "the instance's own order" -- what this used
+            // to enumerate -- is a hash order: different per map, so
+            // two instances of one type numbered their ports
+            // differently and split into separate classes, and the
+            // EMITTING process numbered them differently from the
+            // LOADING one, which is a wrong answer rather than a
+            // missed share (the object indexes the table by the
+            // ordinal it was compiled with; the load fills the table
+            // in its own order).  Only fragments with two or more
+            // reset ports could see it -- the measured mean is 1.02 --
+            // which is why it stayed hidden until a BVI output reset
+            // put a derived reset alongside the default one.
+            //
+            // The name, not the StrId: a StrId is a position in one
+            // design's string table.  Sorting by it would be
+            // deterministic within a design and disagree between two.
+            let mut rorder: Vec<(StrId, usize)> =
+                resets.iter().map(|(&p, &n)| (p, n)).collect();
+            rorder.sort_by(|a, b| self.s(a.0).cmp(self.s(b.0)).then(a.0.cmp(&b.0)));
+            let reset_ord: HashMap<StrId, u32> = rorder
                 .iter()
                 .enumerate()
                 .map(|(k, (port, _))| (*port, k as u32))
                 .collect();
-            for (k, (_, node)) in resets.iter().enumerate() {
+            for (k, (_, node)) in rorder.iter().enumerate() {
                 rec_inits.push((reset_tbl + k as u32, reset_node_slot[*node] as u64));
             }
             // EN_* slots (zeroed per dispatch, stored by compiled call

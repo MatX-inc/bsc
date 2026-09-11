@@ -230,6 +230,12 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    the slot that drives it -- and shared-by-type code loads from there.  One
    extra GEP per exec invocation, emitted into the entry block; at a measured
    1.02 reset ports per fragment that is the whole cost.
+   The table brought a defect of its own, found much later: its ordinals
+   were assigned by enumerating a `HashMap`, so they were unstable
+   between runs and between the emitting and loading processes.  Only a
+   fragment with two or more reset ports can observe the order, which is
+   why 1.02 both made the table cheap and kept the bug hidden.  See
+   section 6.
 2. ~~**The exec symbol names a position in the design.**~~  **Done.**  An
    exec fn was `exec_i{inst}_{ordinal}`, so the same code came out under a
    different symbol in every design.  It is now named for its class: module
@@ -388,7 +394,7 @@ table already distinguishes.  What survived resolves identity at plan time,
 with no ABI change and no new runtime table.  Check any new per-type artifact
 against this before building it.
 
-**An identity that is really a position.**  Three times now, something that
+**An identity that is really a position.**  Four times now, something that
 read as a stable name turned out to be an index into one design's table.
 `mir` is a position in the module list.  `StrId` is a position in the string
 table -- and `inst_sig` was keyed by StrId in all twenty-odd of its
@@ -397,9 +403,22 @@ disagreed about a type they had both compiled identically.  The exec symbol
 itself was an instance index and a schedule ordinal.  Each looked like an
 identity at the use site and was only a coordinate.  The test is whether the
 thing survives being carried to another design: if it does not, hash or emit
-the NAME.  `TRS_SIG_TRACE=<module>` exists for this -- it dumps the running
+the NAME.  The fourth was worse than a
+missed share: the reset-table ordinal, added by rung 30 to get reset
+addresses out of compiled bodies, was assigned by enumerating a
+`HashMap` -- so it was a position in a hash order, which is not even
+stable between two runs of one program.  Two instances of a type
+numbered their ports differently and split into separate classes at
+random, and the process that EMITTED an object numbered the table
+differently from the one that LOADED it, so a body indexed slots its
+loader had filled in another order.  It needs two reset ports in one
+fragment to be observable at all, against a measured mean of 1.02, and
+it survived a 380-design corpus sweep untouched.  Ordinals come from
+the port NAME now.
+`TRS_SIG_TRACE=<module>` exists for this -- it dumps the running
 signature per component, so two designs that should agree can be diffed to
-the first component that does not.
+the first component that does not, and it is what localised the reset
+ordinals to component 12 in about a minute.
 
 **A contract nothing enforces is a guess.**  `inst_sig`'s own comment says
 it "must cover EVERY input the exec lowering reads".  It did not:
@@ -526,6 +545,13 @@ The design's own imports are reported the same way at the top level
 nowhere).  Both Make and Ninja back-ends now build the model first,
 both specializations in parallel, then the design at 100% reuse; the
 resulting `.so` runs and gives the right answer.
+
+It also turned up the reset-ordinal bug above.  A fragment with a BVI
+output reset has a derived reset node in its own subtree BESIDE the
+default one, which is the shape -- two reset ports in one fragment --
+that the corpus never had and the reset table's ordering needed to be
+observable.  Verilator did not cause it; it was the first thing to
+build a design that could see it.
 
 Two things found and NOT fixed here.
 

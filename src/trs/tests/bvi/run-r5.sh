@@ -249,4 +249,55 @@ else
     fi
 fi
 
+# two reset ports in one fragment: the reset table's ORDER.  Assigned
+# from HashMap iteration it differed per map, so instances of one type
+# split at random and an EMITTING process numbered the table
+# differently from the LOADING one -- a wrong answer, invisible at the
+# corpus mean of 1.02 reset ports.  Both halves gated: the signature
+# is stable across runs, and the fragment still builds alone
+# byte-identically.
+d="$WK/PosSpecTwoRst"; rm -rf "$d"; mkdir -p "$d"; cd "$d" || exit 2
+cp "$SRC/PosSpecTwoRst.bsv" .; cp "$SRC"/rtl/RstStretch.v .
+TRS_VLT_CACHE="$d/vlt"; export TRS_VLT_CACHE
+if ! $BSC -sim -u -g sysPosSpecTwoRst -g mkRstWrap PosSpecTwoRst.bsv >b.out 2>&1; then
+    echo "FAIL PosSpecTwoRst (build)"; tail -n 5 b.out; fail=1
+elif ! export_bir sysPosSpecTwoRst >e.out 2>&1 \
+        || ! $TRS link sysPosSpecTwoRst.bir -o sys.exe >l.out 2>&1; then
+    echo "FAIL PosSpecTwoRst (export/link)"; tail -n 5 e.out l.out; fail=1
+else
+    # five plans of one design must agree: the ordinals are a
+    # per-instance table index, and nothing else here varies
+    n=0
+    while [ $n -lt 5 ]; do
+        $TRS specializations sys.exe.bir --format text 2>/dev/null \
+            | grep mkRstWrap > "sig$n.txt"
+        n=$((n + 1))
+    done
+    if ! cmp -s sig0.txt sig1.txt || ! cmp -s sig0.txt sig2.txt \
+            || ! cmp -s sig0.txt sig3.txt || ! cmp -s sig0.txt sig4.txt; then
+        echo "FAIL PosSpecTwoRst-stable (the signature varies between runs)"
+        sort -u sig0.txt sig1.txt sig2.txt sig3.txt sig4.txt; fail=1
+    else
+        echo "PASS PosSpecTwoRst-stable"
+    fi
+    $TRS specializations sys.exe.bir -o m.json >/dev/null 2>&1
+    obj=$(sed -n 's/.*"object": "\([^"]*\)".*/\1/p' m.json | head -1)
+    binds=$(sed -n 's/.*"params": {"k": "\([^"]*\)".*/\1/p' m.json | head -1)
+    mkdir -p indesign alone/out
+    $TRS compile sys.exe.bir --spec-obj-out indesign -o sys.so >c.out 2>&1
+    cp mkRstWrap.bir RstStretch.v alone/
+    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link mkRstWrap.bir "+k=$binds" \
+        -o w.exe >la.out 2>&1 \
+      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile w.exe.bir --spec-obj-out out \
+        >ca.out 2>&1 )
+    if [ ! -f "indesign/$obj" ] || [ ! -f "alone/out/$obj" ]; then
+        echo "FAIL PosSpecTwoRst-identical (no object $obj)"
+        tail -n 5 c.out alone/ca.out; fail=1
+    elif ! cmp -s "indesign/$obj" "alone/out/$obj"; then
+        echo "FAIL PosSpecTwoRst-identical ($obj differs built alone)"; fail=1
+    else
+        echo "PASS PosSpecTwoRst-identical"
+    fi
+fi
+
 exit $fail

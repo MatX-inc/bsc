@@ -692,6 +692,16 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 33: reset-table ordinals are assigned by PORT NAME.  They came
+//     from `HashMap::iter`, so the order differed per map: two
+//     instances of one type numbered their ports differently and
+//     split into separate classes, and -- worse -- the process that
+//     EMITTED an object numbered them differently from the one that
+//     loaded it, so a compiled body indexed the table its loader had
+//     filled in another order.  Reachable only with two or more reset
+//     ports in one fragment (measured mean 1.02), which is why it
+//     surfaced first on a BVI output reset sitting beside a default
+//     one.  Table contents shift, so a rev-32 object is wrong here.
 // 32: the dedup signature covers a fragment's `import "BVI"' children
 //     (Verilog top + trs-vlt run key).  A BVI import is a prim with
 //     no InstEnv, so the `kids` component skipped it entirely; the
@@ -729,7 +739,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 32;
+pub const AOT_LAYOUT_REV: u64 = 33;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
