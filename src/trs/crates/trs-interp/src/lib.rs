@@ -206,6 +206,14 @@ pub struct Interp {
     /// at the per-timeslice commit point (batched three-phase edge
     /// commit, ordered before flush_reset_pending)
     bvi_insts: Vec<usize>,
+    /// BVI instance -> (Verilog top, run key): the model this import
+    /// resolved to, as the identity a LOAD-ONLY consumer computes
+    /// (trs_vlt::run_identity).  Kept so the plan can tell a build
+    /// system which verilated models a fragment needs -- the run key
+    /// names the index file `trs vlt build` writes, so it is a target
+    /// a rule can depend on, and unlike the cache's CLASS key it
+    /// carries no absolute paths.
+    pub(crate) bvi_ident: HashMap<usize, (String, String)>,
     /// VCD writer (vcd.rs, docs/VCD-CONTRACT.md)
     vcd: vcd::Vcd,
     /// record last-computed def values / method calls for VCD dumps (set
@@ -869,6 +877,7 @@ impl Interp {
             rst_pending: Vec::new(),
             initial_asserts: Vec::new(),
             bvi_insts: Vec::new(),
+            bvi_ident: HashMap::new(),
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
             debug_tier: false,
@@ -1219,6 +1228,18 @@ impl Interp {
                     } else {
                         None
                     };
+                    // the model identity, recorded before the prim
+                    // takes ownership of `resolved`: a fragment that
+                    // imports Verilog cannot be built without it, and
+                    // nothing downstream could recompute it (the
+                    // forwarded values resolved in THIS frame).
+                    // Dropping an error here cannot hide a build edge:
+                    // it can only come from parameter serialization,
+                    // which BviPrim::new does again on the next line
+                    // and panics on.
+                    let ident = trs_vlt::run_identity(&c, &self.d.strings, resolved.as_deref())
+                        .ok()
+                        .map(|k| (self.s(c.verilog_name).to_string(), k));
                     let prim = bvi::BviPrim::new(&c, &self.d.strings, &cpath, resolved);
                     let clk_out_init: Vec<bool> = prim.clk_out_initial().to_vec();
                     let idx = self.insts.len();
@@ -1269,6 +1290,9 @@ impl Interp {
                         }
                     }
                     self.bvi_insts.push(idx);
+                    if let Some(id) = ident {
+                        self.bvi_ident.insert(idx, id);
+                    }
                     self.inst_by_path.insert(cpath.clone(), idx);
                     idx
                 }

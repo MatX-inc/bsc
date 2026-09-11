@@ -185,4 +185,68 @@ if [ -f sysNegLie.bir ]; then
     fi
 fi
 
+# per-fragment compilation across a BVI import: the manifest names the
+# model, the fragment builds ALONE byte-identically, and the design
+# assembled from that object runs.  Each half of this has silently
+# broken once in a neighbouring form -- a shared body baking one
+# instance's parameters, and an identity that was really a position --
+# so all three are pinned rather than argued.
+d="$WK/PosSpecialize"; rm -rf "$d"; mkdir -p "$d"; cd "$d" || exit 2
+cp "$SRC/PosSpecialize.bsv" .; cp "$SRC"/rtl/BviCounter.v .
+spec_fail() { echo "FAIL PosSpecialize ($1)"; shift; [ $# -gt 0 ] && tail -n 5 "$@"; fail=1; }
+TRS_VLT_CACHE="$d/vlt"; export TRS_VLT_CACHE
+if ! $BSC -sim -u -g sysPosSpecialize -g mkWrap PosSpecialize.bsv >b.out 2>&1; then
+    spec_fail build b.out
+elif ! export_bir sysPosSpecialize >e.out 2>&1; then
+    spec_fail export e.out
+elif ! $TRS link sysPosSpecialize.bir -o sys.exe >l.out 2>&1; then
+    spec_fail link l.out
+elif ! $TRS specializations sys.exe.bir -o m.json >s.out 2>&1; then
+    spec_fail manifest s.out
+else
+    # the model edge, and the run key it is named by
+    key=$(sed -n 's/.*"run_key": "\([0-9a-f]*\)".*/\1/p' m.json | head -1)
+    if [ -z "$key" ]; then
+        spec_fail "manifest names no model" m.json
+    elif [ ! -f "$TRS_VLT_CACHE/vlt/byid/$key" ]; then
+        # the run key IS the byid file name: that is what makes a model
+        # a build node with a real output path
+        spec_fail "run key $key is not a byid file"
+    else
+        echo "PASS PosSpecialize-manifest"
+    fi
+    obj=$(sed -n 's/.*"object": "\([^"]*\)".*/\1/p' m.json | head -1)
+    binds=$(sed -n 's/.*"params": {"k": "\([^"]*\)".*/\1/p' m.json | head -1)
+    mkdir -p indesign
+    $TRS compile sys.exe.bir --spec-obj-out indesign -o sys.so >c.out 2>&1
+    # alone: its own tree, its own model cache, nothing of the design
+    mkdir -p alone/out; cp mkWrap.bir BviCounter.v alone/
+    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link mkWrap.bir "+k=$binds" \
+        -o w.exe >la.out 2>&1 \
+      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile w.exe.bir --spec-obj-out out \
+        >ca.out 2>&1 )
+    if [ ! -f "indesign/$obj" ] || [ ! -f "alone/out/$obj" ]; then
+        spec_fail "no object $obj (in-design or alone)" c.out alone/ca.out
+    elif ! cmp -s "indesign/$obj" "alone/out/$obj"; then
+        spec_fail "the fragment built alone differs from the design's $obj"
+    else
+        echo "PASS PosSpecialize-identical"
+    fi
+    # and the design assembled from the standalone object still runs
+    if [ -f "alone/out/$obj" ]; then
+        $TRS compile sys.exe.bir --spec-obj-in alone/out -o sys2.so >c2.out 2>&1
+        if ! grep -q "1 of 2 specializations reused" c2.out; then
+            spec_fail "the design did not reuse the standalone object" c2.out
+        else
+            cp sys2.so sys.exe.so
+            timeout 120 $TRS run sys.exe.bir >r.out 2>&1
+            if grep -q "a=9 b=21" r.out; then
+                echo "PASS PosSpecialize-run"
+            else
+                spec_fail "assembled design ran wrong" r.out
+            fi
+        fi
+    fi
+fi
+
 exit $fail

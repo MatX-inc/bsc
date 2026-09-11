@@ -4944,10 +4944,23 @@ impl Interp {
                     }
                 }
             }
+            // Verilog models this instance imports DIRECTLY.  A BVI
+            // child is a prim, so it never appears in `inst_envs` and
+            // the User-child walks below skip it silently; the build
+            // graph still needs the edge, because compiling the
+            // fragment runs its reset window and that instantiates
+            // the model.
+            let mut bvi_needs: Vec<(String, String)> = children
+                .values()
+                .filter_map(|ci| self.bvi_ident.get(ci).cloned())
+                .collect();
+            bvi_needs.sort();
+            bvi_needs.dedup();
             inst_envs.insert(
                 i,
                 InstEnv {
                     mir,
+                    bvi_needs,
                     // assigned once the subtree signatures exist
                     class_id: 0,
                     class_sig: 0,
@@ -5289,6 +5302,20 @@ impl Interp {
                     .collect();
                 kids.sort_unstable();
                 kids.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // `kids` covers USER children only -- a BVI import is
+                // a prim and has no InstEnv -- so the imported models
+                // are hashed here.  The BODY cannot differ over them
+                // (every BVI call goes through the site table, which
+                // the design's plan materialises), but the manifest
+                // row is per class and has to name one set of models,
+                // so the class must mean one.  Derived-not-contracted
+                // otherwise: the contract lives in the fragment's own
+                // BIR, hence in its content hash, and the forwarded
+                // parameters resolve to constants of the fragment --
+                // which is an argument that it agrees today, not one
+                // that it must.
+                e.bvi_needs.hash(&mut hi);
                 if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 if let Some(want) = &sig_trace {
                     let nm = sig_strings

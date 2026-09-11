@@ -131,6 +131,17 @@ pub struct InstEnv {
     pub class_sig: u64,
     /// local child instance name -> global instance index
     pub children: HashMap<StrId, usize>,
+    /// Verilog models this instance DIRECTLY imports, as (Verilog top,
+    /// run key), sorted.  An `import "BVI"' child is a prim, so the
+    /// compiled body never names its model -- every call goes through
+    /// the site table, which the design's plan materialises.  The
+    /// BUILD graph is the part that cannot derive it: compiling a
+    /// fragment runs its reset window, which instantiates the model,
+    /// so a rule that does not depend on the verilate step races it.
+    /// Part of the exec dedup signature's INPUT half -- not because a
+    /// body could differ, but because the manifest row is per class
+    /// and a class must therefore mean one set of models.
+    pub bvi_needs: Vec<(String, String)>,
     /// local register instance name -> (arena base slot, width); plain
     /// sync/no-reset regs only, ceil(width/64) consecutive slots
     pub reg_slot: HashMap<StrId, (u32, u32)>,
@@ -681,6 +692,13 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 32: the dedup signature covers a fragment's `import "BVI"' children
+//     (Verilog top + trs-vlt run key).  A BVI import is a prim with
+//     no InstEnv, so the `kids` component skipped it entirely; the
+//     compiled body is unaffected either way (BVI calls go through
+//     the per-ordinal site table), but the manifest names models per
+//     specialization, so a specialization has to mean one set of
+//     them.  Every signature shifts, BVI or not.
 // 31: affinity ranks come from each module's OWN rules and cones
 //     (layout_ranks_fragment_local) instead of the design's
 //     composition walk, so slot offsets inside a fragment no longer
@@ -711,7 +729,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 31;
+pub const AOT_LAYOUT_REV: u64 = 32;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV

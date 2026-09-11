@@ -3,12 +3,19 @@
 Status: the leaf seam is done -- external Verilog runs as a prim.  The
 compilation unit is done: a compiled object is one CLASS -- a module type
 at one parameter valuation -- it carries a content key, and it does not
-depend on the design it was compiled in.  Two things remain.  A fragment
-still has no EXECUTION contract, so a Verilated model cannot yet stand
-where a Bluespec fragment does (section 4).  And a build graph cannot yet
-name these objects, because a fragment's valuation is not known until its
-parent elaborates (section 5, hurdle 7) -- which is where this meets the
-build rules rather than the compiler.
+depend on the design it was compiled in.  A build graph can name these objects:
+`trs specializations` emits a manifest -- module, signature, object name,
+fragment, valuation, the specializations it directly instantiates, and the
+Verilated models it imports -- and Make, Ninja and Bazel back-ends are
+validated against it end to end.
+
+Two things remain.  A fragment still has no EXECUTION contract, so a
+Verilated model cannot yet stand where a Bluespec fragment does
+(section 4).  And the manifest itself comes from a design-wide action,
+because a fragment's valuation is not known until its parent elaborates
+(section 5, hurdle 7) -- so the graph must be REGENERATED rather than
+derived per fragment, which is where this meets the build rules rather
+than the compiler.
 
 *Fragment* here means a synthesis boundary: a synthesized module plus every
 instance beneath it that is not itself a synthesis boundary.  In BIR that is
@@ -114,7 +121,7 @@ model above bridges them for a LEAF.  For a fragment the open parts are:
   constrains PORTS, not rules, and the composition orders rules.  Two
   fragments with paths crossing both ways settle in Verilog and deadlock a
   static total order; bsc has never analysed a loop *through* two fragments.
-- **ActionValue methods with caller-latched args** (`lower.rs:4158-4163`)
+- **ActionValue methods with caller-latched args** (`lower.rs:4699-4702`)
   already record an interp/compiled asymmetry.  A call boundary must define
   this rather than inherit it.
 
@@ -208,9 +215,9 @@ Most of the mechanism is already there.  Emission is per class; the
 compile is a separate argv-keyed action; cross-boundary inlining is gone.
 And the enabling invariant holds: exec fns take `(arena, env, region base
 index, ordinal)` and address in-region state as `base + (slot - region.0)`
-(`lower.rs:5641`, `lower.rs:2473`), so per-type code is already
+(`lower.rs:3338`, `slot_index`), so per-type code is already
 position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
-(`jit.rs:4947`) is the key in all but name; what it is not is persisted.
+(`jit.rs:5048`) is the key in all but name; what it is not is persisted.
 
 ### Hurdles
 
@@ -246,7 +253,7 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    `inst_sig` at 3.42x, and it is what breaks cross-target reuse rather
    than merely multiplying the count.  See below.
 5. ~~**Layout comes from a whole-design walk**~~ -- "subtree extents (known
-   only after the whole subtree walked)" (`jit.rs:4916`) -- **now stated and
+   only after the whole subtree walked)" (`jit.rs:5018`) -- **now stated and
    checked**.  The signature splits in two.  INPUT is what a fragment IS:
    its type, what it says, the parameters and bound gates it was
    instantiated with, and its children's inputs; these legitimately differ
@@ -276,7 +283,8 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    concern and is **measured at zero**: 502 of 502 corpus designs that
    linked produced an object.  Small designs have fewer chances to contain
    an exotic rule, so this is a floor rather than a verdict.
-7. **The valuation is not known when the graph is built.**  A build system
+7. **The valuation is not known when the graph is built** -- unchanged as
+   a fact, and now confined rather than solved.  A build system
    needs its outputs declared before any action runs, and a fragment's
    parameter valuation comes from its parent's elaboration, not from its own
    `.ba`.  Discovering valuations inside an action forces the whole design
@@ -284,6 +292,14 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    action is a design-wide action wearing a per-fragment name.  So the
    valuations have to be settled before the graph is, which is what makes
    hurdle 4's distribution the load-bearing measurement.
+   What the manifest does is put that action in one place and make its
+   output a checked-in file: `trs specializations <design>.exe.bir` names
+   every specialization the design needs, and the three back-ends turn
+   that into rules.  Bazel gets a regenerate target plus a check that
+   fails the build when the committed graph no longer matches.  The
+   design-wide action still exists; it is now a graph-generation step,
+   which is a thing build systems already know how to hold, rather than a
+   compile action with the whole design in its inputs.
 
 ### What specialization costs, measured against `inst_sig`
 
@@ -329,7 +345,7 @@ either.  Overlap is a property of a family, and pooling destroyed it.
 
 Whichever way the trade goes, the generic path is real work: those
 constants are folded today (`port_consts` is "the compiled mirror of the
-interpreter's Port/Param fallthrough", `jit.rs:4825`), so unbaking them
+interpreter's Port/Param fallthrough", `abi.rs:209`), so unbaking them
 turns folds into loads and gives up the downstream branch elimination a
 width or a mode selector buys.
 
@@ -455,6 +471,79 @@ caching, `trial_lower` becomes the largest remaining cost -- 338s of a
 1,011s residual, a third of it -- so the design-wide eligibility pass
 would be the next thing to attack, not for its failure behaviour (which
 never fires) but for its time.
+
+## 6b. Where Verilator meets this
+
+An `import "BVI"` is a prim, so it never appears in `inst_envs` and the
+`kids` component of `inst_sig` -- which walks User children -- skipped it
+entirely.  That reads like the `bypass_slot` hole, but it is not: nothing
+about a Verilated model *can* reach a compiled body.  Every BVI call
+goes through `trs_cb_prim` and the per-ordinal call-site table, which
+the design's plan materialises; the object's only external symbol is
+the trampoline.  The contract shape that does affect the body -- port
+widths, method kinds, declared paths -- lives in the fragment's own
+BIR, hence in its `content_hash`.
+
+Checked rather than argued: a fragment holding a BVI import, built
+standalone in its own directory with its own (separately verilated)
+model cache, produced a **byte-identical** object to the one the design
+build wrote, and the design then reused it.
+
+What was missing was the BUILD edge.  Compiling a fragment runs its
+reset window, which instantiates the model, so `trs compile` on a cold
+model cache does not degrade -- it dies:
+
+```
+trs bvi: instance a.c (BviCounter): verilated model not found in cache
+... -- verilation is a build step
+```
+
+The manifest said `"needs": []`.  Every generated rule was therefore
+missing a prerequisite, and under Bazel the cache directory was an
+undeclared input.  A specialization now reports the models it imports
+directly, as (Verilog top, trs-vlt **run key**):
+
+```json
+"models": [{"verilog": "BviCounter", "run_key": "c524896973d1..."}]
+```
+
+The run key, not the cache's class key, and the distinction is the
+whole point.  The class key hashes the resolved absolute top file and
+vpath, so the same `BviCounter.v` verilated from four directories
+produced four classes; the run key hashes only the contract, the
+serialized parameters, the defines and the declared vpath, so it was
+identical in all four -- which is also why the standalone object's
+signature matched.  A signature keyed on the class key would have
+destroyed every cross-tree share -- the position-not-identity lesson
+again, one level out.  It is also the file name `trs vlt build` writes
+under `<cache>/vlt/byid/`, which makes a model an ordinary build node
+with a real output path.  Hashed into the signature's INPUT half: not
+because a body could differ over it, but because the manifest row is
+per specialization and a specialization has to mean one set of models.
+
+The design's own imports are reported the same way at the top level
+(the top is not a specialization, so they would otherwise be named
+nowhere).  Both Make and Ninja back-ends now build the model first,
+both specializations in parallel, then the design at 100% reuse; the
+resulting `.so` runs and gives the right answer.
+
+Two things found and NOT fixed here.
+
+**`trs specializations` needs the models to exist.** The plan
+instantiates the design, and `BviPrim::new` dlopens the model.  So the
+build order is verilate, then query, then compile -- `trs vlt build`
+needs only the `.bir`, so the cycle breaks, but a query that requires a
+build step to have run is a papercut, and under Bazel the regenerate
+target inherits the dependency.
+
+**The model cache is the read-modify-write shape that was rejected for
+specialization objects.**  One directory is both input and output;
+`manifest_valid()` does trs's own content-based staleness check over
+deps the build system never declared; `write_byid` mutates a shared
+index.  It has the right bones already -- a content-addressed class
+key, a per-class directory, and a ratified build-step/load-step split
+-- so the fix is the same one the specialization side took: declared
+inputs, declared output.
 
 ## 7. The one number still missing
 

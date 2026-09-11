@@ -1481,7 +1481,38 @@ pub fn compile_design_objects_split(
                 esc(v)
             ));
         }
-        out.push_str("},\n  \"specializations\": [\n");
+        out.push_str("},\n");
+        // The design's OWN imports: the top is not a specialization,
+        // so its models would otherwise be named nowhere and the
+        // design .so rule would race the verilate step.  Direct
+        // edges, like `needs` -- a child specialization's models
+        // arrive through its own row.
+        let child_of: std::collections::HashSet<usize> = env
+            .insts
+            .values()
+            .flat_map(|ie| ie.children.values().copied())
+            .collect();
+        let mut top_models: Vec<(String, String)> = env
+            .insts
+            .iter()
+            .filter(|(i, _)| !child_of.contains(i))
+            .flat_map(|(_, ie)| ie.bvi_needs.iter().cloned())
+            .collect();
+        top_models.sort();
+        top_models.dedup();
+        out.push_str(&format!(
+            "  \"models\": [{}],\n",
+            top_models
+                .iter()
+                .map(|(v, k)| format!(
+                    "{{\"verilog\": \"{}\", \"run_key\": \"{}\"}}",
+                    esc(v),
+                    esc(k)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str("  \"specializations\": [\n");
         #[allow(clippy::type_complexity)]
         let mut rows: Vec<(
             String,
@@ -1489,6 +1520,7 @@ pub fn compile_design_objects_split(
             String,
             Vec<(String, String)>,
             Vec<String>,
+            Vec<(String, String)>,
             usize,
             usize,
             usize,
@@ -1541,6 +1573,21 @@ pub fn compile_design_objects_split(
                 .map(|o| format!("\"{}\"", esc(o)))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // The Verilog this specialization imports directly.  Not
+            // derivable from anything else in the manifest, and not
+            // optional: compiling a fragment runs its reset window,
+            // which instantiates the model, so a rule without this
+            // edge races `trs vlt build`.  The run key is the file
+            // name that step writes under <cache>/vlt/byid, so a
+            // generator has a real target to depend on.
+            let models = exemplar.map(|ie| ie.bvi_needs.clone()).unwrap_or_default();
+            let models_json = models
+                .iter()
+                .map(|(v, k)| {
+                    format!("{{\"verilog\": \"{}\", \"run_key\": \"{}\"}}", esc(v), esc(k))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             let mut ps = String::new();
             for (k, (pn, pv)) in binds.iter().enumerate() {
                 ps.push_str(&format!(
@@ -1564,6 +1611,7 @@ pub fn compile_design_objects_split(
                     })
                     .collect(),
                 needs.clone(),
+                models.clone(),
                 reps.len(),
                 rqs.len(),
                 hs.len(),
@@ -1572,7 +1620,7 @@ pub fn compile_design_objects_split(
                 "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
                  \"object\": \"{}_{sig:016x}_{salt}.o\", \
                  \"fragment\": \"{}.bir\", \"params\": {{{ps}}}, \
-                 \"needs\": [{needs_json}], \
+                 \"needs\": [{needs_json}], \"models\": [{models_json}], \
                  \"exec_fns\": {}, \"boundary_fns\": {}, \
                  \"helper_fns\": {}}}{}\n",
                 esc(&nm),
@@ -1597,6 +1645,9 @@ pub fn compile_design_objects_split(
                 rows.len(),
                 crate::abi::baked_layout_rev()
             );
+            for (v, k) in &top_models {
+                t.push_str(&format!("model {v} ({k})\n"));
+            }
             if !knobs.is_empty() {
                 t.push_str("codegen flags: ");
                 for (i, (k, v)) in knobs.iter().enumerate() {
@@ -1609,7 +1660,7 @@ pub fn compile_design_objects_split(
                 "\n{:<w$}  {:<16}  {:>4} {:>4} {:>4}  {}\n",
                 "module", "signature", "exec", "bnd", "hlp", "parameters"
             ));
-            for (nm, sig, _obj, ps, nd, ex, bn, hl) in &rows {
+            for (nm, sig, _obj, ps, nd, md, ex, bn, hl) in &rows {
                 let pt = if ps.is_empty() {
                     "-".to_string()
                 } else {
@@ -1623,6 +1674,9 @@ pub fn compile_design_objects_split(
                 ));
                 for d in nd {
                     t.push_str(&format!("{:<w$}    needs {d}\n", ""));
+                }
+                for (v, k) in md {
+                    t.push_str(&format!("{:<w$}    model {v} ({k})\n", ""));
                 }
             }
             t.push_str("\nobjects:\n");
