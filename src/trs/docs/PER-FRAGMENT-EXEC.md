@@ -176,10 +176,31 @@ emission per class makes the shared one shareable --
 
 Helpers are declared per module type, but only for a type whose instances
 all share one signature, so a helper's type has exactly one class and lands
-in it unambiguously.  The cost is more, smaller objects -- roughly 3.4x as
-many across the six measured designs, since 207 types resolve to 707
-classes -- traded for each one being independently reusable, and for finer
-parallelism in the emit pipeline.
+in it unambiguously.
+
+The cost is more, smaller objects, and it is measured rather than
+estimated.  Compiling a controller design of 536 fragments:
+
+| | |
+| --- | ---: |
+| distinct module types | 47 |
+| distinct classes | 194 |
+| objects emitted (design + classes) | 195 |
+| boundary method fns, all realized | 1,481 |
+| parallel pipelines + emit | 35.0s |
+| whole compile | 329s |
+| artifact | 60 MB |
+
+**4.1x the objects** a per-type emission would produce, and the emit phase
+is 35s of a 329s compile -- so at this scale the extra objects cost
+nothing measurable, and each one is independently reusable.  The
+multiplicity is as skewed here as everywhere else: 27 of the 47 types have
+a single class, and three types account for 99 of the 194.
+
+Worth recording alongside: this compile is 329 SECONDS.  The 6.6 hours in
+section 1 is what the monolithic strategy cost on a design of this family,
+and the figure has been quoted since; per-type emission already retired it,
+and per-class does not bring it back.
 
 ### Why this is possible at all
 
@@ -245,7 +266,10 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    a fragment compiled on its own would do with the classes beneath it,
    and runs on the workers rather than serially ahead of them.  Proof that
    nothing was lost: the emitted objects are byte-identical to the
-   design-wide realization's.
+   design-wide realization's.  The parallelism is NOT the point and is not
+   a win worth claiming: realizing 193 classes takes 396ms on one worker
+   and 45-79ms on eight, against a 329s compile -- a tenth of a percent.
+   The structural change is the whole of it.
    The other half -- all-or-nothing eligibility, where `trial_lower`
    (`lower.rs:98`) returns one Result for the whole spec list, so one
    ineligible rule turns AOT off design-wide -- was listed here as an equal

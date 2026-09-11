@@ -1210,6 +1210,7 @@ pub fn compile_design_objects_split(
         by_class.entry(rq.class_id).or_default().push(rq.clone());
     }
     let realize_jobs: Vec<Vec<BoundaryReq>> = by_class.into_values().collect();
+    let realize_n = realize_jobs.len();
     let rchunk = realize_jobs.len().div_ceil(nworkers.max(1)).max(1);
     let full_map: BoundaryMap = std::thread::scope(|sc| {
         let mut hs = Vec::new();
@@ -1233,6 +1234,14 @@ pub fn compile_design_objects_split(
         }
         merged
     });
+    if std::env::var_os("TRS_JIT_TIME").is_some() {
+        eprintln!(
+            "trs shard: boundary realization {:?} ({} classes, {} workers)",
+            t_low.elapsed(),
+            realize_n,
+            nworkers.max(1)
+        );
+    }
     let with_sites = full_map
         .values()
         .filter(|b| !b.prim_sites.is_empty() || !b.foreign_sites.is_empty())
