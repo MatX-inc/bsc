@@ -4979,6 +4979,7 @@ impl Interp {
             use std::hash::{Hash, Hasher};
             let mut sigs: HashMap<usize, u64> = HashMap::new();
             let mut input_sigs: HashMap<usize, u64> = HashMap::new();
+            let mut layout_sigs: HashMap<usize, u64> = HashMap::new();
             // input -> (layout, the instance that set it): equal inputs
             // must agree on layout
             let mut layout_of: HashMap<u64, (u64, usize)> = HashMap::new();
@@ -5261,9 +5262,39 @@ impl Interp {
                     }
                 }
                 input_sigs.insert(i, isig);
+                layout_sigs.insert(i, lsig);
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 (isig, lsig).hash(&mut h);
                 sigs.insert(i, h.finish());
+            }
+            // TRS_SIG_DUMP=<path>: one line per instance,
+            //   <module>\t<input sig>\t<layout sig>
+            // The input sig is the object's identity -- what a
+            // per-fragment build would key on -- so counting distinct
+            // inputs per module name says how far a type specializes,
+            // and comparing across designs says how much two targets
+            // could share.  A measurement mode: planning is seconds
+            // where lowering is hours, so it DECLINES below rather
+            // than going on to emit.
+            if let Ok(path) = std::env::var("TRS_SIG_DUMP") {
+                let mut out = String::new();
+                let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+                iis.sort_unstable();
+                for i in iis {
+                    let e = &inst_envs[&i];
+                    let nm = sig_strings
+                        .get(self.d.modules[e.mir].name as usize)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let (is_, ls) = (
+                        input_sigs.get(&i).copied().unwrap_or(0),
+                        layout_sigs.get(&i).copied().unwrap_or(0),
+                    );
+                    out.push_str(&format!("{nm}\t{is_:016x}\t{ls:016x}\n"));
+                }
+                if let Err(e) = std::fs::write(&path, out) {
+                    eprintln!("trs: {path}: {e}");
+                }
             }
             sigs
         } else {
@@ -5293,6 +5324,10 @@ impl Interp {
                     e.class_id = id;
                 }
             }
+        }
+        if std::env::var_os("TRS_SIG_DUMP").is_some() {
+            eprintln!("trs: signature dump written; declining to compile");
+            return None;
         }
 
         // any Exec node of a RULE must belong to a scheduled rule

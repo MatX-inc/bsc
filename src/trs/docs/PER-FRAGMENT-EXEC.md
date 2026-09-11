@@ -195,8 +195,9 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    and the compile already takes its knobs on argv for exactly that reason.
    A key that tried to carry them would be describing the toolchain in a
    field that describes the design.
-4. **Parameter specialization multiplies the unit** -- measured at 3.04x,
-   and the distribution is what decides the design.  See below.
+4. **Parameter specialization multiplies the unit** -- measured against
+   `inst_sig` at 3.42x, and it is what breaks cross-target reuse rather
+   than merely multiplying the count.  See below.
 5. ~~**Layout comes from a whole-design walk**~~ -- "subtree extents (known
    only after the whole subtree walked)" (`jit.rs:4916`) -- **now stated and
    checked**.  The signature splits in two.  INPUT is what a fragment IS:
@@ -226,53 +227,57 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    needs its outputs declared before any action runs, and a fragment's
    parameter valuation comes from its parent's elaboration, not from its own
    `.ba`.  Discovering valuations inside an action forces the whole design
-   into that action's inputs, which destroys the 6.6x -- the discovering
+   into that action's inputs, which destroys the reuse -- the discovering
    action is a design-wide action wearing a per-fragment name.  So the
    valuations have to be settled before the graph is, which is what makes
    hurdle 4's distribution the load-bearing measurement.
 
-### Specialize by default; go generic for the tail
+### What specialization costs, measured against `inst_sig`
 
-320 child types resolve to 974 distinct (type, valuation) pairs, but the
-multiplicity is concentrated:
+The earlier numbers used `Instance::args` as a proxy and warned it was a
+bound from below.  Measured against `inst_sig` itself -- `TRS_SIG_DUMP`
+writes one line per instance and declines, so this costs a second per
+design rather than the hours a compile costs -- on six real designs that
+share 593 fragments:
 
-| valuations per type | types | cumulative |
-| ---: | ---: | ---: |
-| 1 | 182 | 56.9% |
-| 2 | 83 | 82.8% |
-| <=4 | -- | 91.6% |
+| | types | objects | builds | reuse |
+| --- | ---: | ---: | ---: | ---: |
+| specialized (type + valuation) | 207 | 707 | 941 | **1.33x** |
+| generic (type only) | 207 | 207 | 380 | **1.84x** |
+| types with 1 valuation | 109 | 109 | 242 | 2.22x |
+| types with >1 valuation | 98 | 598 | 699 | **1.17x** |
 
-The top ten types hold 40% of the objects; one holds 102 valuations by
-itself.  **For 57% of types the question is moot** -- one valuation means
-generic and specialized are the same object, needing no valuation key at
-all.
+Multiplicity is 3.42 valuations per type, against 3.04 from the proxy --
+the bound held, and the distribution is the same shape: 53% of types have
+one valuation, 79% have at most two, and one type has 102.
 
-That sets the policy, and it is the opposite of the obvious one.  Do not
-compile generically and specialize a listed few; **specialize by default and
-fall back to generic for the high-multiplicity tail**, which is a few dozen
-types.
+**This revises the policy, and not in the direction the count distribution
+suggested.**  Counting types, specialization looks cheap: half of them have
+a single valuation, so specializing costs nothing.  Counting OBJECTS it is
+the dominant cost -- the 98 multi-valuation types produce 598 of the 707
+objects, and those objects barely share at all (1.17x, against 2.22x for
+the single-valuation ones).  Specialization is what breaks cross-target
+reuse, because parameters are exactly what differs between targets.
 
-| policy | static objects | types left generic |
-| --- | ---: | ---: |
-| all generic | 320 | 320 |
-| specialize <=2 valuations | 403 | 55 |
-| specialize <=4 valuations | 476 | 27 |
-| all specialized | 974 | 0 |
+The like-for-like figure is **1.84x generic against 1.33x specialized: a
+quarter of the available sharing, spent on folding constants in 98 types**.
+Whether that is a good trade is the run-rate question in section 7, now
+asked about a specific 98 types rather than in general.  For the other 109
+the question does not arise.
 
-Specializing everything up to two valuations costs 26% more objects than
-compiling everything generically, covers 83% of types, and leaves a
-statically enumerable graph.  Only the 55 remaining types need a
-parameter-generic lowering, which is real work: those constants are folded
-today (`port_consts` is "the compiled mirror of the interpreter's Port/Param
-fallthrough", `jit.rs:4825`), so unbaking them turns folds into loads and
-gives up the downstream branch elimination a width or a mode selector buys.
-Confining that work to the tail is the point.
+What this sample cannot say is the absolute rate.  Six designs cap reuse at
+6x, and these six are controller variants -- closely related, so both more
+likely to share fragments and more likely to differ in the parameters they
+share them at.  The 6.6x quoted earlier is the `.bir` layer over 355
+designs and is not comparable; the same type-level measure over these six
+is the 1.84x above.  Re-run `TRS_SIG_DUMP` over a wider, less related set
+before trusting any absolute number.
 
-Caveats on the numbers: they come from one build tree at one point in time,
-and `Instance::args` is a proxy for the valuation -- `inst_sig` also folds
-gates, resets and unbound-port constants into `port_consts`, so the true
-multiplicity is a bound from below.  Re-measure against `inst_sig` itself
-before committing to a threshold.
+Whichever way the trade goes, the generic path is real work: those
+constants are folded today (`port_consts` is "the compiled mirror of the
+interpreter's Port/Param fallthrough", `jit.rs:4825`), so unbaking them
+turns folds into loads and gives up the downstream branch elimination a
+width or a mode selector buys.
 
 ### The first measurement, taken
 
