@@ -547,7 +547,11 @@ encModule msi elab_ids keepF ffcalls bviEnv (defClk, defRst) pkg = do
       , ("externs", encList [ encStruct [("module", encW32 i)]
                             | i <- externIds ])
       , ("foreign_calls", encList (map encW32 ffcallIds))
-      , ("content_hash", encList (replicate 32 (C.encodeWord8 0))) -- P0 TODO
+      -- Zero, and stays zero: a file cannot carry its own digest.  The
+      -- LINK fills this in, hashing the bytes it read, which is both
+      -- the identity of what it read and the last point at which there
+      -- is a file to hash -- an assembled design has only modules.
+      , ("content_hash", encList (replicate 32 (C.encodeWord8 0)))
       , ("keep_fires", encBool keepF)
       , ("default_clock", encMaybe encW32 defClkId)
       , ("default_reset", encMaybe encW32 defRstId)

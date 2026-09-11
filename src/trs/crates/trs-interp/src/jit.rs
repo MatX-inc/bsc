@@ -5000,6 +5000,14 @@ impl Interp {
                     .unwrap_or("")
                     .hash(&mut h);
                 if tracing { snap.push(h.finish()) }
+                // and what the module SAYS, not only what it is called.
+                // Within one design a name identifies one module, so
+                // intra-design dedup never needed this; a symbol named
+                // for the signature outlives the design, and two
+                // revisions of a module share a name.  Zero for a
+                // module that reached here without a file behind it.
+                self.d.modules[e.mir].content_hash.hash(&mut h);
+                if tracing { snap.push(h.finish()) }
                 (e.region.1 - e.region.0).hash(&mut h);
                 if tracing { snap.push(h.finish()) }
                 let r0 = e.region.0;

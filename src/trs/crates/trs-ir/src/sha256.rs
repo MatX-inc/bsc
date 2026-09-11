@@ -132,6 +132,13 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
+/// The raw 32-byte digest.
+pub fn digest(data: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finish()
+}
+
 pub fn digest_hex(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);

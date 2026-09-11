@@ -821,6 +821,7 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
 
     for bir in birs {
         let r = Remap(bir.strings.iter().map(|s| design.intern(s)).collect());
+        let file_hash = bir.content_hash;
         design.uses_wave_tasks |= bir.uses_wave_tasks;
         let mut take_ffunc = |design: &mut Design, mut f: ForeignFunc| {
             foreign_func(&r, &mut f);
@@ -831,6 +832,12 @@ pub fn assemble(birs: Vec<Bir>) -> Result<Design, DecodeError> {
         match bir.body {
             BirBody::Fragment(mut m) => {
                 module(&r, &mut m);
+                // the fragment file's digest IS this module's content
+                // identity, and this is the last place it is known: the
+                // assembled design has no files, only modules.  A
+                // module coming in from an already-assembled design
+                // keeps the hash it was given here the first time.
+                m.content_hash = file_hash;
                 modules.push(m);
             }
             BirBody::Foreign(f) => {

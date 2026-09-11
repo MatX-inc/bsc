@@ -39,7 +39,9 @@ use trs_ir::Design;
 
 pub mod meta;
 pub mod resolve;
-pub mod sha256;
+// the digest lives in trs-ir: the link needs it to key a module by
+// its content, and trs-ir is below every crate that does
+pub use trs_ir::sha256;
 pub mod shim;
 
 // ---------------------------------------------------------------

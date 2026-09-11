@@ -18,6 +18,7 @@ pub mod link;
 pub mod merge;
 mod psq;
 pub mod schedule;
+pub mod sha256;
 pub mod sym;
 pub mod verify;
 
@@ -222,6 +223,20 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lazy<T> {
 /// which a link takes the union of.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bir {
+    /// SHA-256 of the bytes this was decoded from, or zero when it was
+    /// not decoded from any.  Not part of the wire format: a file
+    /// cannot carry its own digest, and the reader is the one that
+    /// needs it.
+    ///
+    /// This is the identity of a FRAGMENT's content, which the link
+    /// copies into `Module::content_hash` so that it survives assembly
+    /// and reaches the compile.  Nothing else identifies what a module
+    /// actually says: a module is named uniquely within a design, so
+    /// intra-design dedup never had to ask, but a per-type object
+    /// outlives the design it was built in and two revisions of one
+    /// module share a name.
+    #[serde(skip)]
+    pub content_hash: [u8; 32],
     pub strings: Vec<String>,
     /// Whether the content calls a wave-recording task ($dumpvars and
     /// family).  Recorded by the exporter, where rule bodies are plain
@@ -1102,8 +1117,14 @@ impl Bir {
         }
         // deep expression trees (long fold chains) exceed ciborium's
         // default recursion limit of 128
-        ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
-            .map_err(|e| DecodeError::Cbor(e.to_string()))
+        let mut bir: Bir =
+            ciborium::de::from_reader_with_recursion_limit(&bytes[BIR_HEADER..], 65536)
+                .map_err(|e| DecodeError::Cbor(e.to_string()))?;
+        // over the WHOLE file, header included: the version is part of
+        // what the bytes mean, and a reader that hashed only the body
+        // would give two encodings of one module the same identity
+        bir.content_hash = sha256::digest(bytes);
+        Ok(bir)
     }
 }
 
