@@ -1154,16 +1154,21 @@ fn aot_emit(
         // differs); callback-carrying methods drop out at emission and
         // stay inline.  quiet=true suppresses the per-method notes,
         // which the all-types sweep would otherwise emit per method.
-        let reqs_for_mir = |mir: usize, quiet: bool| -> Vec<trs_codegen::abi::BoundaryReq> {
+        // Per CLASS, not per module type.  The body bakes the
+        // exemplar's parameters, so one body per type served instances
+        // whose parameters differed from the exemplar's -- silently,
+        // and with the wrong answer.
+        let reqs_for_class = |class_id: usize, quiet: bool| -> Vec<trs_codegen::abi::BoundaryReq> {
             let Some(exemplar) = env
                 .insts
                 .iter()
-                .filter(|(_, ie)| ie.mir == mir)
+                .filter(|(_, ie)| ie.class_id == class_id)
                 .map(|(&i, _)| i)
                 .min()
             else {
                 return Vec::new();
             };
+            let mir = env.insts[&exemplar].mir;
             let mut reqs = Vec::new();
             for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
                 if m.always_enabled {
@@ -1192,23 +1197,24 @@ fn aot_emit(
                         mi,
                         method: m.name,
                         kind,
-                        sym: format!("trs_bnd{mir}_{mi}_{kind}"),
+                        class_id,
+                        sym: format!("trs_bnd{class_id}_{mi}_{kind}"),
                         args: args.clone(),
                     });
                 }
             }
             reqs
         };
-        // Every instantiated module type gets per-method boundary fns.
+        // Every instantiated dedup CLASS gets per-method boundary fns.
         // Not a mode: inlining across a synthesis boundary is what put
         // 66.8M instructions into a single function on a
         // controller-scale design, where outlining leaves 2.1M as the
         // largest and a third fewer instructions overall.
         let boundary_reqs: Vec<trs_codegen::abi::BoundaryReq> = {
-            let mirs: std::collections::BTreeSet<usize> =
-                env.insts.values().map(|ie| ie.mir).collect();
-            mirs.into_iter()
-                .flat_map(|m| reqs_for_mir(m, true))
+            let ids: std::collections::BTreeSet<usize> =
+                env.insts.values().map(|ie| ie.class_id).collect();
+            ids.into_iter()
+                .flat_map(|c| reqs_for_class(c, true))
                 .collect()
         };
         let _g = trs_codegen::abi::AotModeGuard::set();
@@ -4819,6 +4825,8 @@ impl Interp {
                 i,
                 InstEnv {
                     mir,
+                    // assigned once the subtree signatures exist
+                    class_id: 0,
                     children,
                     reg_slot,
                     wire_slot,
@@ -5049,6 +5057,31 @@ impl Interp {
         } else {
             HashMap::new()
         };
+        // Dense class ids: one per distinct (module type, signature).
+        // Anything emitted ONCE and shared between instances has to be
+        // keyed by this rather than by the module type -- a shared body
+        // bakes the exemplar's parameters, and instances of one type
+        // differ in exactly those.  With no signatures (the artifact
+        // load path, which derives no classes and lowers nothing) every
+        // instance of a type lands in one id, as before.
+        {
+            let mut next = 0usize;
+            let mut seen: HashMap<(usize, u64), usize> = HashMap::new();
+            let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+            iis.sort_unstable();
+            for i in iis {
+                let mir = inst_envs[&i].mir;
+                let sg = inst_sig.get(&i).copied().unwrap_or(0);
+                let id = *seen.entry((mir, sg)).or_insert_with(|| {
+                    let v = next;
+                    next += 1;
+                    v
+                });
+                if let Some(e) = inst_envs.get_mut(&i) {
+                    e.class_id = id;
+                }
+            }
+        }
 
         // any Exec node of a RULE must belong to a scheduled rule
         // above; interface-method Exec nodes are no-ops (skipped by

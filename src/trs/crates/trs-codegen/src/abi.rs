@@ -106,6 +106,12 @@ pub struct PrimCallSpec {
 pub struct InstEnv {
     /// module index in `d.modules`
     pub mir: usize,
+    /// Dense id of this instance's DEDUP CLASS: one per distinct
+    /// (module type, subtree signature).  Two instances of a type at
+    /// different parameters are different classes, because a compiled
+    /// body bakes those parameters -- so anything emitted once and
+    /// shared between instances must be keyed by this, not by `mir`.
+    pub class_id: usize,
     /// local child instance name -> global instance index
     pub children: HashMap<StrId, usize>,
     /// local register instance name -> (arena base slot, width); plain
@@ -568,8 +574,15 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 pub struct BoundaryReq {
     /// module type (Design.modules index)
     pub mir: usize,
-    /// exemplar instance of the type (region source for base-relative
-    /// addressing; all instances share type-uniform offsets)
+    /// the dedup class this fn serves.  A boundary fn used to be
+    /// emitted once per module TYPE, on the reasoning that instances
+    /// of a type share their slot offsets.  They do -- but the body
+    /// also bakes the exemplar's PARAMETERS, which instances of a type
+    /// do not share, so every instance called a body carrying one
+    /// instance's parameter values.  One per class instead.
+    pub class_id: usize,
+    /// exemplar instance of the CLASS (region source for base-relative
+    /// addressing, and the parameter values the body bakes)
     pub exemplar: usize,
     /// method index in the module's methods table
     pub mi: usize,
@@ -586,9 +599,9 @@ pub struct BoundaryReq {
 
 /// The realized boundary map, built while the functions are emitted
 /// (result widths are known only at lowering): call sites consult it
-/// to divert.  Keyed (mir, method, kind).
+/// to divert.  Keyed (class_id, method, kind) -- see BoundaryReq.
 /// A realized boundary method fn: one compiled body serving every
-/// instance of its module type.
+/// instance of its dedup CLASS.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BoundaryFn {
     pub sym: String,

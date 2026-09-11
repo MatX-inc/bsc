@@ -992,7 +992,7 @@ fn lower_boundary_fns<'ctx>(
                     })
                     .collect();
                 map.insert(
-                    (rq.mir, rq.method, rq.kind),
+                    (rq.class_id, rq.method, rq.kind),
                     BoundaryFn {
                         sym: rq.sym.clone(),
                         ret_width: ret_w,
@@ -1068,7 +1068,7 @@ fn compile_type_module(
         // against; a divergence here would mean call sites elsewhere
         // declared a type this module never defined — fail loudly
         for rq in reqs {
-            let k = (rq.mir, rq.method, rq.kind);
+            let k = (rq.class_id, rq.method, rq.kind);
             if local.get(&k) != full_map.get(&k) {
                 return Err(Ineligible(format!(
                     "shard mir {mir}: boundary realization drift on {}",
@@ -4064,7 +4064,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         } else {
             0
         };
-        if let Some(bnd) = self.boundary_hit(cie.mir, method, bkind) {
+        if let Some(bnd) = self.boundary_hit(cie.class_id, method, bkind) {
             let (sym, brw, bargs) = (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
             if let Some(envp) = f.envp {
                 if bargs.iter().all(|(p, _)| cf.args.contains_key(p)) {
@@ -5805,11 +5805,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         ))
     }
 
-    fn boundary_hit(&self, mir: usize, method: StrId, kind: u8) -> Option<BoundaryFn> {
+    /// The boundary fn serving a CALLEE's dedup class.  Keyed by
+    /// class rather than module type: a shared body bakes the
+    /// exemplar's parameters, and instances of one type differ in
+    /// exactly those.
+    fn boundary_hit(&self, class_id: usize, method: StrId, kind: u8) -> Option<BoundaryFn> {
         BOUNDARY.with(|b| {
             b.borrow()
                 .as_ref()
-                .and_then(|m| m.get(&(mir, method, kind)).cloned())
+                .and_then(|m| m.get(&(class_id, method, kind)).cloned())
         })
     }
 
@@ -6595,7 +6599,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // routes $finish paths to stop_bb.  AE
                             // methods never enter the map, so the rdy
                             // gate never coexists with a hit.
-                            let bhit = self.boundary_hit(cie.mir, *method, 2).filter(|bn| {
+                            let bhit = self.boundary_hit(cie.class_id, *method, 2).filter(|bn| {
                                 rdy_id.is_none()
                                     && f.envp.is_some()
                                     && bn.args.iter().all(|(p, _)| cf.args.contains_key(p))
@@ -7817,7 +7821,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 } else {
                     1u8
                 };
-                let bhit = self.boundary_hit(cie.mir, *method, bkind).filter(|bn| {
+                let bhit = self.boundary_hit(cie.class_id, *method, bkind).filter(|bn| {
                     f.envp.is_some() && bn.args.iter().all(|(p, _)| cf.args.contains_key(p))
                 });
                 match bhit {
