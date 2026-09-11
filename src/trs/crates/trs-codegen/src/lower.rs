@@ -1482,8 +1482,17 @@ pub fn compile_design_objects_split(
             ));
         }
         out.push_str("},\n  \"specializations\": [\n");
-        let mut rows: Vec<(String, u64, String, Vec<(String, String)>, usize, usize, usize)> =
-            Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut rows: Vec<(
+            String,
+            u64,
+            String,
+            Vec<(String, String)>,
+            Vec<String>,
+            usize,
+            usize,
+            usize,
+        )> = Vec::new();
         let n = per_class.len();
         for (i, (_cid, (hs, rqs, reps, mir, sig))) in per_class.iter().enumerate() {
             let nm = env
@@ -1492,16 +1501,46 @@ pub fn compile_design_objects_split(
                 .get(env.d.modules[*mir].name as usize)
                 .cloned()
                 .unwrap_or_else(|| format!("mir{mir}"));
-            // the valuation this class IS, in the spelling that
-            // rebuilds it alone: `trs link <fragment> +k=0x3`.  Any
-            // instance of the class carries it -- that is what a
-            // class means.
-            let binds = env
-                .insts
-                .values()
-                .find(|ie| ie.class_id == *_cid)
-                .map(|ie| ie.param_binds.clone())
+            // the valuation this specialization IS, in the spelling
+            // that rebuilds it alone: `trs link <fragment> +k=0x3`.
+            // Any instance carries it -- that is what the class means.
+            let exemplar = env.insts.values().find(|ie| ie.class_id == *_cid);
+            let binds = exemplar.map(|ie| ie.param_binds.clone()).unwrap_or_default();
+            // What this specialization DIRECTLY instantiates, as the
+            // objects those children compile to.  Without it a
+            // generator has only a flat list and must make every
+            // design depend on every specialization; with it the
+            // graph is a DAG over fragments, a parent names its
+            // children as inputs, and compiling the parent reuses
+            // them instead of rebuilding them into its own output.
+            let mut needs: Vec<String> = exemplar
+                .map(|ie| {
+                    let mut v: Vec<String> = ie
+                        .children
+                        .values()
+                        .filter_map(|ci| env.insts.get(ci))
+                        .filter(|ce| ce.class_id != *_cid)
+                        .map(|ce| {
+                            let cn = env
+                                .d
+                                .strings
+                                .get(env.d.modules[ce.mir].name as usize)
+                                .cloned()
+                                .unwrap_or_else(|| format!("mir{}", ce.mir));
+                            format!("{cn}_{:016x}_{salt}.o", ce.class_sig)
+                        })
+                        .collect();
+                    v.sort();
+                    v.dedup();
+                    v
+                })
                 .unwrap_or_default();
+            needs.retain(|o| *o != format!("{nm}_{sig:016x}_{salt}.o"));
+            let needs_json = needs
+                .iter()
+                .map(|o| format!("\"{}\"", esc(o)))
+                .collect::<Vec<_>>()
+                .join(", ");
             let mut ps = String::new();
             for (k, (pn, pv)) in binds.iter().enumerate() {
                 ps.push_str(&format!(
@@ -1524,6 +1563,7 @@ pub fn compile_design_objects_split(
                         )
                     })
                     .collect(),
+                needs.clone(),
                 reps.len(),
                 rqs.len(),
                 hs.len(),
@@ -1532,6 +1572,7 @@ pub fn compile_design_objects_split(
                 "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
                  \"object\": \"{}_{sig:016x}_{salt}.o\", \
                  \"fragment\": \"{}.bir\", \"params\": {{{ps}}}, \
+                 \"needs\": [{needs_json}], \
                  \"exec_fns\": {}, \"boundary_fns\": {}, \
                  \"helper_fns\": {}}}{}\n",
                 esc(&nm),
@@ -1568,7 +1609,7 @@ pub fn compile_design_objects_split(
                 "\n{:<w$}  {:<16}  {:>4} {:>4} {:>4}  {}\n",
                 "module", "signature", "exec", "bnd", "hlp", "parameters"
             ));
-            for (nm, sig, _obj, ps, ex, bn, hl) in &rows {
+            for (nm, sig, _obj, ps, nd, ex, bn, hl) in &rows {
                 let pt = if ps.is_empty() {
                     "-".to_string()
                 } else {
@@ -1580,6 +1621,9 @@ pub fn compile_design_objects_split(
                 t.push_str(&format!(
                     "{nm:<w$}  {sig:016x}  {ex:>4} {bn:>4} {hl:>4}  {pt}\n"
                 ));
+                for d in nd {
+                    t.push_str(&format!("{:<w$}    needs {d}\n", ""));
+                }
             }
             t.push_str("\nobjects:\n");
             for (_, _, obj, ..) in &rows {
