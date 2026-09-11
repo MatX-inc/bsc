@@ -1041,7 +1041,7 @@ pub enum DesignObject {
     /// the edge measurement to decide between accepting the inline
     /// monolith and outlining the sched sections (see outline_sched)
     EdgeOverBudget(Vec<Vec<(usize, u64)>>, u64),
-    /// `trs classes`: the manifest was written and nothing compiled.
+    /// `trs specializations`: the manifest was written and nothing compiled.
     ///
     /// It is produced HERE, from the same partition the emission uses,
     /// rather than from the plan.  The plan knows every class; only
@@ -1180,8 +1180,8 @@ fn compile_class_module(
 /// (step-1 measured: +0.32% Ir, wall neutral-or-better on the
 /// specimen; the Toooba control +0.031%).  EdgeOverBudget is measured
 /// BEFORE any pass pipeline runs and propagates for the caller's
-/// replan unchanged.  Byte-determinism: classes in ascending class
-/// order, jobs chunked contiguously, output order [design, class asc].
+/// replan unchanged.  Byte-determinism: specializations in ascending
+/// class order, jobs chunked contiguously, output order [design, asc].
 /// Everything outside a class's own identity that changes the object it
 /// compiles to: the arena/ABI revision, and the codegen knobs.  A class
 /// signature says what the fragment IS; this says what this trs would
@@ -1216,8 +1216,8 @@ const REPORTING_ONLY: &[&str] = &[
     "TRS_JIT_THREADS",
     // paths, and the reuse directories themselves -- an object cannot
     // be keyed on where it was found
-    "TRS_CLASS_OBJ_IN",
-    "TRS_CLASS_OBJ_OUT",
+    "TRS_SPEC_OBJ_IN",
+    "TRS_SPEC_OBJ_OUT",
     "TRS_VLT_CACHE",
     "TRS_VLT_BUILD",
     "TRS_CC",
@@ -1232,7 +1232,7 @@ pub fn salted_knob(k: &str) -> bool {
     k.starts_with("TRS_") && !REPORTING_ONLY.contains(&k)
 }
 
-pub fn class_obj_salt() -> String {
+pub fn spec_obj_salt() -> String {
     let mut knobs: Vec<(String, String)> = std::env::vars()
         .filter(|(k, _)| salted_knob(k))
         .collect();
@@ -1246,27 +1246,27 @@ pub fn class_obj_salt() -> String {
 
 /// Where prebuilt class objects come from and where new ones go.
 ///
-/// `TRS_CLASS_OBJ_IN` is a `:`-separated list of directories to READ,
+/// `TRS_SPEC_OBJ_IN` is a `:`-separated list of directories to READ,
 /// each one another design's declared output; nothing is ever written
-/// to them.  `TRS_CLASS_OBJ_OUT` is the one directory this WRITES, and
+/// to them.  `TRS_SPEC_OBJ_OUT` is the one directory this WRITES, and
 /// it is never read.  That asymmetry is the point: an action declares
 /// the inputs it consumes and the output it produces, and a build
 /// system can see both.  A single directory read and written by every
 /// design would be neither -- shared mutable state, racy between
 /// concurrent compiles, and a stale entry under a right-looking name
 /// is a wrong object rather than a missed hit.
-struct ClassObjIo {
+struct SpecObjIo {
     ins: Vec<std::path::PathBuf>,
     out: Option<std::path::PathBuf>,
     salt: String,
 }
 
-impl ClassObjIo {
+impl SpecObjIo {
     /// The first input directory holding this class, if any.
     fn read(&self, module: &str, sig: u64) -> Option<Vec<u8>> {
         self.ins
             .iter()
-            .find_map(|d| std::fs::read(class_obj_name(d, module, sig, &self.salt)).ok())
+            .find_map(|d| std::fs::read(spec_obj_name(d, module, sig, &self.salt)).ok())
     }
 
     /// Publish a freshly compiled class.  Best effort and silent: the
@@ -1275,7 +1275,7 @@ impl ClassObjIo {
     /// concurrent reader of this directory never sees a partial file.
     fn write(&self, module: &str, sig: u64, bytes: &[u8]) {
         let Some(dir) = &self.out else { return };
-        let p = class_obj_name(dir, module, sig, &self.salt);
+        let p = spec_obj_name(dir, module, sig, &self.salt);
         let tmp = p.with_extension(format!("tmp{}", std::process::id()));
         if std::fs::write(&tmp, bytes).is_ok() {
             let _ = std::fs::rename(&tmp, &p);
@@ -1290,14 +1290,14 @@ impl ClassObjIo {
 /// 80-89% of an expensive compile is these objects, and a controller
 /// family shares 96% of them.
 ///
-/// Read and write are deliberately SEPARATE (see `ClassObjIo`).  A
+/// Read and write are deliberately SEPARATE (see `SpecObjIo`).  A
 /// single directory that an action both reads and writes is mutable
 /// state shared between builds: an undeclared input and an undeclared
 /// output at once, racy between concurrent designs, and a stale entry
 /// under a correct-looking name is a wrong object rather than a missed
 /// hit.  Inputs are directories the caller declares and this never
 /// writes; the output is one directory this only writes.
-fn class_obj_name(dir: &std::path::Path, module: &str, sig: u64, salt: &str) -> std::path::PathBuf {
+fn spec_obj_name(dir: &std::path::Path, module: &str, sig: u64, salt: &str) -> std::path::PathBuf {
     dir.join(format!("{module}_{sig:016x}_{salt}.o"))
 }
 
@@ -1313,7 +1313,7 @@ pub fn compile_design_objects_split(
     edge_insn_budget: u64,
     boundary_reqs: &[BoundaryReq],
     nworkers: usize,
-    // `trs classes`: write the manifest here (`-` = stdout), as
+    // `trs specializations`: write the manifest here (`-` = stdout), as
     // text when the flag is set, and compile nothing.  A parameter and
     // not an environment variable: it is a command-line property, and
     // the environment is where the CODEGEN knobs live -- every one of
@@ -1370,7 +1370,7 @@ pub fn compile_design_objects_split(
     });
     if std::env::var_os("TRS_JIT_TIME").is_some() {
         eprintln!(
-            "trs shard: boundary realization {:?} ({} classes, {} workers)",
+            "trs shard: boundary realization {:?} ({} specializations, {} workers)",
             t_low.elapsed(),
             realize_n,
             nworkers.max(1)
@@ -1460,7 +1460,7 @@ pub fn compile_design_objects_split(
             .push(specs[o].clone());
     }
     if let Some((mpath, as_text)) = classes {
-        let salt = class_obj_salt();
+        let salt = spec_obj_salt();
         let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
         let mut knobs: Vec<(String, String)> = std::env::vars()
             .filter(|(k, _)| salted_knob(k))
@@ -1481,7 +1481,7 @@ pub fn compile_design_objects_split(
                 esc(v)
             ));
         }
-        out.push_str("},\n  \"classes\": [\n");
+        out.push_str("},\n  \"specializations\": [\n");
         let mut rows: Vec<(String, u64, String, Vec<(String, String)>, usize, usize, usize)> =
             Vec::new();
         let n = per_class.len();
@@ -1552,7 +1552,7 @@ pub fn compile_design_objects_split(
         if as_text {
             let top = env.d.strings[env.d.modules[env.d.top as usize].name as usize].clone();
             let mut t = format!(
-                "{top}: {} classes  (layout rev {}, salt {salt})\n",
+                "{top}: {} specializations  (layout rev {}, salt {salt})\n",
                 rows.len(),
                 crate::abi::baked_layout_rev()
             );
@@ -1771,8 +1771,8 @@ pub fn compile_design_objects_split(
     // Read from declared inputs, write to a declared output; never the
     // same directory, and never a directory this both reads and writes.
     let io = {
-        let salt = class_obj_salt();
-        let ins: Vec<std::path::PathBuf> = std::env::var("TRS_CLASS_OBJ_IN")
+        let salt = spec_obj_salt();
+        let ins: Vec<std::path::PathBuf> = std::env::var("TRS_SPEC_OBJ_IN")
             .ok()
             .into_iter()
             .flat_map(|v| {
@@ -1782,13 +1782,13 @@ pub fn compile_design_objects_split(
                     .collect::<Vec<_>>()
             })
             .collect();
-        let out = std::env::var_os("TRS_CLASS_OBJ_OUT").map(std::path::PathBuf::from);
+        let out = std::env::var_os("TRS_SPEC_OBJ_OUT").map(std::path::PathBuf::from);
         if let Some(d) = &out {
             if let Err(e) = std::fs::create_dir_all(d) {
                 return Err(Ineligible(format!("{}: {e}", d.display())));
             }
         }
-        (!ins.is_empty() || out.is_some()).then_some(ClassObjIo { ins, out, salt })
+        (!ins.is_empty() || out.is_some()).then_some(SpecObjIo { ins, out, salt })
     };
     let io = &io;
     // The phase below runs the DESIGN module's pass pipeline on this
@@ -1873,7 +1873,7 @@ pub fn compile_design_objects_split(
     }
     if io.is_some() {
         eprintln!(
-            "trs shard: {hits} of {} classes reused from inputs ({:.0}%)",
+            "trs shard: {hits} of {} specializations reused from inputs ({:.0}%)",
             typed.len(),
             100.0 * hits as f64 / typed.len().max(1) as f64
         );

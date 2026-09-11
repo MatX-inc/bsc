@@ -1082,7 +1082,7 @@ enum EmitFail {
     /// remain, decides by size between the inline monolith and the
     /// sched-outline dispatcher
     EdgeOverBudget(std::collections::HashSet<usize>, u64),
-    /// `trs classes`: the manifest was written and nothing compiled.
+    /// `trs specializations`: the manifest was written and nothing compiled.
     /// Not a failure -- it is what the caller asked for.
     Manifest,
 }
@@ -1113,9 +1113,9 @@ fn aot_emit(
     // exceeding it returns EmitFail::EdgeOverBudget with measured
     // victims for the caller's replan (one_module + edge-SSA only)
     edge_insn_budget: u64,
-    // `trs classes`: manifest destination and rendering, carried from
+    // `trs specializations`: manifest destination and rendering, carried from
     // the command line rather than through the environment
-    classes_req: Option<(std::path::PathBuf, bool)>,
+    spec_req: Option<(std::path::PathBuf, bool)>,
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::compile_meta_object;
     trs_codegen::lower::llvm_init_once();
@@ -1277,11 +1277,11 @@ fn aot_emit(
             edge_insn_budget,
             &boundary_reqs,
             nworkers,
-            classes_req.as_ref().map(|(p, t)| (p.as_path(), *t)),
+            spec_req.as_ref().map(|(p, t)| (p.as_path(), *t)),
         )
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
         let objs: Vec<Vec<u8>> = match raw {
-            // `trs classes`: the manifest is written and there is
+            // `trs specializations`: the manifest is written and there is
             // nothing to link.  Reported as a clean stop, not as a
             // design the compiler refused.
             trs_codegen::lower::DesignObject::Manifest => {
@@ -6349,7 +6349,7 @@ impl Interp {
                     edge_plan.as_ref(),
                     &bdpi_names,
                     budget_now,
-                    self.classes_req.clone(),
+                    self.spec_req.clone(),
                 ) {
                     Err(EmitFail::EdgeOverBudget(victims, edge_insns)) => {
                         if std::env::var_os("TRS_JIT_TRACE").is_some() {
@@ -7598,11 +7598,11 @@ impl Interp {
 /// describe the classes, not name the files they would compile to --
 /// and says so with an empty salt rather than inventing one.
 #[cfg(feature = "jit")]
-fn class_obj_salt_or_none() -> String {
-    trs_codegen::lower::class_obj_salt()
+fn spec_obj_salt_or_none() -> String {
+    trs_codegen::lower::spec_obj_salt()
 }
 #[cfg(not(feature = "jit"))]
-fn class_obj_salt_or_none() -> String {
+fn spec_obj_salt_or_none() -> String {
     String::new()
 }
 #[cfg(feature = "jit")]

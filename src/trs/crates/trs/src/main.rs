@@ -18,8 +18,8 @@ fn usage() -> ExitCode {
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
     eprintln!("       trs compile <design.bir> [-o <model.so>] [--exe] [--dump-formats vcd,fst]");
-    eprintln!("                    [--class-obj-in <dir>[:<dir>...]] [--class-obj-out <dir>]");
-    eprintln!("       trs classes <design.bir> [-o <manifest.json>] [same codegen flags]");
+    eprintln!("                    [--spec-obj-in <dir>[:<dir>...]] [--spec-obj-out <dir>]");
+    eprintln!("       trs specializations <design.bir> [-o <manifest.json>] [same codegen flags]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [--only-compiled] [+NAME=value...]");
     eprintln!("       trs vlt build <module.bir> [--vpath <dir>]... [--vfile <file>]... [--verilator <bin>] [--cache <dir>]");
     eprintln!();
@@ -32,29 +32,30 @@ fn usage() -> ExitCode {
     eprintln!("separate because the compile costs a large design hours and");
     eprintln!("only pays for itself when the run is long enough to earn it.");
     eprintln!("`--only-compiled' refuses to run at all without that .so,");
+    eprintln!("for runs whose whole point is to measure the compiled engine.");
     eprintln!("");
-    eprintln!("A compile emits one object per CLASS -- a module type at one");
-    eprintln!("parameter valuation -- plus the design's own.  A class object");
-    eprintln!("does not depend on the design it was compiled in, so designs");
-    eprintln!("that share a fragment share its object:");
-    eprintln!("  trs classes          write the class manifest and stop; JSON by");
-    eprintln!("                       default, --format text for a person, and");
-    eprintln!("                       stdout unless -o names a file.");
-    eprintln!("                       Planning only -- seconds where a compile is");
-    eprintln!("                       hours.  Names each object and the .bir it");
-    eprintln!("                       comes from, so a build graph can declare");
-    eprintln!("                       its inputs before compiling anything.  Pass");
-    eprintln!("                       the SAME codegen flags as the compile: they");
-    eprintln!("                       salt the object names.");
-    eprintln!("  --class-obj-in <ds>  `:'-separated directories to READ, each");
-    eprintln!("                       another design's output.  Never written.");
-    eprintln!("  --class-obj-out <d>  the one directory WRITTEN, never read.");
+    eprintln!("A compile emits one object per SPECIALIZATION -- a module type");
+    eprintln!("at one parameter valuation -- plus the design's own.  A");
+    eprintln!("specialization's object does not depend on the design it was");
+    eprintln!("compiled in, so two designs sharing a fragment share its object");
+    eprintln!("and neither has to depend on the other:");
+    eprintln!("  trs specializations  write the manifest and stop.  Planning");
+    eprintln!("                       only -- seconds where a compile is hours.");
+    eprintln!("                       Names each object, the .bir it comes from");
+    eprintln!("                       and the parameters that select it, so a");
+    eprintln!("                       build graph can declare its inputs before");
+    eprintln!("                       compiling anything.  JSON by default,");
+    eprintln!("                       --format text for a person, stdout unless");
+    eprintln!("                       -o names a file.  Pass the SAME codegen");
+    eprintln!("                       flags as the compile: they salt the names.");
+    eprintln!("  --spec-obj-in <ds>   `:'-separated directories to READ, each");
+    eprintln!("                       another build's output.  Never written.");
+    eprintln!("  --spec-obj-out <d>   the one directory WRITTEN, never read.");
     eprintln!("Inputs and output are separate so an action has declared inputs");
     eprintln!("and a declared output; one directory serving as both would be");
     eprintln!("shared mutable state a build system cannot model.  The manifest");
     eprintln!("records the codegen flags it was made under: they salt the object");
     eprintln!("names, so a compile with different ones looks for different files.");
-    eprintln!("for runs whose whole point is to measure the compiled engine.");
     eprintln!();
     eprintln!("bsc writes one .bir per synthesized module and one per");
     eprintln!("`import \"BDPI\"'.  A link given the top follows its");
@@ -109,10 +110,10 @@ fn compile_knob_env(flag: &str) -> Option<&'static str> {
         // because a build system keys an action on its argv: the
         // directories a compile reads are its declared INPUTS and the
         // one it writes is its declared OUTPUT, and both belong where
-        // the action can see them.  --class-obj-in is `:`-separated
-        // and read-only; --class-obj-out is written and never read.
-        "--class-obj-in" => "TRS_CLASS_OBJ_IN",
-        "--class-obj-out" => "TRS_CLASS_OBJ_OUT",
+        // the action can see them.  --spec-obj-in is `:`-separated
+        // and read-only; --spec-obj-out is written and never read.
+        "--spec-obj-in" => "TRS_SPEC_OBJ_IN",
+        "--spec-obj-out" => "TRS_SPEC_OBJ_OUT",
         _ => return None,
     })
 }
@@ -255,7 +256,7 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     Some(synth)
 }
 
-/// `trs compile`, and `trs classes` which is the same action stopped
+/// `trs compile`, and `trs specializations` which is the same action stopped
 /// after planning.  One parser for both: the codegen knobs salt the
 /// object names, so a manifest produced under different ones names
 /// files the compile will never look for, and a second parser would
@@ -283,14 +284,14 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 // the .so plus a main shim, so it is a second
                 // output of one codegen, not a step after it
                 "--exe" => want_exe = true,
-                // Write the class manifest and stop: what classes
+                // Write the manifest and stop: which specializations
                 // this design needs, and the object file each
                 // would be reused from.  Planning only, no LLVM --
                 // seconds where a compile is hours, which is what
                 // lets a build graph name its inputs before paying
                 // for any of them.
                 //
-                // appended by `trs classes`; not a user-facing flag,
+                // appended by `trs specializations`; not a user-facing flag,
                 // which is why it takes no value and is absent from the
                 // usage text
                 "--manifest-mode" => manifest = true,
@@ -302,11 +303,11 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 "--format" => match it.next() {
                     Some(v @ ("json" | "text")) => as_text = v == "text",
                     Some(v) => {
-                        eprintln!("trs classes: --format takes json or text, not `{v}'");
+                        eprintln!("trs specializations: --format takes json or text, not `{v}'");
                         return ExitCode::from(2);
                     }
                     None => {
-                        eprintln!("trs classes: --format needs json or text");
+                        eprintln!("trs specializations: --format needs json or text");
                         return ExitCode::from(2);
                     }
                 },
@@ -358,8 +359,8 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         // means stdout -- in EITHER format.  A build rule always
         // passes -o, because it has to declare the file it produces;
         // everyone else is at a terminal or on the left of a pipe,
-        // and `trs classes d.bir | jq` should need no flags.
-        let classes_path = manifest.then(|| out.clone().unwrap_or_else(|| "-".to_string()));
+        // and `trs specializations d.bir | jq` needs no flags.
+        let spec_path = manifest.then(|| out.clone().unwrap_or_else(|| "-".to_string()));
         let so = out.unwrap_or_else(|| format!("{base}.so"));
         // Replay the link's own settings from <base>.opts.  Baked
         // bindings and the allowed wave formats both fold into the
@@ -425,8 +426,8 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         } else {
             interp.aot_request_emit(so.clone().into());
         }
-        if let Some(cp) = &classes_path {
-            interp.aot_request_classes(cp.into(), as_text);
+        if let Some(cp) = &spec_path {
+            interp.aot_request_specializations(cp.into(), as_text);
         }
         interp.prime();
         // Producing the .so IS the job here, so anything short of
@@ -557,8 +558,8 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
             }
             Some(trs_interp::AotEmit::Manifest) => {
                 eprintln!(
-                    "trs classes: wrote {}",
-                    match classes_path.as_deref() {
+                    "trs specializations: wrote {}",
+                    match spec_path.as_deref() {
                         Some("-") | None => "(stdout)",
                         Some(p) => p,
                     }
@@ -678,7 +679,7 @@ fn main() -> ExitCode {
         // costs hours on a large design and only pays for itself when
         // the run is long enough -- which is a judgement for whoever
         // is running it, not for the link.
-        // `trs classes` is `trs compile` in manifest mode, deliberately
+        // `trs specializations` is `trs compile` in manifest mode, deliberately
         // sharing this arm.  It is a different ACTION -- seconds not
         // hours, a manifest not an object -- and deserves its own name
         // in a build rule.  But the manifest must be produced under
@@ -687,7 +688,7 @@ fn main() -> ExitCode {
         // this one silently: the salt would change, the compile would
         // look for files the manifest never named, and the only
         // symptom is a 0% reuse rate.  One parser, two entry points.
-        ["classes", rest @ ..] if !rest.is_empty() => {
+        ["specializations", rest @ ..] if !rest.is_empty() => {
             let mut v: Vec<&str> = Vec::with_capacity(rest.len() + 1);
             v.extend_from_slice(rest);
             v.push("--manifest-mode");
@@ -1083,7 +1084,7 @@ fn main() -> ExitCode {
                 interp.aot_request_emit(format!("{base}.aot.so").into());
                 interp.prime();
                 match interp.aot_take_emit_result() {
-                    // Manifest cannot arise here: only `trs classes`
+                    // Manifest cannot arise here: only `trs specializations`
                     // sets the mode, and it does not take this path
                     Some(trs_interp::AotEmit::Compiled)
                     | Some(trs_interp::AotEmit::Manifest)
