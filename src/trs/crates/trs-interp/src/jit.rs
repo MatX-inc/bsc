@@ -1208,6 +1208,7 @@ fn aot_emit(
                 return Vec::new();
             };
             let mir = env.insts[&exemplar].mir;
+            let class_sig = env.insts[&exemplar].class_sig;
             let mut reqs = Vec::new();
             for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
                 if m.always_enabled {
@@ -1237,7 +1238,8 @@ fn aot_emit(
                         method: m.name,
                         kind,
                         class_id,
-                        sym: format!("trs_bnd{class_id}_{mi}_{kind}"),
+                        class_sig,
+                        sym: format!("trs_bnd{class_sig:016x}_{mi}_{kind}"),
                         args: args.clone(),
                     });
                 }
@@ -4890,6 +4892,7 @@ impl Interp {
                     mir,
                     // assigned once the subtree signatures exist
                     class_id: 0,
+                    class_sig: 0,
                     children,
                     reg_slot,
                     wire_slot,
@@ -5322,6 +5325,7 @@ impl Interp {
                 });
                 if let Some(e) = inst_envs.get_mut(&i) {
                     e.class_id = id;
+                    e.class_sig = sg;
                 }
             }
         }

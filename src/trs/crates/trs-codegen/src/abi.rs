@@ -112,6 +112,11 @@ pub struct InstEnv {
     /// body bakes those parameters -- so anything emitted once and
     /// shared between instances must be keyed by this, not by `mir`.
     pub class_id: usize,
+    /// The signature behind `class_id`.  The id is a dense index over
+    /// THIS design's instances and so means nothing outside it; the
+    /// signature describes the class itself.  Anything EMITTED that
+    /// must mean the same in another design is named for this.
+    pub class_sig: u64,
     /// local child instance name -> global instance index
     pub children: HashMap<StrId, usize>,
     /// local register instance name -> (arena base slot, width); plain
@@ -611,6 +616,9 @@ pub struct BoundaryReq {
     /// do not share, so every instance called a body carrying one
     /// instance's parameter values.  One per class instead.
     pub class_id: usize,
+    /// the class's signature, which the SYMBOL is named for -- see
+    /// InstEnv::class_sig for why not the id
+    pub class_sig: u64,
     /// exemplar instance of the CLASS (region source for base-relative
     /// addressing, and the parameter values the body bakes)
     pub exemplar: usize,
