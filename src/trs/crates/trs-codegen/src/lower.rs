@@ -1173,6 +1173,94 @@ fn compile_class_module(
 /// BEFORE any pass pipeline runs and propagates for the caller's
 /// replan unchanged.  Byte-determinism: classes in ascending class
 /// order, jobs chunked contiguously, output order [design, class asc].
+/// Everything outside a class's own identity that changes the object it
+/// compiles to: the arena/ABI revision, and the codegen knobs.  A class
+/// signature says what the fragment IS; this says what this trs would
+/// make of it.  Both are in the cache key, so a rev bump or a changed
+/// knob misses rather than serving an object built under the old one.
+fn class_obj_salt() -> String {
+    let mut knobs: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| {
+            (k.starts_with("TRS_JIT") || k.starts_with("TRS_EDGE") || k.starts_with("TRS_CHUNK"))
+                // these change what is REPORTED, not what is emitted
+                && !matches!(
+                    k.as_str(),
+                    "TRS_JIT_TIME"
+                        | "TRS_JIT_TIME_PASSES"
+                        | "TRS_JIT_DUMP"
+                        | "TRS_JIT_TRACE"
+                        | "TRS_JIT_THREADS"
+                        | "TRS_JIT_SHARE_STATS"
+                        | "TRS_JIT_SPLIT_WHY"
+                        | "TRS_EDGE_SSA_STATS"
+                )
+        })
+        .collect();
+    knobs.sort();
+    let mut src = format!("rev={}\n", crate::abi::baked_layout_rev());
+    for (k, v) in knobs {
+        src.push_str(&format!("{k}={v}\n"));
+    }
+    trs_ir::sha256::digest_hex(src.as_bytes())[..16].to_string()
+}
+
+/// Where prebuilt class objects come from and where new ones go.
+///
+/// `TRS_CLASS_OBJ_IN` is a `:`-separated list of directories to READ,
+/// each one another design's declared output; nothing is ever written
+/// to them.  `TRS_CLASS_OBJ_OUT` is the one directory this WRITES, and
+/// it is never read.  That asymmetry is the point: an action declares
+/// the inputs it consumes and the output it produces, and a build
+/// system can see both.  A single directory read and written by every
+/// design would be neither -- shared mutable state, racy between
+/// concurrent compiles, and a stale entry under a right-looking name
+/// is a wrong object rather than a missed hit.
+struct ClassObjIo {
+    ins: Vec<std::path::PathBuf>,
+    out: Option<std::path::PathBuf>,
+    salt: String,
+}
+
+impl ClassObjIo {
+    /// The first input directory holding this class, if any.
+    fn read(&self, module: &str, sig: u64) -> Option<Vec<u8>> {
+        self.ins
+            .iter()
+            .find_map(|d| std::fs::read(class_obj_name(d, module, sig, &self.salt)).ok())
+    }
+
+    /// Publish a freshly compiled class.  Best effort and silent: the
+    /// object is already in hand, so a failure here costs the next
+    /// build a hit, not this one its correctness.  tmp + rename so a
+    /// concurrent reader of this directory never sees a partial file.
+    fn write(&self, module: &str, sig: u64, bytes: &[u8]) {
+        let Some(dir) = &self.out else { return };
+        let p = class_obj_name(dir, module, sig, &self.salt);
+        let tmp = p.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// The file a class object is named by.  Two designs that instantiate a
+/// type identically name the same file, which is the whole point --
+/// 80-89% of an expensive compile is these objects, and a controller
+/// family shares 96% of them.
+///
+/// Read and write are deliberately SEPARATE (see `ClassObjIo`).  A
+/// single directory that an action both reads and writes is mutable
+/// state shared between builds: an undeclared input and an undeclared
+/// output at once, racy between concurrent designs, and a stale entry
+/// under a correct-looking name is a wrong object rather than a missed
+/// hit.  Inputs are directories the caller declares and this never
+/// writes; the output is one directory this only writes.
+fn class_obj_name(dir: &std::path::Path, module: &str, sig: u64, salt: &str) -> std::path::PathBuf {
+    dir.join(format!("{module}_{sig:016x}_{salt}.o"))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn compile_design_objects_split(
     env: &PlanEnv,
@@ -1499,6 +1587,29 @@ pub fn compile_design_objects_split(
         exec_prim_origin: 0,
         autofire: None,
     };
+    // Read from declared inputs, write to a declared output; never the
+    // same directory, and never a directory this both reads and writes.
+    let io = {
+        let salt = class_obj_salt();
+        let ins: Vec<std::path::PathBuf> = std::env::var("TRS_CLASS_OBJ_IN")
+            .ok()
+            .into_iter()
+            .flat_map(|v| {
+                v.split(':')
+                    .filter(|p| !p.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let out = std::env::var_os("TRS_CLASS_OBJ_OUT").map(std::path::PathBuf::from);
+        if let Some(d) = &out {
+            if let Err(e) = std::fs::create_dir_all(d) {
+                return Err(Ineligible(format!("{}: {e}", d.display())));
+            }
+        }
+        (!ins.is_empty() || out.is_some()).then_some(ClassObjIo { ins, out, salt })
+    };
+    let io = &io;
     let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
     let t0 = std::time::Instant::now();
     let (design_obj, class_objs) = std::thread::scope(|sc| {
@@ -1515,12 +1626,29 @@ pub fn compile_design_objects_split(
                 };
                 let mut out = Vec::new();
                 for (cid, (hs, rqs, reps, mir, sig)) in group {
-                    out.push((
-                        *cid,
-                        compile_class_module(
-                            &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir, *sig,
-                        ),
-                    ));
+                    // A class object does not depend on the design it
+                    // was compiled in -- that is what the rest of this
+                    // file was for -- so one built for another design
+                    // is this design's object too.
+                    let name = wenv
+                        .d
+                        .strings
+                        .get(wenv.d.modules[*mir].name as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("mir{mir}"));
+                    if let Some(io) = io {
+                        if let Some(bytes) = io.read(&name, *sig) {
+                            out.push((*cid, Ok(bytes), true));
+                            continue;
+                        }
+                    }
+                    let r = compile_class_module(
+                        &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir, *sig,
+                    );
+                    if let (Some(io), Ok(bytes)) = (io, &r) {
+                        io.write(&name, *sig, bytes);
+                    }
+                    out.push((*cid, r, false));
                 }
                 out
             }));
@@ -1533,7 +1661,7 @@ pub fn compile_design_objects_split(
                 .map_err(|e| Ineligible(format!("shard design object emit: {e}")))?;
             Ok(buf.as_slice().to_vec())
         })();
-        let mut typed: Vec<(usize, Result<Vec<u8>, Ineligible>)> = Vec::new();
+        let mut typed: Vec<(usize, Result<Vec<u8>, Ineligible>, bool)> = Vec::new();
         for h in handles {
             typed.extend(h.join().expect("shard compile thread"));
         }
@@ -1541,8 +1669,19 @@ pub fn compile_design_objects_split(
     });
     let mut objs = vec![design_obj?];
     let mut typed: Vec<(usize, Vec<u8>)> = Vec::new();
-    for (cid, r) in class_objs {
+    let mut hits = 0usize;
+    for (cid, r, hit) in class_objs {
+        if hit {
+            hits += 1;
+        }
         typed.push((cid, r?));
+    }
+    if io.is_some() {
+        eprintln!(
+            "trs shard: {hits} of {} classes reused from inputs ({:.0}%)",
+            typed.len(),
+            100.0 * hits as f64 / typed.len().max(1) as f64
+        );
     }
     typed.sort_by_key(|(cid, _)| *cid);
     objs.extend(typed.into_iter().map(|(_, o)| o));
