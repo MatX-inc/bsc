@@ -1610,6 +1610,16 @@ pub fn compile_design_objects_split(
         (!ins.is_empty() || out.is_some()).then_some(ClassObjIo { ins, out, salt })
     };
     let io = &io;
+    // The phase below runs the DESIGN module's pass pipeline on this
+    // thread while the workers compile classes, so its wall time is a
+    // MAX of the two, not a sum -- reading it as "the class half" was
+    // wrong, and a design whose classes all come from inputs can show
+    // an unchanged phase because the design module still has to run.
+    // Time them apart.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let cls_ns = AtomicU64::new(0);
+    let des_ns = AtomicU64::new(0);
+    let (cls_ns, des_ns) = (&cls_ns, &des_ns);
     let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
     let t0 = std::time::Instant::now();
     let (design_obj, class_objs) = std::thread::scope(|sc| {
@@ -1642,9 +1652,11 @@ pub fn compile_design_objects_split(
                             continue;
                         }
                     }
+                    let tc = std::time::Instant::now();
                     let r = compile_class_module(
                         &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir, *sig,
                     );
+                    cls_ns.fetch_add(tc.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     if let (Some(io), Ok(bytes)) = (io, &r) {
                         io.write(&name, *sig, bytes);
                     }
@@ -1653,6 +1665,7 @@ pub fn compile_design_objects_split(
                 out
             }));
         }
+        let td = std::time::Instant::now();
         let design: Result<Vec<u8>, Ineligible> = (|| {
             run_ir_passes(&module, Some(&tally))?;
             let tm = aot_target_machine()?;
@@ -1661,6 +1674,7 @@ pub fn compile_design_objects_split(
                 .map_err(|e| Ineligible(format!("shard design object emit: {e}")))?;
             Ok(buf.as_slice().to_vec())
         })();
+        des_ns.store(td.elapsed().as_nanos() as u64, Ordering::Relaxed);
         let mut typed: Vec<(usize, Result<Vec<u8>, Ineligible>, bool)> = Vec::new();
         for h in handles {
             typed.extend(h.join().expect("shard compile thread"));
@@ -1687,9 +1701,12 @@ pub fn compile_design_objects_split(
     objs.extend(typed.into_iter().map(|(_, o)| o));
     if timing {
         eprintln!(
-            "trs shard: parallel pipelines + emit {:?} ({} objects)",
+            "trs shard: parallel pipelines + emit {:?} ({} objects; \
+             design module {:.1}s, class work {:.1}s summed over workers)",
             t0.elapsed(),
-            objs.len()
+            objs.len(),
+            des_ns.load(Ordering::Relaxed) as f64 / 1e9,
+            cls_ns.load(Ordering::Relaxed) as f64 / 1e9
         );
     }
     Ok(DesignObject::Objects(objs))
