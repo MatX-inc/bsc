@@ -4438,59 +4438,28 @@ impl Interp {
         // ENs, rule cf/wf/eager, and everything in its submodule
         // subtree) lands in one contiguous region, at offsets that are
         // uniform across instances of the same module type.
-        // rung 38 (schedule-affinity arena layout): per-module-TYPE
-        // first-touch ranks from a slot-free walk of the compositions.
-        // Each allocation group below orders its blocks by (rank, name)
-        // instead of name alone, packing co-touched state onto shared
-        // D1 lines (census: 12,862 -> 8,642 distinct lines per Toooba
-        // edge; the DFS region structure and group boundaries carry
-        // ~none of the win and stay unchanged).  Deterministic (a pure
-        // function of design + comps) and type-uniform (keys are
-        // (module type, name)), so baked artifact slot numbers and
-        // twin-instance dedup stay sound.
+        // Schedule-affinity arena layout (rung 38): each allocation
+        // group below orders its blocks by (rank, name) instead of
+        // name alone, packing co-touched state onto shared D1 lines.
+        // Ranks come from each module's OWN rules and cones.
         //
-        // TRS_LAYOUT_AFFINITY=0 turns the ordering off, and the reason
-        // is the sentence above: a pure function of DESIGN + comps.
-        // Slot offsets inside a fragment then depend on the order the
-        // enclosing design first touches its rules, so the same
-        // fragment at the same parameters lays out differently in two
-        // designs and their compiled objects cannot be shared.
-        // Measured across the TA controller family: inputs agree on
-        // 96-98% of classes and layouts on 16-60%, so this ordering is
-        // what the sharing is lost to.  Off, every group falls back to
-        // name order, which is type-local and identical everywhere.
-        let (touch_rank, live_en) = {
-            let (tr, le) = self.layout_touch_ranks(rcomps);
-            if std::env::var("TRS_LAYOUT_AFFINITY").as_deref() == Ok("0") {
-                // Every group falls back to name order, which is
-                // type-local: the same fragment lays out identically
-                // in every design, and their objects are shareable.
-                //
-                // Measured on the TA controller family -- class
-                // overlap 28.6% with the ordering on, 93.8% off, so
-                // 398 class builds become 279 or 116.  And measured
-                // against what the ordering is FOR, on
-                // TAControllerBurnTest: 19,136 distinct 64B lines per
-                // edge with it, 19,128 without.  Eight lines in
-                // nineteen thousand.
-                //
-                // Rung 38's own census (12,862 -> 8,642) is Toooba, a
-                // different design, so this is not a claim that the
-                // ordering never pays -- only that on the designs
-                // that cost two hours it does not, and it is what
-                // their sharing is lost to.
-                //
-                // A type-local affinity is still open and unbuilt: the
-                // ranks would have to come from a per-module cone
-                // walk, since ranking only CF/WF by the module's rule
-                // order reproduces canonical order exactly and changes
-                // no layout at all (measured -- byte-identical
-                // censuses).
-                (HashMap::new(), le)
-            } else {
-                (tr, le)
-            }
-        };
+        // Rung 38 took them from the DESIGN's composition walk, which
+        // packs co-touched state onto shared cache lines and makes a
+        // fragment's slot offsets depend on who instantiated it -- so
+        // the same fragment at the same parameters laid out two ways
+        // in two designs and their objects could not be shared.  Class
+        // overlap across the TA controller family was 28.6%; it is
+        // 94.6% now.  The packing did not pay for that: on
+        // TAControllerBurnTest, distinct 64B lines over an edge's
+        // total touches are 19,119 fragment-local against 19,136
+        // design-ordered -- fragment-local is, if anything, slightly
+        // tighter.
+        //
+        // The design-wide walk stays, for liveness only: rung 40 prunes
+        // EN slots to the ones some reader loads, and that IS a
+        // property of the whole design.  Only its ranks are dropped.
+        let (_design_ranks, live_en) = self.layout_touch_ranks(rcomps);
+        let touch_rank = self.layout_ranks_fragment_local();
         // rung 40 (keep-fires tier split): fast plans allocate EN slots
         // only for enables some runtime reader actually loads — the
         // walk above covers every tier's readers (rule CF/WF cones and
@@ -5339,7 +5308,7 @@ impl Interp {
                 //             different ones looks for different
                 //             files; a generator must emit the same
                 //             flags it saw here.
-                let salt = trs_codegen::lower::class_obj_salt();
+                let salt = class_obj_salt_or_none();
                 let mut by_class: std::collections::BTreeMap<(String, u64), (usize, u64, u64)> =
                     std::collections::BTreeMap::new();
                 for (i, e) in inst_envs.iter() {
@@ -5361,7 +5330,7 @@ impl Interp {
                 }
                 let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
                 let mut knobs: Vec<(String, String)> = std::env::vars()
-                    .filter(|(k, _)| k.starts_with("TRS_") && trs_codegen::lower::salted_knob(k))
+                    .filter(|(k, _)| k.starts_with("TRS_") && salted_knob_or_all(k))
                     .collect();
                 knobs.sort();
                 let mut out = String::from("{\n");
@@ -7662,6 +7631,27 @@ impl Interp {
 /// local patterns, which is exactly the type-uniformity the allocator
 /// needs — so the walk is O(module types), not O(instances), and adds
 /// nothing measurable to artifact boot.
+/// The object-name salt, where codegen exists to define it.  Without
+/// the llvm feature nothing emits objects, so a manifest can only
+/// describe the classes, not name the files they would compile to --
+/// and says so with an empty salt rather than inventing one.
+#[cfg(feature = "jit")]
+fn class_obj_salt_or_none() -> String {
+    trs_codegen::lower::class_obj_salt()
+}
+#[cfg(not(feature = "jit"))]
+fn class_obj_salt_or_none() -> String {
+    String::new()
+}
+#[cfg(feature = "jit")]
+fn salted_knob_or_all(k: &str) -> bool {
+    trs_codegen::lower::salted_knob(k)
+}
+#[cfg(not(feature = "jit"))]
+fn salted_knob_or_all(_k: &str) -> bool {
+    true
+}
+
 struct LcRank<'a> {
     it: &'a Interp,
     /// per-mir names that are rule fire signals or eager defs: the
@@ -7885,6 +7875,75 @@ impl<'a> LcRank<'a> {
 impl Interp {
     /// Rung-38: derive the per-module-TYPE first-touch rank map the
     /// arena allocator orders its groups by.  See LcRank.
+    /// Affinity ranks computed from each module's OWN rules and cones,
+    /// so a fragment lays out identically in every design.
+    ///
+    /// Rung 38 ranks by first touch in the DESIGN's composition walk.
+    /// That packs co-touched state onto shared cache lines, and it
+    /// makes a fragment's slot offsets depend on the order whoever
+    /// instantiated it happens to touch its rules -- so the same
+    /// fragment at the same parameters lays out two ways in two
+    /// designs, and their compiled objects cannot be shared.  Measured
+    /// on the TA controller family: inputs agree on 96-98% of classes,
+    /// layouts on 16-60%.
+    ///
+    /// This walks each module type alone, in its own rule order, with
+    /// one of its instances used only to resolve names.  Marks landing
+    /// on OTHER module types are dropped: every type is walked exactly
+    /// once and keeps only its own, so nothing depends on the order
+    /// the types are visited -- which is what makes the result
+    /// design-independent rather than merely deterministic.
+    ///
+    /// Counters restart per type.  Ranks are only ever compared within
+    /// one module's allocation groups, so a global sequence would say
+    /// nothing extra and would reintroduce cross-type ordering.
+    fn layout_ranks_fragment_local(&self) -> HashMap<(usize, StrId), u32> {
+        let mut exemplar: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        for i in 0..self.insts.len() {
+            if matches!(self.insts[i].kind, InstKind::User { .. }) {
+                exemplar.entry(self.mods[self.module_of(i)].ir).or_insert(i);
+            }
+        }
+        let mut out: HashMap<(usize, StrId), u32> = HashMap::new();
+        for (&mir, &inst) in &exemplar {
+            // a rule's fire signals are slot-served: the walk marks
+            // them and stops, the same contract the design-wide walk
+            // has, so cones do not re-expand a neighbour's rule
+            let mut stop = HashMap::new();
+            let fires: std::collections::HashSet<StrId> = self.d.modules[mir]
+                .rules
+                .iter()
+                .flat_map(|r| [r.can_fire, r.will_fire])
+                .collect();
+            stop.insert(mir, fires);
+            let mut w = LcRank {
+                it: self,
+                stop,
+                rank: HashMap::new(),
+                n: 0,
+                seen_defs: std::collections::HashSet::new(),
+                seen_meths: std::collections::HashSet::new(),
+                seen_rules: std::collections::HashSet::new(),
+                live_en: std::collections::HashSet::new(),
+            };
+            for r in &self.d.modules[mir].rules {
+                w.mark(mir, r.can_fire);
+                w.mark(mir, r.will_fire);
+                w.def(inst, r.can_fire);
+                for st in r.body.iter() {
+                    w.stmt(inst, st);
+                }
+            }
+            for (k, v) in w.rank {
+                if k.0 == mir {
+                    out.insert(k, v);
+                }
+            }
+        }
+        out
+    }
+
     fn layout_touch_ranks(
         &self,
         rcomps: &[RComp],

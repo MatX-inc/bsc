@@ -669,6 +669,14 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 31: affinity ranks come from each module's OWN rules and cones
+//     (layout_ranks_fragment_local) instead of the design's
+//     composition walk, so slot offsets inside a fragment no longer
+//     depend on who instantiated it.  Slot numbering shifts for every
+//     design.  Measured on TAControllerBurnTest: 19,119 distinct 64B
+//     lines per edge against 19,136 design-ordered and 19,128
+//     unordered -- the packing is a wash and the sharing is not, with
+//     class overlap across the TA family going 28.6% -> 94.6%.
 // 30: every instance's region opens with a reset table -- one word
 //     per reset port, holding the design-global slot that drives it.
 //     Slot numbering therefore shifts, and shared-by-type code reads
@@ -691,7 +699,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 30;
+pub const AOT_LAYOUT_REV: u64 = 31;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
