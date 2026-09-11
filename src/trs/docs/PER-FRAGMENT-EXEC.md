@@ -208,11 +208,20 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    compiled once and reused -- and a violation is reported by name.  Clean
    over 700 designs.  What remains derived is the guarantee itself: the
    check catches a break, it does not prevent one.
-6. **Two design-wide pre-passes.**  `compile_design_objects_split`
+6. **A design-wide pre-pass.**  `compile_design_objects_split`
    (`lower.rs:1168`) realizes the boundary map on a throwaway module first,
-   and eligibility is all-or-nothing -- `trial_lower` (`lower.rs:98`) returns
-   one Result for the whole spec list, so one ineligible rule turns AOT off
-   design-wide.
+   to fix "the eligibility/width decisions every module lowers against".
+   Per-fragment compilation needs each fragment to reach those same
+   decisions without seeing the design, which is the structural half of
+   this and is not started.
+   The other half -- all-or-nothing eligibility, where `trial_lower`
+   (`lower.rs:98`) returns one Result for the whole spec list, so one
+   ineligible rule turns AOT off design-wide -- was listed here as an equal
+   concern and is **measured at zero**: 502 of 502 corpus designs that
+   linked produced an object.  Small designs have fewer chances to contain
+   an exotic rule, so this is a floor rather than a verdict; but nothing
+   observed justifies making eligibility per-fragment ahead of the boundary
+   map.
 7. **The valuation is not known when the graph is built.**  A build system
    needs its outputs declared before any action runs, and a fragment's
    parameter valuation comes from its parent's elaboration, not from its own
