@@ -1082,6 +1082,9 @@ enum EmitFail {
     /// remain, decides by size between the inline monolith and the
     /// sched-outline dispatcher
     EdgeOverBudget(std::collections::HashSet<usize>, u64),
+    /// `trs classes`: the manifest was written and nothing compiled.
+    /// Not a failure -- it is what the caller asked for.
+    Manifest,
 }
 
 #[cfg(feature = "jit")]
@@ -1274,6 +1277,12 @@ fn aot_emit(
         )
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
         let objs: Vec<Vec<u8>> = match raw {
+            // `trs classes`: the manifest is written and there is
+            // nothing to link.  Reported as a clean stop, not as a
+            // design the compiler refused.
+            trs_codegen::lower::DesignObject::Manifest => {
+                return Err(EmitFail::Manifest);
+            }
             trs_codegen::lower::DesignObject::Object(o) => vec![o],
             trs_codegen::lower::DesignObject::Objects(v) => v,
             trs_codegen::lower::DesignObject::EdgeOverBudget(sizes, edge_insns) => {
@@ -5290,82 +5299,6 @@ impl Interp {
             // could share.  A measurement mode: planning is seconds
             // where lowering is hours, so it DECLINES below rather
             // than going on to emit.
-            if let Ok(path) = std::env::var("TRS_SIG_DUMP") {
-                // The class manifest, as JSON, for a script that turns
-                // it into .bzl or Makefile rules.  It has to carry
-                // everything such a script needs and nothing it would
-                // have to guess:
-                //
-                //   object    the file a compile writes under
-                //             --class-obj-out and looks for under
-                //             --class-obj-in.  Join these across
-                //             designs and the sharing is the answer.
-                //   fragment  the .bir this class's module came from,
-                //             so the rule can declare it as an input.
-                //   knobs     the codegen flags this manifest was
-                //             produced under.  They are in the object
-                //             name's salt, so a compile run with
-                //             different ones looks for different
-                //             files; a generator must emit the same
-                //             flags it saw here.
-                let salt = class_obj_salt_or_none();
-                let mut by_class: std::collections::BTreeMap<(String, u64), (usize, u64, u64)> =
-                    std::collections::BTreeMap::new();
-                for (i, e) in inst_envs.iter() {
-                    let nm = sig_strings
-                        .get(self.d.modules[e.mir].name as usize)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    // the COMBINED signature: what class_sig carries
-                    // and what the object is named for.  input and
-                    // layout are reported beside it because when two
-                    // designs fail to share a class, which half
-                    // differs is the whole diagnosis.
-                    let e2 = by_class
-                        .entry((nm.to_string(), sigs.get(i).copied().unwrap_or(0)))
-                        .or_insert((0, 0, 0));
-                    e2.0 += 1;
-                    e2.1 = input_sigs.get(i).copied().unwrap_or(0);
-                    e2.2 = layout_sigs.get(i).copied().unwrap_or(0);
-                }
-                let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
-                let mut knobs: Vec<(String, String)> = std::env::vars()
-                    .filter(|(k, _)| k.starts_with("TRS_") && salted_knob_or_all(k))
-                    .collect();
-                knobs.sort();
-                let mut out = String::from("{\n");
-                out.push_str(&format!(
-                    "  \"top\": \"{}\",\n  \"layout_rev\": {},\n  \"salt\": \"{salt}\",\n",
-                    esc(self.d.name(self.d.modules[self.d.top as usize].name)),
-                    trs_codegen::abi::baked_layout_rev()
-                ));
-                out.push_str("  \"knobs\": {");
-                for (n, (k, v)) in knobs.iter().enumerate() {
-                    out.push_str(&format!(
-                        "{}\"{}\": \"{}\"",
-                        if n > 0 { ", " } else { "" },
-                        esc(k),
-                        esc(v)
-                    ));
-                }
-                out.push_str("},\n  \"classes\": [\n");
-                for (n, ((nm, sig), (insts, isig, lsig))) in by_class.iter().enumerate() {
-                    out.push_str(&format!(
-                        "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
-                         \"object\": \"{}_{sig:016x}_{salt}.o\", \
-                         \"fragment\": \"{}.bir\", \"instances\": {insts}, \
-                         \"input_sig\": \"{isig:016x}\", \"layout_sig\": \"{lsig:016x}\"}}{}\n",
-                        esc(nm),
-                        esc(nm),
-                        esc(nm),
-                        if n + 1 < by_class.len() { "," } else { "" }
-                    ));
-                }
-                out.push_str("  ]\n}\n");
-                if let Err(e) = std::fs::write(&path, out) {
-                    eprintln!("trs: {path}: {e}");
-                }
-            }
             sigs
         } else {
             HashMap::new()
@@ -5396,10 +5329,7 @@ impl Interp {
                 }
             }
         }
-        if std::env::var_os("TRS_SIG_DUMP").is_some() {
-            eprintln!("trs: signature dump written; declining to compile");
-            return None;
-        }
+
 
         // any Exec node of a RULE must belong to a scheduled rule
         // above; interface-method Exec nodes are no-ops (skipped by
@@ -6565,6 +6495,7 @@ impl Interp {
                 Ok(()) => crate::AotEmit::Compiled,
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
                 Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
+                Err(EmitFail::Manifest) => crate::AotEmit::Manifest,
                 // the unbounded second pass cannot report over-budget
                 Err(EmitFail::EdgeOverBudget(..)) => unreachable!(),
             });

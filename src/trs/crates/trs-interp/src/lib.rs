@@ -5518,6 +5518,9 @@ pub enum AotEmit {
     Ineligible(String),
     /// infrastructure failure (LLVM, cc, IO): link must fail
     Failed(String),
+    /// `trs classes`: the manifest was written and nothing compiled.
+    /// A success with a different output, not a refusal.
+    Manifest,
 }
 
 /// FNV-1a over the .bir bytes: the fingerprint baked into AOT

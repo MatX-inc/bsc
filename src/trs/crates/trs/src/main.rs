@@ -18,6 +18,8 @@ fn usage() -> ExitCode {
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
     eprintln!("       trs compile <design.bir> [-o <model.so>] [--exe] [--dump-formats vcd,fst]");
+    eprintln!("                    [--class-obj-in <dir>[:<dir>...]] [--class-obj-out <dir>]");
+    eprintln!("       trs classes <design.bir> [-o <manifest.json>] [same codegen flags]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [--only-compiled] [+NAME=value...]");
     eprintln!("       trs vlt build <module.bir> [--vpath <dir>]... [--vfile <file>]... [--verilator <bin>] [--cache <dir>]");
     eprintln!();
@@ -30,6 +32,26 @@ fn usage() -> ExitCode {
     eprintln!("separate because the compile costs a large design hours and");
     eprintln!("only pays for itself when the run is long enough to earn it.");
     eprintln!("`--only-compiled' refuses to run at all without that .so,");
+    eprintln!("");
+    eprintln!("A compile emits one object per CLASS -- a module type at one");
+    eprintln!("parameter valuation -- plus the design's own.  A class object");
+    eprintln!("does not depend on the design it was compiled in, so designs");
+    eprintln!("that share a fragment share its object:");
+    eprintln!("  trs classes          write the class manifest (JSON) and stop.");
+    eprintln!("                       Planning only -- seconds where a compile is");
+    eprintln!("                       hours.  Names each object and the .bir it");
+    eprintln!("                       comes from, so a build graph can declare");
+    eprintln!("                       its inputs before compiling anything.  Pass");
+    eprintln!("                       the SAME codegen flags as the compile: they");
+    eprintln!("                       salt the object names.");
+    eprintln!("  --class-obj-in <ds>  `:'-separated directories to READ, each");
+    eprintln!("                       another design's output.  Never written.");
+    eprintln!("  --class-obj-out <d>  the one directory WRITTEN, never read.");
+    eprintln!("Inputs and output are separate so an action has declared inputs");
+    eprintln!("and a declared output; one directory serving as both would be");
+    eprintln!("shared mutable state a build system cannot model.  The manifest");
+    eprintln!("records the codegen flags it was made under: they salt the object");
+    eprintln!("names, so a compile with different ones looks for different files.");
     eprintln!("for runs whose whole point is to measure the compiled engine.");
     eprintln!();
     eprintln!("bsc writes one .bir per synthesized module and one per");
@@ -89,12 +111,6 @@ fn compile_knob_env(flag: &str) -> Option<&'static str> {
         // and read-only; --class-obj-out is written and never read.
         "--class-obj-in" => "TRS_CLASS_OBJ_IN",
         "--class-obj-out" => "TRS_CLASS_OBJ_OUT",
-        // Write the class manifest and stop: what classes this design
-        // needs, and the object file name each would be reused from.
-        // Planning only, no LLVM -- seconds where a compile is hours,
-        // which is what lets a build graph name its inputs before
-        // paying for any of them.
-        "--classes" => "TRS_SIG_DUMP",
         _ => return None,
     })
 }
@@ -237,6 +253,312 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     Some(synth)
 }
 
+/// `trs compile`, and `trs classes` which is the same action stopped
+/// after planning.  One parser for both: the codegen knobs salt the
+/// object names, so a manifest produced under different ones names
+/// files the compile will never look for, and a second parser would
+/// drift from this one without saying so.
+fn compile_cmd(rest: &[&str]) -> ExitCode {
+        let mut path: Option<&str> = None;
+        let mut out: Option<String> = None;
+        // the link's own default, so a compile that is told nothing
+        // stamps what a link that was told nothing would have
+        let mut fmt_arg: Option<String> = None;
+        let mut want_exe = false;
+        let mut manifest = false;
+        let mut it = rest.iter().copied();
+        while let Some(a) = it.next() {
+            match a {
+                "-o" | "--output" => match it.next() {
+                    Some(v) => out = Some(v.to_string()),
+                    None => {
+                        eprintln!("trs compile: -o needs a file");
+                        return ExitCode::from(2);
+                    }
+                },
+                // the standalone executable: the SAME objects as
+                // the .so plus a main shim, so it is a second
+                // output of one codegen, not a step after it
+                "--exe" => want_exe = true,
+                // Write the class manifest and stop: what classes
+                // this design needs, and the object file each
+                // would be reused from.  Planning only, no LLVM --
+                // seconds where a compile is hours, which is what
+                // lets a build graph name its inputs before paying
+                // for any of them.
+                //
+                // appended by `trs classes`; not a user-facing flag,
+                // which is why it takes no value and is absent from the
+                // usage text
+                "--manifest-mode" => manifest = true,
+                // the allowed wave formats fold into the design's
+                // identity, so a compile must be told whatever the
+                // link was told
+                "--dump-formats" => match it.next() {
+                    Some(v) => fmt_arg = Some(v.to_string()),
+                    None => {
+                        eprintln!("trs compile: --dump-formats needs a value");
+                        return ExitCode::from(2);
+                    }
+                },
+                // the codegen knobs describe THIS step's work, so
+                // this is where they have to be reachable as flags
+                _ if compile_knob_env(a).is_some() || link_knob_env(a).is_some() => {
+                    let key = compile_knob_env(a).or_else(|| link_knob_env(a)).unwrap();
+                    match it.next() {
+                        Some(v) => std::env::set_var(key, v),
+                        None => {
+                            eprintln!("trs compile: {a} requires a value");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+                _ if compile_knob_switch(a).is_some() => {
+                    std::env::set_var(compile_knob_switch(a).unwrap(), "1")
+                }
+                _ if a.starts_with('-') => {
+                    eprintln!("trs compile: unknown option `{a}'");
+                    return ExitCode::from(2);
+                }
+                _ if path.is_none() => path = Some(a),
+                _ => {
+                    eprintln!("trs compile: one .bir at a time");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        let Some(path) = path else {
+            eprintln!("trs compile: no .bir named");
+            return ExitCode::from(2);
+        };
+        // The .so is named for the .bir beside it, because that is
+        // where the artifact looks: <base>.bir -> <base>.so.
+        let base = path.strip_suffix(".bir").unwrap_or(path).to_string();
+        if manifest {
+            // planning writes it; -o names the manifest here rather
+            // than an object, because an object is not what this
+            // action produces
+            std::env::set_var(
+                "TRS_SIG_DUMP",
+                out.clone().unwrap_or_else(|| format!("{base}.classes.json")),
+            );
+        }
+        let so = out.unwrap_or_else(|| format!("{base}.so"));
+        // Replay the link's own settings from <base>.opts.  Baked
+        // bindings and the allowed wave formats both fold into the
+        // design's identity hash, so a .so compiled without them
+        // carries a stamp the artifact will reject at run time --
+        // it would fall back to interpreting and look, wrongly,
+        // like a design the compiler could not take.
+        let mut binds: Vec<trs_interp::TopBind> = Vec::new();
+        let mut recorded: Option<String> = None;
+        if let Ok(txt) = std::fs::read_to_string(format!("{base}.opts")) {
+            for line in txt.lines() {
+                if let Some(v) = line.strip_prefix("bind=") {
+                    match trs_interp::parse_bind(v, true) {
+                        Ok(b) => binds.push(b),
+                        Err(e) => {
+                            eprintln!("trs compile: {base}.opts: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                } else if let Some(v) = line.strip_prefix("formats=") {
+                    recorded = Some(v.to_string());
+                }
+            }
+        }
+        // an explicit --dump-formats wins over the recorded one,
+        // and the link's own default stands in for neither
+        let fmt = fmt_arg.or(recorded).unwrap_or_else(|| "vcd".to_string());
+        let formats = (
+            fmt.split(',').any(|t| t == "vcd"),
+            fmt.split(',').any(|t| t == "fst"),
+        );
+        // This loads the design, and loading a BVI design builds its
+        // BviPrims, which look the model cache up.  A compile is a
+        // CONSUMER of models -- the link verilated them -- so it
+        // resolves the cache beside the design, as a run does,
+        // rather than allowing verilation here.
+        ensure_vlt_env(path, false);
+        let mut interp = match trs_interp::startup::load_file(path, &[], &binds, None) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("trs compile: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        interp.set_allowed_wave_formats(formats.0, formats.1);
+        if want_exe {
+            // <base> becomes a real PIE (design objects + a main
+            // shim + the slim runtime), replacing whatever the
+            // link left at that name
+            if !binds.is_empty() || interp.has_autofire() {
+                eprintln!(
+                    "trs compile: --exe does not support designs \
+                     with top-level bindings or always_enabled top \
+                     methods (batch artifacts only)"
+                );
+                return ExitCode::FAILURE;
+            }
+            let libdir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| ".".into());
+            interp.aot_request_emit_exe(so.clone().into(), base.clone().into(), libdir);
+        } else {
+            interp.aot_request_emit(so.clone().into());
+        }
+        interp.prime();
+        // Producing the .so IS the job here, so anything short of
+        // it is a failure -- unlike a link, which has a perfectly
+        // good interpreted artifact to fall back on.
+        match interp.aot_take_emit_result() {
+            Some(trs_interp::AotEmit::Compiled) => {
+                // RunCore arena sidecar (validation form): the plan's
+                // deterministic post-attach arena image, cross-checked by
+                // loads under TRS_RUNCORE_CHECK=1; None (interp-only or
+                // traced link) removes any stale sidecar
+                let arena_written = match interp.take_runcore_image() {
+                    Some(img) => {
+                        let t = format!("{base}.arena.tmp");
+                        let ok = std::fs::write(&t, img)
+                            .and_then(|()| std::fs::rename(&t, format!("{base}.arena")))
+                            .is_ok();
+                        if !ok {
+                            eprintln!("trs compile: note: {base}.arena not written");
+                        }
+                        ok
+                    }
+                    None => {
+                        let _ = std::fs::remove_file(format!("{base}.arena"));
+                        false
+                    }
+                };
+                // post-emit window bake (docs/RUNCORE.md): run the reset
+                // window on the just-written artifact — quiet, on the
+                // compiled engine, exactly as a run would — and bake the
+                // post-window state into the sidecar when the window is
+                // effect-free.  Every non-clean outcome is silent: the
+                // design simply boots classic.
+                if arena_written {
+                    // no binds: a binding design's load refuses without
+                    // them, so its bake is a silent no-op and it boots
+                    // classic (run_file gates RunCore off under binds).
+                    // Mem-file designs capture the window TWICE under
+                    // different fill patterns (the two-fill gate): the
+                    // bake is committed only if everything outside the
+                    // load regions agrees — proof the boot's overlay
+                    // replaces the only file-dependent state.
+                    let sidecar = format!("{base}.arena");
+                    let bake = (|| -> Result<bool, String> {
+                        let mut b1 = trs_interp::startup::load_file(path, &[], &[], None)?;
+                        b1.aot_request_code(format!("{base}.so").into());
+                        if !b1.runcore_has_loads() {
+                            let Some(cap) = b1.runcore_bake_capture(None) else {
+                                return Ok(false);
+                            };
+                            return trs_interp::runcore_bake_commit(
+                                std::path::Path::new(&sidecar),
+                                &cap,
+                                None,
+                            );
+                        }
+                        let Some(a) = b1.runcore_bake_capture(Some(0x5555_5555_5555_5555))
+                        else {
+                            return Ok(false);
+                        };
+                        let mut b2 = trs_interp::startup::load_file(path, &[], &[], None)?;
+                        b2.aot_request_code(format!("{base}.so").into());
+                        let Some(b) = b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
+                        else {
+                            return Ok(false);
+                        };
+                        trs_interp::runcore_bake_commit(
+                            std::path::Path::new(&sidecar),
+                            &a,
+                            Some(&b),
+                        )
+                    })();
+                    if let Err(e) = bake {
+                        eprintln!("trs compile: note: window bake skipped: {e}");
+                    }
+                }
+                // A link points the artifact at the full binary,
+                // because it cannot know a .so will ever exist and
+                // the slim runner cannot JIT in-process.  One does
+                // now, so the startup cost of LLVM's constructors
+                // buys nothing -- re-point at the slim runner.
+                // Only a symlink: an --exe PIE is the artifact.
+                if !want_exe {
+                    if let Ok(m) = std::fs::symlink_metadata(&base) {
+                        if m.file_type().is_symlink() {
+                            if let Some(slim) = std::env::current_exe()
+                                .ok()
+                                .map(|p| p.with_file_name("trs-run"))
+                                .filter(|p| p.is_file())
+                            {
+                                let t = format!("{base}.lnk.tmp");
+                                let _ = std::fs::remove_file(&t);
+                                if std::os::unix::fs::symlink(&slim, &t)
+                                    .and_then(|()| std::fs::rename(&t, &base))
+                                    .is_err()
+                                {
+                                    let _ = std::fs::remove_file(&t);
+                                }
+                            }
+                        }
+                    }
+                }
+                // the capi's aot engine looks for the compiled
+                // design beside the model it loads
+                if std::path::Path::new(&format!("{base}.capi.so")).exists() {
+                    let aot = format!("{base}.capi.aot.so");
+                    let _ = std::fs::remove_file(&aot);
+                    if std::os::unix::fs::symlink(
+                        std::path::Path::new(&so)
+                            .file_name()
+                            .unwrap_or(std::ffi::OsStr::new(&so)),
+                        &aot,
+                    )
+                    .is_err()
+                    {
+                        let _ = std::fs::copy(&so, &aot);
+                    }
+                }
+                // silent on success, like any other compiler: the
+                // .so is the output, and stderr here is captured
+                // beside codegen dumps that must not pick up a
+                // stray line
+                ExitCode::SUCCESS
+            }
+            Some(trs_interp::AotEmit::Failed(e)) => {
+                eprintln!("trs compile: {e}");
+                ExitCode::FAILURE
+            }
+            Some(trs_interp::AotEmit::Manifest) => {
+                eprintln!(
+                    "trs classes: wrote {}",
+                    std::env::var("TRS_SIG_DUMP").unwrap_or_default()
+                );
+                ExitCode::SUCCESS
+            }
+            Some(trs_interp::AotEmit::Ineligible(e)) => {
+                eprintln!(
+                    "trs compile: compiled mode is unavailable for \
+                     this design ({e})"
+                );
+                ExitCode::from(86)
+            }
+            None => {
+                eprintln!(
+                    "trs compile: compiled mode is unavailable for \
+                     this design (TRS_JIT_TRACE=1 shows why)"
+                );
+                ExitCode::from(86)
+            }
+        }
+    }
+
 fn main() -> ExitCode {
     // reference parity for `./model | head`: Rust starts with SIGPIPE
     // ignored, so a $display into a closed pipe returned EPIPE and the
@@ -333,277 +655,23 @@ fn main() -> ExitCode {
         // costs hours on a large design and only pays for itself when
         // the run is long enough -- which is a judgement for whoever
         // is running it, not for the link.
+        // `trs classes` is `trs compile` in manifest mode, deliberately
+        // sharing this arm.  It is a different ACTION -- seconds not
+        // hours, a manifest not an object -- and deserves its own name
+        // in a build rule.  But the manifest must be produced under
+        // exactly the codegen knobs the compile will use, because they
+        // salt the object names, and a second parser would drift from
+        // this one silently: the salt would change, the compile would
+        // look for files the manifest never named, and the only
+        // symptom is a 0% reuse rate.  One parser, two entry points.
+        ["classes", rest @ ..] if !rest.is_empty() => {
+            let mut v: Vec<&str> = Vec::with_capacity(rest.len() + 1);
+            v.extend_from_slice(rest);
+            v.push("--manifest-mode");
+            return compile_cmd(&v);
+        }
         ["compile", rest @ ..] if !rest.is_empty() => {
-            let mut path: Option<&str> = None;
-            let mut out: Option<String> = None;
-            // the link's own default, so a compile that is told nothing
-            // stamps what a link that was told nothing would have
-            let mut fmt_arg: Option<String> = None;
-            let mut want_exe = false;
-            let mut it = rest.iter().copied();
-            while let Some(a) = it.next() {
-                match a {
-                    "-o" | "--output" => match it.next() {
-                        Some(v) => out = Some(v.to_string()),
-                        None => {
-                            eprintln!("trs compile: -o needs a file");
-                            return ExitCode::from(2);
-                        }
-                    },
-                    // the standalone executable: the SAME objects as
-                    // the .so plus a main shim, so it is a second
-                    // output of one codegen, not a step after it
-                    "--exe" => want_exe = true,
-                    // the allowed wave formats fold into the design's
-                    // identity, so a compile must be told whatever the
-                    // link was told
-                    "--dump-formats" => match it.next() {
-                        Some(v) => fmt_arg = Some(v.to_string()),
-                        None => {
-                            eprintln!("trs compile: --dump-formats needs a value");
-                            return ExitCode::from(2);
-                        }
-                    },
-                    // the codegen knobs describe THIS step's work, so
-                    // this is where they have to be reachable as flags
-                    _ if compile_knob_env(a).is_some() || link_knob_env(a).is_some() => {
-                        let key = compile_knob_env(a).or_else(|| link_knob_env(a)).unwrap();
-                        match it.next() {
-                            Some(v) => std::env::set_var(key, v),
-                            None => {
-                                eprintln!("trs compile: {a} requires a value");
-                                return ExitCode::from(2);
-                            }
-                        }
-                    }
-                    _ if compile_knob_switch(a).is_some() => {
-                        std::env::set_var(compile_knob_switch(a).unwrap(), "1")
-                    }
-                    _ if a.starts_with('-') => {
-                        eprintln!("trs compile: unknown option `{a}'");
-                        return ExitCode::from(2);
-                    }
-                    _ if path.is_none() => path = Some(a),
-                    _ => {
-                        eprintln!("trs compile: one .bir at a time");
-                        return ExitCode::from(2);
-                    }
-                }
-            }
-            let Some(path) = path else {
-                eprintln!("trs compile: no .bir named");
-                return ExitCode::from(2);
-            };
-            // The .so is named for the .bir beside it, because that is
-            // where the artifact looks: <base>.bir -> <base>.so.
-            let base = path.strip_suffix(".bir").unwrap_or(path).to_string();
-            let so = out.unwrap_or_else(|| format!("{base}.so"));
-            // Replay the link's own settings from <base>.opts.  Baked
-            // bindings and the allowed wave formats both fold into the
-            // design's identity hash, so a .so compiled without them
-            // carries a stamp the artifact will reject at run time --
-            // it would fall back to interpreting and look, wrongly,
-            // like a design the compiler could not take.
-            let mut binds: Vec<trs_interp::TopBind> = Vec::new();
-            let mut recorded: Option<String> = None;
-            if let Ok(txt) = std::fs::read_to_string(format!("{base}.opts")) {
-                for line in txt.lines() {
-                    if let Some(v) = line.strip_prefix("bind=") {
-                        match trs_interp::parse_bind(v, true) {
-                            Ok(b) => binds.push(b),
-                            Err(e) => {
-                                eprintln!("trs compile: {base}.opts: {e}");
-                                return ExitCode::from(2);
-                            }
-                        }
-                    } else if let Some(v) = line.strip_prefix("formats=") {
-                        recorded = Some(v.to_string());
-                    }
-                }
-            }
-            // an explicit --dump-formats wins over the recorded one,
-            // and the link's own default stands in for neither
-            let fmt = fmt_arg.or(recorded).unwrap_or_else(|| "vcd".to_string());
-            let formats = (
-                fmt.split(',').any(|t| t == "vcd"),
-                fmt.split(',').any(|t| t == "fst"),
-            );
-            // This loads the design, and loading a BVI design builds its
-            // BviPrims, which look the model cache up.  A compile is a
-            // CONSUMER of models -- the link verilated them -- so it
-            // resolves the cache beside the design, as a run does,
-            // rather than allowing verilation here.
-            ensure_vlt_env(path, false);
-            let mut interp = match trs_interp::startup::load_file(path, &[], &binds, None) {
-                Ok(i) => i,
-                Err(e) => {
-                    eprintln!("trs compile: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            interp.set_allowed_wave_formats(formats.0, formats.1);
-            if want_exe {
-                // <base> becomes a real PIE (design objects + a main
-                // shim + the slim runtime), replacing whatever the
-                // link left at that name
-                if !binds.is_empty() || interp.has_autofire() {
-                    eprintln!(
-                        "trs compile: --exe does not support designs \
-                         with top-level bindings or always_enabled top \
-                         methods (batch artifacts only)"
-                    );
-                    return ExitCode::FAILURE;
-                }
-                let libdir = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                    .unwrap_or_else(|| ".".into());
-                interp.aot_request_emit_exe(so.clone().into(), base.clone().into(), libdir);
-            } else {
-                interp.aot_request_emit(so.clone().into());
-            }
-            interp.prime();
-            // Producing the .so IS the job here, so anything short of
-            // it is a failure -- unlike a link, which has a perfectly
-            // good interpreted artifact to fall back on.
-            match interp.aot_take_emit_result() {
-                Some(trs_interp::AotEmit::Compiled) => {
-                    // RunCore arena sidecar (validation form): the plan's
-                    // deterministic post-attach arena image, cross-checked by
-                    // loads under TRS_RUNCORE_CHECK=1; None (interp-only or
-                    // traced link) removes any stale sidecar
-                    let arena_written = match interp.take_runcore_image() {
-                        Some(img) => {
-                            let t = format!("{base}.arena.tmp");
-                            let ok = std::fs::write(&t, img)
-                                .and_then(|()| std::fs::rename(&t, format!("{base}.arena")))
-                                .is_ok();
-                            if !ok {
-                                eprintln!("trs compile: note: {base}.arena not written");
-                            }
-                            ok
-                        }
-                        None => {
-                            let _ = std::fs::remove_file(format!("{base}.arena"));
-                            false
-                        }
-                    };
-                    // post-emit window bake (docs/RUNCORE.md): run the reset
-                    // window on the just-written artifact — quiet, on the
-                    // compiled engine, exactly as a run would — and bake the
-                    // post-window state into the sidecar when the window is
-                    // effect-free.  Every non-clean outcome is silent: the
-                    // design simply boots classic.
-                    if arena_written {
-                        // no binds: a binding design's load refuses without
-                        // them, so its bake is a silent no-op and it boots
-                        // classic (run_file gates RunCore off under binds).
-                        // Mem-file designs capture the window TWICE under
-                        // different fill patterns (the two-fill gate): the
-                        // bake is committed only if everything outside the
-                        // load regions agrees — proof the boot's overlay
-                        // replaces the only file-dependent state.
-                        let sidecar = format!("{base}.arena");
-                        let bake = (|| -> Result<bool, String> {
-                            let mut b1 = trs_interp::startup::load_file(path, &[], &[], None)?;
-                            b1.aot_request_code(format!("{base}.so").into());
-                            if !b1.runcore_has_loads() {
-                                let Some(cap) = b1.runcore_bake_capture(None) else {
-                                    return Ok(false);
-                                };
-                                return trs_interp::runcore_bake_commit(
-                                    std::path::Path::new(&sidecar),
-                                    &cap,
-                                    None,
-                                );
-                            }
-                            let Some(a) = b1.runcore_bake_capture(Some(0x5555_5555_5555_5555))
-                            else {
-                                return Ok(false);
-                            };
-                            let mut b2 = trs_interp::startup::load_file(path, &[], &[], None)?;
-                            b2.aot_request_code(format!("{base}.so").into());
-                            let Some(b) = b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
-                            else {
-                                return Ok(false);
-                            };
-                            trs_interp::runcore_bake_commit(
-                                std::path::Path::new(&sidecar),
-                                &a,
-                                Some(&b),
-                            )
-                        })();
-                        if let Err(e) = bake {
-                            eprintln!("trs compile: note: window bake skipped: {e}");
-                        }
-                    }
-                    // A link points the artifact at the full binary,
-                    // because it cannot know a .so will ever exist and
-                    // the slim runner cannot JIT in-process.  One does
-                    // now, so the startup cost of LLVM's constructors
-                    // buys nothing -- re-point at the slim runner.
-                    // Only a symlink: an --exe PIE is the artifact.
-                    if !want_exe {
-                        if let Ok(m) = std::fs::symlink_metadata(&base) {
-                            if m.file_type().is_symlink() {
-                                if let Some(slim) = std::env::current_exe()
-                                    .ok()
-                                    .map(|p| p.with_file_name("trs-run"))
-                                    .filter(|p| p.is_file())
-                                {
-                                    let t = format!("{base}.lnk.tmp");
-                                    let _ = std::fs::remove_file(&t);
-                                    if std::os::unix::fs::symlink(&slim, &t)
-                                        .and_then(|()| std::fs::rename(&t, &base))
-                                        .is_err()
-                                    {
-                                        let _ = std::fs::remove_file(&t);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // the capi's aot engine looks for the compiled
-                    // design beside the model it loads
-                    if std::path::Path::new(&format!("{base}.capi.so")).exists() {
-                        let aot = format!("{base}.capi.aot.so");
-                        let _ = std::fs::remove_file(&aot);
-                        if std::os::unix::fs::symlink(
-                            std::path::Path::new(&so)
-                                .file_name()
-                                .unwrap_or(std::ffi::OsStr::new(&so)),
-                            &aot,
-                        )
-                        .is_err()
-                        {
-                            let _ = std::fs::copy(&so, &aot);
-                        }
-                    }
-                    // silent on success, like any other compiler: the
-                    // .so is the output, and stderr here is captured
-                    // beside codegen dumps that must not pick up a
-                    // stray line
-                    ExitCode::SUCCESS
-                }
-                Some(trs_interp::AotEmit::Failed(e)) => {
-                    eprintln!("trs compile: {e}");
-                    ExitCode::FAILURE
-                }
-                Some(trs_interp::AotEmit::Ineligible(e)) => {
-                    eprintln!(
-                        "trs compile: compiled mode is unavailable for \
-                         this design ({e})"
-                    );
-                    ExitCode::from(86)
-                }
-                None => {
-                    eprintln!(
-                        "trs compile: compiled mode is unavailable for \
-                         this design (TRS_JIT_TRACE=1 shows why)"
-                    );
-                    ExitCode::from(86)
-                }
-            }
+            return compile_cmd(rest);
         }
         // trs link: assemble the design and write the persistent
         // artifact: <out> (wrapper script with the same CLI as
@@ -992,7 +1060,11 @@ fn main() -> ExitCode {
                 interp.aot_request_emit(format!("{base}.aot.so").into());
                 interp.prime();
                 match interp.aot_take_emit_result() {
-                    Some(trs_interp::AotEmit::Compiled) | None => {}
+                    // Manifest cannot arise here: only `trs classes`
+                    // sets the mode, and it does not take this path
+                    Some(trs_interp::AotEmit::Compiled)
+                    | Some(trs_interp::AotEmit::Manifest)
+                    | None => {}
                     Some(trs_interp::AotEmit::Failed(e)) => {
                         eprintln!("trs link --interactive: {e}");
                         return ExitCode::FAILURE;

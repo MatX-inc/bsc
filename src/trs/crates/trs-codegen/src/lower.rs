@@ -1041,6 +1041,15 @@ pub enum DesignObject {
     /// the edge measurement to decide between accepting the inline
     /// monolith and outlining the sched sections (see outline_sched)
     EdgeOverBudget(Vec<Vec<(usize, u64)>>, u64),
+    /// `trs classes`: the manifest was written and nothing compiled.
+    ///
+    /// It is produced HERE, from the same partition the emission uses,
+    /// rather than from the plan.  The plan knows every class; only
+    /// this knows which of them become objects -- a top's rules
+    /// covered by the fused edge plan produce none, and a manifest
+    /// built earlier listed a file that was never written, which for a
+    /// build graph is a declared input that does not exist.
+    Manifest,
 }
 
 /// One per-type module of the sharded emission: the type's outlined
@@ -1444,6 +1453,57 @@ pub fn compile_design_objects_split(
             .expect("just inserted")
             .2
             .push(specs[o].clone());
+    }
+    if let Some(mpath) = std::env::var_os("TRS_SIG_DUMP") {
+        let salt = class_obj_salt();
+        let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
+        let mut knobs: Vec<(String, String)> = std::env::vars()
+            .filter(|(k, _)| salted_knob(k))
+            .collect();
+        knobs.sort();
+        let mut out = String::from("{\n");
+        out.push_str(&format!(
+            "  \"top\": \"{}\",\n  \"layout_rev\": {},\n  \"salt\": \"{salt}\",\n",
+            esc(&env.d.strings[env.d.modules[env.d.top as usize].name as usize]),
+            crate::abi::baked_layout_rev()
+        ));
+        out.push_str("  \"knobs\": {");
+        for (n, (k, v)) in knobs.iter().enumerate() {
+            out.push_str(&format!(
+                "{}\"{}\": \"{}\"",
+                if n > 0 { ", " } else { "" },
+                esc(k),
+                esc(v)
+            ));
+        }
+        out.push_str("},\n  \"classes\": [\n");
+        let n = per_class.len();
+        for (i, (_cid, (hs, rqs, reps, mir, sig))) in per_class.iter().enumerate() {
+            let nm = env
+                .d
+                .strings
+                .get(env.d.modules[*mir].name as usize)
+                .cloned()
+                .unwrap_or_else(|| format!("mir{mir}"));
+            out.push_str(&format!(
+                "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
+                 \"object\": \"{}_{sig:016x}_{salt}.o\", \
+                 \"fragment\": \"{}.bir\", \"exec_fns\": {}, \
+                 \"boundary_fns\": {}, \"helper_fns\": {}}}{}\n",
+                esc(&nm),
+                esc(&nm),
+                esc(&nm),
+                reps.len(),
+                rqs.len(),
+                hs.len(),
+                if i + 1 < n { "," } else { "" }
+            ));
+        }
+        out.push_str("  ]\n}\n");
+        if let Err(e) = std::fs::write(&std::path::PathBuf::from(&mpath), out) {
+            return Err(Ineligible(format!("{}: {e}", mpath.to_string_lossy())));
+        }
+        return Ok(DesignObject::Manifest);
     }
     // phase 2a: the design module — sched fns + fused edge fns, with
     // the full map installed (their method-call sites divert), NO
