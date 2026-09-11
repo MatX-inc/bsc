@@ -1,8 +1,10 @@
 # Per-fragment execution: scaling, and linking external Verilog
 
 Status: the leaf seam is done -- external Verilog runs as a prim.  The
-fragment seam has its substitution point but neither an execution contract
-nor a compilation unit.  Sections 4 and 5 are what is left.
+fragment seam has its substitution point, and its per-type object no longer
+depends on the design it was compiled in.  What it still lacks is an
+execution contract (section 4) and a key to cache that object by (section
+5).
 
 *Fragment* here means a synthesis boundary: a synthesized module plus every
 instance beneath it that is not itself a synthesis boundary.  In BIR that is
@@ -54,6 +56,7 @@ So none of this is new architecture.  It is closing the gap between DESIGN.md
 | Split the LLVM compile out of the link | **done**; codegen knobs are argv, so a build system can key on them |
 | BVI contract + `VPathInfo` carried into BIR | **done**, as `InstanceKind::Bvi` / `BviContract::paths` |
 | A prim backed by a Verilated model | **done**; `INTERP_PANIC` 33 -> 1, PASS +8, no regressions over 2291 designs |
+| A per-type object that does not depend on its design | **done**; byte-identical across two enclosing designs (section 5) |
 
 Outlining shares cones that inlining duplicated at every call site, which is
 why the total instruction count went DOWN.  Correctness is settled: the
@@ -107,7 +110,7 @@ model above bridges them for a LEAF.  For a fragment the open parts are:
   constrains PORTS, not rules, and the composition orders rules.  Two
   fragments with paths crossing both ways settle in Verilog and deadlock a
   static total order; bsc has never analysed a loop *through* two fragments.
-- **ActionValue methods with caller-latched args** (`lower.rs:4021-4026`)
+- **ActionValue methods with caller-latched args** (`lower.rs:4158-4163`)
   already record an interp/compiled asymmetry.  A call boundary must define
   this rather than inherit it.
 
@@ -158,41 +161,51 @@ Most of the mechanism is already there.  Emission is per module type; the
 compile is a separate argv-keyed action; cross-boundary inlining is gone.
 And the enabling invariant holds: exec fns take `(arena, env, region base
 index, ordinal)` and address in-region state as `base + (slot - region.0)`
-(`lower.rs:5504`, `lower.rs:2407`), so per-type code is already
+(`lower.rs:5641`, `lower.rs:2473`), so per-type code is already
 position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
-(`jit.rs:4882`) is the key in all but name; what it is not is persisted.
+(`jit.rs:4947`) is the key in all but name; what it is not is persisted.
 
 ### Hurdles
 
-1. **Reset slots are the one absolute address.**  Every map in `inst_sig` is
-   hashed region-relative (`b - r0`) except `reset_slot`.  A fragment
-   compiled standalone would bake the wrong node.  Small, and the concrete
-   blocker to position-independence.
-2. **The key does not exist.**  `Module::content_hash` is 32 zero bytes from
+1. ~~**Reset slots are the one absolute address.**~~  **Done**, and not by
+   the arithmetic the name suggests.  A reset node is DESIGN-GLOBAL: it is
+   allocated ahead of every region, so there is no region-relative form of
+   its address to convert to, and what a fragment's code depends on is which
+   of the design's nodes its port happens to be wired to.  Each instance's
+   region now opens with a reset table -- one word per reset port, holding
+   the slot that drives it -- and shared-by-type code loads from there.  One
+   extra GEP per exec invocation, emitted into the entry block; at a measured
+   1.02 reset ports per fragment that is the whole cost.
+2. ~~**The exec symbol names a position in the design.**~~  **Done.**  An
+   exec fn was `exec_i{inst}_{ordinal}`, so the same code came out under a
+   different symbol in every design.  It is now named for its class: module
+   type, rule, and subtree signature.  Fixing that exposed the signature
+   itself describing the design rather than the type, twice -- see section 6.
+3. **The key does not exist.**  `Module::content_hash` is 32 zero bytes from
    the exporter (`SimExportIR.hs:550`, `P0 TODO`), ignored by the link
    (`link.rs:544`).  `inst_sig` is the right CONTENT but is computed
    post-link and never persisted.  An export-time equivalent must cover
    children's signatures recursively, the parameter valuation, the codegen
    knobs and the LLVM version.
-3. **Parameter specialization multiplies the unit** -- measured at 3.04x,
+4. **Parameter specialization multiplies the unit** -- measured at 3.04x,
    and the distribution is what decides the design.  See below.
-4. **Layout comes from a whole-design walk** -- "subtree extents (known only
-   after the whole subtree walked)" (`jit.rs:4851`).  The composability this
+5. **Layout comes from a whole-design walk** -- "subtree extents (known only
+   after the whole subtree walked)" (`jit.rs:4916`).  The composability this
    depends on holds today, but is DERIVED rather than contracted.  It needs
    to become a stated and checked property.
-5. **Two design-wide pre-passes.**  `compile_design_objects_split`
-   (`lower.rs:1124`) realizes the boundary map on a throwaway module first,
+6. **Two design-wide pre-passes.**  `compile_design_objects_split`
+   (`lower.rs:1168`) realizes the boundary map on a throwaway module first,
    and eligibility is all-or-nothing -- `trial_lower` (`lower.rs:98`) returns
    one Result for the whole spec list, so one ineligible rule turns AOT off
    design-wide.
-6. **The valuation is not known when the graph is built.**  A build system
+7. **The valuation is not known when the graph is built.**  A build system
    needs its outputs declared before any action runs, and a fragment's
    parameter valuation comes from its parent's elaboration, not from its own
    `.ba`.  Discovering valuations inside an action forces the whole design
    into that action's inputs, which destroys the 6.6x -- the discovering
    action is a design-wide action wearing a per-fragment name.  So the
    valuations have to be settled before the graph is, which is what makes
-   hurdle 3's distribution the load-bearing measurement.
+   hurdle 4's distribution the load-bearing measurement.
 
 ### Specialize by default; go generic for the tail
 
@@ -227,7 +240,7 @@ compiling everything generically, covers 83% of types, and leaves a
 statically enumerable graph.  Only the 55 remaining types need a
 parameter-generic lowering, which is real work: those constants are folded
 today (`port_consts` is "the compiled mirror of the interpreter's Port/Param
-fallthrough", `jit.rs:4762`), so unbaking them turns folds into loads and
+fallthrough", `jit.rs:4825`), so unbaking them turns folds into loads and
 gives up the downstream branch elimination a width or a mode selector buys.
 Confining that work to the tail is the point.
 
@@ -237,14 +250,27 @@ gates, resets and unbound-port constants into `port_consts`, so the true
 multiplicity is a bound from below.  Re-measure against `inst_sig` itself
 before committing to a threshold.
 
-### First implementation step
+### The first measurement, taken
 
-Make reset addressing region-relative (hurdle 1), then compile one type into
-two different enclosing designs and check the objects are byte-identical.
-That tests hurdles 1 and 4 together, needs no key and no caching, and either
-confirms reset slots as the last absolute address or names the next one.
+Compile one type into two different enclosing designs and diff the objects.
+It needs no key and no caching, and it either confirms the addressing is
+design-independent or names what is not.  `TRS_TYPE_OBJ_DIR=<dir>` writes
+each per-type module out as `.o` and `.ll`, keyed by module NAME -- a mir is
+a position in one design's module list, so the same type numbers differently
+elsewhere and the two would not line up.
 
-## 6. Two lessons that keep recurring
+**It passes**: a leaf that reads its reset and is wired to a different reset
+node in each design, and a nested fragment calling across a synthesis
+boundary, both come out byte-identical.
+
+It took three fixes, not the one predicted, and the order in which they
+surfaced is the point: each was invisible until the one before it was
+cleared.  A first attempt passed for the wrong reason -- its fragments never
+read a reset, which 73.6% of real fragments do, because bsc gates a
+`$display` on the reset wire.  Any regression test for this has to contain
+a fragment that reads one.
+
+## 6. Three lessons that keep recurring
 
 **Portless is not absent.**  A portless clock or reset is an association --
 it places a module's methods in a domain without wiring a port, which is how
@@ -262,6 +288,19 @@ and a runtime `self_inst` argument added to carry identity a per-ordinal
 table already distinguishes.  What survived resolves identity at plan time,
 with no ABI change and no new runtime table.  Check any new per-type artifact
 against this before building it.
+
+**An identity that is really a position.**  Three times now, something that
+read as a stable name turned out to be an index into one design's table.
+`mir` is a position in the module list.  `StrId` is a position in the string
+table -- and `inst_sig` was keyed by StrId in all twenty-odd of its
+components, values and recursive child names included, so two designs
+disagreed about a type they had both compiled identically.  The exec symbol
+itself was an instance index and a schedule ordinal.  Each looked like an
+identity at the use site and was only a coordinate.  The test is whether the
+thing survives being carried to another design: if it does not, hash or emit
+the NAME.  `TRS_SIG_TRACE=<module>` exists for this -- it dumps the running
+signature per component, so two designs that should agree can be diffed to
+the first component that does not.
 
 ## 7. The one number still missing
 
