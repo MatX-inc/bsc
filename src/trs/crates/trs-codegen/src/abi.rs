@@ -147,7 +147,26 @@ pub struct InstEnv {
     pub fifo_slot: HashMap<StrId, (u32, u32, u32, bool, bool)>,
     /// module reset input port name -> arena slot holding the PORT level
     /// (1 = deasserted, matching the interpreter's Port read)
+    ///
+    /// DESIGN-GLOBAL and absolute: a reset node is shared across the
+    /// design and sits ahead of every region, so this slot says which
+    /// of the design's resets drives the port, not where the port lives
+    /// in the instance.  Compiled per-type code must NOT bake it -- two
+    /// designs wire one module type to different nodes -- and reads it
+    /// through `reset_tbl` instead.  The interpreter, which is never
+    /// shared between designs, still uses it directly.
     pub reset_slot: HashMap<StrId, u32>,
+    /// module reset input port name -> its index in this module type's
+    /// reset table.  Type-uniform by construction (the ports come from
+    /// the module, so every instance of a type numbers them the same),
+    /// which is what lets one compiled body serve every instance.
+    pub reset_ord: HashMap<StrId, u32>,
+    /// arena slot of this instance's reset table: `reset_ord.len()`
+    /// consecutive words, word i holding the absolute `reset_slot` of
+    /// the port whose `reset_ord` is i.  Region-relative in compiled
+    /// code, so the indirection costs one load in the prologue and the
+    /// body stays identical across designs.
+    pub reset_tbl: u32,
     /// outlined stable def -> (memo slot base: stamp word then value
     /// words, width); type-uniform offsets (part of the dedup sig)
     pub memo_slot: HashMap<StrId, (u32, u32)>,
@@ -631,6 +650,12 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 30: every instance's region opens with a reset table -- one word
+//     per reset port, holding the design-global slot that drives it.
+//     Slot numbering therefore shifts, and shared-by-type code reads
+//     a reset port through that table instead of baking the node's
+//     address, so a rev-29 object would both misread the arena and
+//     carry the wrong design's reset wiring.
 // 29: one emission strategy.  The monolithic and rule-group-chunked
 //     paths are gone; every design is emitted as a design module plus
 //     one per module type, with boundary fns across every synthesis
@@ -647,7 +672,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 29;
+pub const AOT_LAYOUT_REV: u64 = 30;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV

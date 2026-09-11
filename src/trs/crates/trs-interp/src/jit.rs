@@ -4478,6 +4478,15 @@ impl Interp {
             };
             dfs_order.push(i);
             let region_start = nslots;
+            // The reset table, FIRST in the region so its offset is 0
+            // for every instance of every type.  One word per reset
+            // port, holding the design-global slot that drives it.
+            // Per-instance data at a type-uniform offset is what lets
+            // one compiled body serve instances wired to different
+            // reset nodes: the body loads the slot from here instead of
+            // baking it, and so does not depend on the design it was
+            // compiled in.  Filled below, once the ports are known.
+            let reset_tbl = alloc(&mut nslots, resets.len() as u32);
             let module = *module;
             let mir = self.mods[module].ir;
             let children: HashMap<StrId, usize> = children.iter().map(|(k, v)| (*k, *v)).collect();
@@ -4669,6 +4678,16 @@ impl Interp {
                 .iter()
                 .map(|(port, node)| (*port, reset_node_slot[*node]))
                 .collect();
+            // index the ports in the instance's own order, and publish
+            // that order into the table reserved at the region start
+            let reset_ord: HashMap<StrId, u32> = resets
+                .iter()
+                .enumerate()
+                .map(|(k, (port, _))| (*port, k as u32))
+                .collect();
+            for (k, (_, node)) in resets.iter().enumerate() {
+                rec_inits.push((reset_tbl + k as u32, reset_node_slot[*node] as u64));
+            }
             // EN_* slots (zeroed per dispatch, stored by compiled call
             // sites); fast plans allocate only the LIVE-read ones —
             // see en_prune above (rung 40)
@@ -4838,6 +4857,8 @@ impl Interp {
                     creg5_slot,
                     counter_slot,
                     reset_slot,
+                    reset_ord,
+                    reset_tbl,
                     en_slot,
                     cfwf_slot,
                     eager_slot,
@@ -4945,10 +4966,17 @@ impl Interp {
                     .collect();
                 m7.sort_unstable();
                 m7.hash(&mut h);
-                // reset nodes are design-global: absolute slots baked
-                let mut m8: Vec<_> = e.reset_slot.iter().map(|(&k, &b)| (k, b)).collect();
+                // reset nodes are design-global, but compiled code
+                // reaches them through the region-relative reset table,
+                // so what the body depends on is the port's INDEX in
+                // that table -- not which node the design wired it to.
+                // Hashing the index rather than the slot is what lets
+                // two designs share one body for a type whose reset
+                // comes from different nodes in each.
+                let mut m8: Vec<_> = e.reset_ord.iter().map(|(&k, &i)| (k, i)).collect();
                 m8.sort_unstable();
                 m8.hash(&mut h);
+                (e.reset_tbl - r0).hash(&mut h);
                 let mut m9: Vec<_> = e
                     .memo_slot
                     .iter()

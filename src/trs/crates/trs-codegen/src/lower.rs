@@ -112,6 +112,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             site_origin: 0,
             foreign_origin: 0,
             foreign_stmts: Vec::new(),
@@ -561,6 +562,7 @@ pub fn compile_scheds(
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -610,6 +612,7 @@ pub fn compile_execs(
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -851,6 +854,7 @@ fn lower_helpers<'ctx>(
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -955,6 +959,7 @@ fn lower_boundary_fns<'ctx>(
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1093,6 +1098,7 @@ fn compile_type_module(
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1105,6 +1111,36 @@ fn compile_type_module(
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
         .map_err(|e| Ineligible(format!("shard mir {mir} object emit: {e}")))?;
+    // TRS_TYPE_OBJ_DIR: write each type module out under its module
+    // NAME, not its mir -- a mir is a position in this design's module
+    // list, so the same type numbers differently in another design and
+    // the two would not line up.  The name is what makes objects from
+    // two designs comparable, which is the whole reason to dump them:
+    // per-fragment compilation is only possible if a type's object does
+    // not depend on which design it was compiled in.
+    if let Some(dir) = std::env::var_os("TRS_TYPE_OBJ_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        let name = env
+            .d
+            .strings
+            .get(env.d.modules[mir].name as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("mir{mir}"));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("trs shard: {}: {e}", dir.display());
+        } else {
+            let obj = dir.join(format!("{name}.o"));
+            if let Err(e) = std::fs::write(&obj, buf.as_slice()) {
+                eprintln!("trs shard: {}: {e}", obj.display());
+            }
+            // the IR alongside it: an object diff says THAT two designs
+            // disagree, the IR says where
+            let ll = dir.join(format!("{name}.ll"));
+            if let Err(e) = std::fs::write(&ll, module.print_to_string().to_bytes()) {
+                eprintln!("trs shard: {}: {e}", ll.display());
+            }
+        }
+    }
     Ok(buf.as_slice().to_vec())
 }
 
@@ -1212,6 +1248,7 @@ pub fn compile_design_objects_split(
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1714,6 +1751,7 @@ fn lower_edge_ssa<'ctx>(
                     dedup: None,
                     bnd_prim_site: None,
                     bnd_foreign_site: None,
+                    reset_ptrs: HashMap::new(),
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: None,
@@ -1858,6 +1896,7 @@ fn lower_edge_ssa<'ctx>(
                     dedup: None,
                     bnd_prim_site: None,
                     bnd_foreign_site: None,
+                    reset_ptrs: HashMap::new(),
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: Some(std::mem::take(&mut edge_ctx)),
@@ -2064,6 +2103,7 @@ fn lower_edge_ssa<'ctx>(
                                 dedup: None,
                                 bnd_prim_site: None,
                                 bnd_foreign_site: None,
+                                reset_ptrs: HashMap::new(),
                                 foreign_stmts: Vec::new(),
                                 prim_calls: Vec::new(),
                                 edge: Some(EdgeCtx {
@@ -2416,6 +2456,14 @@ struct Lower<'a, 'ctx> {
     /// which indexes its own table from zero.
     bnd_prim_site: Option<IntValue<'ctx>>,
     bnd_foreign_site: Option<IntValue<'ctx>>,
+    /// (instance, reset port) -> pointer to the arena word holding that
+    /// port's level, resolved through the instance's reset table.  The
+    /// key carries the instance because inlining a child's cone moves
+    /// the frame onto a descendant, which has a reset table of its own.
+    /// Emitted into the function's ENTRY block on first use, so a port
+    /// read a hundred times costs one load: the table entry is a
+    /// function of the base parameter alone, which does not change.
+    reset_ptrs: HashMap<(usize, StrId), PointerValue<'ctx>>,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -2725,6 +2773,51 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
         }
         i64t.const_int(slot as u64, false)
+    }
+
+    /// Pointer to the word holding reset port `port` of `inst`.
+    ///
+    /// A reset node is design-global and sits ahead of every region, so
+    /// its slot cannot be baked into code that is shared by module
+    /// type: two designs wire one type to different nodes.  The
+    /// instance's reset table, first in its region, holds the slot; one
+    /// region-relative load reaches it, and the result is the address
+    /// every read of that port then uses.
+    ///
+    /// The load goes in the function's ENTRY block, not at the use
+    /// site.  Its only input is the base parameter, which is constant
+    /// for the call, so a port read under a branch or in a loop still
+    /// pays exactly once -- and LLVM never has to prove the table does
+    /// not alias the arena writes that follow.
+    fn reset_ptr(&mut self, f: &Frame<'ctx>, port: StrId) -> Result<PointerValue<'ctx>, Ineligible> {
+        let inst = f.inst;
+        if let Some(&p) = self.reset_ptrs.get(&(inst, port)) {
+            return Ok(p);
+        }
+        let ie = self.ie(inst)?;
+        let (tbl, ord) = (ie.reset_tbl, *ie.reset_ord.get(&port).ok_or_else(|| {
+            Ineligible(format!("reset port {port} has no reset-table index"))
+        })?);
+        let i64t = self.ctx.i64_type();
+        let here = self.builder.get_insert_block().expect("builder placed");
+        let entry = here
+            .get_parent()
+            .and_then(|fun| fun.get_first_basic_block())
+            .expect("function with an entry block");
+        match entry.get_terminator() {
+            Some(t) => self.builder.position_before(&t),
+            None => self.builder.position_at_end(entry),
+        }
+        // the table entry: an absolute slot, read region-relative
+        let slot = self.load_word(f, tbl + ord);
+        let ptr = unsafe {
+            self.builder
+                .build_gep(i64t, f.arena, &[slot], "rstp")
+                .unwrap()
+        };
+        self.builder.position_at_end(here);
+        self.reset_ptrs.insert((inst, port), ptr);
+        Ok(ptr)
     }
 
     /// Load one raw arena word.
@@ -3151,8 +3244,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Ok(v);
                 }
                 let ie = self.ie(f.inst)?;
-                if let Some(&slot) = ie.reset_slot.get(p) {
-                    let word = self.load_word(f, slot);
+                if ie.reset_slot.contains_key(p) {
+                    // shared-by-type code reaches the design's reset
+                    // node through the instance's table; a design-local
+                    // lowering (sched fns, trial) bakes the slot, which
+                    // is correct there and one load cheaper
+                    let word = if self.dedup.is_some() {
+                        let ptr = self.reset_ptr(f, *p)?;
+                        self.builder
+                            .build_load(self.ctx.i64_type(), ptr, "rstld")
+                            .unwrap()
+                            .into_int_value()
+                    } else {
+                        self.load_word(f, ie.reset_slot[p])
+                    };
                     return Ok(self.to_w(word, 64, 1, false));
                 }
                 if let Some(&slot) = ie.en_slot.get(p) {
@@ -5520,6 +5625,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             func.get_nth_param(2).unwrap().into_int_value(),
             func.get_nth_param(3).unwrap().into_int_value(),
         ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
         let mut f = Frame {
             arena: func.get_nth_param(0).unwrap().into_pointer_value(),
             envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
@@ -5702,6 +5810,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             // reads this ordinal -- but keep it the ABI's type
             self.ctx.i32_type().const_zero(),
         ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
         let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
         for (k, (pn, pw)) in hs.ports.iter().enumerate() {
             args.insert(
@@ -5906,6 +6017,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             func.get_nth_param(2).unwrap().into_int_value(),
             func.get_nth_param(3).unwrap().into_int_value(),
         ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
         self.bnd_prim_site = Some(func.get_nth_param(4).unwrap().into_int_value());
         self.bnd_foreign_site = Some(func.get_nth_param(5).unwrap().into_int_value());
         // Parameter layout: 0 arena, 1 env, 2 region base, 3 ordinal,
