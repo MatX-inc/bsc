@@ -1,0 +1,148 @@
+# Per-fragment compilation: a specialization object must be the unit
+# it claims to be -- a module type at one parameter valuation, built
+# from its own .bir, independent of the design it was compiled in.
+#
+# The gate is BYTE IDENTITY.  A fragment linked and compiled alone,
+# in its own directory, must produce exactly the object the design
+# build writes, and the design must then reuse it rather than
+# recompiling.  Anything weaker passes while the object quietly
+# depends on its design: the symbols are named for the signature, so
+# a signature that drifts files the object under a name no other
+# design looks for and reuse silently MISSES instead of failing.
+# That has happened twice (reset-table ordinals and a region's slot
+# order, both StrId where a name was meant), and neither showed up in
+# a corpus sweep -- only a comparison like this one can see it.
+#
+# `--fragment' is what the fixture's always_enabled method argument
+# needs; see Specialize.bsv.
+#
+# The trs binary comes from $TRS or the PATH; UNSUPPORTED when
+# absent, or when it was built without the jit feature (no codegen,
+# so no objects to compare).
+
+proc trs_spec_test { trs name top } {
+    global srcdir subdir bsc
+
+    bsc_initialize
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set log "$name.spec-out"
+    set flags "-no-show-timestamps -no-show-version"
+    set trsbir [file join [file dirname $bsc] trs-bir]
+    set work "$name.wk"
+    file delete -force $work
+    file mkdir $work
+
+    # every synthesis boundary exports its own .bir; the link
+    # assembles them
+    if { [catch {exec sh -c "$bsc $flags -sim -u -g $top -g mkLeaf $name.bsv > $log 2>&1 && $trsbir mkLeaf.ba >> $log 2>&1 && $trsbir $top.ba >> $log 2>&1 && $trs link $top.bir -o $work/design >> $log 2>&1"}] } {
+        fail "trs specialize compile/export/link of $name (log `$log')"
+        cd $here
+        return
+    }
+
+    # what the design says it is made of
+    if { [catch {exec sh -c "$trs specializations $work/design.bir -o $work/m.json >> $log 2>&1"}] } {
+        fail "trs specializations of $name (log `$log')"
+        cd $here
+        return
+    }
+    set fh [open $work/m.json]
+    set manifest [read $fh]
+    close $fh
+    set objs [regexp -all -inline {"object": "([^"]*)"} $manifest]
+    set binds [regexp -all -inline {"params": \{"k": "([^"]*)"} $manifest]
+    set nspec [expr {[llength $objs] / 2}]
+    if { $nspec != 2 } {
+        fail "trs specialize $name: manifest names $nspec specializations, expected 2"
+        cd $here
+        return
+    }
+    pass "trs specialize $name: the manifest names both specializations"
+
+    # the design build, writing its objects out
+    if { [catch {exec sh -c "$trs compile $work/design.bir --spec-obj-out $work/indesign -o $work/design.so >> $log 2>&1"}] } {
+        fail "trs specialize design compile of $name (log `$log')"
+        cd $here
+        return
+    }
+
+    # each fragment built ALONE: its own directory, its own link, only
+    # its own .bir and its valuation -- nothing of the design
+    set ok 1
+    set ins {}
+    for {set i 0} {$i < $nspec} {incr i} {
+        set obj [lindex $objs [expr {$i * 2 + 1}]]
+        set k   [lindex $binds [expr {$i * 2 + 1}]]
+        set d   "$work/alone$i"
+        file mkdir $d
+        file copy -force mkLeaf.bir $d/mkLeaf.bir
+        if { [catch {exec sh -c "cd $d && $trs link --fragment mkLeaf.bir +k=$k -o frag >> ../../$log 2>&1 && $trs compile --fragment frag.bir --spec-obj-out . >> ../../$log 2>&1"}] } {
+            fail "trs specialize standalone build of $obj (log `$log')"
+            set ok 0
+            continue
+        }
+        if { ![file exists $d/$obj] } {
+            fail "trs specialize standalone build of $obj produced no such object"
+            set ok 0
+            continue
+        }
+        if { [catch {exec cmp -s $work/indesign/$obj $d/$obj}] } {
+            fail "trs specialize $obj built alone differs from the design's"
+            set ok 0
+            continue
+        }
+        lappend ins $d
+    }
+    if { $ok } {
+        pass "trs specialize $name: every fragment built alone is byte-identical"
+    }
+
+    # and the design assembles from those objects rather than
+    # recompiling: the point of the unit, not a side effect
+    if { $ok } {
+        set inarg [join $ins ":"]
+        if { [catch {exec sh -c "$trs compile $work/design.bir --spec-obj-in $inarg -o $work/design.so 2> $work/reuse.txt"}] } {
+            fail "trs specialize reuse compile of $name (log `$work/reuse.txt')"
+            set ok 0
+        } else {
+            set fh [open $work/reuse.txt]
+            set reuse [read $fh]
+            close $fh
+            if { [regexp "$nspec of $nspec specializations reused" $reuse] } {
+                pass "trs specialize $name: the design reuses every standalone object"
+            } else {
+                fail "trs specialize $name: the design did not reuse the standalone objects"
+                set ok 0
+            }
+        }
+    }
+
+    # honesty: the design assembled that way still runs
+    if { $ok } {
+        if { [catch {exec sh -c "cp $work/design.so $work/design.exe.so 2>/dev/null; TRS=$trs $work/design > $name.trs-run-out 2>&1"}] } {
+            fail "trs specialize artifact run of $name"
+        } else {
+            compare_file $name.trs-run-out $top.out.expected "trs_specialize"
+        }
+    }
+
+    if { $ok } {
+        file delete -force $work
+        foreach f [glob -nocomplain $top.bir mkLeaf.bir $log] { file delete -force $f }
+    }
+    cd $here
+}
+
+global env
+set trs_cmd "trs"
+if { [info exists env(TRS)] } { set trs_cmd $env(TRS) }
+
+if { [catch {exec sh -c "command -v $trs_cmd"}] } {
+    unsupported "trs per-fragment compilation (trs not installed)"
+} elseif { [catch {exec sh -c "$trs_cmd features | grep -qw jit"}] } {
+    unsupported "trs per-fragment compilation (trs built without the jit feature)"
+} else {
+    trs_spec_test $trs_cmd Specialize sysSpecialize
+}
