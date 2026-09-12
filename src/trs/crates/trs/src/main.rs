@@ -17,7 +17,9 @@ fn usage() -> ExitCode {
     eprintln!("       trs ir dump --multi-fragments <module.bir>...");
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
+    eprintln!("       trs link --fragment <fragment.bir> [-o <out.cexe>]");
     eprintln!("       trs compile <design.bir> [-o <model.so>] [--exe] [--dump-formats vcd,fst]");
+    eprintln!("                    [--fragment]");
     eprintln!("                    [--spec-obj-in <dir>[:<dir>...]] [--spec-obj-out <dir>]");
     eprintln!("       trs specializations <design.bir> [-o <manifest.json>] [same codegen flags]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [--only-compiled] [+NAME=value...]");
@@ -270,6 +272,10 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         let mut want_exe = false;
         let mut manifest = false;
         let mut as_text = false;
+        // the design being compiled is a FRAGMENT linked for reuse, so
+        // its interface-method arguments stay dynamic (see the link's
+        // --fragment, and topbind::resolve)
+        let fragment = rest.contains(&"--fragment");
         let mut it = rest.iter().copied();
         while let Some(a) = it.next() {
             match a {
@@ -284,6 +290,9 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 // the .so plus a main shim, so it is a second
                 // output of one codegen, not a step after it
                 "--exe" => want_exe = true,
+                // read from `rest' above; accepted here so it is not an
+                // unknown option
+                "--fragment" => {}
                 // Write the manifest and stop: which specializations
                 // this design needs, and the object file each
                 // would be reused from.  Planning only, no LLVM --
@@ -398,7 +407,12 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         // resolves the cache beside the design, as a run does,
         // rather than allowing verilation here.
         ensure_vlt_env(path, false);
-        let mut interp = match trs_interp::startup::load_file(path, &[], &binds, None) {
+        let load_design = if fragment {
+            trs_interp::startup::load_file_open
+        } else {
+            trs_interp::startup::load_file
+        };
+        let mut interp = match load_design(path, &[], &binds, None) {
             Ok(i) => i,
             Err(e) => {
                 eprintln!("trs compile: {e}");
@@ -840,6 +854,11 @@ fn main() -> ExitCode {
             // before the loop, so it governs the positionals whatever
             // order they were written in.
             let multi = rest.contains(&"--multi-fragments");
+            // A fragment linked to be COMPILED, not run: its
+            // interface-method arguments are driven by whatever
+            // instantiates it, so they stay dynamic instead of being
+            // required and baked (see topbind::resolve).
+            let fragment = rest.contains(&"--fragment");
             let mut frags: Vec<&str> = Vec::new();
             // BDPI implementations.  bsc takes these at ITS link too
             // (`bsc -sim -e top foo.c`): a foreign function belongs to
@@ -880,7 +899,7 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
-                    "--multi-fragments" => {}
+                    "--multi-fragments" | "--fragment" => {}
                     "--bdpi" | "-l" | "-L" => {
                         let Some(v) = it.next() else {
                             eprintln!("Error: {a} requires a value");
@@ -978,7 +997,12 @@ fn main() -> ExitCode {
             // no snapshot to prefer: the sidecar is keyed by one
             // file's fingerprint.
             let load = |binds: &[trs_interp::TopBind], fresh: bool| match (multi, fresh) {
-                (true, _) => trs_interp::startup::load_fragments_fresh(&frags, &[], binds, None),
+                (true, _) => {
+                    trs_interp::startup::load_fragments_fresh(&frags, &[], binds, None, fragment)
+                }
+                (false, true) if fragment => {
+                    trs_interp::startup::load_file_fragment(path, &[], binds, None)
+                }
                 (false, true) => trs_interp::startup::load_file_fresh(path, &[], binds, None),
                 (false, false) => trs_interp::startup::load_file(path, &[], binds, None),
             };

@@ -37,7 +37,7 @@ pub fn load_file(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true, false)
 }
 
 /// Code-aware load: prefer the design snapshot EMBEDDED in the
@@ -106,7 +106,7 @@ pub fn load_file_or_code(
             return Ok(interp);
         }
     }
-    load_file_inner(path, plusargs, binds, vcd_file, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true, false)
 }
 
 #[cfg(not(feature = "aot"))]
@@ -117,7 +117,7 @@ pub fn load_file_or_code(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true, false)
 }
 
 /// `load_file` that ignores any snapshot sidecar.  `trs link` is the
@@ -134,7 +134,29 @@ pub fn load_file_fresh(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, false)
+    load_file_inner(path, plusargs, binds, vcd_file, false, false)
+}
+
+/// `load_file` for a fragment being compiled rather than run: its
+/// interface-method arguments stay dynamic.
+pub fn load_file_open(
+    path: &str,
+    plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    load_file_inner(path, plusargs, binds, vcd_file, true, true)
+}
+
+/// `load_file_fresh` for a fragment being linked to be compiled rather
+/// than run: its interface-method arguments stay dynamic.
+pub fn load_file_fragment(
+    path: &str,
+    plusargs: &[String],
+    binds: &[crate::topbind::TopBind],
+    vcd_file: Option<&str>,
+) -> Result<Interp, String> {
+    load_file_inner(path, plusargs, binds, vcd_file, false, true)
 }
 
 /// `load_file_fresh` over one design's fragments -- one per
@@ -149,6 +171,7 @@ pub fn load_fragments_fresh(
     plusargs: &[String],
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
+    open_ports: bool,
 ) -> Result<Interp, String> {
     let mut sl = StartupLap::new();
     // the top's fragment is named last: it is where a companion
@@ -168,7 +191,7 @@ pub fn load_fragments_fresh(
     // would find the stamp stale and compile again.
     let hash = bir_fingerprint(&design.encode());
     sl.lap("fragment link");
-    finish_load(design, hash, sl, path, plusargs, binds, vcd_file)
+    finish_load(design, hash, sl, path, plusargs, binds, vcd_file, open_ports)
 }
 
 /// Read one .bir and everything it needs, then link.
@@ -267,6 +290,7 @@ fn load_file_inner(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
     use_snap: bool,
+    open_ports: bool,
 ) -> Result<Interp, String> {
     let mut sl = StartupLap::new();
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -324,7 +348,7 @@ fn load_file_inner(
         }
         sl.lap("bir fold (extract-of-concat)");
     }
-    finish_load(design, hash, sl, path, plusargs, binds, vcd_file)
+    finish_load(design, hash, sl, path, plusargs, binds, vcd_file, open_ports)
 }
 
 /// The half of a load that does not care where the design came from.
@@ -338,11 +362,12 @@ fn finish_load(
     plusargs: &[String],
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
+    open_ports: bool,
 ) -> Result<Interp, String> {
     // raw +args reach BVI models at construction (their per-instance
     // VerilatedContext), so they stage before instantiation
     crate::bvi::stage_plusargs(plusargs);
-    let mut interp = Interp::new_bound(design, binds)?;
+    let mut interp = Interp::new_bound_open(design, binds, open_ports)?;
     sl.lap("interp build (instantiate)");
     // the bind salt differentiates compiled artifacts by their baked
     // constants (stamp and check both derive from bir_hash); the

@@ -805,7 +805,17 @@ impl Interp {
     /// instantiation arguments may reference the top's parameters, so
     /// the values must be present when the instance tree is built.
     pub fn new_bound(d: Design, binds: &[topbind::TopBind]) -> Result<Interp, String> {
-        let rb = topbind::resolve(&d, binds)?;
+        Interp::new_bound_open(d, binds, false)
+    }
+
+    /// `new_bound` for a fragment linked to be COMPILED rather than run:
+    /// its interface-method arguments stay dynamic (see topbind::resolve).
+    pub fn new_bound_open(
+        d: Design,
+        binds: &[topbind::TopBind],
+        open_ports: bool,
+    ) -> Result<Interp, String> {
+        let rb = topbind::resolve(&d, binds, open_ports)?;
         let str_ids: HashMap<&str, StrId> = d
             .strings
             .iter()

@@ -191,7 +191,22 @@ fn bind_salt(bound: &[(String, Vec<u64>)]) -> u64 {
     h
 }
 
-pub(crate) fn resolve(d: &ir::Design, binds: &[TopBind]) -> Result<ResolvedBinds, String> {
+/// Resolve the top's bindings.
+///
+/// `open_ports` links a fragment for reuse rather than a design to run.
+/// A fragment's interface-method arguments are driven by whatever
+/// instantiates it, so they stay DYNAMIC: requiring them would have no
+/// answer (no constant is the one a parent drives), and baking one via
+/// port_consts would specialize the object to a value no design uses --
+/// which defeats the whole point, since that object is shared by every
+/// design that instantiates the fragment the same way.  Parameters still
+/// bind: a valuation IS what makes a specialization.  always_enabled
+/// auto-fire is likewise a top-level behaviour and is not armed.
+pub(crate) fn resolve(
+    d: &ir::Design,
+    binds: &[TopBind],
+    open_ports: bool,
+) -> Result<ResolvedBinds, String> {
     let top = d
         .modules
         .iter()
@@ -209,7 +224,7 @@ pub(crate) fn resolve(d: &ir::Design, binds: &[TopBind]) -> Result<ResolvedBinds
         .collect();
     // always_enabled methods (arm even with no bindings on the CLI)
     let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> = Vec::new();
-    for m in &top.methods {
+    for m in top.methods.iter().filter(|_| !open_ports) {
         if !m.always_enabled {
             continue;
         }
@@ -378,6 +393,7 @@ pub(crate) fn resolve(d: &ir::Design, binds: &[TopBind]) -> Result<ResolvedBinds
     // ---- completeness ----
     let missing: Vec<String> = surface
         .iter()
+        .filter(|_| !open_ports)
         .filter(|(n, _, _)| !bound.iter().any(|(bn, _)| bn == n))
         .map(|(n, _, w)| format!("{n} ({w} bits)"))
         .collect();
