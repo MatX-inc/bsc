@@ -692,6 +692,17 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 34: EN, eager and memo slots are allocated in NAME order, and a
+//     helper fn's symbol carries its def's NAME.  All four took the
+//     order from a StrId -- a position in the enclosing design's
+//     string table, which `intern` assigns on a first-come basis, so
+//     two modules sharing a method name renumber each other between a
+//     fragment built alone and a design containing it.  Slot offsets
+//     are hashed into the signature, so a move files an object under
+//     a name no other design looks for; the helper SYMBOL was worse,
+//     since a reused object would not define the name its consumer
+//     asks for.  Found by audit after the same defect turned up twice
+//     in one day; slot numbering shifts for every design.
 // 33: reset-table ordinals are assigned by PORT NAME.  They came
 //     from `HashMap::iter`, so the order differed per map: two
 //     instances of one type numbered their ports differently and
@@ -739,7 +750,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 33;
+pub const AOT_LAYOUT_REV: u64 = 34;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV

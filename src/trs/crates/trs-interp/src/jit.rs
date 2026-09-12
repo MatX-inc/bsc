@@ -4799,7 +4799,19 @@ impl Interp {
                 .filter(|&(_, &(_w, kind))| kind == ir::PortKind::MethodEnable)
                 .map(|(&pn, _)| pn)
                 .collect();
-            enps.sort_unstable();
+            // by NAME: a StrId is a position in the enclosing design's
+            // string table, and `intern` hands a string the id of the
+            // FIRST file that used it -- so two modules sharing a
+            // method name reorder each other's ports between a
+            // fragment linked alone and a design containing it.  These
+            // slots are hashed into the signature's layout half, so an
+            // order that moves files the object under a name no other
+            // design looks for.
+            enps.sort_unstable_by(|&a, &b| {
+                self.d.strings[a as usize]
+                    .cmp(&self.d.strings[b as usize])
+                    .then(a.cmp(&b))
+            });
             for pname in enps {
                 if en_prune && !live_en.contains(&(mir, pname)) {
                     en_pruned_any = true;
@@ -4842,8 +4854,15 @@ impl Interp {
                         }
                     }
                 }
-                union.sort_unstable_by_key(|&e| {
-                    (touch_rank.get(&(mir, e)).copied().unwrap_or(u32::MAX), e)
+                // rank first, then NAME -- the StrId tie-break this
+                // used is the enclosing design's numbering (see the EN
+                // ports above)
+                union.sort_unstable_by(|&a, &b| {
+                    let rank = |e: StrId| touch_rank.get(&(mir, e)).copied().unwrap_or(u32::MAX);
+                    rank(a)
+                        .cmp(&rank(b))
+                        .then_with(|| self.d.strings[a as usize].cmp(&self.d.strings[b as usize]))
+                        .then(a.cmp(&b))
                 });
                 for e in union {
                     let Some(ed) = self.mods[mir]
@@ -4870,7 +4889,14 @@ impl Interp {
                     .filter(|((m, _), (_, st, _))| *m == mir && *st)
                     .map(|((_, dn), (w, _, _))| (*dn, *w))
                     .collect();
-                ms.sort_unstable();
+                // by NAME -- "type-uniform offsets" is what the
+                // comment above promises, and a StrId sort does not
+                // deliver it across designs (see the EN ports above)
+                ms.sort_unstable_by(|a, b| {
+                    self.d.strings[a.0 as usize]
+                        .cmp(&self.d.strings[b.0 as usize])
+                        .then(a.cmp(b))
+                });
                 for (dn, w) in ms {
                     let base = alloc(&mut nslots, 1 + w.div_ceil(64));
                     memo_slot.insert(dn, (base, w));
@@ -4987,17 +5013,37 @@ impl Interp {
                 .collect();
             bvi_needs.sort();
             bvi_needs.dedup();
-            if std::env::var_os("TRS_BYPASS_DUMP").is_some() {
+            // TRS_SLOT_DUMP (was TRS_BYPASS_DUMP, which now understates it)
+            if std::env::var_os("TRS_SLOT_DUMP").is_some() {
                 let mname = self.d.strings[self.d.modules[mir].name as usize].clone();
-                let mut v: Vec<_> = bypass_slot
-                    .iter()
-                    .map(|(&k, &(b, w))| {
-                        (self.d.strings[k as usize].clone(), b as i64 - region_start as i64, w)
-                    })
-                    .collect();
+                // every name-keyed map the LAYOUT half of the signature
+                // hashes, as (kind, name, region-relative offset).  A
+                // slot that moves between a fragment built alone and
+                // the same fragment in a design is the whole defect
+                // class -- the object stays correct and gets filed
+                // under a name nobody looks for -- and it is invisible
+                // without a dump like this one.
+                let rel = |b: u32| b as i64 - region_start as i64;
+                let nm = |k: StrId| self.d.strings[k as usize].clone();
+                let mut v: Vec<(String, String, i64, u32)> = Vec::new();
+                for (&k, &(b, w)) in &bypass_slot {
+                    v.push(("bypass".into(), nm(k), rel(b), w));
+                }
+                for (&k, &b) in &en_slot {
+                    v.push(("en".into(), nm(k), rel(b), 1));
+                }
+                for (&k, &(b, w)) in &eager_slot {
+                    v.push(("eager".into(), nm(k), rel(b), w));
+                }
+                for (&k, &(b, w)) in &memo_slot {
+                    v.push(("memo".into(), nm(k), rel(b), w));
+                }
+                for (&k, &(b, w)) in &reg_slot {
+                    v.push(("reg".into(), nm(k), rel(b), w));
+                }
                 v.sort();
-                for (n, off, w) in v {
-                    eprintln!("bypassdump {mname} {n} off={off} w={w}");
+                for (kind, n, off, w) in v {
+                    eprintln!("slotdump {mname} {kind} {n} off={off} w={w}");
                 }
             }
             inst_envs.insert(
@@ -5941,8 +5987,19 @@ impl Interp {
                 mir_sigs.entry(e.mir).or_default().insert(inst_sig[&i]);
                 exemplar.entry(e.mir).or_insert(i);
             }
+            // by NAME, both halves: `mir` is a position in this
+            // design's module list and `dn` a position in its string
+            // table, so this order -- which decides the order helper
+            // fns are emitted into an object -- was the design's, not
+            // the type's
             let mut keys: Vec<(usize, StrId)> = outlined_sel.keys().copied().collect();
-            keys.sort_unstable();
+            keys.sort_unstable_by(|a, b| {
+                let mn = |m: usize| &self.d.strings[self.d.modules[m].name as usize];
+                mn(a.0)
+                    .cmp(mn(b.0))
+                    .then_with(|| self.d.strings[a.1 as usize].cmp(&self.d.strings[b.1 as usize]))
+                    .then(a.cmp(b))
+            });
             for (mir, dn) in keys {
                 if mir_sigs.get(&mir).map(|x| x.len()) != Some(1) {
                     continue;
@@ -5975,7 +6032,30 @@ impl Interp {
                     mir,
                     def: dn,
                     width: w,
-                    sym: format!("hlp_{:016x}_{}", inst_sig[&ex], dn),
+                    // the def's NAME, not its StrId.  A StrId is a
+                    // position in this design's string table, so the
+                    // same helper came out as hlp_<sig>_43 in one
+                    // design and hlp_<sig>_17 in another -- an
+                    // emitted symbol carrying a coordinate, which is
+                    // the one place the defect cannot stay latent:
+                    // reuse across designs asks for a symbol the
+                    // object does not define.
+                    sym: format!(
+                        "hlp_{:016x}_{}",
+                        inst_sig[&ex],
+                        self.d
+                            .strings
+                            .get(dn as usize)
+                            .map(|s| s
+                                .chars()
+                                .map(|c| if c.is_ascii_alphanumeric() || c == '_' {
+                                    c
+                                } else {
+                                    '.'
+                                })
+                                .collect::<String>())
+                            .unwrap_or_default()
+                    ),
                     inst: ex,
                     memo_slot: if st {
                         Some(inst_envs[&ex].memo_slot[&dn].0)

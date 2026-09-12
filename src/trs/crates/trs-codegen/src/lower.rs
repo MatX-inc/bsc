@@ -4332,7 +4332,24 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         return nope("BDPI string arg not a literal");
                     };
                     let text = self.env.d.strings[*sid as usize].clone();
-                    let gname = format!("trs_bdpistr_{sid}");
+                    // named for the TEXT, not the string id: the id is
+                    // a position in this design's table, and the
+                    // comment below is right that the content is a
+                    // pure function of the literal -- so the name
+                    // should be too.  Private linkage probably kept
+                    // this one out of the symbol table anyway, but a
+                    // name carrying a coordinate is the defect class
+                    // this pass exists to remove, and arguing each
+                    // instance benign is how the others survived.
+                    let gname = format!(
+                        "trs_bdpistr_{:016x}",
+                        {
+                            use std::hash::{Hash, Hasher};
+                            let mut h = std::collections::hash_map::DefaultHasher::new();
+                            text.hash(&mut h);
+                            h.finish()
+                        }
+                    );
                     let g = self.module.get_global(&gname).unwrap_or_else(|| {
                         let arr = self.ctx.const_string(text.as_bytes(), true);
                         let g = self.module.add_global(arr.get_type(), None, &gname);
