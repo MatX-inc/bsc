@@ -370,7 +370,21 @@ def copy_bdpi_sources(testdir, wk):
     )
     if not has_bdpi:
         return cfiles
-    for f in os.listdir(testdir):
+    # `X.c.keep' is the inactive copy and a testsuite run ACTIVATES it
+    # by writing `X.c' beside it.  Both then land in the tree, both
+    # copy to the same destination, and the link is handed the same
+    # source twice -- "multiple definition of `xbuf'", 41 phantom
+    # AOT_LINK_FAILs on the second full-corpus sweep in a tree where
+    # the first had left the .c behind.  Same disease as the vpi_
+    # residue below, so: at most one source per destination name, the
+    # tracked .c.keep preferred because it is the copy that cannot be
+    # stale.
+    names = set(os.listdir(testdir))
+    for f in sorted(names):
+        if f.endswith(".c") and f + ".keep" in names:
+            continue
+        if f.endswith(".h") and f + ".keep" in names:
+            continue
         # Verilog-VPI wrapper residue (vpi_wrapper_*.c,
         # vpi_startup_array.c) is generated IN-TREE by testsuite Verilog
         # runs and needs vpi_user.h — never a BDPI link input (40
