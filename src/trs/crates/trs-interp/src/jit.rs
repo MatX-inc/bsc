@@ -4574,8 +4574,20 @@ impl Interp {
             // module type's schedule first-touch rank (rung 38), name-
             // sorted within a rank and for untouched prims.
             let mut kids: Vec<(StrId, usize)> = children.iter().map(|(&k, &v)| (k, v)).collect();
-            kids.sort_unstable_by_key(|&(n, c)| {
-                (touch_rank.get(&(mir, n)).copied().unwrap_or(u32::MAX), n, c)
+            // by NAME, not by StrId: an id indexes the enclosing design's
+            // string table, so the same two names tie-break differently in
+            // a fragment linked alone than in a design that contains it --
+            // which moved a slot, and with it the region-relative offset
+            // the signature hashes (the sig has always used the string).
+            // Only prims tying on touch_rank can observe it, which is why
+            // it stayed hidden: 2 of 26 bypass wires in the first design
+            // measured.
+            kids.sort_unstable_by(|&(an, ac), &(bn, bc)| {
+                let rank = |n: StrId| touch_rank.get(&(mir, n)).copied().unwrap_or(u32::MAX);
+                rank(an)
+                    .cmp(&rank(bn))
+                    .then_with(|| self.d.strings[an as usize].cmp(&self.d.strings[bn as usize]))
+                    .then_with(|| ac.cmp(&bc))
             });
             for &(name, ci) in &kids {
                 let InstKind::Prim(p) = &self.insts[ci].kind else {
@@ -4975,6 +4987,19 @@ impl Interp {
                 .collect();
             bvi_needs.sort();
             bvi_needs.dedup();
+            if std::env::var_os("TRS_BYPASS_DUMP").is_some() {
+                let mname = self.d.strings[self.d.modules[mir].name as usize].clone();
+                let mut v: Vec<_> = bypass_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| {
+                        (self.d.strings[k as usize].clone(), b as i64 - region_start as i64, w)
+                    })
+                    .collect();
+                v.sort();
+                for (n, off, w) in v {
+                    eprintln!("bypassdump {mname} {n} off={off} w={w}");
+                }
+            }
             inst_envs.insert(
                 i,
                 InstEnv {
