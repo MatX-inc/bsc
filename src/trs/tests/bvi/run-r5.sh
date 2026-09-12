@@ -221,9 +221,9 @@ else
     $TRS compile sys.exe.bir --spec-obj-out indesign -o sys.so >c.out 2>&1
     # alone: its own tree, its own model cache, nothing of the design
     mkdir -p alone/out; cp mkWrap.bir BviCounter.v alone/
-    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link mkWrap.bir "+k=$binds" \
+    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link --fragment mkWrap.bir "+k=$binds" \
         -o w.exe >la.out 2>&1 \
-      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile w.exe.bir --spec-obj-out out \
+      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile --fragment w.exe.bir --spec-obj-out out \
         >ca.out 2>&1 )
     if [ ! -f "indesign/$obj" ] || [ ! -f "alone/out/$obj" ]; then
         spec_fail "no object $obj (in-design or alone)" c.out alone/ca.out
@@ -286,9 +286,9 @@ else
     mkdir -p indesign alone/out
     $TRS compile sys.exe.bir --spec-obj-out indesign -o sys.so >c.out 2>&1
     cp mkRstWrap.bir RstStretch.v alone/
-    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link mkRstWrap.bir "+k=$binds" \
+    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link --fragment mkRstWrap.bir "+k=$binds" \
         -o w.exe >la.out 2>&1 \
-      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile w.exe.bir --spec-obj-out out \
+      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile --fragment w.exe.bir --spec-obj-out out \
         >ca.out 2>&1 )
     if [ ! -f "indesign/$obj" ] || [ ! -f "alone/out/$obj" ]; then
         echo "FAIL PosSpecTwoRst-identical (no object $obj)"
