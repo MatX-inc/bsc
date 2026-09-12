@@ -475,7 +475,14 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 // post-window state into the sidecar when the window is
                 // effect-free.  Every non-clean outcome is silent: the
                 // design simply boots classic.
-                if arena_written {
+                // A fragment's object is not an artifact anyone runs, so
+                // there is no sidecar worth baking -- and the bake would
+                // instantiate the fragment's subtree, which reaches BDPI
+                // imports whose companion library a specialization has no
+                // reason to carry.  Until --fragment existed this was
+                // skipped by accident, the bake refusing a top whose
+                // bindings were missing.
+                if arena_written && !fragment {
                     // no binds: a binding design's load refuses without
                     // them, so its bake is a silent no-op and it boots
                     // classic (run_file gates RunCore off under binds).
