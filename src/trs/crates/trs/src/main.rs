@@ -2188,6 +2188,17 @@ fn build_bdpi(
     for l in libs {
         cmd.arg(format!("-l{l}"));
     }
+    // libm, always.  A BDPI implementation using math.h is ordinary C
+    // and nothing in the interface says otherwise, but the companion
+    // was linked without it -- so `pow' resolved only when the HOST
+    // process happened to provide libm.  The full trs does (LLVM
+    // links it); the slim trs-run the artifact wrapper execs does
+    // not, so the same design ran under one tier and died at dlopen
+    // under the other with `undefined symbol: pow'.  A dependency
+    // satisfied by accident is the failure mode worth removing: on
+    // macOS libm is inside libSystem and -lm is a no-op, so this is
+    // unconditional.
+    cmd.arg("-lm");
     let st = cmd.status().map_err(|e| format!("{cc}: {e}"))?;
     if !st.success() {
         return Err(format!("linking {out} failed"));
