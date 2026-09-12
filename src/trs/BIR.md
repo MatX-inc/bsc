@@ -1,8 +1,12 @@
 # BIR — the TRS export format
 
-Status: draft, schema version 1.  This document and the Rust types in
-`crates/trs-ir/src/` jointly define the contract; where prose and code
-disagree, the code is authoritative and this document has a bug.
+Status: legacy format/reference, pending the P0 boundary-protocol result.
+For new architecture work, [DESIGN.md](DESIGN.md) §0 and
+[P0-HANDOFF.md](P0-HANDOFF.md) govern.  The global composition in §4 is
+superseded, not an acceptable hierarchical implementation.  Rust types in
+`crates/trs-ir/src/` describe what the legacy decoder accepts; they do not
+override the new architecture.  P0 must justify and document the replacement
+schema rather than assume that this format already proves feasibility.
 
 BIR is the data contract between bsc (Haskell) and the trs backend
 (Rust).  bsc exports it after elaboration, scheduling, `simExpand`, and
@@ -86,7 +90,11 @@ reset port -> internal reset wire), so a parent's references to
 "<inst>$<port>" chase through the interface to the driving oscillator
 or reset node.
 
-## 4. The hierarchical schedule
+## 4. Legacy global schedule composition (superseded)
+
+The following describes the old factoring approach for reference and
+counterexample mining.  Its global segment order, qualified cross-inhibitors
+and tick lists are forbidden in the P0 engine, including preparation.
 
 **Problem.** bsc's link-time merge produces a global per-domain order over
 all rules of all instances (`mergeSchedules` → `flattenCombSchedGraph`).

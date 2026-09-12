@@ -1,4 +1,11 @@
-# TRS — handoff (rewritten 2026-07-09, start here)
+# TRS — historical implementation handoff (2026-07-09)
+
+Superseded for new architecture work, 2026-09-05: start with
+[P0-HANDOFF.md](P0-HANDOFF.md) and [DESIGN.md](DESIGN.md) §0.  This file
+records the legacy implementation and its measurements.  Its whole-edge
+fusion, global scheduling, phasing, branch/remote instructions, and standing
+commit/push permissions are not instructions or authorization for P0.
+Preserve useful witnesses; do not carry the old execution plan into the spike.
 
 NOTE 2026-07-10: the live branch is claude/trs-fst — the whole
 history REBASED onto personal/bluesim-fst (PR #1027, FST support)
