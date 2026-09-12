@@ -811,7 +811,7 @@ fn main() -> ExitCode {
                         trs_interp::prim::set_load_memfiles(false);
                         match trs_interp::startup::load_file_fresh(path, &[], &[], None) {
                             Ok(_) => println!(
-                                "trs vlt: forwarded-parameter classes \
+                                "trs vlt: forwarded-parameter specializations \
                                  verilated via elaboration"
                             ),
                             Err(e) => {

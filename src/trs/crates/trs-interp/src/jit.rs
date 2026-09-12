@@ -1755,7 +1755,7 @@ fn aot_load(
         }
         let execs: Vec<CompiledExec> = execs
             .into_iter()
-            .map(|o| o.expect("every ordinal belongs to a class"))
+            .map(|o| o.expect("every ordinal belongs to a specialization"))
             .collect();
         // fused edge fns (absent in pre-fusion artifacts: rev-gated)
         let mut fused = Vec::with_capacity(ncomps);
@@ -5826,7 +5826,7 @@ impl Interp {
         }
         if trace {
             eprintln!(
-                "trs jit: {} exec bodies in {} classes",
+                "trs jit: {} exec bodies in {} specializations",
                 specs.len(),
                 classes.len()
             );
@@ -5997,7 +5997,7 @@ impl Interp {
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
-        sl.lap("plan classes+nodes");
+        sl.lap("plan specializations+nodes");
         let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
         let mut tick_level_flag: u64 = 0;
         let mut protos_opt: Option<Vec<FnProtos>> = None;

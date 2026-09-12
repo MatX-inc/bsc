@@ -1834,7 +1834,7 @@ pub fn compile_design_objects_split(
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
     if timing {
         eprintln!(
-            "trs shard: design lowering {:?} ({} class modules)",
+            "trs shard: design lowering {:?} ({} specialization modules)",
             t_low.elapsed(),
             per_class.len()
         );
