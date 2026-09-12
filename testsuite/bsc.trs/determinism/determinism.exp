@@ -63,14 +63,14 @@ proc trs_det_test { trs name top } {
     }
 
     # artifact honesty: one run against the golden output
-    if { [catch {exec sh -c "TRS=$trs ./$name.art1 > $name.trs-run-out 2>&1"}] } {
+    if { [catch {exec sh -c "TRS=$trs ./$name.det > $name.trs-run-out 2>&1"}] } {
         fail "trs artifact run of $name"
     } else {
         compare_file $name.trs-run-out $top.out.expected "trs_determinism"
     }
 
     # scratch cleanup; keep the IR dumps when they differed (evidence)
-    set scratch [glob -nocomplain $name.art* $top.ref* $top.bir*]
+    set scratch [glob -nocomplain $name.det* $top.ref* $top.bir*]
     if { $ok } {
         set scratch [concat $scratch [glob -nocomplain $name.ir*]]
     }
