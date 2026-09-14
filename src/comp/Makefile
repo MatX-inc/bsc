@@ -198,6 +198,7 @@ PACKAGES += $(WARMUP_EXTRA_PKGS)
 # library modules.
 MAINSRC = $@.hs
 bsc bsc2bsv bsv2bsc dumpbo dumpba vcdcheck showrules: MAINSRC = app/$@.hs
+fstcheck fstscopes: MAINSRC = app/$@.hs
 bluetcl: MAINSRC = app/bluetcl_Main.hs
 GHCMAKEFLAGS = --make $(MAINSRC) -o $@ -j$(GHCJOBS)
 GHCCOMPILEFLAGS = -o $@ -c $<
