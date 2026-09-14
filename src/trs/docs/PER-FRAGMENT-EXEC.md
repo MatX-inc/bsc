@@ -571,6 +571,58 @@ key, a per-class directory, and a ratified build-step/load-step split
 -- so the fix is the same one the specialization side took: declared
 inputs, declared output.
 
+## 6c. Two design-wide inputs to layout, deferred on purpose
+
+Both were found looking for whole-design work to remove, and both are
+DEFERRED by decision (2026-09-13), not overlooked.  They share a
+failure mode worth stating once: each can give one fragment two
+layouts, the layout half of the signature catches that, so the object
+is filed under a name the other build never asks for.  Nothing is
+wrong; reuse silently MISSES.  That is why deferring is safe -- the
+damage lands in the "N of M specializations reused" line, which is
+already printed on every compile, so the cost shows up as a number
+rather than as a bug.
+
+**EN-slot liveness pruning (rung 40).**  An EN slot is a one-way flag
+in the callee's region -- "method m was invoked this edge" -- written
+by the caller, zeroed at dispatch, read only by code inside that same
+module.  Pruning drops the slot when nothing loads it: dead-store
+elimination, not always-enabled inference.  The live set is computed
+from the DESIGN's schedule, so it is design-wide.
+
+Measured over the 1,657 designs a full corpus sweep leaves built: 276
+have EN ports at all, 719 ports between them, 120 slots survive
+pruning -- and only FOUR designs have a surviving EN slot on a child
+fragment.  That last number is the reason this can wait.
+
+Three levels, and only two are measured.  Syntactic mention anywhere
+in the module (`port_refs`, 716); fragment-local liveness -- root the
+same walk at the module's own rules and EVERY method, since a
+fragment cannot know which its parent will call -- UNMEASURED; and
+design-wide (120).  The gap is mostly dead defs bsc emitted that trs
+never evaluates, which is a module-local fact, so fragment-local may
+land near 120 and cost almost nothing.  Do not price this change off
+the 716.
+
+If it does cost: the price is per-edge, not per-build.  Dispatch emits
+one unconditional `store i64 0` per EN slot at the top of every edge.
+The way out is a generation stamp -- call site writes an edge id,
+reader compares equality -- which replaces N stores with one and
+makes the slot count stop mattering.  It cannot reuse `now_slot`:
+that holds the simulation INSTANT, several edges share a value, and
+stale enables would read as set.
+
+**Trace mode.**  A traced design allocates recording slots, so the
+same fragment laid out 6 slots alone and 11 inside a VCD-linked
+design.  `--dump-formats vcd` on the standalone link did NOT
+reproduce it -- whether recording happens appears to follow the TOP's
+`$dump` tasks, which a fragment cannot know.  Observed once, cause
+inferred from region extents rather than proven.  The consequence, if
+it holds, is that every shared object is trace-mode-specific and a
+fragment cannot be built correctly without being told the design's
+trace mode: it belongs in the object's salt and in the build graph's
+inputs, and today it is in neither.
+
 ## 7. The one number still missing
 
 What de-inlining costs at RUN time.  Outlining is now unconditional and
