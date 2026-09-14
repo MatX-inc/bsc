@@ -810,7 +810,7 @@ impl Interp {
     /// instantiation arguments may reference the top's parameters, so
     /// the values must be present when the instance tree is built.
     pub fn new_bound(d: Design, binds: &[topbind::TopBind]) -> Result<Interp, String> {
-        Interp::new_bound_open(d, binds, false)
+        Interp::new_bound_open(d, binds, false, false)
     }
 
     /// `new_bound` for a fragment linked to be COMPILED rather than run:
@@ -819,8 +819,9 @@ impl Interp {
         d: Design,
         binds: &[topbind::TopBind],
         open_ports: bool,
+        defer_binds: bool,
     ) -> Result<Interp, String> {
-        let rb = topbind::resolve(&d, binds, open_ports)?;
+        let rb = topbind::resolve(&d, binds, open_ports, defer_binds)?;
         let str_ids: HashMap<&str, StrId> = d
             .strings
             .iter()
@@ -964,14 +965,25 @@ impl Interp {
         // top-level bindings (arguments/parameters, auto-fire method
         // args, EN_<m>=1) enter as the top instance's params — the
         // same mechanism every child instance uses, so Port/Param
-        // reads, the interp fallthroughs, and the compiled
-        // port_consts/wide_consts folds all work unchanged
+        // reads, the interp fallthroughs, and the compiled folds all
+        // work unchanged.
         let top_params: HashMap<StrId, Value> = rb.params.into_iter().collect();
+        // A String binding goes in the OTHER map.  `str_params` is
+        // what an interpreted read resolves through and what the
+        // compiled tier seeds an instance's `str_slot` from; put the
+        // text in `params` instead and the slot stays zero while the
+        // interpreter looks right, which is the worst of both.
+        // Interned here because `resolve` only reads the design.
+        let top_str: HashMap<StrId, StrId> = rb
+            .str_params
+            .into_iter()
+            .map(|(port, text)| (port, it.intern_dyn(text)))
+            .collect();
         it.instantiate(
             "".to_string(),
             top_mod,
             top_params,
-            HashMap::new(),
+            top_str,
             top_binds,
             HashMap::new(),
             HashMap::new(),

@@ -36,8 +36,9 @@ pub fn load_file(
     plusargs: &[String],
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, true, false)
+    load_file_inner(path, plusargs, binds, vcd_file, true, false, defer_binds)
 }
 
 /// Code-aware load: prefer the design snapshot EMBEDDED in the
@@ -86,7 +87,7 @@ pub fn load_file_or_code(
             crate::bvi::stage_plusargs(plusargs);
             let mut interp = Interp::new_bound(design, binds)?;
             sl.lap("interp build (instantiate)");
-            interp.bir_hash = hash ^ interp.top_binds_salt();
+            interp.bir_hash = hash;
             interp.fe.plusargs = plusargs.to_vec();
             interp.wave_pending = vcd_file.map(|f| (WaveFormat::Vcd, Some(f.to_string())));
             // user BDPI code stays a companion .so: prefer the
@@ -106,7 +107,7 @@ pub fn load_file_or_code(
             return Ok(interp);
         }
     }
-    load_file_inner(path, plusargs, binds, vcd_file, true, false)
+    load_file_inner(path, plusargs, binds, vcd_file, true, false, false)
 }
 
 #[cfg(not(feature = "aot"))]
@@ -117,7 +118,7 @@ pub fn load_file_or_code(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, true, false)
+    load_file_inner(path, plusargs, binds, vcd_file, true, false, false)
 }
 
 /// `load_file` that ignores any snapshot sidecar.  `trs link` is the
@@ -133,8 +134,9 @@ pub fn load_file_fresh(
     plusargs: &[String],
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, false, false)
+    load_file_inner(path, plusargs, binds, vcd_file, false, false, defer_binds)
 }
 
 /// `load_file` for a fragment being compiled rather than run: its
@@ -144,8 +146,9 @@ pub fn load_file_open(
     plusargs: &[String],
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, true, true)
+    load_file_inner(path, plusargs, binds, vcd_file, true, true, defer_binds)
 }
 
 /// `load_file_fresh` for a fragment being linked to be compiled rather
@@ -155,8 +158,9 @@ pub fn load_file_fragment(
     plusargs: &[String],
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
-    load_file_inner(path, plusargs, binds, vcd_file, false, true)
+    load_file_inner(path, plusargs, binds, vcd_file, false, true, defer_binds)
 }
 
 /// `load_file_fresh` over one design's fragments -- one per
@@ -172,6 +176,7 @@ pub fn load_fragments_fresh(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
     open_ports: bool,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
     let mut sl = StartupLap::new();
     // the top's fragment is named last: it is where a companion
@@ -191,7 +196,9 @@ pub fn load_fragments_fresh(
     // would find the stamp stale and compile again.
     let hash = bir_fingerprint(&design.encode());
     sl.lap("fragment link");
-    finish_load(design, hash, sl, path, plusargs, binds, vcd_file, open_ports)
+    finish_load(
+        design, hash, sl, path, plusargs, binds, vcd_file, open_ports, defer_binds,
+    )
 }
 
 /// Read one .bir and everything it needs, then link.
@@ -335,6 +342,7 @@ fn load_file_inner(
     vcd_file: Option<&str>,
     use_snap: bool,
     open_ports: bool,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
     let mut sl = StartupLap::new();
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -392,7 +400,9 @@ fn load_file_inner(
         }
         sl.lap("bir fold (extract-of-concat)");
     }
-    finish_load(design, hash, sl, path, plusargs, binds, vcd_file, open_ports)
+    finish_load(
+        design, hash, sl, path, plusargs, binds, vcd_file, open_ports, defer_binds,
+    )
 }
 
 /// The half of a load that does not care where the design came from.
@@ -407,16 +417,23 @@ fn finish_load(
     binds: &[crate::topbind::TopBind],
     vcd_file: Option<&str>,
     open_ports: bool,
+    defer_binds: bool,
 ) -> Result<Interp, String> {
     // raw +args reach BVI models at construction (their per-instance
     // VerilatedContext), so they stage before instantiation
     crate::bvi::stage_plusargs(plusargs);
-    let mut interp = Interp::new_bound_open(design, binds, open_ports)?;
+    let mut interp = Interp::new_bound_open(design, binds, open_ports, defer_binds)?;
     sl.lap("interp build (instantiate)");
-    // the bind salt differentiates compiled artifacts by their baked
-    // constants (stamp and check both derive from bir_hash); the
-    // snapshot key strips it again (write_snapshot)
-    interp.bir_hash = hash ^ interp.top_binds_salt();
+    // The bind salt is NOT in here.  A bound value used to be folded
+    // into the compiled bodies, so an artifact was specific to its
+    // bindings and the stamp had to say so.  It is a slot the run
+    // seeds now, and the .so is the same object whatever the value --
+    // keeping the salt would throw the compiled tier away on every
+    // run that supplied one, which is every run of a design that
+    // defers its bindings.  The one artifact that does bake them is
+    // the fast-boot arena image, and that is salted where it is
+    // written (runcore_image_encode).
+    interp.bir_hash = hash;
     // +NAME=value arguments consumed as bindings are not plusargs
     interp.fe.plusargs = plusargs
         .iter()
@@ -469,7 +486,8 @@ impl Interp {
     #[cold]
     #[inline(never)]
     pub fn write_snapshot(&self, path: &str) -> Result<(), String> {
-        let b = self.d.snap_encode(self.bir_hash ^ self.top_binds_salt())?;
+        // a snapshot is the decoded DESIGN, which no binding touches
+        let b = self.d.snap_encode(self.bir_hash)?;
         std::fs::write(path, b).map_err(|e| format!("{path}: {e}"))
     }
 }

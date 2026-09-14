@@ -225,7 +225,7 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     synth.push("--formats".into());
     synth.push(formats);
     for b in baked_binds {
-        synth.push("--bind".into());
+        synth.push("--link-bind".into());
         synth.push(b);
     }
     synth.extend(user_args.iter().cloned());
@@ -347,7 +347,7 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         if let Ok(txt) = std::fs::read_to_string(format!("{base}.opts")) {
             for line in txt.lines() {
                 if let Some(v) = line.strip_prefix("bind=") {
-                    match trs_interp::parse_bind(v, true) {
+                    match trs_interp::parse_bind(v, true, true) {
                         Ok(b) => binds.push(b),
                         Err(e) => {
                             eprintln!("trs compile: {base}.opts: {e}");
@@ -377,7 +377,9 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         } else {
             trs_interp::startup::load_file
         };
-        let mut interp = match load_design(path, &[], &binds, None) {
+        // a build step, like the link: the .opts it replays may name
+        // no bindings at all, because the run is where they land
+        let mut interp = match load_design(path, &[], &binds, None, true) {
             Ok(i) => i,
             Err(e) => {
                 eprintln!("trs compile: {e}");
@@ -455,7 +457,7 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                     // replaces the only file-dependent state.
                     let sidecar = format!("{base}.arena");
                     let bake = (|| -> Result<bool, String> {
-                        let mut b1 = trs_interp::startup::load_file(path, &[], &[], None)?;
+                        let mut b1 = trs_interp::startup::load_file(path, &[], &[], None, false)?;
                         b1.aot_request_code(format!("{base}.so").into());
                         if !b1.runcore_has_loads() {
                             let Some(cap) = b1.runcore_bake_capture(None) else {
@@ -471,7 +473,7 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                         else {
                             return Ok(false);
                         };
-                        let mut b2 = trs_interp::startup::load_file(path, &[], &[], None)?;
+                        let mut b2 = trs_interp::startup::load_file(path, &[], &[], None, false)?;
                         b2.aot_request_code(format!("{base}.so").into());
                         let Some(b) = b2.runcore_bake_capture(Some(0xAAAA_AAAA_AAAA_AAAA))
                         else {
@@ -767,7 +769,7 @@ fn main() -> ExitCode {
                             std::env::set_var("TRS_VLT_VFILES", join(&opts.extra_vfiles));
                         }
                         trs_interp::prim::set_load_memfiles(false);
-                        match trs_interp::startup::load_file_fresh(path, &[], &[], None) {
+                        match trs_interp::startup::load_file_fresh(path, &[], &[], None, false) {
                             Ok(_) => println!(
                                 "trs vlt: forwarded-parameter model classes \
                                  verilated via elaboration"
@@ -824,7 +826,7 @@ fn main() -> ExitCode {
                 match *a {
                     "-o" => out = it.next().map(|s| s.to_string()),
                     "--bind" => match it.next() {
-                        Some(v) => match trs_interp::parse_bind(v, true) {
+                        Some(v) => match trs_interp::parse_bind(v, true, false) {
                             Ok(b) => binds.push(b),
                             Err(e) => {
                                 eprintln!("trs link: {e}");
@@ -836,7 +838,7 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
-                    p if p.starts_with('+') => match trs_interp::parse_bind(&p[1..], true) {
+                    p if p.starts_with('+') => match trs_interp::parse_bind(&p[1..], true, false) {
                         Ok(b) => binds.push(b),
                         Err(e) => {
                             eprintln!("trs link: {e}");
@@ -959,14 +961,20 @@ fn main() -> ExitCode {
             // no snapshot to prefer: the sidecar is keyed by one
             // file's fingerprint.
             let load = |binds: &[trs_interp::TopBind], fresh: bool| match (multi, fresh) {
-                (true, _) => {
-                    trs_interp::startup::load_fragments_fresh(&frags, &[], binds, None, fragment)
-                }
+                // `true' = a link may leave a top-level parameter
+                // unbound; the value is a slot the RUN seeds, so the
+                // link settles the layout and the run settles the
+                // value.  The artifact still demands it per run.
+                (true, _) => trs_interp::startup::load_fragments_fresh(
+                    &frags, &[], binds, None, fragment, true,
+                ),
                 (false, true) if fragment => {
-                    trs_interp::startup::load_file_fragment(path, &[], binds, None)
+                    trs_interp::startup::load_file_fragment(path, &[], binds, None, true)
                 }
-                (false, true) => trs_interp::startup::load_file_fresh(path, &[], binds, None),
-                (false, false) => trs_interp::startup::load_file(path, &[], binds, None),
+                (false, true) => {
+                    trs_interp::startup::load_file_fresh(path, &[], binds, None, true)
+                }
+                (false, false) => trs_interp::startup::load_file(path, &[], binds, None, true),
             };
             let mut interp = match load(&binds, true) {
                 Ok(i) => i,
@@ -1427,8 +1435,13 @@ fn main() -> ExitCode {
                     // engines apart, so a run that must be compiled
                     // has to say so rather than silently degrade
                     "--only-compiled" => only_compiled = true,
-                    "--bind" => match it.next() {
-                        Some(v) => match trs_interp::parse_bind(v, true) {
+                    // `--bind' is the user's; `--link-bind' is the
+                    // artifact wrapper replaying what the LINK was
+                    // given, and a user binding of the same name
+                    // overrides it (topbind::TopBind::from_link).
+                    // Absent from the usage text: nothing types it.
+                    "--bind" | "--link-bind" => match it.next() {
+                        Some(v) => match trs_interp::parse_bind(v, true, *a == "--link-bind") {
                             Ok(b) => binds.push(b),
                             Err(e) => {
                                 eprintln!("trs: {e}");
@@ -1556,7 +1569,7 @@ fn main() -> ExitCode {
                         // candidate; the loader consumes it (and drops
                         // it from the plusargs) iff NAME is a top
                         // argument of this design
-                        if let Ok(b) = trs_interp::parse_bind(&p[1..], false) {
+                        if let Ok(b) = trs_interp::parse_bind(&p[1..], false, false) {
                             binds.push(b);
                         }
                         plusargs.push(p[1..].to_string());
@@ -2302,7 +2315,8 @@ fn run_script(
         eprintln!("trs run: {e}");
         return ExitCode::FAILURE;
     }
-    let mut interp = match trs_interp::load_file(path, plusargs, binds, vcd) {
+    // a RUN: every top-level parameter must have a value by now
+    let mut interp = match trs_interp::load_file(path, plusargs, binds, vcd, false) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("trs: {e}");

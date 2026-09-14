@@ -47,20 +47,34 @@ use trs_ir as ir;
 /// One NAME=value binding from the CLI.  `explicit` = `--bind` or a
 /// link-time `+` (unknown names are errors); a run-time `+` is
 /// opportunistic (unmatched names stay plusargs).
+///
+/// `from_link` marks one replayed out of a linked artifact's `.opts`
+/// rather than typed on this command line.  The two are not
+/// interchangeable: a run-time binding OVERRIDES the link's, because
+/// the value reaches the body through a slot the run seeds and not
+/// through the code, so there is nothing to relink.  Two bindings
+/// from the SAME source are still a conflict -- that is a typo, not
+/// an override.
 #[derive(Clone, Debug)]
 pub struct TopBind {
     pub name: String,
     pub value: String,
     pub explicit: bool,
+    pub from_link: bool,
 }
 
 /// Parse "NAME=value" (the CLI's spelling after `+` / `--bind`).
-pub fn parse_bind(s: &str, explicit: bool) -> Result<TopBind, String> {
+///
+/// `from_link` marks a binding replayed out of a linked artifact's
+/// recorded options rather than typed on this command line; see
+/// `TopBind`.
+pub fn parse_bind(s: &str, explicit: bool, from_link: bool) -> Result<TopBind, String> {
     match s.split_once('=') {
         Some((n, v)) if !n.is_empty() && !v.is_empty() => Ok(TopBind {
             name: n.to_string(),
             value: v.to_string(),
             explicit,
+            from_link,
         }),
         _ => Err(format!("malformed binding `{s}' (expected NAME=value)")),
     }
@@ -71,6 +85,11 @@ pub(crate) struct ResolvedBinds {
     /// and parameters, auto-fire method arguments, and EN_<m> = 1 for
     /// each auto-fired method.
     pub params: Vec<(ir::StrId, Value)>,
+    /// String-typed bindings: port -> the text supplied.  Kept apart
+    /// from `params` because a String reaches an instance through
+    /// `str_params` (and, compiled, through its `str_slot`), and the
+    /// caller does the interning -- `resolve` only reads the design.
+    pub str_params: Vec<(ir::StrId, String)>,
     /// always_enabled Action methods to auto-fire, in interface
     /// order, each with its constant argument values.
     pub autofire: Vec<(ir::StrId, Vec<Value>)>,
@@ -170,8 +189,40 @@ fn bit_len(limbs: &[u64]) -> u32 {
 
 /// FNV-1a over the canonical binding list (sorted by name, values as
 /// LE limb hex) — the bind identity salt.
-fn bind_salt(bound: &[(String, Vec<u64>)]) -> u64 {
-    let mut names: Vec<&(String, Vec<u64>)> = bound.iter().collect();
+/// One resolved binding: which port, where it came from, and the
+/// value read the way that port's `vtype` says to.
+struct Bnd {
+    port: ir::StrId,
+    from_link: bool,
+    val: BndVal,
+}
+
+/// A bound value, in the shape its port carries.  Kept apart because
+/// the three reach an instance by different routes: bits and reals as
+/// a `Value` in `params`, a string as text in `str_params`.
+enum BndVal {
+    Bits(u32, Vec<u64>),
+    Str(String),
+    Real(f64),
+}
+
+/// FNV-1a over the bound values, so an artifact's fast-boot arena
+/// image is only reused for the bindings it was written with.
+///
+/// Deliberately NOT part of `bir_hash`: a bound value is a slot the
+/// run seeds, not a constant in the compiled code, so the .so is the
+/// same object whatever the value -- and keying it on the value would
+/// throw the compiled tier away on every run that supplied one, which
+/// is every run for a design that defers its bindings to run time.
+/// The arena IMAGE is the one artifact that does bake them, and this
+/// is what gates it.
+///
+/// Every kind is tagged, so `+n=1` as Bits and as a String cannot
+/// collide, and a Real hashes its bit pattern (NaN included -- two
+/// NaNs with different payloads are different images, which is
+/// conservative and cheap).
+fn bind_salt(bound: &[(String, Bnd)]) -> u64 {
+    let mut names: Vec<&(String, Bnd)> = bound.iter().collect();
     names.sort_by(|a, b| a.0.cmp(&b.0));
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |bytes: &[u8]| {
@@ -180,11 +231,25 @@ fn bind_salt(bound: &[(String, Vec<u64>)]) -> u64 {
             h = h.wrapping_mul(0x1000_0000_01b3);
         }
     };
-    for (n, ls) in names {
+    for (n, bn) in names {
         eat(n.as_bytes());
         eat(&[b'=']);
-        for l in ls {
-            eat(&l.to_le_bytes());
+        match &bn.val {
+            BndVal::Bits(w, ls) => {
+                eat(b"b");
+                eat(&w.to_le_bytes());
+                for l in ls {
+                    eat(&l.to_le_bytes());
+                }
+            }
+            BndVal::Str(t) => {
+                eat(b"s");
+                eat(t.as_bytes());
+            }
+            BndVal::Real(r) => {
+                eat(b"r");
+                eat(&r.to_bits().to_le_bytes());
+            }
         }
         eat(&[b';']);
     }
@@ -210,6 +275,7 @@ pub(crate) fn resolve(
     d: &ir::Design,
     binds: &[TopBind],
     open_ports: bool,
+    defer_binds: bool,
 ) -> Result<ResolvedBinds, String> {
     let top = d
         .modules
@@ -220,11 +286,11 @@ pub(crate) fn resolve(
 
     // ---- bindable surface ----
     // top-level arguments/parameters: the module's MethodArg inputs
-    let arg_ports: Vec<(ir::StrId, u32)> = top
+    let arg_ports: Vec<(ir::StrId, u32, ir::PortVal)> = top
         .inputs
         .iter()
         .filter(|p| p.kind == ir::PortKind::MethodArg)
-        .map(|p| (p.name, p.width))
+        .map(|p| (p.name, p.width, p.vtype))
         .collect();
     // always_enabled methods (arm even with no bindings on the CLI)
     let mut autofire: Vec<(ir::StrId, Vec<(ir::StrId, Option<ir::StrId>, u32)>)> = Vec::new();
@@ -285,6 +351,7 @@ pub(crate) fn resolve(
         }
         return Ok(ResolvedBinds {
             params: Vec::new(),
+            str_params: Vec::new(),
             autofire: Vec::new(),
             autofire_at: Default::default(),
             autofire_pre: Default::default(),
@@ -325,46 +392,68 @@ pub(crate) fn resolve(
             }
         }
     }
-    // zero-width (or string-typed: both export width 0) arguments
-    // cannot bind — bsc refuses these too; this guards stale .birs.
+    // A genuinely zero-width BITS argument carries nothing, so there
+    // is no value to supply and `+n=' would name nothing.  Strings are
+    // width 0 too and ARE bindable now -- `vtype' is what separates
+    // them, which is the whole reason the exporter records it.
+    //
     // Only on the binding path: a fragment binds nothing, its
-    // parameters reaching its body from the instance's region, so a
-    // String parameter is no obstacle to compiling it alone.  Refusing
-    // here anyway cost every module carrying one -- the SRBs and the
-    // memories, and so everything built from them -- its shared object.
-    if let Some((n, _)) = arg_ports.iter().filter(|_| !open_ports).find(|(_, w)| *w == 0) {
+    // parameters reaching its body from the instance's region, so no
+    // argument of any type is an obstacle to compiling one alone.
+    // Refusing here anyway cost every module carrying a String -- the
+    // SRBs and the memories, and so everything built from them -- its
+    // shared object.
+    if let Some((n, _, _)) = arg_ports
+        .iter()
+        .filter(|_| !open_ports)
+        .find(|(_, w, vt)| *w == 0 && *vt == ir::PortVal::Bits)
+    {
         return Err(format!(
-            "top-level argument `{}' has width 0 (zero-width or \
-             non-Bit); it cannot be bound",
+            "top-level argument `{}' has width 0; it carries no value \
+             to bind",
             s(*n)
         ));
     }
 
     // ---- match bindings against the surface ----
-    // name -> (port StrId, width); method args are "<method>.<arg>"
-    let mut surface: Vec<(String, ir::StrId, u32)> = arg_ports
+    // name -> (port, width, what it carries); method args are
+    // "<method>.<arg>"
+    let mut surface: Vec<(String, ir::StrId, u32, ir::PortVal)> = arg_ports
         .iter()
-        .map(|&(n, w)| (s(n).to_string(), n, w))
+        .map(|&(n, w, vt)| (s(n).to_string(), n, w, vt))
         .collect();
     for (mname, args) in &autofire {
         for &(an, abase, aw) in args {
-            // the binding key is the user-facing "<method>.<arg>"
+            // the binding key is the user-facing "<method>.<arg>".
+            // A method argument is always Bits: it is driven by a
+            // caller's port, and neither a String nor a Real can be.
             let disp = abase.map(|b| s(b)).unwrap_or(s(an));
-            surface.push((format!("{}.{}", s(*mname), disp), an, aw));
+            surface.push((format!("{}.{}", s(*mname), disp), an, aw, ir::PortVal::Bits));
         }
     }
 
-    let mut bound: Vec<(String, Vec<u64>)> = Vec::new();
-    let mut params: Vec<(ir::StrId, Value)> = Vec::new();
+    // What each name resolved to, and from where.  Keyed by name so a
+    // later binding can REPLACE an earlier one: the artifact's own
+    // `.opts` bindings are replayed first and the command line comes
+    // after, so a run-time value wins.  That is sound because a
+    // parameter is a slot the run seeds, not a constant in the code --
+    // it used to be the latter, which is why this refused outright and
+    // said to relink.
+    //
+    // Two bindings from the SAME source still conflict.  Overriding
+    // the link is a thing a user means; naming one parameter twice on
+    // one command line is a typo, and silently taking the last would
+    // hide it.
+    let mut bound: Vec<(String, Bnd)> = Vec::new();
     let mut consumed_plus: Vec<String> = Vec::new();
     for b in binds {
-        let Some((port, width)) = surface
+        let Some((port, width, vtype)) = surface
             .iter()
-            .find(|(n, _, _)| *n == b.name)
-            .map(|t| (t.1, t.2))
+            .find(|(n, _, _, _)| *n == b.name)
+            .map(|t| (t.1, t.2, t.3))
         else {
             if b.explicit {
-                let names: Vec<&str> = surface.iter().map(|(n, _, _)| n.as_str()).collect();
+                let names: Vec<&str> = surface.iter().map(|(n, _, _, _)| n.as_str()).collect();
                 return Err(format!(
                     "unknown top-level binding `{}' (bindable: {})",
                     b.name,
@@ -373,38 +462,98 @@ pub(crate) fn resolve(
             }
             continue; // run-time `+`: stays a plusarg
         };
-        let limbs =
-            parse_uint(&b.value).map_err(|e| format!("binding `{}={}': {e}", b.name, b.value))?;
-        if bit_len(&limbs) > width {
-            return Err(format!(
-                "binding `{}={}' does not fit in the declared width \
-                 ({} bits)",
-                b.name, b.value, width
-            ));
-        }
-        if let Some((_, prev)) = bound.iter().find(|(n, _)| *n == b.name) {
-            if *prev != limbs {
-                return Err(format!(
-                    "conflicting bindings for `{}' (a linked artifact \
-                     bakes its bindings; relink to change them)",
-                    b.name
-                ));
+        // read the value the way the PORT says to, which the width
+        // cannot say: a String is width 0 and a Real is width 64,
+        // indistinguishable from Bit#(0) and Bit#(64) without `vtype'
+        let val = match vtype {
+            ir::PortVal::Bits => {
+                let limbs = parse_uint(&b.value)
+                    .map_err(|e| format!("binding `{}={}': {e}", b.name, b.value))?;
+                if bit_len(&limbs) > width {
+                    return Err(format!(
+                        "binding `{}={}' does not fit in the declared width \
+                         ({} bits)",
+                        b.name, b.value, width
+                    ));
+                }
+                BndVal::Bits(width, limbs)
             }
-        } else {
-            params.push((port, Value::from_limbs64(width, limbs.clone())));
-            bound.push((b.name.clone(), limbs));
+            // any text at all, taken literally -- a String parameter's
+            // domain is every string, so there is nothing to validate
+            // and nothing to escape
+            ir::PortVal::String => BndVal::Str(b.value.clone()),
+            ir::PortVal::Real => BndVal::Real(b.value.parse::<f64>().map_err(|_| {
+                format!(
+                    "binding `{}={}': `{}' is not a real number",
+                    b.name, b.value, b.value
+                )
+            })?),
+        };
+        match bound.iter_mut().find(|(n, _)| *n == b.name) {
+            Some((_, prev)) if prev.from_link && !b.from_link => {
+                // the override this exists for
+                prev.from_link = false;
+                prev.val = val;
+            }
+            Some((_, prev)) if prev.from_link == b.from_link => {
+                return Err(format!(
+                    "conflicting bindings for `{}' (given twice {})",
+                    b.name,
+                    if b.from_link {
+                        "in the artifact's recorded options"
+                    } else {
+                        "on the command line"
+                    }
+                ))
+            }
+            // a link binding arriving after a command-line one: the
+            // command line already won, so ignore it
+            Some(_) => {}
+            None => bound.push((
+                b.name.clone(),
+                Bnd {
+                    port,
+                    from_link: b.from_link,
+                    val,
+                },
+            )),
         }
         if !b.explicit {
             consumed_plus.push(format!("{}={}", b.name, b.value));
         }
     }
+    let mut params: Vec<(ir::StrId, Value)> = Vec::new();
+    let mut str_params: Vec<(ir::StrId, String)> = Vec::new();
+    for (_, bn) in &bound {
+        match &bn.val {
+            BndVal::Bits(w, limbs) => {
+                params.push((bn.port, Value::from_limbs64(*w, limbs.clone())))
+            }
+            // a String reaches the instance through str_params, never
+            // through params: the compiled tier seeds its `str_slot'
+            // from the former and would leave the slot zero otherwise
+            BndVal::Str(t) => str_params.push((bn.port, t.clone())),
+            BndVal::Real(r) => params.push((bn.port, Value::real(*r))),
+        }
+    }
 
     // ---- completeness ----
+    //
+    // A LINK may leave them unbound: the value is a slot the run
+    // seeds, so linking settles the layout and the run settles the
+    // value.  The artifact still demands them -- this same check runs
+    // again per run, with `defer_binds' false -- so nothing reaches a
+    // simulation holding an unsupplied parameter; it is only the
+    // build step that no longer has to know.
     let missing: Vec<String> = surface
         .iter()
-        .filter(|_| !open_ports)
-        .filter(|(n, _, _)| !bound.iter().any(|(bn, _)| bn == n))
-        .map(|(n, _, w)| format!("{n} ({w} bits)"))
+        .filter(|_| !open_ports && !defer_binds)
+        .filter(|(n, _, _, _)| !bound.iter().any(|(bn, _)| bn == n))
+        .map(|(n, _, w, vt)| match vt {
+            ir::PortVal::String => format!("{n} (String)"),
+            ir::PortVal::Real => format!("{n} (Real)"),
+            ir::PortVal::Bits => format!("{n} ({w} bits)"),
+        })
         .collect();
     if !missing.is_empty() {
         return Err(format!(
@@ -552,6 +701,7 @@ pub(crate) fn resolve(
 
     Ok(ResolvedBinds {
         params,
+        str_params,
         autofire: af,
         autofire_at,
         autofire_pre,

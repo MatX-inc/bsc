@@ -1915,6 +1915,20 @@ impl Interp {
             // traced artifacts boot classic (their rec_inits land
             // after this hook, and the wave engine needs the interp)
             || self.vcd_trace
+            // A design with top-level bindings boots classic too.
+            // This image IS the arena as the link seeded it, bound
+            // values and all, and the whole point of a binding is
+            // that the next run may supply a different one -- booting
+            // from the image would silently run the link's value.
+            //
+            // It cannot be gated on the salt instead: the sidecar's
+            // hash field pairs it with the .so, which is compared
+            // against the `trs_bir_hash' symbol, so there is nowhere
+            // in the current format to put a second key.  Skipping
+            // the image costs these designs the fast BOOT only -- the
+            // compiled .so is binding-independent and still loads,
+            // which is the part that matters at simulation rate.
+            || self.top_binds_salt() != 0
         {
             return None;
         }
