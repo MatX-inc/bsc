@@ -66,7 +66,25 @@ GHCFLAGS = \
 
 GHCMAXHEAP ?= $(shell expr 3 + $(GHCJOBS))G
 GHCRTSFLAGS ?= +RTS -M$(GHCMAXHEAP) -A128m -RTS
-RTSFLAGS = "-with-rtsopts=-H256m -K10m -i1"
+# -K is a MAXIMUM, grown on demand, so a large one costs nothing until
+# it is needed.  It is needed here in proportion to the OUTPUT:
+# cborg's `Encoding' is a difference list, so `<>' is function
+# composition and forcing the result walks a chain as deep as the
+# total number of fields encoded.  A large module overflowed the 10m
+# src/comp uses, where nothing builds an encoding this way.
+#
+# Measured, because the obvious suspect was wrong: the threshold is
+# set by the WHOLE chain -- defs, rules, expressions -- so a field
+# added to a per-port record is lost in it.  Adding `vtype' to every
+# Port left the minimum unchanged to 200k resolution (1700k either
+# way) on a 900-method module chosen to be port-dense, and unchanged
+# at 8m on a 26MB def-heavy one.  Do not assume a new field moved
+# this; measure before blaming one.
+#
+# Raising the default needs no -rtsopts, which matters because this
+# program is linked RtsOptsSafeOnly: +RTS -K on the command line is
+# refused, so a build cannot work around it.
+RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
 
 ifeq ($(shell uname -s),Darwin)
 GHC += -optl -headerpad_max_install_names
