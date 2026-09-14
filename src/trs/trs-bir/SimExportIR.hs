@@ -74,7 +74,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 16
+birVersion = 17
 
 -- ===============
 -- String interning
@@ -839,7 +839,7 @@ encPortOf :: (Id, AType) -> String -> Maybe Id -> EncM C.Encoding
 encPortOf (i, t) kind mmeth = do
     n <- idE i
     baseEnc <- traverse strE (mmeth >>= argBaseName i)
-    return $ encPortRawBase n (aTypeWidth t) kind (encMaybe id baseEnc)
+    return $ encPortRawBase n (aTypeWidth t) kind (aTypeVal t) (encMaybe id baseEnc)
 
 -- | The argument's own name: the port name with its method's prefix off.
 argBaseName :: Id -> Id -> Maybe String
@@ -848,14 +848,26 @@ argBaseName arg meth =
 
 encPortRaw :: C.Encoding -> Word32 -> String -> C.Encoding
 encPortRaw nameEnc w kind =
-    encPortRawBase nameEnc w kind (encMaybe id Nothing)
+    encPortRawBase nameEnc w kind "Bits" (encMaybe id Nothing)
 
-encPortRawBase :: C.Encoding -> Word32 -> String -> C.Encoding -> C.Encoding
-encPortRawBase nameEnc w kind baseEnc =
+-- | What the port CARRIES, which its width does not say: a String is
+-- width 0 exactly like a @Bit#(0)@, and a Real is width 64 exactly
+-- like a @Bit#(64)@.  Both distinctions are lost the moment the width
+-- is all that is written down, and a reader that has only the .bir --
+-- binding a top-level parameter from the command line, say -- then has
+-- no way to know how to read the value it was handed.
+aTypeVal :: AType -> String
+aTypeVal (ATString _) = "String"
+aTypeVal ATReal       = "Real"
+aTypeVal _            = "Bits"
+
+encPortRawBase :: C.Encoding -> Word32 -> String -> String -> C.Encoding -> C.Encoding
+encPortRawBase nameEnc w kind vtype baseEnc =
     encStruct
       [ ("name", nameEnc)
       , ("width", encW32 w)
       , ("kind", encUnitVariant kind)
+      , ("vtype", encUnitVariant vtype)
       , ("base", baseEnc)
       ]
 

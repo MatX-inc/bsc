@@ -205,6 +205,8 @@ fn port(r: &Remap, p: &mut Port) {
         name,
         width: _,
         kind: _,
+        // not a StrId and not a position: nothing to remap
+        vtype: _,
         base,
     } = p;
     r.s(name);
@@ -1008,6 +1010,7 @@ mod tests {
             name,
             width: 1,
             kind,
+            vtype: crate::PortVal::Bits,
             base: None,
         };
         let kid = crate::Module {

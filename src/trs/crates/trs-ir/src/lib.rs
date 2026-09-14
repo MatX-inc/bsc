@@ -35,7 +35,7 @@ pub use schedule::{Composition, ModuleSchedule, QualRule, SchedAlt, SchedNode, S
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 16;
+pub const BIR_VERSION: u32 = 17;
 
 /// magic(8) | BIR_VERSION le32(4) = 12 bytes, ahead of the CBOR body.
 ///
@@ -61,7 +61,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 7;
+const SNAP_LAYOUT_REV: u32 = 8;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -540,10 +540,37 @@ pub struct Port {
     pub name: StrId,
     pub width: u32,
     pub kind: PortKind,
+    /// What the port CARRIES, which `width` does not say.
+    ///
+    /// A String is width 0, exactly like a `Bit#(0)`; a Real is width
+    /// 64, exactly like a `Bit#(64)`.  Nothing downstream can recover
+    /// the difference from the width, and a reader holding only the
+    /// .bir -- binding a top-level parameter from the command line,
+    /// say -- has to know how to read the value it was handed.
+    ///
+    /// REQUIRED, and BIR_VERSION went up with it rather than letting
+    /// it default.  A defaulted `Bits` would decode a stale .bir
+    /// silently into the old meaning, and the old meaning is now
+    /// wrong in two places that do not announce themselves: a String
+    /// parameter would refuse to bind, and a StringConcat over one
+    /// would take the unsupplied-parameter path by width alone.  A
+    /// file that cannot say what its ports carry should be rejected,
+    /// not guessed at.
+    pub vtype: PortVal,
     /// A method argument's own name, without the method that qualifies
     /// it in `name`.  The exporter records it so that reaching an
     /// argument takes no knowledge of how the port name is composed.
     pub base: Option<StrId>,
+}
+
+/// The kind of VALUE a port carries, as bsc's `AType` distinguishes
+/// them and the width does not.  See `Port::vtype`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PortVal {
+    #[default]
+    Bits,
+    String,
+    Real,
 }
 
 /// What a module input carries.
