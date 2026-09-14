@@ -128,6 +128,7 @@ library
     CtxRed
     DOT
     DPIWrappers
+    DefProp
     Depend
     Deriving
     DisjointTest
@@ -172,6 +173,7 @@ library
     IOMutVar
     IOUtil
     IPrims
+    ISimpDicts
     ISimplify
     ISplitIf
     IStateLoc
@@ -198,6 +200,7 @@ library
     LambdaCalc
     LambdaCalcUtil
     Lex
+    LiftDicts
     ListMap
     ListUtil
     Literal
@@ -263,6 +266,7 @@ library
     SolvedBinds
     Sort
     SpeedyString
+    StaleUtils
     StdPrel
     Subst
     SymTab
@@ -291,14 +295,18 @@ library
     Util
     VCD
     VFileName
+    VFileUtils
     VFinalCleanup
     VIOProps
     VModInfo
     VPIWrappers
     VPrims
+    VStableRenumber
     VVerilogDollar
     Verilog
     Version
+    WaveCheck
+    WireAnalysis
     Wires
     Yices
     YicesFFI
