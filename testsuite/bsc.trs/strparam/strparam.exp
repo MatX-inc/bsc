@@ -1,0 +1,138 @@
+# A String parameter must not stop a module being compiled as a fragment.
+#
+# `trs link --fragment' on a module whose String parameter is
+# CONCATENATED during elaboration used to panic -- `StringConcat of a
+# non-string value' -- because --fragment leaves the parameter dynamic,
+# which is what it is for, and the concatenation then found no string
+# behind the port.  A Bit parameter was already read from the arena; a
+# String one had nowhere to be read from.
+#
+# The failure was silent where it mattered.  In a build over fragments
+# the module simply had no object, every design lowered it again, and
+# the build still passed -- just slower, with nothing naming the module
+# or the reason.  Every memory module in a real design carries such a
+# parameter (cf. Grid.bs building `memName + "_" + sx + "x" + sy'), so
+# the modules that could not be shared were the ones instantiated
+# everywhere.
+#
+# What the fix rests on -- and what this test pins -- is that the
+# concatenated value is not part of the OBJECT.  Its only
+# elaboration-time consumer is a mem-file prim's load filename, and a
+# link never opens one: a `.mem' is an input to the simulation, not to
+# the build.  So the gate is BYTE IDENTITY between an object built
+# knowing no filename at all and the one the design built knowing
+# `a.hex' -- if they ever differ, the substitution has reached the code
+# and the reasoning above is wrong.
+#
+# The whole-design link is the control: it must keep succeeding, so a
+# "fix" that merely stops emitting the string cannot pass this.  And
+# the design must still LOAD a.hex and get the right answers, so a fix
+# that drops the filename outright cannot either.
+
+proc trs_strparam_test { trs name top leaf } {
+    global srcdir subdir bsc
+
+    bsc_initialize
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set log "$name.sp-out"
+    set flags "-no-show-timestamps -no-show-version"
+    set trsbir [file join [file dirname $bsc] trs-bir]
+    set work "$name.wk"
+    file delete -force $work
+    file mkdir $work
+
+    if { [catch {exec sh -c "$bsc $flags -sim -u -g $top -g $leaf $name.bsv > $log 2>&1 && $trsbir $leaf.ba >> $log 2>&1 && $trsbir $top.ba >> $log 2>&1"}] } {
+        fail "trs strparam compile/export of $name (log `$log')"
+        cd $here
+        return
+    }
+
+    # control: the whole design links, String parameter and all
+    if { [catch {exec sh -c "$trs link $top.bir -o $work/design >> $log 2>&1"}] } {
+        fail "trs strparam whole-design link of $top (log `$log')"
+        cd $here
+        return
+    }
+    pass "trs strparam whole-design link of $top"
+
+    # the design's object, built knowing the parameter is "a"
+    if { [catch {exec sh -c "$trs compile $work/design.bir --obj-out $work/indesign -o $work/design.so >> $log 2>&1"}] } {
+        fail "trs strparam design compile (log `$log')"
+        cd $here
+        return
+    }
+
+    # the same module ALONE: nothing supplies the String at all
+    set d "$work/alone"
+    file mkdir $d
+    file copy -force $leaf.bir $d/$leaf.bir
+    set ok 1
+    if { [catch {exec sh -c "cd $d && $trs link --fragment $leaf.bir -o frag > link.out 2>&1 && $trs compile --fragment frag.bir --obj-out . > comp.out 2>&1"}] } {
+        fail "trs strparam fragment build of $leaf (logs `$d/link.out', `$d/comp.out')"
+        set ok 0
+    } elseif { ![file exists $d/$leaf.o] } {
+        fail "trs strparam fragment build produced no $leaf.o"
+        set ok 0
+    } else {
+        pass "trs strparam fragment build of $leaf"
+    }
+
+    # the gate: knowing no filename produced the same object as knowing one
+    if { $ok } {
+        if { ![file exists $work/indesign/$leaf.o] } {
+            fail "trs strparam: the design wrote no $leaf.o"
+            set ok 0
+        } elseif { [catch {exec cmp -s $work/indesign/$leaf.o $d/$leaf.o}] } {
+            fail "trs strparam: $leaf.o differs built alone -- the unsupplied\
+                  String reached the object"
+            set ok 0
+        } else {
+            pass "trs strparam: $leaf.o is byte-identical built alone"
+        }
+    }
+
+    # and the design still loads a.hex and gets the right answers
+    if { $ok } {
+        if { [catch {exec sh -c "$trs compile $work/design.bir --obj-in $d -o $work/design.so 2> $work/reuse.txt"}] } {
+            fail "trs strparam reuse compile (log `$work/reuse.txt')"
+            set ok 0
+        } else {
+            set fh [open $work/reuse.txt]; set reuse [read $fh]; close $fh
+            if { ![regexp {1 of 1 fragment objects reused} $reuse] } {
+                fail "trs strparam: the design did not reuse the standalone object"
+                set ok 0
+            } else {
+                pass "trs strparam: the design reuses the standalone object"
+            }
+        }
+    }
+    if { $ok } {
+        if { [catch {exec sh -c "cp $work/design.so $work/design.exe.so 2>/dev/null; TRS=$trs $work/design > $name.trs-run-out 2>&1"}] } {
+            fail "trs strparam artifact run of $name"
+        } else {
+            compare_file $name.trs-run-out $top.out.expected "trs_strparam"
+        }
+    }
+
+    if { $ok } {
+        file delete -force $work
+        foreach f [glob -nocomplain $leaf.bir $top.bir $log $name.trs-run-out] {
+            file delete -force $f
+        }
+    }
+    cd $here
+}
+
+global env
+set trs_cmd "trs"
+if { [info exists env(TRS)] } { set trs_cmd $env(TRS) }
+
+if { [catch {exec sh -c "command -v $trs_cmd"}] } {
+    unsupported "trs String-parameter fragment (trs not installed)"
+} elseif { [catch {exec sh -c "$trs_cmd features | grep -qw jit"}] } {
+    unsupported "trs String-parameter fragment (trs built without the jit feature)"
+} else {
+    trs_strparam_test $trs_cmd StrParam sysStrParam mkNamedLeaf
+}

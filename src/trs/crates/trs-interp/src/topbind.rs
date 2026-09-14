@@ -326,8 +326,13 @@ pub(crate) fn resolve(
         }
     }
     // zero-width (or string-typed: both export width 0) arguments
-    // cannot bind — bsc refuses these too; this guards stale .birs
-    if let Some((n, _)) = arg_ports.iter().find(|(_, w)| *w == 0) {
+    // cannot bind — bsc refuses these too; this guards stale .birs.
+    // Only on the binding path: a fragment binds nothing, its
+    // parameters reaching its body from the instance's region, so a
+    // String parameter is no obstacle to compiling it alone.  Refusing
+    // here anyway cost every module carrying one -- the SRBs and the
+    // memories, and so everything built from them -- its shared object.
+    if let Some((n, _)) = arg_ports.iter().filter(|_| !open_ports).find(|(_, w)| *w == 0) {
         return Err(format!(
             "top-level argument `{}' has width 0 (zero-width or \
              non-Bit); it cannot be bound",

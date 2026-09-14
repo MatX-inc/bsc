@@ -2082,13 +2082,82 @@ impl Interp {
                     let v = self.eval(inst, ctx, a);
                     match v.as_str_id() {
                         Some(id) => text.push_str(self.s(id)),
-                        None => panic!("StringConcat of a non-string value"),
+                        // A String parameter nobody supplied, which is
+                        // the normal state of a fragment built ALONE.
+                        // It contributes nothing and the build carries
+                        // on.
+                        //
+                        // Sound because the result cannot reach the
+                        // OBJECT.  The only elaboration-time consumer
+                        // of a computed string is a mem-file prim's
+                        // load filename (RegFileLoad, BRAM*Load -- the
+                        // whole set that reads `strs'), and a link
+                        // opens none of them: a `.mem' is an input to
+                        // the simulation, not to the build, which is
+                        // why `trs link' clears LOAD_MEMFILES.  At run
+                        // time the parameter is in the instance's slot
+                        // and this arm is never taken.
+                        // bsc.trs/strparam gates it the only way that
+                        // actually checks the claim -- the object
+                        // built knowing no filename must be
+                        // byte-identical to the one built knowing it.
+                        //
+                        // Keyed on the port's declared `vtype', not
+                        // on the value: an unsupplied String reads 0
+                        // at width 0, indistinguishable from a
+                        // `Bit#(0)' or from a zero-width operand
+                        // arriving by any other route -- and those
+                        // others are real defects that stay loud.
+                        None if self.unsupplied_str_param(inst, ctx, a) => {}
+                        None => panic!(
+                            "StringConcat of a non-string value (width {})",
+                            v.width
+                        ),
                     }
                 }
                 let id = self.intern_dyn(text);
                 Value::str_ref(id)
             }
         }
+    }
+
+    /// Is `e` a String parameter of `inst` that nothing supplied?
+    ///
+    /// True only for a bare port/param reference naming a String
+    /// input with no value behind it -- no frame binding, no numeric
+    /// param, no string param -- checked in the same order `eval`
+    /// resolves them, so the two cannot disagree about whether a
+    /// value existed.
+    ///
+    /// `vtype` is what says String, not the width: a String and a
+    /// `Bit#(0)' are both width 0, and keying on the width would also
+    /// swallow a zero-width operand arriving from anywhere else.  A
+    /// non-string reaching a StringConcat by any other route is a
+    /// real defect and stays loud.  That is what a module argument
+    /// looks like in a fragment linked on its own, and a String is the
+    /// only argument kind that exports width 0 and can legally appear
+    /// in a string context (a `Bit#(0)' argument could not typecheck
+    /// there).
+    fn unsupplied_str_param(&self, inst: usize, ctx: &Ctx, e: &Expr) -> bool {
+        let (Expr::Port(name) | Expr::Param(name)) = e else {
+            return false;
+        };
+        if ctx.frame.contains_key(name) {
+            return false;
+        }
+        if let InstKind::User {
+            params, str_params, ..
+        } = &self.insts[inst].kind
+        {
+            if params.contains_key(name) || str_params.contains_key(name) {
+                return false;
+            }
+        }
+        let mir = self.mods[self.module_of(inst)].ir;
+        self.d.modules[mir]
+            .inputs
+            .iter()
+            .any(|q| q.name == *name && q.vtype == ir::PortVal::String)
     }
 
     fn eval_arg(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr, signed: bool) -> Arg {
