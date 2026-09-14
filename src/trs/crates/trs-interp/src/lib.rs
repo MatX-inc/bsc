@@ -300,18 +300,23 @@ pub struct Interp {
     /// schedule-position defs: interpreted evaluation falls through to
     /// the slots the native scheds keep current
     jit_eager_slots: HashMap<(usize, StrId), (u32, u32)>,
+    /// Bound input clock gates, materialised once per edge:
+    /// (owner instance, the gate expression in THAT instance's frame,
+    /// the slot in the gated child's own region).
+    ///
+    /// Compiled bodies read the slot.  Evaluating here rather than in
+    /// the child's body is what lets one body serve instances under
+    /// different gates -- the expression belongs to the parent, and
+    /// re-expanding it inside a shared body baked the parent in.  It
+    /// is also a LATCH: sampled once at the edge, where the old
+    /// in-body re-expansion was a live read that diverged across
+    /// clock domains.
+    jit_gate_fills: Vec<(usize, Expr, u32)>,
     /// what prime()'s planning pass should do: JIT in-process (default),
     /// emit an AOT artifact, or load one (trs link / run --code)
     pub(crate) jit_request: JitRequestT,
     /// outcome of an Emit request (trs link reads this after prime)
     pub(crate) jit_emit_result: Option<AotEmit>,
-    /// `trs specializations`: where to write the class manifest and in which
-    /// rendering.  A property of the command line, so it travels as
-    /// one -- an environment variable would put a presentation choice
-    /// in the same channel the codegen knobs use, and those are hashed
-    /// into every object's name.  It was, briefly, and asking for the
-    /// text rendering renamed every object.
-    pub(crate) spec_req: Option<(std::path::PathBuf, bool)>,
     /// FNV-1a fingerprint of the loaded .bir bytes (artifact check)
     pub(crate) bir_hash: u64,
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
@@ -918,9 +923,9 @@ impl Interp {
             jit_en_slots: HashMap::new(),
             jit_en_pruned: false,
             jit_eager_slots: HashMap::new(),
+            jit_gate_fills: Vec::new(),
             jit_request: Default::default(),
             jit_emit_result: None,
-            spec_req: None,
             bir_hash: 0,
             jit_arena_ptr: std::ptr::null_mut(),
             jit_arena_len: 0,
@@ -1655,6 +1660,37 @@ impl Interp {
             }
         }
         None
+    }
+
+    /// Sample every bound input clock gate into the gated child's
+    /// own slot.  Once per edge, before any compiled body runs: the
+    /// body reads the slot, so one body serves instances under
+    /// different gates, and the value is a latch rather than a live
+    /// re-read.  Empty for the overwhelming majority of designs (no
+    /// gated clocks at all), so the call costs a length check.
+    ///
+    /// It takes the arena from the FIELD rather than an argument so
+    /// that every edge path can call it without threading a pointer
+    /// through a borrow it does not hold.  There are two such paths
+    /// -- the single-clock central loop and the general heap-driven
+    /// one -- and a gate left unsampled on either reads the seeded 1,
+    /// which is "ungated": a gated child would run on an edge it
+    /// should have sat out.  Unfilled is not a missed optimisation.
+    fn fill_gate_slots(&mut self) {
+        if self.jit_gate_fills.is_empty() || self.jit_arena_ptr.is_null() {
+            return;
+        }
+        let arena = self.jit_arena_ptr;
+        // taken and put back because `eval` needs `&mut self`; the
+        // list is rebuilt in the same order, and it is this short
+        // precisely because gated clocks are rare
+        for (owner, ex, slot) in std::mem::take(&mut self.jit_gate_fills) {
+            let mut cx = Ctx::default();
+            let v = self.eval(owner, &mut cx, &ex);
+            let bit = u64::from(v.as_u64() != 0);
+            unsafe { *arena.add(slot as usize) = bit };
+            self.jit_gate_fills.push((owner, ex, slot));
+        }
     }
 
     /// Evaluate an expression in an instance context.  Body-local defs and
@@ -4852,6 +4888,7 @@ impl Interp {
                         self.cycle += 1;
                         self.now = tp;
                         final_now = tp;
+                        self.fill_gate_slots();
                         for &rci in &pos_rcis {
                             let f: unsafe extern "C" fn(
                                 *mut u64,
@@ -5014,6 +5051,7 @@ impl Interp {
             }
             self.now = t;
             final_now = t;
+            self.fill_gate_slots();
             // clock edge bookkeeping (run_edge_schedule_event):
             // combinational_at = previous same-direction edge time
             {
@@ -5560,9 +5598,6 @@ pub enum AotEmit {
     Ineligible(String),
     /// infrastructure failure (LLVM, cc, IO): link must fail
     Failed(String),
-    /// `trs specializations`: the manifest was written and nothing compiled.
-    /// A success with a different output, not a refusal.
-    Manifest,
 }
 
 /// FNV-1a over the .bir bytes: the fingerprint baked into AOT
@@ -5578,12 +5613,6 @@ impl Interp {
     /// setting up a run.
     pub fn aot_request_emit(&mut self, so: std::path::PathBuf) {
         self.jit_request = jit::JitRequest::Emit { so, exe: None };
-    }
-
-    /// `trs specializations`: write the manifest to `path` (`-` for stdout),
-    /// as text when `text`, and compile nothing.
-    pub fn aot_request_specializations(&mut self, path: std::path::PathBuf, text: bool) {
-        self.spec_req = Some((path, text));
     }
 
     /// trs link --exe: after the artifact .so, also link a
@@ -5631,7 +5660,6 @@ impl Interp {
 #[cfg(not(feature = "aot"))]
 impl Interp {
     pub fn aot_request_emit(&mut self, _so: std::path::PathBuf) {}
-    pub fn aot_request_specializations(&mut self, _path: std::path::PathBuf, _text: bool) {}
     pub fn aot_request_emit_exe(
         &mut self,
         _so: std::path::PathBuf,

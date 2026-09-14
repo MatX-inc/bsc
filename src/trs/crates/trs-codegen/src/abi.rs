@@ -107,28 +107,17 @@ pub struct InstEnv {
     /// module index in `d.modules`
     pub mir: usize,
     /// Dense id of this instance's DEDUP CLASS: one per distinct
-    /// (module type, subtree signature).  Two instances of a type at
-    /// different parameters are different classes, because a compiled
-    /// body bakes those parameters -- so anything emitted once and
-    /// shared between instances must be keyed by this, not by `mir`.
-    pub class_id: usize,
-    /// This instance's PARAMETER bindings, name and value, in the
-    /// spelling `trs link` takes after `+` -- hex, so any width round
-    /// trips.  Only the values a parent actually supplied: the
-    /// unbound-port constants that also land in `port_consts` are
-    /// fallthrough readings, not parameters, and feeding them back as
-    /// bindings would be wrong.
+    /// (module type, subtree signature).  Anything emitted once and
+    /// shared between instances is keyed by this, not by `mir`.
     ///
-    /// This is what lets a fragment be built on its own.  A class is
-    /// (module, valuation), the valuation comes from whoever
-    /// instantiated it, and a build graph that wants one target per
-    /// class has to be able to say which valuation it means.
-    pub param_binds: Vec<(StrId, String)>,
-    /// The signature behind `class_id`.  The id is a dense index over
-    /// THIS design's instances and so means nothing outside it; the
-    /// signature describes the class itself.  Anything EMITTED that
-    /// must mean the same in another design is named for this.
-    pub class_sig: u64,
+    /// Parameters used to split a type into several classes, because
+    /// a compiled body baked them.  They do not any more -- everything
+    /// a parent supplies is a slot -- so in practice a type is one
+    /// class, and the emitter checks that and refuses otherwise
+    /// (objects are named for the module alone).  What could still
+    /// split one is a difference in what the instances construct
+    /// BENEATH them, which is genuinely different code.
+    pub class_id: usize,
     /// local child instance name -> global instance index
     pub children: HashMap<StrId, usize>,
     /// Verilog models this instance DIRECTLY imports, as (Verilog top,
@@ -205,6 +194,47 @@ pub struct InstEnv {
     /// EN_<m> port name -> arena slot; zeroed at composition dispatch,
     /// stored by compiled call sites (the C++ enable protocol)
     pub en_slot: HashMap<StrId, u32>,
+    /// Module ARGUMENTS, as slots in this instance's own region:
+    /// name -> (base, width).  The parent supplies a value per
+    /// instantiation, and it used to be BAKED -- which is what made
+    /// one module type into many compiled objects, since two
+    /// instantiations at different values could not share code.
+    ///
+    /// The value is still known at plan time; it is seeded into the
+    /// arena instead of folded into the body, so the body is the same
+    /// for every instantiation and the argument leaves the dedup
+    /// identity entirely.  A read is a load, where it was a constant.
+    /// Part of the LAYOUT half of the signature (where the slot sits),
+    /// never the input half (what the value is).
+    pub arg_slot: HashMap<StrId, (u32, u32)>,
+    /// String module arguments: name -> the slot holding the interned
+    /// string id.  A String port is width 0 and its compiled carrier
+    /// is an i64 marker, so it gets its own map rather than riding in
+    /// `arg_slot` where a zero width means the empty bit-vector.
+    ///
+    /// `str_consts` stays, but only to answer "is this port a
+    /// string?".  Its VALUE is no longer read by the lowering and no
+    /// longer part of the dedup identity -- which is the whole point:
+    /// an instance name threaded through a module was the single most
+    /// common module argument in the corpus (96.7% of them), and
+    /// baking it made every instantiation its own object.
+    pub str_slot: HashMap<StrId, u32>,
+    /// Input clock-gate ports, as slots in this instance's own region.
+    ///
+    /// A gate used to be read by re-expanding the parent's gate
+    /// EXPRESSION in the parent's frame, from inside the child's body
+    /// -- so the body baked the parent's slots and no two instances
+    /// under different gates could share it.  `gates` (the expression,
+    /// and the owner it belongs to) is still how the value is
+    /// produced, but the producing happens in the design-level edge
+    /// function now, once per edge, into this slot.  The child reads
+    /// its own region like it reads anything else.
+    ///
+    /// Sampling once per edge is also the semantics the interpreter
+    /// has: re-expanding live was measured diverging across clock
+    /// domains (mcd_Rand), which is why dynamic gates were refused
+    /// outright rather than compiled.  They need not be now.
+    pub gate_slot: HashMap<StrId, u32>,
     /// constant-valued module input ports and instantiation
     /// parameters: the compiled mirror of the interpreter's
     /// Port/Param fallthrough — an uncalled method's arg reads 0,
@@ -337,16 +367,17 @@ pub struct RuleSpec {
     /// site reports, which the runtime uses to find this rule's
     /// call-site tables
     pub ordinal: u32,
-    /// Where this rule's EXEC half begins in its single call-site
-    /// table.  An output of trial_lower, written back before emission:
-    /// a lowering emits one function at a time and numbers from zero,
-    /// so an exec lowering needs telling where its sched half stopped.
-    /// Carried here rather than threaded because every lowering site
-    /// already holds the spec.  Zero until trial_lower has run.
+    /// Where this rule's SCHED half begins in its single call-site
+    /// table; the exec half is first, at 0 (see `FnProtos`).  An
+    /// output of trial_lower, written back before emission: a lowering
+    /// emits one function at a time and numbers from zero, so a sched
+    /// lowering needs telling where its exec half stopped.  Carried
+    /// here rather than threaded because every lowering site already
+    /// holds the spec.  Zero until trial_lower has run.
     #[serde(skip)]
-    pub exec_foreign_origin: u32,
+    pub sched_foreign_origin: u32,
     #[serde(skip)]
-    pub exec_prim_origin: u32,
+    pub sched_prim_origin: u32,
     /// Some = auto-fire pseudo-spec: `rule_idx` is a synthetic unique
     /// key (never index rules with it) and the exec section inlines
     /// the method body instead.  serde(skip): PlanB only ever carries
@@ -408,7 +439,7 @@ impl std::fmt::Display for Ineligible {
     }
 }
 /// Call-site tables a lowering produces for one rule.  ONE table per
-/// rule, not one per half: the sched fn numbers from zero and the exec
+/// rule, not one per half: the exec fn numbers from zero and the sched
 /// fn continues where it stopped, so a site is named by (ordinal, site)
 /// alone.  A half-indexed pair meant a callee outlined across a
 /// synthesis boundary had to be told which of its caller's two tables
@@ -418,14 +449,21 @@ impl std::fmt::Display for Ineligible {
 pub struct FnProtos {
     pub foreign: Vec<ForeignSpec>,
     pub prims: Vec<PrimCallSpec>,
-    /// where the exec half's sites begin in the tables above.  A
-    /// lowering emits one function at a time and numbers from zero, so
-    /// a path that lowers exec WITHOUT having just lowered sched needs
-    /// telling where to start.  Lowering-time only: the callback ABI
-    /// never sees it, which is the point -- dispatch is (ordinal, site)
-    /// into one table and cannot pick the wrong one.
-    pub exec_foreign_origin: u32,
-    pub exec_prim_origin: u32,
+    /// Where the SCHED half begins in this rule's one call-site
+    /// table.  The exec half is first, at 0, because it is the half a
+    /// whole dedup class shares: a shared body can only bake a
+    /// constant index if that index means the same thing for every
+    /// member, and 0 always does.  The sched half takes the variable
+    /// offset instead, which costs nothing -- a sched fn is
+    /// per-ordinal and nobody shares it.
+    ///
+    /// It was the other way round, and that put design context into a
+    /// shared body: the sched half's SIZE follows how the design's
+    /// schedule split shared eager defs between an instance's rules,
+    /// so members of one class disagreed about where the exec half
+    /// started.
+    pub sched_foreign_origin: u32,
+    pub sched_prim_origin: u32,
 }
 
 /// Wire format for per-ordinal call-site tables baked into artifacts
@@ -486,8 +524,8 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
     for p in protos {
         wf(&mut o, &p.foreign);
         wp(&mut o, &p.prims);
-        w(&mut o, p.exec_foreign_origin);
-        w(&mut o, p.exec_prim_origin);
+        w(&mut o, p.sched_foreign_origin);
+        w(&mut o, p.sched_prim_origin);
     }
     o
 }
@@ -586,8 +624,8 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
         out.push(FnProtos {
             foreign: rf(b, &mut i)?,
             prims: rp(b, &mut i)?,
-            exec_foreign_origin: r(b, &mut i)?,
-            exec_prim_origin: r(b, &mut i)?,
+            sched_foreign_origin: r(b, &mut i)?,
+            sched_prim_origin: r(b, &mut i)?,
         });
     }
     (i == b.len()).then_some(out)
@@ -639,9 +677,6 @@ pub struct BoundaryReq {
     /// do not share, so every instance called a body carrying one
     /// instance's parameter values.  One per class instead.
     pub class_id: usize,
-    /// the class's signature, which the SYMBOL is named for -- see
-    /// InstEnv::class_sig for why not the id
-    pub class_sig: u64,
     /// exemplar instance of the CLASS (region source for base-relative
     /// addressing, and the parameter values the body bakes)
     pub exemplar: usize,
@@ -692,6 +727,49 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 35: specialization is gone.  Everything a parent supplies reaches
+//     a fragment's body through a SLOT in the instance's own region,
+//     seeded at plan time, where it used to be a constant folded into
+//     the code -- so a module type compiles to exactly one object and
+//     a rev-34 object both misreads the arena (slot numbering shifts
+//     for every design) and carries one instantiation's values baked
+//     in.  Four carriers, one mechanism:
+//     - module ARGUMENTS, every width.  This was the specialization
+//       axis: one type became one object per valuation, and a
+//       fragment could not be rebuilt alone without restating a
+//       valuation nothing could always express (String arguments had
+//       no spelling at all).  Reads become loads.
+//     - STRINGS are the bulk of it: an instance-name string threaded
+//       through a module is 96.7% of all module arguments in the
+//       corpus measured, so baking it made nearly every
+//       instantiation its own object.
+//     - input CLOCK GATES.  The body used to re-expand the parent's
+//       gate expression in the PARENT's frame, baking the parent's
+//       slots; the design-level edge fn now evaluates it once per
+//       edge into the child's slot.  That was the last carrier able
+//       to split a type into more than one object.
+//     Slots come from the module's DECLARED ports, never from what a
+//     parent supplied -- an ungated instantiation allocates a gate
+//     slot too and reads the seeded 1 -- because a layout derived
+//     from the instantiation would differ between a fragment built
+//     alone and the same fragment inside a design, and those two are
+//     required to be byte-identical.
+//     `str_consts` and `real_consts` STAY, but only as type markers
+//     (is-a-string for the string lowering, pass-as-double for a
+//     foreign call); dropping the Real one printed the f64 bit
+//     pattern as an integer.  Only their VALUES leave the identity.
+//     The slot must be consulted BEFORE those markers in both the
+//     value and width paths, or every instance reads the exemplar's
+//     constant.
+//     Riding along, because it is the same defect one level out: a
+//     rule's single call-site table now puts its EXEC half FIRST, at
+//     origin 0, and gives the sched half the variable origin.  Both
+//     halves have shared one table since rev 28 with exec second, so
+//     the exec half's origin depended on the sched half's SIZE --
+//     which follows the DESIGN's schedule, so members of one dedup
+//     class disagreed about where exec began and the emitter padded
+//     to paper over it.  Exec is the half a shared body indexes, and
+//     0 means the same thing in every design.
 // 34: EN, eager and memo slots are allocated in NAME order, and a
 //     helper fn's symbol carries its def's NAME.  All four took the
 //     order from a StrId -- a position in the enclosing design's
@@ -750,7 +828,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 34;
+pub const AOT_LAYOUT_REV: u64 = 35;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV

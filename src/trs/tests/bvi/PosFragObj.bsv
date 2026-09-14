@@ -1,11 +1,12 @@
 // R5: per-fragment compilation across a BVI import.  A synthesized
-// wrapper holding an `import "BVI"' is instantiated twice at different
-// parameters, so it is two SPECIALIZATIONS sharing one Verilated
-// model.  The gates: the manifest names the model (as the trs-vlt RUN
-// key, which is path-free -- the cache's class key is not), the
-// fragment built ALONE in its own tree with its own model cache
-// produces a byte-identical object, and the design assembled from that
-// object runs correctly.
+// wrapper holding an `import "BVI"' is instantiated twice at two
+// different argument values, and both instantiations must now come
+// out of ONE object -- the argument reaches the body through a slot
+// in the instance's arena, not through the code, so it is no longer
+// part of what the object IS.  The gates: exactly one mkWrap.o, that
+// object built ALONE in its own tree with its own model cache is
+// byte-identical to the design's, the design assembles from it, and
+// the assembled design still gets both instantiations right.
 interface Counter;
    method Action bump(Bit#(8) amt);
    method Bit#(8) read();
@@ -37,7 +38,7 @@ module mkWrap#(Bit#(8) k)(Wrap);
 endmodule
 
 (* synthesize *)
-module sysPosSpecialize();
+module sysPosFragObj();
    Wrap a <- mkWrap(3);
    Wrap b <- mkWrap(7);
    Reg#(Bit#(3)) n <- mkReg(0);

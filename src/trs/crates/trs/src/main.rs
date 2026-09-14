@@ -20,8 +20,7 @@ fn usage() -> ExitCode {
     eprintln!("       trs link --fragment <fragment.bir> [-o <out.cexe>]");
     eprintln!("       trs compile <design.bir> [-o <model.so>] [--exe] [--dump-formats vcd,fst]");
     eprintln!("                    [--fragment]");
-    eprintln!("                    [--spec-obj-in <dir>[:<dir>...]] [--spec-obj-out <dir>]");
-    eprintln!("       trs specializations <design.bir> [-o <manifest.json>] [same codegen flags]");
+    eprintln!("                    [--obj-in <dir>[:<dir>...]] [--obj-out <dir>]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [--only-compiled] [+NAME=value...]");
     eprintln!("       trs vlt build <module.bir> [--vpath <dir>]... [--vfile <file>]... [--verilator <bin>] [--cache <dir>]");
     eprintln!();
@@ -36,28 +35,24 @@ fn usage() -> ExitCode {
     eprintln!("`--only-compiled' refuses to run at all without that .so,");
     eprintln!("for runs whose whole point is to measure the compiled engine.");
     eprintln!("");
-    eprintln!("A compile emits one object per SPECIALIZATION -- a module type");
-    eprintln!("at one parameter valuation -- plus the design's own.  A");
-    eprintln!("specialization's object does not depend on the design it was");
-    eprintln!("compiled in, so two designs sharing a fragment share its object");
-    eprintln!("and neither has to depend on the other:");
-    eprintln!("  trs specializations  write the manifest and stop.  Planning");
-    eprintln!("                       only -- seconds where a compile is hours.");
-    eprintln!("                       Names each object, the .bir it comes from");
-    eprintln!("                       and the parameters that select it, so a");
-    eprintln!("                       build graph can declare its inputs before");
-    eprintln!("                       compiling anything.  JSON by default,");
-    eprintln!("                       --format text for a person, stdout unless");
-    eprintln!("                       -o names a file.  Pass the SAME codegen");
-    eprintln!("                       flags as the compile: they salt the names.");
-    eprintln!("  --spec-obj-in <ds>   `:'-separated directories to READ, each");
-    eprintln!("                       another build's output.  Never written.");
-    eprintln!("  --spec-obj-out <d>   the one directory WRITTEN, never read.");
+    eprintln!("A compile emits one object per module TYPE, named for it --");
+    eprintln!("mkFoo.bir gives mkFoo.o -- plus the design's own.  A type's");
+    eprintln!("arguments, parameters included, reach its body through the");
+    eprintln!("instance's arena rather than through the code, so one object");
+    eprintln!("serves every instantiation however they are parameterized,");
+    eprintln!("and a build graph can name it before compiling anything.  A");
+    eprintln!("fragment's object does not depend on the design it was");
+    eprintln!("compiled in either, so two designs sharing a fragment share");
+    eprintln!("its object and neither has to depend on the other:");
+    eprintln!("  --obj-in <ds>   `:'-separated directories to READ, each");
+    eprintln!("                  another build's output.  Never written.");
+    eprintln!("  --obj-out <d>   the one directory WRITTEN, never read.");
     eprintln!("Inputs and output are separate so an action has declared inputs");
     eprintln!("and a declared output; one directory serving as both would be");
-    eprintln!("shared mutable state a build system cannot model.  The manifest");
-    eprintln!("records the codegen flags it was made under: they salt the object");
-    eprintln!("names, so a compile with different ones looks for different files.");
+    eprintln!("shared mutable state a build system cannot model.  A directory");
+    eprintln!("records the codegen flags its objects were built with, and a");
+    eprintln!("compile with different ones is refused rather than served a");
+    eprintln!("wrong object under a right-looking name.");
     eprintln!();
     eprintln!("bsc writes one .bir per synthesized module and one per");
     eprintln!("`import \"BDPI\"'.  A link given the top follows its");
@@ -112,10 +107,10 @@ fn compile_knob_env(flag: &str) -> Option<&'static str> {
         // because a build system keys an action on its argv: the
         // directories a compile reads are its declared INPUTS and the
         // one it writes is its declared OUTPUT, and both belong where
-        // the action can see them.  --spec-obj-in is `:`-separated
-        // and read-only; --spec-obj-out is written and never read.
-        "--spec-obj-in" => "TRS_SPEC_OBJ_IN",
-        "--spec-obj-out" => "TRS_SPEC_OBJ_OUT",
+        // the action can see them.  --obj-in is `:`-separated
+        // and read-only; --obj-out is written and never read.
+        "--obj-in" => "TRS_OBJ_IN",
+        "--obj-out" => "TRS_OBJ_OUT",
         _ => return None,
     })
 }
@@ -258,11 +253,13 @@ fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
     Some(synth)
 }
 
-/// `trs compile`, and `trs specializations` which is the same action stopped
-/// after planning.  One parser for both: the codegen knobs salt the
-/// object names, so a manifest produced under different ones names
-/// files the compile will never look for, and a second parser would
-/// drift from this one without saying so.
+/// `trs compile`: plan the design and emit its objects.
+///
+/// An object is named for its module and nothing else -- one .ba, one
+/// .bir, one .o -- so a build system can name a fragment's object
+/// without asking the compiler, and the graph is the fragments' own
+/// extern lists.  There is nothing left to discover, which is why
+/// there is no manifest subcommand any more.
 fn compile_cmd(rest: &[&str]) -> ExitCode {
         let mut path: Option<&str> = None;
         let mut out: Option<String> = None;
@@ -270,8 +267,6 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         // stamps what a link that was told nothing would have
         let mut fmt_arg: Option<String> = None;
         let mut want_exe = false;
-        let mut manifest = false;
-        let mut as_text = false;
         // the design being compiled is a FRAGMENT linked for reuse, so
         // its interface-method arguments stay dynamic (see the link's
         // --fragment, and topbind::resolve)
@@ -293,33 +288,6 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 // read from `rest' above; accepted here so it is not an
                 // unknown option
                 "--fragment" => {}
-                // Write the manifest and stop: which specializations
-                // this design needs, and the object file each
-                // would be reused from.  Planning only, no LLVM --
-                // seconds where a compile is hours, which is what
-                // lets a build graph name its inputs before paying
-                // for any of them.
-                //
-                // appended by `trs specializations`; not a user-facing flag,
-                // which is why it takes no value and is absent from the
-                // usage text
-                "--manifest-mode" => manifest = true,
-                // JSON is what a build integration reads; text is for
-                // a person asking what a design is made of.  JSON is
-                // the default because an integration that silently
-                // started receiving prose would break, and a person
-                // can ask for the other.
-                "--format" => match it.next() {
-                    Some(v @ ("json" | "text")) => as_text = v == "text",
-                    Some(v) => {
-                        eprintln!("trs specializations: --format takes json or text, not `{v}'");
-                        return ExitCode::from(2);
-                    }
-                    None => {
-                        eprintln!("trs specializations: --format needs json or text");
-                        return ExitCode::from(2);
-                    }
-                },
                 // the allowed wave formats fold into the design's
                 // identity, so a compile must be told whatever the
                 // link was told
@@ -363,13 +331,6 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         // The .so is named for the .bir beside it, because that is
         // where the artifact looks: <base>.bir -> <base>.so.
         let base = path.strip_suffix(".bir").unwrap_or(path).to_string();
-        // -o names the manifest rather than an object, because an
-        // object is not what this action produces, and `-` or no -o
-        // means stdout -- in EITHER format.  A build rule always
-        // passes -o, because it has to declare the file it produces;
-        // everyone else is at a terminal or on the left of a pipe,
-        // and `trs specializations d.bir | jq` needs no flags.
-        let spec_path = manifest.then(|| out.clone().unwrap_or_else(|| "-".to_string()));
         let so = out.unwrap_or_else(|| format!("{base}.so"));
         // Replay the link's own settings from <base>.opts.  Baked
         // bindings and the allowed wave formats both fold into the
@@ -440,9 +401,6 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         } else {
             interp.aot_request_emit(so.clone().into());
         }
-        if let Some(cp) = &spec_path {
-            interp.aot_request_specializations(cp.into(), as_text);
-        }
         interp.prime();
         // Producing the .so IS the job here, so anything short of
         // it is a failure -- unlike a link, which has a perfectly
@@ -478,7 +436,7 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
                 // A fragment's object is not an artifact anyone runs, so
                 // there is no sidecar worth baking -- and the bake would
                 // instantiate the fragment's subtree, which reaches BDPI
-                // imports whose companion library a specialization has no
+                // imports whose companion library a fragment object has no
                 // reason to carry.  Until --fragment existed this was
                 // skipped by accident, the bake refusing a top whose
                 // bindings were missing.
@@ -576,16 +534,6 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
             Some(trs_interp::AotEmit::Failed(e)) => {
                 eprintln!("trs compile: {e}");
                 ExitCode::FAILURE
-            }
-            Some(trs_interp::AotEmit::Manifest) => {
-                eprintln!(
-                    "trs specializations: wrote {}",
-                    match spec_path.as_deref() {
-                        Some("-") | None => "(stdout)",
-                        Some(p) => p,
-                    }
-                );
-                ExitCode::SUCCESS
             }
             Some(trs_interp::AotEmit::Ineligible(e)) => {
                 eprintln!(
@@ -700,21 +648,6 @@ fn main() -> ExitCode {
         // costs hours on a large design and only pays for itself when
         // the run is long enough -- which is a judgement for whoever
         // is running it, not for the link.
-        // `trs specializations` is `trs compile` in manifest mode, deliberately
-        // sharing this arm.  It is a different ACTION -- seconds not
-        // hours, a manifest not an object -- and deserves its own name
-        // in a build rule.  But the manifest must be produced under
-        // exactly the codegen knobs the compile will use, because they
-        // salt the object names, and a second parser would drift from
-        // this one silently: the salt would change, the compile would
-        // look for files the manifest never named, and the only
-        // symptom is a 0% reuse rate.  One parser, two entry points.
-        ["specializations", rest @ ..] if !rest.is_empty() => {
-            let mut v: Vec<&str> = Vec::with_capacity(rest.len() + 1);
-            v.extend_from_slice(rest);
-            v.push("--manifest-mode");
-            return compile_cmd(&v);
-        }
         ["compile", rest @ ..] if !rest.is_empty() => {
             return compile_cmd(rest);
         }
@@ -832,7 +765,7 @@ fn main() -> ExitCode {
                         trs_interp::prim::set_load_memfiles(false);
                         match trs_interp::startup::load_file_fresh(path, &[], &[], None) {
                             Ok(_) => println!(
-                                "trs vlt: forwarded-parameter specializations \
+                                "trs vlt: forwarded-parameter model classes \
                                  verilated via elaboration"
                             ),
                             Err(e) => {
@@ -1115,10 +1048,8 @@ fn main() -> ExitCode {
                 interp.aot_request_emit(format!("{base}.aot.so").into());
                 interp.prime();
                 match interp.aot_take_emit_result() {
-                    // Manifest cannot arise here: only `trs specializations`
                     // sets the mode, and it does not take this path
                     Some(trs_interp::AotEmit::Compiled)
-                    | Some(trs_interp::AotEmit::Manifest)
                     | None => {}
                     Some(trs_interp::AotEmit::Failed(e)) => {
                         eprintln!("trs link --interactive: {e}");

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Edge-SSA regression battery: compile each design with the installed
 # bsc, run the reference Bluesim executable and the trs AOT artifact
-# (bare defaults = the specialized fast compile), and diff stdout +
+# (bare defaults = the compiled fast tier), and diff stdout +
 # exit codes.  BSC=/path/bsc TRS=/path/trs sh run.sh [workdir]
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}

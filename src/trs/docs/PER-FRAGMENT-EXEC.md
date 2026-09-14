@@ -1,21 +1,28 @@
 # Per-fragment execution: scaling, and linking external Verilog
 
 Status: the leaf seam is done -- external Verilog runs as a prim.  The
-compilation unit is done: a compiled object is one CLASS -- a module type
-at one parameter valuation -- it carries a content key, and it does not
-depend on the design it was compiled in.  A build graph can name these objects:
-`trs specializations` emits a manifest -- module, signature, object name,
-fragment, valuation, the specializations it directly instantiates, and the
-Verilated models it imports -- and Make, Ninja and Bazel back-ends are
-validated against it end to end.
+compilation unit is done, and it is the module TYPE:
 
-Two things remain.  A fragment still has no EXECUTION contract, so a
+**one `.ba` -> one `.bir` -> one `.o`, named `mkFoo.o`.**
+
+An object does not depend on the design it was compiled in, and no longer
+depends on how it was instantiated either -- everything a parent supplies,
+`parameter` arguments included, reaches the body through a slot in the
+instance's region rather than baked into the code.  So its name is
+derivable from the `.bir` without running the compiler, which is the
+property a build rule needs: it can declare the output before the action
+runs.
+
+That replaced a manifest.  Objects used to be one CLASS -- a type at one
+parameter valuation -- and since a valuation is not known until the
+PARENT elaborates, naming the objects took a design-wide action (`trs
+specializations`), a generated rules file per design, and a staleness
+check.  All of that is deleted; section 5 records what it cost and the
+measurement that settled it.
+
+One thing remains: a fragment still has no EXECUTION contract, so a
 Verilated model cannot yet stand where a Bluespec fragment does
-(section 4).  And the manifest itself comes from a design-wide action,
-because a fragment's valuation is not known until its parent elaborates
-(section 5, hurdle 7) -- so the graph must be REGENERATED rather than
-derived per fragment, which is where this meets the build rules rather
-than the compiler.
+(section 4).
 
 *Fragment* here means a synthesis boundary: a synthesized module plus every
 instance beneath it that is not itself a synthesis boundary.  In BIR that is
@@ -121,7 +128,7 @@ model above bridges them for a LEAF.  For a fragment the open parts are:
   constrains PORTS, not rules, and the composition orders rules.  Two
   fragments with paths crossing both ways settle in Verilog and deadlock a
   static total order; bsc has never analysed a loop *through* two fragments.
-- **ActionValue methods with caller-latched args** (`lower.rs:4699-4702`)
+- **ActionValue methods with caller-latched args** (`lower.rs`, `rec_meth_result`)
   already record an interp/compiled asymmetry.  A call boundary must define
   this rather than inherit it.
 
@@ -166,48 +173,94 @@ version, output the `.o` -- not a cache `trs` consults.  A local cache still
 earns its place for direct command-line use, placed by the caller the way
 `TRS_VLT_CACHE` already is.
 
-### The unit is the class, not the type
+### The unit was the class; it is the type
 
-Emission grouped a type's classes into one object.  Each BODY in it was
-design-independent, but the object was not: it depended on the SET of
-valuations this design happened to use, so two designs sharing one
-valuation emitted the same symbols and the same code into objects that
-differed, and neither could be reused for the other.
-
-Measured on two designs, one using a type at k=3 and the other at k=3 and
-k=7: the shared body was byte-identical and the object was not.  Splitting
-emission per class makes the shared one shareable --
+This section argued, correctly at the time, that the unit had to be finer
+than the type.  Emission grouped a type's classes into one object, and that
+object depended on the SET of valuations this design happened to use -- so
+two designs sharing one valuation emitted the same symbols and the same code
+into objects that differed, and neither could be reused for the other.
+Splitting emission per class made the shared one shareable:
 
     mkP_4d920a930e1e57e3.o   IDENTICAL across both designs
     mkP_4d6ff54c38a6df17.o   only in the design that uses k=7
 
-Helpers are declared per module type, but only for a type whose instances
-all share one signature, so a helper's type has exactly one class and lands
-in it unambiguously.
+That fixed the symptom.  The disease was that a value the PARENT chose was
+baked into the child's code at all, and every remaining hurdle below traces
+back to it: hurdle 4 (the unit multiplies), hurdle 7 (the valuation is not
+known when the build graph is built), the 1.33x-against-1.84x reuse figure,
+and the manifest -- a whole design-wide action, a generated `.bzl`, and a
+staleness check -- that existed only to tell a build system which
+valuations to ask for.
 
-The cost is more, smaller objects, and it is measured rather than
-estimated.  Compiling a controller design of 536 fragments:
+**So the specialization went instead.**  A module argument -- everything
+bsc writes left of the final arrow, `parameter` ones included -- is now a
+slot in the instance's own region, seeded at plan time and read by the
+body like any other state.  Numeric, String, Real and wider-than-64-bit
+values all take the same path.  Clock gates likewise get a slot, filled
+per edge.  Nothing a parent supplies reaches the code, so:
 
-| | |
-| --- | ---: |
-| distinct module types | 47 |
-| distinct classes | 194 |
-| objects emitted (design + classes) | 195 |
-| boundary method fns, all realized | 1,481 |
-| parallel pipelines + emit | 35.0s |
-| whole compile | 329s |
-| artifact | 60 MB |
+**one `.ba` -> one `.bir` -> one `.o`, named `mkFoo.o`.**
 
-**4.1x the objects** a per-type emission would produce, and the emit phase
-is 35s of a 329s compile -- so at this scale the extra objects cost
-nothing measurable, and each one is independently reusable.  The
-multiplicity is as skewed here as everywhere else: 27 of the 47 types have
-a single class, and three types account for 99 of the 194.
+The name is the point as much as the count.  It is derivable from the
+`.bir` without running the compiler, which is what lets a build rule
+declare the output before the action runs -- the thing hurdle 7 said was
+impossible, and it was, for as long as the object's identity included a
+valuation nobody could know that early.
 
-Worth recording alongside: this compile is 329 SECONDS.  The 6.6 hours in
-section 1 is what the monolithic strategy cost on a design of this family,
-and the figure has been quoted since; per-type emission already retired it,
-and per-class does not bring it back.
+The slots are allocated from what the MODULE DECLARES, never from what a
+parent supplied.  That distinction is the whole correctness argument: a
+layout derived from the instantiation would differ between a fragment
+built alone and the same fragment inside a design, and those two are
+required to be byte-identical.  An early version allocated only the
+supplied arguments and failed exactly that way.
+
+Measured on one controller design, the same build before and after:
+
+| TAControllerBurn16Test | before | after |
+| --- | ---: | ---: |
+| objects emitted | 99 | **67** |
+| distinct module types | 67 | 67 |
+| objects beyond one per type | 32 | **0** |
+
+One object per type, exactly, and nothing left for a build graph to
+discover.  Scanning further out, 894 fragments produced **zero** types
+with more than one object.
+
+That one-object-per-type property is not left to hold on its own.  An
+object is named for its module and nothing else, so a type that emitted
+two would have the second silently overwrite the first -- a body
+serving instances it was not compiled for.  The emitter checks and
+refuses (`lower.rs`, "compiles to more than one object"), naming the
+type.
+
+A second check sits one layer up, at the point where the slots are
+allocated: every value a parent supplies must be covered by a slot,
+because anything not covered falls through to `port_consts` and bakes.
+That one is worth its own note, because it did not come free.  The
+reasoning said it could never fire -- the exporter puts module
+arguments ahead of method enables, so a positional walk cannot reach
+one -- and on its first corpus run it fired, on `sysTopAlwaysEn`.  The
+reasoning was right about parents and blind to the other binder:
+`topbind` binds an always_enabled method's arguments on the TOP, as
+`+<method>.<arg>=value`, and those land in the same map.  They are
+method arguments, correctly baked, on a top whose object is shared with
+nothing.  The check now exempts ports a method claims.  An argument
+would have shipped the false positive; the check found it in one sweep.
+
+The wrong-answer case that forced per-class emission in the first place
+is `testsuite/bsc.trs/paramdedup`: one synthesized module instantiated
+at k=3 and k=7, where `k` reaches a METHOD body.  Grouped per type it
+answered `a=3 b=3`.  It now compiles to a single `mkScaled.o` -- the
+very sharing that was unsound then -- and answers `a=3 b=7`, because
+the value the body multiplies by is a load from the instance's arena
+rather than an immediate.
+
+Worth recording alongside: a controller compile of this family is 329
+SECONDS.  The 6.6 hours in section 1 is what the monolithic strategy
+cost on the same family, and that figure has been quoted since;
+per-type emission retired it, per-class did not bring it back, and
+neither does this.
 
 ### Why this is possible at all
 
@@ -215,9 +268,9 @@ Most of the mechanism is already there.  Emission is per class; the
 compile is a separate argv-keyed action; cross-boundary inlining is gone.
 And the enabling invariant holds: exec fns take `(arena, env, region base
 index, ordinal)` and address in-region state as `base + (slot - region.0)`
-(`lower.rs:3338`, `slot_index`), so per-type code is already
+(`lower.rs`, `slot_index`), so per-type code is already
 position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
-(`jit.rs:5048`) is the key in all but name; what it is not is persisted.
+(`jit.rs`) is the key in all but name; what it is not is persisted.
 
 ### Hurdles
 
@@ -255,9 +308,13 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    and the compile already takes its knobs on argv for exactly that reason.
    A key that tried to carry them would be describing the toolchain in a
    field that describes the design.
-4. **Parameter specialization multiplies the unit** -- measured against
-   `inst_sig` at 3.42x, and it is what breaks cross-target reuse rather
-   than merely multiplying the count.  See below.
+4. ~~**Parameter specialization multiplies the unit**~~ -- measured
+   against `inst_sig` at 3.42x, and it broke cross-target reuse rather
+   than merely multiplying the count.  **Removed, not reduced**: a
+   module argument is a slot in the instance's region now, so a type has
+   one object whatever it is instantiated with.  3.42x became 1.00x.
+   See "The unit was the class; it is the type" above, and the measured
+   cost of what was given up in "What specialization cost" below.
 5. ~~**Layout comes from a whole-design walk**~~ -- "subtree extents (known
    only after the whole subtree walked)" (`jit.rs:5018`) -- **now stated and
    checked**.  The signature splits in two.  INPUT is what a fragment IS:
@@ -289,25 +346,28 @@ position-independent -- exec dedup would be unsound otherwise.  `inst_sig`
    concern and is **measured at zero**: 502 of 502 corpus designs that
    linked produced an object.  Small designs have fewer chances to contain
    an exotic rule, so this is a floor rather than a verdict.
-7. **The valuation is not known when the graph is built** -- unchanged as
-   a fact, and now confined rather than solved.  A build system
-   needs its outputs declared before any action runs, and a fragment's
-   parameter valuation comes from its parent's elaboration, not from its own
-   `.ba`.  Discovering valuations inside an action forces the whole design
-   into that action's inputs, which destroys the reuse -- the discovering
-   action is a design-wide action wearing a per-fragment name.  So the
-   valuations have to be settled before the graph is, which is what makes
-   hurdle 4's distribution the load-bearing measurement.
-   What the manifest does is put that action in one place and make its
-   output a checked-in file: `trs specializations <design>.exe.bir` names
-   every specialization the design needs, and the three back-ends turn
-   that into rules.  Bazel gets a regenerate target plus a check that
-   fails the build when the committed graph no longer matches.  The
-   design-wide action still exists; it is now a graph-generation step,
-   which is a thing build systems already know how to hold, rather than a
-   compile action with the whole design in its inputs.
+7. ~~**The valuation is not known when the graph is built.**~~  **Gone
+   with the valuation.**  This was the hardest one and it was never
+   solved on its own terms.  A build system needs its outputs declared
+   before any action runs, and a fragment's parameter valuation comes
+   from its parent's elaboration, not from its own `.ba`.  Discovering
+   valuations inside an action forces the whole design into that
+   action's inputs and destroys the reuse -- the discovering action is a
+   design-wide action wearing a per-fragment name.
 
-### What specialization costs, measured against `inst_sig`
+   The manifest confined that rather than removing it: `trs
+   specializations <design>.exe.bir` put the design-wide step in one
+   place and made its output a checked-in file, three back-ends turned
+   it into rules, and Bazel got a regenerate target plus a staleness
+   check.  It worked, and it was a large amount of machinery -- plus a
+   generated `.bzl` per design, committed -- standing in for a fact
+   nobody could know early enough.
+
+   Once an argument is a slot, the fact is not needed.  `mkFoo.bir` gives
+   `mkFoo.o` and a rule can say so.  The manifest, the subcommand, the
+   generator and the staleness check are all deleted.
+
+### What specialization cost, measured against `inst_sig`
 
 The earlier numbers used `Instance::args` as a proxy and warned it was a
 bound from below.  Measured against `inst_sig` itself -- `TRS_SIG_DUMP`
@@ -351,9 +411,35 @@ either.  Overlap is a property of a family, and pooling destroyed it.
 
 Whichever way the trade goes, the generic path is real work: those
 constants are folded today (`port_consts` is "the compiled mirror of the
-interpreter's Port/Param fallthrough", `abi.rs:209`), so unbaking them
+interpreter's Port/Param fallthrough", `abi.rs:239`), so unbaking them
 turns folds into loads and gives up the downstream branch elimination a
 width or a mode selector buys.
+
+**Measured, and it buys nothing.**  That last paragraph was the only
+argument left for keeping specialization, so it got the same treatment
+as the rest.  Over 13,314 fragment `.bir` files -- 15,536 modules, 10,106
+of them taking module arguments -- the question is how many per-cycle
+expression nodes a parameter's constant value can delete:
+
+| | |
+| --- | ---: |
+| per-cycle expression nodes | 337,287,660 |
+| deletable by folding module arguments | **0** |
+
+Zero, not a small number.  The reason is visible once the arguments are
+listed: 10,024 of the 10,369 are zero-width (String) or Real -- memory
+image filenames, instance labels, `$display` tags -- which are task
+arguments and were never in a per-cycle cone to begin with.  The
+remaining numeric ones sit in initialization and configuration paths that
+run before the design is up.  The mode selector that would have justified
+the machinery is not in these designs, and the width that would have is a
+TYPE parameter, resolved by bsc during elaboration and never a module
+argument at all.
+
+So the trade was: a quarter of the available sharing, a design-wide
+manifest action, a generated `.bzl` per design and a staleness check, in
+exchange for folding constants worth 0 of 337M nodes.  The measurement
+is what settled it.
 
 ### The first measurement, taken
 
@@ -472,6 +558,14 @@ best and 0% for Broadcast, because they largely instantiate different
 module types -- that ceiling is not specialization, and going generic
 would not lift it.
 
+These are CLASS overlaps, measured while a type could still be several
+classes.  The TYPE overlap for the same family was 94.3% against
+96.1% -- which is why this table was, briefly, the one argument that
+specialization paid for itself.  It does not survive the 0-of-337M folding measurement in section
+5: 94.3% sharing of objects that are each one per type beats 96.1%
+sharing of 3.42x as many objects, and the estimate below reads the same
+either way.
+
 **So, for the TA controller family of four:**
 
 | | |
@@ -519,11 +613,15 @@ trs bvi: instance a.c (BviCounter): verilated model not found in cache
 
 The manifest said `"needs": []`.  Every generated rule was therefore
 missing a prerequisite, and under Bazel the cache directory was an
-undeclared input.  A specialization now reports the models it imports
-directly, as (Verilog top, trs-vlt **run key**):
+undeclared input, so the manifest grew a `models` row naming each
+import as (Verilog top, trs-vlt **run key**).
 
-```json
-"models": [{"verilog": "BviCounter", "run_key": "c524896973d1..."}]
+The manifest is gone, and the run key outlived it -- it is what makes
+a model a build node with a real output path, so the edge a build
+system needs is the same one:
+
+```
+mkWrap.bir  +  <cache>/vlt/byid/<run_key>  ->  mkWrap.o
 ```
 
 The run key, not the cache's class key, and the distinction is the
@@ -531,20 +629,18 @@ whole point.  The class key hashes the resolved absolute top file and
 vpath, so the same `BviCounter.v` verilated from four directories
 produced four classes; the run key hashes only the contract, the
 serialized parameters, the defines and the declared vpath, so it was
-identical in all four -- which is also why the standalone object's
-signature matched.  A signature keyed on the class key would have
-destroyed every cross-tree share -- the position-not-identity lesson
-again, one level out.  It is also the file name `trs vlt build` writes
-under `<cache>/vlt/byid/`, which makes a model an ordinary build node
-with a real output path.  Hashed into the signature's INPUT half: not
-because a body could differ over it, but because the manifest row is
-per specialization and a specialization has to mean one set of models.
+identical in all four -- which is also why the standalone object came
+out byte-identical.  Keying on the class key would have destroyed
+every cross-tree share: the position-not-identity lesson again, one
+level out.  `PosFragObj-runkey` pins it directly now -- two caches at
+different absolute paths, holding the same `byid` entry for the same
+model.
 
-The design's own imports are reported the same way at the top level
-(the top is not a specialization, so they would otherwise be named
-nowhere).  Both Make and Ninja back-ends now build the model first,
-both specializations in parallel, then the design at 100% reuse; the
-resulting `.so` runs and gives the right answer.
+`trs vlt build` needs only the `.bir`, so a build can produce the
+model from the fragment alone and the edge is derivable per fragment
+like everything else.  What the manifest used to supply -- WHICH
+models a design needs -- turned out to be exactly the `.bir`'s own
+`externs` list, which is why deleting the subcommand cost nothing.
 
 It also turned up the reset-ordinal bug above.  A fragment with a BVI
 output reset has a derived reset node in its own subtree BESIDE the
@@ -553,23 +649,22 @@ that the corpus never had and the reset table's ordering needed to be
 observable.  Verilator did not cause it; it was the first thing to
 build a design that could see it.
 
-Two things found and NOT fixed here.
-
-**`trs specializations` needs the models to exist.** The plan
-instantiates the design, and `BviPrim::new` dlopens the model.  So the
-build order is verilate, then query, then compile -- `trs vlt build`
-needs only the `.bir`, so the cycle breaks, but a query that requires a
-build step to have run is a papercut, and under Bazel the regenerate
-target inherits the dependency.
+One thing found and NOT fixed here.
 
 **The model cache is the read-modify-write shape that was rejected for
-specialization objects.**  One directory is both input and output;
+fragment objects.**  One directory is both input and output;
 `manifest_valid()` does trs's own content-based staleness check over
 deps the build system never declared; `write_byid` mutates a shared
 index.  It has the right bones already -- a content-addressed class
 key, a per-class directory, and a ratified build-step/load-step split
--- so the fix is the same one the specialization side took: declared
-inputs, declared output.
+-- so the fix is the same one the object side took: declared inputs
+(`--obj-in`, read-only, many), declared output (`--obj-out`, written,
+one), and a marker file so a directory built with different codegen
+knobs is refused rather than silently served.
+
+(The second item here was that `trs specializations` needed the models
+to already exist, since planning a design dlopens them.  That
+subcommand no longer exists.)
 
 ## 6c. Two design-wide inputs to layout, deferred on purpose
 
@@ -579,7 +674,7 @@ failure mode worth stating once: each can give one fragment two
 layouts, the layout half of the signature catches that, so the object
 is filed under a name the other build never asks for.  Nothing is
 wrong; reuse silently MISSES.  That is why deferring is safe -- the
-damage lands in the "N of M specializations reused" line, which is
+damage lands in the "N of M fragment objects reused" line, which is
 already printed on every compile, so the cost shows up as a number
 rather than as a bug.
 
@@ -611,6 +706,24 @@ reader compares equality -- which replaces N stores with one and
 makes the slot count stop mattering.  It cannot reuse `now_slot`:
 that holds the simulation INSTANT, several edges share a value, and
 stale enables would read as set.
+
+**Gate slots have no behavioural test.**  A compiled body reads its
+clock gate out of a slot (`lower.rs`, the `Expr::Port` gate arm), and
+the design-level edge samples every bound gate into those slots once
+per edge.  Two edge paths run compiled bodies -- the single-clock
+central loop and the general heap-driven one -- and both fill, because
+a gate left unfilled reads the seeded 1, which means "ungated".
+
+What is missing is a design that proves it.  Every gated design in the
+corpus takes the general path, but none of them exercises the read:
+a top's own gate ports are unbound and correctly read 1, structural
+gating never reaches the slot at all (the edge simply does not fire,
+so the body does not run), and the designs that would bind a toggling
+gate into a synthesised fragment -- the `mkGatedClock*_Sub` family --
+all hit a pre-existing `child_of` panic on `mkGatedClockFromCC` that
+predates this work.  So the two call sites are right by construction
+and untested by execution.  Anyone touching this should know that
+deleting one would not fail anything today.
 
 **Trace mode.**  A traced design allocates recording slots, so the
 same fragment laid out 6 slots alone and 11 inside a VCD-linked

@@ -197,11 +197,15 @@ fn bind_salt(bound: &[(String, Vec<u64>)]) -> u64 {
 /// A fragment's interface-method arguments are driven by whatever
 /// instantiates it, so they stay DYNAMIC: requiring them would have no
 /// answer (no constant is the one a parent drives), and baking one via
-/// port_consts would specialize the object to a value no design uses --
-/// which defeats the whole point, since that object is shared by every
-/// design that instantiates the fragment the same way.  Parameters still
-/// bind: a valuation IS what makes a specialization.  always_enabled
-/// auto-fire is likewise a top-level behaviour and is not armed.
+/// port_consts would bake a value no design uses -- and that object is
+/// shared by every design that instantiates the fragment, so there is
+/// no value it could correctly bake.
+///
+/// Parameters do not bind either, and that is the point of the current
+/// model: a parent-supplied value lives in a slot in the instance's own
+/// region, so one object serves every valuation and a fragment needs no
+/// bindings to be built alone.  always_enabled auto-fire is likewise a
+/// top-level behaviour and is not armed.
 pub(crate) fn resolve(
     d: &ir::Design,
     binds: &[TopBind],

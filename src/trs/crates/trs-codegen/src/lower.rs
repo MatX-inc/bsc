@@ -120,17 +120,20 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             prim_calls: Vec::new(),
             edge: None,
         };
-        // one table per rule: the exec half keeps numbering where the
-        // sched half stopped, so the tables are NOT reset between them
-        lc.lower_sched()?;
-        let exec_foreign_origin = lc.foreign_stmts.len() as u32;
-        let exec_prim_origin = lc.prim_calls.len() as u32;
+        // one table per rule, exec half FIRST: the shared half sits at
+        // a fixed 0 so a shared body's baked indices mean the same
+        // thing for every member of its class, and the per-ordinal
+        // sched half takes the variable offset.  The tables are NOT
+        // reset between the halves.
         lc.lower_exec()?;
+        let sched_foreign_origin = lc.foreign_stmts.len() as u32;
+        let sched_prim_origin = lc.prim_calls.len() as u32;
+        lc.lower_sched()?;
         protos.push(FnProtos {
             foreign: lc.foreign_stmts,
             prims: lc.prim_calls,
-            exec_foreign_origin,
-            exec_prim_origin,
+            sched_foreign_origin,
+            sched_prim_origin,
         });
     }
     Ok(protos)
@@ -556,8 +559,8 @@ pub fn compile_scheds(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            site_origin: 0,
-            foreign_origin: 0,
+            site_origin: spec.sched_prim_origin,
+            foreign_origin: spec.sched_foreign_origin,
             outlined: None,
             helper_self: None,
             dedup: None,
@@ -607,8 +610,8 @@ pub fn compile_execs(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            site_origin: spec.exec_prim_origin,
-            foreign_origin: spec.exec_foreign_origin,
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: None,
             helper_self: None,
             dedup: None,
@@ -944,8 +947,8 @@ fn lower_boundary_fns<'ctx>(
         shared: Vec::new(),
         label: "boundary".to_string(),
         ordinal: 0,
-        exec_foreign_origin: 0,
-        exec_prim_origin: 0,
+        sched_foreign_origin: 0,
+        sched_prim_origin: 0,
         autofire: None,
     };
     let mut map = BoundaryMap::default();
@@ -1041,15 +1044,6 @@ pub enum DesignObject {
     /// the edge measurement to decide between accepting the inline
     /// monolith and outlining the sched sections (see outline_sched)
     EdgeOverBudget(Vec<Vec<(usize, u64)>>, u64),
-    /// `trs specializations`: the manifest was written and nothing compiled.
-    ///
-    /// It is produced HERE, from the same partition the emission uses,
-    /// rather than from the plan.  The plan knows every class; only
-    /// this knows which of them become objects -- a top's rules
-    /// covered by the fused edge plan produce none, and a manifest
-    /// built earlier listed a file that was never written, which for a
-    /// build graph is a declared input that does not exist.
-    Manifest,
 }
 
 /// One per-type module of the sharded emission: the type's outlined
@@ -1073,7 +1067,6 @@ fn compile_class_module(
     pseudo: &RuleSpec,
     full_map: &BoundaryMap,
     mir: usize,
-    class_sig: u64,
 ) -> Result<Vec<u8>, Ineligible> {
     let _am = crate::abi::AotModeGuard::set();
     let ctx = Context::create();
@@ -1108,8 +1101,8 @@ fn compile_class_module(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            site_origin: spec.exec_prim_origin,
-            foreign_origin: spec.exec_foreign_origin,
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
@@ -1138,20 +1131,17 @@ fn compile_class_module(
     // not depend on which design it was compiled in.
     if let Some(dir) = std::env::var_os("TRS_TYPE_OBJ_DIR") {
         let dir = std::path::PathBuf::from(dir);
-        // named for the CLASS: the module it belongs to plus the
-        // signature that separates one valuation from another.  A mir
-        // is a position in this design's module list, and a class id
-        // an index over its instances; neither means anything in the
-        // next design, and this file name is the key the object would
-        // be cached under.
-        let name = format!(
-            "{}_{class_sig:016x}",
-            env.d
-                .strings
-                .get(env.d.modules[mir].name as usize)
-                .cloned()
-                .unwrap_or_else(|| format!("mir{mir}"))
-        );
+        // the module NAME and nothing else, which is exactly what the
+        // real emission writes -- a dump under a different name would
+        // not be the file whose reuse this diagnostic exists to check.
+        // A mir is a position in this design's module list, so it
+        // numbers differently in the next design and cannot appear.
+        let name = env
+            .d
+            .strings
+            .get(env.d.modules[mir].name as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("mir{mir}"));
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!("trs shard: {}: {e}", dir.display());
         } else {
@@ -1180,7 +1170,7 @@ fn compile_class_module(
 /// (step-1 measured: +0.32% Ir, wall neutral-or-better on the
 /// specimen; the Toooba control +0.031%).  EdgeOverBudget is measured
 /// BEFORE any pass pipeline runs and propagates for the caller's
-/// replan unchanged.  Byte-determinism: specializations in ascending
+/// replan unchanged.  Byte-determinism: fragment objects in ascending
 /// class order, jobs chunked contiguously, output order [design, asc].
 /// Everything outside a class's own identity that changes the object it
 /// compiles to: the arena/ABI revision, and the codegen knobs.  A class
@@ -1216,8 +1206,8 @@ const REPORTING_ONLY: &[&str] = &[
     "TRS_JIT_THREADS",
     // paths, and the reuse directories themselves -- an object cannot
     // be keyed on where it was found
-    "TRS_SPEC_OBJ_IN",
-    "TRS_SPEC_OBJ_OUT",
+    "TRS_OBJ_IN",
+    "TRS_OBJ_OUT",
     "TRS_VLT_CACHE",
     "TRS_VLT_BUILD",
     "TRS_CC",
@@ -1232,7 +1222,7 @@ pub fn salted_knob(k: &str) -> bool {
     k.starts_with("TRS_") && !REPORTING_ONLY.contains(&k)
 }
 
-pub fn spec_obj_salt() -> String {
+pub fn obj_salt() -> String {
     let mut knobs: Vec<(String, String)> = std::env::vars()
         .filter(|(k, _)| salted_knob(k))
         .collect();
@@ -1246,36 +1236,80 @@ pub fn spec_obj_salt() -> String {
 
 /// Where prebuilt class objects come from and where new ones go.
 ///
-/// `TRS_SPEC_OBJ_IN` is a `:`-separated list of directories to READ,
+/// `TRS_OBJ_IN` is a `:`-separated list of directories to READ,
 /// each one another design's declared output; nothing is ever written
-/// to them.  `TRS_SPEC_OBJ_OUT` is the one directory this WRITES, and
+/// to them.  `TRS_OBJ_OUT` is the one directory this WRITES, and
 /// it is never read.  That asymmetry is the point: an action declares
 /// the inputs it consumes and the output it produces, and a build
 /// system can see both.  A single directory read and written by every
 /// design would be neither -- shared mutable state, racy between
 /// concurrent compiles, and a stale entry under a right-looking name
 /// is a wrong object rather than a missed hit.
-struct SpecObjIo {
+struct ObjIo {
     ins: Vec<std::path::PathBuf>,
     out: Option<std::path::PathBuf>,
     salt: String,
 }
 
-impl SpecObjIo {
+/// The file naming the codegen configuration a directory of objects
+/// was built with.
+///
+/// The salt used to be IN each object's filename, so an object built
+/// with different knobs simply had a different name and could never
+/// be mistaken for this one.  Object names carry no salt now -- that
+/// is what makes them predictable from the .bir -- so the
+/// configuration has to be declared by the directory instead, and
+/// declared means checked: a directory is one configuration, and
+/// reading objects out of a directory built with other knobs would
+/// produce a wrong object under a correct-looking name.
+const SALT_MARK: &str = ".trs-objdir-salt";
+
+impl ObjIo {
+    /// Refuse an input directory whose objects were built with
+    /// different codegen knobs.  Loud: a mismatched directory is a
+    /// build-graph error, and silently skipping it would show up only
+    /// as a mysteriously cold cache.
+    fn check_dirs(&self) -> Result<(), Ineligible> {
+        for d in self.ins.iter().chain(self.out.iter()) {
+            let mark = d.join(SALT_MARK);
+            match std::fs::read_to_string(&mark) {
+                Ok(got) if got.trim() == self.salt => {}
+                Ok(got) => {
+                    return Err(Ineligible(format!(
+                        "{}: objects there were built with codegen knobs {}, \
+                         but this compile is {}.  One directory is one \
+                         configuration.",
+                        d.display(),
+                        got.trim(),
+                        self.salt
+                    )))
+                }
+                // no marker: an empty or fresh directory, fine to use
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     /// The first input directory holding this class, if any.
-    fn read(&self, module: &str, sig: u64) -> Option<Vec<u8>> {
+    fn read(&self, module: &str) -> Option<Vec<u8>> {
         self.ins
             .iter()
-            .find_map(|d| std::fs::read(spec_obj_name(d, module, sig, &self.salt)).ok())
+            .find_map(|d| std::fs::read(obj_name(d, module)).ok())
     }
 
     /// Publish a freshly compiled class.  Best effort and silent: the
     /// object is already in hand, so a failure here costs the next
     /// build a hit, not this one its correctness.  tmp + rename so a
     /// concurrent reader of this directory never sees a partial file.
-    fn write(&self, module: &str, sig: u64, bytes: &[u8]) {
+    fn write(&self, module: &str, bytes: &[u8]) {
         let Some(dir) = &self.out else { return };
-        let p = spec_obj_name(dir, module, sig, &self.salt);
+        // stamp the configuration the first time we publish here
+        let mark = dir.join(SALT_MARK);
+        if !mark.exists() {
+            let _ = std::fs::write(&mark, &self.salt);
+        }
+        let p = obj_name(dir, module);
         let tmp = p.with_extension(format!("tmp{}", std::process::id()));
         if std::fs::write(&tmp, bytes).is_ok() {
             let _ = std::fs::rename(&tmp, &p);
@@ -1290,15 +1324,36 @@ impl SpecObjIo {
 /// 80-89% of an expensive compile is these objects, and a controller
 /// family shares 96% of them.
 ///
-/// Read and write are deliberately SEPARATE (see `SpecObjIo`).  A
+/// Read and write are deliberately SEPARATE (see `ObjIo`).  A
 /// single directory that an action both reads and writes is mutable
 /// state shared between builds: an undeclared input and an undeclared
 /// output at once, racy between concurrent designs, and a stale entry
 /// under a correct-looking name is a wrong object rather than a missed
 /// hit.  Inputs are directories the caller declares and this never
 /// writes; the output is one directory this only writes.
-fn spec_obj_name(dir: &std::path::Path, module: &str, sig: u64, salt: &str) -> std::path::PathBuf {
-    dir.join(format!("{module}_{sig:016x}_{salt}.o"))
+/// One .ba, one .bir, one .o -- so the object is named for its module
+/// and nothing else.
+///
+/// The signature is gone because there is nothing left for it to
+/// distinguish: a module type compiles to exactly one object, and a
+/// name a build system can PREDICT from the .bir is what removes the
+/// need to discover object names at all (the manifest existed because
+/// a fragment's valuation, and hence its object's name, was not known
+/// until its parent elaborated).
+///
+/// The salt is gone from the NAME for the same reason, but it has not
+/// gone away: it identifies the codegen configuration, which belongs
+/// in the output directory the caller chooses -- `build/a/mkFoo.o` and
+/// `build/b/mkFoo.o`, the way every other compiler separates them --
+/// not in a filename the build graph then cannot predict.
+///
+/// What the signature also carried was the module's content hash,
+/// which stopped a design linking an object built from a different
+/// revision of the same .bir.  That job moves to the build system's
+/// file dependency, which is where it belongs under declared inputs
+/// and where `foo.o` vs `foo.c` has always kept it.
+fn obj_name(dir: &std::path::Path, module: &str) -> std::path::PathBuf {
+    dir.join(format!("{module}.o"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1313,12 +1368,6 @@ pub fn compile_design_objects_split(
     edge_insn_budget: u64,
     boundary_reqs: &[BoundaryReq],
     nworkers: usize,
-    // `trs specializations`: write the manifest here (`-` = stdout), as
-    // text when the flag is set, and compile nothing.  A parameter and
-    // not an environment variable: it is a command-line property, and
-    // the environment is where the CODEGEN knobs live -- every one of
-    // which is hashed into the object names.
-    classes: Option<(&std::path::Path, bool)>,
 ) -> Result<DesignObject, Ineligible> {
     let t_low = std::time::Instant::now();
     let refs_opt = (!refs.is_empty()).then_some(refs);
@@ -1370,7 +1419,7 @@ pub fn compile_design_objects_split(
     });
     if std::env::var_os("TRS_JIT_TIME").is_some() {
         eprintln!(
-            "trs shard: boundary realization {:?} ({} specializations, {} workers)",
+            "trs shard: boundary realization {:?} ({} fragment objects, {} workers)",
             t_low.elapsed(),
             realize_n,
             nworkers.max(1)
@@ -1412,35 +1461,27 @@ pub fn compile_design_objects_split(
     for ie in env.insts.values() {
         class_of_mir.entry(ie.mir).or_insert(ie.class_id);
     }
-    // (helpers, boundary fns, exec reps, mir, class signature)
-    type ClassJob = (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>, usize, u64);
+    // (helpers, boundary fns, exec reps, mir)
+    type ClassJob = (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>, usize);
     let mut per_class: std::collections::BTreeMap<usize, ClassJob> =
         std::collections::BTreeMap::new();
-    let mut slot = |m: &mut std::collections::BTreeMap<usize, ClassJob>,
+    let slot = |m: &mut std::collections::BTreeMap<usize, ClassJob>,
                     c: usize,
-                    mir: usize,
-                    sig: u64| {
+                    mir: usize| {
         let e = m
             .entry(c)
-            .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new(), mir, sig));
+            .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new(), mir));
         e.3 = mir;
-        e.4 = sig;
     };
     for hs in helper_specs {
         let Some(&c) = class_of_mir.get(&hs.mir) else {
             return Err(Ineligible(format!("shard: helper mir {} unknown", hs.mir)));
         };
-        let sig = env
-            .insts
-            .values()
-            .find(|ie| ie.class_id == c)
-            .map(|ie| ie.class_sig)
-            .unwrap_or(0);
-        slot(&mut per_class, c, hs.mir, sig);
+        slot(&mut per_class, c, hs.mir);
         per_class.get_mut(&c).expect("just inserted").0.push(hs.clone());
     }
     for rq in boundary_reqs {
-        slot(&mut per_class, rq.class_id, rq.mir, rq.class_sig);
+        slot(&mut per_class, rq.class_id, rq.mir);
         per_class
             .get_mut(&rq.class_id)
             .expect("just inserted")
@@ -1452,245 +1493,51 @@ pub fn compile_design_objects_split(
         let Some(ie) = env.insts.get(&inst) else {
             return Err(Ineligible(format!("shard: rep inst {inst} unknown")));
         };
-        slot(&mut per_class, ie.class_id, ie.mir, ie.class_sig);
+        slot(&mut per_class, ie.class_id, ie.mir);
         per_class
             .get_mut(&ie.class_id)
             .expect("just inserted")
             .2
             .push(specs[o].clone());
     }
-    if let Some((mpath, as_text)) = classes {
-        let salt = spec_obj_salt();
-        let esc = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
-        let mut knobs: Vec<(String, String)> = std::env::vars()
-            .filter(|(k, _)| salted_knob(k))
-            .collect();
-        knobs.sort();
-        let mut out = String::from("{\n");
-        out.push_str(&format!(
-            "  \"top\": \"{}\",\n  \"layout_rev\": {},\n  \"salt\": \"{salt}\",\n",
-            esc(&env.d.strings[env.d.modules[env.d.top as usize].name as usize]),
-            crate::abi::baked_layout_rev()
-        ));
-        out.push_str("  \"knobs\": {");
-        for (n, (k, v)) in knobs.iter().enumerate() {
-            out.push_str(&format!(
-                "{}\"{}\": \"{}\"",
-                if n > 0 { ", " } else { "" },
-                esc(k),
-                esc(v)
-            ));
+    // One .o per module type -- checked, because the NAME now assumes
+    // it.  Objects are named for their module alone, so two classes of
+    // one type would write the same file and silently keep whichever
+    // finished last.
+    //
+    // An object is named for its module and nothing else, so a type
+    // that produced two of them would have the second silently
+    // overwrite the first -- a body serving instances it was not
+    // compiled for, which is a wrong answer with no diagnostic.
+    //
+    // Everything a parent supplies is a value in the instance's own
+    // region now, gates included, so what remains that could still
+    // split a type is a difference in what it instantiates BENEATH
+    // it: the signature covers a fragment's children, and two
+    // instances whose subtrees differ are genuinely different code.
+    // Zero designs of 894 measured hit this.  Refuse rather than
+    // emit, and name the type, so the next reader has the one fact
+    // that localises it.
+    {
+        let mut seen: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (cid, (_, _, _, mir)) in per_class.iter() {
+            if let Some(prev) = seen.insert(*mir, *cid) {
+                let nm = env
+                    .d
+                    .strings
+                    .get(env.d.modules[*mir].name as usize)
+                    .cloned()
+                    .unwrap_or_else(|| format!("mir{mir}"));
+                return Err(Ineligible(format!(
+                    "module `{nm}' compiles to more than one object \
+                     (dedup classes {prev} and {cid}), but objects are \
+                     named for their module alone.  Something about this \
+                     type is still per-instantiation: everything a parent \
+                     supplies is a slot now, so look at what the two \
+                     instances instantiate beneath them."
+                )));
+            }
         }
-        out.push_str("},\n");
-        // The design's OWN imports: the top is not a specialization,
-        // so its models would otherwise be named nowhere and the
-        // design .so rule would race the verilate step.  Direct
-        // edges, like `needs` -- a child specialization's models
-        // arrive through its own row.
-        let child_of: std::collections::HashSet<usize> = env
-            .insts
-            .values()
-            .flat_map(|ie| ie.children.values().copied())
-            .collect();
-        let mut top_models: Vec<(String, String)> = env
-            .insts
-            .iter()
-            .filter(|(i, _)| !child_of.contains(i))
-            .flat_map(|(_, ie)| ie.bvi_needs.iter().cloned())
-            .collect();
-        top_models.sort();
-        top_models.dedup();
-        out.push_str(&format!(
-            "  \"models\": [{}],\n",
-            top_models
-                .iter()
-                .map(|(v, k)| format!(
-                    "{{\"verilog\": \"{}\", \"run_key\": \"{}\"}}",
-                    esc(v),
-                    esc(k)
-                ))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        out.push_str("  \"specializations\": [\n");
-        #[allow(clippy::type_complexity)]
-        let mut rows: Vec<(
-            String,
-            u64,
-            String,
-            Vec<(String, String)>,
-            Vec<String>,
-            Vec<(String, String)>,
-            usize,
-            usize,
-            usize,
-        )> = Vec::new();
-        let n = per_class.len();
-        for (i, (_cid, (hs, rqs, reps, mir, sig))) in per_class.iter().enumerate() {
-            let nm = env
-                .d
-                .strings
-                .get(env.d.modules[*mir].name as usize)
-                .cloned()
-                .unwrap_or_else(|| format!("mir{mir}"));
-            // the valuation this specialization IS, in the spelling
-            // that rebuilds it alone: `trs link <fragment> +k=0x3`.
-            // Any instance carries it -- that is what the class means.
-            let exemplar = env.insts.values().find(|ie| ie.class_id == *_cid);
-            let binds = exemplar.map(|ie| ie.param_binds.clone()).unwrap_or_default();
-            // What this specialization DIRECTLY instantiates, as the
-            // objects those children compile to.  Without it a
-            // generator has only a flat list and must make every
-            // design depend on every specialization; with it the
-            // graph is a DAG over fragments, a parent names its
-            // children as inputs, and compiling the parent reuses
-            // them instead of rebuilding them into its own output.
-            let mut needs: Vec<String> = exemplar
-                .map(|ie| {
-                    let mut v: Vec<String> = ie
-                        .children
-                        .values()
-                        .filter_map(|ci| env.insts.get(ci))
-                        .filter(|ce| ce.class_id != *_cid)
-                        .map(|ce| {
-                            let cn = env
-                                .d
-                                .strings
-                                .get(env.d.modules[ce.mir].name as usize)
-                                .cloned()
-                                .unwrap_or_else(|| format!("mir{}", ce.mir));
-                            format!("{cn}_{:016x}_{salt}.o", ce.class_sig)
-                        })
-                        .collect();
-                    v.sort();
-                    v.dedup();
-                    v
-                })
-                .unwrap_or_default();
-            needs.retain(|o| *o != format!("{nm}_{sig:016x}_{salt}.o"));
-            let needs_json = needs
-                .iter()
-                .map(|o| format!("\"{}\"", esc(o)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            // The Verilog this specialization imports directly.  Not
-            // derivable from anything else in the manifest, and not
-            // optional: compiling a fragment runs its reset window,
-            // which instantiates the model, so a rule without this
-            // edge races `trs vlt build`.  The run key is the file
-            // name that step writes under <cache>/vlt/byid, so a
-            // generator has a real target to depend on.
-            let models = exemplar.map(|ie| ie.bvi_needs.clone()).unwrap_or_default();
-            let models_json = models
-                .iter()
-                .map(|(v, k)| {
-                    format!("{{\"verilog\": \"{}\", \"run_key\": \"{}\"}}", esc(v), esc(k))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let mut ps = String::new();
-            for (k, (pn, pv)) in binds.iter().enumerate() {
-                ps.push_str(&format!(
-                    "{}\"{}\": \"{}\"",
-                    if k > 0 { ", " } else { "" },
-                    esc(env.d.strings.get(*pn as usize).map_or("", |v| v)),
-                    esc(pv)
-                ));
-            }
-            rows.push((
-                nm.clone(),
-                *sig,
-                format!("{nm}_{sig:016x}_{salt}.o"),
-                binds
-                    .iter()
-                    .map(|(pn, pv)| {
-                        (
-                            env.d.strings.get(*pn as usize).cloned().unwrap_or_default(),
-                            pv.clone(),
-                        )
-                    })
-                    .collect(),
-                needs.clone(),
-                models.clone(),
-                reps.len(),
-                rqs.len(),
-                hs.len(),
-            ));
-            out.push_str(&format!(
-                "    {{\"module\": \"{}\", \"sig\": \"{sig:016x}\", \
-                 \"object\": \"{}_{sig:016x}_{salt}.o\", \
-                 \"fragment\": \"{}.bir\", \"params\": {{{ps}}}, \
-                 \"needs\": [{needs_json}], \"models\": [{models_json}], \
-                 \"exec_fns\": {}, \"boundary_fns\": {}, \
-                 \"helper_fns\": {}}}{}\n",
-                esc(&nm),
-                esc(&nm),
-                esc(&nm),
-                reps.len(),
-                rqs.len(),
-                hs.len(),
-                if i + 1 < n { "," } else { "" }
-            ));
-        }
-        out.push_str("  ]\n}\n");
-        // Two renderings of one set of facts.  JSON is the contract a
-        // build integration reads; text is for a person at a terminal
-        // asking what a design is made of.  Neither is derived from
-        // the other -- they are two views of `rows`, so the text can
-        // be readable without the JSON having to be.
-        if as_text {
-            let top = env.d.strings[env.d.modules[env.d.top as usize].name as usize].clone();
-            let mut t = format!(
-                "{top}: {} specializations  (layout rev {}, salt {salt})\n",
-                rows.len(),
-                crate::abi::baked_layout_rev()
-            );
-            for (v, k) in &top_models {
-                t.push_str(&format!("model {v} ({k})\n"));
-            }
-            if !knobs.is_empty() {
-                t.push_str("codegen flags: ");
-                for (i, (k, v)) in knobs.iter().enumerate() {
-                    t.push_str(&format!("{}{k}={v}", if i > 0 { " " } else { "" }));
-                }
-                t.push('\n');
-            }
-            let w = rows.iter().map(|r| r.0.len()).max().unwrap_or(6).max(6);
-            t.push_str(&format!(
-                "\n{:<w$}  {:<16}  {:>4} {:>4} {:>4}  {}\n",
-                "module", "signature", "exec", "bnd", "hlp", "parameters"
-            ));
-            for (nm, sig, _obj, ps, nd, md, ex, bn, hl) in &rows {
-                let pt = if ps.is_empty() {
-                    "-".to_string()
-                } else {
-                    ps.iter()
-                        .map(|(k, v)| format!("{k}={v}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                };
-                t.push_str(&format!(
-                    "{nm:<w$}  {sig:016x}  {ex:>4} {bn:>4} {hl:>4}  {pt}\n"
-                ));
-                for d in nd {
-                    t.push_str(&format!("{:<w$}    needs {d}\n", ""));
-                }
-                for (v, k) in md {
-                    t.push_str(&format!("{:<w$}    model {v} ({k})\n", ""));
-                }
-            }
-            t.push_str("\nobjects:\n");
-            for (_, _, obj, ..) in &rows {
-                t.push_str(&format!("  {obj}\n"));
-            }
-            out = t;
-        }
-        if mpath == std::path::Path::new("-") {
-            print!("{out}");
-        } else if let Err(e) = std::fs::write(mpath, out) {
-            return Err(Ineligible(format!("{}: {e}", mpath.display())));
-        }
-        return Ok(DesignObject::Manifest);
     }
     // phase 2a: the design module — sched fns + fused edge fns, with
     // the full map installed (their method-call sites divert), NO
@@ -1834,7 +1681,7 @@ pub fn compile_design_objects_split(
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
     if timing {
         eprintln!(
-            "trs shard: design lowering {:?} ({} specialization modules)",
+            "trs shard: design lowering {:?} ({} fragment modules)",
             t_low.elapsed(),
             per_class.len()
         );
@@ -1862,15 +1709,15 @@ pub fn compile_design_objects_split(
         shared: Vec::new(),
         label: "split-placeholder".to_string(),
         ordinal: 0,
-        exec_foreign_origin: 0,
-        exec_prim_origin: 0,
+        sched_foreign_origin: 0,
+        sched_prim_origin: 0,
         autofire: None,
     };
     // Read from declared inputs, write to a declared output; never the
     // same directory, and never a directory this both reads and writes.
     let io = {
-        let salt = spec_obj_salt();
-        let ins: Vec<std::path::PathBuf> = std::env::var("TRS_SPEC_OBJ_IN")
+        let salt = obj_salt();
+        let ins: Vec<std::path::PathBuf> = std::env::var("TRS_OBJ_IN")
             .ok()
             .into_iter()
             .flat_map(|v| {
@@ -1880,14 +1727,17 @@ pub fn compile_design_objects_split(
                     .collect::<Vec<_>>()
             })
             .collect();
-        let out = std::env::var_os("TRS_SPEC_OBJ_OUT").map(std::path::PathBuf::from);
+        let out = std::env::var_os("TRS_OBJ_OUT").map(std::path::PathBuf::from);
         if let Some(d) = &out {
             if let Err(e) = std::fs::create_dir_all(d) {
                 return Err(Ineligible(format!("{}: {e}", d.display())));
             }
         }
-        (!ins.is_empty() || out.is_some()).then_some(SpecObjIo { ins, out, salt })
+        (!ins.is_empty() || out.is_some()).then_some(ObjIo { ins, out, salt })
     };
+    if let Some(io) = &io {
+        io.check_dirs()?;
+    }
     let io = &io;
     // The phase below runs the DESIGN module's pass pipeline on this
     // thread while the workers compile classes, so its wall time is a
@@ -1914,7 +1764,7 @@ pub fn compile_design_objects_split(
                     gate_scratch: env.gate_scratch,
                 };
                 let mut out = Vec::new();
-                for (cid, (hs, rqs, reps, mir, sig)) in group {
+                for (cid, (hs, rqs, reps, mir)) in group {
                     // A class object does not depend on the design it
                     // was compiled in -- that is what the rest of this
                     // file was for -- so one built for another design
@@ -1926,18 +1776,18 @@ pub fn compile_design_objects_split(
                         .cloned()
                         .unwrap_or_else(|| format!("mir{mir}"));
                     if let Some(io) = io {
-                        if let Some(bytes) = io.read(&name, *sig) {
+                        if let Some(bytes) = io.read(&name) {
                             out.push((*cid, Ok(bytes), true));
                             continue;
                         }
                     }
                     let tc = std::time::Instant::now();
                     let r = compile_class_module(
-                        &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir, *sig,
+                        &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir,
                     );
                     cls_ns.fetch_add(tc.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     if let (Some(io), Ok(bytes)) = (io, &r) {
-                        io.write(&name, *sig, bytes);
+                        io.write(&name, bytes);
                     }
                     out.push((*cid, r, false));
                 }
@@ -1971,7 +1821,7 @@ pub fn compile_design_objects_split(
     }
     if io.is_some() {
         eprintln!(
-            "trs shard: {hits} of {} specializations reused from inputs ({:.0}%)",
+            "trs shard: {hits} of {} fragment objects reused from inputs ({:.0}%)",
             typed.len(),
             100.0 * hits as f64 / typed.len().max(1) as f64
         );
@@ -2454,8 +2304,8 @@ fn lower_edge_ssa<'ctx>(
                     builder: ctx.create_builder(),
                     cbs,
                     spec,
-                    site_origin: if is_exec { spec.exec_prim_origin } else { 0 },
-                    foreign_origin: if is_exec { spec.exec_foreign_origin } else { 0 },
+                    site_origin: if is_exec { 0 } else { spec.sched_prim_origin },
+                    foreign_origin: if is_exec { 0 } else { spec.sched_foreign_origin },
                     outlined,
                     helper_self: None,
                     dedup: None,
@@ -2967,7 +2817,7 @@ pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> 
 struct EdgeCtx<'ctx> {
     /// slots whose stores must SURVIVE export elision: CF slots read
     /// by inhibitor loads, WF/eager slots read by outlined bodies.
-    /// Everything else is dead weight in the specialized compile
+    /// Everything else is dead weight in the per-fragment compile
     /// (Ravi: speed first — the slot-level debug contract is not part
     /// of the edge-SSA artifact surface).
     /// (Rc: under sched outlining every section's fresh EdgeCtx shares
@@ -3227,15 +3077,26 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     if let Some(&(w, _)) = ie.wide_consts.get(p) {
                         return Ok(w);
                     }
+                    // a module argument: its width is the module's
+                    // declaration, carried on the slot
+                    if let Some(&(_, w)) = ie.arg_slot.get(p) {
+                        return Ok(w);
+                    }
                     Ok(ie.port_consts.get(p).map_or(1, |&(w, _)| w)) // reset/EN ports read 1 bit
                 }
             },
             Expr::Param(p) => {
                 let ie = self.ie(f.inst)?;
+                if let Some(&(_, w)) = ie.arg_slot.get(p) {
+                    return Ok(w);
+                }
                 if ie.real_consts.contains_key(p) {
                     return Ok(64); // f64 bits carrier
                 }
                 if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                    return Ok(w);
+                }
+                if let Some(&(_, w)) = ie.arg_slot.get(p) {
                     return Ok(w);
                 }
                 match ie.port_consts.get(p) {
@@ -3856,6 +3717,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         self.env.d.strings[*p as usize]
                     );
                 }
+                // a module argument: a load from this instance's
+                // region, where it used to be a folded constant
+                if let Some(&(base, w)) = ie.arg_slot.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero());
+                    }
+                    return Ok(self.load_val(f, base, w));
+                }
                 if let Some(&(w, v)) = ie.port_consts.get(p) {
                     if w == 0 {
                         return Ok(self.ity(0).const_zero()); // empty bit-vector
@@ -3877,28 +3746,45 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // chases), so dynamic gates stay interp until gate
                 // values get schedule-time slots (mcd_Rand measured a
                 // cross-domain divergence with live re-expansion)
-                if let Some((owner, g)) = ie.gates.get(p) {
-                    // eligible dynamic cones: prim Gate chases are LIVE
-                    // reads on both engines, and a Port link recurses
-                    // through this same checked resolution in the owner
-                    // (terminating at a const, a further chase, or nope)
-                    if !gate_static(g) && !matches!(g, Expr::Gate { .. } | Expr::Port(_)) {
-                        return nope("dynamic input gate (latch semantics)");
-                    }
-                    let (owner, g) = (*owner, g.clone());
-                    let mut of = self.child_frame(f, owner, None)?;
-                    return self.expr_scalar(&mut of, &g);
+                // A gate is a value in this instance's own region,
+                // put there by the design-level edge fn once per
+                // edge.  It used to be re-expanded here in the
+                // OWNER's frame, which baked the parent's slots into
+                // a body meant to serve every instance -- and, being
+                // a live re-read rather than a latch, diverged across
+                // clock domains, which is why a dynamic gate was
+                // refused rather than compiled.  Both go away
+                // together: one load, and dynamic gates are ordinary.
+                if let Some(&slot) = ie.gate_slot.get(p) {
+                    let word = self.load_word(f, slot);
+                    return Ok(self.to_w(word, 64, 1, false));
                 }
                 nope("port read outside args/reset/EN/consts")
             }
             Expr::Param(p) => {
                 let ie = self.ie(f.inst)?;
+                // FIRST: `real_consts` still holds a value, but only
+                // as a type marker -- the live value is in the slot,
+                // and checking the marker first served the exemplar's
+                // constant to every instance
+                if let Some(&(base, w)) = ie.arg_slot.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero());
+                    }
+                    return Ok(self.load_val(f, base, w));
+                }
                 if let Some(&bits) = ie.real_consts.get(p) {
                     return Ok(self.ctx.i64_type().const_int(bits, false));
                 }
                 if let Some((w, limbs)) = ie.wide_consts.get(p) {
                     let (w, limbs) = (*w, limbs.clone());
                     return Ok(self.cval(w, &limbs));
+                }
+                if let Some(&(base, w)) = ie.arg_slot.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero());
+                    }
+                    return Ok(self.load_val(f, base, w));
                 }
                 match ie.port_consts.get(p) {
                     Some(&(0, _)) => Ok(self.ity(0).const_zero()),
@@ -6196,10 +6082,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
         let i32t = self.ctx.i32_type();
         let i64t = self.ctx.i64_type();
-        // exec fns take (arena, env, region base index, ordinal): all
-        // in-region state addresses are relative to base and callback
-        // sites report the runtime ordinal, so ONE compiled body serves
-        // every instance of the module type (per-module-type dedup)
+        // exec fns take (arena, env, region base index, ordinal, prim
+        // site base, foreign site base): in-region state addresses are
+        // relative to base, callback sites report the runtime ordinal,
+        // and site indices are relative to the two bases -- so ONE
+        // compiled body serves every instance of the class, including
+        // instances whose sched half is a different size (see
+        // CompiledExec for why that size varies)
         let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
         let func = self
             .module
@@ -6769,7 +6658,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             Expr::Str(_) => true,
             Expr::Param(p) | Expr::Port(p) => self
                 .ie(f.inst)
-                .map(|ie| ie.str_consts.contains_key(p))
+                .map(|ie| ie.str_consts.contains_key(p) || ie.str_slot.contains_key(p))
                 .unwrap_or(false),
             Expr::If { then_, else_, .. } => {
                 self.expr_is_str_in(f, then_, seen) || self.expr_is_str_in(f, else_, seen)
@@ -6878,10 +6767,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let i64t = self.ctx.i64_type();
         match e {
             Expr::Str(sid) => Ok(i64t.const_int(*sid as u64, false)),
-            Expr::Param(p) | Expr::Port(p) => match self.ie(f.inst)?.str_consts.get(p) {
-                Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
-                None => nope("non-string port in string context"),
-            },
+            Expr::Param(p) | Expr::Port(p) => {
+                let ie = self.ie(f.inst)?;
+                // a load, where this used to be the exemplar's own
+                // interned id baked into a body every instance shares
+                if let Some(&base) = ie.str_slot.get(p) {
+                    return Ok(self.load_word(f, base));
+                }
+                match ie.str_consts.get(p) {
+                    Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
+                    None => nope("non-string port in string context"),
+                }
+            }
             Expr::If {
                 cond, then_, else_, ..
             } => {
@@ -8713,14 +8610,14 @@ mod tests {
             prims: vec![],
             // one table per rule: the exec half starts after the one
             // foreign site the sched half took
-            exec_foreign_origin: 1,
-            exec_prim_origin: 0,
+            sched_foreign_origin: 1,
+            sched_prim_origin: 0,
         }];
         let bytes = encode_protos(&protos);
         let back = decode_protos(&bytes).expect("round trip");
         assert_eq!(back.len(), 1);
-        assert_eq!(back[0].exec_foreign_origin, 1);
-        assert_eq!(back[0].exec_prim_origin, 0);
+        assert_eq!(back[0].sched_foreign_origin, 1);
+        assert_eq!(back[0].sched_prim_origin, 0);
         let args = &back[0].foreign[0].args;
         assert!(matches!(args[0], FArgSpec::Str(11)));
         assert!(matches!(

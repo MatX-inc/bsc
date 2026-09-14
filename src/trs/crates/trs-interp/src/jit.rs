@@ -285,31 +285,29 @@ pub(crate) struct LazyJit {
     cells: Vec<OnceLock<CompiledExec>>,
 }
 
-/// The symbol an exec CLASS is emitted under: module type, rule, and
-/// the subtree signature that decides which instances share a body.
+/// The symbol an exec CLASS is emitted under: module type and rule.
 ///
-/// None of the three is a position in this design.  A design-wide
-/// instance index or schedule ordinal would name the same code
-/// differently in every design that instantiates the type, which is
-/// precisely what stops a per-type object from being reused -- the
-/// signature already distinguishes instances that must NOT share
-/// (different parameters, different layouts), so it is the right
-/// discriminator and the only one needed.
+/// Neither is a position in this design.  A design-wide instance index
+/// or schedule ordinal would name the same code differently in every
+/// design that instantiates the type, which is precisely what stops a
+/// per-type object from being reused.  A module type compiles to one
+/// object, so its own name is the whole discriminator -- and a name a
+/// build system can PREDICT from the .bir is what removes the need to
+/// discover object names at all.
 ///
-/// Empty when no signature was derived.  That happens only on the
-/// artifact LOAD path, which takes its dedup classes from the artifact
-/// and skips the hashing -- and which reads exec fns out of the
-/// ordinal table rather than by name.  Naming nothing is better than
-/// naming a class the emitter never called that.
+/// `named` is false on the artifact LOAD path, which takes its dedup
+/// classes from the artifact and reads exec fns out of the ordinal
+/// table rather than by name.  Naming nothing is better than naming a
+/// class the emitter never called that.
 fn exec_class_label(
     d: &trs_ir::Design,
     mir: usize,
     rule_idx: usize,
-    sig: Option<u64>,
+    named: bool,
 ) -> String {
-    let Some(sig) = sig else {
+    if !named {
         return String::new();
-    };
+    }
     let name = |id: u32| d.strings.get(id as usize).map(String::as_str).unwrap_or("");
     let m = &d.modules[mir];
     let r = m.rules.get(rule_idx).map(|r| name(r.name)).unwrap_or("");
@@ -321,7 +319,7 @@ fn exec_class_label(
             .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '.' })
             .collect()
     };
-    format!("{}_{}_{sig:016x}", ok(name(m.name)), ok(r))
+    format!("{}_{}", ok(name(m.name)), ok(r))
 }
 
 impl LazyJit {
@@ -1082,9 +1080,6 @@ enum EmitFail {
     /// remain, decides by size between the inline monolith and the
     /// sched-outline dispatcher
     EdgeOverBudget(std::collections::HashSet<usize>, u64),
-    /// `trs specializations`: the manifest was written and nothing compiled.
-    /// Not a failure -- it is what the caller asked for.
-    Manifest,
 }
 
 #[cfg(feature = "jit")]
@@ -1113,9 +1108,6 @@ fn aot_emit(
     // exceeding it returns EmitFail::EdgeOverBudget with measured
     // victims for the caller's replan (one_module + edge-SSA only)
     edge_insn_budget: u64,
-    // `trs specializations`: manifest destination and rendering, carried from
-    // the command line rather than through the environment
-    spec_req: Option<(std::path::PathBuf, bool)>,
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::compile_meta_object;
     trs_codegen::lower::llvm_init_once();
@@ -1214,7 +1206,6 @@ fn aot_emit(
                 return Vec::new();
             };
             let mir = env.insts[&exemplar].mir;
-            let class_sig = env.insts[&exemplar].class_sig;
             let mut reqs = Vec::new();
             for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
                 if m.always_enabled {
@@ -1244,8 +1235,20 @@ fn aot_emit(
                         method: m.name,
                         kind,
                         class_id,
-                        class_sig,
-                        sym: format!("trs_bnd{class_sig:016x}_{mi}_{kind}"),
+                        sym: format!(
+                            "trs_bnd_{}_{mi}_{kind}",
+                            d.strings
+                                .get(d.modules[mir].name as usize)
+                                .map(|s| s
+                                    .chars()
+                                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' {
+                                        c
+                                    } else {
+                                        '.'
+                                    })
+                                    .collect::<String>())
+                                .unwrap_or_default()
+                        ),
                         args: args.clone(),
                     });
                 }
@@ -1277,16 +1280,9 @@ fn aot_emit(
             edge_insn_budget,
             &boundary_reqs,
             nworkers,
-            spec_req.as_ref().map(|(p, t)| (p.as_path(), *t)),
         )
         .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
         let objs: Vec<Vec<u8>> = match raw {
-            // `trs specializations`: the manifest is written and there is
-            // nothing to link.  Reported as a clean stop, not as a
-            // design the compiler refused.
-            trs_codegen::lower::DesignObject::Manifest => {
-                return Err(EmitFail::Manifest);
-            }
             trs_codegen::lower::DesignObject::Object(o) => vec![o],
             trs_codegen::lower::DesignObject::Objects(v) => v,
             trs_codegen::lower::DesignObject::EdgeOverBudget(sizes, edge_insns) => {
@@ -1755,7 +1751,7 @@ fn aot_load(
         }
         let execs: Vec<CompiledExec> = execs
             .into_iter()
-            .map(|o| o.expect("every ordinal belongs to a specialization"))
+            .map(|o| o.expect("every ordinal belongs to a dedup class"))
             .collect();
         // fused edge fns (absent in pre-fusion artifacts: rev-gated)
         let mut fused = Vec::with_capacity(ncomps);
@@ -3236,8 +3232,7 @@ impl Interp {
                         Some(trs_ir::PortKind::MethodEnable) => 8,
                         Some(trs_ir::PortKind::Reset)
                         | Some(trs_ir::PortKind::Clock)
-                        | Some(trs_ir::PortKind::ClockGate)
-                        | Some(trs_ir::PortKind::Parameter) => 16,
+                        | Some(trs_ir::PortKind::ClockGate) => 16,
                         _ => 1,
                     };
                 }
@@ -3993,7 +3988,7 @@ impl Interp {
             }
         }
 
-        // export keep-set (specialized compile: slot stores survive
+        // export keep-set (the compiled tier: slot stores survive
         // only for COMPILED consumers — inhibitor loads and outlined
         // bodies; the slot-level debug contract is not part of the
         // edge-SSA artifact surface)
@@ -4927,58 +4922,196 @@ impl Interp {
             let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
             let mut real_consts: HashMap<StrId, u64> = HashMap::new();
             let mut wide_consts: HashMap<StrId, (u32, Vec<u32>)> = HashMap::new();
-            // the bindings a parent supplied, rendered the way the
-            // link takes them back (`+NAME=value`).  Captured HERE and
-            // not from port_consts, which also collects the
-            // unbound-port fallthrough readings below -- those are not
-            // parameters and must not come back as bindings.
-            let mut param_binds: Vec<(StrId, String)> = Vec::new();
             for (&pn, pv) in params {
-                param_binds.push((
-                    pn,
-                    if let Some(r) = pv.as_real() {
-                        // a real is not `+NAME=value` material; carried
-                        // so a generator can see it and refuse rather
-                        // than emit a binding that will not parse
-                        format!("{r:?}")
-                    } else {
-                        let mut h = String::from("0x");
-                        let limbs = pv.limbs64();
-                        let mut lead = true;
-                        for l in limbs.iter().rev() {
-                            if lead && *l == 0 && limbs.len() > 1 {
-                                continue;
-                            }
-                            if lead {
-                                h.push_str(&format!("{l:x}"));
-                                lead = false;
-                            } else {
-                                h.push_str(&format!("{l:016x}"));
-                            }
-                        }
-                        if lead {
-                            h.push('0');
-                        }
-                        h
-                    },
-                ));
                 if pv.width >= 1 && pv.width <= 64 {
-                    port_consts.insert(pn, (pv.width, pv.as_u64()));
+                    // handled below as an arg_slot -- the value is
+                    // seeded into the arena, not folded into the body
                 } else if let Some(r) = pv.as_real() {
                     // real params ride as f64 bits (task-arg carrier)
                     real_consts.insert(pn, r.to_bits());
-                } else if pv.width > 64 && pv.width < u32::MAX - 1 {
-                    // wide instantiation values as LE 32-bit limbs
-                    let mut limbs = Vec::new();
-                    for &l in pv.limbs64() {
-                        limbs.push(l as u32);
-                        limbs.push((l >> 32) as u32);
-                    }
-                    wide_consts.insert(pn, (pv.width, limbs));
                 }
+                // wide values need no branch here: they are arg_slots
+                // below, seeded limb by limb
             }
+            // A module ARGUMENT is a value the parent chose, not a
+            // property of the type -- so it becomes a slot in this
+            // instance's region, seeded with that value, rather than a
+            // constant folded into the body.  That is what lets one
+            // type be one object however many valuations it has.
+            //
+            // Every argument the MODULE declares gets a slot, supplied
+            // or not.  Allocating only the ones this parent passed
+            // would make the layout a property of the instantiation,
+            // and a fragment linked alone (no parent, nothing
+            // supplied) would lay out differently from the same
+            // fragment inside a design -- which is the one thing the
+            // unit is defined not to do.  Unsupplied reads 0, which is
+            // what the fallthrough below would have baked anyway.
+            //
+            // A module argument is a MethodArg-kind input that no
+            // method claims: bsc records both the same way, and this
+            // is the rule topbind uses to find what `+NAME=' binds.
+            let claimed: std::collections::HashSet<StrId> = self.d.modules[mir]
+                .methods
+                .iter()
+                .flat_map(|me| me.args.iter().map(|a| a.name))
+                .collect();
+            let mut argp: Vec<(StrId, u32)> = self.d.modules[mir]
+                .inputs
+                .iter()
+                .filter(|q| {
+                    q.kind == trs_ir::PortKind::MethodArg
+                        && !claimed.contains(&q.name)
+                        && q.width >= 1
+                })
+                .map(|q| (q.name, q.width))
+                .collect();
+            // by NAME -- a StrId is a position in this design's string
+            // table, and these offsets are hashed into the signature
+            argp.sort_by(|a, b| self.s(a.0).cmp(self.s(b.0)).then(a.0.cmp(&b.0)));
+            let mut arg_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
+            for (pn, w) in argp {
+                // wider than a word takes several: a 96-bit argument
+                // was the last carrier that still had to bake, and a
+                // value is a value whatever its width
+                let words = w.div_ceil(64);
+                let base = alloc(&mut nslots, words);
+                if let Some(pv) = params.get(&pn) {
+                    for (k, &l) in pv.limbs64().iter().enumerate().take(words as usize) {
+                        rec_inits.push((base + k as u32, l));
+                    }
+                } else {
+                    for k in 0..words {
+                        rec_inits.push((base + k, 0));
+                    }
+                }
+                arg_slot.insert(pn, (base, w));
+            }
+            // String arguments, the same way: a zero-width unclaimed
+            // MethodArg input.  Declared-set again, not supplied-set,
+            // so the layout is the module's and not the parent's.  A
+            // zero-width Bits argument would land here too; it reads
+            // through the numeric fallthrough below and never through
+            // a string context, so an unused slot is all it costs.
+            let mut strp: Vec<StrId> = self.d.modules[mir]
+                .inputs
+                .iter()
+                .filter(|q| {
+                    q.kind == trs_ir::PortKind::MethodArg
+                        && !claimed.contains(&q.name)
+                        && q.width == 0
+                })
+                .map(|q| q.name)
+                .collect();
+            strp.sort_by(|a, b| self.s(*a).cmp(self.s(*b)).then(a.cmp(b)));
+            // gate slots, from the module's DECLARED gate ports so the
+            // layout is the type's and not the instantiation's
+            let mut gatep: Vec<StrId> = self.d.modules[mir]
+                .inputs
+                .iter()
+                .filter(|q| q.kind == trs_ir::PortKind::ClockGate)
+                .map(|q| q.name)
+                .collect();
+            gatep.sort_by(|a, b| self.s(*a).cmp(self.s(*b)).then(a.cmp(b)));
+            let mut gate_slot: HashMap<StrId, u32> = HashMap::new();
+            for pn in gatep {
+                let base = alloc(&mut nslots, 1);
+                // an ungated clock reads 1; the edge fn overwrites
+                // this every edge for a gate that is actually bound
+                rec_inits.push((base, 1));
+                gate_slot.insert(pn, base);
+            }
+            let mut str_slot: HashMap<StrId, u32> = HashMap::new();
+            for pn in strp {
+                let base = alloc(&mut nslots, 1);
+                let v = str_params.get(&pn).map(|&sid| sid as u64).unwrap_or(0);
+                rec_inits.push((base, v));
+                str_slot.insert(pn, base);
+            }
+            // CHECKED: every value a parent supplied reaches the body
+            // through a slot, never through the code.
+            //
+            // The slot sets come from what the MODULE declares -- an
+            // unclaimed MethodArg port, width >= 1 to `arg_slot` and
+            // width 0 to `str_slot`, which between them cover every
+            // width -- while `params` is what a PARENT bound, keyed by
+            // walking that same declared list positionally against the
+            // instantiation's args.
+            //
+            // They coincide because of how the exporter ORDERS the
+            // list: `insEnc = insEnc0 ++ enInsEnc` (`SimExportIR.hs`)
+            // puts every module argument (`AAI_Port`, `AAI_Clock`,
+            // `AAI_Reset` -- and `AAI_Port` is the only one that
+            // becomes MethodArg) ahead of every MethodEnable, so a
+            // positional walk over the args cannot reach an enable,
+            // and a method's own arguments are qualified by the method
+            // name and so never collide with a module argument's.
+            //
+            // That is a fact about one Haskell function, not an
+            // invariant of the IR -- the .bir could express the other
+            // shape and a reader has no way to reject it.  If it ever
+            // stops holding, the value falls through to `port_consts`
+            // and BAKES: one instance's argument frozen into an object
+            // every instance of the type then shares -- a wrong
+            // answer, and one that needs two instantiations at
+            // different values to show itself.  So check it here,
+            // where both sets are in hand, and refuse the compiled
+            // tier rather than emit that object.
+            //
+            // CLAIMED ports are exempt, and are the reason this is a
+            // check and not an assertion: `topbind` binds an
+            // always_enabled method's arguments on the TOP, as
+            // `+<method>.<arg>=value` (sysTopAlwaysEn binds
+            // `setStep_v`), and those land in `params` too.  They are
+            // method arguments, not module arguments -- no parent can
+            // bind one, since a parent drives a method by CALLING it
+            // -- so they reach `params` only on a top, whose object is
+            // the design's own and shared with nothing.  Baking them
+            // is correct.
+            let unheld = |pn: &StrId| {
+                !arg_slot.contains_key(pn)
+                    && !str_slot.contains_key(pn)
+                    && !claimed.contains(pn)
+            };
+            if let Some((&pn, _)) = params.iter().find(|(pn, _)| unheld(pn)) {
+                eprintln!(
+                    "trs jit: off (module argument `{}' of {} was bound by its \
+                     parent but the module declares no port to hold it, so its \
+                     value would bake into an object shared by every instance)",
+                    self.s(pn),
+                    self.s(self.d.modules[mir].name),
+                );
+                return None;
+            }
+            if let Some((&pn, _)) = str_params.iter().find(|(pn, _)| unheld(pn)) {
+                eprintln!(
+                    "trs jit: off (string module argument `{}' of {} was bound \
+                     by its parent but the module declares no port to hold it)",
+                    self.s(pn),
+                    self.s(self.d.modules[mir].name),
+                );
+                return None;
+            }
+            // A Real reaches the params loop as a value of NO width,
+            // so it lands in `real_consts` up there -- but its PORT is
+            // 64 bits wide, so it also gets a slot, and the slot is
+            // what the lowering reads.  Same for a wide value in
+            // `wide_consts`.  Those leftover copies must not keep the
+            // VALUE in the dedup identity, or the object would serve
+            // every valuation and still be named for one.
+            //
+            // `real_consts` stays anyway, because it is doing a second
+            // job: like `str_consts` it is the TYPE MARKER that makes
+            // a foreign call pass this argument as a double, and
+            // dropping it printed the f64 bit pattern as an integer.
+            // Only its value leaves the identity -- the signature
+            // hashes its keys.  A wide value carries no such marker,
+            // so its copy simply goes.
+            wide_consts.retain(|k, _| !arg_slot.contains_key(k));
+
             for (&pn, &(w, kind)) in &self.mods[module].ports {
                 if port_consts.contains_key(&pn)
+                    || arg_slot.contains_key(&pn)
                     || params.contains_key(&pn)
                     || en_slot.contains_key(&pn)
                     || reset_slot.contains_key(&pn)
@@ -5041,6 +5174,20 @@ impl Interp {
                 for (&k, &(b, w)) in &reg_slot {
                     v.push(("reg".into(), nm(k), rel(b), w));
                 }
+                // the three that carry what a parent supplies.  They
+                // are the newest entries in the layout half and so the
+                // likeliest to move, and an unfilled gate slot reads
+                // the seeded 1 -- silently ungated -- so being able to
+                // see they exist at all is worth the four lines.
+                for (&k, &(b, w)) in &arg_slot {
+                    v.push(("arg".into(), nm(k), rel(b), w));
+                }
+                for (&k, &b) in &str_slot {
+                    v.push(("str".into(), nm(k), rel(b), 0));
+                }
+                for (&k, &b) in &gate_slot {
+                    v.push(("gate".into(), nm(k), rel(b), 1));
+                }
                 v.sort();
                 for (kind, n, off, w) in v {
                     eprintln!("slotdump {mname} {kind} {n} off={off} w={w}");
@@ -5053,7 +5200,6 @@ impl Interp {
                     bvi_needs,
                     // assigned once the subtree signatures exist
                     class_id: 0,
-                    class_sig: 0,
                     children,
                     reg_slot,
                     wire_slot,
@@ -5064,7 +5210,6 @@ impl Interp {
                     bram_slot,
                     creg5_slot,
                     counter_slot,
-                    param_binds,
                     reset_slot,
                     reset_ord,
                     reset_tbl,
@@ -5072,6 +5217,9 @@ impl Interp {
                     cfwf_slot,
                     eager_slot,
                     memo_slot,
+                    arg_slot,
+                    str_slot,
+                    gate_slot,
                     port_consts,
                     real_consts,
                     gates: gates.clone(),
@@ -5286,9 +5434,37 @@ impl Interp {
                 m9.sort_unstable();
                 m9.hash(&mut hl);
                 if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
-                // params/const-ports are baked into compiled bodies:
-                // instances of one module type with different param
-                // values must not share exec code
+                // Everything a parent supplies: WHERE it sits, into
+                // the LAYOUT half, and never what it is.  That is the
+                // whole change -- two instantiations of one type at
+                // different values now agree on the signature, so
+                // they are one object.  These go in the layout half
+                // because a slot's offset is genuinely part of the
+                // code; the value that gets seeded into it is not.
+                let mut m22: Vec<_> = e
+                    .arg_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m22.sort_unstable();
+                m22.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m23: Vec<_> = e
+                    .str_slot
+                    .iter()
+                    .map(|(&k, &b)| (sname(k), b - r0))
+                    .collect();
+                m23.sort_unstable();
+                m23.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m24: Vec<_> = e
+                    .gate_slot
+                    .iter()
+                    .map(|(&k, &b)| (sname(k), b - r0))
+                    .collect();
+                m24.sort_unstable();
+                m24.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 let mut m11: Vec<_> = e
                     .port_consts
                     .iter()
@@ -5297,22 +5473,34 @@ impl Interp {
                 m11.sort_unstable();
                 m11.hash(&mut hi);
                 if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
-                let mut m12: Vec<_> = e.real_consts.iter().map(|(&k, &v)| (sname(k), v)).collect();
+                // names, not values: the value is in a slot now, and
+                // the map survives only as the pass-as-double type
+                // marker (see `real_consts` above)
+                let mut m12: Vec<_> = e.real_consts.keys().map(|&k| sname(k)).collect();
                 m12.sort_unstable();
                 m12.hash(&mut hi);
                 if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
                 // gate wiring pins the sig: owner slots are ABSOLUTE in
                 // deduped bodies, so instances gated differently (other
                 // owner, other expr) must never share exec code
-                let mut m13: Vec<_> = e
-                    .gates
-                    .iter()
-                    .map(|(&k, (o, g))| (sname(k), *o, format!("{g:?}")))
-                    .collect();
+                // the gate PORT NAMES, not the wiring.  This used to
+                // hash the owner's global instance index and the
+                // Debug rendering of the gate expression -- an index
+                // into one design's instance list, and a string full
+                // of raw StrIds, so no two designs could ever agree
+                // and no two instances under different gates could
+                // share a body.  The value lives in a slot now, so
+                // the wiring is not part of what the body IS.
+                let mut m13: Vec<_> = e.gates.keys().map(|&k| sname(k)).collect();
                 m13.sort_unstable();
                 m13.hash(&mut hi);
                 if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
-                let mut m14: Vec<_> = e.str_consts.iter().map(|(&k, &v)| (sname(k), sname(v))).collect();
+                // the NAMES of the string ports, not their texts: a
+                // string argument is a value the parent supplies and
+                // now lives in a slot, so hashing the text would keep
+                // specializing on exactly the thing we just moved out
+                // of the body
+                let mut m14: Vec<_> = e.str_consts.keys().map(|&k| sname(k)).collect();
                 m14.sort_unstable();
                 m14.hash(&mut hi);
                 if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
@@ -5472,7 +5660,6 @@ impl Interp {
                 });
                 if let Some(e) = inst_envs.get_mut(&i) {
                     e.class_id = id;
-                    e.class_sig = sg;
                 }
             }
         }
@@ -5596,11 +5783,11 @@ impl Interp {
                     &self.d,
                     self.mods[self.module_of(ri.inst)].ir,
                     ri.rule_idx,
-                    inst_sig.get(&ri.inst).copied(),
+                    inst_sig.contains_key(&ri.inst),
                 ),
                 ordinal: ri.ordinal as u32,
-                exec_foreign_origin: 0,
-                exec_prim_origin: 0,
+                sched_foreign_origin: 0,
+                sched_prim_origin: 0,
                 autofire: None,
             });
         }
@@ -5654,8 +5841,8 @@ impl Interp {
                     // name; the spec label is already the right scope
                     exec_label: format!("af{afi}_{o}"),
                     ordinal: o as u32,
-                    exec_foreign_origin: 0,
-                    exec_prim_origin: 0,
+                    sched_foreign_origin: 0,
+                    sched_prim_origin: 0,
                     autofire: Some(trs_codegen::abi::AfSpec {
                         method_idx: mi,
                         method: *mname,
@@ -5897,7 +6084,7 @@ impl Interp {
         }
         if trace {
             eprintln!(
-                "trs jit: {} exec bodies in {} specializations",
+                "trs jit: {} exec bodies in {} dedup classes",
                 specs.len(),
                 classes.len()
             );
@@ -6041,8 +6228,12 @@ impl Interp {
                     // reuse across designs asks for a symbol the
                     // object does not define.
                     sym: format!(
-                        "hlp_{:016x}_{}",
-                        inst_sig[&ex],
+                        "hlp_{}_{}",
+                        self.d
+                            .strings
+                            .get(self.d.modules[mir].name as usize)
+                            .map(String::as_str)
+                            .unwrap_or(""),
                         self.d
                             .strings
                             .get(dn as usize)
@@ -6102,7 +6293,7 @@ impl Interp {
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
-        sl.lap("plan specializations+nodes");
+        sl.lap("plan classes+nodes");
         let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
         let mut tick_level_flag: u64 = 0;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
@@ -6178,8 +6369,8 @@ impl Interp {
         // sites would collide silently rather than fail, so there is
         // exactly one writer and it is this one.
         for (sp, pr) in specs.iter_mut().zip(&protos) {
-            sp.exec_prim_origin = pr.exec_prim_origin;
-            sp.exec_foreign_origin = pr.exec_foreign_origin;
+            sp.sched_prim_origin = pr.sched_prim_origin;
+            sp.sched_foreign_origin = pr.sched_foreign_origin;
         }
 
         // A boundary fn's call sites live in its CALLER's table, at a
@@ -6197,23 +6388,89 @@ impl Interp {
             let r = &protos[*rep];
             for &m in members {
                 let p = &protos[m];
-                // one table per rule, so the whole table must match --
-                // and so must the exec origin, because a shared body
-                // bakes indices that start where ITS sched half stopped
-                let shaped = p.exec_prim_origin == r.exec_prim_origin
-                    && p.exec_foreign_origin == r.exec_foreign_origin
-                    && p.prims.len() == r.prims.len()
-                    && p.foreign.len() == r.foreign.len()
-                    && p.prims.iter().zip(&r.prims).all(|(a, b)| {
+                // The EXEC halves must match: one body serves the
+                // whole class and addresses [0, sched_origin), so
+                // every member must agree on both that range's LENGTH
+                // and its contents.
+                //
+                // The sched halves need not, and do not: a sched fn is
+                // per-ordinal and nothing shares it, and its size
+                // follows how the design's schedule split shared eager
+                // defs between an instance's rules -- design context,
+                // which no class key could cover.  Putting exec first
+                // is what confines that to the half where it does no
+                // harm; it used to sit second and inherit the sched
+                // half's design-dependent size as its origin.
+                let (ro, po) = (r.sched_prim_origin as usize, p.sched_prim_origin as usize);
+                let (rf, pf) = (r.sched_foreign_origin as usize, p.sched_foreign_origin as usize);
+                let shaped = po == ro
+                    && pf == rf
+                    && p.prims[..po].iter().zip(&r.prims[..ro]).all(|(a, b)| {
                         a.method == b.method
                             && a.port == b.port
                             && a.arg_widths == b.arg_widths
                             && a.ret_width == b.ret_width
                             && a.is_action == b.is_action
                     })
-                    && p.foreign.iter().zip(&r.foreign).all(|(a, b)| {
+                    && p.foreign[..pf].iter().zip(&r.foreign[..rf]).all(|(a, b)| {
                         a.func == b.func && a.ret_width == b.ret_width && a.args == b.args
                     });
+                if !shaped {
+                    // Say WHICH sites disagree and on what.  The
+                    // assert below names two ordinals, which localises
+                    // nothing: these are a rep and a member the
+                    // signature called identical, so the useful fact
+                    // is the first input it stopped covering.  Only
+                    // the differing entries, and only a few -- the
+                    // tables run to thousands on a large design, and
+                    // the first disagreement is the one to read.
+                    let nm = |i: usize| {
+                        self.insts
+                            .get(i)
+                            .map(|x| x.path.clone())
+                            .unwrap_or_else(|| format!("<inst {i}?>"))
+                    };
+                    let mir = self.mods[self.module_of(specs[*rep].inst)].ir;
+                    eprintln!(
+                        "dedupdiff {}.{}: rep {} vs member {}",
+                        self.d.name(self.d.modules[mir].name),
+                        self.d.name(self.d.modules[mir].rules[specs[*rep].rule_idx].name),
+                        nm(specs[*rep].inst),
+                        nm(specs[m].inst)
+                    );
+                    // sched_origin IS the exec half's length, so
+                    // origins that differ mean the two bodies do not
+                    // even address the same NUMBER of sites
+                    if po != ro || pf != rf {
+                        eprintln!(
+                            "  exec half is {ro} prim / {rf} foreign sites for \
+                             the rep, {po} / {pf} for the member"
+                        );
+                    }
+                    for k in 0..ro.min(po) {
+                        let (a, b) = (&r.prims[k], &p.prims[k]);
+                        if a.method == b.method
+                            && a.port == b.port
+                            && a.arg_widths == b.arg_widths
+                            && a.ret_width == b.ret_width
+                            && a.is_action == b.is_action
+                        {
+                            continue;
+                        }
+                        eprintln!(
+                            "  prim site {k}: rep {}.{} (inst {}) vs member {}.{} (inst {})",
+                            nm(a.inst), self.s(a.method), a.port,
+                            nm(b.inst), self.s(b.method), b.port
+                        );
+                    }
+                    for k in 0..rf.min(pf) {
+                        let (a, b) = (&r.foreign[k], &p.foreign[k]);
+                        if a.func == b.func && a.ret_width == b.ret_width && a.args == b.args {
+                            continue;
+                        }
+                        eprintln!("  foreign site {k}: rep {} vs member {}", a.func, b.func);
+                    }
+                }
                 assert!(
                     shaped,
                     "trs: dedup class rep ordinal {rep} and member {m} \
@@ -6244,7 +6501,7 @@ impl Interp {
         if let JitRequest::Emit { so, exe } = &request {
             // whole-edge SSA emission (task #24, opt-in): build the
             // legality tables the edge emitter consumes
-            // DEFAULT ON for AOT links (the specialized fast compile);
+            // DEFAULT ON for AOT links (the compiled fast tier);
             // TRS_EDGE_SSA=0 restores the classic emission
             let mut nodes_for_plan: Vec<Vec<(bool, usize)>> = comp_nodes
                 .iter()
@@ -6500,7 +6757,6 @@ impl Interp {
                     edge_plan.as_ref(),
                     &bdpi_names,
                     budget_now,
-                    self.spec_req.clone(),
                 ) {
                     Err(EmitFail::EdgeOverBudget(victims, edge_insns)) => {
                         if std::env::var_os("TRS_JIT_TRACE").is_some() {
@@ -6677,7 +6933,6 @@ impl Interp {
                 Ok(()) => crate::AotEmit::Compiled,
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
                 Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
-                Err(EmitFail::Manifest) => crate::AotEmit::Manifest,
                 // the unbounded second pass cannot report over-budget
                 Err(EmitFail::EdgeOverBudget(..)) => unreachable!(),
             });
@@ -6892,6 +7147,18 @@ impl Interp {
         // interpreted bodies resolve fire signals and schedule-position
         // defs straight from the arena (same values the native scheds
         // stored; matches the proven full-interpreter eager semantics)
+        // every bound gate, with the slot the child reads it from
+        self.jit_gate_fills = lazy
+            .insts
+            .iter()
+            .flat_map(|(_, e)| {
+                e.gate_slot.iter().filter_map(|(&port, &slot)| {
+                    e.gates
+                        .get(&port)
+                        .map(|(owner, ex)| (*owner, ex.clone(), slot))
+                })
+            })
+            .collect();
         self.jit_eager_slots = lazy
             .insts
             .iter()
@@ -7744,27 +8011,6 @@ impl Interp {
 /// local patterns, which is exactly the type-uniformity the allocator
 /// needs — so the walk is O(module types), not O(instances), and adds
 /// nothing measurable to artifact boot.
-/// The object-name salt, where codegen exists to define it.  Without
-/// the llvm feature nothing emits objects, so a manifest can only
-/// describe the classes, not name the files they would compile to --
-/// and says so with an empty salt rather than inventing one.
-#[cfg(feature = "jit")]
-fn spec_obj_salt_or_none() -> String {
-    trs_codegen::lower::spec_obj_salt()
-}
-#[cfg(not(feature = "jit"))]
-fn spec_obj_salt_or_none() -> String {
-    String::new()
-}
-#[cfg(feature = "jit")]
-fn salted_knob_or_all(k: &str) -> bool {
-    trs_codegen::lower::salted_knob(k)
-}
-#[cfg(not(feature = "jit"))]
-fn salted_knob_or_all(_k: &str) -> bool {
-    true
-}
-
 struct LcRank<'a> {
     it: &'a Interp,
     /// per-mir names that are rule fire signals or eager defs: the

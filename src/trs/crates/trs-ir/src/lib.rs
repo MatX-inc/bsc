@@ -61,7 +61,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 6;
+const SNAP_LAYOUT_REV: u32 = 7;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -546,6 +546,15 @@ pub struct Port {
     pub base: Option<StrId>,
 }
 
+/// What a module input carries.
+///
+/// There is deliberately no `Parameter`: a module ARGUMENT -- what bsc
+/// writes to the left of the final arrow, including the `parameter`
+/// ones -- arrives as a `MethodArg` input that no method claims, which
+/// is how bsc itself records it and the rule `topbind` uses to find
+/// what `+NAME=' binds.  A separate kind would be a second spelling
+/// for the same thing, and the value reaches the body through a slot
+/// either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PortKind {
     Clock,
@@ -553,7 +562,6 @@ pub enum PortKind {
     Reset,
     MethodArg,
     MethodEnable,
-    Parameter,
 }
 
 /// A clock a module takes in, and the ports it arrives on.

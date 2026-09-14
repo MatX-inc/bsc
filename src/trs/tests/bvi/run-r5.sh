@@ -185,63 +185,79 @@ if [ -f sysNegLie.bir ]; then
     fi
 fi
 
-# per-fragment compilation across a BVI import: the manifest names the
-# model, the fragment builds ALONE byte-identically, and the design
-# assembled from that object runs.  Each half of this has silently
-# broken once in a neighbouring form -- a shared body baking one
-# instance's parameters, and an identity that was really a position --
-# so all three are pinned rather than argued.
-d="$WK/PosSpecialize"; rm -rf "$d"; mkdir -p "$d"; cd "$d" || exit 2
-cp "$SRC/PosSpecialize.bsv" .; cp "$SRC"/rtl/BviCounter.v .
-spec_fail() { echo "FAIL PosSpecialize ($1)"; shift; [ $# -gt 0 ] && tail -n 5 "$@"; fail=1; }
+# per-fragment compilation across a BVI import.  mkWrap is
+# instantiated twice at two different argument values and must come
+# out of ONE object, because the argument now reaches the body
+# through a slot in the instance's arena rather than through the
+# code.  The object's NAME is predictable -- mkWrap.o, derivable from
+# the .bir without asking the compiler -- which is what lets a build
+# system name it as an output.  Then: the fragment built ALONE, in
+# its own tree with its own model cache, is byte-identical to the
+# one the design wrote; the design assembles from that object; and
+# the assembled design still gets BOTH instantiations right, which is
+# what proves the value travels through the arena.  Each half has
+# silently broken once -- a shared body baking one instance's
+# arguments, and an identity that was really a position -- so all of
+# them are pinned rather than argued.
+d="$WK/PosFragObj"; rm -rf "$d"; mkdir -p "$d"; cd "$d" || exit 2
+cp "$SRC/PosFragObj.bsv" .; cp "$SRC"/rtl/BviCounter.v .
+spec_fail() { echo "FAIL PosFragObj ($1)"; shift; [ $# -gt 0 ] && tail -n 5 "$@"; fail=1; }
 TRS_VLT_CACHE="$d/vlt"; export TRS_VLT_CACHE
-if ! $BSC -sim -u -g sysPosSpecialize -g mkWrap PosSpecialize.bsv >b.out 2>&1; then
+if ! $BSC -sim -u -g sysPosFragObj -g mkWrap PosFragObj.bsv >b.out 2>&1; then
     spec_fail build b.out
-elif ! export_bir sysPosSpecialize >e.out 2>&1; then
+elif ! export_bir sysPosFragObj >e.out 2>&1; then
     spec_fail export e.out
-elif ! $TRS link sysPosSpecialize.bir -o sys.exe >l.out 2>&1; then
+elif ! $TRS link sysPosFragObj.bir -o sys.exe >l.out 2>&1; then
     spec_fail link l.out
-elif ! $TRS specializations sys.exe.bir -o m.json >s.out 2>&1; then
-    spec_fail manifest s.out
 else
-    # the model edge, and the run key it is named by
-    key=$(sed -n 's/.*"run_key": "\([0-9a-f]*\)".*/\1/p' m.json | head -1)
-    if [ -z "$key" ]; then
-        spec_fail "manifest names no model" m.json
-    elif [ ! -f "$TRS_VLT_CACHE/vlt/byid/$key" ]; then
-        # the run key IS the byid file name: that is what makes a model
-        # a build node with a real output path
-        spec_fail "run key $key is not a byid file"
-    else
-        echo "PASS PosSpecialize-manifest"
-    fi
-    obj=$(sed -n 's/.*"object": "\([^"]*\)".*/\1/p' m.json | head -1)
-    binds=$(sed -n 's/.*"params": {"k": "\([^"]*\)".*/\1/p' m.json | head -1)
     mkdir -p indesign
-    $TRS compile sys.exe.bir --spec-obj-out indesign -o sys.so >c.out 2>&1
+    $TRS compile sys.exe.bir --obj-out indesign -o sys.so >c.out 2>&1
+    # named for the module and nothing else, and ONE of them for the
+    # two instantiations -- the old model would have written two
+    nobj=$(ls indesign | grep -c '^mkWrap')
+    if [ ! -f indesign/mkWrap.o ]; then
+        spec_fail "the design wrote no mkWrap.o (got: $(ls indesign))" c.out
+    elif [ "$nobj" != 1 ]; then
+        spec_fail "two instantiations of mkWrap gave $nobj objects, expected 1"
+    else
+        echo "PASS PosFragObj-named"
+    fi
     # alone: its own tree, its own model cache, nothing of the design
     mkdir -p alone/out; cp mkWrap.bir BviCounter.v alone/
-    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link --fragment mkWrap.bir "+k=$binds" \
+    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link --fragment mkWrap.bir \
         -o w.exe >la.out 2>&1 \
-      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile --fragment w.exe.bir --spec-obj-out out \
+      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile --fragment w.exe.bir --obj-out out \
         >ca.out 2>&1 )
-    if [ ! -f "indesign/$obj" ] || [ ! -f "alone/out/$obj" ]; then
-        spec_fail "no object $obj (in-design or alone)" c.out alone/ca.out
-    elif ! cmp -s "indesign/$obj" "alone/out/$obj"; then
-        spec_fail "the fragment built alone differs from the design's $obj"
+    if [ ! -f indesign/mkWrap.o ] || [ ! -f alone/out/mkWrap.o ]; then
+        spec_fail "no mkWrap.o (in-design or alone)" c.out alone/ca.out
+    elif ! cmp -s indesign/mkWrap.o alone/out/mkWrap.o; then
+        spec_fail "the fragment built alone differs from the design's mkWrap.o"
     else
-        echo "PASS PosSpecialize-identical"
+        echo "PASS PosFragObj-identical"
+    fi
+    # the model the two caches agree on is named by the trs-vlt RUN
+    # key, which is path-free; the class key hashes absolute paths and
+    # so cannot agree between two trees.  Two caches at different
+    # absolute paths holding the same byid entry is that property.
+    kd=$(ls vlt/vlt/byid 2>/dev/null | sort | tr '\n' ' ')
+    ka=$(ls alone/vlt/vlt/byid 2>/dev/null | sort | tr '\n' ' ')
+    if [ -z "$kd" ]; then
+        spec_fail "the design cache holds no model"
+    elif [ "$kd" != "$ka" ]; then
+        spec_fail "the run key differs between trees ($kd vs $ka)"
+    else
+        echo "PASS PosFragObj-runkey"
     fi
     # and the design assembled from the standalone object still runs
-    if [ -f "alone/out/$obj" ]; then
-        $TRS compile sys.exe.bir --spec-obj-in alone/out -o sys2.so >c2.out 2>&1
-        if ! grep -q "1 of 2 specializations reused" c2.out; then
+    if [ -f alone/out/mkWrap.o ]; then
+        $TRS compile sys.exe.bir --obj-in alone/out -o sys2.so >c2.out 2>&1
+        if ! grep -q "1 of 1 fragment objects reused" c2.out; then
             spec_fail "the design did not reuse the standalone object" c2.out
         else
             cp sys2.so sys.exe.so
             timeout 120 $TRS run sys.exe.bir >r.out 2>&1
             if grep -q "a=9 b=21" r.out; then
-                echo "PASS PosSpecialize-run"
+                echo "PASS PosFragObj-run"
             else
                 spec_fail "assembled design ran wrong" r.out
             fi
@@ -250,53 +266,58 @@ else
 fi
 
 # two reset ports in one fragment: the reset table's ORDER.  Assigned
-# from HashMap iteration it differed per map, so instances of one type
-# split at random and an EMITTING process numbered the table
-# differently from the LOADING one -- a wrong answer, invisible at the
-# corpus mean of 1.02 reset ports.  Both halves gated: the signature
-# is stable across runs, and the fragment still builds alone
-# byte-identically.
-d="$WK/PosSpecTwoRst"; rm -rf "$d"; mkdir -p "$d"; cd "$d" || exit 2
-cp "$SRC/PosSpecTwoRst.bsv" .; cp "$SRC"/rtl/RstStretch.v .
+# from HashMap iteration it differed per map, so an EMITTING process
+# numbered the table differently from the LOADING one -- a wrong
+# answer, invisible at the corpus mean of 1.02 reset ports.  The order
+# is baked into the emitted code, so the gate is the artifact: five
+# separate compilations of the one fragment must agree byte for byte
+# (two orderings of two ports means a random order passes a single
+# comparison half the time, so one repeat is not enough), and the
+# object the design writes must equal the one built alone -- that pair
+# being emitter and loader.
+d="$WK/PosFragTwoRst"; rm -rf "$d"; mkdir -p "$d"; cd "$d" || exit 2
+cp "$SRC/PosFragTwoRst.bsv" .; cp "$SRC"/rtl/RstStretch.v .
 TRS_VLT_CACHE="$d/vlt"; export TRS_VLT_CACHE
-if ! $BSC -sim -u -g sysPosSpecTwoRst -g mkRstWrap PosSpecTwoRst.bsv >b.out 2>&1; then
-    echo "FAIL PosSpecTwoRst (build)"; tail -n 5 b.out; fail=1
-elif ! export_bir sysPosSpecTwoRst >e.out 2>&1 \
-        || ! $TRS link sysPosSpecTwoRst.bir -o sys.exe >l.out 2>&1; then
-    echo "FAIL PosSpecTwoRst (export/link)"; tail -n 5 e.out l.out; fail=1
+if ! $BSC -sim -u -g sysPosFragTwoRst -g mkRstWrap PosFragTwoRst.bsv >b.out 2>&1; then
+    echo "FAIL PosFragTwoRst (build)"; tail -n 5 b.out; fail=1
+elif ! export_bir sysPosFragTwoRst >e.out 2>&1 \
+        || ! $TRS link sysPosFragTwoRst.bir -o sys.exe >l.out 2>&1; then
+    echo "FAIL PosFragTwoRst (export/link)"; tail -n 5 e.out l.out; fail=1
+elif ! $TRS link --fragment mkRstWrap.bir -o w.exe >lf.out 2>&1; then
+    echo "FAIL PosFragTwoRst (fragment link)"; tail -n 5 lf.out; fail=1
 else
-    # five plans of one design must agree: the ordinals are a
-    # per-instance table index, and nothing else here varies
-    n=0
+    # five plans, five processes: the ordinals are a per-instance
+    # table index and nothing else here varies between them
+    n=0; stable=1
     while [ $n -lt 5 ]; do
-        $TRS specializations sys.exe.bir --format text 2>/dev/null \
-            | grep mkRstWrap > "sig$n.txt"
+        mkdir -p "r$n"
+        $TRS compile --fragment w.exe.bir --obj-out "r$n" >"r$n.out" 2>&1
+        if [ ! -f "r$n/mkRstWrap.o" ]; then
+            echo "FAIL PosFragTwoRst-stable (run $n produced no object)"
+            tail -n 5 "r$n.out"; fail=1; stable=0; break
+        fi
+        if [ $n -gt 0 ] && ! cmp -s r0/mkRstWrap.o "r$n/mkRstWrap.o"; then
+            echo "FAIL PosFragTwoRst-stable (the object varies between runs)"
+            fail=1; stable=0; break
+        fi
         n=$((n + 1))
     done
-    if ! cmp -s sig0.txt sig1.txt || ! cmp -s sig0.txt sig2.txt \
-            || ! cmp -s sig0.txt sig3.txt || ! cmp -s sig0.txt sig4.txt; then
-        echo "FAIL PosSpecTwoRst-stable (the signature varies between runs)"
-        sort -u sig0.txt sig1.txt sig2.txt sig3.txt sig4.txt; fail=1
-    else
-        echo "PASS PosSpecTwoRst-stable"
-    fi
-    $TRS specializations sys.exe.bir -o m.json >/dev/null 2>&1
-    obj=$(sed -n 's/.*"object": "\([^"]*\)".*/\1/p' m.json | head -1)
-    binds=$(sed -n 's/.*"params": {"k": "\([^"]*\)".*/\1/p' m.json | head -1)
+    [ $stable = 1 ] && echo "PASS PosFragTwoRst-stable"
+    # emitter and loader: the design's object and the standalone one
     mkdir -p indesign alone/out
-    $TRS compile sys.exe.bir --spec-obj-out indesign -o sys.so >c.out 2>&1
+    $TRS compile sys.exe.bir --obj-out indesign -o sys.so >c.out 2>&1
     cp mkRstWrap.bir RstStretch.v alone/
-    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link --fragment mkRstWrap.bir "+k=$binds" \
+    ( cd alone && TRS_VLT_CACHE="$d/alone/vlt" $TRS link --fragment mkRstWrap.bir \
         -o w.exe >la.out 2>&1 \
-      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile --fragment w.exe.bir --spec-obj-out out \
+      && TRS_VLT_CACHE="$d/alone/vlt" $TRS compile --fragment w.exe.bir --obj-out out \
         >ca.out 2>&1 )
-    if [ ! -f "indesign/$obj" ] || [ ! -f "alone/out/$obj" ]; then
-        echo "FAIL PosSpecTwoRst-identical (no object $obj)"
+    if [ ! -f indesign/mkRstWrap.o ] || [ ! -f alone/out/mkRstWrap.o ]; then
+        echo "FAIL PosFragTwoRst-identical (no mkRstWrap.o)"
         tail -n 5 c.out alone/ca.out; fail=1
-    elif ! cmp -s "indesign/$obj" "alone/out/$obj"; then
-        echo "FAIL PosSpecTwoRst-identical ($obj differs built alone)"; fail=1
+    elif ! cmp -s indesign/mkRstWrap.o alone/out/mkRstWrap.o; then
+        echo "FAIL PosFragTwoRst-identical (differs built alone)"; fail=1
     else
-        echo "PASS PosSpecTwoRst-identical"
+        echo "PASS PosFragTwoRst-identical"
     fi
 fi
 

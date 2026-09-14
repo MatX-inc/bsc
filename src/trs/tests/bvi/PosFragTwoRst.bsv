@@ -4,12 +4,13 @@
 // instance's reset table has two entries rather than the corpus mean
 // of 1.02, which is the only shape that can observe their ORDER.
 //
-// That order came from `HashMap::iter`, so it differed per map: two
-// instances of one type split into separate classes at random, and
+// That order came from `HashMap::iter', so it differed per map, and
 // the process that EMITTED an object numbered the table differently
-// from the one that loaded it.  Ordinals are assigned by port name
-// now; the gates are that the signature is stable across runs and
-// that the fragment still builds alone byte-identically.
+// from the one that LOADED it -- a wrong answer, not a miss.
+// Ordinals are assigned by port name now.  The order is baked into
+// the emitted code, so the gate is on the artifact itself: separate
+// compilations must agree byte for byte, and the object built alone
+// must equal the one the design wrote.
 interface RstStretchIfc;
    method Action go();
    method Bit#(2) state();
@@ -47,7 +48,7 @@ module mkRstWrap#(Bit#(8) k)(Wrap);
 endmodule
 
 (* synthesize *)
-module sysPosSpecTwoRst();
+module sysPosFragTwoRst();
    Wrap a <- mkRstWrap(1);
    Wrap b <- mkRstWrap(2);
    Reg#(Bit#(8)) n <- mkReg(0);

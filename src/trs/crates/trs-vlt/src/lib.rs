@@ -536,7 +536,7 @@ pub fn build_model_resolved(
     }
 
     if opts.verbose {
-        eprintln!("trs-vlt: verilating {top} (specialization {class}, verilator {vmaj}.{vmin:03})");
+        eprintln!("trs-vlt: verilating {top} (model class {class}, verilator {vmaj}.{vmin:03})");
     }
 
     let decl_path = class_dir.join("trs_printf_decl.h");
