@@ -12,8 +12,13 @@ import Data.Char (isSpace)
 import Data.List (isPrefixOf, sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
-import Distribution.Simple.LocalBuildInfo (hostPlatform)
+import Distribution.Package (unPackageName)
+import Distribution.Simple.LocalBuildInfo (hostPlatform, withPrograms)
+import Distribution.Simple.Program (ghcProgram, lookupProgram, programPath)
 import Distribution.Simple.SetupHooks
+import Distribution.Types.BuildInfo (targetBuildDepends)
+import Distribution.Types.Component (componentBuildInfo)
+import Distribution.Types.Dependency (depPkgName)
 import Distribution.System (OS (..))
 import Distribution.Utils.Path
   ( interpretSymbolicPathCWD,
@@ -91,7 +96,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
                   buildInfoComponentDiff
                     (componentName inputs.component)
                     ( emptyBuildInfo
-                        { autogenModules = ["BuildSystem", "BuildVersion"]
+                        { autogenModules = ["BuildSystem", "BuildVersion", "Warmup"]
                         }
                     )
               }
@@ -111,6 +116,16 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
           pathFor loc = interpretSymbolicPathCWD (location loc)
       let buildSystem = locationFor "BuildSystem"
           buildVersion = locationFor "BuildVersion"
+          warmup = locationFor "Warmup"
+      -- Warmup imports every exposed module of every package the component
+      -- depends on, so it is generated against this build's compiler and this
+      -- build's dependencies, not the Makefile's.
+      let ghc =
+            maybe "ghc" programPath $
+              lookupProgram ghcProgram (withPrograms env.localBuildInfo)
+          deps =
+            map (unPackageName . depPkgName) $
+              targetBuildDepends (componentBuildInfo (targetComponent env.targetInfo))
       when (isMainLib (targetComponent env.targetInfo)) $ do
         registerRule_ "BuildSystem.hs" $
           staticRule
@@ -130,6 +145,15 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
             )
             []
             [buildVersion]
+        registerRule_ "Warmup.hs" $
+          staticRule
+            ( mkCommand
+                (static Dict)
+                (static writeWarmupHs)
+                (pathFor warmup, ghc, deps)
+            )
+            []
+            [warmup]
 
     writeBuildSystemHs :: (FilePath, Platform) -> IO ()
     writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
@@ -154,6 +178,21 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
           "getBinFmtType :: BinFmtType",
           "getBinFmtType = " <> binFmtType
         ]
+
+    -- update-warmup.sh writes Warmup.hs into its working directory, and
+    -- src/comp is where it has to land: that copy is the one GHC compiles,
+    -- the autogen copy being for Cabal's bookkeeping (BuildVersion is the
+    -- same shape). The generated imports are one per exposed module of every
+    -- package the component depends on, so the file belongs to whichever
+    -- compiler and package set built it last. The build-depends here name the
+    -- same packages the Makefile passes, so a make build and a cabal build
+    -- with the same compiler produce the same file and neither disturbs the
+    -- other; with different compilers each regenerates it on entry.
+    writeWarmupHs :: (FilePath, FilePath, [String]) -> IO ()
+    writeWarmupHs (path, ghc, deps) = do
+      let cmd = proc "./update-warmup.sh" (ghc : deps)
+      callCreateProcess cmd {cwd = Just "src/comp"}
+      copyFile ("src/comp" </> "Warmup.hs") path
 
     writeBuildVersionHs :: (FilePath, Platform) -> IO ()
     writeBuildVersionHs (path, Platform _ os) = do

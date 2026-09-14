@@ -25,6 +25,9 @@ library
   build-depends:
     array        >=0.5.8.0,
     base         >=4.18.3.0,
+    -- Warmup imports the rule-bearing modules of the packages listed here, so
+    -- the hidden ones update-warmup.sh reports have to be named too.
+    ghc-bignum   >=1.3,
     bytestring   >=0.11.5.4,
     containers   >=0.6.7,
     deepseq      >=1.4.8.1,
@@ -48,6 +51,10 @@ library
     FlexibleContexts,
     FlexibleInstances,
     TypeSynonymInstances,
+  -- From GHC 9.10 on, update-warmup.sh also reports ghc-internal, whose
+  -- modules the generated Warmup then imports.
+  if impl(ghc >= 9.10)
+    build-depends: ghc-internal
   extra-libraries: z
   if os(osx)
     extra-libraries: c++
@@ -315,6 +322,7 @@ library
     VVerilogDollar
     Verilog
     Version
+    Warmup
     WaveCheck
     WireAnalysis
     Wires

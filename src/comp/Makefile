@@ -379,6 +379,7 @@ bsc: $(SOURCES)
         # to force updating of BuildVersion/BuildSystem when necessary
 	./update-build-version.sh
 	./update-build-system.sh
+	./update-warmup.sh $(firstword $(GHC)) $(PACKAGES)
 	$(BUILDCOMMAND) -main-is Main_$@ \
 		$(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
 	$(POSTBUILDCOMMAND)
