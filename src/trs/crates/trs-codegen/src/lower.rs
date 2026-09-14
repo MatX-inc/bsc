@@ -1568,8 +1568,20 @@ pub fn compile_design_objects_split(
             builder: ctx.create_builder(),
             cbs,
             spec,
-            site_origin: 0,
-            foreign_origin: 0,
+            // A FRESH Lower emitting the sched half ALONE numbers its
+            // call sites from zero, so it has to be told where that
+            // half begins in the rule's one table.  Since rev 34 the
+            // exec half is first, at 0, and the sched half follows
+            // it; the load path rebuilds the table by re-running
+            // trial_lower, which lays both out that way.
+            //
+            // Zero here reported a sched site as an EXEC site -- the
+            // wrong callee, silently.  It survived because edge-SSA
+            // normally inlines sched sections into the fused edge, so
+            // this loop rarely runs: with TRS_EDGE_SSA=0 the corpus
+            // goes from 3 diffs to 75.
+            site_origin: spec.sched_prim_origin,
+            foreign_origin: spec.sched_foreign_origin,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
