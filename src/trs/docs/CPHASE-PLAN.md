@@ -238,13 +238,21 @@ top/sibling edits leave module types unchanged (closure-keyed cache
 hits; plus cross-design and cross-N sharing for replicated types).
 For edge-dominated designs per-type caching buys ~nothing — their
 cost lives in the always-rebuilt mega-edge (loop-rolled spine is
-that class's lever, not I3/I4).  CONSEQUENCE for I4: per-type
-precompilation activates exactly when the outline dial fires
-(rep_ords non-empty) — the plan already computes the discriminator;
-edge-dominated designs keep the monolithic path with zero overhead.
-Still to do from the original I2 list (pre-I4, post-rebase window):
-the noinline A/B on outlined exec bodies (lock the call-based form
-as the semantic baseline; diffsweep + perf fences).
+that class's lever, not I3/I4).
+
+SUPERSEDED (see PER-FRAGMENT-EXEC.md).  This paragraph read the
+outline dial as a discriminator -- per-type precompilation would
+activate "exactly when the outline dial fires (rep_ords
+non-empty)", and edge-dominated designs would keep the monolithic
+path.  There is no dial and no monolithic path now: every
+synthesized module compiles to an object, the edge fn calls those
+objects, and rep_ords is every class unconditionally.  A design
+being edge-dominated no longer changes WHERE its code lives, only
+how much of the remaining design .so is dispatcher.  The "noinline
+A/B to lock the call-based form as the semantic baseline" is
+likewise settled by fiat rather than measurement: the call-based
+form IS the semantics, and re-inlining is a link-time optimization
+that must preserve it.
 
 INCREMENT 3 — bsc per-module fragments + splice (flag-gated,
 ~1-2 weeks).  -bir-frag (NOT implied by -trs; one-shot compile stays

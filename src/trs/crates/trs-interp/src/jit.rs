@@ -1069,22 +1069,9 @@ pub fn cc_tool() -> String {
 /// Trial lower catches most ineligibility earlier — this covers
 /// shapes it does not walk (e.g. value-method reads reachable only
 /// through another module's cones).
-#[cfg(feature = "jit")]
-/// Default measured edge-fn budget, instructions: safely under the
-/// pipeline tier's 20k straight-line cap, so a budgeted edge keeps
-/// default<O3>.  TRS_EDGE_INSN_BUDGET overrides; 0 disables.
-const EDGE_INSN_BUDGET: u64 = 16_000;
-
 enum EmitFail {
     Ineligible(String),
     Infra(String),
-    /// an edge fn exceeded the instruction budget: the MEASURED
-    /// oversized inlined sections (ordinals) plus the largest measured
-    /// edge-fn size — the caller extends the plan's outlined set and
-    /// re-emits (see EDGE_INSN_BUDGET), or, when no exec victims
-    /// remain, decides by size between the inline monolith and the
-    /// sched-outline dispatcher
-    EdgeOverBudget(std::collections::HashSet<usize>, u64),
 }
 
 #[cfg(feature = "jit")]
@@ -1109,10 +1096,6 @@ fn aot_emit(
     plan_b: &[u8],
     edge_plan: Option<&trs_codegen::abi::EdgeSsaPlan>,
     bdpi_names: &[String],
-    // largest tolerated edge-fn size, instructions (0 = unbounded);
-    // exceeding it returns EmitFail::EdgeOverBudget with measured
-    // victims for the caller's replan (one_module + edge-SSA only)
-    edge_insn_budget: u64,
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::compile_meta_object;
     trs_codegen::lower::llvm_init_once();
@@ -1130,30 +1113,34 @@ fn aot_emit(
                 rep_of[m] = *rep;
             }
         }
-        // a class rep is needed only if some member's composition is
-        // not covered by an SSA edge fn (covered rules run inline in
-        // the edge; their standalone symbols would double the LLVM
-        // mass — the loader stubs the elided ones)
-        // EXEC coverage only: an ordinal is exec-covered iff its body
-        // lowers INLINE in an edge fn (sched nodes don't count — that
-        // was the bug that dropped every rep once outlined calls
-        // started referencing them; pre-dial artifacts were fully
-        // inlined so nothing noticed)
-        let covered: std::collections::HashSet<usize> = edge_plan
-            .map(|p| {
-                p.nodes
-                    .iter()
-                    .flatten()
-                    .filter(|&&(is_exec, o)| is_exec && !p.outlined_execs.contains(&o))
-                    .map(|&(_, o)| o)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let rep_ords: Vec<usize> = classes
-            .iter()
-            .filter(|(_, members)| members.iter().any(|m| !covered.contains(m)))
-            .map(|(r, _)| *r)
-            .collect();
+        // EVERY class gets a rep, whether or not this design's edge
+        // plan inlines its members.
+        //
+        // It used to get one only if some member was left un-inlined,
+        // on the reasoning that a rule running inline in the edge has
+        // no need of a standalone symbol and emitting one would
+        // double the LLVM mass.  True of the design's own .so -- and
+        // it made a module's object a function of the DESIGN it was
+        // built in: fuse everything and a type's object kept only its
+        // boundary methods, while a module whose content is entirely
+        // rules (every top) got no object at all.
+        //
+        // A module's object holds that module's code.  Whether this
+        // design then inlines a copy into its edge fn is the design's
+        // business, and the two must not be the same decision -- an
+        // object that gained or lost bodies depending on which design
+        // happened to build it first would not be the same object for
+        // the next one, which is the whole basis of reusing it.
+        //
+        // The cost is real and is the price of the contract: a fully
+        // fused design now also emits every body once into its
+        // module's object.  It is also temporary in shape -- the
+        // duplication exists because the design .so is still produced
+        // by a whole-design compile that lowers the edge itself.  Once
+        // fusion is a LINK-time inlining over objects that already
+        // exist, each body is compiled once and the edge either calls
+        // it or inlines it.
+        let rep_ords: Vec<usize> = classes.iter().map(|(r, _)| *r).collect();
         let comps: Vec<FusedComp> = comp_nodes
             .iter()
             .map(|nodes| FusedComp {
@@ -1289,7 +1276,6 @@ fn aot_emit(
             refs_sym,
             &comps,
             edge_plan,
-            edge_insn_budget,
             &boundary_reqs,
             nworkers,
         )
@@ -1297,29 +1283,6 @@ fn aot_emit(
         let objs: Vec<Vec<u8>> = match raw {
             trs_codegen::lower::DesignObject::Object(o) => vec![o],
             trs_codegen::lower::DesignObject::Objects(v) => v,
-            trs_codegen::lower::DesignObject::EdgeOverBudget(sizes, edge_insns) => {
-                // pick MEASURED victims: per over-budget comp, largest
-                // inlined sections first until the comp fits
-                let mut victims: std::collections::HashSet<usize> =
-                    std::collections::HashSet::new();
-                for comp in &sizes {
-                    let mut total: u64 = comp.iter().map(|&(_, i)| i).sum();
-                    if total <= edge_insn_budget {
-                        continue;
-                    }
-                    let mut by_size: Vec<(u64, usize)> =
-                        comp.iter().map(|&(o, i)| (i, o)).collect();
-                    by_size.sort_unstable_by(|a, b| b.cmp(a));
-                    for &(i, o) in &by_size {
-                        if total <= edge_insn_budget {
-                            break;
-                        }
-                        victims.insert(o);
-                        total -= i;
-                    }
-                }
-                return Err(EmitFail::EdgeOverBudget(victims, edge_insns));
-            }
         };
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
@@ -2996,14 +2959,6 @@ impl Interp {
         specs: &[RuleSpec],
         has_early: bool,
         stats: bool,
-        // ordinals forced OUTLINED by the measured edge budget (the
-        // replan pass): joined into outlined_execs before any sharing/
-        // hoist/elision table is computed, so the plan stays coherent
-        forced_outline: &std::collections::HashSet<usize>,
-        // sched sections forced OUTLINED by the measured edge budget
-        // (the replan pass found the remaining mass is sched code, the
-        // shape with no exec victims left) — see EdgeSsaPlan::outline_sched
-        forced_outline_sched: bool,
         // activity-gating dirty-region geometry (allocated by
         // jit_plan for every request kind); None = the caller forbids
         // gating for this plan (stats runs, traced artifacts)
@@ -3448,23 +3403,15 @@ impl Interp {
 
         let mut def_reads: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
         let mut hoists: Vec<Vec<Vec<(usize, StrId)>>> = Vec::with_capacity(nodes.len());
-        // outline dial (link time): big NON-SHARING bodies stay
-        // standalone.  Cost model (default): outline iff
-        //   body_mass > max(FLOOR, FACTOR x consumed-sharable-mass)
-        // — selects "large and shares little" directly instead of
-        // hoping raw mass is a proxy (the sudoku knee showed monsters
-        // are free to outline while mid-size sharers are not).
-        // TRS_EDGE_SSA_OUTLINE=<mass> forces an absolute threshold;
-        // TRS_EDGE_SSA_OUTLINE_FACTOR tunes the model (0 disables).
-        let outline_abs: Option<u64> = std::env::var("TRS_EDGE_SSA_OUTLINE")
-            .ok()
-            .and_then(|v| v.parse().ok());
-        let outline_factor: u64 = std::env::var("TRS_EDGE_SSA_OUTLINE_FACTOR")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2);
-        const OUTLINE_FLOOR: u64 = 800;
-        let mut outlined_execs: std::collections::HashSet<usize> = forced_outline.clone();
+        // EVERY exec body is outlined: the edge fn calls the module's
+        // compiled body, it does not carry a copy.  A design's .so is
+        // a caller of the objects its modules compiled to, and the
+        // dials that used to choose per body -- outline iff "large
+        // and shares little" -- chose between two different answers
+        // to "where does this code live", which is not a tuning
+        // question.
+        let mut outlined_execs: std::collections::HashSet<usize> =
+            (0..specs_lite.len()).collect();
         let mut tot_recompute = 0u64;
         let mut tot_saved = 0u64;
         let mut tot_gaps = 0usize;
@@ -3544,20 +3491,10 @@ impl Interp {
                         .copied()
                         .unwrap_or(1)
                         .max(1);
-                    let outline = match outline_abs {
-                        Some(t) => body_mass > t,
-                        None => {
-                            outline_factor > 0
-                                && body_mass > (OUTLINE_FLOOR / k).max(outline_factor * shared_mass)
-                        }
-                    };
-                    if outline {
-                        outlined_execs.insert(o);
-                    }
                     if stats && body_mass > 400 {
                         eprintln!(
                             "trs edge-ssa: body o={o} mass={body_mass} \
-                             shared={shared_mass} reps={k} outline={outline}"
+                             shared={shared_mass} reps={k}"
                         );
                     }
                 }
@@ -3804,16 +3741,17 @@ impl Interp {
             && nodes.len() == 1
             && !self.vcd_trace
             && std::env::var("TRS_GATING").as_deref() == Ok("1");
-        // dispatcher structure: outline sched sections when the budget
-        // replan demands it (sched mass over the SCHED_OUTLINE
-        // threshold with no exec victims left — the Toooba link
-        // shape), or forced for witnesses.  NOT tied to gating: the
-        // Flute A/B measured outlining at 0.68x of the inline shape
-        // (lost cross-section SSA sharing + 372 calls/edge), so gating
-        // keeps its measured inline form unless the size dial rules
-        // inline out.  Traced plans keep the inline shape too.
-        let outline_sched = !self.vcd_trace
-            && (forced_outline_sched || std::env::var("TRS_JIT_OUTLINE").as_deref() == Ok("1"));
+        // ...and so is every sched section: the edge fn is a
+        // dispatcher that TESTS and CALLS, never a monolith that
+        // inlines.  It used to be a dial -- the Flute A/B measured
+        // outlining at 0.68x of the inline shape, from lost
+        // cross-section SSA sharing and 372 calls/edge -- and that
+        // cost is now simply paid.
+        //
+        // A traced plan still inlines: its recording slots shift the
+        // whole layout, so its sections are not the module's code in
+        // the first place.
+        let outline_sched = !self.vcd_trace;
         // outlined sections cannot consume spine SSA: a hoisted def
         // computed in the dispatcher does not dominate (or even reach)
         // another function's body — sections recompute pure shared
@@ -5924,16 +5862,7 @@ impl Interp {
                     v
                 })
                 .collect();
-            let _ = self.edge_ssa_plan(
-                &inst_envs,
-                &nodes,
-                &specs,
-                has_early,
-                true,
-                &Default::default(),
-                false,
-                None,
-            );
+            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, has_early, true, None);
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
@@ -6683,7 +6612,7 @@ impl Interp {
                     rep_of[m] = *rep;
                 }
             }
-            let mk_edge_plan = |forced: &std::collections::HashSet<usize>, outline_sched: bool| {
+            let mk_edge_plan = || {
                 (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
                     let mut plan = self.edge_ssa_plan(
                         &inst_envs,
@@ -6691,8 +6620,6 @@ impl Interp {
                         &specs,
                         has_early,
                         false,
-                        forced,
-                        outline_sched,
                         Some(gate_layout),
                     );
                     // traced artifacts keep wire ticks boxed: the tick
@@ -6714,9 +6641,14 @@ impl Interp {
                             plan.ord_fnodes.insert(
                                 o,
                                 trs_codegen::abi::FusedNode::Exec(
+                                    // the CLASS symbol, which is what
+                                    // the module's object defines --
+                                    // `label' is this design's
+                                    // (instance, ordinal) and nothing
+                                    // emits a body under it
                                     trs_codegen::abi::HelperRef::Sym(format!(
                                         "exec_{}",
-                                        specs[rep_of[o]].label
+                                        specs[rep_of[o]].share_label
                                     )),
                                     inst_envs[&sp.inst].region.0 as u64,
                                     sp.ordinal,
@@ -6758,102 +6690,36 @@ impl Interp {
                 v.dedup();
                 v
             };
-            // measured edge budget: an over-budget emit hands back the
-            // measured oversized sections, the plan re-runs with them
-            // forced OUTLINED (so sharing/hoist/elision tables stay
-            // coherent), and the second emit is unbounded — measured
-            // sizes make one replan enough.  Lowering is ms-scale; the
-            // expensive pass pipeline never runs on a discarded module.
-            let budget: u64 = std::env::var("TRS_EDGE_INSN_BUDGET")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(EDGE_INSN_BUDGET);
-            let mut forced: std::collections::HashSet<usize> = Default::default();
-            let mut budget_now = budget;
-            // outlining a consumer collapses sharing, so survivors
-            // re-expand cones and the next measurement can still be
-            // over budget: iterate (the forced set only grows, so this
-            // terminates), with a round cap as the safety valve
-            let mut rounds = 0u32;
-            let mut outline_sched = false;
-            let result = loop {
-                let edge_plan = mk_edge_plan(&forced, outline_sched);
-                match aot_emit(
-                    &self.d,
-                    &inst_envs,
-                    &specs,
-                    now_slot,
-                    &classes,
-                    &helper_specs,
-                    &refs_sym,
-                    split_thresh.unwrap_or(0),
-                    &protos,
-                    &comp_nodes,
-                    &en_slots,
-                    so,
-                    exe.as_ref(),
-                    // trace-salted: a traced plan (recording slots shift
-                    // the whole layout) must never accept an untraced
-                    // artifact, and vice versa
-                    self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
-                    self.bir_hash,
-                    self.plan_a_bytes.as_deref().unwrap_or(&[]),
-                    &plan_b_bytes,
-                    edge_plan.as_ref(),
-                    &bdpi_names,
-                    budget_now,
-                ) {
-                    Err(EmitFail::EdgeOverBudget(victims, edge_insns)) => {
-                        if std::env::var_os("TRS_JIT_TRACE").is_some() {
-                            eprintln!(
-                                "trs jit: edge over budget ({edge_insns} \
-                                 insns) — replanning with {} measured \
-                                 sections outlined",
-                                victims.len()
-                            );
-                        }
-                        rounds += 1;
-                        // no exec sections left to outline: the
-                        // remainder is sched code.  Below the sched-
-                        // outline threshold, ACCEPT the inline
-                        // monolith — cross-section SSA sharing is
-                        // worth 1.4x wall on Flute (measured: outlined
-                        // 34.7s vs inline 23.7s busy), and the
-                        // pipeline handles Flute-scale functions
-                        // (~250k insns) fine.  Above it, outline the
-                        // sched sections (the dispatcher structure) —
-                        // the Toooba-scale shape where early-cse's
-                        // superlinear dominated-use rewrites wedge the
-                        // link outright (>39min DNF).  Already
-                        // outlined and still over, or the round cap:
-                        // accept — every remaining function is bounded
-                        // and run_ir_passes's O1 size tier covers
-                        // stragglers.
-                        if victims.is_empty() {
-                            let sched_budget: u64 = std::env::var("TRS_JIT_SCHED_OUTLINE_BUDGET")
-                                .ok()
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(1_000_000);
-                            if outline_sched || sched_budget == 0 || edge_insns < sched_budget {
-                                budget_now = 0;
-                            } else {
-                                outline_sched = true;
-                                if std::env::var_os("TRS_JIT_TRACE").is_some() {
-                                    eprintln!(
-                                        "trs jit: sched mass over budget \
-                                         — outlining sched sections"
-                                    );
-                                }
-                            }
-                        }
-                        if rounds >= 5 {
-                            budget_now = 0;
-                        }
-                        forced.extend(victims);
-                    }
-                    other => break other,
-                }
-            };
+            // No replan loop: nothing is inlined into the edge fn, so
+            // there is no mega-function to bound and no victims to
+            // choose.  The loop existed to walk the outline dial up
+            // until the edge fit a budget -- one measurement, one
+            // re-emit, repeat -- and every body it could have
+            // outlined is outlined from the start now.
+            let result = aot_emit(
+                &self.d,
+                &inst_envs,
+                &specs,
+                now_slot,
+                &classes,
+                &helper_specs,
+                &refs_sym,
+                split_thresh.unwrap_or(0),
+                &protos,
+                &comp_nodes,
+                &en_slots,
+                so,
+                exe.as_ref(),
+                // trace-salted: a traced plan (recording slots shift
+                // the whole layout) must never accept an untraced
+                // artifact, and vice versa
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+                self.bir_hash,
+                self.plan_a_bytes.as_deref().unwrap_or(&[]),
+                &plan_b_bytes,
+                mk_edge_plan().as_ref(),
+                &bdpi_names,
+            );
             // RunCore sidecar (validation form): build the arena the
             // link would hand a boot — the SAME four steps as the load
             // tail below (alloc, attach, reset levels, memo stamps;
@@ -6979,7 +6845,6 @@ impl Interp {
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
                 Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
                 // the unbounded second pass cannot report over-budget
-                Err(EmitFail::EdgeOverBudget(..)) => unreachable!(),
             });
             return None;
         }

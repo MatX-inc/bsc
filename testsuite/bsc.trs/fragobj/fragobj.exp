@@ -15,6 +15,15 @@
 # a module type compiles to exactly one object -- which the compiler
 # checks and refuses to violate.
 #
+# EVERY synthesized module gets one, the top included: a top is a
+# module whose interface happens to be Empty, not a special case, so
+# `sysFragObj.o' exists alongside `mkLeaf.o' and the design is
+# assembled from the two.  That is the last gate here -- 2 of 2
+# reused -- and it is what makes a design build a LINK over objects
+# rather than a compile of the whole thing.  It also has to hold
+# whatever the top contains, which is why the top's object is checked
+# for byte identity the same way the child's is.
+#
 # mkLeaf is instantiated at k=3 and k=7 and both must still behave
 # correctly from the one shared body, since the value now reaches it
 # through the arena rather than through the code.
@@ -48,14 +57,22 @@ proc trs_fragobj_test { trs name top } {
         cd $here
         return
     }
-    # named for the module and nothing else -- no hash to look up
+    # named for the module and nothing else -- no hash to look up --
+    # and the TOP gets one too, on the same terms
+    set got [glob -nocomplain -tails -directory $work/indesign *.o]
     if { ![file exists $work/indesign/mkLeaf.o] } {
-        fail "trs fragobj: the design did not write mkLeaf.o\
-              (got: [glob -nocomplain -tails -directory $work/indesign *])"
+        fail "trs fragobj: the design did not write mkLeaf.o (got: $got)"
         cd $here
         return
     }
     pass "trs fragobj $name: the object is named mkLeaf.o"
+    if { ![file exists $work/indesign/$top.o] } {
+        fail "trs fragobj: the design did not write $top.o -- a top is a\
+              module like any other (got: $got)"
+        cd $here
+        return
+    }
+    pass "trs fragobj $name: the top gets an object too, $top.o"
 
     # built ALONE: its own directory, its own link, no bindings
     set d "$work/alone"
@@ -75,17 +92,41 @@ proc trs_fragobj_test { trs name top } {
         pass "trs fragobj $name: built alone, with no bindings, byte-identical"
     }
 
-    # and the design assembles from it rather than recompiling
+    # the TOP, built as a fragment in its own tree.  Linking a top
+    # with --fragment walks its instantiations, so this one build
+    # yields the whole set -- which is the point: the objects a design
+    # needs are the objects its modules compile to, nothing else.
+    set t "$work/topalone"
+    file mkdir $t
+    foreach b [list $top mkLeaf] { file copy -force $b.bir $t/$b.bir }
     if { $ok } {
-        if { [catch {exec sh -c "$trs compile $work/design.bir --obj-in $d -o $work/design.so 2> $work/reuse.txt"}] } {
+        if { [catch {exec sh -c "cd $t && $trs link --fragment $top.bir -o tf > link.out 2>&1 && $trs compile --fragment tf.bir --obj-out . > comp.out 2>&1"}] } {
+            fail "trs fragobj: fragment build of the top (logs in `$t')"
+            set ok 0
+        } elseif { ![file exists $t/$top.o] } {
+            fail "trs fragobj: the top's fragment build produced no $top.o"
+            set ok 0
+        } elseif { [catch {exec cmp -s $work/indesign/$top.o $t/$top.o}] } {
+            fail "trs fragobj: $top.o differs built as a fragment"
+            set ok 0
+        } else {
+            pass "trs fragobj $name: the top's object is byte-identical too"
+        }
+    }
+
+    # and the design assembles ENTIRELY from objects -- every module
+    # it contains, reused, nothing recompiled
+    if { $ok } {
+        file copy -force $d/mkLeaf.o $t/mkLeaf.o
+        if { [catch {exec sh -c "$trs compile $work/design.bir --obj-in $t -o $work/design.so 2> $work/reuse.txt"}] } {
             fail "trs fragobj reuse compile of $name (log `$work/reuse.txt')"
             set ok 0
         } else {
             set fh [open $work/reuse.txt]; set reuse [read $fh]; close $fh
-            if { [regexp {1 of 1 fragment objects reused} $reuse] } {
-                pass "trs fragobj $name: the design reuses the standalone object"
+            if { [regexp {2 of 2 fragment objects reused} $reuse] } {
+                pass "trs fragobj $name: the design assembles from objects alone"
             } else {
-                fail "trs fragobj $name: the design did not reuse it"
+                fail "trs fragobj $name: expected 2 of 2 reused, got: $reuse"
                 set ok 0
             }
         }

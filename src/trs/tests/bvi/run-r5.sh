@@ -251,7 +251,9 @@ else
     # and the design assembled from the standalone object still runs
     if [ -f alone/out/mkWrap.o ]; then
         $TRS compile sys.exe.bir --obj-in alone/out -o sys2.so >c2.out 2>&1
-        if ! grep -q "1 of 1 fragment objects reused" c2.out; then
+        # 1 of 2: the other is the TOP's object, which this build did
+        # not supply -- every synthesized module compiles to one
+        if ! grep -q "1 of 2 fragment objects reused" c2.out; then
             spec_fail "the design did not reuse the standalone object" c2.out
         else
             cp sys2.so sys.exe.so

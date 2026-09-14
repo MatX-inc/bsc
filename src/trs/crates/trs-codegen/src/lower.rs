@@ -1028,22 +1028,12 @@ fn lower_boundary_fns<'ctx>(
     map
 }
 
-/// The emission's outcome: the object, or the measured
-/// per-comp inlined-section sizes when an edge fn exceeded the
-/// caller's instruction budget (the caller extends the plan's
-/// outlined set from the MEASURED sizes and re-lowers — lowering is
-/// ms-scale; only the pass pipeline is expensive, and it never runs
-/// on an over-budget module).
+/// The emission's outcome.
 pub enum DesignObject {
     Object(Vec<u8>),
     /// design object first, then one object per module type in
     /// ascending mir order — the caller appends meta.o and links them
     Objects(Vec<Vec<u8>>),
-    /// (per-comp inlined section sizes, largest measured edge-fn size
-    /// in IR instructions) — the caller replans on the sizes and uses
-    /// the edge measurement to decide between accepting the inline
-    /// monolith and outlining the sched sections (see outline_sched)
-    EdgeOverBudget(Vec<Vec<(usize, u64)>>, u64),
 }
 
 /// One per-type module of the sharded emission: the type's outlined
@@ -1181,9 +1171,7 @@ fn compile_class_module(
 /// the caller exactly like the one-module artifact with meta.o
 /// appended.  Cross-module method calls ride the boundary ABI
 /// (step-1 measured: +0.32% Ir, wall neutral-or-better on the
-/// specimen; the Toooba control +0.031%).  EdgeOverBudget is measured
-/// BEFORE any pass pipeline runs and propagates for the caller's
-/// replan unchanged.  Byte-determinism: fragment objects in ascending
+/// specimen; the Toooba control +0.031%).  Byte-determinism: fragment objects in ascending
 /// class order, jobs chunked contiguously, output order [design, asc].
 /// Everything outside a class's own identity that changes the object it
 /// compiles to: the arena/ABI revision, and the codegen knobs.  A class
@@ -1378,7 +1366,6 @@ pub fn compile_design_objects_split(
     refs: &HelperMap,
     fused: &[FusedComp],
     edge_plan: Option<&EdgeSsaPlan>,
-    edge_insn_budget: u64,
     boundary_reqs: &[BoundaryReq],
     nworkers: usize,
 ) -> Result<DesignObject, Ineligible> {
@@ -1569,7 +1556,6 @@ pub fn compile_design_objects_split(
     let mut tally = IrTally::default();
     let _bguard = BoundaryGuard;
     BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
-    let mut section_sizes: Vec<Vec<(usize, u64)>> = Vec::new();
     match edge_plan {
         Some(p) => lower_edge_ssa(
             env,
@@ -1580,7 +1566,6 @@ pub fn compile_design_objects_split(
             refs_opt,
             p,
             fused,
-            &mut section_sizes,
         )?,
         None => {
             let _ = lower_fused(&ctx, &module, fused);
@@ -1588,25 +1573,6 @@ pub fn compile_design_objects_split(
     }
     // measured edge budget BEFORE any pass pipeline runs (one-module
     // contract: an over-budget module never reaches the passes)
-    if edge_insn_budget > 0 {
-        let mut max_insns = 0u64;
-        for k in 0..fused.len() {
-            if let Some(f) = module.get_function(&format!("edge_c{k}")) {
-                let mut insns = 0u64;
-                for bb in f.get_basic_blocks() {
-                    let mut ins = bb.get_first_instruction();
-                    while let Some(i) = ins {
-                        insns += 1;
-                        ins = i.get_next_instruction();
-                    }
-                }
-                max_insns = max_insns.max(insns);
-            }
-        }
-        if max_insns > edge_insn_budget {
-            return Ok(DesignObject::EdgeOverBudget(section_sizes, max_insns));
-        }
-    }
     // ordinal fn tables: exec reps live in per-type modules — declare
     // the emitted ones so their table entries become link relocations
     // instead of null ("elided"), which the loader would stub to a
@@ -2060,30 +2026,7 @@ fn lower_edge_ssa<'ctx>(
     outlined: Option<&HelperMap>,
     plan: &EdgeSsaPlan,
     fused: &[FusedComp],
-    // construction-time tracking: per comp, (spec ordinal, emitted
-    // instructions) for every INLINED section — the measured sizes
-    // the budget replan consumes (estimates were tried and failed:
-    // action-heavy bodies emit real code with near-zero cone mass)
-    section_sizes: &mut Vec<Vec<(usize, u64)>>,
 ) -> Result<(), Ineligible> {
-    let count_block = |bb: inkwell::basic_block::BasicBlock| -> u64 {
-        let mut insns = 0u64;
-        let mut ins = bb.get_first_instruction();
-        while let Some(i) = ins {
-            insns += 1;
-            ins = i.get_next_instruction();
-        }
-        insns
-    };
-    // instructions in blocks[from..]: the blocks a section appended
-    let count_new = |func: inkwell::values::FunctionValue, from_block: usize| -> (usize, u64) {
-        let bbs = func.get_basic_blocks();
-        let mut insns = 0u64;
-        for bb in &bbs[from_block.min(bbs.len())..] {
-            insns += count_block(*bb);
-        }
-        (bbs.len(), insns)
-    };
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
@@ -2140,7 +2083,6 @@ fn lower_edge_ssa<'ctx>(
             b.build_store(gep(g.scratch), i64t.const_zero()).unwrap();
         }
 
-        section_sizes.push(Vec::new());
         // dynamic-scheduling dispatch (compiled alts): evaluate the
         // guards in declaration order against pre-edge state — pure
         // register/const cones by the SchedAlt exporter contract —
@@ -2231,13 +2173,6 @@ fn lower_edge_ssa<'ctx>(
                 exports: exports_rc.clone(),
                 ..Default::default()
             };
-            // checkpoint for exact per-section attribution: new blocks
-            // PLUS growth of the carried-over insert block (straight-line
-            // sections often append no block at all — block-count deltas
-            // alone attribute their code to the next block creator)
-            let mut blocks_seen = func.count_basic_blocks() as usize;
-            let mut carry = start;
-            let mut carry_insns = count_block(start);
             let mut cur = start;
             // guard grouping (gating armed): a maximal run of
             // consecutive gated sched sections gets ONE outer test on
@@ -2391,12 +2326,15 @@ fn lower_edge_ssa<'ctx>(
                         });
                     }
                     if plan.outlined_execs.contains(&o) {
-                        // outline dial: call the standalone class body (it
-                        // gates itself on the stored WF slot; stores are
-                        // all kept) — bounds the mega-function while the
-                        // body keeps its per-module-type dedup
-                        // variant rows have no FusedComp stream: the
-                        // outlined call resolves per ordinal instead
+                        // Always: call the module's own compiled body
+                        // (it gates itself on the stored WF slot;
+                        // stores are all kept).  The edge fn carries
+                        // no copy of a rule body -- that is what lets
+                        // a design be linked from the objects its
+                        // modules compiled to.
+                        //
+                        // Variant rows have no FusedComp stream, so
+                        // the call resolves per ordinal instead.
                         let fnode = if row == k {
                             &fused[k].nodes[s]
                         } else {
@@ -2493,7 +2431,17 @@ fn lower_edge_ssa<'ctx>(
                         .and_then(|_| plan.gate_masks.get(o))
                         .and_then(|m| m.as_ref())
                         .filter(|m| !m.is_empty());
-                    if plan.outline_sched && spec.autofire.is_none() {
+                    // A variant row's sched section is NOT the module's
+                    // code: `sched_over' rewrites its ME inhibitors and
+                    // owned-earlier share claims to follow the selected
+                    // interleaving, so it differs from the body the
+                    // module's object defines.  Those stay inline;
+                    // calling the module's symbol for them ran the base
+                    // order and gave wrong answers (the sysDynSched
+                    // family).
+                    let row_specific = !is_exec
+                        && plan.sched_over.get(row).is_some_and(|m| m.contains_key(&o));
+                    if plan.outline_sched && spec.autofire.is_none() && !row_specific {
                         // dispatcher structure: the sched body lives in
                         // its own bounded function (internal + noinline
                         // — function passes stay linear per function,
@@ -2507,67 +2455,38 @@ fn lower_edge_ssa<'ctx>(
                         // slot fallbacks a skipped gated section
                         // relies on (def()'s existing lattice, the one
                         // standalone sched fns lower with).
-                        let gname = format!("gsec{k}_r{row}_s{s}");
-                        let gty = ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
-                        let gfunc = module.add_function(&gname, gty, None);
-                        gfunc.set_linkage(inkwell::module::Linkage::Internal);
-                        gfunc.add_attribute(
-                            inkwell::attributes::AttributeLoc::Function,
-                            ctx.create_enum_attribute(
-                                inkwell::attributes::Attribute::get_named_enum_kind_id("noinline"),
-                                0,
-                            ),
+                        // The sched half is the MODULE's code, so
+                        // the edge calls the module's compiled body --
+                        // `sched_{module}_{rule}', defined in that
+                        // module's own object -- rather than emitting
+                        // a copy of the section here.  A design .so
+                        // calls what its modules compiled to; it does
+                        // not carry its own duplicates of them.
+                        //
+                        // Cross-section values travel through their
+                        // CF/WF/eager slots: the plan widened the
+                        // export keep-set and emptied the hoist
+                        // tables, which is the same lattice a
+                        // standalone sched fn lowers with.
+                        let gname = format!("sched_{}", spec.share_label);
+                        let gty = ctx.void_type().fn_type(
+                            &[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()],
+                            false,
                         );
-                        {
-                            let mut lo = Lower {
-                                env,
-                                ctx,
-                                module,
-                                builder: ctx.create_builder(),
-                                cbs,
-                                spec,
-                                site_origin: 0,
-                                foreign_origin: 0,
-                                outlined,
-                                helper_self: None,
-                                dedup: None,
-                                bnd_prim_site: None,
-                                bnd_foreign_site: None,
-                                reset_ptrs: HashMap::new(),
-                                share_sym: None,
-                                foreign_stmts: Vec::new(),
-                                prim_calls: Vec::new(),
-                                edge: Some(EdgeCtx {
-                                    exports: exports_rc.clone(),
-                                    gate_no_latch: true,
-                                    ..Default::default()
-                                }),
-                            };
-                            let gentry = ctx.append_basic_block(gfunc, "entry");
-                            lo.builder.position_at_end(gentry);
-                            let mut gf = Frame {
-                                arena: gfunc.get_nth_param(0).unwrap().into_pointer_value(),
-                                envp: Some(gfunc.get_nth_param(1).unwrap().into_pointer_value()),
-                                inst: spec.inst,
-                                method_idx: None,
-                                args: HashMap::new(),
-                                ssa: HashMap::new(),
-                                chunks: HashMap::new(),
-                                expanding: Vec::new(),
-                                thunks: HashMap::new(),
-                                av_widths: HashMap::new(),
-                                dead_defs: Default::default(),
-                                tasks: HashMap::new(),
-                                av_slots: HashMap::new(),
-                                av_args: HashMap::new(),
-                                is_exec: false,
-                                depth: 0,
-                            };
-                            lo.sched_section(&mut gf)?;
-                            lo.builder.build_return(None).unwrap();
-                        }
-                        let cargs: [inkwell::values::BasicMetadataValueEnum; 2] =
-                            [arena.into(), envp.into()];
+                        let gfunc = module
+                            .get_function(&gname)
+                            .unwrap_or_else(|| module.add_function(&gname, gty, None));
+                        let base = env
+                            .insts
+                            .get(&spec.inst)
+                            .map(|ie| ie.region.0 as u64)
+                            .unwrap_or(0);
+                        let cargs: [inkwell::values::BasicMetadataValueEnum; 4] = [
+                            arena.into(),
+                            envp.into(),
+                            i64t.const_int(base, false).into(),
+                            i32t.const_int(spec.ordinal as u64, false).into(),
+                        ];
                         match gm {
                             Some(mask) => {
                                 let g = plan.gate.as_ref().unwrap();
@@ -2684,15 +2603,6 @@ fn lower_edge_ssa<'ctx>(
                 }
                 cur = lc.builder.get_insert_block().unwrap();
                 edge_ctx = lc.edge.take().unwrap();
-                let (nb, new_insns) = count_new(func, blocks_seen);
-                let carry_now = count_block(carry);
-                let insns = new_insns + carry_now.saturating_sub(carry_insns);
-                blocks_seen = nb;
-                carry = cur;
-                carry_insns = count_block(cur);
-                if is_exec && !plan.outlined_execs.contains(&o) {
-                    section_sizes[k].push((o, insns));
-                }
             }
             let bend = ctx.create_builder();
             bend.position_at_end(cur);

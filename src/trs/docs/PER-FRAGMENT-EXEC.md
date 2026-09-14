@@ -1,9 +1,50 @@
 # Per-fragment execution: scaling, and linking external Verilog
 
-Status: the leaf seam is done -- external Verilog runs as a prim.  The
-compilation unit is done, and it is the module TYPE:
+## The contract
 
-**one `.ba` -> one `.bir` -> one `.o`, named `mkFoo.o`.**
+A user builds a simulation the way they build a C program.
+
+- **Every synthesized module compiles to one object**, named for it:
+  one `.ba` -> one `.bir` -> one `mkFoo.o`.  Unconditionally -- not
+  depending on the design it was built in, on how it was
+  instantiated, or on what any optimizer decided.
+- **Any module can be the top.**  A top is a module whose interface
+  happens to be `Empty`; it is not a special case and gets an object
+  like anything else.  Selecting a different top does not change what
+  any module compiles to.
+- **A design is LINKED from those objects**: the chosen top's, plus
+  every module it transitively instantiates.
+
+        trs link --fragment sysFoo.bir      # builds the whole set
+        trs compile design.bir --obj-in <dir>
+        trs shard: N of N fragment objects reused from inputs (100%)
+
+  Nothing recompiled.  The design `.so` is a CALLER: its edge fn is a
+  dispatcher over `exec_{module}_{rule}` and `sched_{module}_{rule}`,
+  each defined in the module's own object, and it carries no copy of
+  any body.
+
+That is the whole user-visible model, and it holds whatever the top
+contains.  The rest of this document is how it was reached and what it
+cost.
+
+### What is deliberately NOT in the contract
+
+**Speed.**  The simple model is the semantics.  Re-inlining a callee
+into the edge is a future LINK-time optimization, and it must preserve
+these semantics exactly rather than define its own -- which is why
+inlining was removed from the default path (section 6c) rather than
+left as the thing the contract has to describe around.  Outlining
+measured 0.68x of the inline shape on Flute; that is accepted.
+
+**Knobs.**  Where a module's code lives is not a tuning question, so
+it is not tunable.  Five environment pivots that used to answer it
+per design are deleted, not defaulted.
+
+## Status
+
+The leaf seam is done -- external Verilog runs as a prim.  The
+compilation unit is done, and the contract above holds by default.
 
 An object does not depend on the design it was compiled in, and no longer
 depends on how it was instantiated either -- everything a parent supplies,
@@ -75,6 +116,8 @@ So none of this is new architecture.  It is closing the gap between DESIGN.md
 | BVI contract + `VPathInfo` carried into BIR | **done**, as `InstanceKind::Bvi` / `BviContract::paths` |
 | A prim backed by a Verilated model | **done**; `INTERP_PANIC` 33 -> 1, PASS +8, no regressions over 2291 designs |
 | A per-class object that does not depend on its design | **done**; byte-identical across enclosing designs (section 5) |
+| An object for EVERY synthesized module, the top included | **done**; a top is a module whose interface is `Empty` (section 6c) |
+| The design .so calls those objects, never a copy | **done**; inlining into the edge fn removed, with five env pivots (section 6c) |
 
 Outlining shares cones that inlining duplicated at every call site, which is
 why the total instruction count went DOWN.  Correctness is settled: the
@@ -666,10 +709,11 @@ knobs is refused rather than silently served.
 to already exist, since planning a design dlopens them.  That
 subcommand no longer exists.)
 
-## 6c. Two design-wide inputs to layout, deferred on purpose
+## 6c. Known gaps, deferred on purpose
 
-Both were found looking for whole-design work to remove, and both are
-DEFERRED by decision (2026-09-13), not overlooked.  They share a
+Design-wide inputs to layout, and two things with no test.  The
+layout ones were found looking for whole-design work to remove and
+are DEFERRED by decision (2026-09-13), not overlooked.  They share a
 failure mode worth stating once: each can give one fragment two
 layouts, the layout half of the signature catches that, so the object
 is filed under a name the other build never asks for.  Nothing is
@@ -736,10 +780,51 @@ fragment cannot be built correctly without being told the design's
 trace mode: it belongs in the object's salt and in the build graph's
 inputs, and today it is in neither.
 
+## 6d. Inlining removed from the default path
+
+**Inlining is gone from the default path, and with it five dials.**
+The edge fn used to INLINE rule bodies and sched sections, choosing
+per body with a cost model ("outline iff large and shares little")
+and a measured instruction budget that drove a measure-and-replan
+loop.  That made a module's object a function of the DESIGN it was
+built in: fuse everything and a type's object kept only its boundary
+methods, while a module made entirely of rules -- every top -- got no
+object at all.
+
+Where a module's code lives is not a tuning question, so the choice
+is gone: every body and every section is called.
+`TRS_EDGE_SSA_OUTLINE`, `TRS_EDGE_SSA_OUTLINE_FACTOR`,
+`TRS_JIT_OUTLINE`, `TRS_JIT_SCHED_OUTLINE_BUDGET` and
+`TRS_EDGE_INSN_BUDGET` are deleted, along with the replan loop, the
+`EdgeOverBudget` outcome and the section-size measurement that fed
+it.
+
+It costs simulation rate -- outlining measured 0.68x of the inline
+shape on Flute, from lost cross-section SSA sharing -- and that is
+accepted.  Re-inlining belongs at LINK time, over objects that
+already exist, where it cannot change which object a body lives in.
+
+One case stays inline: a variant row's sched section under a dynamic
+schedule, where `sched_over` rewrites the ME inhibitors and
+owned-earlier share claims to follow the selected interleaving.  That
+section genuinely is not the module's code -- calling the module's
+symbol for it runs the base order, which the `sysDynSched` family
+catches.
+
 ## 7. The one number still missing
 
-What de-inlining costs at RUN time.  Outlining is now unconditional and
-correctness is settled, so the experiment is purely a cost question: an A/B
-on simulation RATE -- not link time -- for a design whose worst function is a
-replicated child cone.  Everything above trades link time for run time and
-nobody has measured the other side.
+What de-inlining costs at RUN time, at scale.  Outlining is
+unconditional and correctness is settled, so this is purely a cost
+question -- and, per the contract, one that does not gate anything:
+the call-based form is the semantics whatever the number says.
+
+What is known: 0.68x on Flute from the old A/B, and the corpus cannot
+refine it (only five designs run 50ms or longer; median 1.13x, best
+0.87x -- i.e. one got FASTER, which is how little signal there is).
+The measurement wants the controller family in the playground, whose
+worst function is a replicated child cone.
+
+It matters for one decision only: whether link-time re-inlining is
+worth building, and which callees it should target.  Until then the
+honest statement is that the simple model costs something unmeasured
+at simulation rate and nothing at all in predictability.

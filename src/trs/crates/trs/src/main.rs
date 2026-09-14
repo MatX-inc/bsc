@@ -105,8 +105,6 @@ fn compile_knob_env(flag: &str) -> Option<&'static str> {
         "--jit-opt" => "TRS_JIT_OPT",
         "--jit-pipeline" => "TRS_JIT_PIPELINE",
         "--jit-threads" => "TRS_JIT_THREADS",
-        "--outline" => "TRS_EDGE_SSA_OUTLINE",
-        "--outline-factor" => "TRS_EDGE_SSA_OUTLINE_FACTOR",
         // Per-class object reuse.  Flags rather than environment
         // because a build system keys an action on its argv: the
         // directories a compile reads are its declared INPUTS and the

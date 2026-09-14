@@ -100,8 +100,12 @@ proc trs_strparam_test { trs name top leaf } {
             set ok 0
         } else {
             set fh [open $work/reuse.txt]; set reuse [read $fh]; close $fh
-            if { ![regexp {1 of 1 fragment objects reused} $reuse] } {
-                fail "trs strparam: the design did not reuse the standalone object"
+            # 1 of 2: the design's other object is the TOP's, which
+            # this build did not supply -- every synthesized module
+            # compiles to one, an Empty interface included
+            # (bsc.trs/fragobj gates the whole-design assembly)
+            if { ![regexp {1 of 2 fragment objects reused} $reuse] } {
+                fail "trs strparam: expected the leaf reused (1 of 2), got: $reuse"
                 set ok 0
             } else {
                 pass "trs strparam: the design reuses the standalone object"
