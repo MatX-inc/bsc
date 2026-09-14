@@ -18,6 +18,7 @@ fn usage() -> ExitCode {
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
     eprintln!("       trs link --multi-fragments <module.bir>... [-o <out.cexe>]");
     eprintln!("       trs link --fragment <fragment.bir> [-o <out.cexe>]");
+    eprintln!("                 [--bir-in <dir>[:<dir>...]]");
     eprintln!("       trs compile <design.bir> [-o <model.so>] [--exe] [--dump-formats vcd,fst]");
     eprintln!("                    [--fragment]");
     eprintln!("                    [--obj-in <dir>[:<dir>...]] [--obj-out <dir>]");
@@ -54,6 +55,9 @@ fn usage() -> ExitCode {
     eprintln!("compile with different ones is refused rather than served a");
     eprintln!("wrong object under a right-looking name.");
     eprintln!();
+    eprintln!("  --bir-in <ds>   `:'-separated directories to search for a");
+    eprintln!("                  fragment not beside the one naming it.");
+    eprintln!("");
     eprintln!("bsc writes one .bir per synthesized module and one per");
     eprintln!("`import \"BDPI\"'.  A link given the top follows its");
     eprintln!("instantiations and its imports, finding each by name beside");
@@ -840,6 +844,24 @@ fn main() -> ExitCode {
                         }
                     },
                     "--multi-fragments" | "--fragment" => {}
+                    // Where to find a fragment that is not beside the
+                    // one naming it.  Read-only and `:'-separated, like
+                    // --obj-in: a build system puts each module's .bir
+                    // wherever it built that module, and staging copies
+                    // to make them siblings tells the link nothing it
+                    // cannot be told here.
+                    "--bir-in" => {
+                        let Some(v) = it.next() else {
+                            eprintln!("Error: {a} requires a value");
+                            return ExitCode::from(2);
+                        };
+                        trs_interp::startup::set_bir_search_path(
+                            v.split(':')
+                                .filter(|d| !d.is_empty())
+                                .map(std::path::PathBuf::from)
+                                .collect(),
+                        );
+                    }
                     "--bdpi" | "-l" | "-L" => {
                         let Some(v) = it.next() else {
                             eprintln!("Error: {a} requires a value");

@@ -221,10 +221,41 @@ fn library_dir() -> Option<std::path::PathBuf> {
     Some(exe.parent()?.parent()?.join("lib").join("Libraries"))
 }
 
+/// Directories to look in for a .bir that is not beside the file naming
+/// it.  Process-wide because it describes this invocation -- where its
+/// inputs were put -- and not any one load; every entry point that
+/// resolves siblings honours it without threading it through.
+static BIR_SEARCH: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+/// Set the search path consulted by every sibling resolution in this
+/// process.  Call before loading anything; later calls are ignored.
+pub fn set_bir_search_path(dirs: Vec<std::path::PathBuf>) {
+    let _ = BIR_SEARCH.set(dirs);
+}
+
 /// A fragment plus every module it reaches, resolved by name beside
-/// it.  Public because the BVI build step needs the whole design to
-/// find its imports, and a lone fragment cannot resolve a sibling.
+/// it (then along the search path, then the compiler's own library).
+/// Public because the BVI build step needs the whole design to find
+/// its imports, and a lone fragment cannot resolve a sibling.
 pub fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> {
+    let empty: Vec<std::path::PathBuf> = Vec::new();
+    decode_with_siblings_in(path, bytes, BIR_SEARCH.get().unwrap_or(&empty))
+}
+
+/// As `decode_with_siblings`, but resolving a name that is not beside
+/// the file against `search` first, in the order given.
+///
+/// A build system does not get to choose where it puts a file: the .bir
+/// for each module is written by whichever target built its .ba, so they
+/// land in as many directories as there are packages.  Requiring them to
+/// be siblings makes the caller stage copies purely to satisfy the
+/// lookup, which is a build graph's worth of symlinks per design and
+/// tells the link nothing it could not have been told directly.
+pub fn decode_with_siblings_in(
+    path: &str,
+    bytes: &[u8],
+    search: &[std::path::PathBuf],
+) -> Result<Design, String> {
     let first = trs_ir::Bir::decode(bytes).map_err(|e| format!("{path}: {e}"))?;
     let dir = std::path::Path::new(path)
         .parent()
@@ -256,20 +287,33 @@ pub fn decode_with_siblings(path: &str, bytes: &[u8]) -> Result<Design, String> 
             continue;
         }
         let p = dir.join(format!("{name}.bir"));
-        // beside the file that names it, then among the compiler's own
+        // beside the file that names it, then along the search path the
+        // caller gave, then among the compiler's own
         let (p, b) = match std::fs::read(&p) {
             Ok(b) => (p, b),
             Err(e) => {
-                let lib = library_dir().map(|d| d.join(format!("{name}.bir")));
-                match lib.as_ref().and_then(|l| std::fs::read(l).ok()) {
-                    Some(b) => (lib.expect("read implies a path"), b),
+                let found = search
+                    .iter()
+                    .map(|d| d.join(format!("{name}.bir")))
+                    .find_map(|c| std::fs::read(&c).ok().map(|b| (c, b)));
+                match found {
+                    Some(hit) => hit,
                     None => {
-                        return Err(format!(
-                            "{}: {} `{name}', and {} could not be read: {e}",
-                            path,
-                            if is_ff { "imports" } else { "instantiates" },
-                            p.display()
-                        ))
+                        let lib = library_dir().map(|d| d.join(format!("{name}.bir")));
+                        match lib.as_ref().and_then(|l| std::fs::read(l).ok()) {
+                            Some(b) => (lib.expect("read implies a path"), b),
+                            None => {
+                                return Err(format!(
+                                    "{}: {} `{name}', and it is not {} nor on \
+                                     the {} director{} given with --bir-in: {e}",
+                                    path,
+                                    if is_ff { "imports" } else { "instantiates" },
+                                    p.display(),
+                                    search.len(),
+                                    if search.len() == 1 { "y" } else { "ies" },
+                                ))
+                            }
+                        }
                     }
                 }
             }
