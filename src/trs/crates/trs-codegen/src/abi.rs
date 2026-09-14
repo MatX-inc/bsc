@@ -362,7 +362,7 @@ pub struct RuleSpec {
     /// a per-type object comparable, and cacheable, across designs.
     /// Only rep ordinals are ever emitted or looked up under it.
     #[serde(default)]
-    pub exec_label: String,
+    pub share_label: String,
     /// this spec's index in the spec list — the `ordinal` a callback
     /// site reports, which the runtime uses to find this rule's
     /// call-site tables
@@ -416,9 +416,16 @@ pub enum FArgSpec {
     StrDyn,
 }
 
-/// A compiled rule sched function (kept alive by the leaked engine).
+/// A compiled rule sched function: (arena, env, region base index,
+/// ordinal) -- the same shape as `CompiledExec`, and for the same
+/// reason.  A sched body was the last piece of a module's code still
+/// addressing the arena ABSOLUTELY, which made it specific to one
+/// instance in one design: two instances of a type differed only by
+/// their region offset, and so had to be emitted twice.  Region
+/// relative, one body serves them all, and it can live in the
+/// module's own object.
 pub struct CompiledSched {
-    pub sched: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
+    pub sched: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32),
 }
 
 /// A compiled rule body: (arena, env, region base index, ordinal).
@@ -727,6 +734,18 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 36: a sched fn takes (arena, env, region base, ordinal) and
+//     addresses its region RELATIVE to that base, exactly as an exec
+//     fn has since rev 29.  It was the last piece of a module's own
+//     code still baking absolute arena offsets, which is why two
+//     instances of one type emitted two byte-different sched bodies
+//     that differed only by their region offset -- and why a sched
+//     fn could not live in the module's object.  The callback ABI
+//     changes with the signature, so a rev-35 artifact's sched
+//     symbols cannot be called by a rev-36 runtime.
+//     The call-site origins stay baked: unlike the region, they are
+//     constant across a dedup class (each is the shared exec half's
+//     length, which the class invariant already asserts is equal).
 // 35: specialization is gone.  Everything a parent supplies reaches
 //     a fragment's body through a SLOT in the instance's own region,
 //     seeded at plan time, where it used to be a constant folded into
@@ -828,7 +847,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 35;
+pub const AOT_LAYOUT_REV: u64 = 36;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
@@ -1283,8 +1302,8 @@ pub struct SchedOver {
 }
 
 pub enum FusedNode {
-    /// sched fn: baked address (JIT) or symbol (AOT)
-    Sched(HelperRef),
+    /// sched fn + its (region base, ordinal) args
+    Sched(HelperRef, u64, u32),
     /// exec fn + its (region base, ordinal) args
     Exec(HelperRef, u64, u32),
 }

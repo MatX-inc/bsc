@@ -484,9 +484,14 @@ impl JitPlans {
                             ns.iter()
                                 .map(|n| match *n {
                                     JitNode::Sched(o) => {
-                                        FusedNode::Sched(trs_codegen::abi::HelperRef::Addr(
-                                            self.lazy.scheds[o as usize].sched as usize,
-                                        ))
+                                        let (b, t) = self.lazy.exec_args[o as usize];
+                                        FusedNode::Sched(
+                                            trs_codegen::abi::HelperRef::Addr(
+                                                self.lazy.scheds[o as usize].sched as usize,
+                                            ),
+                                            b,
+                                            t,
+                                        )
                                     }
                                     JitNode::Exec(o) => {
                                         let (b, t) = self.lazy.exec_args[o as usize];
@@ -1159,16 +1164,23 @@ fn aot_emit(
                     .map(|ns| {
                         ns.iter()
                             .map(|n| match *n {
-                                JitNode::Sched(o) => FusedNode::Sched(HelperRef::Sym(format!(
-                                    "sched_{}",
-                                    specs[o as usize].label
-                                ))),
+                                JitNode::Sched(o) => {
+                                    let sp = &specs[o as usize];
+                                    FusedNode::Sched(
+                                        HelperRef::Sym(format!(
+                                            "sched_{}",
+                                            specs[rep_of[o as usize]].share_label
+                                        )),
+                                        inst_envs[&sp.inst].region.0 as u64,
+                                        sp.ordinal,
+                                    )
+                                }
                                 JitNode::Exec(o) => {
                                     let sp = &specs[o as usize];
                                     FusedNode::Exec(
                                         HelperRef::Sym(format!(
                                             "exec_{}",
-                                            specs[rep_of[o as usize]].exec_label
+                                            specs[rep_of[o as usize]].share_label
                                         )),
                                         inst_envs[&sp.inst].region.0 as u64,
                                         sp.ordinal,
@@ -1684,7 +1696,7 @@ fn aot_load(
         // run inline in an edge fn; the token TABLES stay per-ordinal
         // (edge callbacks resolve through them).  A stub keeps the
         // types simple and fails LOUDLY if a supposedly-dead path runs.
-        unsafe extern "C" fn missing_sched(_: *mut u64, _: *mut core::ffi::c_void) {
+        unsafe extern "C" fn missing_sched(_: *mut u64, _: *mut core::ffi::c_void, _: u64, _: u32) {
             panic!("trs: sched symbol elided by edge-SSA artifact was called");
         }
         unsafe extern "C" fn missing_exec(
@@ -1707,22 +1719,33 @@ fn aot_load(
         let sched_tab = tab(b"trs_sched_tab", b"trs_sched_tab_len", specs.len());
         let exec_tab = tab(b"trs_exec_tab", b"trs_exec_tab_len", specs.len());
         let edge_tab = tab(b"trs_edge_tab", b"trs_edge_tab_len", ncomps);
-        let mut scheds = Vec::with_capacity(specs.len());
-        for (o, (spec, proto)) in specs.iter().zip(protos.iter()).enumerate() {
+        // sched fns: one symbol per dedup class, shared by its
+        // members, read at the REP and fanned out -- the same shape
+        // as the exec bodies below, because a sched fn now lives in
+        // the same per-type object and under the same class symbol.
+        let mut scheds: Vec<CompiledSched> = (0..specs.len())
+            .map(|_| CompiledSched {
+                sched: missing_sched,
+            })
+            .collect();
+        for (rep, members) in classes {
             let sf = match sched_tab {
-                Some(t) if t[o] != 0 => std::mem::transmute::<
+                Some(t) if t[*rep] != 0 => std::mem::transmute::<
                     usize,
-                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
-                >(t[o]),
+                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32),
+                >(t[*rep]),
                 Some(_) => missing_sched,
+                None if specs[*rep].share_label.is_empty() => missing_sched,
                 None => lib
-                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)>(
-                        format!("sched_{}\0", spec.label).as_bytes(),
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32)>(
+                        format!("sched_{}\0", specs[*rep].share_label).as_bytes(),
                     )
                     .map(|f| *f)
                     .unwrap_or(missing_sched),
             };
-            scheds.push(CompiledSched { sched: sf });
+            for &m in members {
+                scheds[m] = CompiledSched { sched: sf };
+            }
         }
         // exec bodies: one symbol per dedup class, shared by members
         let mut execs: Vec<Option<CompiledExec>> = (0..specs.len()).map(|_| None).collect();
@@ -1737,10 +1760,10 @@ fn aot_load(
                 // class name the emitter used.  A load that took its
                 // classes from the artifact never derived one, and an
                 // artifact this trs emits always carries the table.
-                None if specs[*rep].exec_label.is_empty() => missing_exec,
+                None if specs[*rep].share_label.is_empty() => missing_exec,
                 None => lib
                     .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32>(
-                        format!("exec_{}\0", specs[*rep].exec_label).as_bytes(),
+                        format!("exec_{}\0", specs[*rep].share_label).as_bytes(),
                     )
                     .map(|f| *f)
                     .unwrap_or(missing_exec),
@@ -5793,7 +5816,7 @@ impl Interp {
                 eager: ri.eager.clone(),
                 shared: ri.shared.clone(),
                 label: format!("i{}_{}", ri.inst, ri.ordinal),
-                exec_label: exec_class_label(
+                share_label: exec_class_label(
                     &self.d,
                     self.mods[self.module_of(ri.inst)].ir,
                     ri.rule_idx,
@@ -5853,7 +5876,7 @@ impl Interp {
                     // an auto-fired top method belongs to the DESIGN's
                     // top module, so there is no cross-design class to
                     // name; the spec label is already the right scope
-                    exec_label: format!("af{afi}_{o}"),
+                    share_label: format!("af{afi}_{o}"),
                     ordinal: o as u32,
                     sched_foreign_origin: 0,
                     sched_prim_origin: 0,
@@ -6402,31 +6425,39 @@ impl Interp {
             let r = &protos[*rep];
             for &m in members {
                 let p = &protos[m];
-                // The EXEC halves must match: one body serves the
-                // whole class and addresses [0, sched_origin), so
-                // every member must agree on both that range's LENGTH
-                // and its contents.
+                // BOTH halves must match.  One compiled body of each
+                // serves the whole class -- they live together in the
+                // module's object under the class symbol -- so every
+                // member has to agree on the whole table: its length,
+                // where the halves meet, and the contents.
                 //
-                // The sched halves need not, and do not: a sched fn is
-                // per-ordinal and nothing shares it, and its size
-                // follows how the design's schedule split shared eager
-                // defs between an instance's rules -- design context,
-                // which no class key could cover.  Putting exec first
-                // is what confines that to the half where it does no
-                // harm; it used to sit second and inherit the sched
-                // half's design-dependent size as its origin.
+                // The sched half was exempt while it was per-ordinal
+                // and nothing shared it.  The reason given then was
+                // that its size follows how the DESIGN's schedule
+                // split shared eager defs between an instance's
+                // rules, which is design context no class key covers.
+                // That remains possible in principle -- a shared def
+                // attaches to whichever of an instance's rules the
+                // schedule reaches first -- and is now a refusal
+                // rather than a silent difference, because sharing a
+                // sched body the members do not agree on would run
+                // one instance's schedule for another.  Measured over
+                // 354 designs and 5,930 class members: zero
+                // disagreements.
                 let (ro, po) = (r.sched_prim_origin as usize, p.sched_prim_origin as usize);
                 let (rf, pf) = (r.sched_foreign_origin as usize, p.sched_foreign_origin as usize);
                 let shaped = po == ro
                     && pf == rf
-                    && p.prims[..po].iter().zip(&r.prims[..ro]).all(|(a, b)| {
+                    && p.prims.len() == r.prims.len()
+                    && p.foreign.len() == r.foreign.len()
+                    && p.prims.iter().zip(&r.prims).all(|(a, b)| {
                         a.method == b.method
                             && a.port == b.port
                             && a.arg_widths == b.arg_widths
                             && a.ret_width == b.ret_width
                             && a.is_action == b.is_action
                     })
-                    && p.foreign[..pf].iter().zip(&r.foreign[..rf]).all(|(a, b)| {
+                    && p.foreign.iter().zip(&r.foreign).all(|(a, b)| {
                         a.func == b.func && a.ret_width == b.ret_width && a.args == b.args
                     });
                 if !shaped {

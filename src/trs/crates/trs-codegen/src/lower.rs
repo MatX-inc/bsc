@@ -113,7 +113,7 @@ pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, I
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
-            exec_sym: None,
+            share_sym: None,
             site_origin: 0,
             foreign_origin: 0,
             foreign_stmts: Vec::new(),
@@ -567,7 +567,7 @@ pub fn compile_scheds(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
-            exec_sym: None,
+            share_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -618,7 +618,7 @@ pub fn compile_execs(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
-            exec_sym: None,
+            share_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -861,7 +861,7 @@ fn lower_helpers<'ctx>(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
-            exec_sym: None,
+            share_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -938,7 +938,7 @@ fn lower_boundary_fns<'ctx>(
         inst: usize::MAX,
         rule_idx: usize::MAX,
         // a sentinel spec: never emitted as an exec class
-        exec_label: String::new(),
+        share_label: String::new(),
         inhibit_slots: Vec::new(),
         cf_slot: 0,
         wf_slot: 0,
@@ -969,7 +969,7 @@ fn lower_boundary_fns<'ctx>(
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
-            exec_sym: None,
+            share_sym: None,
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
@@ -1094,28 +1094,41 @@ fn compile_class_module(
     }
     BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
     for spec in reps {
-        let mut lc = Lower {
+        let mut mk = |exec: bool| Lower {
             env,
             ctx: &ctx,
             module: &module,
             builder: ctx.create_builder(),
             cbs,
             spec,
-            site_origin: 0,
-            foreign_origin: 0,
+            // exec is first in the rule's one call-site table, so it
+            // starts at 0 and the sched half follows it
+            site_origin: if exec { 0 } else { spec.sched_prim_origin },
+            foreign_origin: if exec { 0 } else { spec.sched_foreign_origin },
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
             bnd_prim_site: None,
             bnd_foreign_site: None,
             reset_ptrs: HashMap::new(),
-            exec_sym: Some(spec.exec_label.clone()),
+            share_sym: Some(spec.share_label.clone()),
             foreign_stmts: Vec::new(),
             prim_calls: Vec::new(),
             edge: None,
         };
-        lc.lower_exec()
+        mk(true)
+            .lower_exec()
             .map_err(|e| Ineligible(format!("shard mir {mir} exec: {e}")))?;
+        // The SCHED half too, so the object holds all of the module's
+        // own code.  Emitted unconditionally, even when this design's
+        // edge fuses and inlines the sched section instead: whether
+        // to fuse is a property of the DESIGN, and an object that
+        // gained or lost a function depending on the design it was
+        // first built in would not be the same object for the next
+        // one.  A fused design simply never calls it.
+        mk(false)
+            .lower_sched()
+            .map_err(|e| Ineligible(format!("shard mir {mir} sched: {e}")))?;
     }
     run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
@@ -1539,62 +1552,23 @@ pub fn compile_design_objects_split(
             }
         }
     }
-    // phase 2a: the design module — sched fns + fused edge fns, with
-    // the full map installed (their method-call sites divert), NO
-    // helpers/boundary/reps.
+    // phase 2a: the design module — the fused edge fns, the dispatch
+    // tables and the glue, with the full map installed (their
+    // method-call sites divert).  NO helpers/boundary/reps, and no
+    // sched fns either: like exec bodies, a sched fn belongs to the
+    // module whose rule it is and lives in that module's object under
+    // the class symbol, so this module only declares the ones its
+    // tables point at.
+    //
+    // That is the whole of what a design contributes now.  Everything
+    // a module can be compiled from is in the module's own object,
+    // which is what lets a top be linked from objects like any other
+    // translation unit.
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     let mut tally = IrTally::default();
     let _bguard = BoundaryGuard;
     BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
-    let covered: std::collections::HashSet<usize> = edge_plan
-        .map(|p| {
-            p.nodes
-                .iter()
-                .flatten()
-                .filter(|&&(is_exec, _)| !is_exec)
-                .map(|&(_, o)| o)
-                .collect()
-        })
-        .unwrap_or_default();
-    for (o, spec) in specs.iter().enumerate() {
-        if covered.contains(&o) {
-            continue;
-        }
-        let mut lc = Lower {
-            env,
-            ctx: &ctx,
-            module: &module,
-            builder: ctx.create_builder(),
-            cbs,
-            spec,
-            // A FRESH Lower emitting the sched half ALONE numbers its
-            // call sites from zero, so it has to be told where that
-            // half begins in the rule's one table.  Since rev 34 the
-            // exec half is first, at 0, and the sched half follows
-            // it; the load path rebuilds the table by re-running
-            // trial_lower, which lays both out that way.
-            //
-            // Zero here reported a sched site as an EXEC site -- the
-            // wrong callee, silently.  It survived because edge-SSA
-            // normally inlines sched sections into the fused edge, so
-            // this loop rarely runs: with TRS_EDGE_SSA=0 the corpus
-            // goes from 3 diffs to 75.
-            site_origin: spec.sched_prim_origin,
-            foreign_origin: spec.sched_foreign_origin,
-            outlined: refs_opt,
-            helper_self: None,
-            dedup: None,
-            bnd_prim_site: None,
-            bnd_foreign_site: None,
-            reset_ptrs: HashMap::new(),
-            exec_sym: None,
-            foreign_stmts: Vec::new(),
-            prim_calls: Vec::new(),
-            edge: None,
-        };
-        lc.lower_sched()?;
-    }
     let mut section_sizes: Vec<Vec<(usize, u64)>> = Vec::new();
     match edge_plan {
         Some(p) => lower_edge_ssa(
@@ -1643,7 +1617,7 @@ pub fn compile_design_objects_split(
         let i32t = ctx.i32_type();
         let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
         for &o in rep_ords {
-            let name = format!("exec_{}", specs[o].exec_label);
+            let name = format!("exec_{}", specs[o].share_label);
             if module.get_function(&name).is_none() {
                 module.add_function(&name, exec_ty, None);
             }
@@ -1655,9 +1629,30 @@ pub fn compile_design_objects_split(
                 .map(|f| f.as_global_value().as_pointer_value())
                 .unwrap_or_else(|| ptrt.const_null())
         };
+        // declare the class sched symbols so their table entries
+        // become link relocations into the per-type objects
+        let sched_ty = ctx
+            .void_type()
+            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+        for &o in rep_ords {
+            let name = format!("sched_{}", specs[o].share_label);
+            if module.get_function(&name).is_none() {
+                module.add_function(&name, sched_ty, None);
+            }
+        }
+        // Read at the rep and fanned out to members by the loader,
+        // exactly as the exec table is: one body serves the class, so
+        // a non-rep entry must stay null rather than resolve by name.
         let scheds: Vec<_> = specs
             .iter()
-            .map(|sp| fnptr(format!("sched_{}", sp.label)))
+            .enumerate()
+            .map(|(o, sp)| {
+                if is_rep.contains(&o) {
+                    fnptr(format!("sched_{}", sp.share_label))
+                } else {
+                    ptrt.const_null()
+                }
+            })
             .collect();
         // Only rep ordinals are read from this table, and a non-rep
         // must stay null: its CLASS symbol resolves (its rep defined
@@ -1668,7 +1663,7 @@ pub fn compile_design_objects_split(
             .enumerate()
             .map(|(o, sp)| {
                 if is_rep.contains(&o) {
-                    fnptr(format!("exec_{}", sp.exec_label))
+                    fnptr(format!("exec_{}", sp.share_label))
                 } else {
                     ptrt.const_null()
                 }
@@ -1712,7 +1707,7 @@ pub fn compile_design_objects_split(
         inst: usize::MAX,
         rule_idx: usize::MAX,
         // a sentinel spec: never emitted as an exec class
-        exec_label: String::new(),
+        share_label: String::new(),
         inhibit_slots: Vec::new(),
         cf_slot: 0,
         wf_slot: 0,
@@ -1906,7 +1901,9 @@ fn lower_fused<'ctx>(
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
-    let sched_ty = ctx.void_type().fn_type(&[ptrt.into(), ptrt.into()], false);
+    let sched_ty = ctx
+        .void_type()
+        .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
     let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
     let b = ctx.create_builder();
     let mut syms = Vec::with_capacity(comps.len());
@@ -1947,15 +1944,20 @@ fn lower_fused<'ctx>(
         let mut stop_bbs = Vec::new();
         for n in &comp.nodes {
             match n {
-                FusedNode::Sched(r) => {
+                FusedNode::Sched(r, base, ord) => {
                     let (f_, p_, ty) = callee(r, sched_ty);
+                    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        arena.into(),
+                        envp.into(),
+                        i64t.const_int(*base, false).into(),
+                        i32t.const_int(*ord as u64, false).into(),
+                    ];
                     match (f_, p_) {
                         (Some(f_), _) => {
-                            b.build_call(f_, &[arena.into(), envp.into()], "s").unwrap();
+                            b.build_call(f_, &args, "s").unwrap();
                         }
                         (_, Some(p_)) => {
-                            b.build_indirect_call(ty, p_, &[arena.into(), envp.into()], "s")
-                                .unwrap();
+                            b.build_indirect_call(ty, p_, &args, "s").unwrap();
                         }
                         _ => unreachable!(),
                     }
@@ -2178,7 +2180,7 @@ fn lower_edge_ssa<'ctx>(
                     bnd_prim_site: None,
                     bnd_foreign_site: None,
                     reset_ptrs: HashMap::new(),
-                    exec_sym: None,
+                    share_sym: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: None,
@@ -2324,7 +2326,7 @@ fn lower_edge_ssa<'ctx>(
                     bnd_prim_site: None,
                     bnd_foreign_site: None,
                     reset_ptrs: HashMap::new(),
-                    exec_sym: None,
+                    share_sym: None,
                     foreign_stmts: Vec::new(),
                     prim_calls: Vec::new(),
                     edge: Some(std::mem::take(&mut edge_ctx)),
@@ -2532,7 +2534,7 @@ fn lower_edge_ssa<'ctx>(
                                 bnd_prim_site: None,
                                 bnd_foreign_site: None,
                                 reset_ptrs: HashMap::new(),
-                                exec_sym: None,
+                                share_sym: None,
                                 foreign_stmts: Vec::new(),
                                 prim_calls: Vec::new(),
                                 edge: Some(EdgeCtx {
@@ -2893,12 +2895,12 @@ struct Lower<'a, 'ctx> {
     /// read a hundred times costs one load: the table entry is a
     /// function of the base parameter alone, which does not change.
     reset_ptrs: HashMap<(usize, StrId), PointerValue<'ctx>>,
-    /// AOT: emit the exec fn under the CLASS symbol instead of the
-    /// spec's own.  The in-process JIT lowers every spec separately
+    /// AOT: emit BOTH halves of the rule under the CLASS symbol
+    /// instead of the spec's own.  The in-process JIT lowers every spec separately
     /// into one module, so it must keep per-spec names; a per-type
     /// object holds one body per class and names it for the class, so
     /// that two designs emit the same symbol for the same code.
-    exec_sym: Option<String>,
+    share_sym: Option<String>,
     foreign_stmts: Vec<ForeignSpec>,
     prim_calls: Vec<PrimCallSpec>,
 }
@@ -5977,15 +5979,40 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// sched_<label>(arena): cone eval, inhibitors, CF/WF + eager stores.
     fn lower_sched(&mut self) -> Result<(), Ineligible> {
         let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        let i64t = self.ctx.i64_type();
+        // sched fns take (arena, env, region base index, ordinal),
+        // exactly as exec fns do: in-region state addresses relative
+        // to base and callback sites report the runtime ordinal, so
+        // ONE body serves every instance of the class.  The call-site
+        // origins stay BAKED -- unlike the region, they are constant
+        // across a class (the dedup invariant asserts the sched
+        // origins are equal, since each is the shared exec half's
+        // length).
         let fnty = self
             .ctx
             .void_type()
-            .fn_type(&[ptrt.into(), ptrt.into()], false);
-        let func = self
-            .module
-            .add_function(&format!("sched_{}", self.spec.label), fnty, None);
+            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+        let func = self.module.add_function(
+            &format!(
+                "sched_{}",
+                self.share_sym.as_deref().unwrap_or(&self.spec.label)
+            ),
+            fnty,
+            None,
+        );
         let bb = self.ctx.append_basic_block(func, "entry");
         self.builder.position_at_end(bb);
+        let region = self.ie(self.spec.inst)?.region;
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            func.get_nth_param(3).unwrap().into_int_value(),
+        ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
         let mut f = Frame {
             arena: func.get_nth_param(0).unwrap().into_pointer_value(),
             envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
@@ -6107,7 +6134,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .add_function(
                 &format!(
                     "exec_{}",
-                    self.exec_sym.as_deref().unwrap_or(&self.spec.label)
+                    self.share_sym.as_deref().unwrap_or(&self.spec.label)
                 ),
                 fnty,
                 None,

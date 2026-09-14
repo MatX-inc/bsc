@@ -5230,7 +5230,8 @@ impl Interp {
                                     match *n {
                                         jit::JitNode::Sched(ord) => {
                                             let f = j.lazy.scheds[ord as usize].sched;
-                                            unsafe { f(ap, envp) }
+                                            let (b, tb) = j.lazy.exec_args[ord as usize];
+                                            unsafe { f(ap, envp, b, tb) }
                                         }
                                         jit::JitNode::Exec(ord) => {
                                             match j.lazy.exec(ord as usize) {
