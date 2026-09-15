@@ -2333,40 +2333,41 @@ fn lower_edge_ssa<'ctx>(
                         // a design be linked from the objects its
                         // modules compiled to.
                         //
-                        // Variant rows have no FusedComp stream, so
-                        // the call resolves per ordinal instead.
-                        let fnode = if row == k {
-                            &fused[k].nodes[s]
-                        } else {
-                            plan.ord_fnodes.get(&o).ok_or_else(|| {
-                                Ineligible("variant outlined exec without ord node".into())
-                            })?
-                        };
-                        let FusedNode::Exec(href, base, ord) = fnode else {
-                            return Err(Ineligible("outlined exec node mismatch".into()));
-                        };
+                        // Built from the SPEC, the same way the sched
+                        // call below is.  It used to come from the
+                        // FusedComp stream for a base row and from a
+                        // parallel per-ordinal map for a variant row
+                        // (which has no stream to index) -- two
+                        // hand-maintained constructions of the same
+                        // triple, which is exactly how they drifted:
+                        // the stream was moved to the class symbol and
+                        // the map was left emitting `exec_i{inst}_{ord}',
+                        // a name nothing defines.  It stayed hidden
+                        // while variant-row execs were only outlined
+                        // when a size dial fired.
+                        //
+                        // `share_label' is a function of (module,
+                        // rule), which every member of a class shares,
+                        // so the rep indirection those two used was
+                        // redundant as well.
                         let exec_ty = i32t
                             .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+                        let ebase = env
+                            .insts
+                            .get(&spec.inst)
+                            .map(|ie| ie.region.0 as u64)
+                            .unwrap_or(0);
                         let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
                             arena.into(),
                             envp.into(),
-                            i64t.const_int(*base, false).into(),
-                            i32t.const_int(*ord as u64, false).into(),
+                            i64t.const_int(ebase, false).into(),
+                            i32t.const_int(spec.ordinal as u64, false).into(),
                         ];
-                        let cs = match href {
-                            HelperRef::Sym(name) => {
-                                let cf = module
-                                    .get_function(name)
-                                    .unwrap_or_else(|| module.add_function(name, exec_ty, None));
-                                lc.builder.build_call(cf, &args, "oe").unwrap()
-                            }
-                            HelperRef::Addr(a) => {
-                                let fp = i64t.const_int(*a as u64, false).const_to_pointer(ptrt);
-                                lc.builder
-                                    .build_indirect_call(exec_ty, fp, &args, "oe")
-                                    .unwrap()
-                            }
-                        };
+                        let ename = format!("exec_{}", spec.share_label);
+                        let cf = module
+                            .get_function(&ename)
+                            .unwrap_or_else(|| module.add_function(&ename, exec_ty, None));
+                        let cs = lc.builder.build_call(cf, &args, "oe").unwrap();
                         let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
                             return Err(Ineligible("outlined exec returned void".into()));
                         };

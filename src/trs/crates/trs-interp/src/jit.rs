@@ -4029,7 +4029,6 @@ impl Interp {
             // `nodes` — this fn is row-uniform
             alt_rows: Vec::new(),
             sched_over: Vec::new(),
-            ord_fnodes: HashMap::new(),
             export_slots,
             outline_sched,
             gate: gating_on.then_some(gate).flatten(),
@@ -6604,14 +6603,6 @@ impl Interp {
                     guard: av.guard,
                 });
             }
-            // exec class representatives, for the variant rows'
-            // outlined-call nodes (FusedComp streams cover base rows)
-            let mut rep_of: Vec<usize> = (0..specs.len()).collect();
-            for (rep, members) in &classes {
-                for &m in members {
-                    rep_of[m] = *rep;
-                }
-            }
             let mk_edge_plan = || {
                 (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
                     let mut plan = self.edge_ssa_plan(
@@ -6635,26 +6626,6 @@ impl Interp {
                     if !alt_row_comp.is_empty() {
                         plan.alt_rows = alt_row_refs.clone();
                         plan.sched_over = sched_over_rows.clone();
-                        // variant rows resolve outlined execs per
-                        // ordinal (no FusedComp stream to index)
-                        for (o, sp) in specs.iter().enumerate() {
-                            plan.ord_fnodes.insert(
-                                o,
-                                trs_codegen::abi::FusedNode::Exec(
-                                    // the CLASS symbol, which is what
-                                    // the module's object defines --
-                                    // `label' is this design's
-                                    // (instance, ordinal) and nothing
-                                    // emits a body under it
-                                    trs_codegen::abi::HelperRef::Sym(format!(
-                                        "exec_{}",
-                                        specs[rep_of[o]].share_label
-                                    )),
-                                    inst_envs[&sp.inst].region.0 as u64,
-                                    sp.ordinal,
-                                ),
-                            );
-                        }
                         // variant rows inherit their composition's
                         // tick tables (ticks are per comp, not per
                         // interleaving); rows were appended in

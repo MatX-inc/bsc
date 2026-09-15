@@ -957,10 +957,6 @@ pub struct EdgeSsaPlan {
     /// shares).  Base rows carry empty maps — a RuleSpec bakes the
     /// BASE interleaving's values and is correct there.
     pub sched_over: Vec<HashMap<usize, SchedOver>>,
-    /// per exec ordinal: the outlined-call node (class-rep symbol +
-    /// region base and ordinal).  Variant rows have no FusedComp node
-    /// stream to index by section, so outlined execs resolve here.
-    pub ord_fnodes: HashMap<usize, FusedNode>,
     /// per composition: packed trs_bram_tick argument triples of
     /// ungated BRAM port ticks — the edge fn calls the helper through
     /// the trs_bram_tick_cb pointer-global (filled at artifact load)
