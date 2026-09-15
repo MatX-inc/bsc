@@ -1095,10 +1095,10 @@ impl Interp {
                     // bind the child's parameters: its inputs align
                     // positionally with the instantiation args
                     let cmir = self.mods[cmod].ir;
-                    let inputs: Vec<(StrId, ir::PortKind)> = self.d.modules[cmir]
+                    let inputs: Vec<(StrId, ir::PortKind, ir::PortVal)> = self.d.modules[cmir]
                         .inputs
                         .iter()
-                        .map(|p| (p.name, p.kind))
+                        .map(|p| (p.name, p.kind, p.vtype))
                         .collect();
                     let mut params = HashMap::new();
                     let mut str_params = HashMap::new();
@@ -1114,7 +1114,7 @@ impl Interp {
                         if pi >= inputs.len() {
                             break;
                         }
-                        let (pname_, kind_) = inputs[pi];
+                        let (pname_, kind_, vtype_) = inputs[pi];
                         pi += 1;
                         match kind_ {
                             ir::PortKind::Clock => {
@@ -1154,7 +1154,29 @@ impl Interp {
                                 _ => {
                                     let mut c = Ctx::default();
                                     let v = self.eval(slot, &mut c, arg);
-                                    params.insert(pname_, v);
+                                    match v.as_str_id() {
+                                        // a COMPUTED string -- a
+                                        // concatenation, say -- reaches the
+                                        // child as a string, not as the
+                                        // marker Value
+                                        Some(sid) => {
+                                            str_params.insert(pname_, sid);
+                                        }
+                                        // An unsupplied String forwarded
+                                        // DOWN.  In a fragment link the top's
+                                        // String has no value, so it reads 0
+                                        // at width 0; putting that in `params`
+                                        // told the child it had been supplied,
+                                        // and the child then had a
+                                        // non-string where a string belonged.
+                                        // Leave it unsupplied instead, so the
+                                        // child's own port reads as what it
+                                        // is: a String nobody gave a value.
+                                        None if vtype_ == ir::PortVal::String => {}
+                                        None => {
+                                            params.insert(pname_, v);
+                                        }
+                                    }
                                 }
                             },
                         }

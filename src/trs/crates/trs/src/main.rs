@@ -370,6 +370,19 @@ fn compile_cmd(rest: &[&str]) -> ExitCode {
         // resolves the cache beside the design, as a run does,
         // rather than allowing verilation here.
         ensure_vlt_env(path, false);
+        // A .mem is an input to the SIMULATION, not to the build.  The
+        // link already declines to read one (prim::LOAD_MEMFILES) and a
+        // compile is the same kind of step: it instantiates the design
+        // only to plan and emit code, and the artifact opens its own
+        // load files when it runs.
+        //
+        // It mattered once a fragment could be compiled with a String
+        // parameter unsupplied: the filename a memory builds from its
+        // instance name concatenates to just the suffix, and the
+        // compile reported `failed to open file '.mem'' -- a real file
+        // it had no business opening, named after a value that is
+        // deliberately absent at build time.
+        trs_interp::prim::set_load_memfiles(false);
         let load_design = if fragment {
             trs_interp::startup::load_file_open
         } else {
