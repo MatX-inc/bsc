@@ -26,6 +26,19 @@ proc trs_det_test { trs name top } {
     set log "$name.det-out"
     set flags "-no-show-timestamps -no-show-version"
 
+    # Everything the comparison builds goes in a scratch directory
+    # that is removed whole, so a per-run product cannot become
+    # litter in a tracked source directory by being left out of a
+    # cleanup list -- which is how three `.so$i' copies once escaped.
+    # `work_*/' is already in the suite's clean patterns
+    # (cleanonly.mk), so the one kept as failure evidence goes with a
+    # `make clean' too.  The runs cd into it, so a `trs' named by a
+    # relative path has to be resolved before we move.
+    set work "work_$name"
+    file delete -force $work
+    file mkdir $work
+    if { [string match "*/*" $trs] } { set trs [file normalize $trs] }
+
     # trs-bir writes the .bir, and installs beside bsc
     set trsbir [file join [file dirname $bsc] trs-bir]
     if { [catch {exec sh -c "$bsc $flags -sim -u -g $top $name.bs > $log 2>&1 && $bsc $flags -sim -e $top -o $top.ref >> $log 2>&1 && $trsbir $top.ba >> $log 2>&1"}] } {
@@ -40,7 +53,7 @@ proc trs_det_test { trs name top } {
     # differ in that stamp alone and the comparison below could never
     # hold -- the thing under test is the codegen, not the filename.
     for {set i 1} {$i <= $nlinks} {incr i} {
-        if { [catch {exec sh -c "$trs link $top.bir -o $name.det > /dev/null 2>&1 && TRS_JIT_DUMP_PRE=1 $trs compile $name.det.bir > /dev/null 2> $name.ir$i && cp $name.det.so $name.so$i"}] } {
+        if { [catch {exec sh -c "cd $work && $trs link ../$top.bir -o $name.det > /dev/null 2>&1 && TRS_JIT_DUMP_PRE=1 $trs compile $name.det.bir > /dev/null 2> $name.ir$i && cp $name.det.so $name.so$i"}] } {
             fail "trs determinism link/compile of $name (run `$i')"
             cd $here
             return
@@ -49,11 +62,11 @@ proc trs_det_test { trs name top } {
 
     set ok 1
     for {set i 2} {$i <= $nlinks} {incr i} {
-        if { [catch {exec cmp -s $name.ir1 $name.ir$i}] } {
+        if { [catch {exec cmp -s $work/$name.ir1 $work/$name.ir$i}] } {
             fail "pre-O3 IR identical across links of $name (run `$i' differs)"
             set ok 0
         }
-        if { [catch {exec cmp -s $name.so1 $name.so$i}] } {
+        if { [catch {exec cmp -s $work/$name.so1 $work/$name.so$i}] } {
             fail "artifact .so identical across links of $name (run `$i' differs)"
             set ok 0
         }
@@ -63,18 +76,27 @@ proc trs_det_test { trs name top } {
     }
 
     # artifact honesty: one run against the golden output
-    if { [catch {exec sh -c "TRS=$trs ./$name.det > $name.trs-run-out 2>&1"}] } {
+    if { [catch {exec sh -c "cd $work && TRS=$trs ./$name.det > $name.trs-run-out 2>&1"}] } {
         fail "trs artifact run of $name"
+        set ok 0
     } else {
-        compare_file $name.trs-run-out $top.out.expected "trs_determinism"
+        if { [compare_file $work/$name.trs-run-out $top.out.expected "trs_determinism"] } {
+            set ok 0
+        }
     }
 
-    # scratch cleanup; keep the IR dumps when they differed (evidence)
-    set scratch [glob -nocomplain $name.det* $top.ref* $top.bir*]
-    if { $ok } {
-        set scratch [concat $scratch [glob -nocomplain $name.ir*]]
-    }
+    # The scratch directory holds everything the comparison built;
+    # keep it when something failed, because the IR dumps are the
+    # evidence.  Everything else this test puts in the source
+    # directory -- the bsc products included, named one by one rather
+    # than swept with a `sys*' glob that would take the goldens with
+    # them -- goes unconditionally, so a pass leaves the directory
+    # exactly as it found it.
+    set scratch [glob -nocomplain \
+        $name.det* $name.bo $top.ba $top.ref* $top.bir* \
+        $top.cxx $top.h $top.o model_$top.cxx model_$top.h model_$top.o]
     foreach f $scratch { file delete -force $f }
+    if { $ok } { file delete -force $work }
     cd $here
 }
 
